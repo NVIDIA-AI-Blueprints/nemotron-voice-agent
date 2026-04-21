@@ -31,7 +31,7 @@ env:
 
 jobs:
   deploy-and-test:
-    runs-on: arc-runner-set-oke-org-poc-2-gpu
+    runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
     timeout-minutes: 480
     env:
       NVIDIA_API_KEY: ${{ secrets.NGC_API_KEY }}
