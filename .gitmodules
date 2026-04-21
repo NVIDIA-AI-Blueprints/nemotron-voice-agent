@@ -1,0 +1,3 @@
+[submodule "nvidia-pipecat"]
+	path = nvidia-pipecat
+	url = https://github.com/NVIDIA/voice-agent-examples

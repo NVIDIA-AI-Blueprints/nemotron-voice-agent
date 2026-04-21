@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+name: nemotron-voice-agent-jetson
+
+volumes:
+  nim_cache:
+
+services:
+  # =============================================================================
+  # LLM Service
+  # =============================================================================
+
+  llm-nvidia-jetson:
+    runtime: nvidia
+    image: nvcr.io/nvidia/vllm:25.10-py3
+    container_name: llm-nvidia-jetson
+    env_file:
+      - .env
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    ports:
+      - "9000:8000"
+    volumes:
+      - nim_cache:/root/.cache
+    shm_size: 16GB
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        python3 -m vllm.entrypoints.openai.api_server \
+          --model "$${NVIDIA_LLM_MODEL:-RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w4a16}" \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --max-model-len 4096 \
+          --gpu-memory-utilization "$${GPU_MEMORY_UTILIZATION:-0.15}" \
+          --enforce-eager \
+          --trust-remote-code
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 1200s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # =============================================================================
+  # Voice Agent Application
+  # =============================================================================
+
+  python-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nvcr.io/nvidia/blueprint/nemotron-voice-agent:${IMAGE_VERSION:-dev}
+    container_name: voice-agent-webrtc-jetson
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+    command: >
+      bash -c "
+      if [ \"$${TRANSPORT:-WEBRTC}\" = \"WEBSOCKET\" ]; then
+        echo \"Starting WebSocket pipeline...\"
+        uv run src/pipeline_websocket.py --host 0.0.0.0 --port 7860 --workers $${WORKERS:-1}
+      else
+        echo \"Starting WebRTC pipeline...\"
+        uv run src/pipeline.py --host 0.0.0.0 --port 7860 --workers $${WORKERS:-1}
+      fi
+      "
+    volumes:
+      - ./audio_dumps:/app/audio_dumps
+      - ./config:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:7860/docs || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =============================================================================
+  # UI Application
+  # =============================================================================
+
+  ui-app:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: nvcr.io/nvidia/blueprint/nemotron-voice-agent-ui:${IMAGE_VERSION:-dev}
+    container_name: webrtc-ui-jetson
+    ports:
+      - "8081:8000"
+    restart: unless-stopped

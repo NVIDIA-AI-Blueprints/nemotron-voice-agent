@@ -1,0 +1,192 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+name: nemotron-voice-agent
+
+services:
+  tts-service:
+    image: ${TTS_DOCKER_IMAGE:-nvcr.io/nim/nvidia/magpie-tts-multilingual:1.6.0}
+    user: "0:0"
+    environment:
+      - NGC_API_KEY=${NVIDIA_API_KEY}
+      - NIM_HTTP_API_PORT=9000
+      - NIM_GRPC_API_PORT=50051
+      - NIM_TAGS_SELECTOR=${TTS_NIM_TAGS:-name=magpie-tts-multilingual,batch_size=32}
+    ports:
+      - "50151:50051"
+    ulimits:
+      nofile: 2048
+    healthcheck:
+      test: ["CMD-SHELL", "/bin/grpc_health_probe -addr=:50051 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 10
+      start_period: 3000s # Longer startup for TensorRT engine compilation on first run
+    volumes:
+      - tts_cache:/opt/nim/.cache
+    shm_size: 16GB
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  asr-service:
+    image: ${ASR_DOCKER_IMAGE:-nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.4.0}
+    user: "0:0"
+    environment:
+      - NGC_API_KEY=${NVIDIA_API_KEY}
+      - NIM_HTTP_API_PORT=9001
+      - NIM_GRPC_API_PORT=50052
+      - NIM_TAGS_SELECTOR=${ASR_NIM_TAGS:-mode=str,vad=silero}
+    ports:
+      - "50152:50052"
+    ulimits:
+      nofile: 2048
+    volumes:
+      - asr_cache:/opt/nim/.cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "/bin/grpc_health_probe -addr=:50052 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 3000s # Longer startup for TensorRT engine compilation on first run
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  nvidia-llm:
+    image: ${NVIDIA_LLM_IMAGE:-nvcr.io/nim/nvidia/nemotron-3-nano:1.7.0-variant}
+    env_file:
+      - .env
+    user: "0:0"
+    environment:
+      - NGC_API_KEY=${NVIDIA_API_KEY}
+      - NIM_HTTP_API_PORT=8000
+    ports:
+      - "18000:8000"
+    ulimits:
+      nofile: 2048
+    volumes:
+      - llm_cache:/opt/nim/.cache
+    shm_size: 16GB
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/v1/health/ready\").read()' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 1800s # longer startup time needed for TRT engine build if prebuilt engine is not available.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  python-app:
+    image: nvcr.io/nvidia/blueprint/nemotron-voice-agent:${IMAGE_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      bash -c "
+      if [ \"$${TRANSPORT:-WEBRTC}\" = \"WEBSOCKET\" ]; then
+        echo \"Starting WebSocket pipeline...\"
+        uv run src/pipeline_websocket.py --host 0.0.0.0 --port 7860 --workers $${WORKERS:-1}
+      else
+        echo \"Starting WebRTC pipeline...\"
+        uv run src/pipeline.py --host 0.0.0.0 --port 7860 --workers $${WORKERS:-1}
+      fi
+      "
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./audio_dumps:/app/audio_dumps
+      - ./config/:/app/config/
+    env_file:
+      - .env
+    environment:
+      # Docker services endpoints
+      - ASR_SERVER_URL=${ASR_SERVER_URL:-asr-service:50052}
+      - TTS_SERVER_URL=${TTS_SERVER_URL:-tts-service:50051}
+      - NVIDIA_LLM_URL=${NVIDIA_LLM_URL:-http://nvidia-llm:8000/v1}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+
+    depends_on:
+      tts-service:
+        condition: service_healthy
+      asr-service:
+        condition: service_healthy
+      nvidia-llm:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7860/docs || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  ui-app:
+    image: nvcr.io/nvidia/blueprint/nemotron-voice-agent-ui:${IMAGE_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "9000:8000"
+    env_file:
+      - .env
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    depends_on:
+      python-app:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  llm_cache:
+  asr_cache:
+  tts_cache:

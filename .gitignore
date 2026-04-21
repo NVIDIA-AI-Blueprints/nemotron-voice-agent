@@ -1,0 +1,41 @@
+.idea/
+result*
+.direnv/
+.ruff_cache/
+__pycache__/
+.vscode/
+.env
+.env.jetson
+*.wav
+venv/
+.venv/
+riva_quickstart_*
+
+# Ignore any local models.
+models/
+
+# Ignore CProfile outputs
+*.prof
+
+# Ignore test coverage files
+.coverage
+test_report.xml
+coverage_report.xml
+
+# Ignore generated output
+output/
+
+# Ignore docs
+docs/build/
+
+# Ignore .DS_Store
+.DS_Store
+
+*.log
+nim_cache/
+asr_cache/
+tts_cache/
+llm_cache/
+audio_dumps/
+
+webrtc_ui/node_modules/

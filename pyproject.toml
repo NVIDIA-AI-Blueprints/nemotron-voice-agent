@@ -1,0 +1,72 @@
+[project]
+name = "nemotron-voice-agent"
+version = "1.0.0"
+description = "Voice Agent Example"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "nvidia-pipecat",
+    "pipecat-ai[silero,openai,runner,webrtc,websocket,nvidia,tracing]==0.0.98",
+    "pyyaml>=6.0.2",
+    "rapidfuzz>=3.14.0",
+    "uvicorn>=0.34.0",
+    "python-dotenv>=1.0.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.39.1",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.39.1",
+    "wheel>=0.46.2",
+]
+
+[tool.uv.sources]
+nvidia-pipecat = { path = "./nvidia-pipecat", editable = true }
+torch = { index = "pytorch" }
+
+# Force patched versions for known CVEs
+[tool.uv]
+override-dependencies = [
+    "pillow>=12.1.1",
+    "nltk>=3.9.3",
+    "setuptools>=80",
+    "grpcio>=1.71",
+    "protobuf==5.29.6",
+    "cryptography>=46.0.5",
+    "python-multipart>=0.0.22",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.13",
+    "pre-commit>=4.0.0",
+]
+
+[tool.ruff]
+line-length = 120
+
+###############################################################################
+# Linting Rules
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+    # docstring checks
+    "D"
+]
+
+ignore = ["SIM108"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
