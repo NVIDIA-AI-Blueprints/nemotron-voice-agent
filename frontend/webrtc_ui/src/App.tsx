@@ -65,7 +65,16 @@ function App() {
   const [isZeroshotModel, setIsZeroshotModel] = useState<boolean>(false);
   const [customPromptName, setCustomPromptName] = useState<string>(""); // Backend prompt filename
   const [activeCustomPromptId, setActiveCustomPromptId] = useState<string>(""); // Active custom prompt ID (from backend's zero_shot_prompt)
-
+  const [tokenUsage, setTokenUsage] = useState({
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  });
+  const [latencies, setLatencies] = useState({
+    asr: 0,
+    llm: 0,
+    tts: 0,
+  });
   // Uploaded prompts management
   interface UploadedPrompt {
     id: string;
@@ -347,12 +356,57 @@ function App() {
             setCurrentPrompts(parsed);
             setHasSystemPrompt(parsed.length > 0);
           }
+        } else if (
+          payload?.tokens &&
+          Array.isArray(payload.tokens) &&
+          payload.tokens.length > 0
+        ) {
+          const latest = payload.tokens[0];
+
+          setTokenUsage({
+            prompt_tokens: latest.prompt_tokens ?? 0,
+            completion_tokens: latest.completion_tokens ?? 0,
+            total_tokens: latest.total_tokens ?? 0,
+          });
+
+          console.log("Token Usage:", latest);
+        } else if (
+          payload?.processing &&
+          Array.isArray(payload.processing) &&
+          payload.processing.length > 0
+        ) {
+          console.log("Received processing metrics array:", payload.processing);
+          const metric = payload.processing[0];
+          console.log("Received metric:", metric);
+
+          if (metric.processor?.includes("NvidiaLLMService")) {
+            setLatencies((prev) => ({
+              ...prev,
+              llm: Math.round(metric.value * 1000),
+            }));
+          }
+
+          if (metric.processor?.includes("NemotronTTSService")) {
+            setLatencies((prev) => ({
+              ...prev,
+              tts: Math.round(metric.value * 1000),
+            }));
+          }
+
+          if (metric.processor?.includes("RivaASRService")) {
+            setLatencies((prev) => ({
+              ...prev,
+              asr: Math.round(metric.value * 1000),
+            }));
+          }
         }
       } catch {}
     };
     ch.addEventListener("message", onMessage);
     return () => ch.removeEventListener("message", onMessage);
   }, [webRTC.status, selectedVoice, uploadedPrompts, sanitizePrompts]);
+
+  const totalLatency = latencies.asr + latencies.llm + latencies.tts;
 
   // Reset sync flags when disconnected
   useEffect(() => {
@@ -843,23 +897,6 @@ function App() {
         <div className="grid grid-cols-12 gap-5">
           {/* --- LEFT --- */}
           <aside className="col-span-12 lg:col-span-3 space-y-4">
-            {/* Call Flow */}
-            <div className="border border-[#E6E5E5] bg-white p-5">
-              <div className="mb-3 font-yantramanav text-[10px] font-bold uppercase tracking-[0.18em] text-[#808080]">
-                Call Flow
-              </div>
-
-              <div className="flex items-center justify-center gap-2 bg-[#FB4E0B] py-2">
-                <PhoneOutgoing className="h-[13px] w-[13px] text-white" />
-                <span className="font-yantramanav text-xs font-semibold tracking-[0.04em] text-white">
-                  Outbound
-                </span>
-              </div>
-
-              <div className="mt-3 font-yantramanav text-[11px] leading-6 text-[#808080]">
-                Aria initiates the call to the delinquent customer.
-              </div>
-            </div>
             {/* Customer Card */}
             <div className="border border-[#E6E5E5] bg-white p-5">
               <div className="mb-3 font-yantramanav text-[10px] font-bold uppercase tracking-[0.18em] text-[#808080]">
@@ -875,7 +912,7 @@ function App() {
 
                 <div className="min-w-0 flex-1">
                   <div className="font-yantramanav text-[17px] font-bold leading-tight text-black">
-                     Nathan Reeves
+                    Nathan Reeves
                   </div>
                   <div className="font-yantramanav text-[11px] tracking-[0.04em] text-[#808080]">
                     R5T2Y9N7
@@ -936,24 +973,34 @@ function App() {
                     {/* Phone Button */}
                     <button
                       onClick={() => {
-                        if (webRTC.status === "init" || webRTC.status === "error") {
+                        if (
+                          webRTC.status === "init" ||
+                          webRTC.status === "error"
+                        ) {
                           setPendingStart(true);
                           webRTC.start();
                         } else if (webRTC.status === "connected") {
                           if (!started) {
-                            const ch = webRTC.dataChannel as RTCDataChannel | null;
+                            const ch =
+                              webRTC.dataChannel as RTCDataChannel | null;
                             const promptData = promptsPayload();
-                            if (hasSystemPrompt && ch && promptData.length > 0) {
+                            if (
+                              hasSystemPrompt &&
+                              ch &&
+                              promptData.length > 0
+                            ) {
                               ch.send(
                                 JSON.stringify({
                                   id: "prompt-start",
                                   label: "rtvi-ai",
                                   type: "client-message",
                                   data: { t: "context_reset", d: promptData },
-                                })
+                                }),
                               );
                             }
-                            const needsSync = uploadedPrompts.length > 0 && !hasSyncedRef.current;
+                            const needsSync =
+                              uploadedPrompts.length > 0 &&
+                              !hasSyncedRef.current;
                             if (ch && !needsSync) {
                               beginConversation(ch);
                             }
@@ -969,8 +1016,8 @@ function App() {
                         webRTC.status === "connected" && started
                           ? "bg-red-600 animate-pulse"
                           : webRTC.status === "connecting"
-                          ? "bg-yellow-600 animate-pulse"
-                          : "bg-[#FB4E0B] hover:bg-[#e03a00]"
+                            ? "bg-yellow-600 animate-pulse"
+                            : "bg-[#FB4E0B] hover:bg-[#e03a00]"
                       }`}
                       disabled={webRTC.status === "connecting"}
                     >
@@ -1008,7 +1055,8 @@ function App() {
                     </div>
 
                     <div className="mt-2 flex items-center justify-center gap-2">
-                      {(webRTC.status === "init" || webRTC.status === "error") && (
+                      {(webRTC.status === "init" ||
+                        webRTC.status === "error") && (
                         <button
                           onClick={() => {
                             setShowConfig(true);
@@ -1104,7 +1152,7 @@ function App() {
                               label: "rtvi-ai",
                               type: "client-message",
                               data: { t: "context_reset", d: promptData },
-                            })
+                            }),
                           );
                         }
                         setShowConfig(false);
@@ -1135,9 +1183,7 @@ function App() {
 
                 <div className="flex items-center gap-2 text-[11px] text-[#808080] font-['Yantramanav']">
                   <Volume2 className="w-[13px] h-[13px]" />
-                  {selectedVoice
-                    ? `Riva TTS · ${selectedVoice}`
-                    : ""}
+                  {selectedVoice ? `Riva TTS · ${selectedVoice}` : ""}
                 </div>
               </div>
 
@@ -1196,7 +1242,6 @@ function App() {
                     Neutral
                   </span>
                 </div>
-
               </div>
             </div>
 
@@ -1212,28 +1257,28 @@ function App() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="font-yantramanav text-[12px] text-[#808080]">
-                    ASR · Riva
+                    Nemotron ASR
                   </span>
                   <span className="font-yantramanav text-[12px] font-semibold text-[#000000]">
-                    180 ms
+                    {latencies.asr} ms
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <span className="font-yantramanav text-[12px] text-[#808080]">
-                    LLM · Nemotron
+                    Nemotron LLM
                   </span>
                   <span className="font-yantramanav text-[12px] font-semibold text-[#000000]">
-                    420 ms
+                    {latencies.llm} ms
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <span className="font-yantramanav text-[12px] text-[#808080]">
-                    TTS · Riva
+                    Nemotron TTS
                   </span>
                   <span className="font-yantramanav text-[12px] font-semibold text-[#000000]">
-                    140 ms
+                    {latencies.tts} ms
                   </span>
                 </div>
               </div>
@@ -1243,7 +1288,7 @@ function App() {
                   Total turn
                 </div>
                 <div className="font-yantramanav text-[14px] font-bold text-[#000000]">
-                  740 ms
+                  {totalLatency} ms
                 </div>
               </div>
             </div>
@@ -1263,19 +1308,18 @@ function App() {
                     Prompt
                   </span>
                   <span className="font-yantramanav text-[12px] font-semibold text-[#000000]">
-                    0
+                    {tokenUsage.prompt_tokens.toLocaleString()}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <span className="font-yantramanav text-[12px] text-[#808080]">
-                  Completion
+                    Completion
                   </span>
                   <span className="font-yantramanav text-[12px] font-semibold text-[#000000]">
-                    0
+                    {tokenUsage.completion_tokens.toLocaleString()}
                   </span>
                 </div>
-
               </div>
 
               <div className="mt-4 flex items-center justify-between border-t border-[#E6E5E5] pt-3">
@@ -1283,7 +1327,7 @@ function App() {
                   Total
                 </div>
                 <div className="font-yantramanav text-[14px] font-bold text-[#000000]">
-                  0
+                  {tokenUsage.total_tokens.toLocaleString()}
                 </div>
               </div>
             </div>

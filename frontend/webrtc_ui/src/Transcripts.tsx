@@ -20,7 +20,6 @@ interface DataChannelMessage {
   text: string;
 }
 
-
 interface AugmentedMessage extends DataChannelMessage {
   timestamp: Date;
 }
@@ -32,7 +31,9 @@ export function Transcripts(props: Props) {
   // Clear transcripts when a new connection is established
   useEffect(() => {
     if (props.dataChannel) {
-      console.log("New DataChannel connection detected, clearing old transcripts");
+      console.log(
+        "New DataChannel connection detected, clearing old transcripts",
+      );
       setTranscripts([]);
     }
   }, [props.dataChannel]);
@@ -40,13 +41,19 @@ export function Transcripts(props: Props) {
   useEffect(() => {
     function onDataChannelMessage(event: MessageEvent) {
       try {
-        const envelope = JSON.parse(event.data) as IncomingDataChannelMessage | any;
-        const payload = typeof (envelope as any)?.data === "string" ? JSON.parse((envelope as any).data) : (envelope as any)?.data;
+        const envelope = JSON.parse(event.data) as
+          | IncomingDataChannelMessage
+          | any;
+        const payload =
+          typeof (envelope as any)?.data === "string"
+            ? JSON.parse((envelope as any).data)
+            : (envelope as any)?.data;
 
         // Ignore control/config messages (e.g., { type: "tts_voices" | "tts_voice_current", ... })
         if (payload && typeof payload === "object" && (payload as any).type) {
           return;
         }
+        console.log("Received DataChannel message:", payload);
 
         const message = (payload || {}) as Partial<DataChannelMessage>;
         // Only process transcript-like messages that have required fields
@@ -67,7 +74,9 @@ export function Transcripts(props: Props) {
 
         setTranscripts((prev) => {
           const existingMessage = prev.find(
-            (t) => t.actor === validMessage.actor && t.message_id === validMessage.message_id
+            (t) =>
+              t.actor === validMessage.actor &&
+              t.message_id === validMessage.message_id,
           );
           if (existingMessage) {
             existingMessage.text = validMessage.text;
@@ -99,22 +108,33 @@ export function Transcripts(props: Props) {
 
   return filteredTranscripts.map((transcript) => (
     <div
-      className="font-mono text-lg flex items-start mb-2"
-      key={transcript.actor + transcript.message_id}
+      key={transcript.message_id}
+      className={`flex gap-3 mb-4 ${
+        transcript.actor === "bot" ? "" : "flex-row-reverse"
+      }`}
     >
-      {transcript.timestamp.toTimeString().slice(0, 8)}
-      <div className="flex items-center ml-3 mr-3 min-w-[60px]">
-        <div
-          className={`rounded-lg text-white text-sm p-1 flex justify-center items-center min-w-full ${transcript.actor === "bot" ? "bg-nvidia" : "bg-cyan-700"
-            }`}
-        >
-          {transcript.actor}
+      <div
+        className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-semibold ${
+          transcript.actor === "bot" ? "bg-[#FB4E0B]" : "bg-[#0EA5E9]"
+        }`}
+      >
+        {transcript.actor === "bot" ? "A" : "N"}
+      </div>
+
+      <div className="flex-1 max-w-[80%]">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-xs font-medium text-gray-700">
+            {transcript.actor === "bot" ? "Aria" : "Nathan Reeves"}
+          </span>
+          <span className="text-xs text-gray-400">
+            {transcript.timestamp.toTimeString().slice(0, 8)}
+          </span>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl px-4 py-3">
+          {transcript.text}
         </div>
       </div>
-      <div>:</div>
-      <div className="pl-3"> </div>
-      <div className="flex-1">{transcript.text}</div>
-      <div ref={bottomRef} />
     </div>
   ));
 }
