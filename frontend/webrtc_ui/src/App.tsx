@@ -17,7 +17,6 @@ import type { VoicesMap } from "./types";
 import { Header } from "./components/ui/header";
 import {
   Phone,
-  PhoneOutgoing,
   Mic,
   Waves,
   ShieldCheck,
@@ -1240,6 +1239,18 @@ function App() {
                   </div>
                   <span className="text-sm font-medium text-[#111111]">
                     Neutral
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-green-600" />
+                    <span className="text-sm text-[#666666]">
+                      Promise to Pay
+                    </span>
+                  </div>
+                  <span className="text-sm font-medium text-green-600">
+                    15 June 2026
                   </span>
                 </div>
               </div>
