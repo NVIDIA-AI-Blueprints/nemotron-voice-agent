@@ -5,6 +5,7 @@ This section covers pipeline configurations for optimizing the performance and u
 - [Smart Turn Detection](#smart-turn-detection)
 - [Chat History Limit](#chat-history-limit)
 - [Audio Output Buffering](#audio-output-buffering)
+- [Uvicorn Worker Scaling](#uvicorn-worker-scaling)
 - [Transport Selection](#transport-selection)
 
 ## Smart Turn Detection
@@ -91,6 +92,23 @@ AUDIO_OUT_10MS_CHUNKS=10
 **Telephony / server-side: send in bursts.** When the consumer is a telephony gateway (SIP/PSTN) or another server that does its own buffering and pacing, real-time chunking on our side only adds latency. Use a custom transport to send audio as soon as it is generated, and let the downstream handle playout timing.
 
 **Barge-in trade-off.** Buffering works against fast barge-in: when the user interrupts, audio already queued downstream keeps playing until it drains, so the bot talks over the user for up to the buffer's duration. The bigger the buffer, the longer that tail. For low barge-in latency with a large buffer, the client must **flush its playback queue** on interruption (drop the buffered audio) rather than play it out. Custom and telephony clients (typically on the WebSocket path) should implement this flush.
+
+## Uvicorn Worker Scaling
+
+`UVICORN_WORKERS` controls how many `uvicorn` worker processes accept incoming sessions.
+
+```bash
+# .env or container env
+UVICORN_WORKERS=<workers>
+```
+
+Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the benchmarked best-scaling deployment shape and its companion tuning values, see [Reproducing the best scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup).
+
+When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows are disabled** because that state is process-local. For multi-worker deployments, use one of these patterns:
+
+- keep a **single worker** if you depend on per-process session config
+- use **sticky routing** so a session stays on the same worker
+- move session state into **shared storage**
 
 ## Transport Selection
 
