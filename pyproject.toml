@@ -29,6 +29,7 @@ override-dependencies = [
 dev = [
     "ruff>=0.15.6",
     "pre-commit>=4.0.0",
+    "pytest>=9.1.1",
 ]
 # Dependencies for everything under `benchmarking_tools/`. Install with:
 #   uv sync --group benchmark
@@ -44,6 +45,9 @@ benchmark = [
     "datasets>=2.19.0",
     "huggingface-hub>=0.23.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 120
