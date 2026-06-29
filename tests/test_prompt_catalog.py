@@ -41,6 +41,7 @@ class PromptCatalogTests(unittest.TestCase):
             PROJECT_ROOT / "src/examples/generic/prompts.yaml": {
                 "flowershop",
                 "generic_assistant",
+                "generic_assistant_without_tools",
             },
             PROJECT_ROOT / "src/examples/multilingual/prompts.yaml": {
                 "auto_detect_language_addon",

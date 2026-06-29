@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# Lightweight CI: Python lint/format (ruff) and client lint + build (eslint, tsc,
-# vite). No deployment and no GPU are required.
+# Lightweight CI: Python lint/format (ruff), Python unit tests (pytest), and
+# client lint + build (eslint, tsc, vite). No deployment and no GPU are required.
 
 name: Nemotron Voice Agent CI
 
@@ -33,6 +33,22 @@ jobs:
 
       - name: Ruff format check
         run: uvx ruff@0.15.6 format --check .
+
+  unit-tests:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run unit tests
+        run: uv run pytest tests/ -v
 
   client-lint-build:
     name: Client lint and build

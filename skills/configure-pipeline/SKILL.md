@@ -1,7 +1,7 @@
 ---
 name: configure-pipeline
 description: Configure Nemotron Voice Agent runtime via `.env`, example-local `services.{cloud,local}.yaml`, and example-local `prompts.yaml`. Use when changing prompts, tracing, audio knobs, exposed pipelines or transports, or local NIM image overrides.
-version: "1.0.0"
+version: "2.0.0"
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [configuration, pipeline, voice-agent, nemotron]
