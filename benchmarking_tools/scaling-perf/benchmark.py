@@ -12,7 +12,7 @@ Default mode (no ``--aggregate-*`` flag): act as **one** synthetic voice
 client against a running Nemotron Voice Agent server.
 
 The flow per turn:
-  1. Open a wss WebSocket to ``wss://<host>:<port>/api/ws?session_id=...``
+  1. Open a wss WebSocket to ``wss://<host>:<port>/api/ws``
      (TLS verification disabled, since the server uses a self-signed cert).
   2. Receive and discard the bot's initial intro utterance.
   3. Stream a WAV file from ``--dataset-dir`` to the server in 32 ms chunks
@@ -170,7 +170,7 @@ class ClientResult:
     these files back to build the per-run ``benchmark_summary.json``.
 
     Attributes:
-        stream_id: WebSocket session identifier (matches the ``client_<i>_<id>``
+        stream_id: Local client identifier (matches the ``client_<i>_<id>``
             output directory name).
         average_latency: Mean of *valid* response latencies (above the reverse
             barge-in threshold), or ``None`` when no valid turn completed
@@ -295,7 +295,7 @@ class PerfClient:
 
     @property
     def uri(self) -> str:
-        return f"wss://{self.host}:{self.port}/api/ws?session_id={self.stream_id}"
+        return f"wss://{self.host}:{self.port}/api/ws"
 
     async def _process_server_message(self, message: dict) -> None:
         if not isinstance(message, dict):

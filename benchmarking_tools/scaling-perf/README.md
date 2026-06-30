@@ -7,6 +7,10 @@ each turn took. You can run a single client (smoke test) or fan out to N
 parallel clients (concurrency / scaling test) and produce a sweep across
 multiple concurrency levels.
 
+The scaling benchmark connects directly to `WS /api/ws` and does not use the
+server's session-config flow. That keeps it compatible with multi-worker
+deployments such as `generic-assistant/workstation-perf`.
+
 **RTVI** (Real-Time Voice/Video Inference) is the Pipecat-standard
 protocol the server uses to push per-turn timing breakdowns (LLM / TTS /
 ASR sub-latencies) to the client over the same WebSocket as the audio.
