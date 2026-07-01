@@ -47,6 +47,7 @@ services:
       - omni-assistant/dgx-spark
       - omni-assistant-subagents/dgx-spark
       - frontend-backend-agent/workstation
+      - webex-byova-assistant/workstation
     environment:
       <<: *tts-service-env
       NIM_TAGS_SELECTOR: name=magpie-tts-multilingual,batch_size=8

@@ -76,3 +76,6 @@ ignore = ["SIM108", "E402"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"src/examples/webex_byova/client/cisco_webex_byova_adapter/generated/*.py" = ["D", "E501", "F401", "I001", "UP"]

@@ -75,3 +75,13 @@ examples:
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-tts]
     bot: examples.frontend_backend_agent.pipeline:bot
+
+  webex-byova-assistant:
+    label: Cisco Webex BYOVA Assistant
+    slots: [llm, asr, tts]
+    defaults:
+      prompt: [generic_assistant]
+      llm: [nemotron-nano]
+      asr: [nemotron-asr-streaming-english]
+      tts: [magpie-tts]
+    bot: examples.webex_byova.pipeline:bot
