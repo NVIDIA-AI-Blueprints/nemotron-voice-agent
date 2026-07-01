@@ -11,7 +11,7 @@ The local submodule directory is `nvidia-pipecat`; the upstream repository is `N
 
 **Transport:** The BigBench and performance scripts connect to the voice agent over **WebSocket only**. If your deployment uses WebRTC (the default), switch to WebSocket before running these benchmarks. Refer to [Choose a Transport Method](how-to/choose-transport-method.md) for how to set `TRANSPORT=WEBSOCKET` in `.env` and restart the services.
 
-After switching transports, verify that the WebSocket UI is available at `http://<host-ip>:9000` for workstation deployments or `http://<jetson-ip>:8081` for Jetson deployments before running benchmarks.
+After switching transports, verify that the WebSocket UI is available at `http://<host-ip>:9000` for workstation deployments or `http://<jetson-ip>:8081` for Jetson deployments before running benchmarks. The benchmark clients connect directly to the `python-app` WebSocket endpoint, not the UI port. For this blueprint's Docker Compose deployments, use `--port 7860` when running the BigBench or performance scripts.
 
 ---
 

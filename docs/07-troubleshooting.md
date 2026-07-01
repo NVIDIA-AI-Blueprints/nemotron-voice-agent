@@ -10,9 +10,9 @@ Run the following command from the repository root:
 docker compose ps
 ```
 
-On first startup, ASR, TTS, and LLM services can remain in `starting` while images download and optimized engines initialize. First startup can take 30-60 minutes depending on network speed, GPU, and model profile.
+On first startup, model services can remain in `starting` while images download and optimized engines initialize. First startup can take 30-60 minutes depending on network speed, GPU, and model profile.
 
-If a service stays unhealthy, inspect its logs:
+For workstation deployments, inspect the local ASR, TTS, LLM, application, and UI services:
 
 ```bash
 docker compose logs -f asr-service
@@ -22,7 +22,7 @@ docker compose logs -f python-app
 docker compose logs -f ui-app
 ```
 
-For Jetson deployments, include the Jetson compose file:
+For Jetson deployments, include the Jetson compose file. The Jetson stack includes `llm-nvidia-jetson`, `python-app`, and `ui-app`; ASR and TTS endpoints are configured separately in `.env`.
 
 ```bash
 docker compose -f docker-compose.jetson.yml ps
@@ -48,17 +48,23 @@ docker compose up -d
 
 The first run can take a long time while NIM services build or load optimized engines. This is expected during initial deployment.
 
-Check progress with:
+For workstation deployments, check progress with:
 
 ```bash
 docker compose logs -f asr-service tts-service nvidia-llm
+```
+
+For Jetson deployments, check the local LLM service and confirm that the ASR and TTS endpoints in `.env` are reachable:
+
+```bash
+docker compose -f docker-compose.jetson.yml logs -f llm-nvidia-jetson
 ```
 
 If startup fails with GPU or memory errors, verify that your system meets the [GPU requirements](./01-getting-started.md#gpu-requirements). The default workstation deployment requires two GPUs, with ASR/TTS on GPU 0 and LLM on GPU 1.
 
 ## Python App Is Unhealthy
 
-`python-app` depends on healthy ASR, TTS, and LLM services. If `python-app` does not start, inspect upstream services first:
+In the workstation compose stack, `python-app` depends on healthy ASR, TTS, and LLM services. If `python-app` does not start, inspect upstream services first:
 
 ```bash
 docker compose ps asr-service tts-service nvidia-llm
@@ -71,6 +77,8 @@ docker compose logs -f python-app
 ```
 
 Common causes include missing `.env` values, an invalid `SYSTEM_PROMPT_SELECTOR`, unavailable model endpoints, or service names removed from `docker-compose.yml` without updating `depends_on`.
+
+For Jetson deployments, inspect `llm-nvidia-jetson` and confirm that `ASR_SERVER_URL`, `TTS_SERVER_URL`, and `NVIDIA_LLM_URL` in `.env` point to reachable endpoints.
 
 ## Browser Cannot Access the Microphone
 
