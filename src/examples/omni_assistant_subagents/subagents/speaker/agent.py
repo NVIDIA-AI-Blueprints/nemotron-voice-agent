@@ -219,4 +219,10 @@ class SpeakerOmniAgent(PipelineWorker):
             uploaded_attachment_available=uploaded_attachment_available,
             audio_response_instruction=audio_response_instruction,
         )
-        super().__init__(Pipeline([omni]), name=name or self.AGENT_NAME, active=True, bridged=())
+        super().__init__(
+            Pipeline([omni]),
+            name=name or self.AGENT_NAME,
+            active=True,
+            bridged=(),
+            enable_rtvi=False,
+        )
