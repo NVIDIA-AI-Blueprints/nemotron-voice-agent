@@ -13,7 +13,7 @@ Speculative speech processing reduces response latency by processing interim ASR
 
 ### Configuration
 
-Speculative speech processing is controlled by the `ENABLE_SPECULATIVE_SPEECH` environment variable in [.env](../../config/env.example).
+Speculative speech processing is controlled by the `ENABLE_SPECULATIVE_SPEECH` environment variable in `.env`. If you have not created `.env` yet, copy [config/env.example](../../config/env.example) to `.env`.
 
 ```bash
 # Enable speculative speech processing (default)
@@ -57,7 +57,7 @@ The following NVIDIA Pipecat components enable speculative speech processing. Fo
 
 ### Pipeline Configuration
 
-When speculative speech is enabled, the agent's pipeline includes the TTS response cacher:
+When speculative speech is enabled, the agent's pipeline includes the TTS response cacher. The following snippet is simplified to highlight where speculative speech fits; the full source also includes RTVI processors, transcript synchronization, recorders, and other runtime processors.
 
 ```python
 pipeline = Pipeline([
@@ -132,21 +132,25 @@ AUDIO_DUMP_PATH=./audio_dumps # Output directory for WAV files.
 
 Output files use WAV format with stream IDs for correlation.
 
-> **Note:** If Docker creates the folder with different permissions, you can fix this in one of two ways:
->- Option 1: Pre-create directory before container start
->    ```bash
->    mkdir -p ./audio_dumps
->    ```
->- Option 2: Fix ownership after container creates it
->    ```bash
->    sudo chown -R $(id -u):$(id -g) ./audio_dumps
->    ```
+> **Note:** If Docker creates the folder with different permissions, use one of the following options.
+
+Pre-create the directory before container start:
+
+```bash
+mkdir -p ./audio_dumps
+```
+
+Fix ownership after the container creates it:
+
+```bash
+sudo chown -R $(id -u):$(id -g) ./audio_dumps
+```
 
 > **Warning:** Disable audio debugging in production to prevent disk exhaustion.
 
 ## Audio Output Buffering
 
-To control audio output latency and stability, set the `AUDIO_OUT_10MS_CHUNKS` environment variable to the number of 10ms chunks to buffer for output. By default, the audio output buffer size is set to 5.
+To control audio output latency and stability, set the `AUDIO_OUT_10MS_CHUNKS` environment variable to the number of 10ms chunks to buffer for output. The default `.env` template sets the buffer size to 5.
 
 ```bash
 # In .env file
@@ -154,6 +158,15 @@ AUDIO_OUT_10MS_CHUNKS=5  # Number of 10ms chunks to buffer
 ```
 
 The following are the configuration guidelines for the `AUDIO_OUT_10MS_CHUNKS` environment variable.
-- **Default WebRTC**: 5 chunks (50ms buffer) - optimized for low latency
-- **Default WebSocket**: 10 chunks (100ms buffer) - more stable for network variations
-- **High Concurrency**: 10-40 chunks (100-400ms buffer) - prevents audio glitches under high load
+- **WebRTC code default**: 5 chunks (50ms buffer), optimized for low latency.
+- **WebSocket code default**: 10 chunks (100ms buffer), more stable for network variations.
+- **Template default**: [config/env.example](../../config/env.example) sets `AUDIO_OUT_10MS_CHUNKS=5` for both transports unless you change it.
+- **High concurrency**: 10-40 chunks (100-400ms buffer), helps prevent audio glitches under high load.
+
+## Apply Changes
+
+Performance environment variables are loaded when `python-app` starts. Restart the service after changing `.env` values:
+
+```bash
+docker compose restart python-app
+```

@@ -2,6 +2,8 @@
 
 OpenTelemetry tracing provides comprehensive observability for your voice agent pipeline, allowing you to monitor performance, debug issues, and analyze conversation flows. The following steps show how to enable tracing with [Phoenix](https://arize.com/docs/phoenix/self-hosting).
 
+Tracing is supported by both `src/pipeline.py` (WebRTC) and `src/pipeline_websocket.py` (WebSocket).
+
 ## Steps
 
 1. Add the Phoenix service to the `docker-compose.yml` file as follows.
@@ -14,6 +16,8 @@ OpenTelemetry tracing provides comprehensive observability for your voice agent 
         - "4317:4317"  # OTLP gRPC collector
       restart: unless-stopped
     ```
+
+    > **Security:** Phoenix traces can include conversation content and timing details. For shared or production environments, bind Phoenix to a private interface, use an SSH tunnel, or put it behind an authenticated reverse proxy instead of exposing port `6006` publicly.
 
 2. Edit the `.env` file and enable tracing as follows.
 
@@ -31,7 +35,7 @@ OpenTelemetry tracing provides comprehensive observability for your voice agent 
       - For **gRPC** (port 4317): Use `host:port` format (for example, `phoenix:4317` or `localhost:4317`).
       - For **HTTP** (port 4318 or custom): Use `http://host:port` format (for example, `http://phoenix:4318`).
 
-3. Deploy the services.
+3. Deploy the services. Start Phoenix before or with `python-app` so the OTLP endpoint is available when tracing begins.
 
     ```bash
     docker compose up -d
@@ -43,11 +47,13 @@ OpenTelemetry tracing provides comprehensive observability for your voice agent 
     http://localhost:6006
     ```
 
-    For remote access, use the following URL, replacing `your-server-ip` with your server's public IP address.
+    For controlled remote access, use the following URL, replacing `<host-ip>` with your server's IP address.
 
     ```text
-    http://your-server-ip:6006
+    http://<host-ip>:6006
     ```
+
+5. Generate one conversation in the voice-agent UI, refresh Phoenix, and confirm that spans appear in the default project.
 
 Through the Phoenix UI dashboard, you can:
 - View distributed traces from your voice agent pipeline.
@@ -55,7 +61,7 @@ Through the Phoenix UI dashboard, you can:
 - Monitor ASR, LLM, and TTS performance.
 - Debug issues with detailed span information.
 
-**Note:** The current implementation in `src/pipeline.py` supports OTLP exporters (HTTP and gRPC). For alternative tracing backends, refer to the [OpenTelemetry Tracing with Pipecat](https://github.com/pipecat-ai/pipecat-examples/tree/main/open-telemetry) documentation.
+**Note:** The current implementation supports OTLP exporters (HTTP and gRPC). For alternative tracing backends, refer to the [OpenTelemetry Tracing with Pipecat](https://github.com/pipecat-ai/pipecat-examples/tree/main/open-telemetry) documentation.
 
 ## Phoenix UI Walkthrough
 
@@ -63,7 +69,7 @@ If you are not familiar with OpenTelemetry, Phoenix can look unfamiliar. This se
 
 ### 1. Open Phoenix and Open Your Project
 
-Open **http://localhost:6006** (or `http://your-server-ip:6006`). The **Projects** page opens. Click the `default` project to open it.
+Open **http://localhost:6006** (or `http://<host-ip>:6006` for a controlled remote deployment). The **Projects** page opens. Click the `default` project to open it.
 
 ![Phoenix Projects](../images/phoenix-projects.png)
 

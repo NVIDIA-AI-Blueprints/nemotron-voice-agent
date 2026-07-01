@@ -11,7 +11,7 @@ The following table compares the available transport options:
 
 ## Switch to WebSocket Transport
 
-1. Update your [.env](../../config/env.example) file to enable WebSocket transport:
+1. Update `.env` to enable WebSocket transport. If you have not created `.env` yet, copy [config/env.example](../../config/env.example) to `.env`.
 
     ```bash
     # In .env file
@@ -25,4 +25,31 @@ The following table compares the available transport options:
     docker compose up -d
     ```
 
-The system automatically loads the appropriate pipeline and UI based on the `TRANSPORT` setting. After starting the services, access the web interface through your browser at `http://your-server-ip:9000`.
+The system automatically loads the appropriate pipeline and UI based on the `TRANSPORT` setting.
+
+## Switch Back to WebRTC Transport
+
+1. Update `.env` to restore the default WebRTC transport:
+
+    ```bash
+    # In .env file
+    TRANSPORT=WEBRTC
+    ```
+
+2. Restart the services:
+
+    ```bash
+    docker compose stop python-app ui-app
+    docker compose up -d
+    ```
+
+## Access URLs
+
+Use the URL for your deployment target after the services restart:
+
+| Deployment | URL |
+|------------|-----|
+| Workstation or server compose stack | `http://<host-ip>:9000` |
+| Jetson compose stack | `http://<jetson-ip>:8081` |
+
+If you access WebRTC remotely, configure TURN as described in [Getting Started](../01-getting-started.md#optional-deploy-turn-server-for-remote-access). WebSocket transport usually avoids TURN requirements because it uses standard HTTP connectivity.

@@ -1,10 +1,10 @@
 # Switch LLM Models
 
-The Nemotron Voice Agent supports multiple LLM models with different capabilities and resource requirements. Configure your desired model by editing the [.env](../../config/env.example) file.
+The Nemotron Voice Agent supports multiple LLM models with different capabilities and resource requirements. Configure your desired model by editing `.env`. If you have not created `.env` yet, copy [config/env.example](../../config/env.example) to `.env`.
 
 ## Using a Local LLM NIM Microservice
 
-1. Copy the example configuration [.env](../../config/env.example):
+1. Copy the example configuration [config/env.example](../../config/env.example) to `.env`:
 
     ```bash
     cp config/env.example .env
@@ -17,6 +17,13 @@ The Nemotron Voice Agent supports multiple LLM models with different capabilitie
     ```
 
 3. Edit the `.env` file. The file contains four pre-configured model blocks. To switch models, comment out the current block and uncomment your desired model.
+
+    | Option | Model | Prompt selector |
+    |--------|-------|-----------------|
+    | OPTION 1 | `nvidia/nemotron-3-nano` | `nemotron-3-nano/generic_voice_assistant` |
+    | OPTION 2 | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | `llama-3.3-nemotron-super-49b-v1.5/generic_voice_assistant` |
+    | OPTION 3 | `nvidia/nvidia-nemotron-nano-9b-v2` | `nvidia-nemotron-nano-9b-v2/generic_voice_assistant` |
+    | OPTION 4 | `meta/llama-3.1-8b-instruct` | `llama-3.1-8b-instruct/generic_voice_assistant` |
 
     **Example: Switch from [Nemotron-3-Nano](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (default) to [Llama-3.3-Nemotron-Super-49B](https://build.nvidia.com/nvidia/llama-3_3-nemotron-super-49b-v1_5/modelcard)**
 
@@ -62,19 +69,27 @@ The Nemotron Voice Agent supports multiple LLM models with different capabilitie
 
 ## Using Cloud Endpoints
 
-Instead of local deployment, you can use NVIDIA's cloud-hosted models on [build.nvidia.com](https://build.nvidia.com/). For example, you can set up the `.env` file to use the [Nemotron-3-Nano](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) model on build.nvidia.com as follows.
+Instead of local deployment, you can use NVIDIA's cloud-hosted models on [build.nvidia.com](https://build.nvidia.com/). This removes the local `nvidia-llm` GPU requirement; the host still needs GPU capacity for ASR and TTS unless you also move those services to cloud endpoints. For example, you can set up the `.env` file to use the [Nemotron-3-Nano](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) model on build.nvidia.com as follows.
 
 1. Set your NVIDIA API key as an environment variable:
     ```bash
     export NVIDIA_API_KEY=<your-nvidia-api-key>
     ```
 
-2. Update .env with LLM model details
+2. Update `.env` with LLM model details.
+
     ```bash
     # In .env file
     NVIDIA_LLM_URL=https://integrate.api.nvidia.com/v1
     NVIDIA_LLM_MODEL=nvidia/nemotron-3-nano-30b-a3b  # Cloud model name
+    SYSTEM_PROMPT_SELECTOR=nemotron-3-nano/generic_voice_assistant
+    TEMPERATURE=1.0
+    TOP_P=1.0
+    ENABLE_THINKING=false
+    MAX_TOKENS=2048
     ```
+
+    `NVIDIA_LLM_IMAGE`, `NIM_MODEL_PROFILE`, and other local NIM image/profile settings are ignored after you remove the local `nvidia-llm` service.
 
 3. Comment out or remove the `nvidia-llm` service from the [`docker-compose.yml`](../../docker-compose.yml) file.
 
@@ -92,10 +107,21 @@ Instead of local deployment, you can use NVIDIA's cloud-hosted models on [build.
     ```
 
 5. Restart the remaining services:
+
     ```bash
     docker compose down
     docker compose up -d
     ```
+
+6. Verify the rendered compose configuration and service startup:
+
+    ```bash
+    docker compose config
+    docker compose ps
+    docker compose logs -f python-app
+    ```
+
+    Confirm that `nvidia-llm` is not running and that `python-app` uses the cloud `NVIDIA_LLM_URL`.
 
 ## Selecting Model Profiles in LLM Local Deployment
 
@@ -112,7 +138,7 @@ NVIDIA NIM provides optimized model profiles for different GPU configurations. E
       list-model-profiles
     ```
 
-2. To manually select a profile, set the `NIM_MODEL_PROFILE` environment variable in your `.env` file or docker-compose configuration:
+2. To manually select a profile, set the `NIM_MODEL_PROFILE` environment variable in your `.env` file or Docker Compose configuration. The `nvidia-llm` service reads `.env` through its `env_file` entry.
 
     ```bash
     # Using profile name

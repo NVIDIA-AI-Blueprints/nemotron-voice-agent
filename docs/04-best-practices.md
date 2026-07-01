@@ -61,8 +61,9 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 
   **Configuration in `.env`:**
   ```bash
-  # Number of 10ms chunks to buffer (default: 10)
-  AUDIO_OUT_10MS_CHUNKS=10
+  # WebRTC default in config/env.example: 5 chunks (50ms)
+  # Increase to 10-40 chunks for higher-concurrency deployments.
+  AUDIO_OUT_10MS_CHUNKS=5
   ```
 
 ### ASR (Automatic Speech Recognition) Latency
@@ -147,6 +148,7 @@ update profile, set alerts, or lock your card. What would you like?"
 "What would you like to do today?"
 # (Let user guide, offer suggestions if confused)
 ```
+
 ### Persona and Tone Consistency
 
 **Define Agent Personality:**
@@ -260,14 +262,24 @@ ERROR_MESSAGES = {
 
 ---
 
+## Security and Data Handling
+
+- Use strong, unique credentials for TURN servers and restrict access to TURN and UI ports with firewall rules or a private network.
+- Store NVIDIA API keys, NGC API keys, Hugging Face tokens, and TURN credentials in `.env` or a secret manager. Do not commit populated secrets.
+- Disable ASR and TTS audio dumps outside controlled debugging sessions because they can contain user speech and sensitive data.
+- Protect observability dashboards, traces, and logs with authentication or network controls because they can include conversation content.
+- Prefer HTTPS or a trusted reverse proxy for remote deployments. Browser insecure-origin flags are for development only.
+
+---
+
 ## Conclusion
 
 Building production voice agents requires a holistic approach balancing technical performance, user experience, and operational excellence. Key takeaways:
 
-1. **Design for Latency**: Every millisecond counts in conversational AI
-2. **Handle Errors Gracefully**: Users should never feel lost
-3. **Monitor Everything**: You cannot improve what you do not measure
-4. **Test Thoroughly**: Automated testing catches issues before users do
-5. **Iterate Based on Data**: Use real user feedback to improve
-6. **Plan for Scale**: Design for 10x your current load
-7. **Prioritize Security**: Protect user data as your top responsibility
+1. **Design for Latency**: Every millisecond counts in conversational AI.
+2. **Handle Errors Gracefully**: Users should never feel lost.
+3. **Monitor Everything**: You cannot improve what you do not measure.
+4. **Test Thoroughly**: Automated testing catches issues before users do.
+5. **Iterate Based on Data**: Use real user feedback to improve.
+6. **Plan for Scale**: Design for 10x your current load.
+7. **Prioritize Security**: Protect user data as your top responsibility.

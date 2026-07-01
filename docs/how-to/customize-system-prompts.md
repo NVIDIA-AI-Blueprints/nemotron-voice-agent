@@ -33,6 +33,7 @@ SYSTEM_PROMPT_SELECTOR=llama-3.1-8b-instruct/flowershop
 ```
 
 **Characteristics**
+
 - Persona: Flora from GreenForce Garden
 - Handles order management, consultations, delivery coordination
 
@@ -42,10 +43,13 @@ To use the TTS emotion tags prompt sample, set the `SYSTEM_PROMPT_SELECTOR` in t
 
 ```bash
 # In .env file
-SYSTEM_PROMPT_SELECTOR=llama-3.1-8b-instruct/tts_emotion_tags
+SYSTEM_PROMPT_SELECTOR=llama/tts_emotion_tags
 ```
 
+Use the `llama/tts_emotion_tags` selector with the default text-filter behavior. If you use a model-specific inherited selector such as `llama-3.1-8b-instruct/tts_emotion_tags`, set `ENABLE_TTS_TEXT_FILTER=false` so the filter does not remove emotion-tag output.
+
 The generated LLM output format with this system prompt is as follows.
+
 ```
 Emotion: <Happy|Calm|Neutral|Sad|Angry|Fearful> Text: <response>
 ```
@@ -88,3 +92,11 @@ To deploy the voice agent with multilingual support, refer to [Enable Multilingu
     ```bash
     SYSTEM_PROMPT_SELECTOR=your-model-name/custom_prompt_name
     ```
+
+## Apply Changes
+
+Prompt files and environment variables are loaded when `python-app` starts. Restart the service after prompt changes:
+
+```bash
+docker compose restart python-app
+```

@@ -22,7 +22,7 @@ The following sections describe how the multilingual pipeline components work to
 
 The multilingual system uses a structured output format defined in [config/prompt.yaml](../../config/prompt.yaml) to coordinate language detection and TTS routing.
 
-```
+```text
 Language: <LangCode> Text: <DirectResponse> MetaData: <AdditionalInfo>
 ```
 
@@ -34,7 +34,7 @@ Language: <LangCode> Text: <DirectResponse> MetaData: <AdditionalInfo>
 
 The following are some example responses:
 
-```
+```text
 Language: en-US Text: How can I help you today? MetaData: greeting
 Language: de-DE Text: Gerne! Welche Blumen moechten Sie? MetaData: flower inquiry
 Language: fr-FR Text: Bonjour! Comment puis-je vous aider? MetaData: none
@@ -53,19 +53,21 @@ The agent uses these language detection rules.
 
 Follow these steps to deploy the Nemotron Voice Agent in multilingual mode.
 
+> **Prerequisite:** Multilingual mode switches the LLM to **Llama 3.3 Nemotron Super 49B**, which requires significantly more GPU memory than the default Nemotron-3-Nano configuration. Confirm that your system has enough VRAM before changing the ASR and LLM settings.
+
 1. Copy the example environment file to the root directory.
 
     ```bash
     cp config/env.example .env
     ```
 
-2. Edit the [.env](../../config/env.example) file and enable multilingual mode.
+2. Edit `.env` and enable multilingual mode.
 
     ```bash
     ENABLE_MULTILINGUAL=true
     ```
 
-    **Tip:** Set `CHAT_HISTORY_LIMIT` to `3`-`5` in the `.env` file for better language detection accuracy.
+    > **Tip:** Set `CHAT_HISTORY_LIMIT` to `3`-`5` in the `.env` file for better language detection accuracy.
 
 3. Configure multilingual ASR by replacing the default ASR settings with the following values.
 
@@ -74,12 +76,12 @@ Follow these steps to deploy the Nemotron Voice Agent in multilingual mode.
     ASR_DOCKER_IMAGE=nvcr.io/nim/nvidia/parakeet-1-1b-rnnt-multilingual:1.4.0
     ASR_MODEL_NAME=parakeet-rnnt-1.1b-unified-ml-cs-universal-multi-asr-streaming
     ASR_NIM_TAGS=mode=str
-    ASR_CLOUD_FUNCTION_ID=71203149-d3b7-4460-8231-1be2543a1fca #if using nvcf endpoint
+    ASR_CLOUD_FUNCTION_ID=71203149-d3b7-4460-8231-1be2543a1fca # if using NVCF endpoint
     ```
 
-    **Note:** These values replace the default `parakeet-1-1b-ctc-en-us` configuration. Comment out or remove the existing ASR settings before adding these.
+    **Note:** These values replace both the default ASR image (`ASR_DOCKER_IMAGE=nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.4.0`) and the default ASR model name (`ASR_MODEL_NAME=parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer`). Comment out or remove the existing ASR settings before adding these.
 
-4. Configure the LLM for multilingual by uncommenting OPTION 2 in the [.env](../../config/env.example) file and commenting out OPTION 1.
+4. Configure the LLM for multilingual by uncommenting OPTION 2 in `.env` and commenting out OPTION 1.
 
     Multilingual mode uses the **Llama 3.3 Nemotron Super 49B** model, which is significantly larger than the default Nemotron-3-Nano model. Ensure your system has sufficient VRAM to run the 49B model before enabling multilingual mode. Refer to the [main Requirements section](../../README.md#requirements) for general hardware and software prerequisites.
 
@@ -98,12 +100,19 @@ Follow these steps to deploy the Nemotron Voice Agent in multilingual mode.
 5. Deploy the Nemotron Voice Agent.
 
     ```bash
-    docker compose up -d
+    docker compose up --build -d
+    ```
+
+6. Verify that the multilingual ASR, LLM, and Python application are running.
+
+    ```bash
+    docker compose ps
+    docker compose logs -f asr-service nvidia-llm python-app
     ```
 
 ## Testing the Multilingual Agent
 
-After deployment, open your browser and navigate to `http://<machine-ip>:9000/` to access the voice agent UI.
+After deployment, open your browser and navigate to `http://<host-ip>:9000/` to access the voice agent UI.
 
 ### Example Conversations
 
@@ -118,7 +127,7 @@ The following examples demonstrate how the agent responds to different languages
 
 ### Supported Languages
 
-The multilingual agent supports the following language codes by default.
+The following table shows common language codes for multilingual conversations. The authoritative supported-language set comes from the deployed Magpie TTS model at runtime.
 
 | Language | Code |
 |----------|------|
@@ -129,8 +138,7 @@ The multilingual agent supports the following language codes by default.
 | Mandarin | `zh-CN` |
 | Italian | `it-IT` |
 
-
-You can customize the supported languages by editing the `lang_codes` variable in the `multilingual_voice_assistant` prompt in [config/prompt.yaml](../../config/prompt.yaml). By default, all languages supported by the deployed Magpie TTS model are automatically included as allowed language codes through runtime detection.
+At startup, the pipeline injects available TTS language codes into the `multilingual_voice_assistant` prompt based on `tts.list_available_voices()`. There is no static `lang_codes` field to edit in [config/prompt.yaml](../../config/prompt.yaml). To restrict languages, adjust the prompt instructions, deploy a TTS model or voice set with the desired languages, or customize the pipeline code that builds the allowed language list.
 
 ### Testing Language Switching
 

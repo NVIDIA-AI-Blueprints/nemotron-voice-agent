@@ -4,9 +4,14 @@ This guide points to tooling for benchmarking the Nemotron Voice Agent for **acc
 
 ```bash
 git submodule update --init
+ls nvidia-pipecat/tests/perf
 ```
 
+The local submodule directory is `nvidia-pipecat`; the upstream repository is `NVIDIA/voice-agent-examples`.
+
 **Transport:** The BigBench and performance scripts connect to the voice agent over **WebSocket only**. If your deployment uses WebRTC (the default), switch to WebSocket before running these benchmarks. Refer to [Choose a Transport Method](how-to/choose-transport-method.md) for how to set `TRANSPORT=WEBSOCKET` in `.env` and restart the services.
+
+After switching transports, verify that the WebSocket UI is available at `http://<host-ip>:9000` for workstation deployments or `http://<jetson-ip>:8081` for Jetson deployments before running benchmarks.
 
 ---
 
@@ -27,7 +32,7 @@ BigBench Audio evaluates **answer correctness** on the [ArtificialAnalysis/big_b
 
 ### Reference Results
 
-The following table shows accuracy (%) on Big Bench Audio for text-only (standalone LLM) vs speech-to-speech (LLM in voice agent pipeline):
+The following table shows point-in-time accuracy (%) on Big Bench Audio for text-only (standalone LLM) vs speech-to-speech (LLM in voice agent pipeline). Results can vary by model version, dataset revision, benchmark script version, prompt, and inference settings.
 
 | Model / API | Reasoning Mode | Text Only Standalone LLM (%) | LLM In Voice Agent Pipeline (%) |
 | --- | --- | --- | --- |
@@ -44,7 +49,7 @@ The performance tests in `nvidia-pipecat/tests/perf/` measure latency and scalab
 
 ### Reference Results
 
-**The Nemotron Voice Agent** performance benchmark shows **sub-second End-to-End (E2E) latency**. The setup uses **4× H100 GPUs** (one for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM) with [speculative speech processing](how-to/tune-pipeline-performance.md#speculative-speech-processing) enabled. All latencies are in seconds.
+**The Nemotron Voice Agent** performance benchmark shows **sub-second End-to-End (E2E) latency** in one measured setup. The setup uses **4× H100 GPUs** (one for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM) with [speculative speech processing](how-to/tune-pipeline-performance.md#speculative-speech-processing) enabled. All latencies are in seconds.
 
 > **Note:** This benchmark uses a 4-GPU setup to measure scalability. The [minimum deployment requirement](01-getting-started.md#gpu-requirements) is 2 GPUs.
 

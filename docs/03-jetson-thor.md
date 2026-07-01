@@ -8,6 +8,7 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
 
 - **Jetson Thor** flashed with **JetPack 7.0** using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) (with CUDA, CUDA-X, TensorRT, and NVIDIA Container Runtime components installed)
 - [NGC CLI](https://org.ngc.nvidia.com/setup/installers/cli) installed and configured
+- Access to the NVIDIA NGC Docker Registry
 - [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and [Docker Compose](https://docs.docker.com/compose/install/linux/)
 - [HuggingFace API token](https://huggingface.co/docs/hub/en/security-tokens) for downloading LLM models
 - Network connectivity
@@ -51,10 +52,12 @@ All models are deployed on the local Jetson device. Default models used:
 1. Clone the repository and navigate to the root directory.
 
     ```bash
-    git clone git@github.com:NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    git clone https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
     cd nemotron-voice-agent
     git submodule update --init
     ```
+
+    If you use GitHub SSH keys, you can use `git@github.com:NVIDIA-AI-Blueprints/nemotron-voice-agent.git` instead.
 
 2. Configure the environment. Copy the example environment file [env.jetson.example](../config/env.jetson.example) to the root directory:
 
@@ -67,6 +70,7 @@ All models are deployed on the local Jetson device. Default models used:
     ```bash
     # Required
     export NVIDIA_API_KEY=<your-nvidia-api-key>
+    export NGC_API_KEY=<your-nvidia-api-key>
     export HF_TOKEN=<your-huggingface-token>
     ```
 
@@ -74,62 +78,76 @@ All models are deployed on the local Jetson device. Default models used:
     - `ENABLE_SPECULATIVE_SPEECH=false` — Disabled for resource optimization.
     - `WORKERS=1` — Single worker to reduce memory usage.
 
-4. Deploy Nemotron Speech ASR and TTS models.
-
-    a. Ensure you meet the [prerequisites](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide.html#prerequisites) before proceeding.
-
-    b. Configure NGC CLI with your API key:
+4. Log in to the NVIDIA NGC Docker Registry.
 
     ```bash
-    ngc config set
+    docker login nvcr.io -u '$oauthtoken' -p "$NGC_API_KEY"
     ```
 
-    c. Download the Nemotron Speech ASR and TTS Quick Start scripts:
+5. Deploy Nemotron Speech ASR and TTS models.
 
-    ```bash
-    ngc registry resource download-version nvidia/riva/riva_quickstart_arm64:2.24.0
-    cd riva_quickstart_arm64_v2.24.0
-    ```
+    1. Ensure you meet the [prerequisites](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide.html#prerequisites) before proceeding.
 
-    d. [Optional] Enable Silero VAD for improved ASR performance:
-
-    > **Tip:** Enabling Silero VAD can help improve End-of-Utterance (EOU) detection and performance in noisy environments.
-
-    1. Edit the `config.sh` in Quick Start directory `riva_quickstart_arm64_v2.24.0`:
+    2. Configure NGC CLI with your API key:
 
         ```bash
-        # Use Silero Diarizer as accessory model for ASR
-        asr_accessory_model=("silero_diarizer")
+        ngc config set
         ```
 
-    2. Update your `.env` file with the ASR model name:
+    3. Download the Nemotron Speech ASR and TTS Quick Start scripts:
 
         ```bash
-        ASR_MODEL_NAME=parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer
+        ngc registry resource download-version nvidia/riva/riva_quickstart_arm64:2.24.0
+        cd riva_quickstart_arm64_v2.24.0
         ```
 
-    e. Deploy Nemotron Speech ASR and TTS models:
+    4. [Optional] Enable Silero VAD for improved ASR performance:
 
-    ```bash
-    bash riva_init.sh
-    bash riva_start.sh
-    ```
+        > **Tip:** Enabling Silero VAD can help improve End-of-Utterance (EOU) detection and performance in noisy environments.
 
-    > **Note:** Initialization may take 30-60 minutes on first run.
+        1. Edit the `config.sh` in Quick Start directory `riva_quickstart_arm64_v2.24.0`:
 
-5. Start LLM Service and Voice Agent Application. Start services from the root directory:
+            ```bash
+            # Use Silero Diarizer as accessory model for ASR
+            asr_accessory_model=("silero_diarizer")
+            ```
+
+        2. Update the project `.env` file in the repository root with the ASR model name:
+
+            ```bash
+            ASR_MODEL_NAME=parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer
+            ```
+
+    5. Deploy Nemotron Speech ASR and TTS models:
+
+        ```bash
+        bash riva_init.sh
+        bash riva_start.sh
+        ```
+
+        > **Note:** Initialization may take 30-60 minutes on first run.
+
+    6. Return to the repository root before starting the Jetson Docker Compose stack:
+
+        ```bash
+        cd ..
+        ```
+
+6. Start the LLM service and Voice Agent application from the repository root:
 
     ```bash
     docker compose -f docker-compose.jetson.yml up -d
     ```
 
-    > **Note:** Deployment may take 15-20 minutes on first run.
+    > **Note:** Deployment may take 15-20 minutes on first run. The Jetson LLM service can take several minutes to download and load the model. Watch `docker compose -f docker-compose.jetson.yml logs -f llm-nvidia-jetson` until the service is ready before using the UI.
 
-6. Access the application at `http://<jetson-ip>:8081` on your browser.
+7. Access the application at `http://<jetson-ip>:8081` on your browser.
 
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
 
-   > **Note:** To enable microphone access in Chrome, go to `chrome://flags/`, enable "Insecure origins treated as secure", add `http://<jetson-ip>:8081` to the list, and restart Chrome. If you need to access the application from remote locations or deploy on cloud platforms, configure a TURN server. Refer to [Optional: Deploy TURN Server for Remote Access](01-getting-started.md#optional-deploy-turn-server-for-remote-access).
+    > **Note:** To enable microphone access in Chrome, go to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, enable **Insecure origins treated as secure**, add `http://<jetson-ip>:8081` to the list, and restart Chrome.
+
+    > **Remote access:** If you need TURN for a remote Jetson deployment, follow [Optional: Deploy TURN Server for Remote Access](01-getting-started.md#optional-deploy-turn-server-for-remote-access), but use the Jetson UI origin `http://<jetson-ip>:8081` instead of the workstation origin `http://<host-ip>:9000`.
 
 ---
 
