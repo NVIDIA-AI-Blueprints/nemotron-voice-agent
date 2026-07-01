@@ -3,7 +3,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { RTVIEvent } from "@pipecat-ai/client-js";
-import { VoiceVisualizer, usePipecatClientMediaTrack, useRTVIClientEvent } from "@pipecat-ai/client-react";
+import { useRTVIClientEvent } from "@pipecat-ai/client-react";
 
 type ParticipantType = "local" | "bot";
 
@@ -87,37 +87,42 @@ export function VoiceLevelVisualizer({
   barMaxHeight = 44,
   barWidth = 8,
 }: Readonly<VoiceLevelVisualizerProps>) {
-  const [remoteLevel, setRemoteLevel] = useState(0);
-  const track = usePipecatClientMediaTrack("audio", participantType);
+  const [level, setLevel] = useState(0);
+
+  useRTVIClientEvent(
+    RTVIEvent.LocalAudioLevel,
+    useCallback((rawLevel: number) => {
+      if (participantType === "local") setLevel(normalizeAudioLevel(rawLevel));
+    }, [participantType])
+  );
 
   useRTVIClientEvent(
     RTVIEvent.RemoteAudioLevel,
     useCallback((rawLevel: number) => {
-      setRemoteLevel(normalizeRemoteAudioLevel(rawLevel));
-    }, [])
+      if (participantType === "bot") setLevel(normalizeRemoteAudioLevel(rawLevel));
+    }, [participantType])
   );
 
   useRTVIClientEvent(
     RTVIEvent.BotStoppedSpeaking,
     useCallback(() => {
-      setRemoteLevel(0);
-    }, [])
+      if (participantType === "bot") setLevel(0);
+    }, [participantType])
   );
 
-  if (participantType === "local" || track) {
-    return (
-      <VoiceVisualizer
-        participantType={participantType}
-        backgroundColor={backgroundColor}
-        barColor={barColor}
-        barCount={barCount}
-        barGap={barGap}
-        barLineCap={barLineCap}
-        barMaxHeight={barMaxHeight}
-        barWidth={barWidth}
-      />
-    );
-  }
+  useRTVIClientEvent(
+    RTVIEvent.UserStoppedSpeaking,
+    useCallback(() => {
+      if (participantType === "local") setLevel(0);
+    }, [participantType])
+  );
+
+  useRTVIClientEvent(
+    RTVIEvent.Disconnected,
+    useCallback(() => {
+      setLevel(0);
+    }, [])
+  );
 
   return (
     <AudioLevelBars
@@ -130,7 +135,7 @@ export function VoiceLevelVisualizer({
       barLineCap={barLineCap}
       barMaxHeight={barMaxHeight}
       barWidth={barWidth}
-      level={remoteLevel}
+      level={level}
     />
   );
 }
