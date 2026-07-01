@@ -149,10 +149,6 @@ services:
       USE_SILERO_VAD_TURN_DETECTION: "true"
       SILERO_VAD_STOP_SECS: "0.5"
       AUDIO_OUT_10MS_CHUNKS: "40"
-    volumes:
-      - ./src:/app/src:ro
-      - ./examples_registry.yaml:/app/examples_registry.yaml:ro
-      - ./benchmarking_tools/scaling-perf:/app/benchmarking_tools/scaling-perf:ro
 
   multilingual-assistant:
     <<: *app-base
