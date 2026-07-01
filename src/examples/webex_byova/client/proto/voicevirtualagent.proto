@@ -1,0 +1,77 @@
+/*
+This proto file has the definition of RPC, request and response structures required to use BYoVA(Bring your own Virtual Agent)
+These definitions will be used for communication between client and VA(server) over gRPC
+*/
+syntax = "proto3";
+package com.cisco.wcc.ccai.media.v1;
+
+import "byova_common.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+message VoiceVARequest {
+  string conversation_id = 1;
+  string customer_org_id = 2;
+  string virtual_agent_id = 3;
+  bool allow_partial_responses = 4;
+  string vendor_specific_config = 5;
+
+  oneof voice_va_input_type {
+    VoiceInput audio_input = 6;
+    DTMFInputs dtmf_input = 7;
+    EventInput event_input = 8;
+  }
+  map<string, string> additional_info = 9;
+}
+
+message VoiceInput {
+  bytes caller_audio = 1;
+
+  enum VoiceEncoding {
+    UNSPECIFIED_FORMAT = 0;
+    LINEAR16_FORMAT = 1;
+    MULAW_FORMAT = 2;
+    ALAW_FORMAT = 3;
+  }
+  VoiceEncoding encoding = 2;
+  int32 sample_rate_hertz = 3;
+  google.protobuf.Timestamp audio_timestamp = 4;
+  string language_code = 5;
+  bool is_single_utterance = 6;
+}
+
+message VoiceVAResponse {
+  repeated Prompt prompts = 1;
+  repeated OutputEvent output_events = 2;
+  bool input_sensitive = 3;
+  VoiceVAInputMode input_mode = 4;
+  InputHandlingConfig input_handling_config = 5;
+  TextContent session_transcript = 6;
+  TextContent session_summary = 7;
+  ResponseType response_type = 8;
+
+  enum ResponseType {
+    FINAL = 0;
+    PARTIAL = 1;
+    CHUNK = 2;
+  }
+}
+
+message Prompt {
+  string text = 1;
+  string audio_uri = 2;
+  bytes audio_content = 3;
+  bool is_barge_in_enabled = 4;
+}
+
+enum VoiceVAInputMode {
+  INPUT_VOICE_MODE_UNSPECIFIED = 0;
+  INPUT_VOICE = 1;
+  INPUT_EVENT_DTMF = 2;
+  INPUT_VOICE_DTMF = 3;
+}
+
+service VoiceVirtualAgent {
+  rpc ProcessCallerInput(stream VoiceVARequest) returns (stream VoiceVAResponse);
+  rpc ListVirtualAgents(ListVARequest) returns (ListVAResponse) {}
+}
