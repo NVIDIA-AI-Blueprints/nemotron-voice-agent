@@ -117,7 +117,12 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
   }, []);
 
   const sendWebcamState = useCallback((isEnabled: boolean) => {
-    client?.sendClientMessage("webcam-state", { enabled: isEnabled });
+    if (!client || client.state !== "ready") return;
+    try {
+      client.sendClientMessage("webcam-state", { enabled: isEnabled });
+    } catch (err) {
+      console.warn("Could not send webcam state update:", err);
+    }
   }, [client]);
 
   const handleStreamEnded = useCallback(() => {

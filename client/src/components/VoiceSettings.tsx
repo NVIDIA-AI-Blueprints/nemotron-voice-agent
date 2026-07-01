@@ -120,11 +120,15 @@ export function VoiceSettings() {
       voiceId,
     }));
     setSelectedVoiceId(voiceId);
-    if (isConnected && client && voiceId) {
-      client.sendClientMessage("set-voice", {
-        voice_id: voiceId,
-        language: activeLang,
-      });
+    if (isConnected && client?.state === "ready" && voiceId) {
+      try {
+        client.sendClientMessage("set-voice", {
+          voice_id: voiceId,
+          language: activeLang,
+        });
+      } catch (err) {
+        console.warn("Could not send voice update:", err);
+      }
     }
   };
 
