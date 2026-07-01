@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
-import { Component, useCallback, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { PipecatClient } from "@pipecat-ai/client-js";
 import { PipecatClientProvider, PipecatClientAudio } from "@pipecat-ai/client-react";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
@@ -17,44 +17,6 @@ import { Sidebar } from "./components/Sidebar";
 import { CenterPanel } from "./components/content";
 
 const EMPTY_ICE_SERVERS: RTCIceServer[] = [];
-
-class AppErrorBoundary extends Component<
-  Readonly<{ children: ReactNode; resetKey: number }>,
-  { error: Error | null }
-> {
-  state: { error: Error | null } = { error: null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Nemotron Voice Agent UI error:", error, errorInfo);
-  }
-
-  componentDidUpdate(prevProps: Readonly<{ resetKey: number }>) {
-    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
-      this.setState({ error: null });
-    }
-  }
-
-  render() {
-    if (!this.state.error) return this.props.children;
-    return (
-      <div className="h-screen d-flex items-center justify-center p-4">
-        <div className="panel-section max-w-md">
-          <p className="panel-label">UI ERROR</p>
-          <p className="text-sm text-secondary mb-3">
-            The session UI hit an unexpected browser-side error.
-          </p>
-          <button className="btn-primary" type="button" onClick={() => globalThis.location.reload()}>
-            Reload
-          </button>
-        </div>
-      </div>
-    );
-  }
-}
 
 function AppInner() {
   const { selectedTransport } = useApp();
@@ -101,17 +63,15 @@ function AppInner() {
 
   return (
     <PipecatClientProvider key={clientGeneration} client={client} jotaiStore={jotaiStore}>
-      <AppErrorBoundary resetKey={clientGeneration}>
-        <div className="h-screen d-flex flex-col overflow-hidden">
-          <Header />
-          <div className="flex-1 d-flex overflow-hidden">
-            <StatusPanel />
-            <CenterPanel />
-            <Sidebar />
-          </div>
-          <PipecatClientAudio />
+      <div className="h-screen d-flex flex-col overflow-hidden">
+        <Header />
+        <div className="flex-1 d-flex overflow-hidden">
+          <StatusPanel />
+          <CenterPanel />
+          <Sidebar />
         </div>
-      </AppErrorBoundary>
+        <PipecatClientAudio />
+      </div>
     </PipecatClientProvider>
   );
 }

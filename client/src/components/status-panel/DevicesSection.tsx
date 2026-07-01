@@ -5,8 +5,8 @@ import { useState, useRef, useEffect } from "react";
 import {
   usePipecatClientMicControl,
   usePipecatClientMediaDevices,
+  VoiceVisualizer
 } from "@pipecat-ai/client-react";
-import { VoiceLevelVisualizer } from "../VoiceLevelVisualizer";
 
 export function DevicesSection() {
   const { enableMic, isMicEnabled } = usePipecatClientMicControl();
@@ -44,9 +44,8 @@ export function DevicesSection() {
         >
           <span className="device-icon">🎤</span>
           <div className="device-visualizer">
-            <VoiceLevelVisualizer
+            <VoiceVisualizer
               participantType="local"
-              ariaLabel="Microphone audio level"
               backgroundColor="transparent"
               barColor={isMicEnabled ? "#76b900" : "#666666"}
               barCount={16}

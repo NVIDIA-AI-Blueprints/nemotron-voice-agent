@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useConnectionState } from "../../hooks/useConnectionState";
 import { IdleHero } from "./IdleHero";
 import { ConversationPanel } from "./ConversationPanel";
@@ -34,13 +34,6 @@ function ConversationContent() {
 
 export function CenterPanel() {
   const [activeTab, setActiveTab] = useState<Tab>("conversation");
-  const conversationScrollRef = useRef<HTMLDivElement>(null);
-  const { isConnected } = useConnectionState();
-
-  useLayoutEffect(() => {
-    if (activeTab !== "conversation" || isConnected) return;
-    conversationScrollRef.current?.scrollTo({ top: 0, left: 0 });
-  }, [activeTab, isConnected]);
 
   return (
     <main className="flex-1 d-flex flex-col overflow-hidden">
@@ -57,7 +50,7 @@ export function CenterPanel() {
       </div>
 
       <div className={`flex-1 min-h-0 relative ${activeTab !== "conversation" ? "hidden" : ""}`}>
-        <div ref={conversationScrollRef} className="conversation-overlay overflow-y-auto">
+        <div className="conversation-overlay overflow-y-auto">
           <ConversationContent />
         </div>
       </div>

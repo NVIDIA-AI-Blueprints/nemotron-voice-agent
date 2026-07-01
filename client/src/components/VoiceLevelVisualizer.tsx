@@ -3,7 +3,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { RTVIEvent } from "@pipecat-ai/client-js";
-import { useRTVIClientEvent } from "@pipecat-ai/client-react";
+import { VoiceVisualizer, usePipecatClientMediaTrack, useRTVIClientEvent } from "@pipecat-ai/client-react";
 
 type ParticipantType = "local" | "bot";
 
@@ -87,42 +87,37 @@ export function VoiceLevelVisualizer({
   barMaxHeight = 44,
   barWidth = 8,
 }: Readonly<VoiceLevelVisualizerProps>) {
-  const [level, setLevel] = useState(0);
-
-  useRTVIClientEvent(
-    RTVIEvent.LocalAudioLevel,
-    useCallback((rawLevel: number) => {
-      if (participantType === "local") setLevel(normalizeAudioLevel(rawLevel));
-    }, [participantType])
-  );
+  const [remoteLevel, setRemoteLevel] = useState(0);
+  const track = usePipecatClientMediaTrack("audio", participantType);
 
   useRTVIClientEvent(
     RTVIEvent.RemoteAudioLevel,
     useCallback((rawLevel: number) => {
-      if (participantType === "bot") setLevel(normalizeRemoteAudioLevel(rawLevel));
-    }, [participantType])
+      setRemoteLevel(normalizeRemoteAudioLevel(rawLevel));
+    }, [])
   );
 
   useRTVIClientEvent(
     RTVIEvent.BotStoppedSpeaking,
     useCallback(() => {
-      if (participantType === "bot") setLevel(0);
-    }, [participantType])
-  );
-
-  useRTVIClientEvent(
-    RTVIEvent.UserStoppedSpeaking,
-    useCallback(() => {
-      if (participantType === "local") setLevel(0);
-    }, [participantType])
-  );
-
-  useRTVIClientEvent(
-    RTVIEvent.Disconnected,
-    useCallback(() => {
-      setLevel(0);
+      setRemoteLevel(0);
     }, [])
   );
+
+  if (participantType === "local" || track) {
+    return (
+      <VoiceVisualizer
+        participantType={participantType}
+        backgroundColor={backgroundColor}
+        barColor={barColor}
+        barCount={barCount}
+        barGap={barGap}
+        barLineCap={barLineCap}
+        barMaxHeight={barMaxHeight}
+        barWidth={barWidth}
+      />
+    );
+  }
 
   return (
     <AudioLevelBars
@@ -135,7 +130,7 @@ export function VoiceLevelVisualizer({
       barLineCap={barLineCap}
       barMaxHeight={barMaxHeight}
       barWidth={barWidth}
-      level={level}
+      level={remoteLevel}
     />
   );
 }
