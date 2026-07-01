@@ -1,0 +1,49 @@
+[project]
+name = "cisco-webex-byova-adapter"
+version = "0.1.0"
+description = "Thin BYoVA-to-Nemotron adapter for Cisco Webex Contact Center"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "grpcio>=1.74.0",
+    "protobuf>=6.33.6",
+    "pipecat-ai[websocket]==1.1.0",
+    "PyJWT[crypto]>=2.10.1",
+    "python-dotenv>=1.2.2",
+    "websockets>=15.0.1",
+]
+
+[project.scripts]
+cisco-webex-byova-adapter = "cisco_webex_byova_adapter.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+override-dependencies = [
+    "cryptography>=46.0.5",
+    "idna>=3.15",
+    "protobuf>=6.33.6",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.6",
+    "pre-commit>=4.0.0",
+    "grpcio-tools>=1.74.0",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I", "D"]
+ignore = ["SIM108", "E402"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cisco_webex_byova_adapter*"]

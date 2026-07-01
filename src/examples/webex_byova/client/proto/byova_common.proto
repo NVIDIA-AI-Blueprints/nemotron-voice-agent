@@ -1,0 +1,103 @@
+/*
+This file has the defintion of the common fields used in VoiceVirtualAgent.proto
+*/
+syntax = "proto3";
+
+package com.cisco.wcc.ccai.media.v1;
+import "google/protobuf/struct.proto";
+
+message TextContent {
+  oneof input_content {
+    string text = 1;
+    string ssml = 2;
+  }
+  string language_code = 3;
+}
+
+message InputSpeechTimers {
+  int32 max_speech_timeout_msec = 1;
+  int32 complete_timeout_msec = 2;
+  int32 incomplete_timeout_msec = 3;
+  int32 no_input_timeout_msec = 4;
+}
+
+message InputHandlingConfig {
+  DTMFInputConfig dtmf_config = 1;
+  InputSpeechTimers speech_timers = 2;
+}
+
+enum DTMFDigits {
+  DTMF_EVENT_UNSPECIFIED = 0;
+  DTMF_DIGIT_ONE = 1;
+  DTMF_DIGIT_TWO = 2;
+  DTMF_DIGIT_THREE = 3;
+  DTMF_DIGIT_FOUR = 4;
+  DTMF_DIGIT_FIVE = 5;
+  DTMF_DIGIT_SIX = 6;
+  DTMF_DIGIT_SEVEN = 7;
+  DTMF_DIGIT_EIGHT = 8;
+  DTMF_DIGIT_NINE = 9;
+  DTMF_DIGIT_ZERO = 10;
+  DTMF_DIGIT_A = 11;
+  DTMF_DIGIT_B = 12;
+  DTMF_DIGIT_C = 13;
+  DTMF_DIGIT_D = 14;
+  DTMF_DIGIT_STAR = 15;
+  DTMF_DIGIT_POUND = 16;
+}
+
+message DTMFInputConfig {
+  int32 inter_digit_timeout_msec = 1;
+  DTMFDigits termchar = 2;
+  int32 dtmf_input_length = 3;
+}
+
+message DTMFInputs {
+  repeated DTMFDigits dtmf_events = 1;
+}
+
+message ListVARequest {
+  string customer_org_id = 1;
+  bool is_default_virtual_agent_enabled = 2;
+}
+
+message VirtualAgentInfo{
+  string virtual_agent_id = 1;
+  string virtual_agent_name = 2;
+  bool is_default = 3;
+  map<string, string> attributes = 4;
+}
+
+message ListVAResponse{
+  repeated VirtualAgentInfo virtual_agents = 1;
+}
+
+message OutputEvent {
+  enum EventType {
+    UNSPECIFIED_EVENT = 0;
+    SESSION_END = 1;
+    TRANSFER_TO_AGENT = 2;
+    CUSTOM_EVENT = 3;
+    START_OF_INPUT = 4;
+    END_OF_INPUT = 5;
+    NO_MATCH = 6;
+    NO_INPUT = 7;
+  }
+  EventType event_type = 1;
+  string name = 2;
+  google.protobuf.Struct metadata = 3;
+}
+
+message EventInput {
+  enum EventType {
+    UNSPECIFIED_INPUT = 0;
+    SESSION_START = 1;
+    SESSION_END = 2;
+    NO_INPUT = 3;
+    START_OF_DTMF = 4;
+    CUSTOM_EVENT = 5;
+  }
+  EventType event_type = 1;
+  string name = 2;
+  google.protobuf.Struct parameters = 3;
+}

@@ -12,7 +12,8 @@ name: nemotron-voice-agent
 #   multilingual-assistant       Cascaded Multilingual ASR + LLM + TTS Pipeline (Multilingual Assistant)
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
-#   frontend-backend-agent               Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
+#   frontend-backend-agent       Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
+#   webex-byova-assistant        Cascaded backend for Cisco Webex BYOVA adapter
 #
 # Hardware targets:
 #   server                    NIM ASR + LLM + TTS. Recommended for scaling
@@ -39,6 +40,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-agent/server up
 #   docker compose --profile frontend-backend-agent/single-gpu up
+#   docker compose --profile webex-byova-assistant/server up
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
@@ -228,3 +230,16 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
+
+  webex-byova-assistant-server:
+    <<: *app-base
+    profiles:
+      - webex-byova-assistant/server
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: webex-byova-assistant
+      TRANSPORT_SELECTION: websocket
+      UVICORN_WORKERS: "1"
+      USE_SILERO_VAD_TURN_DETECTION: "true"
+      SILERO_VAD_STOP_SECS: "${SILERO_VAD_STOP_SECS:-0.8}"
+      AUDIO_OUT_10MS_CHUNKS: "40"

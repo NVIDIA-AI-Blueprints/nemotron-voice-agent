@@ -39,6 +39,7 @@ services:
     profiles:
       - generic-assistant/server
       - frontend-backend-agent/server
+      - webex-byova-assistant/server
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=en-US,mode=str
