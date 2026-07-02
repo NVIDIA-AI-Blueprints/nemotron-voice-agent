@@ -111,10 +111,8 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
 
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 
-6. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require). Use `https://localhost:7860` on the device itself. For a remote client, replace `<machine-ip>` with the Jetson Thor IP address.
+6. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require).
 
-    > **Note:** The development server generates a self-signed certificate for local HTTPS. On first visit, accept the browser certificate warning for your test host, then allow microphone access.
-    >
     > **Note:** `PIPELINE_TLS=false` serves plain HTTP for headless/API testing only. For plain-HTTP browser testing, see [plain-HTTP deployment and usage](06-troubleshooting.md#browser-access).
 
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.

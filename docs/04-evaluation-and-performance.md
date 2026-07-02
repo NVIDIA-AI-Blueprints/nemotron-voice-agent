@@ -8,7 +8,7 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 
 ### Reference Results
 
-The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x H100 GPU** setup (one GPU for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM). Most tested concurrency levels are below one second E2E latency, and the 64-stream run reaches 1.00 second. Treat these numbers as a scaling reference for this topology, not as a general expectation for cloud-only or single-GPU deployments. All latencies are in seconds.
+The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x H100 GPU** setup (one GPU for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM). Most tested concurrency levels are below one second E2E latency, and the 64-stream run reaches 1.00 second. All latencies are in seconds.
 
 > **Note:** This benchmark uses a 4-GPU setup to measure scalability. The [minimum deployment requirement](01-getting-started.md#docker-based-deployment) is cloud-only (no local GPUs) or 1 GPU with roughly 80 GB available VRAM for a local profile.
 
@@ -41,8 +41,6 @@ The following table shows accuracy (%) on Big Bench Audio for the LLM standalone
 | Nemotron 49B (`llama-3.3-nemotron-super-49b-v1.5`) | Reasoning OFF | 82.70 | 60.30 |
 | Nemotron 30B (`nemotron-3-nano`) | Reasoning ON, Budget 500 | 78.76 | 75.60 |
 | Nemotron 30B (`nemotron-3-nano`)| Reasoning OFF | 56.50 | 50.40 |
-
-Voice-agent pipeline accuracy can be lower than text-only LLM accuracy because the request passes through speech recognition, turn-taking, and spoken-response constraints before the LLM answer is judged. Use these results to choose a model and reasoning mode for your latency and accuracy target, then validate with your own domain audio.
 
 ### How to Reproduce
 

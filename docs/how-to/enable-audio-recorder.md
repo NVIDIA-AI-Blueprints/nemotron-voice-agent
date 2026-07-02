@@ -2,8 +2,6 @@
 
 The audio recorder captures raw ASR/TTS audio for debugging and issue reproduction. Each conversation turn is saved as a separate WAV file for easy analysis.
 
-> **Privacy:** Audio dumps can contain sensitive personal or biometric data. Enable this feature only for debugging with appropriate user consent, retention limits, access controls, and encrypted storage. Keep it disabled in production unless your deployment has an approved data-handling policy.
-
 ## Configuration
 
 | Variable | Default | Description |
@@ -73,4 +71,4 @@ The `<stream_id>` is a unique 8-character hex ID per session, so files from conc
 > sudo chown -R $(id -u):$(id -g) ./audio_dumps
 > ```
 
-> **Warning:** Disable the audio recorder in production to prevent disk exhaustion and unintended retention of user audio.
+> **Warning:** Disable the audio recorder in production to prevent disk exhaustion.

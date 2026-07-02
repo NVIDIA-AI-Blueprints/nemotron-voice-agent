@@ -16,7 +16,7 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 
 1. The user speaks, and ASR emits interim transcripts as audio streams in.
 2. Silero VAD detects a pause in speech.
-3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it is incomplete but silence continues past the stop threshold, the turn completes anyway (fallback).
+3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it's incomplete but silence continues past the stop threshold, the turn completes anyway (fallback).
 4. On a completed turn, the transcript goes to the LLM and TTS streams the reply back.
 
 ### Configuration
@@ -120,8 +120,6 @@ The server supports both WebRTC and WebSocket transports simultaneously on diffe
 | **WebSocket** | `WS /api/ws` | Telephony / server-side integrations, testing, firewall-restricted environments, simpler deployments |
 
 **For telephony (SIP/PSTN) and server-to-server use cases, use the WebSocket endpoint.** It streams raw audio frames you can bridge to a gateway or another service. WebRTC is best for direct browser clients, where its built-in jitter buffering and NAT traversal give the lowest latency.
-
-> **Scaling note:** The browser WebRTC flow depends on session configuration that is process-local. Keep `UVICORN_WORKERS=1` for that flow unless your deployment adds sticky routing or shared session state. Use WebSocket for the multi-worker scaling benchmark path.
 
 ### Choosing which transports are exposed
 

@@ -2,9 +2,9 @@
 
 The cascaded pipeline calls a text **LLM** for response generation. The **Omni** examples use a single audio-input model that performs ASR and the LLM together. All of them are **NVIDIA Nemotron** models, reasoning-capable open models with built-in tool calling, served either from the cloud (NVIDIA-hosted NVCF endpoints) or self-hosted next to the pipeline as a Compose sidecar.
 
-The blueprint uses models from the **Nemotron 3** family and exposes them through example-specific service catalogs. Evaluate the model, deployment path, and hardware profile that match your latency, accuracy, and cost targets before putting a deployment in production.
+Nemotron models are **transparent**: weights and training data are open on [Hugging Face](https://huggingface.co/nvidia) and the technical reports for reproducing them are public, so you can evaluate a model before putting it in production. The **Nemotron 3** family pairs a hybrid **Mamba-Transformer MoE** architecture for efficient, high-throughput, multimodal agentic AI, and deploys with open frameworks (vLLM, SGLang, Ollama, llama.cpp) on any NVIDIA GPU (edge, cloud, or data center) or as NVIDIA NIM microservices.
 
-This page covers the models that ship with the blueprint: **Nano**, **Super**, and **Nano Omni**. Learn more about the broader Nemotron model family at [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron).
+The reasoning family is tiered by platform. **Nano** is cost-efficient with high accuracy for specialized sub-agents, and is multimodal via **Nano Omni**. **Super** offers the highest efficiency with leading accuracy for reasoning and tool calling in multi-agent apps. **Ultra** gives the highest reasoning accuracy for the most complex agentic tasks. Learn more at [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron).
 
 Models are declared per example in `services.cloud.yaml` (remote / NVCF) and `services.local.yaml` (Compose-managed sidecars). This page is the **model reference**. It covers what's available, how to deploy and size it, how to control reasoning and tool calling, and how to tune per-request sampling. For how the catalog is loaded, switched in the UI, and overridden, see [Configure Services](configure-services.md).
 
@@ -17,8 +17,6 @@ Three unique Nemotron models back the examples. Each is served by the self-hoste
 | **Nemotron 3 Nano 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron3-nano.yaml`](../../docker/docker-compose.nemotron3-nano.yaml) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) |
 | **Nemotron 3 Super 120B A12B**: recommended for cloud deployments, higher capability for complex tasks | [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
 | **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
-
-> **Note:** Self-hosting Super uses the standalone `nemotron-3-super` compose service and requires a hardware layout that can host the model. It is not started by the standard `<example>/workstation` profile unless you add the Super profile/service to your deployment.
 
 Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` / `services.local.yaml`:
 
@@ -35,7 +33,7 @@ The `*-reasoning` keys are the **same weights** with thinking enabled (see [Reas
 You can self-host the LLM two ways, and the repo wires the right one per profile:
 
 - **NIM** (`nvidia-llm`, `nemotron-3-super`): a prebuilt, optimized inference microservice with automatic, hardware-aware **model-profile** selection. Recommended for Nano and Super on supported data-center / workstation GPUs. Used by the `*/workstation` profiles.
-- **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`): serves the weights directly with `vllm serve`, giving explicit control over every flag. Used where a NIM profile is not the right fit: the **Omni** NVFP4 model, and **DGX Spark** / **Jetson Thor** edge deployments. This is more manual, since you set precision, parsers, and memory flags yourself.
+- **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`): serves the weights directly with `vllm serve`, giving explicit control over every flag. Used where a NIM profile isn't the right fit: the **Omni** NVFP4 model, and **DGX Spark** / **Jetson Thor** edge deployments. This is more manual, since you set precision, parsers, and memory flags yourself.
 
 Both expose the same OpenAI-compatible API, so the pipeline and the request tuning below behave identically against either.
 
