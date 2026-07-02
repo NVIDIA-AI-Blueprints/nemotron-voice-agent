@@ -45,7 +45,7 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 
 ### VRAM & hardware support
 
-The ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. On a single ~80 GB GPU, ASR (~15 GB) + TTS (~14 GB) + the LLM (~30 GB FP8) fit together. If they don't, move ASR/TTS to a second GPU via their `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the full multi-GPU layout.
+The ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. On a single ~80 GB GPU, ASR (~15 GB) + TTS (~14 GB) + the LLM (~30 GB FP8) fit together. If they do not, move ASR/TTS to a second GPU via their `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the full multi-GPU layout.
 
 ### Performance
 

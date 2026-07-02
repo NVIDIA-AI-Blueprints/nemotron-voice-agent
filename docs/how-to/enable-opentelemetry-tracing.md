@@ -2,11 +2,13 @@
 
 OpenTelemetry tracing provides observability for the cascaded voice pipelines, allowing you to monitor latency, debug issues, and analyze conversation flows. The steps below show how to enable tracing with [Phoenix](https://arize.com/docs/phoenix/self-hosting).
 
+> **Security:** Traces can include conversation metadata, token usage, timing, and service details. Run Phoenix on a trusted network, place remote access behind authentication, and review your data-retention policy before enabling tracing in shared or production environments.
+
 ## Steps
 
 1. Enable tracing in `.env` **before** starting the stack, so the app picks it up:
 
-    ```bash
+    ```env
     ENABLE_TRACING=true
     OTEL_CONSOLE_EXPORT=false
     OTEL_EXPORTER_OTLP_ENDPOINT=phoenix:4317
@@ -18,7 +20,7 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
     docker compose --profile generic-assistant/workstation --profile tracing up -d
     ```
 
-    If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker-compose.yml`) exposes:
+    If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker/docker-compose.phoenix.yaml` and included by the root compose file) exposes:
     - **Port 6006** — Phoenix UI
     - **Port 4317** — OTLP gRPC collector
 
@@ -28,7 +30,7 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
     http://localhost:6006
     ```
 
-    For remote access replace `localhost` with your server's IP address.
+    For remote access replace `localhost` with your server's IP address. Do this only on a trusted network or behind an authenticated proxy.
 
 ## Configuration
 
@@ -64,5 +66,7 @@ Conversation
 ## Alternative Backends
 
 Any OTLP-compatible backend works — Jaeger, Grafana Tempo, Langfuse, Datadog, etc. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at your collector and the traces will flow there instead of Phoenix.
+
+The built-in exporter uses insecure gRPC for local development. For multi-host or production deployments, route OTLP traffic over TLS or through a trusted collector endpoint, and avoid sending traces over untrusted networks.
 
 See the [Pipecat OpenTelemetry docs](https://docs.pipecat.ai/server/utilities/opentelemetry) for additional exporter options.

@@ -31,6 +31,13 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
     HF_TOKEN=<your-huggingface-token>
     ```
 
+    Export the NVIDIA API key in your shell and log in to the NVIDIA NGC Docker Registry before pulling the NGC images:
+
+    ```bash
+    export NVIDIA_API_KEY=<your-nvidia-api-key>
+    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+    ```
+
 3. Build the Nemotron Speech (Riva) model repository. **One-time per machine.**
 
     a. Ensure you meet the [prerequisites](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide.html#prerequisites) before proceeding.
@@ -60,7 +67,7 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
     | TTS language | `tts_language_code` | `en-US` |
 
     - **Omni examples** (`omni-assistant/jetson-thor`): set `service_enabled_asr=false`. Omni LLM doesn't need ASR separately, so Riva only needs to serve TTS.
-    - **Multilingual example**: switch `asr_acoustic_model` to the multilingual ASR model and set `asr_language_code` (and `tts_language_code`) to your target locales.
+    - **Multilingual deployments**: multilingual Jetson profiles are not included in this blueprint. If you build a custom profile, switch `asr_acoustic_model` to the multilingual ASR model and set `asr_language_code` (and `tts_language_code`) to your target locales.
 
     > Exact model identifiers and the full option list live in the downloaded `config.sh`.
 
@@ -72,6 +79,8 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
     ```
 
     > **Note:** Initialization may take 30–60 minutes on first run.
+    >
+    > If your repository clone uses a different directory name, return to that clone directory instead of `../nemotron-voice-agent`.
 
     > If the quickstart lives somewhere other than the repo's sibling directory, set `RIVA_MODEL_LOC` in `.env` to the absolute path of `model_repository/`.
 
@@ -102,8 +111,10 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
 
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 
-6. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require).
+6. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require). Use `https://localhost:7860` on the device itself. For a remote client, replace `<machine-ip>` with the Jetson Thor IP address.
 
+    > **Note:** The development server generates a self-signed certificate for local HTTPS. On first visit, accept the browser certificate warning for your test host, then allow microphone access.
+    >
     > **Note:** `PIPELINE_TLS=false` serves plain HTTP for headless/API testing only. For plain-HTTP browser testing, see [plain-HTTP deployment and usage](06-troubleshooting.md#browser-access).
 
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
@@ -111,11 +122,11 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
 7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant` or `omni-assistant`). If you enabled CUDA MPS in step 4, stop the daemon when tearing down.
 
     ```bash
-    # View logs
-    docker compose --profile <example>/jetson-thor logs -f <example>
+    # View logs for the whole profile
+    docker compose --profile <example>/jetson-thor logs -f
 
     # Rebuild after code changes
-    docker compose --profile <example>/jetson-thor up --build -d <example>
+    docker compose --profile <example>/jetson-thor up --build -d
 
     # Stop all services
     docker compose --profile <example>/jetson-thor down

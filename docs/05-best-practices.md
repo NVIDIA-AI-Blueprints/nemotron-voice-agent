@@ -1,17 +1,19 @@
-# Best Practices for Building Production-Grade Voice Agents
+# Best Practices for Voice Agent Prototypes and Production Planning
 
-Building production-grade voice agents requires careful consideration of multiple dimensions: technical performance, user experience, security, and operational excellence. This guide consolidates best practices and lessons learned from deploying voice agents at scale.
+Building reliable voice agents requires careful consideration of multiple dimensions: technical performance, user experience, security, and operational excellence. This guide consolidates practical patterns for improving the blueprint and planning a production rollout.
+
+> **Production readiness:** The default Docker Compose deployment is a reference implementation for development, evaluation, and demos. It does not include application authentication, high availability, managed secrets, production ingress, or compliance controls. Add those controls before exposing the app, TURN server, tracing UI, demo backends, or model endpoints beyond a trusted environment.
 
 ---
 
 ## Key Success Metrics
 
-The following metrics are key to the success of a voice agent.
+The following metrics are key to the success of a voice agent. Treat the target values as planning examples; validate them against your deployment topology, hardware, model choices, and user traffic.
 
 - **Latency**: Time from user speech end to bot response start (target: 600-1500ms).
 - **Accuracy**: ASR word error rate (WER), factual correctness, LLM generation quality, task completion and so on.
-- **Scalability**: Concurrent streams supported without audio glitches or performance degradation, all models scale independently.
-- **Availability**: System uptime and fault tolerance (target: 99.9%+).
+- **Scalability**: Concurrent streams supported without audio glitches or performance degradation. Independent model scaling requires a multi-GPU, multi-service, or cloud deployment topology.
+- **Availability**: System uptime and fault tolerance, backed by production readiness checks, runbooks, and deployment architecture.
 - **User Satisfaction**: Task completion rate and user feedback scores.
 
 ---
@@ -203,7 +205,7 @@ update profile, set alerts, or lock your card. What would you like?"
 - Use inverse text normalization (ITN) for proper formatting.
 - Ensure user audio quality is good.
 - Avoid resampling if possible.
-- Skip noise processing since Nemotron Speech ASR models are robust to noise.
+- Start without extra noise processing for baseline tests, but still recommend a headset or quiet room. In noisy environments, tune VAD thresholds and evaluate upstream denoising with your own audio.
 - Base critical decisions on final transcripts only.
 - Fine-tune ASR model on domain data if needed.
 
@@ -261,6 +263,19 @@ ERROR_MESSAGES = {
 - Implement adaptive bitrate.
 - Support multiple codecs (Opus preferred).
 - Handle network transitions (WiFi to cellular).
+
+---
+
+## Production Hardening Checklist
+
+Before using this blueprint in production, add the controls that match your environment:
+
+- **Authentication and authorization**: Put the app behind an authenticated reverse proxy or ingress. Do not expose unauthenticated app routes, `/api/ice-servers`, Phoenix, or demo backend services directly to the internet.
+- **Secrets management**: Store `NVIDIA_API_KEY`, `HF_TOKEN`, TURN credentials, and backend credentials in a secrets manager or orchestrator secret, not in a shared `.env` file. Rotate secrets and restrict who can read them.
+- **Transport security**: Use valid TLS certificates for browser and remote access. Use TLS or a trusted collector path for OTLP traces outside a single-host development setup.
+- **Data privacy**: Review audio dumps, webcam frames, uploads, transcripts, traces, and logs for PII. Define retention, encryption, consent, and deletion policies before enabling capture features.
+- **Reliability operations**: Add readiness probes for model sidecars, alerts for failed sessions and rate limits, capacity tests for your hardware shape, and incident runbooks for ASR, LLM, TTS, TURN, and tracing failures.
+- **Demo backend isolation**: Treat example services such as the airline booking server as demo-only. Add real backend authentication, audit controls, and network isolation before connecting to production systems.
 
 ---
 

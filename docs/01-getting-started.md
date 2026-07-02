@@ -1,21 +1,24 @@
 # Getting Started
 
-This guide walks you through different deployment options for the Nemotron Voice Agent on your system, from a cloud-only quick start to local GPU, DGX Spark, and Jetson Thor deployments.
+This guide walks you through different deployment options for the Nemotron Voice Agent on your system, from a cloud-only quick start to local GPU, DGX Spark, and Jetson Thor deployments. The blueprint is intended as a development and reference deployment; add authentication, network controls, and production operations before exposing it beyond a trusted environment.
 
 ## Prerequisites
 
 Before you begin, ensure you have the following:
 
 - Access to NVIDIA NGC with valid credentials. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
-- Docker with NVIDIA GPU support installed. Refer to the [NIM documentation](https://docs.nvidia.com/nim/riva/asr/latest/getting-started.html#prerequisites).
 - Docker Compose v2.20 or newer (Check using `docker compose version`).
 - NVIDIA API key. Required for accessing NIM ASR, TTS, and LLM models and Docker images. Get yours at [build.nvidia.com](https://build.nvidia.com/).
+
+For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
 ## Docker based Deployment
 
 Each example ships as Docker Compose **profiles**. Pick exactly one per deployment. The bare **`<example>`** profile runs cloud-only (no local GPU, using NVIDIA cloud API endpoints), while **`<example>/workstation`**, **`<example>/dgx-spark`**, and **`<example>/jetson-thor`** deploy models locally. Pick the profile that matches the example you want to run. `docker compose up` with no profile is intentionally a no-op so the deployment is always explicit.
 
 > **Note:** For example-specific architecture, configuration, and tunables, see each example's README (linked in the table below).
+>
+> **Recommended first run:** Start with `generic-assistant` for the quickest cloud-only path. It does not require a local GPU. Use `generic-assistant/workstation`, `generic-assistant/dgx-spark`, or `generic-assistant/jetson-thor` after you are ready to run local models.
 
 | Example | Description | Supported profiles |
 |---------|-------------|--------------------|
@@ -26,6 +29,8 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/workstation` |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
+>
+> **Security:** The default app listens on the host and does not include application authentication. Use it on trusted networks only. For production, place it behind an authenticated reverse proxy or ingress, enforce rate limits, use managed secrets instead of plain `.env` files, and avoid exposing demo backends directly.
 
 ---
 
@@ -38,14 +43,16 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     cd nemotron-voice-agent
     ```
 
-2. Configure the environment. Copy the example environment file [.env.example](../.env.example) to the root directory.
+2. Configure the environment. Copy the example environment file [.env.example](../.env.example) to the root directory, then set `NVIDIA_API_KEY` in `.env`. Docker Compose passes `.env` values into the app and model sidecars, so exporting the key in your shell is not enough for runtime.
 
     ```bash
     cp .env.example .env
+    # Edit .env and replace the placeholder with your key:
+    # NVIDIA_API_KEY=<your-nvidia-api-key>
     ```
     > **Optional (DGX Spark / Jetson Thor):** Set `HF_TOKEN` in `.env` for the LLM model download from huggingface.
 
-3. Set your NVIDIA API key as an environment variable:
+3. Export the same NVIDIA API key in your shell for Docker registry login:
 
     ```bash
     export NVIDIA_API_KEY=<your-nvidia-api-key>
@@ -60,6 +67,8 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 5. Deploy the example profile of your choice.
 
     **5.1 Cloud only** (no local GPU):
+
+    > **Note:** Cloud profiles use hosted build.nvidia.com endpoints and are intended for development, evaluation, and trials. For sustained production traffic, deploy the model services in your own environment and plan for rate limits, availability, and data-governance requirements.
 
     ```bash
     docker compose --profile generic-assistant up -d            # Generic Cascaded
@@ -102,8 +111,10 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     >
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 
-6. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require).
+6. Access the application at `https://<machine-ip>:7860` (HTTPS by default, which browser microphone and WebRTC require). Use `https://localhost:7860` on the same machine. For a remote client, replace `<machine-ip>` with the host IP address.
 
+    > **Note:** The development server generates a self-signed certificate for local HTTPS. On first visit, accept the browser certificate warning for your test host, then allow microphone access.
+    >
     > **Note:** `PIPELINE_TLS=false` serves plain HTTP for headless/API testing only. For plain-HTTP browser testing, see [plain-HTTP deployment and usage](06-troubleshooting.md#browser-access).
     >
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
@@ -154,7 +165,7 @@ For development and debugging, you can run the server directly:
 
     Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `selection` field to choose what the UI exposes, then start the server normally. The server has no example/pipeline CLI flags.
 
-    By default a host-native server uses the cloud (NVCF) service endpoints. To run against **local on-prem services** instead, set `PLATFORM` in `.env` to the hardware whose local catalog you want: `workstation`, `dgxspark`, or `jetsonthor`. This selects the matching section of the example's `services.local.yaml`, so the server connects to the local ASR, LLM, and TTS sidecars for that hardware instead of the cloud endpoints. Docker Compose recipe profiles set `PLATFORM` automatically (for example, `<example>/workstation` sets `PLATFORM=workstation`), so you only set it by hand for host-native runs.
+    By default a host-native server uses the cloud (NVCF) service endpoints. To run against **local on-prem services** instead, start the matching ASR, LLM, and TTS sidecars separately, then set `PLATFORM` in `.env` to the hardware whose local catalog you want: `workstation`, `dgxspark`, or `jetsonthor`. This selects the matching section of the example's `services.local.yaml`, so the server connects to local services instead of cloud endpoints. Docker Compose recipe profiles set `PLATFORM` automatically (for example, `<example>/workstation` sets `PLATFORM=workstation`), so you only set it by hand for host-native runs.
 
     | `selection` in `examples_registry.yaml` | UI behavior |
     |-----------------------------------------|-------------|
@@ -169,5 +180,7 @@ For development and debugging, you can run the server directly:
 
 6. Access the application locally at `https://localhost:7860`, or from another machine at
    `https://<machine-ip>:7860` (replace `<machine-ip>` with the host IP).
+
+   > **Note:** The local development certificate is self-signed. Accept the browser warning for your test host before granting microphone access.
 
    > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
