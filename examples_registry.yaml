@@ -35,6 +35,7 @@ examples:
     label: Multilingual Assistant
     slots: [llm, asr, tts]
     capabilities: [session_languages]
+    default_session_language: es-US
     agent_prompt_keys:
       - fixed_session_language_addon
       - auto_detect_language_addon

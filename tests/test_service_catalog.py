@@ -155,6 +155,13 @@ llm:
             frozenset({"fixed_session_language_addon", "auto_detect_language_addon"}),
         )
 
+    def test_multilingual_default_session_language_is_registry_declared(self) -> None:
+        example = examples_registry._lookup_by_key("multilingual-assistant")
+
+        metadata = examples_registry.metadata(example)
+
+        self.assertEqual(metadata["default_session_language"], "es-US")
+
     def test_registry_defaults_promote_reachable_local_multilingual_asr(self) -> None:
         example = examples_registry._lookup_by_key("multilingual-assistant")
 

@@ -22,6 +22,7 @@ class ExampleEntry(TypedDict):
     label: str
     slots: list[str]
     capabilities: list[str]
+    default_session_language: str
     agent_prompt_keys: list[str]
     defaults: dict[str, list[str]]
     bot: str
@@ -344,6 +345,7 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
         bot_spec = str(entry.get("bot") or "").strip()
         slots = entry.get("slots", [])
         capabilities = entry.get("capabilities", [])
+        default_session_language = str(entry.get("default_session_language") or "").strip()
         agent_prompt_keys = entry.get("agent_prompt_keys", [])
         defaults = entry.get("defaults", {})
         if not label or not bot_spec:
@@ -365,6 +367,7 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             "label": label,
             "slots": list(slots),
             "capabilities": list(capabilities),
+            "default_session_language": default_session_language,
             "agent_prompt_keys": list(agent_prompt_keys),
             "defaults": normalized_defaults,
             "bot": bot_spec,
@@ -489,6 +492,7 @@ def metadata(example: EnrichedExample) -> dict:
         "label": example["label"],
         "slots": example["slots"],
         "capabilities": example["capabilities"],
+        "default_session_language": example.get("default_session_language", ""),
         "defaults": defaults,
     }
 
