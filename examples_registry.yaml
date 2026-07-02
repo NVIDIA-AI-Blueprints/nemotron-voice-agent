@@ -39,6 +39,7 @@ examples:
       - fixed_session_language_addon
       - auto_detect_language_addon
     defaults:
+      default_session_language: es-US
       prompt: [multilingual_voice_assistant]
       llm: [nemotron-super]
       asr: [parakeet-rnnt]

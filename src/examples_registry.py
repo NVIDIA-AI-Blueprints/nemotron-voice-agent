@@ -23,7 +23,7 @@ class ExampleEntry(TypedDict):
     slots: list[str]
     capabilities: list[str]
     agent_prompt_keys: list[str]
-    defaults: dict[str, list[str]]
+    defaults: dict[str, list[str] | str]
     bot: str
 
 
@@ -294,7 +294,7 @@ def _resolve_service_defaults(example: EnrichedExample) -> dict[str, list[Servic
     return {
         category: [_resolve_service_default(example, category, service_id) for service_id in service_ids]
         for category, service_ids in example["defaults"].items()
-        if category != "prompt"
+        if category not in ("prompt", "default_session_language") and isinstance(service_ids, list)
     }
 
 
@@ -356,8 +356,13 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             raise RuntimeError(f"Example {example_id!r} agent_prompt_keys must be a list of strings")
         if not isinstance(defaults, dict):
             raise RuntimeError(f"Example {example_id!r} defaults must be a mapping")
-        normalized_defaults: dict[str, list[str]] = {}
+        normalized_defaults: dict[str, list[str] | str] = {}
         for slot, service_ids in defaults.items():
+            if slot == "default_session_language":
+                if not isinstance(service_ids, str):
+                    raise RuntimeError(f"Example {example_id!r} defaults[{slot!r}] must be a string")
+                normalized_defaults[str(slot)] = service_ids.strip()
+                continue
             if not isinstance(service_ids, list) or not all(isinstance(service_id, str) for service_id in service_ids):
                 raise RuntimeError(f"Example {example_id!r} defaults[{slot!r}] must be a list of strings")
             normalized_defaults[str(slot)] = list(service_ids)
@@ -489,6 +494,7 @@ def metadata(example: EnrichedExample) -> dict:
         "label": example["label"],
         "slots": example["slots"],
         "capabilities": example["capabilities"],
+        "default_session_language": str(example["defaults"].get("default_session_language") or ""),
         "defaults": defaults,
     }
 

@@ -4,7 +4,6 @@ x-parakeet-asr-env: &parakeet-asr-env
   NGC_API_KEY: ${NVIDIA_API_KEY}
   NIM_HTTP_API_PORT: "9001"
   NIM_GRPC_API_PORT: "50052"
-  NIM_TAGS_SELECTOR: mode=str,vad=silero
 
 x-parakeet-asr: &parakeet-asr-base
   user: "0:0"
@@ -40,12 +39,18 @@ x-parakeet-asr: &parakeet-asr-base
 services:
   parakeet-ctc-asr:
     <<: *parakeet-asr-base
+    environment:
+      <<: *parakeet-asr-env
+      NIM_TAGS_SELECTOR: mode=str,vad=silero
     profiles:
       - parakeet-ctc-asr
     image: nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.5.0
 
   parakeet-rnnt-asr:
     <<: *parakeet-asr-base
+    environment:
+      <<: *parakeet-asr-env
+      NIM_TAGS_SELECTOR: mode=str,vad=silero,type=default
     profiles:
       - parakeet-rnnt-asr
       - multilingual-assistant/workstation

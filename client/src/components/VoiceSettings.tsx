@@ -71,11 +71,12 @@ export function VoiceSettings() {
 
   useEffect(() => {
     if (!sessionLanguagesEnabled) return;
+    if (!ttsConfig) return;
     const languages = ttsConfig?.languages ?? [];
     if (selectedSessionLanguage && !languages.includes(selectedSessionLanguage)) {
       setSelectedSessionLanguage(SESSION_LANGUAGE_AUTO);
     }
-  }, [sessionLanguagesEnabled, selectedSessionLanguage, ttsConfig?.languages, setSelectedSessionLanguage]);
+  }, [sessionLanguagesEnabled, selectedSessionLanguage, ttsConfig, setSelectedSessionLanguage]);
 
   const defaultVoice = useMemo(() => {
     if (!ttsConfig?.voices?.length) return null;
