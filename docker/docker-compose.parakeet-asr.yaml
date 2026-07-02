@@ -4,7 +4,7 @@ x-parakeet-asr-env: &parakeet-asr-env
   NGC_API_KEY: ${NVIDIA_API_KEY}
   NIM_HTTP_API_PORT: "9001"
   NIM_GRPC_API_PORT: "50052"
-  NIM_TAGS_SELECTOR: mode=str,vad=silero
+  NIM_TAGS_SELECTOR: mode=str,vad=silero,type=default
 
 x-parakeet-asr: &parakeet-asr-base
   user: "0:0"
