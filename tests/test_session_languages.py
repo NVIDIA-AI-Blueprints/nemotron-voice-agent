@@ -8,6 +8,13 @@ import types
 import unittest
 from unittest.mock import patch
 
+
+class _FakeRivaSpeechRecognitionConfigRequest:
+    def __init__(self, **kwargs):
+        self.model_name = kwargs.get("model_name", "")
+        self.model_name_was_set = "model_name" in kwargs
+
+
 if "pipecat.services.nvidia.stt" not in sys.modules:
     pipecat = types.ModuleType("pipecat")
     services = types.ModuleType("pipecat.services")
@@ -29,12 +36,7 @@ if "riva.client.proto.riva_asr_pb2" not in sys.modules:
     proto = types.ModuleType("riva.client.proto")
     riva_asr_pb2 = types.ModuleType("riva.client.proto.riva_asr_pb2")
 
-    class RivaSpeechRecognitionConfigRequest:
-        def __init__(self, **kwargs):
-            self.model_name = kwargs.get("model_name", "")
-            self.model_name_was_set = "model_name" in kwargs
-
-    riva_asr_pb2.RivaSpeechRecognitionConfigRequest = RivaSpeechRecognitionConfigRequest
+    riva_asr_pb2.RivaSpeechRecognitionConfigRequest = _FakeRivaSpeechRecognitionConfigRequest
     sys.modules["riva"] = riva
     sys.modules["riva.client"] = client
     sys.modules["riva.client.proto"] = proto
@@ -99,6 +101,10 @@ class SessionLanguageCatalogTests(unittest.TestCase):
         _FakeNvidiaSTTService.last = None
         with (
             patch("examples.shared.prewarm.NvidiaSTTService", _FakeNvidiaSTTService),
+            patch(
+                "examples.shared.prewarm.riva_asr_pb2.RivaSpeechRecognitionConfigRequest",
+                _FakeRivaSpeechRecognitionConfigRequest,
+            ),
             patch("examples.shared.prewarm.config_store.get", return_value=None),
             patch("examples.shared.prewarm.config_store.set"),
         ):
