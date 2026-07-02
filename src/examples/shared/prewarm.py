@@ -89,6 +89,9 @@ def _normalize_catalog_code(code: str) -> str:
     return normalize_lang_code(code).lower()
 
 
+_EMPTY_ASR_LANGUAGE_FALLBACK = "es-US"
+
+
 def intersect_session_languages(asr_config: dict, tts_config: dict) -> list[str]:
     """Languages supported by both ASR and TTS (LLM prompt uses the TTS catalog)."""
     tts_langs = _tts_language_set(tts_config)
@@ -97,9 +100,9 @@ def intersect_session_languages(asr_config: dict, tts_config: dict) -> list[str]
 
     asr_langs = {_normalize_catalog_code(code) for code in (asr_config or {}).get("languages", []) if code}
     if not asr_langs:
-        result = tts_langs
-    else:
-        result = asr_langs & tts_langs
+        asr_langs = {_normalize_catalog_code(_EMPTY_ASR_LANGUAGE_FALLBACK)}
+
+    result = asr_langs & tts_langs
 
     return sorted(
         (normalize_lang_code(code) for code in result),
@@ -176,6 +179,13 @@ def prewarm_tts(server: str, voice_id: str) -> dict:
 _ASR_PREWARM_RPC_TIMEOUT_SECS = float(os.getenv("ASR_PREWARM_RPC_TIMEOUT_SECS", "5"))
 
 
+def _fetch_asr_config(svc: NvidiaSTTService):
+    return svc._asr_service.stub.GetRivaSpeechRecognitionConfig(
+        riva_asr_pb2.RivaSpeechRecognitionConfigRequest(),
+        timeout=_ASR_PREWARM_RPC_TIMEOUT_SECS,
+    )
+
+
 def prewarm_asr(server: str, model: str = "", function_id: str = "") -> dict:
     """Pre-warm an ASR server and cache its supported language codes.
 
@@ -203,12 +213,10 @@ def prewarm_asr(server: str, model: str = "", function_id: str = "") -> dict:
             }
         svc = NvidiaSTTService(**asr_kwargs)
         svc._initialize_client()
-        raw_config = svc._asr_service.stub.GetRivaSpeechRecognitionConfig(
-            riva_asr_pb2.RivaSpeechRecognitionConfigRequest(model_name=model or ""),
-            timeout=_ASR_PREWARM_RPC_TIMEOUT_SECS,
-        )
+        raw_config = _fetch_asr_config(svc)
         asr_config = _parse_asr_config(raw_config)
         asr_config["server"] = server
+        asr_config["config_model"] = ""
         config_store.set(cache_key, asr_config)
         logger.info(f"ASR pre-warmed ({server}) — {len(asr_config['languages']) or 'all'} languages from model config")
         return asr_config

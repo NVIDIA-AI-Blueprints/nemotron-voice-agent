@@ -237,6 +237,7 @@ def get_lang_codes(
         ).get("languages", [])
         if languages:
             return ", ".join(languages)
+        return ""
 
     tts_config = config_store.get("tts", {})
     languages = tts_config.get("languages", []) if isinstance(tts_config, dict) else []

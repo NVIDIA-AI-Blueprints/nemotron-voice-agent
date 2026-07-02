@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import { useDeployment, useDefaultLLMs, useDefaultPrompts, useDefaultASR, useDefaultTTS, useDefaultTools, type DeploymentOption, type LLMService, type Prompt, type SimpleService, type Tool, type TransportOption, type TransportType } from "../api";
@@ -309,6 +310,15 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [selectedVoiceId, setSelectedVoiceId] = useState("");
 
   const [selectedSessionLanguage, setSelectedSessionLanguage] = useState(SESSION_LANGUAGE_AUTO);
+  const defaultSessionLanguageExampleKey = useRef("");
+  const selectedExampleDefaultSessionLanguage = selectedExample?.default_session_language ?? SESSION_LANGUAGE_AUTO;
+
+  useEffect(() => {
+    const selectedExampleKey = selectedExample?.key ?? "";
+    if (!selectedExampleKey || defaultSessionLanguageExampleKey.current === selectedExampleKey) return;
+    defaultSessionLanguageExampleKey.current = selectedExampleKey;
+    setSelectedSessionLanguage(selectedExampleDefaultSessionLanguage || SESSION_LANGUAGE_AUTO);
+  }, [selectedExample?.key, selectedExampleDefaultSessionLanguage]);
 
   // --- TTS state ---
   const { data: defaultTTS = [], isLoading: ttsLoading } = useDefaultTTS(serviceCatalogKey);

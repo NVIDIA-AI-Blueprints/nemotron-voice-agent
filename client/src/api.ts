@@ -167,6 +167,7 @@ export interface DeploymentOption {
   label: string;
   slots: string[];
   capabilities?: string[];
+  default_session_language?: string;
   defaults?: DeploymentDefaults;
 }
 
