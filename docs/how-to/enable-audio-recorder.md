@@ -18,7 +18,7 @@ ENABLE_TTS_AUDIO_DUMP=true
 AUDIO_DUMP_PATH=audio_dumps
 ```
 
-These settings only take effect if the pipeline creates and wires the shared recorder. The audio recorder is not wired into every example by default. To add it to a **new example**, mirror [`examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
+The shipped examples already create and wire the shared recorder, so the `.env` settings are enough to enable capture for those examples. To add the recorder to a **new custom example**, mirror [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
 
 1. Import the helper:
 
@@ -45,7 +45,7 @@ These settings only take effect if the pipeline creates and wires the shared rec
         await audio_recorder.start_recording()
     ```
 
-With those in place, the `ENABLE_ASR_AUDIO_DUMP` / `ENABLE_TTS_AUDIO_DUMP` / `AUDIO_DUMP_PATH` settings above control capture for your example.
+With those in place, the `ENABLE_ASR_AUDIO_DUMP` / `ENABLE_TTS_AUDIO_DUMP` / `AUDIO_DUMP_PATH` settings above control capture for your custom example.
 
 ## Output Format
 
@@ -60,9 +60,9 @@ audio_dumps/
 └── ...
 ```
 
-The `<stream_id>` is a unique 8-character hex ID per session, so files from concurrent sessions don't collide.
+The `<stream_id>` is a unique 8-character hex ID per session, so files from concurrent sessions do not collide.
 
-> **Note:** If Docker creates the folder with different permissions, fix ownership:
+> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, mount a host directory to `/app/audio_dumps` if you want the files to appear on the host, or copy them out of the app container after capture. If Docker creates the folder with different permissions, fix ownership:
 >
 > ```bash
 > # Option 1: Pre-create directory before container start

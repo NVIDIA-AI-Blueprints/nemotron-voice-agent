@@ -14,9 +14,15 @@ You can add custom prompts directly from the UI's **Prompts** tab without editin
 
 Prompt presets are defined per example. The Generic Cascaded example currently provides the presets below (the active default is set by `defaults.prompt` in `examples_registry.yaml`).
 
+| Prompt Key | Description |
+|------------|-------------|
+| `generic_assistant` | Generic voice assistant with tool support and a single-sentence response format. |
+| `generic_assistant_without_tools` | Generic voice assistant without tool access and with a single-sentence response format. |
+| `flowershop` | Flora persona for the GreenForce Garden flower-shop scenario with strict flow rules. |
+
 ## Changing the Default Prompt
 
-Set the per-example default with `defaults.prompt` in `examples_registry.yaml`. As a fallback (when that key isn't one of the active example's prompt keys in `prompts.yaml`), the entry marked `default: true` is used, otherwise the first entry.
+Set the per-example default with `defaults.prompt` in `examples_registry.yaml`. As a fallback (when that key is not one of the active example's prompt keys in `prompts.yaml`), the entry marked `default: true` is used, otherwise the first entry.
 
 ```yaml
 my_prompt:

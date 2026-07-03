@@ -7,9 +7,10 @@ This guide walks you through different deployment options for the Nemotron Voice
 Before you begin, ensure you have the following:
 
 - Access to NVIDIA NGC with valid credentials. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
-- Docker with NVIDIA GPU support installed. Refer to the [NIM documentation](https://docs.nvidia.com/nim/riva/asr/latest/getting-started.html#prerequisites).
 - Docker Compose v2.20 or newer (Check using `docker compose version`).
 - NVIDIA API key. Required for accessing NIM ASR, TTS, and LLM models and Docker images. Get yours at [build.nvidia.com](https://build.nvidia.com/).
+
+For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
 ## Docker based Deployment
 
@@ -38,14 +39,16 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     cd nemotron-voice-agent
     ```
 
-2. Configure the environment. Copy the example environment file [.env.example](../.env.example) to the root directory.
+2. Configure the environment. Copy the example environment file [.env.example](../.env.example) to the root directory, then set `NVIDIA_API_KEY` in `.env`. Docker Compose passes `.env` values into the app and model sidecars, so exporting the key in your shell is not enough for runtime.
 
     ```bash
     cp .env.example .env
+    # Edit .env and replace the placeholder with your key:
+    # NVIDIA_API_KEY=<your-nvidia-api-key>
     ```
     > **Optional (DGX Spark / Jetson Thor):** Set `HF_TOKEN` in `.env` for the LLM model download from huggingface.
 
-3. Set your NVIDIA API key as an environment variable:
+3. Export the same NVIDIA API key in your shell for Docker registry login:
 
     ```bash
     export NVIDIA_API_KEY=<your-nvidia-api-key>

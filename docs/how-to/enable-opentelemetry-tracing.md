@@ -6,7 +6,7 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
 
 1. Enable tracing in `.env` **before** starting the stack, so the app picks it up:
 
-    ```bash
+    ```env
     ENABLE_TRACING=true
     OTEL_CONSOLE_EXPORT=false
     OTEL_EXPORTER_OTLP_ENDPOINT=phoenix:4317
@@ -18,7 +18,7 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
     docker compose --profile generic-assistant/workstation --profile tracing up -d
     ```
 
-    If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker-compose.yml`) exposes:
+    If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker/docker-compose.phoenix.yaml` and included by the root compose file) exposes:
     - **Port 6006** — Phoenix UI
     - **Port 4317** — OTLP gRPC collector
 

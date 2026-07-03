@@ -8,7 +8,7 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 
 ### Reference Results
 
-**The Nemotron Voice Agent** performance benchmark shows **sub-second End-to-End (E2E) latency**. The setup uses **4x H100 GPUs** (one for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM). All latencies are in seconds.
+The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x H100 GPU** setup (one GPU for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM). Most tested concurrency levels are below one second E2E latency, and the 64-stream run reaches 1.00 second. All latencies are in seconds.
 
 > **Note:** This benchmark uses a 4-GPU setup to measure scalability. The [minimum deployment requirement](01-getting-started.md#docker-based-deployment) is cloud-only (no local GPUs) or 1 GPU with roughly 80 GB available VRAM for a local profile.
 
@@ -52,4 +52,4 @@ Follow steps from [`benchmarking_tools/AA-BigBenchAudio-Eval/`](../benchmarking_
 
 [Full-Duplex-Bench](https://github.com/DanielLin94144/Full-Duplex-Bench) (v1, v1.5) probes turn-taking behavior under interruption. It measures when the agent yields to a user barge-in, when it keeps talking through background noise, and how quickly the bot reply lands after the user finishes speaking. The repo's [`benchmarking_tools/Full-Duplex-Bench-Eval/`](../benchmarking_tools/Full-Duplex-Bench-Eval/README.md) tool acts as the inference client: it streams each dataset sample to the running voice agent over WebSocket and writes the bot's reply audio back into the per-sample folders. Scoring (TOR, P_resp, P_inter, …) is then computed by the upstream Full-Duplex-Bench tooling against those output WAVs.
 
-Follow the [eval README](../benchmarking_tools/Full-Duplex-Bench-Eval/README.md) for detailed steps for running the benchmark.
+This repository provides the evaluation client and workflow, but it does not publish reference Full-Duplex-Bench scores in this page. Follow the [eval README](../benchmarking_tools/Full-Duplex-Bench-Eval/README.md) for detailed steps for running the benchmark and generating scores for your deployment.

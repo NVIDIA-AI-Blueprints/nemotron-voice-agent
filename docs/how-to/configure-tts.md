@@ -51,7 +51,7 @@ tts:
 
 ### Pronunciation (IPA)
 
-Override Magpie's default pronunciation for specific words with an International Phonetic Alphabet (IPA) dictionary. Set `TTS_IPA_FILE_PATH` in `.env` to a JSON or YAML file (relative paths resolve from the repo root):
+Override Magpie's default pronunciation for specific words with an International Phonetic Alphabet (IPA) dictionary. Create a JSON or YAML dictionary file, then set `TTS_IPA_FILE_PATH` in `.env` to that path. Relative paths resolve from the repo root:
 
 ```bash
 TTS_IPA_FILE_PATH=config/ipa.json
