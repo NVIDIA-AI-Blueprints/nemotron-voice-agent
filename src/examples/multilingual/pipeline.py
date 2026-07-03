@@ -13,6 +13,8 @@ import os
 
 from dotenv import load_dotenv
 from loguru import logger
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
@@ -20,6 +22,7 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
 )
 from pipecat.processors.aggregators.llm_text_processor import LLMTextProcessor
 from pipecat.processors.frameworks.rtvi import RTVIObserverParams
@@ -28,6 +31,10 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
+from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
+from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 import config_store
@@ -46,7 +53,6 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
-    build_user_aggregator_params,
     create_transport,
 )
 from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
@@ -57,6 +63,8 @@ from utils import (
     load_prompt_catalog,
     load_service_entry,
     normalize_lang_code,
+    parse_env_bool,
+    parse_env_float,
     parse_env_int,
     parse_json_dict,
     render_prompt_addon,
@@ -65,6 +73,26 @@ from utils import (
 
 load_dotenv(override=True)
 CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
+
+
+def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
+    """Use VAD-only turn starts so interim ASR text does not start a user turn."""
+    if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
+        return LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+            user_turn_strategies=UserTurnStrategies(start=[VADUserTurnStartStrategy()]),
+        )
+
+    stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
+    return LLMUserAggregatorParams(
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
+        user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+        user_turn_strategies=UserTurnStrategies(
+            start=[VADUserTurnStartStrategy()],
+            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
+        ),
+    )
 
 
 async def _build_multilingual_pipeline(
@@ -226,7 +254,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=build_user_aggregator_params(),
+        user_params=_build_multilingual_user_aggregator_params(),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
