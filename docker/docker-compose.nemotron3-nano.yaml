@@ -74,6 +74,7 @@ services:
       - generic-assistant/workstation
       - multilingual-assistant/workstation
       - frontend-backend-agent/workstation
+      - webex-byova-assistant/workstation
     environment:
       <<: *nim-llm-env
       NIM_TAGS_SELECTOR: ${NIM_TAGS_SELECTOR:-precision=fp8,tp=1}

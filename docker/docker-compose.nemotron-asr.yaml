@@ -40,6 +40,7 @@ services:
       - generic-assistant/workstation
       - generic-assistant/workstation-perf
       - frontend-backend-agent/workstation
+      - webex-byova-assistant/workstation
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=en-US,mode=str
