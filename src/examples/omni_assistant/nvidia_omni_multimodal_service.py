@@ -670,7 +670,12 @@ class NvidiaOmniMultimodalService(LLMService):
             await self._on_turn_result(result)
             if result.transcript and not transcript_emitted:
                 await self._emit_user_transcript(result.transcript)
-            if not response_started and result.response:
+            if trailing_text:
+                response_started = await self._emit_assistant_text(
+                    trailing_text,
+                    response_started=response_started,
+                )
+            elif not response_started and result.response:
                 response_started = await self._emit_assistant_text(
                     result.response,
                     response_started=response_started,

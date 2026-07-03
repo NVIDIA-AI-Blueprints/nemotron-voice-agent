@@ -6,7 +6,10 @@
 import asyncio
 import unittest
 from collections.abc import Callable
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 
 from examples.omni_assistant.nvidia_omni_multimodal_service import NvidiaOmniMultimodalService
 
@@ -140,6 +143,77 @@ class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(first_task.cancelled())
         self.assertFalse(self.turns[0].cancelled)
         self.assertEqual(len(self.turns), 1)
+
+    async def test_structured_stream_flushes_unpunctuated_trailing_response(self) -> None:
+        frames = []
+        self.service._settings.emit_transcriptions = True
+        self.service.push_frame = AsyncMock(side_effect=lambda frame, *_args: frames.append(frame))
+        self.service.start_processing_metrics = AsyncMock()
+        self.service.start_ttfb_metrics = AsyncMock()
+        self.service.stop_processing_metrics = AsyncMock()
+        self.service.stop_ttfb_metrics = AsyncMock()
+
+        async def stream():
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content='{"transcript":"Where is the Eiffel Tower?","response":"Paris"}')
+                    )
+                ],
+                usage=None,
+            )
+
+        self.service._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=stream())))
+        )
+
+        await self.service._run_streaming_omni_turn({}, has_audio=True, metrics_start_time=None)
+
+        assistant_frames = [
+            frame
+            for frame in frames
+            if isinstance(frame, (LLMFullResponseStartFrame, LLMTextFrame, LLMFullResponseEndFrame))
+        ]
+        self.assertIsInstance(assistant_frames[0], LLMFullResponseStartFrame)
+        self.assertIsInstance(assistant_frames[1], LLMTextFrame)
+        self.assertEqual(assistant_frames[1].text, "Paris ")
+        self.assertIsInstance(assistant_frames[2], LLMFullResponseEndFrame)
+
+    async def test_structured_stream_falls_back_to_parsed_response_when_no_text_is_emitted(self) -> None:
+        self.service._settings.emit_transcriptions = True
+        self.service.push_frame = AsyncMock()
+        self.service.start_processing_metrics = AsyncMock()
+        self.service.start_ttfb_metrics = AsyncMock()
+        self.service.stop_processing_metrics = AsyncMock()
+        self.service.stop_ttfb_metrics = AsyncMock()
+        self.service._emit_assistant_text = AsyncMock(return_value=True)
+
+        async def stream():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content='{"response":"Paris"}'))],
+                usage=None,
+            )
+
+        class _NoTextStreamer:
+            done = False
+
+            def __init__(self, _field_name: str) -> None:
+                pass
+
+            def feed(self, _text: str) -> str:
+                return ""
+
+        self.service._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=stream())))
+        )
+
+        with patch(
+            "examples.omni_assistant.nvidia_omni_multimodal_service._JsonStringFieldStreamer",
+            _NoTextStreamer,
+        ):
+            await self.service._run_streaming_omni_turn({}, has_audio=True, metrics_start_time=None)
+
+        self.service._emit_assistant_text.assert_awaited_once_with("Paris", response_started=False)
 
 
 if __name__ == "__main__":
