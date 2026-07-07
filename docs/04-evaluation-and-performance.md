@@ -23,6 +23,8 @@ The reference performance benchmark measures the Nemotron Voice Agent on a dedic
 
 *E2E: End-to-End · TTFB: Time to First Byte · TTFT: Time to First Token*
 
+> **Note:** Performance numbers may vary based on hardware configuration (both CPU and GPU). Occasionally, higher latency may be observed due to uneven load balancing across FastAPI workers. For production deployments, using a Kubernetes setup is recommended to ensure stable load distribution and scalability.
+
 To run these latency/scaling benchmarks yourself, see [Run Scaling & Performance Tests](how-to/run-scaling-perf-tests.md). For production targets and tuning guidance, refer to [Best Practices](05-best-practices.md) and [Tune Pipeline Performance](how-to/tune-pipeline-performance.md).
 
 ---

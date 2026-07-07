@@ -4,6 +4,8 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 
 `benchmark.py` drives a single client. `simulate_concurrency.sh` orchestrates multiple parallel clients and rolls up suite-level results.
 
+> **Note:** Performance numbers may vary based on hardware configuration (both CPU and GPU). Occasionally, higher latency may be observed due to uneven load balancing across FastAPI workers. For production deployments, using a Kubernetes setup is recommended to ensure stable load distribution and scalability.
+
 ## Setup
 
 1. Create `benchmarking_tools/scaling-perf/dataset/` and add WAV files as the simulated user's utterances. The benchmark exits if the directory is missing or empty.

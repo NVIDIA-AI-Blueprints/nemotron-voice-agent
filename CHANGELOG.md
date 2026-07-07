@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-07-07
 
 Re-architecture by upstreaming `nvidia-pipecat` changes to [Pipecat](https://github.com/pipecat-ai/pipecat) and a unified React UI client, new multimodal Nemotron Omni and Frontend Backend Agent examples and recipe-style deployment profiles.
 
@@ -12,7 +12,7 @@ Re-architecture by upstreaming `nvidia-pipecat` changes to [Pipecat](https://git
 
 - **Example pipelines**, each shipped as self-contained Compose recipes:
   - `generic-assistant`: baseline English cascaded pipeline (Nemotron ASR + LLM + Magpie TTS).
-  - `multilingual-assistant`: automatic language detection, mid-conversation language switching, and a session-language selector.
+  - `multilingual-assistant`: showcases a multilingual pipeline using Multilingual ASR and TTS, with a fixed language per session for better reliability.
   - `omni-assistant`: Nemotron 3 Nano Omni as a single multimodal ASR + LLM service with Magpie TTS.
   - `omni-assistant-subagents`: the Omni service split across cooperating Pipecat Subagents with live webcam, vision and uploaded-media analysis.
   - `frontend-backend-agent`: a talker LLM front-ending a stateful backend agent (airline-booking reference).
@@ -22,11 +22,10 @@ Re-architecture by upstreaming `nvidia-pipecat` changes to [Pipecat](https://git
 - **DGX Spark and single-GPU workstation** local NIM deployment, plus improved Jetson Thor support.
 - Agent skills for example deployments and configurations.
 
-
 ### Fixed
 
 - Improve TTS text filter to avoid removing commonly used special chars like $, %
-- Summarize chat history for longer session to limit LLM context
+- Summarize chat history for long sessions to limit LLM context growth.
 
 ### Changed
 
