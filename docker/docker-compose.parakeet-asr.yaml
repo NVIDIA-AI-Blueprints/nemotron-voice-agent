@@ -53,8 +53,6 @@ services:
       NIM_TAGS_SELECTOR: mode=str,vad=silero,type=default
     profiles:
       - parakeet-rnnt-asr
-      - multilingual-assistant/workstation
-      - multilingual-assistant/dgx-spark
     image: nvcr.io/nim/nvidia/parakeet-1-1b-rnnt-multilingual:1.5.0
 
 volumes:

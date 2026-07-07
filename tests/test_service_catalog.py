@@ -152,7 +152,7 @@ llm:
             keys = examples_registry.agent_prompt_keys("multilingual-assistant")
         self.assertEqual(
             keys,
-            frozenset({"fixed_session_language_addon", "auto_detect_language_addon"}),
+            frozenset({"fixed_session_language_addon"}),
         )
 
     def test_multilingual_default_session_language_is_registry_declared(self) -> None:
@@ -160,7 +160,7 @@ llm:
 
         metadata = examples_registry.metadata(example)
 
-        self.assertEqual(metadata["default_session_language"], "es-US")
+        self.assertEqual(metadata["default_session_language"], "de-DE")
 
     def test_registry_defaults_promote_reachable_local_multilingual_asr(self) -> None:
         example = examples_registry._lookup_by_key("multilingual-assistant")
@@ -168,8 +168,8 @@ llm:
         with patch("examples_registry.is_endpoint_reachable", return_value=True):
             defaults = examples_registry.metadata(example)["defaults"]
 
-        self.assertEqual(defaults["asr"][0]["id"], "self-hosted:parakeet-rnnt")
-        self.assertEqual(defaults["asr"][0]["model"], "parakeet-1.1b-rnnt-multilingual-asr")
+        self.assertEqual(defaults["asr"][0]["id"], "self-hosted:nemotron-asr-streaming-multilingual")
+        self.assertEqual(defaults["asr"][0]["model"], "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer")
 
     def test_jetson_default_uses_reachable_nemotron_speech_asr(self) -> None:
         example = examples_registry._lookup_by_key("generic-assistant")

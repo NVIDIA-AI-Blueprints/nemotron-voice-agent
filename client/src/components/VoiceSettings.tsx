@@ -7,7 +7,7 @@ import { usePipecatClient, useRTVIClientEvent } from "@pipecat-ai/client-react";
 import { useVoiceCatalog } from "../api";
 import { useConnectionState } from "../hooks/useConnectionState";
 import { useApp } from "../context/useApp";
-import { SESSION_LANGUAGE_AUTO } from "../context/AppContext";
+import { DEFAULT_SESSION_LANGUAGE } from "../context/AppContext";
 import { PanelSection } from "./PanelSection";
 
 type LanguageSwitchedMessage = {
@@ -73,8 +73,9 @@ export function VoiceSettings() {
     if (!sessionLanguagesEnabled) return;
     if (!ttsConfig) return;
     const languages = ttsConfig?.languages ?? [];
-    if (selectedSessionLanguage && !languages.includes(selectedSessionLanguage)) {
-      setSelectedSessionLanguage(SESSION_LANGUAGE_AUTO);
+    if (languages.length === 0) return;
+    if (!selectedSessionLanguage || !languages.includes(selectedSessionLanguage)) {
+      setSelectedSessionLanguage(languages.includes(DEFAULT_SESSION_LANGUAGE) ? DEFAULT_SESSION_LANGUAGE : languages[0]);
     }
   }, [sessionLanguagesEnabled, selectedSessionLanguage, ttsConfig, setSelectedSessionLanguage]);
 
@@ -159,12 +160,11 @@ export function VoiceSettings() {
           <span className="settings-label">Language</span>
           <select
             className="select-dark"
-            value={selectedSessionLanguage || SESSION_LANGUAGE_AUTO}
+            value={selectedSessionLanguage || DEFAULT_SESSION_LANGUAGE}
             onChange={(e) => setSelectedSessionLanguage(e.target.value)}
             disabled={isConnecting || isLocked}
             title={languageSelectTitle}
           >
-            <option value={SESSION_LANGUAGE_AUTO}>Auto-detect (per turn)</option>
             {availableLanguages.map((lang) => (
               <option key={lang} value={lang}>{lang}</option>
             ))}

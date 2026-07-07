@@ -24,8 +24,8 @@ const PROMPT_SELECTION = "nvidia-voice-agent-prompt-selection";
 const TRANSPORT_STORAGE = "nvidia-voice-agent-transport";
 const SELECTED_EXAMPLE_STORAGE = "nvidia-voice-agent-selected-example";
 
-/** Empty string = auto-detect language on each turn. */
-export const SESSION_LANGUAGE_AUTO = "";
+/** Fallback session language when an example declares none. */
+export const DEFAULT_SESSION_LANGUAGE = "en-US";
 
 type ManagedService = {
   id: string;
@@ -185,7 +185,7 @@ export interface AppState {
   selectedVoiceId: string;
   setSelectedVoiceId: (id: string) => void;
 
-  /** Empty string = auto-detect per turn when session language selection is enabled. */
+  /** The language the whole session is locked to when session language selection is enabled. */
   selectedSessionLanguage: string;
   setSelectedSessionLanguage: (code: string) => void;
 
@@ -309,15 +309,15 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
 
   const [selectedVoiceId, setSelectedVoiceId] = useState("");
 
-  const [selectedSessionLanguage, setSelectedSessionLanguage] = useState(SESSION_LANGUAGE_AUTO);
+  const [selectedSessionLanguage, setSelectedSessionLanguage] = useState(DEFAULT_SESSION_LANGUAGE);
   const defaultSessionLanguageExampleKey = useRef("");
-  const selectedExampleDefaultSessionLanguage = selectedExample?.default_session_language ?? SESSION_LANGUAGE_AUTO;
+  const selectedExampleDefaultSessionLanguage = selectedExample?.default_session_language ?? DEFAULT_SESSION_LANGUAGE;
 
   useEffect(() => {
     const selectedExampleKey = selectedExample?.key ?? "";
     if (!selectedExampleKey || defaultSessionLanguageExampleKey.current === selectedExampleKey) return;
     defaultSessionLanguageExampleKey.current = selectedExampleKey;
-    setSelectedSessionLanguage(selectedExampleDefaultSessionLanguage || SESSION_LANGUAGE_AUTO);
+    setSelectedSessionLanguage(selectedExampleDefaultSessionLanguage || DEFAULT_SESSION_LANGUAGE);
   }, [selectedExample?.key, selectedExampleDefaultSessionLanguage]);
 
   // --- TTS state ---

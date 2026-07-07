@@ -52,6 +52,7 @@ services:
     <<: *nemotron-asr
     profiles:
       - nemotron-asr-streaming-multilingual/workstation
+      - multilingual-assistant/workstation
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=multi,mode=str
@@ -60,6 +61,7 @@ services:
     <<: *nemotron-asr
     profiles:
       - nemotron-asr-streaming-multilingual/dgx-spark
+      - multilingual-assistant/dgx-spark
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=multi,mode=str,gpu=dgx_spark,batch_size=32

@@ -30,8 +30,8 @@ For multilingual deployments, choose between the two multilingual ASR models bas
 
 | Model | Recommendation and trade-offs |
 | --- | --- |
-| Nemotron ASR Streaming Multilingual | Prefer this model when latency and throughput are the main constraints. It is faster in this pipeline, but recognition quality is currently weaker for a few languages, and language auto-detection is less reliable. For best results, preselect the session language instead of relying on auto-detection. |
-| Parakeet 1.1B RNNT Multilingual | Prefer this model when multilingual recognition quality matters more than raw latency. Language auto-detection is relatively stronger, and Hindi and Chinese recognition are generally better than Nemotron ASR in this setup. The trade-off is slower latency and throughput. It can also miss the first word of an utterance in some cases and may produce occasional false transcripts when the microphone is muted or no user speech is intended, so validate turn-start and silence handling for production. |
+| Nemotron ASR Streaming Multilingual | Prefer this model when latency and throughput are the main constraints. It is faster in this pipeline, but recognition quality is currently weaker for a few languages. In noisy environments, it can occasionally emit an empty transcript for turns, so the user may need to repeat themselves. A good microphone and reduced background noise help. |
+| Parakeet 1.1B RNNT Multilingual | Prefer this model when multilingual recognition quality matters more than raw latency. Hindi and Chinese recognition are generally better than Nemotron ASR in this setup. The trade-off is slower latency and throughput. It can also miss the first word of an utterance in some cases and may produce occasional false transcripts when the microphone is muted or no user speech is intended, so validate turn-start and silence handling for production. |
 
 ## Hardware requirements and deployment configs
 
@@ -76,7 +76,7 @@ For ASR latency and throughput across GPUs and WER for different models, see the
 
   This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing is the lower-level, ASR-side signal. See [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html) for exact semantics, defaults, and the `force_eou` runtime flag.
 
-- **Language**: multilingual streaming uses `language_code: auto` for per-turn language detection. Pin a fixed locale (e.g. `es-US`) to force one language. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
+- **Language**: the multilingual example locks each session to a single locale, selectable per connection in the UI (any locale the ASR and TTS both support, default `de-DE`) and fixed for that session. Different sessions can use different languages. The ASR also accepts `language_code: auto` for per-turn detection, but this blueprint does not use it, since a pinned locale is more reliable. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
 - **Catalog config**: a cloud entry sets `server` / `model` / `function_id`, while a local entry points at the Compose sidecar `host:port`. Host-run deployments rewrite sidecar endpoints to `localhost` automatically. See [Configure Services → On-prem catalog](configure-services.md#on-prem-catalog).
 
 ```yaml
