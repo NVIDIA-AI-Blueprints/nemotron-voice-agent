@@ -28,6 +28,8 @@ Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` /
 
 The `*-reasoning` keys are the **same weights** with thinking enabled (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) under `defaults`.
 
+> **Multilingual conversation quality.** Nemotron 3 Nano's conversation quality is weaker in some languages (for example Hindi). For multilingual deployments where language fidelity matters, prefer **Nemotron 3 Super** (`nemotron-super`). It stays more reliably in the target language and reads more naturally across languages.
+
 ## Hardware requirements and deployment configs
 
 You can self-host the LLM two ways, and the repo wires the right one per profile:
