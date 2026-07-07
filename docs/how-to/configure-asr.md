@@ -26,12 +26,29 @@ Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.
 
 ### Choosing a multilingual ASR model
 
-For multilingual deployments, choose between the two multilingual ASR models based on whether latency or recognition quality matters more:
+For multilingual deployments, select the ASR model based on your language requirements and quality expectations:
 
-| Model | Recommendation and trade-offs |
+| Model | When to use |
 | --- | --- |
-| Nemotron ASR Streaming Multilingual | Prefer this model when latency and throughput are the main constraints. It is faster in this pipeline, but recognition quality is currently weaker for a few languages. In noisy environments, it can occasionally emit an empty transcript for turns, so the user may need to repeat themselves. A good microphone and reduced background noise help. |
-| Parakeet 1.1B RNNT Multilingual | Prefer this model when multilingual recognition quality matters more than raw latency. Hindi and Chinese recognition are generally better than Nemotron ASR in this setup. The trade-off is slower latency and throughput. It can also miss the first word of an utterance in some cases and may produce occasional false transcripts when the microphone is muted or no user speech is intended, so validate turn-start and silence handling for production. |
+| Nemotron ASR Streaming Multilingual | Best choice when latency is the priority. Recognition quality varies by language, and auto language detection is less reliable. Specify the session language explicitly for best results. In noisy environments, it can occasionally emit an empty transcript for turns, so the user may need to repeat themselves. |
+| Parakeet 1.1B RNNT Multilingual | Better recognition quality for many languages, with better auto language detection. Trade-off is higher latency. Note: may occasionally miss the first word of an utterance or produce spurious transcripts during silence. |
+
+**Guidance:**
+- For English, use the English-only model.
+- Do not rely on auto language detection. Explicitly set the target language when possible.
+- Both models behave differently across languages. Test both with your target language and choose based on observed recognition quality.
+- For Nemotron ASR Streaming Multilingual, use only languages listed as transcription-ready in the [supported languages table](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#asr-nemotron-asr-streaming-supported-languages). Other locales may produce degraded results.
+- For Parakeet 1.1B RNNT Multilingual, see the [supported languages table](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html#asr-parakeet-11b-rnnt-multilingual-supported-languages).
+
+**Other multilingual models to consider:**
+
+The [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) lists additional multilingual NIM models that may better fit specific language targets, including:
+- **Parakeet RNNT Indic**: optimized for Indic languages.
+- **Code-switching models**: for mixed-language speech within a single utterance.
+
+To use one of these, configure the NIM endpoint to point to the corresponding model and update the catalog key in `services.cloud.yaml` or `services.local.yaml`.
+
+
 
 ## Hardware requirements and deployment configs
 
