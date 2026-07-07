@@ -1,0 +1,244 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Deploys the generic-assistant on-prem (workstation) recipe via Docker Compose,
+# waits for it to become healthy, then runs the Nemotron Voice Agent UI automation
+# test suite from the shared QA test image.
+#
+# Reusable workflow: invoked by ci.yml (via `uses:`) on pushes to main, after the
+# lint/unit/client jobs pass. Can also be run manually via workflow_dispatch, and
+# runs automatically on pull requests that modify this workflow file so a broken
+# deploy/E2E is caught before merge.
+#
+# Required repository secrets:
+#   NGC_API_KEY            NVIDIA API key used to build/pull the Nemotron images and
+#                          populate NVIDIA_API_KEY in .env.
+#   TEST_DOCKER_PULL_KEY   NVIDIA API key with pull access to
+#                          nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image.
+#                          If unset, the test step is skipped.
+#
+
+name: Nemotron Voice Agent Deploy & E2E
+
+on:
+  workflow_call:
+    secrets:
+      NGC_API_KEY:
+        required: true
+      TEST_DOCKER_PULL_KEY:
+        required: false
+      SMTP_USERNAME:
+        required: false
+      SMTP_PASSWORD:
+        required: false
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/deploy-e2e.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  QA_TEST_IMAGE: nvcr.io/rw983xdqtcdp/auto_test_team/blueprint-github-test-image:latest
+  UI_URL: http://127.0.0.1:7860
+  API_DOCS_URL: http://127.0.0.1:7860/docs
+
+jobs:
+  deploy-and-test:
+    runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
+    timeout-minutes: 480
+    env:
+      NVIDIA_API_KEY: ${{ secrets.NGC_API_KEY }}
+      NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+      COMPOSE_PROFILES: generic-assistant/workstation
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Print initial container status
+        run: docker ps -a
+
+      - name: Prepare .env and log in to NGC
+        run: |
+          set -euo pipefail
+
+          if [ -z "${NGC_API_KEY:-}" ]; then
+            echo "::error::Repository secret NGC_API_KEY is not set."
+            exit 1
+          fi
+
+          cp .env.example .env
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          env_path = Path(".env")
+          updates = {"NVIDIA_API_KEY": os.environ["NVIDIA_API_KEY"], "PIPELINE_TLS": "false"}
+          seen = set()
+          out = []
+          for line in env_path.read_text().splitlines():
+              key = line.split("=", 1)[0] if "=" in line else ""
+              if key in updates:
+                  out.append(f"{key}={updates[key]}")
+                  seen.add(key)
+              else:
+                  out.append(line)
+          for key, value in updates.items():
+              if key not in seen:
+                  out.append(f"{key}={value}")
+          env_path.write_text("\n".join(out) + "\n")
+          PY
+
+          echo "${NGC_API_KEY}" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+
+      - name: Deploy stack and wait for health
+        run: |
+          set -euo pipefail
+
+          echo "Starting Nemotron Voice Agent stack (first pull / TRT build can take a long time)..."
+          # Retry build/up for transient apt/mirror/network issues during image build.
+          for attempt in 1 2 3 4 5; do
+            if docker compose -f docker-compose.yml up -d --build; then
+              break
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              echo "::error::docker compose up --build failed after 5 attempts"
+              exit 1
+            fi
+            echo "docker compose attempt ${attempt} failed; cleaning up and retrying..."
+            docker compose -f docker-compose.yml down 2>/dev/null || true
+            sleep $((attempt * 15))
+          done
+
+          wait_for_url() {
+            local url="$1" attempts="$2" label="$3"
+            local i=0
+            until curl -fsS --max-time 10 "${url}" > /dev/null 2>&1; do
+              i=$((i + 1))
+              if [ "${i}" -ge "${attempts}" ]; then
+                echo "::error::${label} did not become ready after ${attempts} attempts (${url})"
+                docker compose -f docker-compose.yml ps
+                exit 1
+              fi
+              echo "Waiting for ${label}... (${i}/${attempts})"
+              sleep 10
+            done
+            echo "${label} is ready at ${url}"
+          }
+
+          wait_for_url "${UI_URL}/"        120 "UI"
+          wait_for_url "${API_DOCS_URL}"    60 "python-app OpenAPI docs"
+
+      - name: Run UI automation tests
+        if: always()
+        env:
+          TEST_DOCKER_PULL_KEY: ${{ secrets.TEST_DOCKER_PULL_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TEST_DOCKER_PULL_KEY:-}" ]; then
+            echo "Skipping tests: repository secret TEST_DOCKER_PULL_KEY is not set."
+            exit 0
+          fi
+
+          echo "${TEST_DOCKER_PULL_KEY}" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+
+          echo "Waiting for services to stabilize (10 minutes)..."
+          sleep 600
+
+          echo "Confirming UI is still reachable at ${UI_URL}..."
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 10 "${UI_URL}/" > /dev/null 2>&1; then
+              break
+            fi
+            if [ "${i}" -eq 30 ]; then
+              echo "::error::UI unreachable after stabilization wait"
+              exit 1
+            fi
+            echo "Retry ${i}/30..."
+            sleep 10
+          done
+
+          echo "Pulling QA test image: ${QA_TEST_IMAGE}"
+          docker pull "${QA_TEST_IMAGE}"
+
+          docker run --rm \
+            --net=host \
+            -v "$(pwd):/workspace" \
+            "${QA_TEST_IMAGE}" \
+            pytest -m "nemotron_voice_agent and ui" \
+              --nemotron-voice-agent-url="${UI_URL}" \
+              --disable-warnings -v --timeout=180 \
+              --html=/workspace/nemotron-voice-agent-ui-test.html \
+              --self-contained-html
+
+      - name: Upload UI test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nemotron-voice-agent-ui-test
+          path: nemotron-voice-agent-ui-test.html
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Cleanup Docker resources
+        if: always()
+        run: |
+          set +e
+
+          echo "Stopping Docker Compose services..."
+          docker compose -f docker-compose.yml down --rmi all 2>/dev/null || true
+
+          sleep 30
+
+          echo "Removing QA test image..."
+          docker rmi "${QA_TEST_IMAGE}" 2>/dev/null || true
+
+          echo "Pruning dangling images..."
+          docker image prune -f
+
+          echo "Remaining containers:"
+          docker ps -a
+          echo "Remaining images:"
+          docker images
+
+      - name: Compute job result
+        id: set_result
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "RESULT=PASS" >> "$GITHUB_OUTPUT"
+          else
+            echo "RESULT=FAIL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send mail
+        uses: dawidd6/action-send-mail@6e71c855c9a091d80a519621b9fd3e8d252ca40c
+        if: always()
+        continue-on-error: true
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "QA Test Workflow Result for ${{ github.repository }}"
+          to: Github-Action-Blueprint-QA@nvidia.com
+          from: github-workflow-notification@gmail.com
+          html_body: |
+            <p>Hello,</p>
+
+            <p>The workflow for repository: <strong>${{ github.repository }}</strong> has completed.<br>
+            <strong>Result:</strong> ${{ steps.set_result.outputs.RESULT }}</p>
+
+            <p>You can review the details on GitHub:<br>
+            <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</a></p>
+
+            <p>Thanks!</p>

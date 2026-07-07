@@ -72,3 +72,14 @@ jobs:
 
       - name: Build client
         run: npm --prefix client run build
+
+  deploy-e2e:
+    name: Deploy and E2E (GPU)
+    needs: [python-lint, unit-tests, client-lint-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy-e2e.yml
+    secrets:
+      NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+      TEST_DOCKER_PULL_KEY: ${{ secrets.TEST_DOCKER_PULL_KEY }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
