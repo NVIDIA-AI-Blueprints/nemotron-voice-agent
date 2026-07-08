@@ -45,11 +45,13 @@ the environment and the launcher uses `uv run` internally.
 
 Default backend targets:
 
-- `NEMOTRON_VOICE_AGENT_HTTP=https://127.0.0.1:7860`
 - `NEMOTRON_VOICE_AGENT_WS=wss://127.0.0.1:7860`
-- `NEMOTRON_PIPELINE_MODE=webex-byova-assistant`
 
 The backend itself is the `webex-byova-assistant` example in this repository.
+The adapter opens `/api/ws` directly without `/api/session-config` or a
+`session_id`, allowing connections to be distributed across multiple Uvicorn
+workers. The backend Compose profile selects the example at startup with
+`EXAMPLE_SELECTION=webex-byova-assistant`.
 For the full backend + adapter + Cisco sandbox flow, use:
 
 - [`../run.md`](../run.md)

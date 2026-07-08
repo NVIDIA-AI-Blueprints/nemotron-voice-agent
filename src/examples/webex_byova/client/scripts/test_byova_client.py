@@ -279,7 +279,7 @@ async def main() -> None:
     parser.add_argument("--conversation-id", default=f"test-{int(time.time())}")
     parser.add_argument("--customer-org-id", default="local-test-org")
     parser.add_argument("--virtual-agent-id", default="nemotron-generic")
-    parser.add_argument("--vendor-specific-config", default='{"pipeline_mode":"webex-byova-assistant"}')
+    parser.add_argument("--vendor-specific-config", default="{}")
     parser.add_argument("--response-wait-secs", type=float, default=8.0)
     parser.add_argument(
         "--post-silence-ms",

@@ -12,10 +12,8 @@ import logging
 import os
 import ssl
 import time
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlencode
 
 import websockets
 from pipecat.frames.protobufs import frames_pb2
@@ -30,6 +28,11 @@ _TRACE_PATH = os.environ.get("NEMOTRON_BYOVA_ADAPTER_TRACE_FILE", "")
 _PCM16_BYTES_PER_SAMPLE = 2
 _NEMOTRON_INPUT_CHUNK_MS = 32
 _NEMOTRON_INPUT_CHUNK_BYTES = TARGET_SAMPLE_RATE * _NEMOTRON_INPUT_CHUNK_MS // 1000 * _PCM16_BYTES_PER_SAMPLE
+_ADAPTER_VENDOR_CONFIG_KEYS = {
+    "transfer_keywords",
+    "end_session_keywords",
+    "transfer_metadata",
+}
 
 
 def _trace(message: str) -> None:
@@ -49,10 +52,9 @@ def _ssl_context(insecure: bool) -> ssl.SSLContext | None:
 
 
 def _ssl_for_uri(uri: str, insecure: bool) -> ssl.SSLContext | None:
-    # The websockets / urllib libraries reject an SSL context on plain ws:// or
-    # http:// targets. Only attach one when the scheme is actually TLS.
+    # websockets rejects an SSL context on plain ws:// targets.
     scheme = uri.split("://", 1)[0].lower() if "://" in uri else ""
-    if scheme in ("wss", "https"):
+    if scheme == "wss":
         return _ssl_context(insecure)
     return None
 
@@ -66,7 +68,6 @@ class NemotronSession:
     vendor_specific_config: str = ""
     outbound_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     websocket: Any | None = None
-    session_id: str = ""
     reader_task: asyncio.Task | None = None
     finalizer_task: asyncio.Task | None = None
     closed: bool = False
@@ -90,17 +91,21 @@ class NemotronSession:
     caller_resample_state: Any = None
 
     async def start(self) -> None:
-        """Create a Nemotron session and open its websocket channel."""
+        """Open a stateless Nemotron websocket channel for this conversation."""
         self.vendor_config = self._parse_vendor_config()
-        self.session_id = await asyncio.to_thread(self._create_session)
-        params = urlencode({"session_id": self.session_id})
-        uri = f"{self.config.nemotron_voice_agent_ws.rstrip('/')}/api/ws?{params}"
+        uri = f"{self.config.nemotron_voice_agent_ws.rstrip('/')}/api/ws"
+        unsupported_keys = sorted(set(self.vendor_config) - _ADAPTER_VENDOR_CONFIG_KEYS)
+        if unsupported_keys:
+            logger.warning(
+                "Ignoring unsupported vendor_specific_config keys for conversation_id=%s keys=%s",
+                self.conversation_id,
+                unsupported_keys,
+            )
         logger.info(
-            "Opening Nemotron websocket for conversation_id=%s session_id=%s",
+            "Opening stateless Nemotron websocket for conversation_id=%s",
             self.conversation_id,
-            self.session_id,
         )
-        _trace(f"open websocket session_id={self.session_id}")
+        _trace("open websocket")
         self.websocket = await websockets.connect(uri, ssl=_ssl_for_uri(uri, self.config.allow_insecure_tls))
         self.reader_task = asyncio.create_task(self._reader_loop(), name=f"nemotron-reader-{self.conversation_id}")
         # Announce the adapter as a ready RTVI client so the backend can send
@@ -122,30 +127,6 @@ class NemotronSession:
         frame = frames_pb2.Frame(message=frames_pb2.MessageFrame(data=json.dumps(payload)))
         await self.websocket.send(frame.SerializeToString())
         _trace("sent client-ready")
-
-    def _create_session(self) -> str:
-        payload: dict[str, Any] = {"pipeline_mode": self.config.pipeline_mode}
-        if self.vendor_config:
-            payload.update(self.vendor_config)
-
-        body = json.dumps(payload).encode("utf-8")
-        url = f"{self.config.nemotron_voice_agent_http.rstrip('/')}/api/session-config"
-        request = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(
-            request,
-            context=_ssl_for_uri(url, self.config.allow_insecure_tls),
-            timeout=30,
-        ) as response:
-            data = json.load(response)
-        session_id = data.get("session_id", "")
-        if not session_id:
-            raise RuntimeError("Nemotron session-config response did not include session_id")
-        return session_id
 
     def _parse_vendor_config(self) -> dict[str, Any]:
         if not self.vendor_specific_config.strip():
@@ -382,9 +363,8 @@ class NemotronSession:
         if self.closed:
             return
         logger.info(
-            "Closing Nemotron websocket conversation_id=%s session_id=%s",
+            "Closing Nemotron websocket conversation_id=%s",
             self.conversation_id,
-            self.session_id,
         )
         self.closed = True
         if self.finalizer_task:
