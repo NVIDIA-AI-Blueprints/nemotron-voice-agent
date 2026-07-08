@@ -10,10 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@pipecat-ai/client-js": "^1.11.0",
-    "@pipecat-ai/client-react": "1.4.0",
-    "@pipecat-ai/small-webrtc-transport": "^1.10.4",
-    "@pipecat-ai/websocket-transport": "^1.6.7",
+    "@pipecat-ai/client-js": "1.12.0",
+    "@pipecat-ai/client-react": "1.7.1",
+    "@pipecat-ai/small-webrtc-transport": "1.10.5",
+    "@pipecat-ai/websocket-transport": "1.7.0",
     "@tanstack/react-query": "^5.100.11",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

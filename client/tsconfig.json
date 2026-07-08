@@ -7,6 +7,9 @@
     "types": ["vite/client"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
+    "paths": {
+      "client-js": ["./node_modules/@pipecat-ai/client-js/dist/index.d.ts"]
+    },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
