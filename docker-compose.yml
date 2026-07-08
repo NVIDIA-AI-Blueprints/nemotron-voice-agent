@@ -256,7 +256,7 @@ services:
       <<: [*app-env, *platform-workstation]
       EXAMPLE_SELECTION: webex-byova-assistant
       TRANSPORT_SELECTION: websocket
-      UVICORN_WORKERS: "1"
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-1}"
       USE_SILERO_VAD_TURN_DETECTION: "true"
       SILERO_VAD_STOP_SECS: "${SILERO_VAD_STOP_SECS:-0.8}"
       AUDIO_OUT_10MS_CHUNKS: "40"

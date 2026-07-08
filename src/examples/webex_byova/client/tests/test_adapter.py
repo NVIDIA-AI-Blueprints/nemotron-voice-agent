@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 from cisco_webex_byova_adapter.auth import CiscoJwsValidator, _CachedJwkSet
 from cisco_webex_byova_adapter.config import AdapterConfig
 from cisco_webex_byova_adapter.generated import byova_common_pb2, voicevirtualagent_pb2
+from cisco_webex_byova_adapter.nemotron_bridge import NemotronSession
 from cisco_webex_byova_adapter.service import VoiceVirtualAgentServicer, _SessionEntry
 
 
@@ -97,6 +98,35 @@ class AdapterConfigTests(unittest.TestCase):
         )
         config.validate()
         self.assertTrue(config.tls_enabled)
+
+
+class NemotronSessionConnectionTests(unittest.IsolatedAsyncioTestCase):
+    """Cover the stateless adapter-to-backend WebSocket handshake."""
+
+    async def test_start_uses_direct_websocket_without_session_routing(self) -> None:
+        """Use the example selected when the backend deployment started."""
+        websocket = AsyncMock()
+        connect = AsyncMock(return_value=websocket)
+        reader_loop = AsyncMock()
+        session = NemotronSession(
+            config=AdapterConfig(
+                enable_auth=False,
+                nemotron_voice_agent_ws="ws://127.0.0.1:7860",
+            ),
+            conversation_id="stateless-connection",
+        )
+
+        with (
+            patch("cisco_webex_byova_adapter.nemotron_bridge.websockets.connect", connect),
+            patch.object(NemotronSession, "_reader_loop", reader_loop),
+        ):
+            await session.start()
+            await session.reader_task
+
+        uri = connect.await_args.args[0]
+        self.assertEqual(uri, "ws://127.0.0.1:7860/api/ws")
+        self.assertNotIn("?", uri)
+        websocket.send.assert_awaited_once()
 
 
 class _FakeSession:

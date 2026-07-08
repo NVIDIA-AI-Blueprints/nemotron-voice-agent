@@ -15,15 +15,10 @@ class AdapterConfig:
 
     grpc_host: str = os.getenv("NEMOTRON_BYOVA_ADAPTER_GRPC_HOST", "0.0.0.0")
     grpc_port: int = int(os.getenv("NEMOTRON_BYOVA_ADAPTER_GRPC_PORT", "50061"))
-    nemotron_voice_agent_http: str = os.getenv(
-        "NEMOTRON_VOICE_AGENT_HTTP",
-        os.getenv("NEMOTRON_HTTP_BASE", "https://127.0.0.1:7860"),
-    )
     nemotron_voice_agent_ws: str = os.getenv(
         "NEMOTRON_VOICE_AGENT_WS",
         os.getenv("NEMOTRON_WS_BASE", "wss://127.0.0.1:7860"),
     )
-    pipeline_mode: str = os.getenv("NEMOTRON_PIPELINE_MODE", "webex-byova-assistant")
     virtual_agent_id: str = os.getenv("DEFAULT_VIRTUAL_AGENT_ID", "nemotron-generic")
     virtual_agent_name: str = os.getenv("DEFAULT_VIRTUAL_AGENT_NAME", "Nemotron Generic")
     allow_insecure_tls: bool = os.getenv("NEMOTRON_INSECURE_TLS", "true").lower() == "true"

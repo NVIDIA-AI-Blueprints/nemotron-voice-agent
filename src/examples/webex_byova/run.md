@@ -14,7 +14,7 @@ In this setup:
 - the backend example is `webex-byova-assistant`
 - the client is the vendored adapter in [`client/`](./client/)
 - Cisco Webex Contact Center connects to the adapter over gRPC+TLS
-- the adapter connects to this server over `/api/session-config` and `/api/ws`
+- the adapter connects directly to this server over `/api/ws`
 
 ## Architecture
 
@@ -37,6 +37,17 @@ docker compose --profile webex-byova-assistant/workstation up -d
 
 This recipe uses the normal workstation hardware/service stack and pins the
 server to `websocket` transport for the adapter path.
+
+It also locks the backend deployment with
+`EXAMPLE_SELECTION=webex-byova-assistant`, so the adapter connects directly to
+`/api/ws` without request-level example routing. Multiple Uvicorn workers are
+supported because the adapter does not use `/api/session-config` or a
+`session_id`:
+
+```bash
+UVICORN_WORKERS=4 \
+  docker compose --profile webex-byova-assistant/workstation up -d
+```
 
 `SILERO_VAD_STOP_SECS` controls how much trailing silence is required after
 speech before the user turn ends; it does not control speech-start detection.
@@ -86,9 +97,7 @@ export NEMOTRON_BYOVA_ADAPTER_TLS_KEY=/etc/letsencrypt/live/<public-host>/privke
 
 Important adapter defaults:
 
-- `NEMOTRON_VOICE_AGENT_HTTP=https://127.0.0.1:7860`
 - `NEMOTRON_VOICE_AGENT_WS=wss://127.0.0.1:7860`
-- `NEMOTRON_PIPELINE_MODE=webex-byova-assistant`
 - `NEMOTRON_BYOVA_ADAPTER_GRPC_PORT=50061`
 - `NEMOTRON_BYOVA_ADAPTER_HEALTH_PORT=8081`
 

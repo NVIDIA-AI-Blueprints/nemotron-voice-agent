@@ -176,7 +176,6 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                     is_default=True,
                     attributes={
                         "provider": "nemotron",
-                        "pipeline_mode": self._config.pipeline_mode,
                     },
                 )
             ]
