@@ -8,13 +8,12 @@ from __future__ import annotations
 import base64
 import contextlib
 import itertools
+import math
 import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
-
-from utils import parse_env_float, parse_env_int
+from datetime import UTC, datetime, timedelta
 
 
 @dataclass(frozen=True)
@@ -52,6 +51,12 @@ _lock = threading.Lock()
 _sequence = itertools.count(1)
 _frames_by_session: dict[str, list[WebcamFrame]] = {}
 _listeners_by_session: dict[str, list[Callable[[], None]]] = {}
+_SAMPLE_INTERVAL_SECONDS = 1.0
+_FRAME_MAX_WIDTH = 640
+_JPEG_QUALITY = 0.7
+_INITIAL_UPLOAD_DELAY_MS = 700
+_FRAME_MAX_BYTES = 5_000_000
+_FRAME_RING_LIMIT = 64
 
 
 def register_webcam_frame_listener(session_id: str, listener: Callable[[], None]) -> Callable[[], None]:
@@ -76,13 +81,13 @@ def register_webcam_frame_listener(session_id: str, listener: Callable[[], None]
 
 
 def webcam_client_config() -> dict[str, float | int | bool]:
-    """Return browser-facing webcam capture defaults from local env knobs."""
+    """Return browser-facing webcam capture defaults."""
     return {
-        "sample_interval_seconds": parse_env_float("WEBCAM_SAMPLE_INTERVAL_SECONDS", 1, min_value=0.5),
-        "frame_max_width": parse_env_int("WEBCAM_FRAME_MAX_WIDTH", 640, min_value=160),
-        "jpeg_quality": parse_env_float("WEBCAM_JPEG_QUALITY", 0.7, min_value=0.1),
+        "sample_interval_seconds": _SAMPLE_INTERVAL_SECONDS,
+        "frame_max_width": _FRAME_MAX_WIDTH,
+        "jpeg_quality": _JPEG_QUALITY,
         "initial_upload_enabled": True,
-        "initial_upload_delay_ms": parse_env_int("WEBCAM_INITIAL_UPLOAD_DELAY_MS", 700, min_value=0),
+        "initial_upload_delay_ms": _INITIAL_UPLOAD_DELAY_MS,
     }
 
 
@@ -103,11 +108,9 @@ def store_webcam_frame(
     if not data:
         raise ValueError("webcam frame is empty")
 
-    max_bytes = parse_env_int("WEBCAM_FRAME_MAX_BYTES", 5_000_000, min_value=1)
-    if len(data) > max_bytes:
-        raise ValueError(f"webcam frame exceeds max size ({max_bytes} bytes)")
+    if len(data) > _FRAME_MAX_BYTES:
+        raise ValueError(f"webcam frame exceeds max size ({_FRAME_MAX_BYTES} bytes)")
 
-    limit = parse_env_int("WEBCAM_FRAME_RING_LIMIT", 8, min_value=1)
     with _lock:
         frame = WebcamFrame(
             id=uuid.uuid4().hex,
@@ -120,7 +123,7 @@ def store_webcam_frame(
         )
         frames = _frames_by_session.setdefault(cleaned_session_id, [])
         frames.append(frame)
-        del frames[:-limit]
+        del frames[:-_FRAME_RING_LIMIT]
         listeners = list(_listeners_by_session.get(cleaned_session_id, ()))
     for listener in listeners:
         listener()
@@ -134,15 +137,34 @@ def latest_webcam_frame(session_id: str) -> WebcamFrame | None:
     return frames[-1] if frames else None
 
 
-def get_webcam_frame(session_id: str, frame_id: str) -> WebcamFrame | None:
-    """Return a specific webcam frame by id."""
+def recent_webcam_frames(
+    session_id: str,
+    *,
+    max_seconds: float | None = None,
+    max_count: int | None = None,
+) -> list[WebcamFrame]:
+    """Return recent webcam frames (oldest to newest) for a session.
+
+    ``max_seconds`` keeps only frames within that many seconds of the latest frame;
+    ``max_count`` caps how many of the most recent frames are returned. Used to build
+    a single continuous video window for native temporal understanding.
+    """
     cleaned_session_id = session_id.strip()
-    cleaned_frame_id = frame_id.strip()
-    if not cleaned_session_id or not cleaned_frame_id:
-        return None
+    if not cleaned_session_id:
+        return []
     with _lock:
         frames = list(_frames_by_session.get(cleaned_session_id, ()))
-    return next((frame for frame in frames if frame.id == cleaned_frame_id), None)
+    if not frames:
+        return []
+    if max_seconds is not None and math.isfinite(max_seconds) and max_seconds > 0:
+        try:
+            cutoff = datetime.fromisoformat(frames[-1].created_at) - timedelta(seconds=max_seconds)
+            frames = [f for f in frames if datetime.fromisoformat(f.created_at) >= cutoff]
+        except (OverflowError, ValueError):
+            pass
+    if max_count is not None and max_count > 0:
+        frames = frames[-max_count:]
+    return frames
 
 
 def clear_session_webcam_frames(session_id: str) -> None:

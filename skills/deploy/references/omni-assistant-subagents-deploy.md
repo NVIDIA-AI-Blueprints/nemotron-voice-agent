@@ -1,6 +1,6 @@
 # Omni Assistant Subagents Cascaded Example — Deployment Reference
 
-Use this reference from the `deploy` skill when deploying the examples/omni_assistant_subagents example — Nemotron Omni split across four cooperating Pipecat Subagents (transport, speaker, media analyzer, webcam) that share a single `AgentBus`.
+Use this reference from the `deploy` skill when deploying the examples/omni_assistant_subagents example — Nemotron 3 Omni split across five cooperating Pipecat workers (transport, speaker, media analyzer, webcam, thinker) that share a single `WorkerBus`.
 
 ## When to use
 
@@ -36,7 +36,7 @@ Tear down with the same recipe used at `up` time.
 ## Verify
 
 - UI at `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`. The sidebar shows a webcam panel and the conversation panel shows an attachment upload control.
-- App logs: `docker compose logs --tail 200 omni-assistant-subagents`. Look for `Starting Nemotron Omni subagents pipeline ... agents=transport,speaker,media,webcam`.
+- App logs: `docker compose logs --tail 200 omni-assistant-subagents`. Look for `Starting Nemotron Omni Assistant Subagents pipeline ... agents=transport,speaker,media,webcam,thinker`.
 - Attachment upload check: `curl -F file=@image.jpg "https://<host>:7860/api/sessions/<session_id>/attachments?kind=image"` (use a session id from a live session).
 - Webcam config check: `curl -fk https://<host>:7860/api/webcam-config`.
 

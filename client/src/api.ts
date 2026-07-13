@@ -39,6 +39,16 @@ export interface Tool {
   parameters?: Record<string, unknown>;
 }
 
+export type SubagentReasoning = "on" | "off" | "on_demand";
+
+export interface Subagent {
+  key: string;
+  label: string;
+  capability: string;
+  delegatable: boolean;
+  reasoning: SubagentReasoning;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) {
@@ -92,6 +102,14 @@ export function useDefaultTools(pipelineMode = "") {
   return useQuery<Tool[]>({
     queryKey: ["tools", pipelineMode],
     queryFn: () => fetchJson<Tool[]>(`/api/tools${qs}`),
+  });
+}
+
+export function useSubagents(pipelineMode = "") {
+  const qs = pipelineMode ? `?pipeline_mode=${encodeURIComponent(pipelineMode)}` : "";
+  return useQuery<Subagent[]>({
+    queryKey: ["subagents", pipelineMode],
+    queryFn: () => fetchJson<Subagent[]>(`/api/subagents${qs}`),
   });
 }
 
@@ -316,6 +334,22 @@ export async function uploadWebcamFrame(sessionId: string, frame: Blob) {
   const form = new FormData();
   form.append("file", frame, "webcam-frame.jpg");
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/webcam/frames`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    const details = body ? `: ${body.slice(0, 200)}` : "";
+    throw new Error(`HTTP ${res.status}${details}`);
+  }
+  return res.json();
+}
+
+export async function uploadWebcamCapture(sessionId: string, frame: Blob, requestId: string) {
+  const form = new FormData();
+  form.append("file", frame, "focused-capture.jpg");
+  form.append("request_id", requestId);
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/webcam/capture`, {
     method: "POST",
     body: form,
   });

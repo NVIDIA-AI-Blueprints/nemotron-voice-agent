@@ -3,6 +3,7 @@
 
 import { useConnectionState } from "../hooks/useConnectionState";
 import { useApp } from "../context/useApp";
+import { PanelSection } from "./PanelSection";
 
 export function PipelineExampleSelector() {
   const { isLocked } = useConnectionState();
@@ -12,8 +13,7 @@ export function PipelineExampleSelector() {
   if (!selectedExample || deploymentOptions.length <= 1) return null;
 
   return (
-    <div className="panel-section">
-      <p className="panel-label">EXAMPLE</p>
+    <PanelSection label="EXAMPLE">
       <select
         className="select-dark select-full"
         value={selectedExample.key}
@@ -27,6 +27,6 @@ export function PipelineExampleSelector() {
           </option>
         ))}
       </select>
-    </div>
+    </PanelSection>
   );
 }

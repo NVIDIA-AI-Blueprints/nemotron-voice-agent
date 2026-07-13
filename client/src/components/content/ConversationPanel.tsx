@@ -12,6 +12,7 @@ import {
 } from "@pipecat-ai/client-react";
 import { uploadAttachment } from "../../api";
 import { useApp } from "../../context/useApp";
+import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { isRecord, stringField } from "../../utils";
 import { TranscriptMessage } from "./TranscriptMessage";
 
@@ -439,6 +440,7 @@ export function ConversationPanel() {
   }, [agentTasks, assistantTurns, attachments, visibleMessages, userTurnAnchors]);
 
   const showAttachmentControl = Boolean(currentSessionId) && canUploadAttachments && visibleMessages.length > 0;
+  const bottomAnchorRef = useStickToBottom(conversationItems);
 
   return (
     <div className="p-4">
@@ -472,6 +474,7 @@ export function ConversationPanel() {
         })}
         {showAttachmentControl && <AttachMediaButton onClick={() => uploadInputRef.current?.click()} />}
       </ul>
+      <div ref={bottomAnchorRef} className="conversation-bottom-spacer" aria-hidden="true" />
       <input
         ref={uploadInputRef}
         type="file"
