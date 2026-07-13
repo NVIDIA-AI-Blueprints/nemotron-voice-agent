@@ -3,6 +3,18 @@
 
 """Webcam worker package."""
 
-from examples.omni_assistant_subagents.subagents.webcam.agent import WEBCAM_SUMMARY_TASK_NAME, WebcamAgent
+from examples.omni_assistant_subagents.subagents.webcam.agent import (
+    SPEAKER_STATE_PREFIXES,
+    WEBCAM_CONTEXT_PREFIX,
+    WEBCAM_FIRST_SIGHT_PREFIX,
+    WEBCAM_SUMMARY_TASK_NAME,
+    WebcamAgent,
+)
 
-__all__ = ["WEBCAM_SUMMARY_TASK_NAME", "WebcamAgent"]
+__all__ = [
+    "SPEAKER_STATE_PREFIXES",
+    "WEBCAM_CONTEXT_PREFIX",
+    "WEBCAM_FIRST_SIGHT_PREFIX",
+    "WEBCAM_SUMMARY_TASK_NAME",
+    "WebcamAgent",
+]
