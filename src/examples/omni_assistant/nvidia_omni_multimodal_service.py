@@ -126,6 +126,7 @@ class NvidiaOmniInferenceResult:
 
     text: str = ""
     reasoning: str = ""
+    finish_reason: str = ""
 
 
 class NvidiaOmniMultimodalService(LLMService):
@@ -267,6 +268,7 @@ class NvidiaOmniMultimodalService(LLMService):
         context: LLMContext,
         *,
         max_tokens: int | None = None,
+        reasoning_budget: int | None = None,
         temperature: float | None = None,
         stream: bool = False,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -280,22 +282,34 @@ class NvidiaOmniMultimodalService(LLMService):
         request_kwargs = self._build_request_kwargs(messages=self._messages_from_context(context), has_audio=False)
         if max_tokens is not None:
             request_kwargs["max_tokens"] = max_tokens
+        if reasoning_budget is not None:
+            extra_body = dict(request_kwargs.get("extra_body") or {})
+            extra_body["reasoning_budget"] = reasoning_budget
+            request_kwargs["extra_body"] = extra_body
         if temperature is not None:
             request_kwargs["temperature"] = temperature
         if not stream:
             request_kwargs["stream"] = False
             completion = await self._client.chat.completions.create(**request_kwargs)
-            message = completion.choices[0].message if completion.choices else None
-            return NvidiaOmniInferenceResult(text=_extract_text_content(getattr(message, "content", "")).strip())
+            choice = completion.choices[0] if completion.choices else None
+            message = choice.message if choice else None
+            return NvidiaOmniInferenceResult(
+                text=_extract_text_content(getattr(message, "content", "")).strip(),
+                finish_reason=str(getattr(choice, "finish_reason", "") or ""),
+            )
 
         request_kwargs["stream"] = True
         text = ""
         reasoning = ""
+        finish_reason = ""
         response_stream = await self._client.chat.completions.create(**request_kwargs)
         async for chunk in response_stream:
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if choice.finish_reason:
+                finish_reason = str(choice.finish_reason)
             reasoning_delta = _extract_delta_reasoning_content(delta)
             text_delta = _extract_text_content(getattr(delta, "content", ""))
             if reasoning_delta:
@@ -306,7 +320,11 @@ class NvidiaOmniMultimodalService(LLMService):
                 text += text_delta
                 if on_text_delta is not None:
                     await on_text_delta(text_delta)
-        return NvidiaOmniInferenceResult(text=text.strip(), reasoning=reasoning.strip())
+        return NvidiaOmniInferenceResult(
+            text=text.strip(),
+            reasoning=reasoning.strip(),
+            finish_reason=finish_reason,
+        )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Process pipeline frames for multimodal Omni turns."""
@@ -559,7 +577,7 @@ class NvidiaOmniMultimodalService(LLMService):
         await self._emit_llm_usage_metrics(getattr(completion, "usage", None))
         structured_audio_response = self._expects_structured_audio_response(has_audio)
         result = self._parse_turn_result(raw_content, parse_json=structured_audio_response)
-        await self._on_turn_result(result)
+        result = await self._on_turn_result(result) or result
         if structured_audio_response and result.transcript:
             await self._emit_user_transcript(result.transcript)
 
@@ -667,7 +685,14 @@ class NvidiaOmniMultimodalService(LLMService):
         trailing_text = sentence_buffer.strip()
         if structured_audio_response:
             result = self._parse_turn_result(raw_content, parse_json=True)
-            await self._on_turn_result(result)
+            corrected_result = await self._on_turn_result(result)
+            if corrected_result is not None:
+                result = corrected_result
+                if response_started and result.response:
+                    response_started = await self._emit_assistant_text(
+                        result.response,
+                        response_started=response_started,
+                    )
             if result.transcript and not transcript_emitted:
                 await self._emit_user_transcript(result.transcript)
             if trailing_text:
@@ -752,9 +777,9 @@ class NvidiaOmniMultimodalService(LLMService):
             payload=payload,
         )
 
-    async def _on_turn_result(self, result: NvidiaOmniTurnResult) -> None:
-        """Hook for example-specific subclasses to inspect parsed Omni responses."""
-        pass
+    async def _on_turn_result(self, result: NvidiaOmniTurnResult) -> NvidiaOmniTurnResult | None:
+        """Inspect a parsed response and optionally replace it before final emission."""
+        return None
 
     def _messages_from_context(self, context: LLMContext | None) -> list[OpenAIMessage]:
         if context is None:

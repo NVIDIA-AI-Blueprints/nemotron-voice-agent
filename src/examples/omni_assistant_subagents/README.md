@@ -1,10 +1,10 @@
-# Nemotron Omni Assistant Subagents - cascaded pipeline example
+# Nemotron 3 Omni Assistant Subagents - cascaded pipeline example
 
-Multi-agent variant of [`omni-assistant`](../omni_assistant/README.md) built on Pipecat's built-in multi-agent framework (`pipecat.workers`). A transport agent owns I/O and TTS, a speaker agent owns spoken output, and two worker agents handle uploaded media and live webcam vision. It keeps the voice conversation responsive while specialized agents analyze uploaded media and live webcam frames.
+Multi-agent variant of [`omni-assistant`](../omni_assistant/README.md) built on Pipecat's built-in multi-agent framework (`pipecat.workers`). A transport agent owns I/O and TTS, a speaker agent owns spoken output, and worker agents handle uploaded media, live webcam vision, and deliberate reasoning. It keeps the voice conversation responsive while specialized agents analyze uploaded media and live webcam frames and escalate difficult turns to a reasoning pass.
 
-The pattern splits responsibility across a transport agent, speaker agent, media analyzer, and webcam agent using `pipecat.workers`, with explicit dispatch and acknowledgement points. It showcases agent boundaries and prompt separation, visual barge-in, deferred media dispatch, rolling webcam scene summaries, and UI capability declarations for attachments and webcam support.
+The pattern splits responsibility across a transport agent, speaker agent, media analyzer, webcam agent, and thinker using `pipecat.workers`, with explicit dispatch and acknowledgement points. It showcases agent boundaries and prompt separation, visual barge-in, deferred media dispatch, rolling webcam scene summaries, on-demand high-resolution capture, proactive hand-gesture behavior, and UI capability declarations for attachments and webcam support.
 
-![Omni Assistant Subagents architecture](images/omni-subagent-example.png)
+![Omni Assistant Subagents architecture](images/omni-subagent-example.jpeg)
 
 ## Running the example
 
@@ -53,12 +53,14 @@ To run host-native without Docker, set `selection: omni-assistant-subagents` in 
 
 | Path | Role |
 | --- | --- |
-| `pipeline.py` | entry point that wires the four workers into a `WorkerRunner` over a shared `WorkerBus` |
+| `pipeline.py` | entry point that wires the five workers into a `WorkerRunner` over a shared `WorkerBus` |
 | `subagents/speaker/agent.py` | `SpeakerOmniAgent` plus a structured-JSON wrapper around `NvidiaOmniMultimodalService` |
-| `subagents/transport/agent.py` | `OmniTransportAgent` for transport I/O, TTS, visual barge-in, and analyzer dispatch |
+| `subagents/transport/agent.py` | `OmniTransportAgent` for transport I/O, TTS, visual barge-in, analyzer dispatch, and the pinned subagent state board |
 | `subagents/media_analyzer/agent.py` | `MediaAnalyzerWorker` for uploaded image, audio, and video attachments |
 | `subagents/webcam/agent.py` | `WebcamAgent` rolling scene summaries for live webcam context |
+| `subagents/thinker/agent.py` | `ThinkerWorker` reruns difficult or low-confidence turns with reasoning enabled |
 | `media_dispatch_processor.py` | frame-processor that defers analyzer dispatch until the speaker ack closes |
+| `subagents.yaml` | source of truth for worker capabilities, routing rules, reasoning modes, and UI labels |
 | `prompts.yaml` | example-local prompt catalog (top-level prompt plus `agent_prompts:` per agent) |
 | `services.cloud.yaml`, `services.local.yaml` | example-local service catalogs for cloud and on-prem deployments |
 
@@ -72,6 +74,6 @@ The example declares `capabilities: [attachments, webcam]` in `examples_registry
 
 ## Tips & best practices
 
-- **Keep the voice loop responsive.** Media and webcam analysis run as separate worker agents so the transport and speaker agents never block on vision work. Preserve that split when adding new capabilities.
+- **Keep the voice loop responsive.** Media, webcam, and reasoning analysis run as separate worker agents so the transport and speaker agents never block on vision or reasoning work. Preserve that split when adding new capabilities.
 - **Reuse the deferred-dispatch pattern.** `media_dispatch_processor.py` holds analyzer dispatch until the current spoken turn finishes, which avoids cutting the user off. Reuse it for any new asynchronous worker.
 - **Model selection and VRAM** follow the Omni sizing in [Configure LLM](../../../docs/how-to/configure-llm.md). For deployment and general failure modes, see the [Troubleshooting guide](../../../docs/06-troubleshooting.md).

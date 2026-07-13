@@ -3,6 +3,7 @@
 
 import { usePipecatClient } from "@pipecat-ai/client-react";
 import { useApp } from "../../context/useApp";
+import { PanelSection } from "../PanelSection";
 import { StatusRow } from "./StatusRow";
 
 export function SessionSection() {
@@ -12,10 +13,9 @@ export function SessionSection() {
     availableTransports.find((transport) => transport.id === selectedTransport)?.label ?? selectedTransport;
 
   return (
-    <div className="panel-section">
-      <p className="panel-label">SESSION</p>
+    <PanelSection label="SESSION">
       <StatusRow label="Transport" value={selectedTransportLabel} />
       <StatusRow label="RTVI" value={client?.version ?? "---"} />
-    </div>
+    </PanelSection>
   );
 }
