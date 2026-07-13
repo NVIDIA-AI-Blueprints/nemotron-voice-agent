@@ -51,7 +51,7 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, Query, Request, UploadFile, WebSocket
+from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
@@ -65,8 +65,9 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 import config_store
 import examples_registry
-from attachment_store import store_attachment
+from attachment_store import consume_capture_request, store_attachment
 from examples.shared.prewarm import build_session_languages, prewarm_tts, warmup_tts_synthesis
+from examples.shared.subagents import load_subagent_registry
 from utils import (
     PROJECT_ROOT,
     build_services_api_response,
@@ -712,6 +713,40 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         )
         return frame.metadata()
 
+    @app.post("/api/sessions/{session_id}/webcam/capture")
+    async def upload_webcam_capture(
+        session_id: str,
+        file: Annotated[UploadFile, File()],
+        request_id: Annotated[str, Form()],
+    ):
+        """Store an agent-requested high-resolution webcam snapshot for focused analysis.
+
+        Unlike a streamed webcam frame, this lands in the attachment store (so the media
+        analyzer can read it via get_attachment) tagged source="capture", so it never
+        becomes the Speaker's default visual source.
+        """
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        if (failure := _session_capability_error(session_id, "webcam")) is not None:
+            return failure
+        if not consume_capture_request(session_id, request_id):
+            return JSONResponse(status_code=409, content={"detail": "capture request is missing, stale, or invalid"})
+        try:
+            data = await _read_upload_file_with_limit(file)
+            attachment = store_attachment(
+                session_id=session_id,
+                kind="image",
+                name=file.filename or "focused-capture.jpg",
+                content_type=file.content_type or "image/jpeg",
+                data=data,
+                source="capture",
+            )
+        except ValueError as exc:
+            status_code = 413 if "limit" in str(exc).lower() else 400
+            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
+        logger.debug(f"Stored high-res webcam capture (session_id={session_id[:8]}..., bytes={len(attachment.data)})")
+        return attachment.metadata()
+
     # ---- WebRTC signaling ----
 
     @app.post("/api/offer")
@@ -867,6 +902,13 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 }
             )
         return tools
+
+    @app.get("/api/subagents")
+    async def get_subagents(pipeline_mode: str = Query(default="")):
+        """Subagents the example declares in ``subagents.yaml`` (empty if none)."""
+        _, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
+        registry = load_subagent_registry(Path(module_file).parent / "subagents.yaml")
+        return registry.to_payload()
 
     # ---- Service catalog (services.cloud.yaml or services.local.yaml) ----
 
