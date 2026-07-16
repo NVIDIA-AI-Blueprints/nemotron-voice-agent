@@ -1,0 +1,20 @@
+metric,value,unit,notes
+measurement_window_hours,TODO,hours,Duration of perf observation window
+avg_concurrency_measured,TODO,sessions,From scale sweep stable tier
+throughput_turns_per_min,TODO,turns/min,From perf results
+p95_e2e_latency_ms,TODO,ms,From perf results
+gpu_count,TODO,count,Total GPUs used at target tier
+gpu_hourly_rate_usd,TODO,usd_per_gpu_hour,Infra or cloud pricing input
+cpu_ram_hourly_rate_usd,TODO,usd_per_hour,Host overhead
+network_egress_monthly_usd,TODO,usd_per_month,Optional
+power_draw_watts_per_node,TODO,watts,On-prem only
+electricity_rate_usd_per_kwh,TODO,usd_per_kwh,On-prem only
+utilization_fraction,TODO,0_to_1,Observed or planning assumption
+support_ops_monthly_usd,TODO,usd_per_month,SRE/Ops allocation
+sessions_per_month,TODO,sessions,Forecast input
+turns_per_session,TODO,turns,Forecast input
+cost_per_hour_usd,= (gpu_count*gpu_hourly_rate_usd) + cpu_ram_hourly_rate_usd,usd_per_hour,Formula placeholder
+cost_per_month_usd,= (cost_per_hour_usd*24*30) + network_egress_monthly_usd + support_ops_monthly_usd,usd_per_month,Formula placeholder
+cost_per_session_usd,= cost_per_month_usd / sessions_per_month,usd_per_session,Formula placeholder
+cost_per_turn_usd,= cost_per_session_usd / turns_per_session,usd_per_turn,Formula placeholder
+effective_sessions_per_gpu,= avg_concurrency_measured / gpu_count,sessions_per_gpu,Capacity indicator

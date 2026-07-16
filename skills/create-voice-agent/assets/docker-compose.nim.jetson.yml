@@ -1,0 +1,149 @@
+# Jetson Thor edge stack: vLLM LLM + Riva ASR + Riva TTS (aarch64).
+# Prerequisite: Riva model repos built via riva_quickstart_arm64 riva_init.sh (see platforms/jetson-thor.md).
+# FlashInfer wheel is pinned below (flashinfer-jit-cache==0.6.0+cu130) — bump only after Jetson validation.
+# Usage:
+#   cp .env.example .env  # NVIDIA_API_KEY, HF_TOKEN, RIVA_ASR_MODEL_LOC, RIVA_TTS_MODEL_LOC
+#   docker compose -f docker-compose.nim.jetson.yml up -d
+# Host ports: LLM 18000, ASR 50052, TTS 50051 (match platforms/jetson-thor.md).
+
+name: voice-agent-nim-jetson
+
+services:
+  nvidia-llm-vllm:
+    container_name: nvidia-llm-vllm
+    runtime: nvidia
+    image: ${NVIDIA_VLLM_IMAGE:-nvcr.io/nvidia/vllm:25.12.post1-py3}
+    pull_policy: if_not_present
+    ipc: host
+    shm_size: 16gb
+    cpuset: ${VLLM_CPUSET:-}
+    env_file:
+      - .env
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - VLLM_USE_FLASHINFER_MOE_FP4=1
+      - VLLM_FLASHINFER_MOE_BACKEND=throughput
+      - FLASHINFER_DISABLE_VERSION_CHECK=1
+      - CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+      - CUDA_MPS_LOG_DIRECTORY=/tmp/nvidia-log
+      - CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=${VLLM_MPS_THREAD_PCT:-100}
+    ports:
+      - "18000:8000"
+    volumes:
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
+      - llm_cache:/root/.cache/vllm
+      - /tmp/nvidia-mps:/tmp/nvidia-mps
+      - /tmp/nvidia-log:/tmp/nvidia-log
+    ulimits:
+      nofile: 2048
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        (sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null) || true && \
+        pip install --no-cache-dir "flashinfer-jit-cache==0.6.0+cu130" \
+          --index-url https://flashinfer.ai/whl/cu130 && \
+        vllm serve ${VLLM_MODEL_ID:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4} \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --max-model-len ${VLLM_MAX_MODEL_LEN:-4096} \
+          --gpu-memory-utilization ${VLLM_GPU_MEM_UTIL:-0.35} \
+          --trust-remote-code \
+          --enable-auto-tool-choice \
+          --tool-call-parser qwen3_coder \
+          --async-scheduling \
+          --kv-cache-dtype fp8
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 1200s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  nemotron-speech-asr:
+    container_name: nemotron-speech-asr
+    image: ${RIVA_ASR_IMAGE:-nvcr.io/nvidia/riva/riva-speech:2.24.0-l4t-aarch64}
+    runtime: nvidia
+    ipc: host
+    cpuset: ${RIVA_CPUSET:-}
+    environment:
+      - CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+      - CUDA_MPS_LOG_DIRECTORY=/tmp/nvidia-log
+      - CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=${RIVA_MPS_THREAD_PCT:-100}
+    volumes:
+      - ${RIVA_ASR_MODEL_LOC:-../riva_quickstart_arm64_v2.24.0/model_repository}:/data
+      - /tmp/nvidia-mps:/tmp/nvidia-mps
+      - /tmp/nvidia-log:/tmp/nvidia-log
+    ports:
+      - "50052:50051"
+    ulimits:
+      memlock: -1
+    command:
+      - start-riva
+      - --riva-uri=0.0.0.0:50051
+      - --asr_service=true
+      - --tts_service=false
+      - --nlp_service=false
+    healthcheck:
+      test: ["CMD", "/bin/grpc_health_probe", "-addr=:50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  nemotron-speech-tts:
+    container_name: nemotron-speech-tts
+    image: ${RIVA_TTS_IMAGE:-nvcr.io/nvidia/riva/riva-speech:2.24.0-l4t-aarch64}
+    runtime: nvidia
+    ipc: host
+    cpuset: ${RIVA_CPUSET:-}
+    environment:
+      - CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+      - CUDA_MPS_LOG_DIRECTORY=/tmp/nvidia-log
+      - CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=${RIVA_MPS_THREAD_PCT:-100}
+    volumes:
+      - ${RIVA_TTS_MODEL_LOC:-../riva_tts_model_repository_refresher}:/data
+      - /tmp/nvidia-mps:/tmp/nvidia-mps
+      - /tmp/nvidia-log:/tmp/nvidia-log
+    ports:
+      - "50051:50051"
+    ulimits:
+      memlock: -1
+    command:
+      - start-riva
+      - --riva-uri=0.0.0.0:50051
+      - --asr_service=false
+      - --tts_service=true
+      - --nlp_service=false
+    healthcheck:
+      test: ["CMD", "/bin/grpc_health_probe", "-addr=:50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  llm_cache:
