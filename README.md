@@ -136,6 +136,7 @@ npx skills add .
 
 - [`deploy`](skills/deploy/SKILL.md): NGC login, deployment-profile selection, and compose bring-up.
 - [`configure-pipeline`](skills/configure-pipeline/SKILL.md): edit `.env`, prompts, and example service catalogs, then re-apply the change.
+- [`create-voice-agent`](skills/create-voice-agent/SKILL.md): scaffold new cascaded or omni Pipecat/LiveKit voice agents on NVIDIA cloud, workstation, DGX Spark, or Jetson Thor.
 
 ---
 
