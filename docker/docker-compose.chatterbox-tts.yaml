@@ -20,7 +20,7 @@ x-chatterbox-tts-service: &chatterbox-tts-service-base
       resources:
         reservations:
           devices:
-            # ~52.5 GB VRAM; keep off Magpie's GPU 0 when both run on workstation.
+            # ~52.5 GB VRAM; keep off Magpie's GPU 0 when both run.
             - driver: nvidia
               device_ids: ['1']
               capabilities: [gpu]
@@ -39,12 +39,10 @@ x-chatterbox-tts-service-env: &chatterbox-tts-service-env
 services:
   chatterbox-tts-service:
     <<: *chatterbox-tts-service-base
+    # Opt-in: do not attach to */workstation recipes (avoids reserving ~52.5 GB by default).
+    #   docker compose --profile <recipe> --profile chatterbox-tts up -d
     profiles:
-      - generic-assistant/workstation
-      - multilingual-assistant/workstation
-      - omni-assistant/workstation
-      - omni-assistant-subagents/workstation
-      - frontend-backend-agent/workstation
+      - chatterbox-tts
     environment:
       <<: *chatterbox-tts-service-env
       NIM_TAGS_SELECTOR: name=chatterbox-tts-multilingual

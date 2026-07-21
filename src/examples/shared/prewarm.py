@@ -170,6 +170,7 @@ def prewarm_tts(
     cached = config_store.get(cache_key)
     if cached:
         logger.debug(f"TTS config for {server} already cached")
+        config_store.set("tts", cached)
         return cached
 
     logger.info(f"Pre-warming TTS on {server} (this may take 10-20s on first run)...")

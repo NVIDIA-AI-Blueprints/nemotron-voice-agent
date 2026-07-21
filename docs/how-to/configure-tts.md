@@ -9,9 +9,16 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
-| **Chatterbox TTS Multilingual**: optional streaming multilingual TTS (workstation local + cloud) | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
+| **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
-Magpie TTS Multilingual is exposed as the catalog key `magpie-multilingual-tts` in `services.cloud.yaml` / `services.local.yaml`. Chatterbox is `chatterbox-multilingual-tts` (cloud everywhere; local under `workstation` only). Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Chatterbox-Multilingual.en-US.Male`). The available voices and emotions depend on the deployed NIM. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
+Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.local.yaml` (same pattern as ASR options such as Nemotron vs Parakeet):
+
+| Model | Catalog key | Default deploy? |
+|-------|-------------|-----------------|
+| Magpie TTS Multilingual | `magpie-multilingual-tts` | Yes — Magpie is the registry default and the TTS sidecar started by `*/workstation` / `*/dgx-spark` recipes |
+| Chatterbox TTS Multilingual | `chatterbox-multilingual-tts` | No — catalog option only; pick it in the Services tab (or change `defaults`) to replace Magpie. Cloud is always available; local NIM starts only with the opt-in Compose profile `chatterbox-tts` (like Parakeet’s `parakeet-ctc-asr` / `parakeet-rnnt-asr`) |
+
+Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Chatterbox-Multilingual.en-US.Male`). The available voices and emotions depend on the deployed NIM. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
 
@@ -21,13 +28,16 @@ Magpie TTS Multilingual is exposed as the catalog key `magpie-multilingual-tts` 
 
 TTS runs one of three ways, and the repo wires the right one per profile:
 
-- **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. The simplest starting point.
-- **Magpie TTS NIM sidecar**: on the `*/workstation` and `*/dgx-spark` profiles (`tts-service` on GPU `0` by default, [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)).
+- **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. Magpie and Chatterbox are both listed; switch in the Services tab.
+- **Magpie TTS NIM sidecar** (default local TTS): started by `*/workstation` and `*/dgx-spark` recipes (`tts-service` on GPU `0` by default, [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)).
+- **Chatterbox TTS NIM sidecar** (opt-in alternate, not part of default recipes): add `--profile chatterbox-tts` when you want the local NIM (`chatterbox-tts-service` on GPU `1` by default, ~52.5 GB VRAM). Then select `chatterbox-multilingual-tts` in the Services tab (or set it in `defaults`) to use it instead of Magpie. See [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml).
 - **Riva embedded (Jetson Thor)**: on `*/jetson-thor`, on-device Riva serves TTS: `nemotron-speech` (ASR + TTS together) or `nemotron-speech-tts` (TTS only). See [Jetson Thor](../03-jetson-thor.md).
 
 ### VRAM & hardware support
 
-The TTS sidecar uses roughly **~14 GB VRAM** and, on local profiles, runs alongside the LLM and ASR. On a single ~80 GB GPU, TTS (~14 GB) + ASR (~15 GB) + the LLM (~30 GB FP8) fit together. To split them across GPUs, set `device_ids` in [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the full layout.
+**Magpie TTS** uses roughly **~14 GB VRAM** and, on local profiles, can share a single ~80 GB GPU with ASR (~15 GB) and the LLM (~30 GB FP8). To split Magpie across GPUs, set `device_ids` in [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for that Magpie + ASR + LLM layout.
+
+**Chatterbox TTS** needs about **~52.5 GB VRAM** (Compose reserves a dedicated GPU, device `1` by default). It does **not** fit the Magpie single-80-GB shared layout with the LLM and ASR; run it on a separate GPU via the opt-in `chatterbox-tts` profile ([`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml)).
 
 ### Performance & scaling
 

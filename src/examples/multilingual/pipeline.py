@@ -36,7 +36,6 @@ from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-import config_store
 from examples.multilingual.multilingual_processor import (
     FIXED_SESSION_GREETING_TRIGGER,
     FIXED_SESSION_LANGUAGE_ADDON_KEY,
@@ -116,11 +115,10 @@ async def _prepare_session_language_codes(
         logger.info("Skipping ASR/TTS service prewarm for eval transport startup")
         return ""
 
-    prewarm_tasks = [asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id)]
-    if not config_store.get("tts"):
-        prewarm_tasks.append(
-            asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model)
-        )
+    prewarm_tasks = [
+        asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id),
+        asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model),
+    ]
     await asyncio.gather(*prewarm_tasks)
     return get_lang_codes(
         asr_server=asr_server,
