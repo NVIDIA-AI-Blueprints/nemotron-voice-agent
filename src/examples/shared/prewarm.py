@@ -14,13 +14,28 @@ import config_store
 from utils import is_nvcf, normalize_lang_code
 
 
-def _create_tts_service(server: str, voice_id: str) -> NvidiaTTSService:
-    return NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=server,
-        settings=NvidiaTTSSettings(voice=voice_id),
-        use_ssl=is_nvcf(server),
-    )
+def _create_tts_service(
+    server: str,
+    voice_id: str,
+    function_id: str = "",
+    model: str = "",
+):
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": server,
+        "settings": NvidiaTTSSettings(voice=voice_id),
+        "use_ssl": is_nvcf(server),
+    }
+    if function_id or model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": function_id,
+            "model_name": model,
+        }
+    return NvidiaTTSService(**tts_kwargs)
+
+
+def _tts_cache_key(server: str, function_id: str = "", model: str = "") -> str:
+    return f"tts:{server}:{function_id}:{model}"
 
 
 def _parse_language_codes_param(raw: str) -> list[str]:
@@ -116,9 +131,16 @@ def build_session_languages(
     asr_function_id: str,
     tts_server: str,
     tts_voice_id: str,
+    tts_function_id: str = "",
+    tts_model: str = "",
 ) -> dict:
     """Return the ASR∩TTS language catalog and TTS voices for session configuration."""
-    tts_config = prewarm_tts(tts_server, tts_voice_id)
+    tts_config = prewarm_tts(
+        tts_server,
+        tts_voice_id,
+        tts_function_id,
+        tts_model,
+    )
     asr_config = prewarm_asr(asr_server, asr_model, asr_function_id)
     languages = intersect_session_languages(asr_config, tts_config)
     return {
@@ -128,28 +150,31 @@ def build_session_languages(
     }
 
 
-def _tts_cache_key(server: str) -> str:
-    return f"tts:{server}"
-
-
 def _asr_cache_key(server: str, model: str, function_id: str) -> str:
     return f"asr:{server}:{model}:{function_id}"
 
 
-def prewarm_tts(server: str, voice_id: str) -> dict:
+def prewarm_tts(
+    server: str,
+    voice_id: str,
+    function_id: str = "",
+    model: str = "",
+) -> dict:
     """Pre-warm a TTS server and cache its voice/language config.
 
     Returns the TTS config dict (languages, voices, defaultVoiceId).
-    Results are cached per server in config_store.
+    Results are cached per server + function_id + model in config_store so
+    multiple cloud NIMs on ``grpc.nvcf.nvidia.com`` do not collide.
     """
-    cached = config_store.get(_tts_cache_key(server))
+    cache_key = _tts_cache_key(server, function_id, model)
+    cached = config_store.get(cache_key)
     if cached:
         logger.debug(f"TTS config for {server} already cached")
         return cached
 
     logger.info(f"Pre-warming TTS on {server} (this may take 10-20s on first run)...")
     try:
-        svc = _create_tts_service(server, voice_id)
+        svc = _create_tts_service(server, voice_id, function_id, model)
         svc._initialize_client()
         raw_config = svc._create_synthesis_config()
 
@@ -158,7 +183,7 @@ def prewarm_tts(server: str, voice_id: str) -> dict:
         tts_config["defaultVoiceId"] = voice_id
         tts_config["server"] = server
 
-        config_store.set(_tts_cache_key(server), tts_config)
+        config_store.set(cache_key, tts_config)
         config_store.set("tts", tts_config)
 
         n_langs = len(tts_config["languages"])
@@ -225,11 +250,16 @@ def prewarm_asr(server: str, model: str = "", function_id: str = "") -> dict:
         return {"languages": [], "server": server, "error": str(e)}
 
 
-def warmup_tts_synthesis(server: str, voice_id: str) -> bool:
+def warmup_tts_synthesis(
+    server: str,
+    voice_id: str,
+    function_id: str = "",
+    model: str = "",
+) -> bool:
     """Run a tiny synthesis request to verify the selected TTS is responsive."""
     logger.info(f"Warming up TTS synthesis on {server}...")
     try:
-        svc = _create_tts_service(server, voice_id)
+        svc = _create_tts_service(server, voice_id, function_id, model)
         svc._initialize_client()
 
         responses = svc._service.synthesize_online(

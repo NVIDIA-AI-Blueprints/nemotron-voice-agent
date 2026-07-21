@@ -45,7 +45,14 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
     ),
     "asr": frozenset({"asr_id", "asr_server", "asr_model", "asr_function_id", "asr_language_code"}),
     "tts": frozenset(
-        {"tts_id", "tts_server", "tts_voice_id", "tts_function_id", "tts_synthesis_mode"}
+        {
+            "tts_id",
+            "tts_server",
+            "tts_voice_id",
+            "tts_function_id",
+            "tts_model",
+            "tts_synthesis_mode",
+        }
     ),
 }
 _SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content"})
@@ -470,6 +477,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "tts_server",
         "tts_voice_id",
         "tts_function_id",
+        "tts_model",
         "tts_synthesis_mode",
     }
 )
@@ -515,6 +523,7 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
         {
             "server": "tts_server",
             "function_id": "tts_function_id",
+            "model": "tts_model",
             "voice_id": "tts_voice_id",
             "synthesis_mode": "tts_synthesis_mode",
         },

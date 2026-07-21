@@ -148,6 +148,7 @@ export function useDefaultTTS(pipelineMode = "") {
         id: e.id,
         name: e.name,
         server: String(e.server ?? ""),
+        model: e.model ? String(e.model) : undefined,
         voiceId: e.voice_id ? String(e.voice_id) : undefined,
         functionId: e.function_id ? String(e.function_id) : undefined,
         builtIn: true,
@@ -261,13 +262,26 @@ export function useVoiceCatalog(
   asrServer?: string,
   asrModel?: string,
   asrFunctionId?: string,
+  functionId?: string,
+  model?: string,
 ) {
   return useQuery<TTSConfig>({
-    queryKey: ["tts-config", server || "default", voiceId || "", asrServer || "", asrModel || "", asrFunctionId || ""],
+    queryKey: [
+      "tts-config",
+      server || "default",
+      voiceId || "",
+      functionId || "",
+      model || "",
+      asrServer || "",
+      asrModel || "",
+      asrFunctionId || "",
+    ],
     queryFn: () => {
       const params = new URLSearchParams();
       if (server) params.set("server", server);
       if (voiceId) params.set("voice_id", voiceId);
+      if (functionId) params.set("function_id", functionId);
+      if (model) params.set("model", model);
       if (asrServer) params.set("asr_server", asrServer);
       if (asrModel) params.set("asr_model", asrModel);
       if (asrFunctionId) params.set("asr_function_id", asrFunctionId);

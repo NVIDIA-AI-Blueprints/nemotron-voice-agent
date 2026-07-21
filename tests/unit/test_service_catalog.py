@@ -40,6 +40,7 @@ tts:
     name: Magpie
     server: catalog-tts:443
     function_id: catalog-tts-function
+    model: magpie-tts-multilingual
     voice_id: Magpie-Multilingual.EN-US.Aria
     synthesis_mode: stitched
 """,
@@ -60,6 +61,7 @@ tts:
                 "tts_id": "cloud-nim:magpie",
                 "tts_server": "client-tts:443",
                 "tts_function_id": "client-tts-function",
+                "tts_model": "client-tts-model",
                 "tts_voice_id": "client-voice",
                 "tts_synthesis_mode": "per_sentence",
             }
@@ -86,6 +88,7 @@ tts:
             self.assertEqual(config["asr_language_code"], "client-asr-language")
             self.assertEqual(config["tts_server"], "catalog-tts:443")
             self.assertEqual(config["tts_function_id"], "catalog-tts-function")
+            self.assertEqual(config["tts_model"], "magpie-tts-multilingual")
             self.assertEqual(config["tts_voice_id"], "client-voice")
             self.assertEqual(config["tts_synthesis_mode"], "stitched")
 

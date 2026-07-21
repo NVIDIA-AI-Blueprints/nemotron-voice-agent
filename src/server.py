@@ -526,6 +526,8 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
     default_tts_server, default_tts_voice = _get_default_tts_selection()
     tts_server = config.get("tts_server", "") or default_tts_server
     voice_id = config.get("tts_voice_id", "") or default_tts_voice
+    tts_function_id = config.get("tts_function_id", "")
+    tts_model = config.get("tts_model", "")
 
     ready_url = _local_speech_ready_url("TTS", tts_server)
     if ready_url:
@@ -551,6 +553,8 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
             warmup_tts_synthesis,
             tts_server,
             voice_id,
+            tts_function_id,
+            tts_model,
             timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
         )
     except TimeoutError as exc:
@@ -923,6 +927,8 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     async def tts_config(
         server: str = Query(default=""),
         voice_id: str = Query(default=""),
+        function_id: str = Query(default=""),
+        model: str = Query(default=""),
         asr_server: str = Query(default=""),
         asr_model: str = Query(default=""),
         asr_function_id: str = Query(default=""),
@@ -930,6 +936,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         if asr_server or asr_model or asr_function_id:
             default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
             default_tts_server, default_tts_voice = _get_default_tts_selection()
+            default_tts = load_service_entry("tts", "")
             try:
                 return await _run_blocking(
                     build_session_languages,
@@ -938,6 +945,8 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                     asr_function_id or default_asr_function_id,
                     server or default_tts_server,
                     voice_id or default_tts_voice,
+                    function_id or default_tts.get("function_id", ""),
+                    model or default_tts.get("model", ""),
                     timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
                 )
             except TimeoutError:
@@ -952,10 +961,19 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
         if server:
             _, default_tts_voice = _get_default_tts_selection()
-            cached = config_store.get(f"tts:{server}")
+            default_tts = load_service_entry("tts", "")
+            resolved_function_id = function_id or default_tts.get("function_id", "")
+            resolved_model = model or default_tts.get("model", "")
+            cached = config_store.get(f"tts:{server}:{resolved_function_id}:{resolved_model}")
             if cached:
                 return cached
-            return await _run_blocking(prewarm_tts, server, voice_id or default_tts_voice)
+            return await _run_blocking(
+                prewarm_tts,
+                server,
+                voice_id or default_tts_voice,
+                resolved_function_id,
+                resolved_model,
+            )
         return config_store.get("tts", {"languages": [], "voices": []})
 
     # ---- WebRTC ICE servers (TURN credentials) ----

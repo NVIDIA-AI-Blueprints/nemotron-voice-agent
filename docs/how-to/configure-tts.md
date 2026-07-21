@@ -9,8 +9,9 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
+| **Chatterbox TTS Multilingual**: optional streaming multilingual TTS (workstation local + cloud) | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
-Magpie TTS Multilingual is exposed as the catalog key `magpie-multilingual-tts` in `services.cloud.yaml` / `services.local.yaml`. Voice IDs follow `Model.Language.VoiceName` (e.g. `Magpie-Multilingual.EN-US.Aria`). The available voices and emotions depend on your Magpie version. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
+Magpie TTS Multilingual is exposed as the catalog key `magpie-multilingual-tts` in `services.cloud.yaml` / `services.local.yaml`. Chatterbox is `chatterbox-multilingual-tts` (cloud everywhere; local under `workstation` only). Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Chatterbox-Multilingual.en-US.Male`). The available voices and emotions depend on the deployed NIM. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
 
@@ -46,9 +47,20 @@ tts:
     name: "Magpie TTS Multilingual"
     server: "grpc.nvcf.nvidia.com:443"   # cloud; local entries use the sidecar host:port (e.g. tts-service:50051)
     voice_id: "Magpie-Multilingual.EN-US.Aria"
-    function_id: ""
+    model: "magpie-tts-multilingual"
+    function_id: "877104f7-e885-42b9-8de8-f6e4c6303969"
     synthesis_mode: stitched             # Magpie; omit on other models to keep per_sentence
+
+  chatterbox-multilingual-tts:
+    name: "Chatterbox TTS Multilingual"
+    server: "grpc.nvcf.nvidia.com:443"
+    voice_id: "Chatterbox-Multilingual.en-US.Male"
+    model: "chatterbox-tts-multilingual"
+    function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
+    # no synthesis_mode → Pipecat per_sentence
 ```
+
+Catalog `model` + `function_id` are hydrated into the session and passed to Pipecat's `NvidiaTTSService` as `model_function_map` (same pattern as ASR). Magpie remains the registry default; pick Chatterbox in the Services tab to switch.
 
 ### Synthesis mode
 

@@ -96,6 +96,8 @@ class OmniTransportAgent(PipelineWorker):
         tts_ssl: bool,
         tts_voice: str,
         tts_synthesis_mode: str,
+        tts_function_id: str,
+        tts_model: str,
         runner_args: RunnerArguments,
         session_id: str,
         subagent_registry: SubagentRegistry,
@@ -128,18 +130,26 @@ class OmniTransportAgent(PipelineWorker):
         tts_settings_kwargs: dict[str, Any] = {"voice": tts_voice}
         if tts_synthesis_mode:
             tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
-        self._tts = NvidiaTTSService(
-            api_key=api_key,
-            server=tts_server,
-            settings=NvidiaTTSSettings(**tts_settings_kwargs),
-            use_ssl=tts_ssl,
-            text_filters=[NemotronSpeechTextFilter()],
-            custom_dictionary=load_ipa_dictionary(),
-            stop_frame_timeout_s=parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 30.0, min_value=5.0),
-        )
+        tts_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "server": tts_server,
+            "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+            "use_ssl": tts_ssl,
+            "text_filters": [NemotronSpeechTextFilter()],
+            "custom_dictionary": load_ipa_dictionary(),
+            "stop_frame_timeout_s": parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 30.0, min_value=5.0),
+        }
+        if tts_function_id or tts_model:
+            tts_kwargs["model_function_map"] = {
+                "function_id": tts_function_id,
+                "model_name": tts_model,
+            }
+        self._tts = NvidiaTTSService(**tts_kwargs)
         logger.info(
             f"Nemotron Omni subagents TTS: server={tts_server}, ssl={tts_ssl}, "
-            f"voice={tts_voice}, synthesis_mode={tts_synthesis_mode or '(pipecat default)'}"
+            f"voice={tts_voice}, model={tts_model or '(pipecat default)'}, "
+            f"function_id={tts_function_id or '(pipecat default)'}, "
+            f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}"
         )
 
         self._speaker_context = SpeakerContextManager(context=self._context)

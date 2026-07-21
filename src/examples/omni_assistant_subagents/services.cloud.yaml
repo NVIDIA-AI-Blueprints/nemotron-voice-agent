@@ -13,5 +13,13 @@ tts:
     name: "Magpie TTS Multilingual"
     server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
-    function_id: ""
+    model: "magpie-tts-multilingual"
+    function_id: "877104f7-e885-42b9-8de8-f6e4c6303969"
     synthesis_mode: stitched
+
+  chatterbox-multilingual-tts:
+    name: "Chatterbox TTS Multilingual"
+    server: "grpc.nvcf.nvidia.com:443"
+    voice_id: "Chatterbox-Multilingual.en-US.Male"
+    model: "chatterbox-tts-multilingual"
+    function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
