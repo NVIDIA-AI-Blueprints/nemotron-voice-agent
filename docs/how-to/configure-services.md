@@ -89,4 +89,7 @@ tts:
     server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
     function_id: ""
+    # Optional. Magpie Multilingual uses ``stitched``; omit on other models to
+    # keep Pipecat's ``per_sentence`` default.
+    synthesis_mode: stitched
 ```

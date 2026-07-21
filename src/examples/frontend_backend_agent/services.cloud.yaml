@@ -23,11 +23,12 @@ booking-server:
     server: "http://booking-server:8001"
 
 tts:
-  magpie-tts:
+  magpie-multilingual-tts:
     name: "Magpie TTS Multilingual"
     server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
     function_id: ""
+    synthesis_mode: stitched
 
 asr:
   nemotron-asr-streaming-english:

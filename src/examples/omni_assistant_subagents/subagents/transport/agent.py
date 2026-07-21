@@ -95,6 +95,7 @@ class OmniTransportAgent(PipelineWorker):
         tts_server: str,
         tts_ssl: bool,
         tts_voice: str,
+        tts_synthesis_mode: str,
         runner_args: RunnerArguments,
         session_id: str,
         subagent_registry: SubagentRegistry,
@@ -112,6 +113,7 @@ class OmniTransportAgent(PipelineWorker):
         self._tts_server = tts_server
         self._tts_ssl = tts_ssl
         self._tts_voice = tts_voice
+        self._tts_synthesis_mode = tts_synthesis_mode
         self._runner_args = runner_args
         self._session_id = session_id
         self._latency_turn_count = 1
@@ -123,16 +125,22 @@ class OmniTransportAgent(PipelineWorker):
         self._assistant_speaking = False
         self._user_speaking = False
 
+        tts_settings_kwargs: dict[str, Any] = {"voice": tts_voice}
+        if tts_synthesis_mode:
+            tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
         self._tts = NvidiaTTSService(
             api_key=api_key,
             server=tts_server,
-            settings=NvidiaTTSSettings(voice=tts_voice),
+            settings=NvidiaTTSSettings(**tts_settings_kwargs),
             use_ssl=tts_ssl,
             text_filters=[NemotronSpeechTextFilter()],
             custom_dictionary=load_ipa_dictionary(),
             stop_frame_timeout_s=parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 30.0, min_value=5.0),
         )
-        logger.info(f"Nemotron Omni subagents TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}")
+        logger.info(
+            f"Nemotron Omni subagents TTS: server={tts_server}, ssl={tts_ssl}, "
+            f"voice={tts_voice}, synthesis_mode={tts_synthesis_mode or '(pipecat default)'}"
+        )
 
         self._speaker_context = SpeakerContextManager(context=self._context)
         self._subagent_board = SubagentStateBoard(

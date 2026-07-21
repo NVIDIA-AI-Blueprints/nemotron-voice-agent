@@ -258,7 +258,7 @@ def _get_default_tts_selection() -> tuple[str, str]:
     default_tts = load_service_entry("tts", "")
     return (
         default_tts.get("server", "grpc.nvcf.nvidia.com:443"),
-        default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria"),
+        default_tts.get("voice_id", ""),
     )
 
 

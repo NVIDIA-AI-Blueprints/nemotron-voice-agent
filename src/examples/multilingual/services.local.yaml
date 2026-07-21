@@ -11,11 +11,12 @@ workstation:
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     parakeet-rnnt:
       name: "Parakeet 1.1B RNNT Multilingual ASR"
@@ -38,11 +39,12 @@ dgxspark:
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     parakeet-rnnt:
       name: "Parakeet 1.1B RNNT Multilingual ASR"

@@ -22,11 +22,12 @@ workstation:
       name: "Booking Server"
       server: "http://booking-server:8001"
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -60,11 +61,12 @@ dgxspark:
       name: "Booking Server"
       server: "http://booking-server:8001"
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -98,11 +100,12 @@ jetson:
       name: "Booking Server"
       server: "http://booking-server:8001"
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "nemotron-speech:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     parakeet-ctc:
       name: "Parakeet CTC 1.1B"

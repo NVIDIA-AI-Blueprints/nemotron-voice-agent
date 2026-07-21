@@ -173,7 +173,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
     lang_codes = await _prepare_session_language_codes(
         runner_args,
         tts_server=tts_server,
@@ -237,6 +237,10 @@ async def bot(runner_args: RunnerArguments) -> None:
             tts_voice = resolved_voice
             tts_settings_kwargs["voice"] = resolved_voice
 
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
+
     tts = NvidiaTTSService(
         api_key=os.getenv("NVIDIA_API_KEY"),
         server=tts_server,
@@ -248,6 +252,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"lang_codes={lang_codes or '(no voices discovered)'}, "
         f"text_filters=[NemotronSpeechTextFilter]"
     )

@@ -10,7 +10,7 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 |-------|-----------------------------|-----------|
 | **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
 
-Magpie TTS Multilingual is exposed as the catalog key `magpie-tts` in `services.cloud.yaml` / `services.local.yaml`. Voice IDs follow `Model.Language.VoiceName` (e.g. `Magpie-Multilingual.EN-US.Aria`). The available voices and emotions depend on your Magpie version. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
+Magpie TTS Multilingual is exposed as the catalog key `magpie-multilingual-tts` in `services.cloud.yaml` / `services.local.yaml`. Voice IDs follow `Model.Language.VoiceName` (e.g. `Magpie-Multilingual.EN-US.Aria`). The available voices and emotions depend on your Magpie version. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
 
@@ -42,12 +42,24 @@ To change the **default**, edit `voice_id` in the example's `services.cloud.yaml
 
 ```yaml
 tts:
-  magpie-tts:
+  magpie-multilingual-tts:
     name: "Magpie TTS Multilingual"
     server: "grpc.nvcf.nvidia.com:443"   # cloud; local entries use the sidecar host:port (e.g. tts-service:50051)
     voice_id: "Magpie-Multilingual.EN-US.Aria"
     function_id: ""
+    synthesis_mode: stitched             # Magpie; omit on other models to keep per_sentence
 ```
+
+### Synthesis mode
+
+Pipecat's `NvidiaTTSService` supports two synthesis modes via the catalog field `synthesis_mode`:
+
+| Value | Behavior |
+|-------|----------|
+| `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Use this for Magpie multilingual / zero-shot ≥ v1.7.0. |
+| `per_sentence` | Open a fresh synthesis call per sentence. Safe for models without cross-sentence stitching. |
+
+Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie ships with `stitched`. Omit the field on other models to leave Pipecat's default (`per_sentence`).
 
 ### Pronunciation (IPA)
 

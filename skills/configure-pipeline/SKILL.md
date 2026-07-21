@@ -36,7 +36,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
    - `<example-package>/prompts.yaml`: built-in prompt presets and prompt content for the active example.
 
 3. Validate:
-   - Multilingual prompts must use multilingual-capable ASR and TTS from the active catalog (e.g. `parakeet-rnnt`, `nemotron-asr-streaming-multilingual`, `magpie-tts`). Verify the keys exist before referencing them.
+   - Multilingual prompts must use multilingual-capable ASR and TTS from the active catalog (e.g. `parakeet-rnnt`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts`). Verify the keys exist before referencing them.
    - Local catalog endpoints must use Compose service names (`nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `parakeet-ctc-asr:50052`, `parakeet-rnnt-asr:50052`, `tts-service:50051`, `nvidia-llm:8000`, `nvidia-llm-vllm:8000`, `nvidia-llm-vllm-omni:8002`, `nemotron-speech:50051`, `booking-server:8001`). Host-run backends auto-rewrite to the matching `localhost` ports.
    - ASR/TTS variants are selected via Compose profile (e.g. `parakeet-ctc-asr`, `parakeet-rnnt-asr`).
    - Workstation local Compose runs ASR/TTS and NIM LLM on GPU `0` by default. Single-GPU deployments are supported only when at least 80 GB of VRAM is available.
@@ -62,7 +62,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 1. Add the prompt to the active example's `prompts.yaml`.
 2. To make it the per-example default, update `examples_registry.yaml` `defaults.prompt` for that example to the new prompt key.
-3. Ensure the active example's catalog has multilingual-capable ASR (`parakeet-rnnt` or `nemotron-asr-streaming-multilingual`) and TTS (`magpie-tts`).
+3. Ensure the active example's catalog has multilingual-capable ASR (`parakeet-rnnt` or `nemotron-asr-streaming-multilingual`) and TTS (`magpie-multilingual-tts`).
 4. Compose restart of the example service and refresh browser.
 
 ## Limitations

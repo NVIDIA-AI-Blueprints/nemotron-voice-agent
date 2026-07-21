@@ -29,11 +29,12 @@ workstation:
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"repetition_penalty":1.05}}'
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -66,11 +67,12 @@ dgxspark:
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"repetition_penalty":1.05}}'
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -92,11 +94,12 @@ jetson:
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "nemotron-speech:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     parakeet-ctc:
       name: "Parakeet CTC 1.1B"

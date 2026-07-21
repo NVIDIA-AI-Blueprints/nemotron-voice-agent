@@ -123,7 +123,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
     api_key = os.getenv("NVIDIA_API_KEY")
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
@@ -135,6 +136,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         tts_server=tts_server,
         tts_ssl=tts_ssl,
         tts_voice=tts_voice,
+        tts_synthesis_mode=tts_synthesis_mode,
         runner_args=runner_args,
         session_id=session_id,
         subagent_registry=registry,

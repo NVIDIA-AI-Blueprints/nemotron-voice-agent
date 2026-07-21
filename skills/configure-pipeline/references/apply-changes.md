@@ -76,7 +76,7 @@ docker compose --profile generic-assistant/dgx-spark --profile tracing --profile
 
 - The selected recipe profile matches the example and hardware you want active.
 - `examples_registry.yaml` `defaults` references catalog keys that actually exist for that example.
-- Multilingual prompt selection is paired with multilingual-capable ASR (`parakeet-rnnt` by default, or `nemotron-asr-streaming-multilingual` when opted in) and TTS (`magpie-tts`) in the active catalog.
+- Multilingual prompt selection is paired with multilingual-capable ASR (`parakeet-rnnt` by default, or `nemotron-asr-streaming-multilingual` when opted in) and TTS (`magpie-multilingual-tts`) in the active catalog.
 - If `ENABLE_TRACING=true` with `phoenix:4317`, the `phoenix` service is started through the `tracing` profile.
 - Compose-managed local entries use service DNS names, not `localhost`.
 - ASR/TTS image variants use their Compose service DNS names (for example `nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `tts-service:50051`).
