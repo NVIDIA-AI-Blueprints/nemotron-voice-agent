@@ -1,4 +1,4 @@
-# Cloud catalog for the Nemotron Omni Assistant Subagents example.
+# Cloud catalog for the Nemotron 3 Omni Assistant Subagents example.
 
 llm:
   nemotron-omni-nvfp4:
@@ -6,7 +6,7 @@ llm:
     model_id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
     base_url: "https://integrate.api.nvidia.com/v1"
     system_prompt: ""
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":16384,"repetition_penalty":1.05}}'
+    extra_params: '{"extra_body":{"top_k":1,"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
 
 tts:
   magpie-tts:

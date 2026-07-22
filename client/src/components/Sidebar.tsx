@@ -3,8 +3,10 @@
 
 import { useApp } from "../context/useApp";
 import { useConnectionState } from "../hooks/useConnectionState";
+import { CollapsibleCard } from "./CollapsibleCard";
 import { StatusSection } from "./status-panel/StatusSection";
 import { SessionSection } from "./status-panel/SessionSection";
+import { SubagentsPanel } from "./SubagentsPanel";
 import { VoiceLevelVisualizer } from "./VoiceLevelVisualizer";
 import { WebcamVisionPanel } from "./WebcamVisionPanel";
 
@@ -30,25 +32,29 @@ export function Sidebar() {
 
       {isConnected && (
         <>
-          <div className="card sidebar-card sidebar-audio-card">
-            <p className="text-xs text-secondary mb-2">BOT AUDIO</p>
+          <CollapsibleCard label="BOT AUDIO" className="sidebar-audio-card" storageKey="bot-audio">
             <div className="sidebar-voice-visualizer">
               <VoiceLevelVisualizer participantType="bot" ariaLabel="Bot audio level" {...VISUALIZER_PROPS} />
             </div>
-          </div>
+          </CollapsibleCard>
 
-          <div className="card sidebar-card sidebar-audio-card">
-            <p className="text-xs text-secondary mb-2">USER AUDIO</p>
+          <CollapsibleCard label="USER AUDIO" className="sidebar-audio-card" storageKey="user-audio">
             <div className="sidebar-voice-visualizer">
               <VoiceLevelVisualizer participantType="local" ariaLabel="User audio level" {...VISUALIZER_PROPS} />
             </div>
-          </div>
+          </CollapsibleCard>
+
+          {currentSessionId && <SubagentsPanel key={currentSessionId} />}
 
           {canUseWebcam && currentSessionId && (
-            <div className="card sidebar-card sidebar-webcam-card">
-              <p className="text-xs text-secondary mb-2">WEBCAM VISION</p>
-              <WebcamVisionPanel sessionId={currentSessionId} />
-            </div>
+            <CollapsibleCard
+              label="WEBCAM VISION"
+              className="sidebar-webcam-card"
+              storageKey="webcam-vision"
+              keepMounted
+            >
+              <WebcamVisionPanel key={currentSessionId} sessionId={currentSessionId} />
+            </CollapsibleCard>
           )}
         </>
       )}

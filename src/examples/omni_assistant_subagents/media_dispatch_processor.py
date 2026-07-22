@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from loguru import logger
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -23,6 +24,9 @@ class MediaDispatchHandler(Protocol):
 
     async def start_pending_media_analysis(self) -> None:
         """Start any queued media analysis after the assistant ack turn completes."""
+
+    async def start_pending_thinking(self) -> None:
+        """Start any queued deliberate-reasoning pass after the stall turn completes."""
 
     async def on_user_voice_turn_started(self) -> None:
         """Notify that the user resumed control through speech."""
@@ -79,4 +83,11 @@ class PostAckMediaDispatchProcessor(FrameProcessor):
             await self._handler.on_assistant_speaking_stopped()
             if was_interrupted:
                 return
-            await self._handler.start_pending_media_analysis()
+            try:
+                await self._handler.start_pending_media_analysis()
+            except Exception as exc:
+                logger.warning(f"Failed to start pending media analysis: {exc}")
+            try:
+                await self._handler.start_pending_thinking()
+            except Exception as exc:
+                logger.warning(f"Failed to start pending thinking: {exc}")

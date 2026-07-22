@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { RTVIEvent } from "@pipecat-ai/client-js";
 import { usePipecatClient, useRTVIClientEvent } from "@pipecat-ai/client-react";
-import { getWebcamConfig, uploadWebcamFrame, type WebcamConfig } from "../api";
+import { getWebcamConfig, uploadWebcamCapture, uploadWebcamFrame, type WebcamConfig } from "../api";
 import { isRecord, numberField, stringField } from "../utils";
 
 type WebcamStatus = "idle" | "starting" | "live" | "uploading" | "error";
@@ -13,7 +13,7 @@ type WebcamUploadState = {
   mode: string;
   label: string;
 };
-type VisualControlIntent = "none" | "stop" | "continue";
+type VisualControlIntent = "none" | "greet" | "stop" | "continue" | "down";
 type VisualControl = {
   intent: VisualControlIntent;
   confidence: number;
@@ -22,6 +22,7 @@ type VisualControl = {
 type WebcamAgentUpdate = {
   observation: string;
   eventReason: string;
+  focus: string;
   visualControl: VisualControl;
   propagated: boolean;
   createdAt: string;
@@ -41,6 +42,8 @@ const DEFAULT_WEBCAM_CONFIG: Required<WebcamConfig> = {
   initial_upload_delay_ms: 700,
 };
 const IDLE_UPLOAD_STATE: WebcamUploadState = { mode: "idle", label: "" };
+const HIGHRES_JPEG_QUALITY = 0.92;
+const DEFAULT_CHUNK_SECONDS = 8;
 
 function normalizeWebcamConfig(config: WebcamConfig): NormalizedWebcamConfig {
   return {
@@ -74,11 +77,29 @@ function canvasToJpegBlob(canvas: HTMLCanvasElement, quality: number): Promise<B
 function visualControlFromMessage(message: Record<string, unknown>): VisualControl {
   const control = isRecord(message.visual_control) ? message.visual_control : {};
   const intent = stringField(control, "intent");
+  const known = intent === "greet" || intent === "stop" || intent === "continue" || intent === "down";
   return {
-    intent: intent === "stop" || intent === "continue" ? intent : "none",
+    intent: known ? (intent as VisualControlIntent) : "none",
     confidence: Math.min(1, Math.max(0, numberField(control, "confidence"))),
     reason: stringField(control, "reason"),
   };
+}
+
+function proactiveActionLabel(update: WebcamControlUpdate): string {
+  switch (update.state) {
+    case "greeted":
+      return "Greeted you back";
+    case "barged_in":
+      return "Stopped on your signal";
+    case "resumed":
+      return "Resumed where I left off";
+    case "acknowledged":
+      return "Saw your thumbs-up";
+    case "noted":
+      return "Noted your thumbs-down";
+    default:
+      return update.action ? `Reacted to your ${update.action} gesture` : "";
+  }
 }
 
 export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>) {
@@ -88,15 +109,31 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<number | null>(null);
   const initialUploadTimeoutRef = useRef<number | null>(null);
-  const uploadingRef = useRef(false);
+  const inFlightRef = useRef(0);
+  const captureGenerationRef = useRef(0);
   const uploadModeRef = useRef("idle");
   const configRef = useRef<NormalizedWebcamConfig | null>(null);
   const [enabled, setEnabled] = useState(false);
+  const [chunkSeconds, setChunkSeconds] = useState(DEFAULT_CHUNK_SECONDS);
   const [uploadState, setUploadState] = useState<WebcamUploadState>(IDLE_UPLOAD_STATE);
   const [status, setStatus] = useState<WebcamStatus>("idle");
   const [error, setError] = useState("");
   const [agentUpdate, setAgentUpdate] = useState<WebcamAgentUpdate | null>(null);
   const [controlUpdate, setControlUpdate] = useState<WebcamControlUpdate | null>(null);
+  const [captureState, setCaptureState] = useState<"idle" | "capturing" | "analyzing">("idle");
+  const captureClearTimerRef = useRef<number | null>(null);
+  const captureAttachmentIdRef = useRef("");
+  const captureInProgressRef = useRef(false);
+
+  const clearCaptureProgress = useCallback(() => {
+    if (captureClearTimerRef.current !== null) {
+      window.clearTimeout(captureClearTimerRef.current);
+      captureClearTimerRef.current = null;
+    }
+    captureAttachmentIdRef.current = "";
+    captureInProgressRef.current = false;
+    setCaptureState("idle");
+  }, []);
 
   const cleanupStream = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -107,14 +144,16 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
       window.clearTimeout(initialUploadTimeoutRef.current);
       initialUploadTimeoutRef.current = null;
     }
+    captureGenerationRef.current += 1;
+    clearCaptureProgress();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-    uploadingRef.current = false;
+    inFlightRef.current = 0;
     uploadModeRef.current = "idle";
     setUploadState(IDLE_UPLOAD_STATE);
     configRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
-  }, []);
+  }, [clearCaptureProgress]);
 
   const sendWebcamState = useCallback((isEnabled: boolean) => {
     if (!client || client.state !== "ready") return;
@@ -122,6 +161,17 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
       client.sendClientMessage("webcam-state", { enabled: isEnabled });
     } catch (err) {
       console.warn("Could not send webcam state update:", err);
+    }
+  }, [client]);
+
+  const sendWebcamChunk = useCallback((seconds: number) => {
+    if (!client || client.state !== "ready") return false;
+    try {
+      client.sendClientMessage("webcam-chunk", { seconds });
+      return true;
+    } catch (err) {
+      console.warn("Could not send webcam chunk update:", err);
+      return false;
     }
   }, [client]);
 
@@ -141,33 +191,48 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
     setStatus("idle");
   }, [cleanupStream, sendWebcamState]);
 
-  const captureFrame = useCallback(async (config: NormalizedWebcamConfig) => {
-    if (!sessionId || uploadingRef.current) return;
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas || !video.videoWidth || !video.videoHeight) return;
+  const captureFrame = useCallback(
+    async (
+      config: NormalizedWebcamConfig,
+      { highRes = false, captureRequestId = "" }: { highRes?: boolean; captureRequestId?: string } = {},
+    ): Promise<string | null> => {
+      if (!sessionId || (!highRes && inFlightRef.current > 0)) return null;
+      const generation = captureGenerationRef.current;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || !video.videoWidth || !video.videoHeight) return null;
 
-    const scale = Math.min(1, config.frame_max_width / video.videoWidth);
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const scale = highRes ? 1 : Math.min(1, config.frame_max_width / video.videoWidth);
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      const context = canvas.getContext("2d");
+      if (!context) return null;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    uploadingRef.current = true;
-    setStatus("uploading");
-    try {
-      const blob = await canvasToJpegBlob(canvas, config.jpeg_quality);
-      await uploadWebcamFrame(sessionId, blob);
-      setStatus("live");
-      setError("");
-    } catch (err) {
-      setStatus("error");
-      setError(err instanceof Error ? err.message : "Webcam upload failed");
-    } finally {
-      uploadingRef.current = false;
-    }
-  }, [sessionId]);
+      inFlightRef.current += 1;
+      setStatus("uploading");
+      try {
+        const blob = await canvasToJpegBlob(canvas, highRes ? HIGHRES_JPEG_QUALITY : config.jpeg_quality);
+        const uploaded = await (highRes
+          ? uploadWebcamCapture(sessionId, blob, captureRequestId)
+          : uploadWebcamFrame(sessionId, blob));
+        if (generation !== captureGenerationRef.current) return null;
+        setError("");
+        return (isRecord(uploaded) ? stringField(uploaded, "id") : "") || null;
+      } catch (err) {
+        if (generation !== captureGenerationRef.current) return null;
+        setStatus("error");
+        setError(err instanceof Error ? err.message : "Webcam upload failed");
+        return null;
+      } finally {
+        if (generation === captureGenerationRef.current) {
+          inFlightRef.current -= 1;
+          if (inFlightRef.current === 0) setStatus((prev) => (prev === "error" ? prev : "live"));
+        }
+      }
+    },
+    [sessionId]
+  );
 
   const start = useCallback(async () => {
     if (enabled) {
@@ -195,6 +260,7 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
       setEnabled(true);
       setStatus("live");
       sendWebcamState(true);
+      sendWebcamChunk(chunkSeconds);
 
       if (config.initial_upload_enabled) {
         initialUploadTimeoutRef.current = window.setTimeout(() => {
@@ -208,7 +274,7 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
       setStatus("error");
       setError(err instanceof Error ? err.message : "Could not start webcam");
     }
-  }, [captureFrame, cleanupStream, enabled, handleStreamEnded, sendWebcamState, stop]);
+  }, [captureFrame, chunkSeconds, cleanupStream, enabled, handleStreamEnded, sendWebcamChunk, sendWebcamState, stop]);
 
   const stopFrameUploads = useCallback((mode = "") => {
     if (mode && uploadModeRef.current !== mode) return;
@@ -238,6 +304,31 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
   const captureFrameOnce = useCallback(() => {
     const config = configRef.current;
     if (config) void captureFrame(config);
+  }, [captureFrame]);
+
+  const captureHighRes = useCallback(async (requestId: string) => {
+    if (!requestId || captureInProgressRef.current) return;
+    const generation = captureGenerationRef.current;
+    const config = configRef.current;
+    if (!config) return;
+    captureInProgressRef.current = true;
+    if (captureClearTimerRef.current !== null) window.clearTimeout(captureClearTimerRef.current);
+    setCaptureState("capturing");
+    const capturedId = await captureFrame(config, { highRes: true, captureRequestId: requestId });
+    if (generation !== captureGenerationRef.current) return;
+    if (!capturedId) {
+      captureInProgressRef.current = false;
+      setCaptureState("idle");
+      return;
+    }
+    captureAttachmentIdRef.current = capturedId;
+    setCaptureState("analyzing");
+    captureClearTimerRef.current = window.setTimeout(() => {
+      if (generation !== captureGenerationRef.current) return;
+      captureAttachmentIdRef.current = "";
+      captureInProgressRef.current = false;
+      setCaptureState("idle");
+    }, 60000);
   }, [captureFrame]);
 
   useEffect(() => {
@@ -281,6 +372,20 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
         }
         return;
       }
+      if (messageType === "webcam-capture-request") {
+        void captureHighRes(stringField(message, "request_id"));
+        return;
+      }
+      if (messageType === "agent-task-update") {
+        const status = stringField(message, "status");
+        if (status !== "done" && status !== "error") return;
+        const attachment = message.attachment;
+        const attachmentId = isRecord(attachment) ? stringField(attachment, "id") : "";
+        if (attachmentId && attachmentId === captureAttachmentIdRef.current) {
+          clearCaptureProgress();
+        }
+        return;
+      }
       if (messageType === "webcam-control-update") {
         setControlUpdate({
           action: stringField(message, "action"),
@@ -296,21 +401,21 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
       setAgentUpdate({
         observation,
         eventReason: stringField(message, "event_reason"),
+        focus: stringField(message, "focus"),
         visualControl: visualControlFromMessage(message),
         propagated: message.propagated === true,
         createdAt: new Date().toISOString(),
       });
-    }, [captureFrameOnce, startFrameUploads, stopFrameUploads])
+    }, [captureFrameOnce, captureHighRes, clearCaptureProgress, startFrameUploads, stopFrameUploads])
   );
 
-  const statusLabel = enabled
-    ? status === "uploading"
-      ? "Updating latest frame..."
-      : uploadState.mode !== "idle"
-        ? uploadState.label
-        : "ready for server capture"
-    : "camera is off; not capturing";
+  const statusLabel = !enabled
+    ? "Camera off — not capturing"
+    : uploadState.mode !== "idle"
+      ? uploadState.label
+      : "Watching the live view";
   const agentUpdateStale = Boolean(agentUpdate && !enabled);
+  const proactiveLabel = controlUpdate ? proactiveActionLabel(controlUpdate) : "";
 
   return (
     <div className={`webcam-control webcam-control-${status} ${enabled ? "webcam-control-enabled" : "webcam-control-off"}`}>
@@ -329,14 +434,46 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
           </svg>
         </button>
         <div className="webcam-control-text">
-          <strong>{enabled ? "Vision enabled" : "Webcam off"}</strong>
-          <small>{statusLabel}</small>
+          <strong>
+            <span
+              className={`webcam-status-dot${enabled ? " webcam-status-dot-live" : ""}`}
+              aria-hidden="true"
+            />
+            {enabled ? "Vision enabled" : "Webcam off"}
+          </strong>
+          <small className="webcam-status-label">{statusLabel}</small>
           {error && <small className="webcam-error">{error}</small>}
         </div>
+        <label className="webcam-chunk-control" title="Recent seconds sent to the model as one continuous video">
+          <span>Chunk</span>
+          <select
+            value={chunkSeconds}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+              const seconds = Number(e.target.value);
+              if (sendWebcamChunk(seconds)) setChunkSeconds(seconds);
+            }}
+          >
+            <option value={2}>2s</option>
+            <option value={4}>4s</option>
+            <option value={8}>8s</option>
+            <option value={15}>15s</option>
+            <option value={30}>30s</option>
+          </select>
+        </label>
       </div>
       {enabled && (
         <div className="webcam-preview">
           <video ref={videoRef} muted playsInline />
+          {captureState !== "idle" && (
+            <div className={`webcam-capture-overlay webcam-capture-overlay-${captureState}`}>
+              <span className="webcam-capture-spinner" aria-hidden="true" />
+              <span>
+                {captureState === "capturing"
+                  ? "Capturing a high-resolution snapshot — hold on..."
+                  : "Reading the high-resolution snapshot..."}
+              </span>
+            </div>
+          )}
         </div>
       )}
       {!enabled && !agentUpdate && (
@@ -358,6 +495,10 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
                 ? "Shared with agent bus"
                 : "UI only, no meaningful scene change"}
           </small>
+          <div className={`webcam-focus-note webcam-focus-note-${agentUpdate.focus ? "steered" : "generic"}`}>
+            <span className="webcam-focus-tag">Steering</span>
+            <small>{agentUpdate.focus || "Generic — no conversational focus set"}</small>
+          </div>
           <p>{agentUpdate.observation}</p>
           {agentUpdate.eventReason && (
             <small>{agentUpdate.propagated ? "Why it propagated" : "Summary note"}: {agentUpdate.eventReason}</small>
@@ -367,11 +508,11 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
             <strong>{Math.round(agentUpdate.visualControl.confidence * 100)}%</strong>
             {agentUpdate.visualControl.reason && <small>{agentUpdate.visualControl.reason}</small>}
           </div>
-          {controlUpdate && (
-            <small>
-              Last control action: {controlUpdate.action || "none"} | state {controlUpdate.state || "listening"} |{" "}
-              {new Date(controlUpdate.createdAt).toLocaleTimeString()}
-            </small>
+          {controlUpdate && proactiveLabel && (
+            <div className={`webcam-visual-control webcam-visual-control-${controlUpdate.visualControl.intent}`}>
+              <span>{proactiveLabel}</span>
+              <small>{new Date(controlUpdate.createdAt).toLocaleTimeString()}</small>
+            </div>
           )}
         </div>
       )}

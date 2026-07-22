@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 import { usePipecatClientTransportState } from "@pipecat-ai/client-react";
+import { PanelSection } from "../PanelSection";
 import { StatusRow } from "./StatusRow";
 import { InlineSpinner } from "./Spinner";
 
@@ -40,14 +41,13 @@ export function StatusSection() {
   };
 
   return (
-    <div className="panel-section">
-      <p className="panel-label">STATUS</p>
+    <PanelSection label="STATUS">
       <StatusRow label="Client" value={getClientStatus()}>
         {isLoading && <InlineSpinner />}
       </StatusRow>
       <StatusRow label="Agent" value={getAgentStatus()}>
         {isLoading && <InlineSpinner />}
       </StatusRow>
-    </div>
+    </PanelSection>
   );
 }

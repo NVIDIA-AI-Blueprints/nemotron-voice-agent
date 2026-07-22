@@ -1,0 +1,68 @@
+# Subagents wired into this example, keyed by stable id (must match the worker's
+# AGENT_NAME). This is the single source of truth for:
+#   * the delegation block injected into the Speaker prompt (delegatable subagents),
+#   * the /api/subagents UI endpoint (all subagents, rendered as status), and
+#   * per-subagent config such as the model reasoning mode.
+#
+# Fields per subagent:
+#   label          Human-friendly name shown in the UI.
+#   source_token   selected_input_source value the Speaker emits to delegate here.
+#                  Omit for ambient subagents that are not Speaker-routed (webcam, thinker).
+#   reasoning      Model thinking mode: on | off | on_demand.
+#   capability     What the subagent can do (one prose sentence/paragraph).
+#   routing_rules  Shown to the Speaker as "use_when": for routable subagents, when to route
+#                  here; for ambient ones, how to read their live state (they run on their own).
+#   findings_label How this subagent's live state/result is labelled in the Speaker's pinned
+#                  board (e.g. "analysis", "what you currently see"). Omit if it carries none.
+#
+# A subagent's own worker system prompt lives in prompts.yaml (agent_prompts), not
+# here: this file is the routing/registry view; prompts.yaml is the prompt catalog.
+
+subagents:
+  omni_media_analyzer:
+    label: Media Analyzer
+    source_token: uploaded_attachment
+    reasoning: on
+    findings_label: analysis
+    capability: >-
+      reads the contents of an uploaded attachment (image, audio, or video) and returns a
+      plain-text description of what it contains. It only reports what is in the media — it
+      does not reason, plan, summarize beyond the media, or write code.
+    routing_rules: >-
+      Route here ONLY when the current request is explicitly about the uploaded file's
+      contents (the image, video, or audio the user shared). Something the user
+      holds up, points at, or shows on the live camera is NOT an uploaded file — that is the
+      live webcam, never this. For anything else —
+      continuing an earlier topic, planning, drafting, or a vague "it" that does not clearly
+      refer to the file — use selected_input_source "none" and answer yourself. When a prior
+      analysis of the attachment is already in context, answer follow-ups from it with
+      media_analysis_action "none"; set media_analysis_action "new" (or "rerun" to look
+      again) ONLY when the user asks for a detail that analysis does not contain. If the user
+      asks about an attachment but none is available, do not route here — ask them to share it.
+
+  omni_webcam:
+    label: Webcam Vision
+    reasoning: off
+    findings_label: what you currently see
+    capability: >-
+      streams live webcam frames and continuously describes what is visible — the
+      assistant's basic eye vision.
+    routing_rules: >-
+      This is your live eyes and it runs on its own — you never route to it. "what you currently
+      see" below is the CURRENT live view and it changes continuously; it is the only truth about
+      what is in front of the camera right now. Always answer live visual questions (what you see,
+      what they are showing, what is on their phone or screen) from this latest value — never from
+      what you said you saw earlier in the conversation, because the scene keeps changing and your
+      past descriptions are stale. If it says the camera is off, tell the user you cannot see
+      anything at the moment.
+
+  omni_thinker:
+    label: Thinker
+    reasoning: on_demand
+    capability: >-
+      deliberate reasoning escalation. The assistant hands off to this automatically — not
+      by routing — when a turn is hard or it senses the conversation is going badly (its
+      self-rated confidence drops), then re-answers with full reasoning enabled.
+    routing_rules: >-
+      Runs automatically — you never route to it and do not need to mention it. When you choose
+      turn_action think, this takes over and re-answers the turn with full reasoning.

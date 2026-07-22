@@ -119,6 +119,24 @@
   padding: 1px 6px;
 }
 
+@mixin compact-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--text-muted);
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
 // ------------------------------------------
 // Base Reset & Body
 // ------------------------------------------
@@ -527,7 +545,7 @@ body {
 }
 
 // Badge
-.badge {
+%badge-base {
   display: inline-flex;
   align-items: center;
   padding: var(--space-1) var(--space-2);
@@ -538,8 +556,12 @@ body {
   color: var(--text-secondary);
 }
 
+.badge {
+  @extend %badge-base;
+}
+
 .badge-accent {
-  @extend .badge;
+  @extend %badge-base;
   background-color: rgba(118, 185, 0, 0.15);
   color: var(--nvidia-green);
 }
@@ -659,9 +681,17 @@ body {
 }
 
 .sidebar-webcam-card {
+  overflow: hidden;
+}
+
+.sidebar-webcam-card.is-expanded,
+.sidebar-webcam-card .collapsible-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+}
+
+.sidebar-webcam-card .collapsible-body {
+  overflow-y: auto;
 }
 
 .sidebar-voice-visualizer {
@@ -757,7 +787,16 @@ body {
 .webcam-control-text {
   display: flex;
   flex-direction: column;
+  gap: 2px;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.webcam-control-text strong,
+.webcam-chunk-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .webcam-control-text strong {
@@ -767,13 +806,93 @@ body {
 
 .webcam-control-text small {
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.webcam-status-label {
+  min-height: 1.15em;
 }
 
 .webcam-error {
   color: #ff9b9b !important;
+  white-space: normal !important;
+}
+
+.webcam-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--text-muted);
+  transition: background-color 0.2s ease;
+}
+
+.webcam-status-dot-live {
+  background: var(--nvidia-green);
+  animation: webcam-status-pulse 2s ease-out infinite;
+}
+
+@keyframes webcam-status-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(118, 185, 0, 0.45); }
+  70% { box-shadow: 0 0 0 6px rgba(118, 185, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(118, 185, 0, 0); }
+}
+
+.webcam-chunk-control {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.webcam-chunk-control > span {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: var(--font-medium);
+  color: var(--text-muted);
+}
+
+.webcam-chunk-control select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  margin: 0;
+  padding: 4px 26px 4px 10px;
+  font: inherit;
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--text-primary);
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a0a0a0' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.webcam-chunk-control select:hover {
+  border-color: var(--border-strong);
+  background-color: var(--bg-card-hover);
+}
+
+.webcam-chunk-control select:focus-visible {
+  outline: none;
+  border-color: var(--nvidia-green);
+  box-shadow: 0 0 0 2px rgba(118, 185, 0, 0.25);
+}
+
+.webcam-chunk-control select option {
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 
 .webcam-preview {
+  position: relative;
   overflow: hidden;
   margin-top: var(--space-2);
   border-radius: var(--radius-md);
@@ -786,6 +905,33 @@ body {
   width: 100%;
   max-height: clamp(120px, 22vh, 170px);
   object-fit: cover;
+}
+
+.webcam-capture-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  text-align: center;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.62);
+  border: 2px solid rgba(118, 185, 0, 0.85);
+  border-radius: var(--radius-md);
+}
+
+.webcam-capture-spinner {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: rgba(118, 185, 0, 1);
+  animation: spin 0.8s linear infinite;
 }
 
 .webcam-off-state {
@@ -817,7 +963,7 @@ body {
   border: 1px solid rgba(118, 185, 0, 0.25);
   border-radius: var(--radius-md);
   background: rgba(118, 185, 0, 0.08);
-  max-height: 120px;
+  max-height: 160px;
   overflow: auto;
 }
 
@@ -857,6 +1003,52 @@ body {
 .webcam-agent-update small {
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+.webcam-focus-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+
+  small {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+}
+
+.webcam-focus-tag {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.webcam-focus-note-steered {
+  border-color: rgba(0, 160, 255, 0.4);
+  background: rgba(0, 160, 255, 0.1);
+
+  small {
+    color: var(--text-primary);
+  }
+
+  .webcam-focus-tag {
+    color: rgb(120, 200, 255);
+  }
+}
+
+.webcam-focus-note-generic {
+  opacity: 0.72;
+
+  small {
+    font-style: italic;
+  }
 }
 
 .webcam-visual-control {
@@ -951,14 +1143,7 @@ body {
 }
 
 .agent-task-status {
-  display: inline-flex;
-  align-items: center;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-full);
-  background-color: var(--bg-elevated);
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-  font-weight: var(--font-medium);
+  @extend %badge-base;
   font-style: normal;
   text-transform: lowercase;
 }
@@ -1187,6 +1372,32 @@ body {
   text-transform: uppercase;
 }
 
+.panel-label-toggle,
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.panel-label-toggle {
+  font-family: inherit;
+}
+
+.panel-label-toggle:hover .collapsible-chevron,
+.collapsible-header:hover .collapsible-chevron {
+  stroke: var(--text-primary);
+}
+
+.panel-section.is-collapsed .panel-label-toggle {
+  margin-bottom: 0;
+}
+
 .tools-list {
   list-style: none;
   margin: 0;
@@ -1198,20 +1409,7 @@ body {
   max-height: 9rem;
   overflow-y: auto;
   padding-right: var(--space-1);
-
-  scrollbar-width: thin;
-  scrollbar-color: var(--text-muted) transparent;
-
-  &::-webkit-scrollbar {
-    width: 6px;
-  }
-  &::-webkit-scrollbar-thumb {
-    background-color: var(--text-muted);
-    border-radius: 3px;
-  }
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
+  @include compact-scrollbar;
 }
 
 .tools-row {
@@ -1240,6 +1438,125 @@ body {
 
 .tools-name {
   font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.collapsible-card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
+.collapsible-header {
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.collapsible-chevron {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--transition-base);
+}
+
+.collapsible-chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.collapsible-body {
+  margin-top: var(--space-2);
+  min-height: 0;
+}
+
+.subagents-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 12rem;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+  @include compact-scrollbar;
+}
+
+.subagent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.subagent-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.subagent-name {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  transition: color 0.15s ease;
+
+  .subagent-row.is-on & {
+    color: var(--text-primary);
+  }
+}
+
+.subagent-row.is-working .subagent-name {
+  background: linear-gradient(
+    90deg,
+    var(--text-primary) 0%,
+    var(--text-primary) 38%,
+    var(--nvidia-green) 50%,
+    var(--text-primary) 62%,
+    var(--text-primary) 100%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: subagent-working-sweep 1.3s ease-in-out infinite;
+}
+
+@keyframes subagent-working-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+.subagent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.subagent-badge {
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.subagent-badge-reasoning-on {
+  color: var(--nvidia-green);
+  border-color: var(--border-accent);
+}
+
+.subagent-badge-ambient {
+  font-style: italic;
 }
 
 .status-row {
@@ -1903,6 +2220,11 @@ body {
   position: relative;
   z-index: 1;
   height: 100%;
+}
+
+.conversation-bottom-spacer {
+  min-height: var(--space-10);
+  flex: none;
 }
 
 // Settings row with label and control

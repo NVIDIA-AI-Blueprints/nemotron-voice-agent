@@ -1,12 +1,4 @@
-# On-prem catalog for the Nemotron Omni Assistant Subagents example.
-#
-# Pair with the ``omni-assistant-subagents/dgx-spark`` compose recipe/profile.
-# In this catalog, that profile maps to the ``dgxspark`` mode key below.
-# It starts the ``nvidia-llm-vllm-omni`` sidecar (Nemotron Omni
-# vLLM) plus Magpie TTS. Jetson is not supported today: the 30B Omni NVFP4
-# model does not fit on Orin-class hardware. Add a ``jetson:`` block here,
-# the matching compose recipe, and the sidecar profile entry once a
-# smaller Omni variant lands.
+# On-prem catalog for the Nemotron 3 Omni Assistant Subagents example.
 
 workstation:
   llm:
