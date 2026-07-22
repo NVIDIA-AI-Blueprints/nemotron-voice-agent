@@ -1,0 +1,17 @@
+# Service-backed multilingual audio scenarios. These exercise the bot's real
+# ASR path with synthesized user audio and its real TTS path with captured bot
+# audio transcribed by the eval harness. Use for gated/nightly CI.
+
+bots_dir: ../../../src
+scenarios_dir: scenarios
+concurrency: 1
+base_port: 8060
+runs_dir: ../../../eval-runs
+record: true
+spawn: "env PLATFORM=workstation {python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: eval_bot.py
+    runner_body: runner_bodies/multilingual_audio_fixed_english.json
+    scenarios:
+      - multilingual_audio_fixed_english_roundtrip

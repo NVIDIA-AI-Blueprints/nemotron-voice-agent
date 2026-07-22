@@ -1,0 +1,17 @@
+name: frontend_backend_unsupported_nonflight
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "Can you order a pizza for me?"
+    expect:
+      - event: response
+        eval: "the reply says this assistant supports flight searches, new bookings, cancellation of pending flight tasks, or PNR status, and does not offer to order pizza"
+        within_ms: 90000

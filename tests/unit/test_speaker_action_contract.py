@@ -22,7 +22,7 @@ from examples.omni_assistant_subagents.subagents.speaker.agent import (
 )
 from examples.omni_assistant_subagents.subagents.thinker.agent import ThinkerWorker
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_PATH = PROJECT_ROOT / "src/examples/omni_assistant_subagents/prompts.yaml"
 
 

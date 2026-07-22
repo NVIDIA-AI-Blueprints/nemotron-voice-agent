@@ -1,0 +1,29 @@
+# Service-backed generic assistant scenarios. These require configured NVIDIA
+# services and are intended for gated CI/CD or post-deploy validation.
+
+bots_dir: ../../../src
+scenarios_dir: scenarios
+concurrency: 1
+base_port: 7940
+runs_dir: ../../../eval-runs
+record: false
+spawn: "env PLATFORM=workstation {python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: eval_bot.py
+    runner_body: runner_bodies/generic_default.json
+    scenarios:
+      - generic_initial_greeting
+      - generic_basic_response
+      - generic_tool_bmi
+      - generic_tool_weather_fallback
+      - generic_context_memory
+      - generic_latency_smoke
+  - bot: eval_bot.py
+    runner_body: runner_bodies/generic_without_tools.json
+    scenarios:
+      - generic_tool_disabled_prompt
+  - bot: eval_bot.py
+    runner_body: runner_bodies/generic_flowershop.json
+    scenarios:
+      - generic_flowershop_persona

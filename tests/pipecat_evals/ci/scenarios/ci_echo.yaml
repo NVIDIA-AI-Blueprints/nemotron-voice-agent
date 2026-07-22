@@ -1,0 +1,20 @@
+name: ci_echo
+user:
+  modality: text
+judge:
+  modality: text
+turns:
+  - user: hello from ci
+    expect:
+      - event: user_started_speaking
+        within_ms: 3000
+      - event: user_transcription
+        text_contains: hello from ci
+        within_ms: 3000
+      - event: user_stopped_speaking
+        within_ms: 3000
+      - event: llm_started
+        within_ms: 3000
+      - event: response
+        text_contains: "CI eval bot turn 1: hello from ci"
+        within_ms: 3000

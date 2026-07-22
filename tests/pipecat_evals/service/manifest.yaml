@@ -1,0 +1,16 @@
+# Service-backed Pipecat Eval samples. These are intentionally not run in CI
+# because they exercise the real NVIDIA services configured for each example.
+
+bots_dir: ../../../src
+scenarios_dir: scenarios
+concurrency: 1
+base_port: 7930
+runs_dir: ../../../eval-runs
+record: false
+spawn: "env PLATFORM=workstation OMNI_MAX_TOKENS=1024 TTS_STOP_FRAME_TIMEOUT_S=45 {python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: eval_bot.py
+    runner_body: runner_bodies/omni_uploaded_image.json
+    scenarios:
+      - omni_uploaded_image_path

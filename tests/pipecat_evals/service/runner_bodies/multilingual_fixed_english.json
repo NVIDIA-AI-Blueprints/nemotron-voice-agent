@@ -1,0 +1,8 @@
+{
+  "pipeline_mode": "multilingual-assistant",
+  "prompt_key": "multilingual_voice_assistant",
+  "tts_server": "localhost:50151",
+  "tts_voice_id": "Magpie-Multilingual.EN-US.Aria",
+  "asr_language_code": "en-US",
+  "session_id": "eval-multilingual-fixed-english"
+}

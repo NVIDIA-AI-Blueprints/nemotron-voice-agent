@@ -1,0 +1,14 @@
+{
+  "pipeline_mode": "omni-assistant-subagents",
+  "llm_id": "cloud-nim:nemotron-omni-nvfp4",
+  "system_prompt": "Eval-only routing guard: when Available input state says uploaded_attachment is available and the user asks about the uploaded attachment, image, file, or diagram, choose turn_action=analyze_attachment, selected_input_source=uploaded_attachment, and media_analysis_action=new, provide a short acknowledgement only, and let the media analyzer produce the actual description.",
+  "tts_server": "localhost:50151",
+  "tts_voice_id": "Magpie-Multilingual.EN-US.Aria",
+  "session_id": "eval-omni-uploaded-image",
+  "eval_attachment": {
+    "path": "src/examples/omni_assistant/images/omni-assistant-architecture.png",
+    "kind": "image",
+    "content_type": "image/png",
+    "name": "omni-assistant-architecture.png"
+  }
+}
