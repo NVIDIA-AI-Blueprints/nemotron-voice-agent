@@ -59,8 +59,6 @@ class ActivityCheckProcessor(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Track speech-boundary frames and forward every pipeline frame."""
-        # Let Pipecat initialize this processor on StartFrame (and clean it up
-        # on EndFrame/CancelFrame) before forwarding the frame ourselves.
         await super().process_frame(frame, direction)
 
         if isinstance(frame, UserStartedSpeakingFrame):
@@ -152,9 +150,6 @@ class ActivityCheckProcessor(FrameProcessor):
                 self._disconnect_after_speech = False
                 await self._on_disconnect()
             else:
-                # The first warning may still complete after its watchdog
-                # expires. Retire that completion so it cannot be mistaken
-                # for the final warning and disconnect before its audio plays.
                 self._retired_warning_completions += 1
                 await self._emit_warning(stage + 1)
         except asyncio.CancelledError:

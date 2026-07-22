@@ -223,9 +223,6 @@ async def bot(runner_args: RunnerArguments) -> None:
             llm,
             tts,
             transport.output(),
-            # The output transport emits BotStoppedSpeakingFrame downstream
-            # only after its final TTS audio has played. Keep the activity
-            # processor after it so countdowns begin from that definitive event.
             *([activity_check] if activity_check else []),
             *([audio_recorder] if audio_recorder else []),
             assistant_aggregator,
@@ -297,8 +294,6 @@ async def bot(runner_args: RunnerArguments) -> None:
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        # Let activity checks and closing TTS run first, but retain a longer
-        # worker-level backstop in case a speech-boundary frame is never emitted.
         idle_timeout_secs=(
             max(
                 runner_args.pipeline_idle_timeout_secs,
