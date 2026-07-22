@@ -88,6 +88,11 @@ x-app: &app-base
 x-app-env: &app-env
   APP_RUNTIME: container
   TRANSPORT_SELECTION: ${TRANSPORT_SELECTION:-}
+  PIPELINE_TLS: ${PIPELINE_TLS:-true}
+  ACTIVITY_CHECK_ENABLED: ${ACTIVITY_CHECK_ENABLED:-true}
+  ACTIVITY_CHECK_INTERVAL_S: ${ACTIVITY_CHECK_INTERVAL_S:-600}
+  FIRST_WARNING_S: ${FIRST_WARNING_S:-600}
+  SECOND_WARNING_S: ${SECOND_WARNING_S:-30}
 
 # Platform overrides keep recipe services small and make future hardware targets
 # a one-anchor addition.

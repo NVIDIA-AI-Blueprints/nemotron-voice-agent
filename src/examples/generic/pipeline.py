@@ -30,6 +30,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
+from examples.shared.activity_check import ActivityCheckProcessor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
@@ -164,6 +165,52 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     audio_recorder = create_audio_recorder()
 
+    activity_check_enabled = str(
+        body.get("activity_check_enabled", os.getenv("ACTIVITY_CHECK_ENABLED", "true"))
+    ).lower() not in {"0", "false", "no", "off"}
+
+    def _timeout(body_key: str, env_key: str, default: float) -> float:
+        value = body.get(body_key, os.getenv(env_key, default))
+        try:
+            value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{body_key} must be a positive number") from exc
+        if value <= 0:
+            raise ValueError(f"{body_key} must be a positive number")
+        return value
+
+    activity_check_interval_s = _timeout("activity_check_interval_s", "ACTIVITY_CHECK_INTERVAL_S", 600.0)
+    first_warning_s = _timeout("first_warning_s", "FIRST_WARNING_S", activity_check_interval_s)
+    second_warning_s = _timeout("second_warning_s", "SECOND_WARNING_S", 30.0)
+
+    async def on_activity_warning(stage: int) -> None:
+        prompts = {
+            1: ("The user may have stepped away. Ask if they are still there in one short, warm sentence."),
+            2: (
+                "The user is still quiet after an earlier check-in. Give one concise, "
+                "polite closing statement in your persona and say you are disconnecting now."
+            ),
+        }
+        context.add_message({"role": "user", "content": prompts[stage]})
+        await task.queue_frame(LLMRunFrame())
+
+    async def on_activity_disconnect() -> None:
+        logger.info("Disconnecting after unanswered activity checks")
+        await task.cancel(reason="user inactive after activity checks")
+
+    activity_check = (
+        ActivityCheckProcessor(
+            activity_check_interval_s=activity_check_interval_s,
+            first_warning_s=first_warning_s,
+            second_warning_s=second_warning_s,
+            on_warning=on_activity_warning,
+            on_disconnect=on_activity_disconnect,
+        )
+        if activity_check_enabled
+        else None
+    )
+    logger.info(f"Proactive activity checks: {'enabled' if activity_check_enabled else 'disabled'}")
+
     pipeline = Pipeline(
         [
             transport.input(),
@@ -172,6 +219,10 @@ async def bot(runner_args: RunnerArguments) -> None:
             llm,
             tts,
             transport.output(),
+            # The output transport emits BotStoppedSpeakingFrame downstream
+            # only after its final TTS audio has played. Keep the activity
+            # processor after it so countdowns begin from that definitive event.
+            *([activity_check] if activity_check else []),
             *([audio_recorder] if audio_recorder else []),
             assistant_aggregator,
         ]
@@ -242,7 +293,10 @@ async def bot(runner_args: RunnerArguments) -> None:
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        # ActivityCheckProcessor owns inactivity handling when enabled and lets
+        # warning TTS finish before cancelling the task. Restore the original
+        # worker timeout when proactive checks are disabled.
+        idle_timeout_secs=(None if activity_check_enabled else runner_args.pipeline_idle_timeout_secs),
         observers=[latency_observer],
         enable_tracing=IS_TRACING_ENABLED,
     )
