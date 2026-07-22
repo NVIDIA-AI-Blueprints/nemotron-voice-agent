@@ -4,6 +4,8 @@
 """Proactive inactivity checks for cascaded voice pipelines."""
 
 import asyncio
+import contextlib
+from collections import deque
 from collections.abc import Awaitable, Callable
 
 from loguru import logger
@@ -12,6 +14,8 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     Frame,
+    LLMFullResponseEndFrame,
+    TTSStartedFrame,
     UserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -54,6 +58,9 @@ class ActivityCheckProcessor(FrameProcessor):
         self._stage = 0
         self._disconnect_after_speech = False
         self._retired_warning_completions = 0
+        self._retired_warning_stage: int | None = None
+        self._pending_warning_response_stages: deque[int] = deque()
+        self._warning_audio_started_stages: set[int] = set()
         self._timer: asyncio.Task[None] | None = None
         self._warning_completion_timer: asyncio.Task[None] | None = None
 
@@ -71,6 +78,10 @@ class ActivityCheckProcessor(FrameProcessor):
             self.reset()
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._handle_bot_stopped_speaking()
+        elif isinstance(frame, TTSStartedFrame):
+            self._handle_tts_started()
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            self._handle_llm_response_ended()
         elif isinstance(frame, (CancelFrame, EndFrame)):
             self.reset()
 
@@ -85,6 +96,28 @@ class ActivityCheckProcessor(FrameProcessor):
         self._stage = 0
         self._disconnect_after_speech = False
         self._retired_warning_completions = 0
+        self._retired_warning_stage = None
+        self._pending_warning_response_stages.clear()
+        self._warning_audio_started_stages.clear()
+
+    def _handle_tts_started(self) -> None:
+        if not self._pending_warning_response_stages:
+            return
+
+        stage = self._pending_warning_response_stages[0]
+        self._warning_audio_started_stages.add(stage)
+        if self._retired_warning_stage == stage:
+            self._retired_warning_completions += 1
+            self._retired_warning_stage = None
+
+    def _handle_llm_response_ended(self) -> None:
+        if not self._pending_warning_response_stages:
+            return
+
+        stage = self._pending_warning_response_stages.popleft()
+        self._warning_audio_started_stages.discard(stage)
+        if self._retired_warning_stage == stage:
+            self._retired_warning_stage = None
 
     def _handle_bot_stopped_speaking(self) -> None:
         """Handle a bot-speech completion for the currently active warning."""
@@ -125,6 +158,7 @@ class ActivityCheckProcessor(FrameProcessor):
     async def _emit_warning(self, stage: int) -> None:
         self._stage = stage
         self._disconnect_after_speech = stage == len(self._intervals)
+        self._pending_warning_response_stages.append(stage)
         logger.info("Activity check fired: stage={}", stage)
         self._warning_completion_timer = self.create_task(
             self._wait_for_warning_completion(stage), "wait-for-warning-completion"
@@ -132,6 +166,8 @@ class ActivityCheckProcessor(FrameProcessor):
         try:
             await self._on_warning(stage)
         except Exception:
+            with contextlib.suppress(ValueError):
+                self._pending_warning_response_stages.remove(stage)
             logger.exception("Activity check warning generation failed: stage={}", stage)
 
     async def _wait_for_warning_completion(self, stage: int) -> None:
@@ -150,7 +186,10 @@ class ActivityCheckProcessor(FrameProcessor):
                 self._disconnect_after_speech = False
                 await self._on_disconnect()
             else:
-                self._retired_warning_completions += 1
+                if stage in self._warning_audio_started_stages:
+                    self._retired_warning_completions += 1
+                else:
+                    self._retired_warning_stage = stage
                 await self._emit_warning(stage + 1)
         except asyncio.CancelledError:
             logger.debug("Activity check warning-completion watchdog cancelled")

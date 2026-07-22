@@ -62,6 +62,8 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
         await processor._emit_warning(1)
         await asyncio.wait_for(self._wait_for_warnings(warnings), timeout=0.5)
 
+        processor._handle_tts_started()
+        processor._handle_llm_response_ended()
         processor._handle_bot_stopped_speaking()
 
         self.assertEqual(processor._retired_warning_completions, 0)
@@ -69,8 +71,39 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(processor._warning_completion_timer)
         self.assertFalse(disconnected.is_set())
 
+        processor._handle_tts_started()
+        processor._handle_llm_response_ended()
         processor._handle_bot_stopped_speaking()
         await asyncio.wait_for(disconnected.wait(), timeout=0.5)
+
+    async def test_empty_first_warning_does_not_retire_second_warning_completion(self) -> None:
+        warnings: list[int] = []
+        disconnected = asyncio.Event()
+
+        async def on_warning(stage: int) -> None:
+            warnings.append(stage)
+
+        async def on_disconnect() -> None:
+            disconnected.set()
+
+        processor = _TestActivityCheckProcessor(
+            activity_check_interval_s=1.0,
+            second_warning_s=1.0,
+            warning_completion_timeout_s=0.05,
+            on_warning=on_warning,
+            on_disconnect=on_disconnect,
+        )
+
+        await processor._emit_warning(1)
+        await asyncio.wait_for(self._wait_for_warnings(warnings), timeout=0.5)
+
+        processor._handle_llm_response_ended()
+        processor._handle_tts_started()
+        processor._handle_llm_response_ended()
+        processor._handle_bot_stopped_speaking()
+
+        await asyncio.wait_for(disconnected.wait(), timeout=0.5)
+        self.assertEqual(processor._retired_warning_completions, 0)
 
     async def _wait_for_warnings(self, warnings: list[int]) -> None:
         while warnings != [1, 2]:
