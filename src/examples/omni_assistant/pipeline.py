@@ -358,8 +358,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
 
 def _create_transport(runner_args: RunnerArguments):
-    """Create a transport from runner arguments (WebRTC or WebSocket)."""
-    from pipecat.runner.types import SmallWebRTCRunnerArguments
+    """Create a transport from runner arguments (WebRTC, WebSocket, or eval)."""
+    from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
 
     if isinstance(runner_args, SmallWebRTCRunnerArguments):
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -371,6 +371,24 @@ def _create_transport(runner_args: RunnerArguments):
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
             ),
             webrtc_connection=runner_args.webrtc_connection,
+        )
+
+    if isinstance(runner_args, EvalRunnerArguments):
+        from pipecat.evals.serializer import RTVIEvalSerializer
+        from pipecat.evals.transport import EvalTransport, EvalTransportParams
+
+        return EvalTransport(
+            params=EvalTransportParams(
+                audio_in_enabled=True,
+                audio_in_sample_rate=16000,
+                audio_out_enabled=True,
+                audio_out_sample_rate=16000,
+                audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
+                add_wav_header=False,
+                serializer=RTVIEvalSerializer(),
+            ),
+            host=runner_args.host,
+            port=runner_args.port,
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer

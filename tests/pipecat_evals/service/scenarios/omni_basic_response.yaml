@@ -1,0 +1,17 @@
+name: omni_basic_response
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "What is 2 plus 2? Reply with only the numeral."
+    expect:
+      - event: response
+        eval: "the response correctly answers that 2 plus 2 equals 4"
+        within_ms: 120000

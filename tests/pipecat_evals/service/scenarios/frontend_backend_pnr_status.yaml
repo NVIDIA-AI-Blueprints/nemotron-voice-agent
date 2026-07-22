@@ -1,0 +1,21 @@
+name: frontend_backend_pnr_status
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "Check the status of PNR ABC123."
+    expect:
+      - event: function_call
+        calls:
+          - name: call_backend
+        within_ms: 90000
+      - event: response
+        eval: "the reply says PNR ABC123 is active, confirmed, or scheduled for a New York to Los Angeles booking"
+        within_ms: 120000

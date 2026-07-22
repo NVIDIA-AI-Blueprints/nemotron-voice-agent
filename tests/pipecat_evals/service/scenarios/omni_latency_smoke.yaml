@@ -1,0 +1,15 @@
+name: omni_latency_smoke
+user:
+  modality: text
+judge:
+  modality: text
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "Say ready."
+    expect:
+      - event: llm_started
+        within_ms: 45000
+      - event: response
+        within_ms: 120000

@@ -1,0 +1,22 @@
+name: generic_audio_e2e_roundtrip
+user: !include _audio_user_kokoro.yaml
+judge: !include _audio_judge_moonshine.yaml
+turns:
+  - expect:
+      - event: response
+        eval: "the spoken reply is a brief initial greeting or self-introduction"
+        within_ms: 120000
+  - user: "Please say the colors are red blue green."
+    expect:
+      - event: user_transcription
+        text_contains: "Please say"
+        within_ms: 90000
+      - event: llm_started
+        within_ms: 90000
+      - event: tts_response
+        text_contains: "green"
+        eval: "the TTS text says the colors are red blue green"
+        within_ms: 120000
+      - event: response
+        eval: "the spoken reply says the colors are red blue green"
+        within_ms: 120000

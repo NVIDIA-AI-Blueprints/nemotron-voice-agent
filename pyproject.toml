@@ -32,6 +32,9 @@ dev = [
     "pre-commit>=4.0.0",
     "pytest>=9.1.1",
 ]
+eval = [
+    "pipecat-ai[evals]==1.5.0",
+]
 # Dependencies for everything under `benchmarking_tools/`. Install with:
 #   uv sync --group benchmark
 benchmark = [

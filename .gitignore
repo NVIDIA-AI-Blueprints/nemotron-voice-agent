@@ -24,6 +24,7 @@ coverage_report.xml
 
 # Generated output
 output/
+eval-runs/
 
 # Docs build artifacts
 docs/build/

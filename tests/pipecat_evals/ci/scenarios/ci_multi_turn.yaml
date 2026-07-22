@@ -1,0 +1,22 @@
+name: ci_multi_turn
+user:
+  modality: text
+judge:
+  modality: text
+turns:
+  - user: first ci turn
+    expect:
+      - event: user_transcription
+        text_contains: first ci turn
+        within_ms: 3000
+      - event: response
+        text_contains: "CI eval bot turn 1: first ci turn"
+        within_ms: 3000
+  - user: second ci turn
+    expect:
+      - event: user_transcription
+        text_contains: second ci turn
+        within_ms: 3000
+      - event: response
+        text_contains: "CI eval bot turn 2: second ci turn"
+        within_ms: 3000

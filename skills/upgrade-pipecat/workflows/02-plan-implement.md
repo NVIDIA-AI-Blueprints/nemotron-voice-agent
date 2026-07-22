@@ -94,14 +94,15 @@ Fix client type/lint errors using the renamed RTVI APIs from the notes. Confirm 
 
 ## Step 5 — Tests
 
-Tests live flat under `tests/` (`test_service_catalog.py`, `test_prompt_catalog.py`, `test_frontend_backend_agent.py`,
-booking-state helpers). Update plumbing only; preserve intent.
+Unit tests live under `tests/unit/` (`test_service_catalog.py`, `test_prompt_catalog.py`,
+`test_frontend_backend_agent.py`, booking-state helpers). Update plumbing only; preserve intent.
 
-- Scan: `grep -rn "pipecat\|<old_import_root>\|<OldClass>\|<OldFrame>" tests/`.
+- Scan: `grep -rn "pipecat\|<old_import_root>\|<OldClass>\|<OldFrame>" tests/unit/`.
 - Change only import paths, mock targets, constructor/`Settings` kwargs, frame names, fixture shapes. Never
   change assertions, remove tests, or reduce coverage.
-- Run/fix (max 3 cycles): `uv run pytest tests/ -x -q 2>&1 | head -80`. Classify each failure as source bug
-  (fix source, feed back to gap analysis) vs test plumbing (fix test).
+- Run/fix (max 3 cycles):
+  `set +e; uv run pytest tests/unit -x -q > /tmp/pytest.log 2>&1; status=$?; head -80 /tmp/pytest.log; exit $status`.
+  Classify each failure as source bug (fix source, feed back to gap analysis) vs test plumbing (fix test).
 - Lint (CI parity): `uv run ruff format . && uv run ruff check . --fix && uv run ruff check .`.
 
 ## Deliverable
