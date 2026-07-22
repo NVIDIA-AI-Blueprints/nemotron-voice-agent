@@ -182,6 +182,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     activity_check_interval_s = _timeout("activity_check_interval_s", "ACTIVITY_CHECK_INTERVAL_S", 600.0)
     first_warning_s = _timeout("first_warning_s", "FIRST_WARNING_S", activity_check_interval_s)
     second_warning_s = _timeout("second_warning_s", "SECOND_WARNING_S", 30.0)
+    warning_completion_timeout_s = _timeout(
+        "warning_completion_timeout_s", "ACTIVITY_WARNING_COMPLETION_TIMEOUT_S", 45.0
+    )
 
     async def on_activity_warning(stage: int) -> None:
         prompts = {
@@ -203,6 +206,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             activity_check_interval_s=activity_check_interval_s,
             first_warning_s=first_warning_s,
             second_warning_s=second_warning_s,
+            warning_completion_timeout_s=warning_completion_timeout_s,
             on_warning=on_activity_warning,
             on_disconnect=on_activity_disconnect,
         )
@@ -293,10 +297,16 @@ async def bot(runner_args: RunnerArguments) -> None:
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        # ActivityCheckProcessor owns inactivity handling when enabled and lets
-        # warning TTS finish before cancelling the task. Restore the original
-        # worker timeout when proactive checks are disabled.
-        idle_timeout_secs=(None if activity_check_enabled else runner_args.pipeline_idle_timeout_secs),
+        # Let activity checks and closing TTS run first, but retain a longer
+        # worker-level backstop in case a speech-boundary frame is never emitted.
+        idle_timeout_secs=(
+            max(
+                runner_args.pipeline_idle_timeout_secs,
+                first_warning_s + second_warning_s + (2 * warning_completion_timeout_s) + 60,
+            )
+            if activity_check_enabled
+            else runner_args.pipeline_idle_timeout_secs
+        ),
         observers=[latency_observer],
         enable_tracing=IS_TRACING_ENABLED,
     )
