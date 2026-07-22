@@ -224,9 +224,13 @@ llm:
             utils._service_context.reset(token)
 
         self_hosted = [entry for entry in tts if entry["source"] == "self-hosted"]
-        self.assertEqual(len(self_hosted), 1)
-        self.assertEqual(self_hosted[0]["id"], "self-hosted:magpie-multilingual-tts")
-        self.assertEqual(self_hosted[0]["server"], "localhost:50151")
+        self_hosted_ids = {entry["id"] for entry in self_hosted}
+        self.assertEqual(
+            self_hosted_ids,
+            {"self-hosted:magpie-multilingual-tts", "self-hosted:chatterbox-multilingual-tts"},
+        )
+        for entry in self_hosted:
+            self.assertEqual(entry["server"], "localhost:50151")
 
     def test_runtime_platform_filters_local_services(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

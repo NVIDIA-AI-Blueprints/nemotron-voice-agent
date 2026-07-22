@@ -44,7 +44,7 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
 
 ## Trace Structure
 
-```
+```text
 Conversation
 ├── turn
 │   ├── stt          (ASR: user speech to text)
