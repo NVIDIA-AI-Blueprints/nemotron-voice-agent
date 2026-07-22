@@ -10,10 +10,12 @@ import unittest
 from contextlib import suppress
 from datetime import date, timedelta
 from typing import Any
+from unittest.mock import patch
 
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.services.llm_service import FunctionCallParams
 
+from examples.frontend_backend_agent import pipeline as frontend_backend_pipeline
 from examples.frontend_backend_agent.airline.airports import spoken_time
 from examples.frontend_backend_agent.airline.database.api import BookingAPI
 from examples.frontend_backend_agent.airline.database.db import apply_schema
@@ -23,6 +25,7 @@ from examples.frontend_backend_agent.airline.tools import CALL_BACKEND_TOOL, CAN
 from examples.frontend_backend_agent.airline.transform import _server_booking_to_record, _server_flight_to_option
 from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload
+from examples.frontend_backend_agent.src.runtime_context import runtime_today
 from examples.frontend_backend_agent.src.tool_handlers import (
     _emit_talker_response,
     _normalize_arguments,
@@ -346,7 +349,50 @@ def _has_route_fields(slots: dict[str, Any]) -> bool:
     )
 
 
+class FrontendBackendPipelineConfigTests(unittest.TestCase):
+    def test_booking_backend_url_uses_explicit_env_override(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"BOOKING_BACKEND_URL": "http://custom.example:8001", "APP_RUNTIME": ""},
+            clear=True,
+        ):
+            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+
+        self.assertEqual(url, "http://custom.example:8001")
+
+    def test_booking_backend_url_rewrites_docker_hostname_for_host_native(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+
+        self.assertEqual(url, "http://localhost:8001")
+
+    def test_booking_backend_url_preserves_container_docker_hostname(self) -> None:
+        with patch.dict("os.environ", {"APP_RUNTIME": "container"}, clear=True):
+            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+
+        self.assertEqual(url, "http://booking-server:8001")
+
+    def test_booking_backend_url_preserves_custom_catalog_url(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking.internal:8001"})
+
+        self.assertEqual(url, "http://booking.internal:8001")
+
+
 class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
+    def test_runtime_today_uses_frontend_backend_agent_override(self) -> None:
+        with patch.dict("os.environ", {"FRONTEND_BACKEND_AGENT_TODAY": "2026-04-30"}):
+            self.assertEqual(runtime_today(), date(2026, 4, 30))
+
+    def test_runtime_today_rejects_invalid_override(self) -> None:
+        for value in ("04/30/2026", "20260430", "2026-W18-4", "2026-02-30"):
+            with (
+                self.subTest(value=value),
+                patch.dict("os.environ", {"FRONTEND_BACKEND_AGENT_TODAY": value}),
+                self.assertRaisesRegex(ValueError, "YYYY-MM-DD"),
+            ):
+                runtime_today()
+
     def test_spoken_time_preserves_ten_oclock_hours(self) -> None:
         self.assertEqual(spoken_time("2026-05-26T10:05:00"), "10:05 AM")
         self.assertEqual(spoken_time("2026-05-26T22:45:00"), "10:45 PM")
@@ -404,10 +450,11 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
             llm=llm,
             system_prompt="You are a planner.",
         )
-        today = date.today()
+        today = date(2026, 4, 30)
         tomorrow = today + timedelta(days=1)
 
-        await planner.plan(query="Search flights tomorrow", slots={}, state={})
+        with patch.dict("os.environ", {"FRONTEND_BACKEND_AGENT_TODAY": today.isoformat()}):
+            await planner.plan(query="Search flights tomorrow", slots={}, state={})
 
         self.assertIn(f"Today is {today.isoformat()}.", llm.messages[0]["content"])
         self.assertIn(f"Tomorrow is {tomorrow.isoformat()}.", llm.messages[0]["content"])
@@ -815,6 +862,40 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         markers = [event.marker for event in thinker.state.lifecycle_events]
         self.assertEqual(markers, ["ThinkerStarted", "IntermediateResponse", "ThinkerCompleted"])
 
+    async def test_call_backend_direct_response_emits_talker_text_and_suppresses_llm_rerun(self) -> None:
+        thinker = _make_thinker()
+        llm = _FrameCapturingLLM()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="call_backend",
+            tool_call_id="call_test",
+            arguments={
+                "query": "Search flights from New York to Seattle tomorrow",
+                "origin_airport": "JFK",
+                "dest_airport": "SEA",
+                "date": "2026-05-26",
+            },
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        with patch.dict("os.environ", {"FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE": "true"}):
+            await build_handlers(thinker)["call_backend"](params)
+
+        self.assertEqual(len(llm.frames), 3)
+        self.assertIsInstance(llm.frames[0], LLMFullResponseStartFrame)
+        self.assertIsInstance(llm.frames[1], LLMTextFrame)
+        self.assertEqual(llm.frames[1].text, results[-1][0]["response_text"])
+        self.assertIsInstance(llm.frames[2], LLMFullResponseEndFrame)
+        self.assertEqual(results[-1][0]["type"], "tool_result")
+        self.assertFalse(results[-1][1].run_llm)
+
     async def test_call_backend_ignores_duplicate_started_events_for_filler(self) -> None:
         llm = _FrameCapturingLLM()
         results = []
@@ -1002,6 +1083,35 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[-1][0]["context"], "cancel_backend")
         self.assertEqual(results[-1][0]["response_text"], "There is nothing pending right now.")
         self.assertEqual(thinker.state.lifecycle_events, [])
+
+    async def test_cancel_backend_direct_response_emits_talker_text_and_suppresses_llm_rerun(self) -> None:
+        thinker = _make_thinker()
+        llm = _FrameCapturingLLM()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_test",
+            arguments={},
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        with patch.dict("os.environ", {"FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE": "true"}):
+            await build_handlers(thinker)["cancel_backend"](params)
+
+        self.assertEqual(len(llm.frames), 3)
+        self.assertIsInstance(llm.frames[0], LLMFullResponseStartFrame)
+        self.assertIsInstance(llm.frames[1], LLMTextFrame)
+        self.assertEqual(llm.frames[1].text, "There is nothing pending right now.")
+        self.assertIsInstance(llm.frames[2], LLMFullResponseEndFrame)
+        self.assertEqual(results[-1][0]["context"], "cancel_backend")
+        self.assertFalse(results[-1][1].run_llm)
 
     async def test_cancel_backend_clears_pending_booking_confirmation(self) -> None:
         thinker = _make_thinker()

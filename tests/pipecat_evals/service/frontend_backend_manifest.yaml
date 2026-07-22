@@ -1,0 +1,26 @@
+# Service-backed frontend/backend agent scenarios. These require configured
+# NVIDIA services, a local Ollama judge, and a reachable booking server.
+# The spawn environment freezes the runtime date so static seed flights in
+# early May 2026 remain future travel dates, suppresses optional filler text
+# so judges evaluate final backend responses, and gives live thinker calls a
+# larger timeout budget for gated CI.
+
+bots_dir: ../../../src
+scenarios_dir: scenarios
+concurrency: 1
+base_port: 8370
+runs_dir: ../../../eval-runs
+record: false
+spawn: "env PLATFORM=workstation BOOKING_BACKEND_URL=http://localhost:8001 FRONTEND_BACKEND_AGENT_TODAY=2026-04-30 FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE=true THINKER_FILLER_THRESHOLD_SECONDS=999 THINKER_TOOL_TIMEOUT_SECONDS=90 {python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: eval_bot.py
+    runner_body: runner_bodies/frontend_backend_default.json
+    scenarios:
+      - frontend_backend_initial_greeting
+      - frontend_backend_identity_direct
+      - frontend_backend_unsupported_nonflight
+      - frontend_backend_missing_info_handoff
+      - frontend_backend_flight_search
+      - frontend_backend_pnr_status
+      - frontend_backend_cancel_after_search

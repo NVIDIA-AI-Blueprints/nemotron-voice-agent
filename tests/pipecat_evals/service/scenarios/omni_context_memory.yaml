@@ -1,0 +1,21 @@
+name: omni_context_memory
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "My name is Alex."
+    expect:
+      - event: response
+        within_ms: 120000
+  - user: "What is my name? Reply with only my name."
+    expect:
+      - event: response
+        eval: "the response identifies Alex as the user's remembered name"
+        within_ms: 120000

@@ -1,0 +1,17 @@
+name: generic_basic_response
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 60000
+  - user: What is 2 plus 2? Reply with only the numeral.
+    expect:
+      - event: response
+        eval: "the reply is exactly the single numeral 4, with no other words, punctuation, or explanation"
+        within_ms: 60000

@@ -1,0 +1,17 @@
+name: generic_tool_disabled_prompt
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 60000
+  - user: Calculate BMI for 70 kilograms and 1.75 meters. Answer directly.
+    expect:
+      - event: response
+        eval: "the reply answers the BMI request directly, gives a BMI of about 22.86, and does not refer to using or missing a tool"
+        within_ms: 60000

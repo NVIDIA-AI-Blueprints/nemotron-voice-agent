@@ -1,0 +1,18 @@
+# Service-backed generic assistant audio scenarios. These exercise the full
+# cascaded path: synthesized user audio -> NVIDIA ASR -> NVIDIA LLM -> NVIDIA
+# TTS -> captured bot audio transcribed by the eval harness. Use for gated or
+# nightly service CI, not no-services MR CI.
+
+bots_dir: ../../../src
+scenarios_dir: scenarios
+concurrency: 1
+base_port: 8080
+runs_dir: ../../../eval-runs
+record: true
+spawn: "env PLATFORM=workstation {python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: eval_bot.py
+    runner_body: runner_bodies/generic_audio_default.json
+    scenarios:
+      - generic_audio_e2e_roundtrip

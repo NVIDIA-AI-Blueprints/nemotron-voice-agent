@@ -1,0 +1,17 @@
+name: multilingual_basic_english
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "How do you greet someone in the morning?"
+    expect:
+      - event: response
+        eval: "the reply is in English and answers that a common morning greeting is good morning"
+        within_ms: 90000

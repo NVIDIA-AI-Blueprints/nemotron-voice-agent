@@ -1,0 +1,18 @@
+name: omni_uploaded_image_path
+user: !include _audio_user_kokoro.yaml
+judge: !include _audio_judge_moonshine.yaml
+turns:
+  - expect:
+      - event: response
+        eval: "the spoken reply is a brief friendly initial greeting from an NVIDIA voice assistant"
+        within_ms: 120000
+  - user: "Use the uploaded attachment image. Please inspect the uploaded image and summarize what the diagram shows."
+    expect:
+      - event: llm_started
+        within_ms: 120000
+      - event: tts_response
+        eval: "the spoken reply briefly acknowledges it will inspect or analyze the uploaded image before the image analysis result"
+        within_ms: 240000
+      - event: tts_response
+        eval: "the spoken reply summarizes or reports concrete findings from the uploaded architecture diagram"
+        within_ms: 240000

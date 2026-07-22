@@ -1,4 +1,5 @@
 # On-prem service catalog for the Frontend/Backend Agent cascaded example.
+# Host-native runs use localhost when this catalog points at the Docker booking-server hostname.
 
 workstation:
   llm:
