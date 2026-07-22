@@ -1,0 +1,21 @@
+name: frontend_backend_missing_info_handoff
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "I want to book a flight."
+    expect:
+      - event: function_call
+        calls:
+          - name: call_backend
+        within_ms: 90000
+      - event: response
+        eval: "the reply asks for missing flight booking details such as origin, destination, and travel date"
+        within_ms: 120000

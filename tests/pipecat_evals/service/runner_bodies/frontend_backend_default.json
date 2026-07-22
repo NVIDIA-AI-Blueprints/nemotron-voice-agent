@@ -1,0 +1,7 @@
+{
+  "pipeline_mode": "frontend-backend-agent",
+  "prompt_key": "talker",
+  "tts_server": "localhost:50151",
+  "tts_voice_id": "Magpie-Multilingual.EN-US.Aria",
+  "session_id": "eval-frontend-backend-default"
+}

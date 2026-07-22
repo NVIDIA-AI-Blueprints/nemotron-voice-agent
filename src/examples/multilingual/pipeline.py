@@ -26,7 +26,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
@@ -74,6 +74,12 @@ CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
 DEFAULT_SESSION_LANGUAGE = "de-DE"
 
 
+def _is_eval_transport(runner_args: RunnerArguments) -> bool:
+    """Return whether the pipeline is running through Pipecat's eval transport."""
+    cli_transport = str(getattr(getattr(runner_args, "cli_args", None), "transport", "") or "").strip().lower()
+    return cli_transport == "eval" or isinstance(runner_args, EvalRunnerArguments)
+
+
 def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
     """Use VAD-only turn starts so interim ASR text does not start a user turn."""
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
@@ -91,6 +97,33 @@ def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
             start=[VADUserTurnStartStrategy()],
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
         ),
+    )
+
+
+async def _prepare_session_language_codes(
+    runner_args: RunnerArguments,
+    *,
+    tts_server: str,
+    tts_voice: str,
+    asr_server: str,
+    asr_model: str,
+    asr_function_id: str,
+) -> str:
+    """Prewarm speech services and return UI language codes when startup should probe them."""
+    if _is_eval_transport(runner_args):
+        logger.info("Skipping ASR/TTS service prewarm for eval transport startup")
+        return ""
+
+    prewarm_tasks = [asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id)]
+    if not config_store.get("tts"):
+        prewarm_tasks.append(asyncio.to_thread(prewarm_tts, tts_server, tts_voice))
+    await asyncio.gather(*prewarm_tasks)
+    return get_lang_codes(
+        asr_server=asr_server,
+        asr_model=asr_model,
+        asr_function_id=asr_function_id,
+        tts_server=tts_server,
+        tts_voice_id=tts_voice,
     )
 
 
@@ -141,15 +174,13 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
-    if not config_store.get("tts"):
-        await asyncio.to_thread(prewarm_tts, tts_server, tts_voice)
-    await asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id)
-    lang_codes = get_lang_codes(
+    lang_codes = await _prepare_session_language_codes(
+        runner_args,
+        tts_server=tts_server,
+        tts_voice=tts_voice,
         asr_server=asr_server,
         asr_model=asr_model,
         asr_function_id=asr_function_id,
-        tts_server=tts_server,
-        tts_voice_id=tts_voice,
     )
 
     # --- LLM ---

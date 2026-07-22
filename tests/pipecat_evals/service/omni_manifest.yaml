@@ -1,0 +1,26 @@
+# Service-backed omni assistant scenarios. These require configured NVIDIA
+# services and a local Ollama judge. Runner bodies pin the cloud Omni catalog
+# entry so half-started local Omni endpoints are not selected accidentally.
+# The uploaded-image scenario targets the subagents variant because the base
+# omni assistant does not expose attachments.
+
+bots_dir: ../../../src
+scenarios_dir: scenarios
+concurrency: 1
+base_port: 8390
+runs_dir: ../../../eval-runs
+record: false
+spawn: "env PLATFORM=workstation OMNI_MAX_TOKENS=1024 TTS_STOP_FRAME_TIMEOUT_S=45 {python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: eval_bot.py
+    runner_body: runner_bodies/omni_default.json
+    scenarios:
+      - omni_initial_greeting
+      - omni_basic_response
+      - omni_context_memory
+      - omni_latency_smoke
+  - bot: eval_bot.py
+    runner_body: runner_bodies/omni_uploaded_image.json
+    scenarios:
+      - omni_uploaded_image_path

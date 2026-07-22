@@ -1,0 +1,30 @@
+name: frontend_backend_cancel_after_search
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "Find flights from New York to Los Angeles on May 1, 2026."
+    expect:
+      - event: function_call
+        calls:
+          - name: call_backend
+        within_ms: 90000
+      - event: response
+        eval: "the reply offers flight options and asks which flight to book"
+        within_ms: 120000
+  - user: "Never mind, cancel that."
+    expect:
+      - event: function_call
+        calls:
+          - name: cancel_backend
+        within_ms: 90000
+      - event: response
+        eval: "the reply acknowledges that the pending flight task was stopped or canceled"
+        within_ms: 90000

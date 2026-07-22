@@ -1,0 +1,15 @@
+# Pipecat Eval suite intended for fast, service-free CI validation.
+
+bots_dir: .
+scenarios_dir: scenarios
+concurrency: 1
+base_port: 7920
+runs_dir: ../../../eval-runs
+record: false
+spawn: "{python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: ci_bot.py
+    scenarios:
+      - ci_echo
+      - ci_multi_turn
