@@ -53,6 +53,7 @@ class ActivityCheckProcessor(FrameProcessor):
         self._warning_completion_timeout_s = warning_completion_timeout_s
         self._stage = 0
         self._disconnect_after_speech = False
+        self._retired_warning_completions = 0
         self._timer: asyncio.Task[None] | None = None
         self._warning_completion_timer: asyncio.Task[None] | None = None
 
@@ -71,13 +72,7 @@ class ActivityCheckProcessor(FrameProcessor):
                 )
             self.reset()
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._cancel_warning_completion_timer()
-            if self._disconnect_after_speech:
-                self._disconnect_after_speech = False
-                logger.info("Final activity check finished; disconnecting session")
-                self.create_task(self._on_disconnect(), "disconnect")
-            else:
-                self._arm_timer()
+            self._handle_bot_stopped_speaking()
         elif isinstance(frame, (CancelFrame, EndFrame)):
             self.reset()
 
@@ -91,6 +86,25 @@ class ActivityCheckProcessor(FrameProcessor):
         self._cancel_warning_completion_timer()
         self._stage = 0
         self._disconnect_after_speech = False
+        self._retired_warning_completions = 0
+
+    def _handle_bot_stopped_speaking(self) -> None:
+        """Handle a bot-speech completion for the currently active warning."""
+        if self._retired_warning_completions:
+            self._retired_warning_completions -= 1
+            logger.info(
+                "Ignoring delayed completion from retired activity warning (remaining={})",
+                self._retired_warning_completions,
+            )
+            return
+
+        self._cancel_warning_completion_timer()
+        if self._disconnect_after_speech:
+            self._disconnect_after_speech = False
+            logger.info("Final activity check finished; disconnecting session")
+            self.create_task(self._on_disconnect(), "disconnect")
+        else:
+            self._arm_timer()
 
     def _arm_timer(self) -> None:
         if self._timer is not None:
@@ -138,6 +152,10 @@ class ActivityCheckProcessor(FrameProcessor):
                 self._disconnect_after_speech = False
                 await self._on_disconnect()
             else:
+                # The first warning may still complete after its watchdog
+                # expires. Retire that completion so it cannot be mistaken
+                # for the final warning and disconnect before its audio plays.
+                self._retired_warning_completions += 1
                 await self._emit_warning(stage + 1)
         except asyncio.CancelledError:
             logger.debug("Activity check warning-completion watchdog cancelled")
