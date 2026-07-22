@@ -222,6 +222,7 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm", 8000): 18000,
     ("nvidia-llm-vllm", 8000): 18000,
     ("tts-service", 50051): 50151,
+    ("chatterbox-tts-service", 50051): 50151,
     ("nemotron-asr-streaming-english", 50052): 50152,
     ("nemotron-asr-streaming-multilingual", 50052): 50152,
     ("parakeet-ctc-asr", 50052): 50152,

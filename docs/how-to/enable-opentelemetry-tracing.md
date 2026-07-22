@@ -19,8 +19,8 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
     ```
 
     If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker/docker-compose.phoenix.yaml` and included by the root compose file) exposes:
-    - **Port 6006** — Phoenix UI
-    - **Port 4317** — OTLP gRPC collector
+    - **Port 6006**: Phoenix UI
+    - **Port 4317**: OTLP gRPC collector
 
 3. Open the Phoenix UI.
 
@@ -39,17 +39,17 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP collector endpoint |
 
 **Endpoint format:**
-- **gRPC** (port 4317): `host:port` — e.g. `phoenix:4317` or `localhost:4317`
-- **HTTP** (port 4318 or custom): `http://host:port` — e.g. `http://phoenix:4318`
+- **gRPC** (port 4317): `host:port` (e.g. `phoenix:4317` or `localhost:4317`)
+- **HTTP** (port 4318 or custom): `http://host:port` (e.g. `http://phoenix:4318`)
 
 ## Trace Structure
 
 ```
 Conversation
 ├── turn
-│   ├── stt          (ASR — user speech to text)
-│   ├── llm          (LLM — generate response)
-│   └── tts          (TTS — synthesise audio)
+│   ├── stt          (ASR: user speech to text)
+│   ├── llm          (LLM: generate response)
+│   └── tts          (TTS: synthesise audio)
 └── turn ...
 ```
 
@@ -63,6 +63,6 @@ Conversation
 
 ## Alternative Backends
 
-Any OTLP-compatible backend works — Jaeger, Grafana Tempo, Langfuse, Datadog, etc. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at your collector and the traces will flow there instead of Phoenix.
+Any OTLP-compatible backend works (Jaeger, Grafana Tempo, Langfuse, Datadog, etc.). Point `OTEL_EXPORTER_OTLP_ENDPOINT` at your collector and the traces will flow there instead of Phoenix.
 
 See the [Pipecat OpenTelemetry docs](https://docs.pipecat.ai/server/utilities/opentelemetry) for additional exporter options.

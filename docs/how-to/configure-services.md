@@ -90,7 +90,5 @@ tts:
     voice_id: "Magpie-Multilingual.EN-US.Aria"
     model: "magpie-tts-multilingual"
     function_id: ""
-    # Optional. Magpie Multilingual uses ``stitched``; omit on other models to
-    # keep Pipecat's ``per_sentence`` default.
     synthesis_mode: stitched
 ```

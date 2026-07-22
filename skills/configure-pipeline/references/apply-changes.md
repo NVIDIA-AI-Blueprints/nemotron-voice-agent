@@ -16,6 +16,7 @@ The catalog stores Compose DNS endpoints. The backend rewrites them to `localhos
 | `http://nvidia-llm:8000/v1` | `http://localhost:18000/v1` |
 | `http://nvidia-llm-vllm:8000/v1` | `http://localhost:18000/v1` |
 | `tts-service:50051` | `localhost:50151` |
+| `chatterbox-tts-service:50051` | `localhost:50151` |
 | `nemotron-asr-streaming-english:50052` | `localhost:50152` |
 | `nemotron-asr-streaming-multilingual:50052` | `localhost:50152` |
 | `parakeet-ctc-asr:50052` | `localhost:50152` |
@@ -76,7 +77,7 @@ docker compose --profile generic-assistant/dgx-spark --profile tracing --profile
 
 - The selected recipe profile matches the example and hardware you want active.
 - `examples_registry.yaml` `defaults` references catalog keys that actually exist for that example.
-- Multilingual prompt selection is paired with multilingual-capable ASR (`parakeet-rnnt` by default, or `nemotron-asr-streaming-multilingual` when opted in) and TTS (`magpie-multilingual-tts`) in the active catalog.
+- Multilingual prompt selection is paired with multilingual-capable ASR (`parakeet-rnnt` by default, or `nemotron-asr-streaming-multilingual` when opted in) and TTS (`magpie-multilingual-tts` or `chatterbox-multilingual-tts`) in the active catalog.
 - If `ENABLE_TRACING=true` with `phoenix:4317`, the `phoenix` service is started through the `tracing` profile.
 - Compose-managed local entries use service DNS names, not `localhost`.
 - ASR/TTS image variants use their Compose service DNS names (for example `nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `tts-service:50051`).

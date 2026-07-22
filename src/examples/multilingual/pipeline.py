@@ -176,7 +176,10 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
-    tts_function_id = body.get("tts_function_id", "") or default_tts.get("function_id", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
+    )
     tts_model = body.get("tts_model", "") or default_tts.get("model", "")
     lang_codes = await _prepare_session_language_codes(
         runner_args,

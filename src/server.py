@@ -103,7 +103,7 @@ _SPEECH_READY_ENDPOINTS = {
         50152,
         9001,
     ),
-    "tts": (("tts-service",), 50051, 50151, 9000),
+    "tts": (("tts-service", "chatterbox-tts-service"), 50051, 50151, 9000),
 }
 _TURN_LISTEN_PORT = 3478
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
