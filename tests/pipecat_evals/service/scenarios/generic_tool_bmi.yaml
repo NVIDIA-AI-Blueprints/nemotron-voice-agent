@@ -1,0 +1,24 @@
+name: generic_tool_bmi
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 60000
+  - user: Use the calculate_bmi tool for a person who weighs 70 kilograms and is 1.75 meters tall.
+    expect:
+      - event: function_call
+        calls:
+          - name: calculate_bmi
+            args:
+              weight_kg: 70
+              height_m: 1.75
+        within_ms: 60000
+      - event: response
+        eval: "the reply gives a BMI of about 22.86 for 70 kilograms and 1.75 meters"
+        within_ms: 60000

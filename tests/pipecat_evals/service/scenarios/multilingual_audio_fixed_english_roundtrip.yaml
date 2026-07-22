@@ -1,0 +1,20 @@
+name: multilingual_audio_fixed_english_roundtrip
+user: !include _audio_user_kokoro.yaml
+judge: !include _audio_judge_moonshine.yaml
+turns:
+  - expect:
+      - event: response
+        within_ms: 120000
+  - user: "How do you greet someone in the morning?"
+    expect:
+      - event: user_transcription
+        text_contains: "greet someone"
+        within_ms: 90000
+      - event: llm_started
+        within_ms: 90000
+      - event: tts_response
+        eval: "the TTS text is in English and gives good morning as a common morning greeting"
+        within_ms: 120000
+      - event: response
+        eval: "the spoken reply is in English and gives good morning as a common morning greeting"
+        within_ms: 120000

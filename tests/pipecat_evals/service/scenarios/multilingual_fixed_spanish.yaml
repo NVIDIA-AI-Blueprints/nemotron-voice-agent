@@ -1,0 +1,17 @@
+name: multilingual_fixed_spanish
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "¿Cuál es una forma común de saludar por la mañana?"
+    expect:
+      - event: response
+        eval: "the reply is in Spanish and answers that a common morning greeting is buenos días"
+        within_ms: 90000

@@ -1,0 +1,17 @@
+name: frontend_backend_identity_direct
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "What is your name?"
+    expect:
+      - event: response
+        eval: "the reply says the assistant is Ava and helps with G Force Airlines travel, without mentioning Nemotron, NVIDIA, or internal tools"
+        within_ms: 90000

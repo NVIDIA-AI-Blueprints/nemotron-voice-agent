@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import date, timedelta
+from datetime import timedelta
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -35,6 +35,7 @@ from examples.frontend_backend_agent.airline.backend import HTTPBookingBackend
 from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
 from examples.frontend_backend_agent.airline.tools import TOOLS_SCHEMA
 from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
+from examples.frontend_backend_agent.src.runtime_context import runtime_today
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
@@ -64,7 +65,7 @@ THINKER_TOOL_TIMEOUT_SECONDS = parse_env_float("THINKER_TOOL_TIMEOUT_SECONDS", 3
 
 def _build_context_messages(base_prompt: str, system_prompt: str = "") -> list[dict]:
     """Build initial Talker context messages."""
-    today = date.today()
+    today = runtime_today()
     runtime_context = (
         f"\n\nRuntime context:\n"
         f"- Today is {today.isoformat()}.\n"
@@ -162,7 +163,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"extra_params={extra_params or '(none)'}"
     )
 
-    booking_backend_url = default_booking_server.get("server") or _default_booking_backend_url()
+    booking_backend_url = _booking_backend_url(default_booking_server)
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
     thinker_max_tokens = _parse_optional_int(
@@ -335,7 +336,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
 def _create_transport(runner_args: RunnerArguments):
     """Create a transport from runner arguments."""
-    from pipecat.runner.types import SmallWebRTCRunnerArguments
+    from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
 
     if isinstance(runner_args, SmallWebRTCRunnerArguments):
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -347,6 +348,24 @@ def _create_transport(runner_args: RunnerArguments):
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
             ),
             webrtc_connection=runner_args.webrtc_connection,
+        )
+
+    if isinstance(runner_args, EvalRunnerArguments):
+        from pipecat.evals.serializer import RTVIEvalSerializer
+        from pipecat.evals.transport import EvalTransport, EvalTransportParams
+
+        return EvalTransport(
+            params=EvalTransportParams(
+                audio_in_enabled=True,
+                audio_in_sample_rate=16000,
+                audio_out_enabled=True,
+                audio_out_sample_rate=16000,
+                audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
+                add_wav_header=False,
+                serializer=RTVIEvalSerializer(),
+            ),
+            host=runner_args.host,
+            port=runner_args.port,
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer
@@ -379,6 +398,19 @@ def _default_booking_backend_url() -> str:
     if os.environ.get("APP_RUNTIME", "").strip().lower() == "container":
         return "http://booking-server:8001"
     return "http://localhost:8001"
+
+
+def _booking_backend_url(default_booking_server: dict) -> str:
+    """Resolve the booking-server URL, preserving explicit user overrides."""
+    explicit_url = os.getenv("BOOKING_BACKEND_URL", "").strip()
+    if explicit_url:
+        return explicit_url
+
+    configured_url = str(default_booking_server.get("server") or "").strip()
+    runtime_default = _default_booking_backend_url()
+    if runtime_default == "http://localhost:8001" and configured_url == "http://booking-server:8001":
+        return runtime_default
+    return configured_url or runtime_default
 
 
 def _parse_optional_int(raw: object, default: int) -> int:

@@ -7,11 +7,11 @@
 name: Nemotron Voice Agent CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,7 +48,26 @@ jobs:
         run: uv sync --dev
 
       - name: Run unit tests
-        run: uv run pytest tests/ -v
+        run: uv run pytest tests/unit -v
+
+  pipecat-evals:
+    name: Pipecat eval smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --group eval
+
+      - name: Validate eval transport wiring
+        run: PYTHONPATH=src uv run --group eval python tests/pipecat_evals/ci/smoke.py
+
+      - name: Run service-free eval suite
+        run: PYTHONPATH=src uv run --group eval python -m pipecat.evals suite tests/pipecat_evals/ci/manifest.yaml --timeout 5 --name ci
 
   client-lint-build:
     name: Client lint and build

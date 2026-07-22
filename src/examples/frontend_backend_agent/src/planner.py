@@ -13,6 +13,8 @@ from loguru import logger
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 
+from examples.frontend_backend_agent.src.runtime_context import runtime_today
+
 
 class ThinkerPlanner(Protocol):
     """Planner interface for selecting internal Thinker tool calls."""
@@ -40,7 +42,7 @@ class NvidiaThinkerPlanner:
 
     async def plan(self, *, query: str, slots: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Ask the Thinker LLM for internal tool plan JSON."""
-        today = date.today()
+        today = runtime_today()
         tomorrow = today + timedelta(days=1)
         user_payload = {
             "query": query,

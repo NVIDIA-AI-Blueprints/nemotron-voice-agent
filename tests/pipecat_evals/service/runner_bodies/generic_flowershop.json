@@ -1,0 +1,7 @@
+{
+  "pipeline_mode": "generic-assistant",
+  "prompt_key": "flowershop",
+  "tts_server": "localhost:50151",
+  "tts_voice_id": "Magpie-Multilingual.EN-US.Aria",
+  "session_id": "eval-generic-flowershop"
+}
