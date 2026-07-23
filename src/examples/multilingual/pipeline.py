@@ -30,7 +30,6 @@ from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
-from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
@@ -52,6 +51,7 @@ from examples.shared.pipeline_utils import (
     bot_introduction_enabled,
     build_context_messages,
     build_smart_turn_stop_strategies,
+    build_user_mute_strategies,
     create_transport,
 )
 from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
@@ -86,7 +86,7 @@ def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+            user_mute_strategies=build_user_mute_strategies(),
             user_turn_strategies=UserTurnStrategies(
                 start=[VADUserTurnStartStrategy()],
                 stop=build_smart_turn_stop_strategies(),
@@ -96,7 +96,7 @@ def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+        user_mute_strategies=build_user_mute_strategies(),
         user_turn_strategies=UserTurnStrategies(
             start=[VADUserTurnStartStrategy()],
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
