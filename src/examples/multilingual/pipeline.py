@@ -244,7 +244,13 @@ async def bot(runner_args: RunnerArguments) -> None:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     if fixed_session_language:
         tts_settings_kwargs["language"] = fixed_session_language
-        resolved_voice = resolve_voice_for_language(fixed_session_language, tts_voice)
+        resolved_voice = resolve_voice_for_language(
+            fixed_session_language,
+            tts_voice,
+            server=tts_server,
+            function_id=tts_function_id,
+            model=tts_model,
+        )
         if resolved_voice:
             tts_voice = resolved_voice
             tts_settings_kwargs["voice"] = resolved_voice

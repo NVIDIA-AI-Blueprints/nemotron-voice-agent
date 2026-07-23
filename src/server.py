@@ -254,11 +254,37 @@ def _resolve_config(session_id: str = "", fallback_example_key: str = "", **quer
     return _sanitize_session_config({k: v for k, v in base.items() if v}, fallback_example_key=fallback_example_key)
 
 
-def _get_default_tts_selection() -> tuple[str, str]:
+def _get_default_tts_selection() -> tuple[str, str, str, str]:
+    """Return default TTS ``(server, voice_id, function_id, model)`` from the catalog."""
     default_tts = load_service_entry("tts", "")
     return (
         default_tts.get("server", "grpc.nvcf.nvidia.com:443"),
         default_tts.get("voice_id", ""),
+        default_tts.get("function_id", ""),
+        default_tts.get("model", ""),
+    )
+
+
+def _resolve_tts_selection(
+    server: str = "",
+    voice_id: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> tuple[str, str, str, str]:
+    """Bind server + metadata as one selection.
+
+    When ``server`` is omitted, fall back to the catalog default for server,
+    voice, function_id, and model together. When ``server`` is explicit, keep
+    empty function_id/model (do not borrow Magpie defaults for another NIM).
+    """
+    default_server, default_voice, default_function_id, default_model = _get_default_tts_selection()
+    if server:
+        return server, voice_id or default_voice, function_id, model
+    return (
+        default_server,
+        voice_id or default_voice,
+        function_id or default_function_id,
+        model or default_model,
     )
 
 
@@ -523,11 +549,12 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
     if _should_skip_tts_prewarm(example):
         return
 
-    default_tts_server, default_tts_voice = _get_default_tts_selection()
-    tts_server = config.get("tts_server", "") or default_tts_server
-    voice_id = config.get("tts_voice_id", "") or default_tts_voice
-    tts_function_id = config.get("tts_function_id", "")
-    tts_model = config.get("tts_model", "")
+    tts_server, voice_id, tts_function_id, tts_model = _resolve_tts_selection(
+        config.get("tts_server", ""),
+        config.get("tts_voice_id", ""),
+        config.get("tts_function_id", ""),
+        config.get("tts_model", ""),
+    )
 
     ready_url = _local_speech_ready_url("TTS", tts_server)
     if ready_url:
@@ -935,18 +962,19 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     ):
         if asr_server or asr_model or asr_function_id:
             default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
-            default_tts_server, default_tts_voice = _get_default_tts_selection()
-            default_tts = load_service_entry("tts", "")
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
             try:
                 return await _run_blocking(
                     build_session_languages,
                     asr_server or default_asr_server,
                     asr_model or default_asr_model,
                     asr_function_id or default_asr_function_id,
-                    server or default_tts_server,
-                    voice_id or default_tts_voice,
-                    function_id or default_tts.get("function_id", ""),
-                    model or default_tts.get("model", ""),
+                    tts_server,
+                    tts_voice,
+                    tts_function_id,
+                    tts_model,
                     timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
                 )
             except TimeoutError:
@@ -960,19 +988,21 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 )
 
         if server:
-            _, default_tts_voice = _get_default_tts_selection()
-            default_tts = load_service_entry("tts", "")
-            resolved_function_id = function_id or default_tts.get("function_id", "")
-            resolved_model = model or default_tts.get("model", "")
-            cached = config_store.get(f"tts:{server}:{resolved_function_id}:{resolved_model}")
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
+            cached = config_store.get(f"tts:{tts_server}:{tts_function_id}:{tts_model}")
             if cached:
-                return cached
+                result = dict(cached)
+                if tts_voice:
+                    result["defaultVoiceId"] = tts_voice
+                return result
             return await _run_blocking(
                 prewarm_tts,
-                server,
-                voice_id or default_tts_voice,
-                resolved_function_id,
-                resolved_model,
+                tts_server,
+                tts_voice,
+                tts_function_id,
+                tts_model,
             )
         return config_store.get("tts", {"languages": [], "voices": []})
 

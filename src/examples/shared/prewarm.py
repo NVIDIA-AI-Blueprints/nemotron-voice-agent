@@ -170,8 +170,11 @@ def prewarm_tts(
     cached = config_store.get(cache_key)
     if cached:
         logger.debug(f"TTS config for {server} already cached")
-        config_store.set("tts", cached)
-        return cached
+        result = dict(cached)
+        if voice_id:
+            result["defaultVoiceId"] = voice_id
+        config_store.set("tts", result)
+        return result
 
     logger.info(f"Pre-warming TTS on {server} (this may take 10-20s on first run)...")
     try:
@@ -282,10 +285,21 @@ def warmup_tts_synthesis(
         return False
 
 
-def load_voice_map() -> dict[str, str]:
+def load_voice_map(
+    server: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> dict[str, str]:
     """``{lower_lang_code: first_voice_id}`` from the prewarm cache."""
-    tts_config = config_store.get("tts", {})
-    voices = tts_config.get("voices", []) if isinstance(tts_config, dict) else []
+    tts_config: dict = {}
+    if server or function_id or model:
+        cached = config_store.get(_tts_cache_key(server, function_id, model), {})
+        if isinstance(cached, dict):
+            tts_config = cached
+    if not tts_config:
+        legacy = config_store.get("tts", {})
+        tts_config = legacy if isinstance(legacy, dict) else {}
+    voices = tts_config.get("voices", [])
     result: dict[str, str] = {}
     for v in voices:
         lang = (v.get("language") or "").strip()
@@ -295,12 +309,27 @@ def load_voice_map() -> dict[str, str]:
     return result
 
 
-def resolve_voice_for_language(language_code: str, preferred_voice_id: str = "") -> str:
+def resolve_voice_for_language(
+    language_code: str,
+    preferred_voice_id: str = "",
+    *,
+    server: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> str:
     """Pick a TTS voice id for ``language_code`` from the prewarmed catalog."""
     normalized = normalize_lang_code(language_code).lower()
-    voice_map = load_voice_map()
+    tts_config: dict = {}
+    if server or function_id or model:
+        cached = config_store.get(_tts_cache_key(server, function_id, model), {})
+        if isinstance(cached, dict):
+            tts_config = cached
+    if not tts_config:
+        legacy = config_store.get("tts", {})
+        tts_config = legacy if isinstance(legacy, dict) else {}
+    voice_map = load_voice_map(server=server, function_id=function_id, model=model)
     if preferred_voice_id:
-        for voice in config_store.get("tts", {}).get("voices", []):
+        for voice in tts_config.get("voices", []):
             if voice.get("id") == preferred_voice_id and voice.get("language", "").lower() == normalized:
                 return preferred_voice_id
     voice_id = voice_map.get(normalized)
