@@ -105,7 +105,6 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
         prewarm_asr = Mock(name="prewarm_asr")
 
         with (
-            patch("examples.multilingual.pipeline.config_store.get", return_value=None),
             patch("examples.multilingual.pipeline.asyncio.to_thread", to_thread),
             patch("examples.multilingual.pipeline.prewarm_tts", prewarm_tts),
             patch("examples.multilingual.pipeline.prewarm_asr", prewarm_asr),
@@ -117,7 +116,13 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
         to_thread.assert_has_awaits(
             [
                 call(prewarm_asr, "asr.example:443", "parakeet", "fn-123"),
-                call(prewarm_tts, "tts.example:443", "Magpie-Multilingual.EN-US.Aria"),
+                call(
+                    prewarm_tts,
+                    "tts.example:443",
+                    "Magpie-Multilingual.EN-US.Aria",
+                    "tts-fn-456",
+                    "magpie-tts-multilingual",
+                ),
             ]
         )
         get_lang_codes.assert_called_once_with(
@@ -128,31 +133,14 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
             tts_voice_id="Magpie-Multilingual.EN-US.Aria",
         )
 
-    def test_non_eval_transport_skips_tts_prewarm_when_tts_is_configured(self) -> None:
-        to_thread = AsyncMock()
-        get_lang_codes = Mock(return_value="en-US,de-DE")
-        prewarm_tts = Mock(name="prewarm_tts")
-        prewarm_asr = Mock(name="prewarm_asr")
-
-        with (
-            patch("examples.multilingual.pipeline.config_store.get", return_value=object()),
-            patch("examples.multilingual.pipeline.asyncio.to_thread", to_thread),
-            patch("examples.multilingual.pipeline.prewarm_tts", prewarm_tts),
-            patch("examples.multilingual.pipeline.prewarm_asr", prewarm_asr),
-            patch("examples.multilingual.pipeline.get_lang_codes", get_lang_codes),
-        ):
-            lang_codes = self._run_prepare_session_language_codes(RunnerArguments())
-
-        self.assertEqual(lang_codes, "en-US,de-DE")
-        to_thread.assert_awaited_once_with(prewarm_asr, "asr.example:443", "parakeet", "fn-123")
-        prewarm_tts.assert_not_called()
-
     def _run_prepare_session_language_codes(self, runner_args: RunnerArguments) -> str:
         return asyncio.run(
             _prepare_session_language_codes(
                 runner_args,
                 tts_server="tts.example:443",
                 tts_voice="Magpie-Multilingual.EN-US.Aria",
+                tts_function_id="tts-fn-456",
+                tts_model="magpie-tts-multilingual",
                 asr_server="asr.example:443",
                 asr_model="parakeet",
                 asr_function_id="fn-123",

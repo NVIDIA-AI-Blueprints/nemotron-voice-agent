@@ -43,6 +43,8 @@ export function VoiceSettings() {
     sessionLanguagesEnabled ? selectedASR?.server : undefined,
     sessionLanguagesEnabled ? selectedASR?.model : undefined,
     sessionLanguagesEnabled ? selectedASR?.functionId : undefined,
+    selectedTTS?.functionId,
+    selectedTTS?.model,
   );
 
   const [voiceOverride, setVoiceOverride] = useState<VoiceOverrideState>({

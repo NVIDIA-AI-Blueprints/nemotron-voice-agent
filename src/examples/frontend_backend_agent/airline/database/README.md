@@ -19,7 +19,7 @@ HTTP routes in `server.py`:
 | --- | --- |
 | **Booking lookup** | Look up a PNR, read back passenger / flight / status / seat / meal |
 | **Flight status** | Check status (scheduled / delayed / cancelled / diverted / misconnect) and delay minutes for any flight number |
-| **Rebook** | Move an active PNR to a different flight on the same or different route; optionally change seat / meal |
+| **Rebook** | Move an active PNR to a different flight on the same or different route. Optionally change seat / meal |
 | **Cancel** | Cancel an active PNR under the appropriate fare / IRROPS policy |
 | **New booking** | Create a fresh PNR on a scheduled flight, with optional seat / meal |
 | **Standby** | List a PNR on an earlier flight without giving up the original |
@@ -131,7 +131,7 @@ airports automatically.
   the origin airport** (no timezone suffix). The agent reads these back
   as wall-clock times — it does not perform timezone math.
 - The seeded date window is **2026-04-22 through 2026-05-10** for the
-  generated catalog; curated alternatives spread across the same range.
+  generated catalog. Curated alternatives spread across the same range.
 - Asking about dates outside that window will get a "no flights found"
   reply — that's the database, not a bug in the agent.
 
@@ -139,7 +139,7 @@ airports automatically.
 
 - Real-time pricing (the agent quotes a flat per-cabin rate from
   `BookingAPI.price_for`, with a 2× international surcharge).
-- Real seat maps (any seat string is accepted on input; `ancillaries.seat`
+- Real seat maps (any seat string is accepted on input. `ancillaries.seat`
   is stored verbatim).
 - Frequent-flyer balances (only the `elite_tier` enum is stored).
 - Connections / multi-segment itineraries (each PNR is a single
@@ -157,7 +157,7 @@ PYTHONPATH=src uv run python3 -m examples.frontend_backend_agent.airline.databas
 ```
 
 The flight catalog in `seed_data/flights.jsonl` and the PNR fixtures
-in `seed_data/pnrs.jsonl` are committed as-is; the OpenFlights
+in `seed_data/pnrs.jsonl` are committed as-is. The OpenFlights
 schedules were generated once and baked in. If you need to expand the
 hub set or extend the date range, edit `flights.jsonl` directly (one
 JSON record per line) — `seed.py` will pick the new rows up on the
@@ -184,5 +184,5 @@ directly with `curl` for debugging:
 | `POST` | `/pnrs/{pnr}/cancel` | Cancel |
 | `POST` | `/pnrs/{pnr}/standby` | Standby listing |
 
-Server defaults to `http://localhost:8001`; override the SQLite path
+Server defaults to `http://localhost:8001`. Override the SQLite path
 with `BOOKING_DB_PATH=...`.

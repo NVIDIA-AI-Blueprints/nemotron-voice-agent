@@ -79,7 +79,7 @@ When the message count exceeds `CHAT_HISTORY_RECENT_TURNS`:
 `AUDIO_OUT_10MS_CHUNKS` sets how many 10 ms audio frames the server batches per outbound send (the output buffer depth). Defaults are `5` (50 ms).
 
 ```bash
-# In .env — override the transport default
+# In .env: override the transport default
 AUDIO_OUT_10MS_CHUNKS=10
 ```
 
@@ -132,6 +132,6 @@ Both transports are exposed by default and the browser UI picks one. To restrict
 | `websocket` | WebSocket only |
 
 ```bash
-# .env — e.g. expose only WebSocket for a telephony / server-side deployment
+# .env: e.g. expose only WebSocket for a telephony / server-side deployment
 TRANSPORT_SELECTION=websocket
 ```
