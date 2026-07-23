@@ -87,7 +87,7 @@ For ASR latency and throughput across GPUs and WER for different models, see the
   ```python
   stt = NvidiaSTTService(
       **asr_kwargs,
-      stop_history=400,       # ms trailing silence before finalizing (repo default; ≥560 favors accuracy)
+      stop_history=400,       # ms trailing silence before finalizing (repo default. ≥560 favors accuracy)
   )
   ```
 
@@ -100,7 +100,7 @@ For ASR latency and throughput across GPUs and WER for different models, see the
 asr:
   my-custom-asr:
     name: "My Custom ASR"
-    server: "grpc.nvcf.nvidia.com:443"   # cloud; local entries use the sidecar host:port
+    server: "grpc.nvcf.nvidia.com:443"   # cloud. Local entries use the sidecar host:port
     model: "my-asr-model"
     function_id: ""
 ```

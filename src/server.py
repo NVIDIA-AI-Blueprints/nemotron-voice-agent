@@ -103,7 +103,7 @@ _SPEECH_READY_ENDPOINTS = {
         50152,
         9001,
     ),
-    "tts": (("tts-service",), 50051, 50151, 9000),
+    "tts": (("tts-service", "chatterbox-tts-service"), 50051, 50151, 9000),
 }
 _TURN_LISTEN_PORT = 3478
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
@@ -254,11 +254,37 @@ def _resolve_config(session_id: str = "", fallback_example_key: str = "", **quer
     return _sanitize_session_config({k: v for k, v in base.items() if v}, fallback_example_key=fallback_example_key)
 
 
-def _get_default_tts_selection() -> tuple[str, str]:
+def _get_default_tts_selection() -> tuple[str, str, str, str]:
+    """Return default TTS ``(server, voice_id, function_id, model)`` from the catalog."""
     default_tts = load_service_entry("tts", "")
     return (
         default_tts.get("server", "grpc.nvcf.nvidia.com:443"),
-        default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria"),
+        default_tts.get("voice_id", ""),
+        default_tts.get("function_id", ""),
+        default_tts.get("model", ""),
+    )
+
+
+def _resolve_tts_selection(
+    server: str = "",
+    voice_id: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> tuple[str, str, str, str]:
+    """Bind server + metadata as one selection.
+
+    When ``server`` is omitted, fall back to the catalog default for server,
+    voice, function_id, and model together. When ``server`` is explicit, keep
+    empty function_id/model (do not borrow Magpie defaults for another NIM).
+    """
+    default_server, default_voice, default_function_id, default_model = _get_default_tts_selection()
+    if server:
+        return server, voice_id or default_voice, function_id, model
+    return (
+        default_server,
+        voice_id or default_voice,
+        function_id or default_function_id,
+        model or default_model,
     )
 
 
@@ -523,9 +549,12 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
     if _should_skip_tts_prewarm(example):
         return
 
-    default_tts_server, default_tts_voice = _get_default_tts_selection()
-    tts_server = config.get("tts_server", "") or default_tts_server
-    voice_id = config.get("tts_voice_id", "") or default_tts_voice
+    tts_server, voice_id, tts_function_id, tts_model = _resolve_tts_selection(
+        config.get("tts_server", ""),
+        config.get("tts_voice_id", ""),
+        config.get("tts_function_id", ""),
+        config.get("tts_model", ""),
+    )
 
     ready_url = _local_speech_ready_url("TTS", tts_server)
     if ready_url:
@@ -551,6 +580,8 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
             warmup_tts_synthesis,
             tts_server,
             voice_id,
+            tts_function_id,
+            tts_model,
             timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
         )
     except TimeoutError as exc:
@@ -923,21 +954,27 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     async def tts_config(
         server: str = Query(default=""),
         voice_id: str = Query(default=""),
+        function_id: str = Query(default=""),
+        model: str = Query(default=""),
         asr_server: str = Query(default=""),
         asr_model: str = Query(default=""),
         asr_function_id: str = Query(default=""),
     ):
         if asr_server or asr_model or asr_function_id:
             default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
-            default_tts_server, default_tts_voice = _get_default_tts_selection()
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
             try:
                 return await _run_blocking(
                     build_session_languages,
                     asr_server or default_asr_server,
                     asr_model or default_asr_model,
                     asr_function_id or default_asr_function_id,
-                    server or default_tts_server,
-                    voice_id or default_tts_voice,
+                    tts_server,
+                    tts_voice,
+                    tts_function_id,
+                    tts_model,
                     timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
                 )
             except TimeoutError:
@@ -951,11 +988,22 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 )
 
         if server:
-            _, default_tts_voice = _get_default_tts_selection()
-            cached = config_store.get(f"tts:{server}")
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
+            cached = config_store.get(f"tts:{tts_server}:{tts_function_id}:{tts_model}")
             if cached:
-                return cached
-            return await _run_blocking(prewarm_tts, server, voice_id or default_tts_voice)
+                result = dict(cached)
+                if tts_voice:
+                    result["defaultVoiceId"] = tts_voice
+                return result
+            return await _run_blocking(
+                prewarm_tts,
+                tts_server,
+                tts_voice,
+                tts_function_id,
+                tts_model,
+            )
         return config_store.get("tts", {"languages": [], "voices": []})
 
     # ---- WebRTC ICE servers (TURN credentials) ----

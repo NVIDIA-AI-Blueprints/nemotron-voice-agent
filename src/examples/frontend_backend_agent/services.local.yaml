@@ -22,10 +22,18 @@ workstation:
       name: "Booking Server"
       server: "http://booking-server:8001"
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
+      model: "magpie-tts-multilingual"
+      function_id: ""
+      synthesis_mode: stitched
+    chatterbox-multilingual-tts:
+      name: "Chatterbox TTS Multilingual"
+      server: "chatterbox-tts-service:50051"
+      voice_id: "Chatterbox-Multilingual.en-US.Male"
+      model: "chatterbox-tts-multilingual"
       function_id: ""
   asr:
     nemotron-asr-streaming-english:
@@ -60,10 +68,18 @@ dgxspark:
       name: "Booking Server"
       server: "http://booking-server:8001"
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
+      model: "magpie-tts-multilingual"
+      function_id: ""
+      synthesis_mode: stitched
+    chatterbox-multilingual-tts:
+      name: "Chatterbox TTS Multilingual"
+      server: "chatterbox-tts-service:50051"
+      voice_id: "Chatterbox-Multilingual.en-US.Male"
+      model: "chatterbox-tts-multilingual"
       function_id: ""
   asr:
     nemotron-asr-streaming-english:
@@ -98,11 +114,13 @@ jetson:
       name: "Booking Server"
       server: "http://booking-server:8001"
   tts:
-    magpie-tts:
+    magpie-multilingual-tts:
       name: "Magpie TTS"
       server: "nemotron-speech:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
+      model: "magpie-tts-multilingual"
       function_id: ""
+      synthesis_mode: stitched
   asr:
     parakeet-ctc:
       name: "Parakeet CTC 1.1B"

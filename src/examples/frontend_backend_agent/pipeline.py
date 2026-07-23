@@ -217,18 +217,37 @@ async def bot(runner_args: RunnerArguments) -> None:
     # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
-    custom_dictionary = load_ipa_dictionary()
-    tts = NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=tts_server,
-        settings=NvidiaTTSSettings(voice=tts_voice),
-        use_ssl=tts_ssl,
-        text_filters=[NemotronSpeechTextFilter()],
-        text_transforms=[("*", apply_frontend_backend_agent_pronunciation_for_tts)],
-        custom_dictionary=custom_dictionary,
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
     )
-    logger.info(f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}")
+    tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    custom_dictionary = load_ipa_dictionary()
+    tts_settings_kwargs: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": tts_server,
+        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "use_ssl": tts_ssl,
+        "text_filters": [NemotronSpeechTextFilter()],
+        "text_transforms": [("*", apply_frontend_backend_agent_pronunciation_for_tts)],
+        "custom_dictionary": custom_dictionary,
+    }
+    if tts_function_id or tts_model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": tts_function_id,
+            "model_name": tts_model,
+        }
+    tts = NvidiaTTSService(**tts_kwargs)
+    logger.info(
+        f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}"
+    )
 
     # --- Context + aggregators ---
     messages = _build_context_messages(talker_prompt, system_prompt)

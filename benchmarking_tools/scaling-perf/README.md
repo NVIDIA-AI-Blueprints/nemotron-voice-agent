@@ -116,7 +116,7 @@ uv run python3 benchmark.py
 # Concurrent run (4 parallel processes, single concurrency level)
 ./simulate_concurrency.sh --clients 4
 
-# Scaling sweep (one run per concurrency level; cooldown between levels)
+# Scaling sweep (one run per concurrency level, cooldown between levels)
 ./simulate_concurrency.sh --clients "1 2 4 8 16"
 ```
 
@@ -129,7 +129,7 @@ The shell wrapper accepts `-h`/`--help`. Common flags:
 | `--test-duration` | `300` | Seconds of metric collection per level. |
 | `--client-start-delay` | `1` | Stagger between clients connecting (s). With N clients and delay D, the metric window opens at ``now + (N-1)*D`` so every worker is connected before measurement starts. |
 | `--cooldown` | `10` | Pause between sweep levels (s) — lets the server settle between bursts. |
-| `--reverse-barge-in-threshold` | `0.4` | Bot audio arriving within this many seconds of the user finishing speaking is discarded as a *reverse* barge-in (the server racing the end of the user's utterance) instead of being timed as the real response. Used internally; not surfaced in summaries. |
+| `--reverse-barge-in-threshold` | `0.4` | Bot audio arriving within this many seconds of the user finishing speaking is discarded as a *reverse* barge-in (the server racing the end of the user's utterance) instead of being timed as the real response. Used internally. Not surfaced in summaries. |
 | `--no-save-audio` | (audio saved) | Skip writing per-client output WAVs. |
 | `--dataset-dir DIR` | `./dataset` | Override input WAV directory. |
 | `--output-dir DIR` | this folder | Override result destination. |

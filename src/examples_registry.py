@@ -145,7 +145,8 @@ def _rewrite_entry_for_host_runtime(entry: dict) -> dict:
             )
         else:
             out[field] = (
-                value.replace("tts-service:50051", "localhost:50151")
+                value.replace("chatterbox-tts-service:50051", "localhost:50151")
+                .replace("tts-service:50051", "localhost:50151")
                 .replace("nemotron-asr-streaming-english:50052", "localhost:50152")
                 .replace("nemotron-asr-streaming-multilingual:50052", "localhost:50152")
                 .replace("parakeet-ctc-asr:50052", "localhost:50152")

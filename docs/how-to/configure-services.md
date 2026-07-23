@@ -88,5 +88,7 @@ tts:
     name: "My Custom TTS"
     server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
-    function_id: ""
+    model: "magpie-tts-multilingual"
+    function_id: "<NVCF_FUNCTION_ID>"
+    synthesis_mode: stitched
 ```
