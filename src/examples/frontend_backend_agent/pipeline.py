@@ -36,7 +36,7 @@ from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.pipeline_utils import build_user_aggregator_params
+from examples.shared.pipeline_utils import bot_introduction_enabled, build_user_aggregator_params
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -317,6 +317,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if not bot_introduction_enabled():
+            logger.info("Bot introduction disabled; waiting for the user to speak first")
+            return
         context.add_message({"role": "user", "content": "Please greet the user briefly."})
         await task.queue_frames([LLMRunFrame()])
 

@@ -3,6 +3,7 @@
 This section covers pipeline configurations for optimizing the performance and user experience of the Nemotron Voice Agent.
 
 - [Smart Turn Detection](#smart-turn-detection)
+- [Bot Introduction](#bot-introduction)
 - [Chat History Limit](#chat-history-limit)
 - [Audio Output Buffering](#audio-output-buffering)
 - [Uvicorn Worker Scaling](#uvicorn-worker-scaling)
@@ -38,6 +39,21 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 | `MuteUntilFirstBotCompleteUserMuteStrategy` | The user-mute strategy. Mutes user input until the first bot response completes |
 
 The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so there is no upstream `TranscriptionFrame` for Pipecat's stock Smart Turn stop strategy to wait on. They use a custom `AudioOnlySmartTurnStopStrategy` that wraps the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs=1.0`) plus a `VADUserTurnStartStrategy`, and finalizes the turn as soon as the analyzer returns `COMPLETE`. The same `MuteUntilFirstBotCompleteUserMuteStrategy` applies.
+
+## Bot Introduction
+
+By default, when a client connects the bot introduces itself (greets the user) before the user says anything. This is driven by a synthetic first turn queued on `on_client_ready`. Set `ENABLE_BOT_INTRODUCTION=false` to skip that greeting so the bot stays silent until the user speaks first.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_BOT_INTRODUCTION` | `true` | When `true`, the bot greets/introduces itself on connect. Set `false` to wait for the user to speak first. |
+
+This applies to the Generic, Multilingual, Omni, and Frontend/Backend Agent examples. The `generic-assistant/workstation-perf` profile sets `ENABLE_BOT_INTRODUCTION=false` so benchmark runs start from a clean user turn.
+
+```bash
+# .env: keep the bot quiet until the user speaks
+ENABLE_BOT_INTRODUCTION=false
+```
 
 ## Chat History Limit
 
