@@ -48,11 +48,11 @@ from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
-    bot_introduction_enabled,
     build_context_messages,
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
+    welcome_message_enabled,
 )
 from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
 from tracing import IS_TRACING_ENABLED
@@ -409,8 +409,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
-        if not bot_introduction_enabled():
-            logger.info("Bot introduction disabled; waiting for the user to speak first")
+        if not welcome_message_enabled():
+            logger.info("Welcome message disabled; waiting for the user to speak first")
             return
         context.add_message({"role": "user", "content": FIXED_SESSION_GREETING_TRIGGER})
         await task.queue_frames([LLMRunFrame()])
