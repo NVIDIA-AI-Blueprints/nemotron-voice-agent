@@ -18,8 +18,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 from loguru import logger
-from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -53,6 +51,7 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
 )
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.pipeline_utils import build_smart_turn_analyzer
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -74,9 +73,7 @@ def _build_user_turn_strategies() -> UserTurnStrategies:
     return UserTurnStrategies(
         start=[VADUserTurnStartStrategy()],
         stop=[
-            AudioOnlySmartTurnStopStrategy(
-                turn_analyzer=LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=0.7))
-            )
+            AudioOnlySmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())
         ],
     )
 

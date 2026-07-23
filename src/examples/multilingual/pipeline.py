@@ -50,6 +50,7 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
+    build_smart_turn_stop_strategies,
     create_transport,
 )
 from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
@@ -85,7 +86,10 @@ def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
-            user_turn_strategies=UserTurnStrategies(start=[VADUserTurnStartStrategy()]),
+            user_turn_strategies=UserTurnStrategies(
+                start=[VADUserTurnStartStrategy()],
+                stop=build_smart_turn_stop_strategies(),
+            ),
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
