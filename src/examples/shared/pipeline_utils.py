@@ -49,19 +49,32 @@ def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]
     return [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())]
 
 
+def build_user_mute_strategies() -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
+    """Return the user-mute strategy, or none when there is no bot introduction.
+
+    ``MuteUntilFirstBotCompleteUserMuteStrategy`` keeps the user muted until the
+    bot finishes its first turn. When ``ENABLE_BOT_INTRODUCTION`` is off the bot
+    waits for the user, so that first turn never happens and muting would
+    deadlock — return an empty list instead.
+    """
+    if not bot_introduction_enabled():
+        return []
+    return [MuteUntilFirstBotCompleteUserMuteStrategy()]
+
+
 def build_user_aggregator_params() -> LLMUserAggregatorParams:
     """Return user-turn configuration, defaulting to Pipecat smart turn."""
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+            user_mute_strategies=build_user_mute_strategies(),
             user_turn_strategies=UserTurnStrategies(stop=build_smart_turn_stop_strategies()),
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+        user_mute_strategies=build_user_mute_strategies(),
         user_turn_strategies=UserTurnStrategies(
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
         ),

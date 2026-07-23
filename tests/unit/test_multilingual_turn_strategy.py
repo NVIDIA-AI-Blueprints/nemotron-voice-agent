@@ -59,7 +59,10 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
 
     def test_default_multilingual_turn_start_is_vad_only(self) -> None:
         with (
-            patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}),
+            patch.dict(
+                os.environ,
+                {"USE_SILERO_VAD_TURN_DETECTION": "false", "ENABLE_BOT_INTRODUCTION": "true"},
+            ),
             patch("examples.multilingual.pipeline.SileroVADAnalyzer", return_value=_FakeVADAnalyzer()),
             patch(
                 "examples.shared.pipeline_utils.LocalSmartTurnAnalyzerV3",
@@ -76,6 +79,25 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
         analyzer = params.user_turn_strategies.stop[0]._turn_analyzer
         self.assertIsInstance(analyzer, _FakeTurnAnalyzer)
         self.assertEqual(analyzer.params.stop_secs, SMART_TURN_FALLBACK_SECS)
+        # With an introduction the bot speaks first, so the user is muted until then.
+        self.assertEqual(len(params.user_mute_strategies), 1)
+
+    def test_disabled_introduction_drops_user_mute_strategy(self) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {"USE_SILERO_VAD_TURN_DETECTION": "false", "ENABLE_BOT_INTRODUCTION": "false"},
+            ),
+            patch("examples.multilingual.pipeline.SileroVADAnalyzer", return_value=_FakeVADAnalyzer()),
+            patch(
+                "examples.shared.pipeline_utils.LocalSmartTurnAnalyzerV3",
+                side_effect=_FakeTurnAnalyzer,
+            ),
+        ):
+            params = _build_multilingual_user_aggregator_params()
+
+        # No introduction means no first bot turn, so muting would deadlock.
+        self.assertEqual(params.user_mute_strategies, [])
 
     def test_silero_timeout_multilingual_turn_start_is_vad_only(self) -> None:
         with (

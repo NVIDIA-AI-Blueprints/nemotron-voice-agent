@@ -36,9 +36,6 @@ from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.transports.base_transport import TransportParams
-from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import (
-    MuteUntilFirstBotCompleteUserMuteStrategy,
-)
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
@@ -51,7 +48,11 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
 )
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.pipeline_utils import bot_introduction_enabled, build_smart_turn_analyzer
+from examples.shared.pipeline_utils import (
+    bot_introduction_enabled,
+    build_smart_turn_analyzer,
+    build_user_mute_strategies,
+)
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -72,9 +73,7 @@ def _build_user_turn_strategies() -> UserTurnStrategies:
     """Build VAD-start + Smart Turn-stop strategies for Omni audio turns."""
     return UserTurnStrategies(
         start=[VADUserTurnStartStrategy()],
-        stop=[
-            AudioOnlySmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())
-        ],
+        stop=[AudioOnlySmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())],
     )
 
 
@@ -175,7 +174,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams()),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+            user_mute_strategies=build_user_mute_strategies(),
             user_turn_strategies=_build_user_turn_strategies(),
         ),
     )
