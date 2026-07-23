@@ -91,12 +91,12 @@ Nemotron LLMs support a chain-of-thought "thinking" mode, controlled per catalog
 
 ```yaml
 llm:
-  # Reasoning OFF — lowest latency (recommended default for spoken pipelines)
+  # Reasoning OFF: lowest latency (recommended default for spoken pipelines)
   nemotron-nano:
     model_id: "nvidia/nemotron-3-nano-30b-a3b"
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
 
-  # Reasoning ON — better on complex tasks, higher time-to-first-response
+  # Reasoning ON: better on complex tasks, higher time-to-first-response
   nemotron-nano-reasoning:
     model_id: "nvidia/nemotron-3-nano-30b-a3b"
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true}}}'

@@ -36,7 +36,6 @@ from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-import config_store
 from examples.multilingual.multilingual_processor import (
     FIXED_SESSION_GREETING_TRIGGER,
     FIXED_SESSION_LANGUAGE_ADDON_KEY,
@@ -105,6 +104,8 @@ async def _prepare_session_language_codes(
     *,
     tts_server: str,
     tts_voice: str,
+    tts_function_id: str,
+    tts_model: str,
     asr_server: str,
     asr_model: str,
     asr_function_id: str,
@@ -114,9 +115,10 @@ async def _prepare_session_language_codes(
         logger.info("Skipping ASR/TTS service prewarm for eval transport startup")
         return ""
 
-    prewarm_tasks = [asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id)]
-    if not config_store.get("tts"):
-        prewarm_tasks.append(asyncio.to_thread(prewarm_tts, tts_server, tts_voice))
+    prewarm_tasks = [
+        asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id),
+        asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model),
+    ]
     await asyncio.gather(*prewarm_tasks)
     return get_lang_codes(
         asr_server=asr_server,
@@ -173,11 +175,18 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
+    )
+    tts_model = body.get("tts_model", "") or default_tts.get("model", "")
     lang_codes = await _prepare_session_language_codes(
         runner_args,
         tts_server=tts_server,
         tts_voice=tts_voice,
+        tts_function_id=tts_function_id,
+        tts_model=tts_model,
         asr_server=asr_server,
         asr_model=asr_model,
         asr_function_id=asr_function_id,
@@ -229,25 +238,42 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- TTS ---
     custom_dictionary = load_ipa_dictionary()
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
     tts_settings_kwargs: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     if fixed_session_language:
         tts_settings_kwargs["language"] = fixed_session_language
-        resolved_voice = resolve_voice_for_language(fixed_session_language, tts_voice)
+        resolved_voice = resolve_voice_for_language(
+            fixed_session_language,
+            tts_voice,
+            server=tts_server,
+            function_id=tts_function_id,
+            model=tts_model,
+        )
         if resolved_voice:
             tts_voice = resolved_voice
             tts_settings_kwargs["voice"] = resolved_voice
 
-    tts = NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=tts_server,
-        settings=NvidiaTTSSettings(**tts_settings_kwargs),
-        use_ssl=tts_ssl,
-        text_filters=[NemotronSpeechTextFilter()],
-        custom_dictionary=custom_dictionary,
-    )
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": tts_server,
+        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "use_ssl": tts_ssl,
+        "text_filters": [NemotronSpeechTextFilter()],
+        "custom_dictionary": custom_dictionary,
+    }
+    if tts_function_id or tts_model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": tts_function_id,
+            "model_name": tts_model,
+        }
+    tts = NvidiaTTSService(**tts_kwargs)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"lang_codes={lang_codes or '(no voices discovered)'}, "
         f"text_filters=[NemotronSpeechTextFilter]"
     )

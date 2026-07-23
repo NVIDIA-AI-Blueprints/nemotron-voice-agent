@@ -50,6 +50,7 @@ include:
   - path: docker/docker-compose.nemotron-asr.yaml
   - path: docker/docker-compose.parakeet-asr.yaml
   - path: docker/docker-compose.magpie-tts.yaml
+  - path: docker/docker-compose.chatterbox-tts.yaml
   - path: docker/docker-compose.nemotron3-omni.yaml
   - path: docker/docker-compose.speech-jetson.yaml
   - path: docker/docker-compose.coturn.yaml

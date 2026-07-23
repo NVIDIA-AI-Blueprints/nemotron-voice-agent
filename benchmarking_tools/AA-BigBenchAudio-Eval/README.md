@@ -46,7 +46,7 @@ Listens on `http://localhost:7860`. Set `PIPELINE_TLS=true` or unset it to use H
 uv run python speech-inference.py --input_dir ./datasets/bigbench_audio --preprocess
 ```
 
-**Inference** — `POST /api/session-config` + WebSocket `/api/ws` per sample (same protocol as the Nemotron WebSocket client). Use **`http://` or `https://`** in `--server-url`; port defaults to **7860** if omitted.
+**Inference** — `POST /api/session-config` + WebSocket `/api/ws` per sample (same protocol as the Nemotron WebSocket client). Use **`http://` or `https://`** in `--server-url`. Port defaults to **7860** if omitted.
 
 ```bash
 uv run python speech-inference.py \
