@@ -150,7 +150,7 @@ services:
       USE_SILERO_VAD_TURN_DETECTION: "true"
       SILERO_VAD_STOP_SECS: "0.5"
       AUDIO_OUT_10MS_CHUNKS: "40"
-      ENABLE_BOT_INTRODUCTION: "false"
+      ENABLE_WELCOME_MESSAGE: "false"
 
   multilingual-assistant:
     <<: *app-base
