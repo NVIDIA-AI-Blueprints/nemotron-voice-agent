@@ -10,13 +10,13 @@ This section covers pipeline configurations for optimizing the performance and u
 
 ## Smart Turn Detection
 
-By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete.
+By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete. If the model still has not finalized after **1.0 s** of silence, the turn completes anyway (fallback).
 
 ### How It Works
 
 1. The user speaks, and ASR emits interim transcripts as audio streams in.
 2. Silero VAD detects a pause in speech.
-3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it's incomplete but silence continues past the stop threshold, the turn completes anyway (fallback).
+3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it's incomplete but silence continues past the 1.0 s stop threshold, the turn completes anyway (fallback).
 4. On a completed turn, the transcript goes to the LLM and TTS streams the reply back.
 
 ### Configuration
@@ -26,18 +26,18 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 | `USE_SILERO_VAD_TURN_DETECTION` | `false` | Keep `false` for Smart Turn. Set `true` to disable it and use pure Silero VAD end-of-utterance detection instead. |
 | `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance. Applies **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). |
 
-> The default Smart Turn path uses a fixed `0.2 s` Silero floor (`stop_secs=0.2`), so `SILERO_VAD_STOP_SECS` does not apply there. The two thresholds are independent and never both active.
+> The default Smart Turn path uses a fixed `0.2 s` Silero floor (`stop_secs=0.2`) and a `1.0 s` Smart Turn silence fallback. `SILERO_VAD_STOP_SECS` does not apply on the Smart Turn path. The two thresholds are independent and never both active. The `generic-assistant/workstation-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
 
 ### Key Components
 
 | Component | Purpose |
 |-----------|---------|
 | [`SileroVADAnalyzer`](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) | Voice activity detection with a configurable silence threshold |
-| [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) (default) | ML end-of-utterance detection for natural turn-taking |
+| [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) (default) | ML end-of-utterance detection for natural turn-taking (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs=1.0`) |
 | `SpeechTimeoutUserTurnStopStrategy` | End-of-turn strategy used **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). Ends the turn on a VAD silence timeout instead of the Smart Turn model |
 | `MuteUntilFirstBotCompleteUserMuteStrategy` | The user-mute strategy. Mutes user input until the first bot response completes |
 
-The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so there is no upstream `TranscriptionFrame` for Pipecat's stock Smart Turn stop strategy to wait on. They use a custom `AudioOnlySmartTurnStopStrategy` that wraps the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, `stop_secs=0.7`) plus a `VADUserTurnStartStrategy`, and finalizes the turn as soon as the analyzer returns `COMPLETE`. The same `MuteUntilFirstBotCompleteUserMuteStrategy` applies.
+The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so there is no upstream `TranscriptionFrame` for Pipecat's stock Smart Turn stop strategy to wait on. They use a custom `AudioOnlySmartTurnStopStrategy` that wraps the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs=1.0`) plus a `VADUserTurnStartStrategy`, and finalizes the turn as soon as the analyzer returns `COMPLETE`. The same `MuteUntilFirstBotCompleteUserMuteStrategy` applies.
 
 ## Chat History Limit
 

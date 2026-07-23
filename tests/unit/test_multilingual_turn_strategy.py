@@ -12,16 +12,19 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import TranscriptionUserTurnStartStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
 
 from examples.multilingual.pipeline import (
     _build_multilingual_user_aggregator_params,
     _is_eval_transport,
     _prepare_session_language_codes,
 )
+from examples.shared.pipeline_utils import SMART_TURN_FALLBACK_SECS
 
 
 class _FakeTurnAnalyzer:
-    pass
+    def __init__(self, *args, **kwargs):
+        self.params = kwargs.get("params")
 
 
 class _FakeVADAnalyzer:
@@ -59,14 +62,20 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
             patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}),
             patch("examples.multilingual.pipeline.SileroVADAnalyzer", return_value=_FakeVADAnalyzer()),
             patch(
-                "pipecat.audio.turn.smart_turn.local_smart_turn_v3.LocalSmartTurnAnalyzerV3",
-                return_value=_FakeTurnAnalyzer(),
+                "examples.shared.pipeline_utils.LocalSmartTurnAnalyzerV3",
+                side_effect=_FakeTurnAnalyzer,
             ),
         ):
             params = _build_multilingual_user_aggregator_params()
 
         self.assertIsInstance(params.vad_analyzer, _FakeVADAnalyzer)
         _assert_vad_only_start(self, params.user_turn_strategies)
+        assert params.user_turn_strategies is not None
+        self.assertEqual(len(params.user_turn_strategies.stop), 1)
+        self.assertIsInstance(params.user_turn_strategies.stop[0], TurnAnalyzerUserTurnStopStrategy)
+        analyzer = params.user_turn_strategies.stop[0]._turn_analyzer
+        self.assertIsInstance(analyzer, _FakeTurnAnalyzer)
+        self.assertEqual(analyzer.params.stop_secs, SMART_TURN_FALLBACK_SECS)
 
     def test_silero_timeout_multilingual_turn_start_is_vad_only(self) -> None:
         with (
