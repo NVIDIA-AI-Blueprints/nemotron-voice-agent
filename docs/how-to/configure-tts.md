@@ -6,17 +6,12 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 
 ## Models
 
-| Model | Self-hosted compose service | Modelcard |
-|-------|-----------------------------|-----------|
-| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
-| **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
+| Model | Catalog key | Self-hosted compose service | Modelcard |
+|-------|-------------|-----------------------------|-----------|
+| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
+| **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
-Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.local.yaml`:
-
-| Model | Catalog key | Default? |
-|-------|-------------|----------|
-| Magpie TTS Multilingual | `magpie-multilingual-tts` | Yes (registry default. Local recipes start Magpie) |
-| Chatterbox TTS Multilingual | `chatterbox-multilingual-tts` | No. Select in the Services tab (or `defaults.tts`) |
+> Magpie is the registry default and the TTS sidecar started by local recipes. Chatterbox is opt-in: select `chatterbox-multilingual-tts` in the Services tab (or `defaults.tts`). For local NIM, also enable the `chatterbox-tts` Compose profile (see [Hardware requirements](#hardware-requirements-and-deployment-configs)).
 
 Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Chatterbox-Multilingual.en-US.Male`). The available voices and emotions depend on the deployed NIM. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
