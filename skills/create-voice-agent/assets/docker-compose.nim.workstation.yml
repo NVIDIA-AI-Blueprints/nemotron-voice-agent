@@ -1,0 +1,108 @@
+# Workstation NIM sidecars — single GPU default (LLM+ASR+TTS on GPU0).
+# Start: cp assets/start_nim_stack.sh scripts/ && ./scripts/start_nim_stack.sh
+# Multi-GPU exception: LLM_GPU=0 ASR_GPU=1 TTS_GPU=2 in .env
+
+name: voice-agent-nim-workstation
+
+services:
+  nvidia-llm:
+    image: ${NVIDIA_LLM_IMAGE:-nvcr.io/nim/nvidia/nemotron-3-nano:2.0.5}
+    user: "0:0"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${LLM_GPU:-0}
+      - NGC_API_KEY=${NVIDIA_API_KEY}
+      - NIM_HTTP_API_PORT=8000
+      - NIM_MODEL_PROFILE=${LLM_NIM_PROFILE:-vllm-nvfp4-tp1-pp1-21.0}
+      - NIM_KVCACHE_PERCENT=${NIM_KVCACHE_PERCENT:-0.52}
+      - NIM_MAX_MODEL_LEN=${NIM_MAX_MODEL_LEN:-16384}
+      - NIM_PASSTHROUGH_ARGS=${NIM_PASSTHROUGH_ARGS:---enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 --max-num-seqs 64}
+    ports:
+      - "18000:8000"
+    volumes:
+      - llm_cache:/opt/nim/.cache
+    shm_size: 16gb
+    ulimits:
+      nofile: 2048
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_GPU:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/v1/health/ready\").read()' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 1800s
+    restart: unless-stopped
+
+  tts-service:
+    profiles: [full]
+    image: ${TTS_DOCKER_IMAGE:-nvcr.io/nim/nvidia/magpie-tts-multilingual:1.8.0}
+    user: "0:0"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${TTS_GPU:-0}
+      - NGC_API_KEY=${NVIDIA_API_KEY}
+      - NIM_HTTP_API_PORT=9000
+      - NIM_GRPC_API_PORT=50051
+      - NIM_TAGS_SELECTOR=${TTS_NIM_TAGS:-name=magpie-tts-multilingual,batch_size=8}
+    ports:
+      - "50151:50051"
+      - "9000:9000"
+    volumes:
+      - tts_cache:/opt/nim/.cache
+    shm_size: 16gb
+    ulimits:
+      nofile: 2048
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${TTS_GPU:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import json, urllib.request; data=json.load(urllib.request.urlopen(\"http://127.0.0.1:9000/v1/health/ready\", timeout=5)); raise SystemExit(0 if data.get(\"status\") == \"ready\" or data.get(\"ready\") is True else 1)'"]
+      interval: 60s
+      timeout: 10s
+      retries: 10
+      start_period: 3000s
+    restart: unless-stopped
+
+  asr-service:
+    profiles: [full]
+    image: ${ASR_DOCKER_IMAGE:-nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.5.0}
+    user: "0:0"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${ASR_GPU:-0}
+      - NGC_API_KEY=${NVIDIA_API_KEY}
+      - NIM_HTTP_API_PORT=9001
+      - NIM_GRPC_API_PORT=50052
+      - NIM_TAGS_SELECTOR=${ASR_NIM_TAGS:-mode=str,vad=silero}
+    ports:
+      - "50152:50052"
+      - "9001:9001"
+    volumes:
+      - ./.nim-cache/asr:/opt/nim/.cache
+    ulimits:
+      nofile: 2048
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${ASR_GPU:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import json, urllib.request; data=json.load(urllib.request.urlopen(\"http://127.0.0.1:9001/v1/health/ready\", timeout=5)); raise SystemExit(0 if data.get(\"status\") == \"ready\" or data.get(\"ready\") is True else 1)'"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 2400s
+    restart: unless-stopped
+
+volumes:
+  llm_cache:
+  tts_cache:
