@@ -34,9 +34,9 @@ from utils import parse_env_bool, parse_env_float, parse_env_int
 SMART_TURN_FALLBACK_SECS = 1.0
 
 
-def bot_introduction_enabled() -> bool:
-    """Return whether the bot introduces itself at session start (ENABLE_BOT_INTRODUCTION)."""
-    return parse_env_bool("ENABLE_BOT_INTRODUCTION", default=True)
+def welcome_message_enabled() -> bool:
+    """Return whether the bot sends a welcome message at session start (ENABLE_WELCOME_MESSAGE)."""
+    return parse_env_bool("ENABLE_WELCOME_MESSAGE", default=True)
 
 
 def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
@@ -50,14 +50,14 @@ def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]
 
 
 def build_user_mute_strategies() -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
-    """Return the user-mute strategy, or none when there is no bot introduction.
+    """Return the user-mute strategy, or none when there is no welcome message.
 
     ``MuteUntilFirstBotCompleteUserMuteStrategy`` keeps the user muted until the
-    bot finishes its first turn. When ``ENABLE_BOT_INTRODUCTION`` is off the bot
+    bot finishes its first turn. When ``ENABLE_WELCOME_MESSAGE`` is off the bot
     waits for the user, so that first turn never happens and muting would
     deadlock — return an empty list instead.
     """
-    if not bot_introduction_enabled():
+    if not welcome_message_enabled():
         return []
     return [MuteUntilFirstBotCompleteUserMuteStrategy()]
 

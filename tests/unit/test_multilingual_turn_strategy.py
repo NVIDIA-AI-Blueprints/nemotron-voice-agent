@@ -61,7 +61,7 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
         with (
             patch.dict(
                 os.environ,
-                {"USE_SILERO_VAD_TURN_DETECTION": "false", "ENABLE_BOT_INTRODUCTION": "true"},
+                {"USE_SILERO_VAD_TURN_DETECTION": "false", "ENABLE_WELCOME_MESSAGE": "true"},
             ),
             patch("examples.multilingual.pipeline.SileroVADAnalyzer", return_value=_FakeVADAnalyzer()),
             patch(
@@ -86,7 +86,7 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
         with (
             patch.dict(
                 os.environ,
-                {"USE_SILERO_VAD_TURN_DETECTION": "false", "ENABLE_BOT_INTRODUCTION": "false"},
+                {"USE_SILERO_VAD_TURN_DETECTION": "false", "ENABLE_WELCOME_MESSAGE": "false"},
             ),
             patch("examples.multilingual.pipeline.SileroVADAnalyzer", return_value=_FakeVADAnalyzer()),
             patch(
