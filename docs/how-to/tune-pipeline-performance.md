@@ -27,7 +27,7 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 | `USE_SILERO_VAD_TURN_DETECTION` | `false` | Keep `false` for Smart Turn. Set `true` to disable it and use pure Silero VAD end-of-utterance detection instead. |
 | `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance. Applies **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). |
 
-> The default Smart Turn path uses a fixed `0.2 s` Silero floor (`stop_secs=0.2`) and a `1.0 s` Smart Turn silence fallback. `SILERO_VAD_STOP_SECS` does not apply on the Smart Turn path. The two thresholds are independent and never both active. The `generic-assistant/workstation-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
+> On the Smart Turn path the two thresholds apply **sequentially**: a fixed `0.2 s` Silero VAD pause (`stop_secs=0.2`) first detects the silence, then the Smart Turn model gets up to a `1.0 s` silence fallback to finalize the turn. Only `SILERO_VAD_STOP_SECS` is ignored in Smart Turn mode. The `generic-assistant/workstation-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
 
 ### Key Components
 
