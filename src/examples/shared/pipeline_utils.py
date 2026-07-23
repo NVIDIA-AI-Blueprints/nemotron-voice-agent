@@ -34,6 +34,11 @@ from utils import parse_env_bool, parse_env_float, parse_env_int
 SMART_TURN_FALLBACK_SECS = 1.0
 
 
+def bot_introduction_enabled() -> bool:
+    """Return whether the bot introduces itself at session start (ENABLE_BOT_INTRODUCTION)."""
+    return parse_env_bool("ENABLE_BOT_INTRODUCTION", default=True)
+
+
 def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
     """Return LocalSmartTurnAnalyzerV3 with the blueprint fallback timeout."""
     return LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=SMART_TURN_FALLBACK_SECS))
