@@ -29,7 +29,9 @@ from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
+from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
@@ -164,6 +166,17 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     audio_recorder = create_audio_recorder()
 
+    async def queue_activity_llm_run() -> None:
+        await task.queue_frame(LLMRunFrame())
+
+    activity_check = create_activity_check_processor(
+        examples_registry.activity_check_config(body.get("pipeline_mode", "generic-assistant")),
+        context=context,
+        queue_llm_run=queue_activity_llm_run,
+        instruction_role="developer",
+    )
+    logger.info(f"Proactive activity checks: {'enabled' if activity_check else 'disabled'}")
+
     pipeline = Pipeline(
         [
             transport.input(),
@@ -172,6 +185,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             llm,
             tts,
             transport.output(),
+            *([activity_check] if activity_check else []),
             *([audio_recorder] if audio_recorder else []),
             assistant_aggregator,
         ]

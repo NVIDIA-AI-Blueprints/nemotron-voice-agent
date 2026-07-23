@@ -24,6 +24,10 @@ examples:
   generic-assistant:
     label: Generic Assistant
     slots: [llm, asr, tts]
+    activity_check:
+      first_warning_s: 600
+      second_warning_s: 30
+      warning_completion_timeout_s: 45
     defaults:
       prompt: [generic_assistant]
       llm: [nemotron-nano]
