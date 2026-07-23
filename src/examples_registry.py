@@ -3,6 +3,8 @@
 
 """Built-in voice-agent examples loaded from the root ``examples_registry.yaml``."""
 
+from __future__ import annotations
+
 import importlib
 import os
 from collections.abc import Callable
@@ -23,6 +25,7 @@ class ExampleEntry(TypedDict):
     slots: list[str]
     capabilities: list[str]
     agent_prompt_keys: list[str]
+    activity_check: ActivityCheckConfig | None
     defaults: dict[str, list[str] | str]
     bot: str
 
@@ -32,6 +35,14 @@ class EnrichedExample(ExampleEntry):
 
     id: str
     key: str
+
+
+class ActivityCheckConfig(TypedDict, total=False):
+    """Per-example settings for proactive inactivity checks."""
+
+    first_warning_s: float
+    second_warning_s: float
+    warning_completion_timeout_s: float
 
 
 class ServiceDefault(TypedDict, total=False):
@@ -345,6 +356,7 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
         slots = entry.get("slots", [])
         capabilities = entry.get("capabilities", [])
         agent_prompt_keys = entry.get("agent_prompt_keys", [])
+        activity_check = entry.get("activity_check")
         defaults = entry.get("defaults", {})
         if not label or not bot_spec:
             raise RuntimeError(f"Example {example_id!r} requires label and bot")
@@ -354,6 +366,8 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             raise RuntimeError(f"Example {example_id!r} capabilities must be a list of strings")
         if not isinstance(agent_prompt_keys, list) or not all(isinstance(key, str) for key in agent_prompt_keys):
             raise RuntimeError(f"Example {example_id!r} agent_prompt_keys must be a list of strings")
+        if activity_check is not None and not isinstance(activity_check, dict):
+            raise RuntimeError(f"Example {example_id!r} activity_check must be a mapping")
         if not isinstance(defaults, dict):
             raise RuntimeError(f"Example {example_id!r} defaults must be a mapping")
         normalized_defaults: dict[str, list[str] | str] = {}
@@ -366,11 +380,20 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             if not isinstance(service_ids, list) or not all(isinstance(service_id, str) for service_id in service_ids):
                 raise RuntimeError(f"Example {example_id!r} defaults[{slot!r}] must be a list of strings")
             normalized_defaults[str(slot)] = list(service_ids)
+        normalized_activity_check: ActivityCheckConfig | None = None
+        if activity_check is not None:
+            normalized_activity_check = {}
+            for key in ("first_warning_s", "second_warning_s", "warning_completion_timeout_s"):
+                value = activity_check.get(key)
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+                    raise RuntimeError(f"Example {example_id!r} activity_check.{key} must be a positive number")
+                normalized_activity_check[key] = float(value)
         examples[str(example_id)] = {
             "label": label,
             "slots": list(slots),
             "capabilities": list(capabilities),
             "agent_prompt_keys": list(agent_prompt_keys),
+            "activity_check": normalized_activity_check,
             "defaults": normalized_defaults,
             "bot": bot_spec,
         }
@@ -497,6 +520,12 @@ def metadata(example: EnrichedExample) -> dict:
         "default_session_language": str(example["defaults"].get("default_session_language") or ""),
         "defaults": defaults,
     }
+
+
+def activity_check_config(example_key: str = "") -> ActivityCheckConfig | None:
+    """Return a copy of the selected example's activity-check configuration."""
+    config = find(example_key)["activity_check"]
+    return dict(config) if config else None
 
 
 def visible_options() -> list[dict]:

@@ -3,25 +3,103 @@
 
 """Proactive inactivity checks for cascaded voice pipelines."""
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Literal
 
 from loguru import logger
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
+    EndTaskFrame,
     Frame,
     LLMFullResponseEndFrame,
     TTSStartedFrame,
     UserStartedSpeakingFrame,
 )
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 ActivityCallback = Callable[[int], Awaitable[None]]
-DisconnectCallback = Callable[[], Awaitable[None]]
+QueueLLMRunCallback = Callable[[], Awaitable[None]]
+ActivityInstructionRole = Literal["developer", "system"]
+
+
+@dataclass(frozen=True)
+class ActivityCheckSettings:
+    """Validated per-example inactivity settings."""
+
+    first_warning_s: float
+    second_warning_s: float
+    warning_completion_timeout_s: float
+
+    @classmethod
+    def from_mapping(cls, config: Mapping[str, object] | None) -> ActivityCheckSettings | None:
+        """Build settings from an optional example-registry mapping."""
+        if config is None:
+            return None
+        return cls(
+            first_warning_s=_positive_timeout(config, "first_warning_s"),
+            second_warning_s=_positive_timeout(config, "second_warning_s"),
+            warning_completion_timeout_s=_positive_timeout(config, "warning_completion_timeout_s"),
+        )
+
+
+def _positive_timeout(config: Mapping[str, object], key: str) -> float:
+    value = config.get(key)
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"activity_check.{key} must be a positive number")
+    return float(value)
+
+
+def create_activity_check_processor(
+    config: Mapping[str, object] | None,
+    *,
+    context: LLMContext,
+    queue_llm_run: QueueLLMRunCallback,
+    instruction_role: ActivityInstructionRole,
+) -> ActivityCheckProcessor | None:
+    """Build an activity-check processor for an opted-in example."""
+    settings = ActivityCheckSettings.from_mapping(config)
+    if settings is None:
+        return None
+
+    async def on_warning(stage: int) -> None:
+        context.add_message(
+            {
+                "role": instruction_role,
+                "content": activity_check_instruction(stage),
+            }
+        )
+        await queue_llm_run()
+
+    return ActivityCheckProcessor(
+        first_warning_s=settings.first_warning_s,
+        second_warning_s=settings.second_warning_s,
+        warning_completion_timeout_s=settings.warning_completion_timeout_s,
+        on_warning=on_warning,
+    )
+
+
+def activity_check_instruction(stage: int) -> str:
+    """Return the role instruction for an activity-check stage."""
+    instructions = {
+        1: "The user may have stepped away. Ask if they are still there in one short, warm sentence.",
+        2: (
+            "The user is still quiet after an earlier check-in. Give one concise, "
+            "polite closing statement in your persona and say you are disconnecting now."
+        ),
+    }
+    try:
+        return instructions[stage]
+    except KeyError as exc:
+        raise ValueError(f"unknown activity-check stage: {stage}") from exc
 
 
 class ActivityCheckProcessor(FrameProcessor):
@@ -42,7 +120,6 @@ class ActivityCheckProcessor(FrameProcessor):
         second_warning_s: float = 30.0,
         warning_completion_timeout_s: float = 45.0,
         on_warning: ActivityCallback,
-        on_disconnect: DisconnectCallback,
     ) -> None:
         """Initialize inactivity thresholds, warning watchdogs, and callbacks."""
         super().__init__(name="activity-check")
@@ -53,7 +130,6 @@ class ActivityCheckProcessor(FrameProcessor):
         if any(interval <= 0 for interval in (*self._intervals, warning_completion_timeout_s)):
             raise ValueError("activity-check intervals must be greater than zero")
         self._on_warning = on_warning
-        self._on_disconnect = on_disconnect
         self._warning_completion_timeout_s = warning_completion_timeout_s
         self._stage = 0
         self._disconnect_after_speech = False
@@ -133,7 +209,7 @@ class ActivityCheckProcessor(FrameProcessor):
         if self._disconnect_after_speech:
             self._disconnect_after_speech = False
             logger.info("Final activity check finished; disconnecting session")
-            self.create_task(self._on_disconnect(), "disconnect")
+            self.create_task(self._request_disconnect(), "disconnect")
         else:
             self._arm_timer()
 
@@ -184,7 +260,7 @@ class ActivityCheckProcessor(FrameProcessor):
             )
             if stage == len(self._intervals):
                 self._disconnect_after_speech = False
-                await self._on_disconnect()
+                await self._request_disconnect()
             else:
                 if stage in self._warning_audio_started_stages:
                     self._retired_warning_completions += 1
@@ -193,6 +269,12 @@ class ActivityCheckProcessor(FrameProcessor):
                 await self._emit_warning(stage + 1)
         except asyncio.CancelledError:
             logger.debug("Activity check warning-completion watchdog cancelled")
+
+    async def _request_disconnect(self) -> None:
+        await self.push_frame(
+            EndTaskFrame(reason="user inactive after activity checks"),
+            FrameDirection.UPSTREAM,
+        )
 
     def _cancel_warning_completion_timer(self) -> None:
         if self._warning_completion_timer is not None:
