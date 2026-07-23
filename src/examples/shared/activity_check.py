@@ -90,10 +90,16 @@ def create_activity_check_processor(
 def activity_check_instruction(stage: int) -> str:
     """Return the role instruction for an activity-check stage."""
     instructions = {
-        1: "The user may have stepped away. Ask if they are still there in one short, warm sentence.",
+        1: (
+            "Generate exactly one short, warm, user-facing spoken sentence asking whether "
+            "the user is still present. Output only that sentence. Do not include reasoning, "
+            "think tags, analysis, labels, instructions, or any additional text."
+        ),
         2: (
-            "The user is still quiet after an earlier check-in. Give one concise, "
-            "polite closing statement in your persona and say you are disconnecting now."
+            "Generate exactly one concise, polite, user-facing closing sentence in your "
+            "persona saying that you are disconnecting now because the user is still absent. "
+            "Output only that sentence. Do not include reasoning, think tags, analysis, "
+            "labels, instructions, or any additional text."
         ),
     }
     try:

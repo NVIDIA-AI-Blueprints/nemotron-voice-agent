@@ -11,7 +11,11 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 
 import examples_registry
-from examples.shared.activity_check import ActivityCheckProcessor, create_activity_check_processor
+from examples.shared.activity_check import (
+    ActivityCheckProcessor,
+    activity_check_instruction,
+    create_activity_check_processor,
+)
 
 
 class _TestActivityCheckProcessor(ActivityCheckProcessor):
@@ -129,7 +133,14 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(runs, 1)
         self.assertEqual(context.get_messages()[-1]["role"], "developer")
-        self.assertIn("still there", context.get_messages()[-1]["content"])
+        self.assertEqual(context.get_messages()[-1]["content"], activity_check_instruction(1))
+
+    def test_activity_instructions_require_a_single_clean_spoken_sentence(self) -> None:
+        for stage in (1, 2):
+            instruction = activity_check_instruction(stage)
+            self.assertIn("exactly one", instruction)
+            self.assertIn("Output only that sentence", instruction)
+            self.assertIn("think tags", instruction)
 
     def test_generic_example_enables_activity_check_in_registry(self) -> None:
         config = examples_registry.activity_check_config("generic-assistant")
