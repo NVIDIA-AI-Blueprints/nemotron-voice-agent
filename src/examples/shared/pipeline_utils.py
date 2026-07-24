@@ -6,6 +6,8 @@
 import asyncio
 
 from loguru import logger
+from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -16,7 +18,10 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
-from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_stop import (
+    SpeechTimeoutUserTurnStopStrategy,
+    TurnAnalyzerUserTurnStopStrategy,
+)
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.context.llm_context_summarization import (
     DEFAULT_SUMMARIZATION_PROMPT,
@@ -25,19 +30,48 @@ from pipecat.utils.context.llm_context_summarization import (
 
 from utils import parse_env_bool, parse_env_float, parse_env_int
 
+# Smart Turn silence fallback default (seconds); override via SMART_TURN_STOP_SECS.
+# Pipecat's stock default is 3.0s.
+SMART_TURN_FALLBACK_SECS = 1.0
 
-def build_user_aggregator_params() -> LLMUserAggregatorParams:
+
+def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
+    """Return LocalSmartTurnAnalyzerV3 with the configurable silence fallback."""
+    stop_secs = parse_env_float("SMART_TURN_STOP_SECS", SMART_TURN_FALLBACK_SECS, min_value=0.0)
+    return LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=stop_secs))
+
+
+def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]:
+    """Return the default Smart Turn stop strategy used by cascaded pipelines."""
+    return [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())]
+
+
+def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
+    """Return the user-mute strategy, or none when there is no welcome message.
+
+    ``MuteUntilFirstBotCompleteUserMuteStrategy`` keeps the user muted until the
+    bot finishes its first turn. When the welcome message is off the bot waits
+    for the user, so that first turn never happens and muting would deadlock —
+    return an empty list instead.
+    """
+    if not welcome_enabled:
+        return []
+    return [MuteUntilFirstBotCompleteUserMuteStrategy()]
+
+
+def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
     """Return user-turn configuration, defaulting to Pipecat smart turn."""
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
+            user_turn_strategies=UserTurnStrategies(stop=build_smart_turn_stop_strategies()),
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+        user_mute_strategies=build_user_mute_strategies(welcome_enabled),
         user_turn_strategies=UserTurnStrategies(
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
         ),

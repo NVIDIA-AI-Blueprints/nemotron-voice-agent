@@ -3,6 +3,7 @@
 This section covers pipeline configurations for optimizing the performance and user experience of the Nemotron Voice Agent.
 
 - [Smart Turn Detection](#smart-turn-detection)
+- [Welcome Message](#welcome-message)
 - [Chat History Limit](#chat-history-limit)
 - [Audio Output Buffering](#audio-output-buffering)
 - [Uvicorn Worker Scaling](#uvicorn-worker-scaling)
@@ -10,13 +11,13 @@ This section covers pipeline configurations for optimizing the performance and u
 
 ## Smart Turn Detection
 
-By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete.
+By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete. If the model still has not finalized after the Smart Turn silence fallback (default **1.0 s**, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
 
 ### How It Works
 
 1. The user speaks, and ASR emits interim transcripts as audio streams in.
 2. Silero VAD detects a pause in speech.
-3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it's incomplete but silence continues past the stop threshold, the turn completes anyway (fallback).
+3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it's incomplete but silence continues past the Smart Turn stop threshold (default 1.0 s, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
 4. On a completed turn, the transcript goes to the LLM and TTS streams the reply back.
 
 ### Configuration
@@ -25,19 +26,41 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 |----------|---------|-------------|
 | `USE_SILERO_VAD_TURN_DETECTION` | `false` | Keep `false` for Smart Turn. Set `true` to disable it and use pure Silero VAD end-of-utterance detection instead. |
 | `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance. Applies **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). |
+| `SMART_TURN_STOP_SECS` | `1.0` | Smart Turn silence fallback (seconds) before the turn completes without a `COMPLETE` classification. Applies **only** in Smart Turn mode (`USE_SILERO_VAD_TURN_DETECTION=false`). |
 
-> The default Smart Turn path uses a fixed `0.2 s` Silero floor (`stop_secs=0.2`), so `SILERO_VAD_STOP_SECS` does not apply there. The two thresholds are independent and never both active.
+> On the Smart Turn path the two thresholds apply **sequentially**: a fixed `0.2 s` Silero VAD pause (`stop_secs=0.2`) first detects the silence, then the Smart Turn model gets up to the Smart Turn silence fallback (default `1.0 s`, `SMART_TURN_STOP_SECS`) to finalize the turn. Only `SILERO_VAD_STOP_SECS` is ignored in Smart Turn mode. The `generic-assistant/workstation-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
 
 ### Key Components
 
 | Component | Purpose |
 |-----------|---------|
 | [`SileroVADAnalyzer`](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) | Voice activity detection with a configurable silence threshold |
-| [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) (default) | ML end-of-utterance detection for natural turn-taking |
+| [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) (default) | ML end-of-utterance detection for natural turn-taking (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) |
 | `SpeechTimeoutUserTurnStopStrategy` | End-of-turn strategy used **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). Ends the turn on a VAD silence timeout instead of the Smart Turn model |
-| `MuteUntilFirstBotCompleteUserMuteStrategy` | The user-mute strategy. Mutes user input until the first bot response completes |
+| `MuteUntilFirstBotCompleteUserMuteStrategy` | The user-mute strategy. Mutes user input until the first bot response completes. Applied **only** when the [welcome message](#welcome-message) is enabled; with it disabled there is no first bot turn to wait on, so no mute strategy is used and the user is unmuted immediately |
 
-The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so there is no upstream `TranscriptionFrame` for Pipecat's stock Smart Turn stop strategy to wait on. They use a custom `AudioOnlySmartTurnStopStrategy` that wraps the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, `stop_secs=0.7`) plus a `VADUserTurnStartStrategy`, and finalizes the turn as soon as the analyzer returns `COMPLETE`. The same `MuteUntilFirstBotCompleteUserMuteStrategy` applies.
+The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so there is no upstream `TranscriptionFrame` for Pipecat's stock Smart Turn stop strategy to wait on. They use a custom `AudioOnlySmartTurnStopStrategy` that wraps the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) plus a `VADUserTurnStartStrategy`, and finalizes the turn as soon as the analyzer returns `COMPLETE`. The same `MuteUntilFirstBotCompleteUserMuteStrategy` applies when the [welcome message](#welcome-message) is enabled; disabling it drops the mute strategy so the user is unmuted immediately.
+
+## Welcome Message
+
+By default, when a client connects the bot sends a welcome message (greets/introduces itself) before the user says anything. This is driven by a synthetic first turn queued on `on_client_ready`. Disable it so the bot stays silent until the user speaks first.
+
+This applies to the Generic, Multilingual, Omni, and Frontend/Backend Agent examples. There are two ways to configure it:
+
+- **Per example (recommended when running the server directly with `uv`):** set `welcome_message: false` on an example in [`examples_registry.yaml`](../../examples_registry.yaml). This scopes the choice to a single example instead of every one. The default is `true` when the key is omitted.
+- **Global override:** set the `ENABLE_WELCOME_MESSAGE` environment variable. When set it wins over every example's registry value — this is how the `generic-assistant/workstation-perf` profile disables the greeting so benchmark runs start from a clean user turn.
+
+```yaml
+# examples_registry.yaml: keep one example quiet until the user speaks
+examples:
+  generic-assistant:
+    welcome_message: false
+```
+
+```bash
+# .env: global override across all examples
+ENABLE_WELCOME_MESSAGE=false
+```
 
 ## Chat History Limit
 
