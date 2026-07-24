@@ -41,6 +41,7 @@ from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
 from examples.omni_assistant.audio_only_smart_turn_strategy import AudioOnlySmartTurnStopStrategy
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
     NvidiaOmniService,
@@ -51,7 +52,6 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     build_smart_turn_analyzer,
     build_user_mute_strategies,
-    welcome_message_enabled,
 )
 from tracing import IS_TRACING_ENABLED
 from utils import (
@@ -86,6 +86,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Nemotron Omni cascaded pipeline for one session."""
     transport = _create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
     prompt_key, base_system_content = resolve_prompt(
         __file__,
@@ -174,7 +175,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams()),
-            user_mute_strategies=build_user_mute_strategies(),
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
             user_turn_strategies=_build_user_turn_strategies(),
         ),
     )
@@ -337,7 +338,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
-        if not welcome_message_enabled():
+        if not welcome_enabled:
             logger.info("Welcome message disabled; waiting for the user to speak first")
             return
         context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
