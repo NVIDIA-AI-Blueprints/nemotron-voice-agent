@@ -23,6 +23,22 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 
+## Welcome Message
+
+When a client connects, the bot sends a welcome message (greets/introduces itself) before the user speaks. Disable it to have the bot wait for the user instead. This applies to the Generic, Multilingual, Omni, and Frontend/Backend Agent examples.
+
+- **Per example (backend-only):** set `welcome_message: false` on an example in [`examples_registry.yaml`](../examples_registry.yaml). The default is `true` when the key is omitted.
+- **Global override:** set `ENABLE_WELCOME_MESSAGE` in `.env`. When set it wins over every example's registry value — this is how the `generic-assistant/workstation-perf` profile disables the greeting.
+
+```yaml
+# examples_registry.yaml: keep one example quiet until the user speaks
+examples:
+  generic-assistant:
+    welcome_message: false
+```
+
+While the welcome message is enabled, the user is muted until the bot finishes its opening turn (`MuteUntilFirstBotCompleteUserMuteStrategy`) so the greeting isn't interrupted. Disabling it drops that mute strategy — there is no first bot turn to wait on — so the user is unmuted immediately.
+
 ## Performance tuning
 
 Pipeline tuning knobs (smart turn, chat-history window, audio buffering, transport) live in [Tune Pipeline Performance](how-to/tune-pipeline-performance.md). For benchmark results, see [Evaluation and Performance](04-evaluation-and-performance.md).
