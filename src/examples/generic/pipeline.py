@@ -39,7 +39,6 @@ from examples.shared.pipeline_utils import (
     build_context_messages,
     build_user_aggregator_params,
     create_transport,
-    welcome_message_enabled,
 )
 from tracing import IS_TRACING_ENABLED
 from utils import (
@@ -61,6 +60,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
         __file__,
         body.get("prompt_content", ""),
@@ -178,7 +178,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=build_user_aggregator_params(),
+        user_params=build_user_aggregator_params(welcome_enabled),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
@@ -300,7 +300,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
-        if not welcome_message_enabled():
+        if not welcome_enabled:
             logger.info("Welcome message disabled; waiting for the user to speak first")
             return
         context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
