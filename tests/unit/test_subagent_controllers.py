@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock, Mock, patch
 from pipecat.processors.aggregators.llm_context import LLMContext
 
 from examples.omni_assistant_subagents.subagents.transport.media_analysis_controller import MediaAnalysisController
+from examples.omni_assistant_subagents.subagents.transport.subagent_state_board import SubagentStateBoard
 from examples.omni_assistant_subagents.subagents.transport.thinking_controller import ThinkingController
+from examples.shared.subagents import SubagentSpec
 
 
 class MediaAnalysisBindingTests(unittest.IsolatedAsyncioTestCase):
@@ -94,6 +96,58 @@ class MediaAnalysisBindingTests(unittest.IsolatedAsyncioTestCase):
             await controller.analyze_capture({"id": "capture-1"}, "Read the label")
 
         remove.assert_called_once_with("session", "capture-1")
+
+
+class StateBoardRenderingTests(unittest.TestCase):
+    def _board(self) -> tuple[SubagentStateBoard, dict[str, str]]:
+        pinned: dict[str, str] = {}
+        registry = SimpleNamespace(
+            specs=lambda: [
+                SubagentSpec(
+                    key="omni_webcam",
+                    label="Webcam Vision",
+                    capability="Describes the live webcam view.",
+                    findings_label="what you currently see",
+                    routing_rules="This is your live eyes.",
+                )
+            ]
+        )
+        context = SimpleNamespace(set_pinned_state=lambda prefix, text: pinned.__setitem__(prefix, text))
+        return SubagentStateBoard(registry=registry, speaker_context=context), pinned
+
+    def _text(self, pinned: dict[str, str]) -> str:
+        return next(iter(pinned.values()))
+
+    def test_no_subagent_is_ever_reported_as_switchable(self) -> None:
+        board, pinned = self._board()
+
+        board.set_findings("omni_webcam", "a GoPro on a tripod")
+
+        self.assertNotIn("status:", self._text(pinned))
+
+    def test_our_own_state_is_stated_as_fact(self) -> None:
+        board, pinned = self._board()
+
+        board.set_findings("omni_webcam", "the camera is OFF right now", trusted=True)
+
+        text = self._text(pinned)
+        self.assertIn("what you currently see: the camera is OFF right now", text)
+        self.assertNotIn("what you currently see_untrusted_data_json", text)
+
+    def test_subagent_output_stays_quoted_as_untrusted(self) -> None:
+        board, pinned = self._board()
+
+        board.set_findings("omni_webcam", "a GoPro on a tripod")
+
+        self.assertIn('what you currently see_untrusted_data_json: "a GoPro on a tripod"', self._text(pinned))
+
+    def test_appended_patch_carries_the_subagent_voice(self) -> None:
+        board, pinned = self._board()
+
+        board.set_findings("omni_webcam", "the camera is OFF right now", trusted=True)
+        board.append_findings("omni_webcam", "a GoPro on a tripod")
+
+        self.assertIn("what you currently see_untrusted_data_json", self._text(pinned))
 
 
 class ThinkingInvalidationTests(unittest.IsolatedAsyncioTestCase):

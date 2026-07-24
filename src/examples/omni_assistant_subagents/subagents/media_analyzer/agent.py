@@ -17,7 +17,7 @@ from pipecat.workers.base_worker import BaseWorker
 
 from attachment_store import Attachment, get_attachment
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniService,
+    NvidiaOmniLLMService,
     NvidiaOmniSettings,
     media_message_part,
     text_message_part,
@@ -76,7 +76,7 @@ class MediaAnalyzerWorker(BaseWorker):
             "enable_thinking": reasoning == "on",
         }
         omni_extra["extra_body"] = extra_body
-        self._omni = NvidiaOmniService(
+        self._omni = NvidiaOmniLLMService(
             api_key=api_key,
             base_url=base_url,
             extra=omni_extra,
@@ -84,8 +84,6 @@ class MediaAnalyzerWorker(BaseWorker):
                 model=model_id,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
-                input_modalities=("image", "audio", "video", "text"),
-                stream=True,
             ),
         )
 
