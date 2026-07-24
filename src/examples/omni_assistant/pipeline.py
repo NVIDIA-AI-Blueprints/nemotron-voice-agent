@@ -4,7 +4,7 @@
 """Nemotron Omni cascaded pipeline using the upstream-style Omni service.
 
 This is the current experimental pipeline for the clean
-``NvidiaOmniMultimodalService`` shape:
+``NvidiaOmniLLMService`` shape:
 
 * ``transport.input`` + VAD/user-turn processing feed audio into Omni.
 * Omni replaces ASR + LLM and emits standard Pipecat frames.
@@ -48,7 +48,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from examples.omni_assistant.audio_only_smart_turn_strategy import AudioOnlySmartTurnStopStrategy
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniService,
+    NvidiaOmniLLMService,
     NvidiaOmniSettings,
 )
 from examples.shared.audio_recorder import create_audio_recorder
@@ -110,15 +110,16 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # Build the conversation context up-front. With emit_transcriptions enabled,
-    # Omni emits TranscriptionFrame for the user side while the assistant
-    # aggregator commits LLMTextFrame output as usual.
+    # Omni reports the user's speech as a TranscriptionFrame, which the user
+    # aggregator writes here as it would an STT service's transcript, while the
+    # assistant aggregator commits LLMTextFrame output as usual.
     system_content = base_system_content
     if system_prompt_override:
         system_content = f"{base_system_content}\n\n{system_prompt_override}".strip()
     context = LLMContext([{"role": "system", "content": system_content}])
 
     emit_transcriptions = parse_env_bool("OMNI_EMIT_TRANSCRIPTIONS", default=True)
-    omni = NvidiaOmniService(
+    omni = NvidiaOmniLLMService(
         # Name carries "llm" so metrics consumers (UI metric-group, perf
         # benchmark) attribute Omni's TTFB/processing/token-usage metrics to the
         # LLM stage. Omni fuses ASR+LLM, so these are the pipeline's LLM metrics.
@@ -133,7 +134,6 @@ async def bot(runner_args: RunnerArguments) -> None:
             temperature=parse_env_float("OMNI_TEMPERATURE", 0.6, min_value=0.0),
             top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
             input_modalities=("text", "audio"),
-            response_format={"type": "json_object"} if emit_transcriptions else None,
             emit_transcriptions=emit_transcriptions,
             min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
         ),
