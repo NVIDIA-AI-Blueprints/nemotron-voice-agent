@@ -30,18 +30,15 @@ from pipecat.utils.context.llm_context_summarization import (
 
 from utils import parse_env_bool, parse_env_float, parse_env_int
 
-# Smart Turn silence fallback (seconds). Pipecat's stock default is 3.0s.
+# Smart Turn silence fallback default (seconds); override via SMART_TURN_STOP_SECS.
+# Pipecat's stock default is 3.0s.
 SMART_TURN_FALLBACK_SECS = 1.0
 
 
-def welcome_message_enabled() -> bool:
-    """Return whether the bot sends a welcome message at session start (ENABLE_WELCOME_MESSAGE)."""
-    return parse_env_bool("ENABLE_WELCOME_MESSAGE", default=True)
-
-
 def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
-    """Return LocalSmartTurnAnalyzerV3 with the blueprint fallback timeout."""
-    return LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=SMART_TURN_FALLBACK_SECS))
+    """Return LocalSmartTurnAnalyzerV3 with the configurable silence fallback."""
+    stop_secs = parse_env_float("SMART_TURN_STOP_SECS", SMART_TURN_FALLBACK_SECS, min_value=0.0)
+    return LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=stop_secs))
 
 
 def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]:
@@ -49,32 +46,32 @@ def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]
     return [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())]
 
 
-def build_user_mute_strategies() -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
+def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
     """Return the user-mute strategy, or none when there is no welcome message.
 
     ``MuteUntilFirstBotCompleteUserMuteStrategy`` keeps the user muted until the
-    bot finishes its first turn. When ``ENABLE_WELCOME_MESSAGE`` is off the bot
-    waits for the user, so that first turn never happens and muting would
-    deadlock — return an empty list instead.
+    bot finishes its first turn. When the welcome message is off the bot waits
+    for the user, so that first turn never happens and muting would deadlock —
+    return an empty list instead.
     """
-    if not welcome_message_enabled():
+    if not welcome_enabled:
         return []
     return [MuteUntilFirstBotCompleteUserMuteStrategy()]
 
 
-def build_user_aggregator_params() -> LLMUserAggregatorParams:
+def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
     """Return user-turn configuration, defaulting to Pipecat smart turn."""
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=build_user_mute_strategies(),
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
             user_turn_strategies=UserTurnStrategies(stop=build_smart_turn_stop_strategies()),
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=build_user_mute_strategies(),
+        user_mute_strategies=build_user_mute_strategies(welcome_enabled),
         user_turn_strategies=UserTurnStrategies(
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
         ),

@@ -24,6 +24,7 @@ class ExampleEntry(TypedDict):
     capabilities: list[str]
     agent_prompt_keys: list[str]
     defaults: dict[str, list[str] | str]
+    welcome_message: bool
     bot: str
 
 
@@ -327,6 +328,20 @@ def prompt_default_key(example_key: str = "", *, ignore_lock: bool = False) -> s
     return prompt_keys[0] if prompt_keys else None
 
 
+def welcome_message_enabled(example_key: str = "") -> bool:
+    """Return whether an example greets the user at session start.
+
+    Resolution order: the ``ENABLE_WELCOME_MESSAGE`` environment variable wins
+    when set (a global override used by the ``generic-assistant/workstation-perf``
+    compose profile), otherwise the per-example ``welcome_message`` registry value
+    applies (default ``True``).
+    """
+    override = os.getenv("ENABLE_WELCOME_MESSAGE", "").strip()
+    if override:
+        return override.lower() == "true"
+    return bool(find(example_key).get("welcome_message", True))
+
+
 def agent_prompt_keys(example_key: str = "") -> frozenset[str]:
     """Return prompt-catalog keys that are pipeline-only (hidden from the UI selector)."""
     return frozenset(find(example_key).get("agent_prompt_keys", []))
@@ -355,6 +370,9 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             raise RuntimeError(f"Example {example_id!r} capabilities must be a list of strings")
         if not isinstance(agent_prompt_keys, list) or not all(isinstance(key, str) for key in agent_prompt_keys):
             raise RuntimeError(f"Example {example_id!r} agent_prompt_keys must be a list of strings")
+        welcome_message = entry.get("welcome_message", True)
+        if not isinstance(welcome_message, bool):
+            raise RuntimeError(f"Example {example_id!r} welcome_message must be a boolean")
         if not isinstance(defaults, dict):
             raise RuntimeError(f"Example {example_id!r} defaults must be a mapping")
         normalized_defaults: dict[str, list[str] | str] = {}
@@ -373,6 +391,7 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             "capabilities": list(capabilities),
             "agent_prompt_keys": list(agent_prompt_keys),
             "defaults": normalized_defaults,
+            "welcome_message": welcome_message,
             "bot": bot_spec,
         }
     return examples

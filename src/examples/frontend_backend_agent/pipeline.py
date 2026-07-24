@@ -27,6 +27,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.transports.base_transport import TransportParams
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
 from examples.frontend_backend_agent.airline.backend import HTTPBookingBackend
 from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
 from examples.frontend_backend_agent.airline.tools import TOOLS_SCHEMA
@@ -36,7 +37,7 @@ from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.pipeline_utils import build_user_aggregator_params, welcome_message_enabled
+from examples.shared.pipeline_utils import build_user_aggregator_params
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -99,6 +100,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info("Starting Frontend/Backend Agent cascaded pipeline")
     transport = _create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
     prompt_key, talker_prompt = resolve_prompt(
         __file__,
@@ -252,7 +254,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     preserve_prompt_messages = len(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=build_user_aggregator_params(),
+        user_params=build_user_aggregator_params(welcome_enabled),
     )
     audio_recorder = create_audio_recorder()
 
@@ -317,7 +319,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
-        if not welcome_message_enabled():
+        if not welcome_enabled:
             logger.info("Welcome message disabled; waiting for the user to speak first")
             return
         context.add_message({"role": "user", "content": "Please greet the user briefly."})
