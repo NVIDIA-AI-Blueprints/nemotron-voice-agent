@@ -9,7 +9,7 @@ workers under ``examples.omni_assistant_subagents.subagents``:
 
 * ``OmniTransportAgent`` owns transport I/O, VAD/turn detection, TTS, and
   routes user frames to ``SpeakerOmniAgent`` through a ``BusBridgeProcessor``.
-* ``SpeakerOmniAgent`` wraps ``NvidiaOmniMultimodalService`` and is the only
+* ``SpeakerOmniAgent`` wraps ``NvidiaOmniLLMService`` and is the only
   agent allowed to emit spoken responses.
 * ``MediaAnalyzerWorker`` analyzes uploaded image/audio/video attachments.
 * ``WebcamAgent`` produces rolling scene summaries from the browser webcam.

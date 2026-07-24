@@ -31,7 +31,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.workers.base_worker import BaseWorker
 
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniService,
+    NvidiaOmniLLMService,
     NvidiaOmniSettings,
     text_message_part,
     video_message_part,
@@ -122,7 +122,7 @@ class WebcamAgent(BaseWorker):
             "enable_thinking": enable_thinking,
         }
         omni_extra["extra_body"] = extra_body
-        self._omni = NvidiaOmniService(
+        self._omni = NvidiaOmniLLMService(
             api_key=api_key,
             base_url=base_url,
             extra=omni_extra,
@@ -130,8 +130,6 @@ class WebcamAgent(BaseWorker):
                 model=model_id,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
-                input_modalities=("video", "text"),
-                stream=False,
             ),
         )
 

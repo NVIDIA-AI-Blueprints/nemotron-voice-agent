@@ -1,7 +1,7 @@
 # Subagents wired into this example, keyed by stable id (must match the worker's
 # AGENT_NAME). This is the single source of truth for:
 #   * the delegation block injected into the Speaker prompt (delegatable subagents),
-#   * the /api/subagents UI endpoint (all subagents, rendered as status), and
+#   * the /api/subagents UI endpoint (all subagents, rendered as the session roster), and
 #   * per-subagent config such as the model reasoning mode.
 #
 # Fields per subagent:

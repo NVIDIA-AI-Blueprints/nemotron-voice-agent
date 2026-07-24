@@ -9,7 +9,7 @@ so they read like the rest of the catalog files and can be tuned without code
 changes. This module is the single, framework-agnostic source of truth used by:
 
 * the Speaker prompt (delegatable subagents' capability + routing block),
-* the ``/api/subagents`` UI endpoint (all subagents, for status), and
+* the ``/api/subagents`` UI endpoint (all subagents, for the session's roster), and
 * per-worker config such as the reasoning mode.
 
 Examples without a ``subagents.yaml`` simply yield an empty registry, so nothing
@@ -29,8 +29,8 @@ REASONING_MODES = ("on", "off", "on_demand")
 _DEFAULT_REASONING = "off"
 
 #: Leading text of the Speaker's pinned "subagents available" note. Used as a stable
-#: marker so the note can be located and replaced in the Speaker context when subagents
-#: are toggled at runtime. The note itself is rendered by ``SubagentStateBoard``.
+#: marker so the note can be located and replaced in the Speaker context whenever a
+#: subagent's state changes. The note itself is rendered by ``SubagentStateBoard``.
 SPEAKER_CAPABILITIES_PREFIX = "Subagents available to you this session"
 
 

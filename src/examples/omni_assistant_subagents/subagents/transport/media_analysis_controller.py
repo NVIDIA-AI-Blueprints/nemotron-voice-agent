@@ -80,7 +80,7 @@ class MediaAnalysisController:
         attachment = latest_user_attachment(self._session_id)
         if attachment is None or attachment.id == self._analyzed_attachment_id:
             return
-        self._board.set_findings(MediaAnalyzerWorker.AGENT_NAME, _PENDING_ANALYSIS)
+        self._board.set_findings(MediaAnalyzerWorker.AGENT_NAME, _PENDING_ANALYSIS, trusted=True)
         logger.info("Marked uploaded attachment as pending analysis on the subagents board")
 
     def _clear_pending(self) -> None:

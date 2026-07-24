@@ -16,7 +16,7 @@ Re-architecture by upstreaming `nvidia-pipecat` changes to [Pipecat](https://git
   - `omni-assistant`: Nemotron 3 Nano Omni as a single multimodal ASR + LLM service with Magpie TTS.
   - `omni-assistant-subagents`: the Omni service split across cooperating Pipecat Subagents with live webcam, vision and uploaded-media analysis.
   - `frontend-backend-agent`: a talker LLM front-ending a stateful backend agent (airline-booking reference).
-- `NvidiaOmniMultimodalService`: an upstream-compatible Pipecat `LLMService` for Nemotron Omni
+- `NvidiaOmniLLMService`: an upstream-compatible Pipecat `LLMService` for Nemotron Omni
 - **Unified UI client** (`client/`) with grouped LLM/ASR/TTS selectors (Self-hosted / NVIDIA Cloud / Custom), a prompt-preset picker, a Metrics panel, attachment upload, and a webcam panel.
 - **New models**: Nemotron 3 Super 120B A12B and Nemotron 3 Nano Omni (LLMs), plus Nemotron ASR Streaming (English and Multilingual).
 - **DGX Spark and single-GPU workstation** local NIM deployment, plus improved Jetson Thor support.
