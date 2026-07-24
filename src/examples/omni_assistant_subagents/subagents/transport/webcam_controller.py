@@ -158,14 +158,15 @@ class WebcamController:
         Injected next to the user's turn (see the Speaker service) so each reply is
         grounded in the LATEST live view instead of the older, top-pinned board note.
         Reflects the camera state and most recent meaningful observation, mirroring
-        the single "what you currently see" board state.
+        the single "what you currently see" board state. The Speaker frames it, so this
+        carries the state alone and no framing of its own.
         """
         if not self._enabled:
             return _CAMERA_OFF_STATE
         state = self._board_state.strip()
         if not state or state in (_CAMERA_OFF_STATE, _CAMERA_ON_STATE):
             return _CAMERA_ON_STATE
-        return f"through your live webcam you currently see: {state}"
+        return state
 
     async def handle_summary_response(self, task_id: str, response: dict[str, Any]) -> bool:
         """Stream one completed frame observation to the client UI and pinned board."""
@@ -192,11 +193,20 @@ class WebcamController:
         return True
 
     def _set_board_state(self, text: str) -> None:
-        """Mirror the live webcam state into the Speaker's pinned board (deduped, no log dump)."""
+        """Mirror the live webcam state into the Speaker's pinned board (deduped, no log dump).
+
+        A camera-state note is this pipeline's own word on what the camera is doing, so it
+        goes on the board as a plain fact; only a frame observation is the WebcamAgent's
+        own output and stays quoted as untrusted data.
+        """
         if text == self._board_state:
             return
         self._board_state = text
-        self._board.set_findings(WebcamAgent.AGENT_NAME, text)
+        self._board.set_findings(
+            WebcamAgent.AGENT_NAME,
+            text,
+            trusted=text in (_CAMERA_OFF_STATE, _CAMERA_ON_STATE),
+        )
 
     def _notify_frame_uploaded(self) -> None:
         """Wake the streaming loop when the browser uploads a fresh frame."""

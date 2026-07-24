@@ -54,7 +54,7 @@ To run host-native without Docker, set `selection: omni-assistant-subagents` in 
 | Path | Role |
 | --- | --- |
 | `pipeline.py` | entry point that wires the five workers into a `WorkerRunner` over a shared `WorkerBus` |
-| `subagents/speaker/agent.py` | `SpeakerOmniAgent` plus a structured-JSON wrapper around `NvidiaOmniMultimodalService` |
+| `subagents/speaker/agent.py` | `SpeakerOmniAgent` plus a structured-JSON wrapper around `NvidiaOmniLLMService` |
 | `subagents/transport/agent.py` | `OmniTransportAgent` for transport I/O, TTS, visual barge-in, analyzer dispatch, and the pinned subagent state board |
 | `subagents/media_analyzer/agent.py` | `MediaAnalyzerWorker` for uploaded image, audio, and video attachments |
 | `subagents/webcam/agent.py` | `WebcamAgent` rolling scene summaries for live webcam context |
