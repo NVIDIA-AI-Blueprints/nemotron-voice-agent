@@ -11,8 +11,6 @@ from datetime import timedelta
 
 from dotenv import load_dotenv
 from loguru import logger
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
@@ -20,7 +18,6 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
@@ -28,9 +25,9 @@ from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.transports.base_transport import TransportParams
-from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
 from examples.frontend_backend_agent.airline.backend import HTTPBookingBackend
 from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
 from examples.frontend_backend_agent.airline.tools import TOOLS_SCHEMA
@@ -40,6 +37,7 @@ from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.pipeline_utils import build_user_aggregator_params
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -102,6 +100,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info("Starting Frontend/Backend Agent cascaded pipeline")
     transport = _create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
     prompt_key, talker_prompt = resolve_prompt(
         __file__,
@@ -255,10 +254,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     preserve_prompt_messages = len(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
-        ),
+        user_params=build_user_aggregator_params(welcome_enabled),
     )
     audio_recorder = create_audio_recorder()
 
@@ -323,6 +319,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
         context.add_message({"role": "user", "content": "Please greet the user briefly."})
         await task.queue_frames([LLMRunFrame()])
 

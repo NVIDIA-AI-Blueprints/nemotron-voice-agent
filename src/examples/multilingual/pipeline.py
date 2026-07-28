@@ -30,12 +30,12 @@ from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
-from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
 from examples.multilingual.multilingual_processor import (
     FIXED_SESSION_GREETING_TRIGGER,
     FIXED_SESSION_LANGUAGE_ADDON_KEY,
@@ -50,6 +50,8 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
+    build_smart_turn_stop_strategies,
+    build_user_mute_strategies,
     create_transport,
 )
 from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
@@ -79,19 +81,22 @@ def _is_eval_transport(runner_args: RunnerArguments) -> bool:
     return cli_transport == "eval" or isinstance(runner_args, EvalRunnerArguments)
 
 
-def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
+def _build_multilingual_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
     """Use VAD-only turn starts so interim ASR text does not start a user turn."""
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
-            user_turn_strategies=UserTurnStrategies(start=[VADUserTurnStartStrategy()]),
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
+            user_turn_strategies=UserTurnStrategies(
+                start=[VADUserTurnStartStrategy()],
+                stop=build_smart_turn_stop_strategies(),
+            ),
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+        user_mute_strategies=build_user_mute_strategies(welcome_enabled),
         user_turn_strategies=UserTurnStrategies(
             start=[VADUserTurnStartStrategy()],
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
@@ -133,6 +138,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the multilingual NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
         __file__,
         body.get("prompt_content", ""),
@@ -293,7 +299,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=_build_multilingual_user_aggregator_params(),
+        user_params=_build_multilingual_user_aggregator_params(welcome_enabled),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
@@ -404,6 +410,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
         context.add_message({"role": "user", "content": FIXED_SESSION_GREETING_TRIGGER})
         await task.queue_frames([LLMRunFrame()])
 
