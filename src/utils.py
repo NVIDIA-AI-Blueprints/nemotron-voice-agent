@@ -52,6 +52,7 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
             "tts_function_id",
             "tts_model",
             "tts_synthesis_mode",
+            "tts_zero_shot_audio_prompt_file",
         }
     ),
 }
@@ -223,6 +224,7 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm-vllm", 8000): 18000,
     ("tts-service", 50051): 50151,
     ("chatterbox-tts-service", 50051): 50151,
+    ("magpie-zeroshot-tts-service", 50051): 50151,
     ("nemotron-asr-streaming-english", 50052): 50152,
     ("nemotron-asr-streaming-multilingual", 50052): 50152,
     ("parakeet-ctc-asr", 50052): 50152,
@@ -480,6 +482,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "tts_function_id",
         "tts_model",
         "tts_synthesis_mode",
+        "tts_zero_shot_audio_prompt_file",
     }
 )
 
@@ -527,6 +530,7 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "model": "tts_model",
             "voice_id": "tts_voice_id",
             "synthesis_mode": "tts_synthesis_mode",
+            "zero_shot_audio_prompt_file": "tts_zero_shot_audio_prompt_file",
         },
     ),
 )

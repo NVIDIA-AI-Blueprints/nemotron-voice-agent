@@ -43,6 +43,7 @@ tts:
     model: magpie-tts-multilingual
     voice_id: Magpie-Multilingual.EN-US.Aria
     synthesis_mode: stitched
+    zero_shot_audio_prompt_file: /data/prompts/clone.wav
 """,
                 encoding="utf-8",
             )
@@ -91,6 +92,7 @@ tts:
             self.assertEqual(config["tts_model"], "magpie-tts-multilingual")
             self.assertEqual(config["tts_voice_id"], "client-voice")
             self.assertEqual(config["tts_synthesis_mode"], "stitched")
+            self.assertEqual(config["tts_zero_shot_audio_prompt_file"], "/data/prompts/clone.wav")
 
     def test_hydrates_raw_catalog_key_for_direct_clients(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -227,7 +229,11 @@ llm:
         self_hosted_ids = {entry["id"] for entry in self_hosted}
         self.assertEqual(
             self_hosted_ids,
-            {"self-hosted:magpie-multilingual-tts", "self-hosted:chatterbox-multilingual-tts"},
+            {
+                "self-hosted:magpie-multilingual-tts",
+                "self-hosted:chatterbox-multilingual-tts",
+                "self-hosted:magpie-zeroshot-tts",
+            },
         )
         for entry in self_hosted:
             self.assertEqual(entry["server"], "localhost:50151")

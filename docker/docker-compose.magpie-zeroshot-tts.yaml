@@ -1,0 +1,60 @@
+# Magpie TTS Zeroshot: alternate to Magpie Multilingual (local only).
+# Access is restricted on NGC. Apply for access before pulling the image.
+#
+# Opt-in alternate (shared ports 50151/9000. Only one TTS can run):
+#   docker compose --profile <recipe>/workstation --profile magpie-zeroshot-tts \
+#     up -d --scale tts-service=0
+#   # same with <recipe>/dgx-spark instead of workstation
+# Omitting --profile magpie-zeroshot-tts leaves Zeroshot running and holding the
+# ports. Stop it before Magpie can bind again:
+#   docker compose --profile magpie-zeroshot-tts stop magpie-zeroshot-tts-service
+#   docker compose --profile <recipe>/workstation up -d
+# Then pick magpie-zeroshot-tts (or Magpie Multilingual) in the Services tab.
+#
+# NGC publishes this image as :latest (restricted). Pin a numeric tag when NGC
+# lists one for your release train.
+
+services:
+  magpie-zeroshot-tts-service:
+    image: nvcr.io/nim/nvidia/magpie-tts-zeroshot:latest
+    user: "0:0"
+    profiles:
+      - magpie-zeroshot-tts
+    environment:
+      NGC_API_KEY: ${NVIDIA_API_KEY}
+      NIM_HTTP_API_PORT: "9000"
+      NIM_GRPC_API_PORT: "50051"
+      # batch_size=8 (~10.87 GB GPU / ~9.74 GB CPU). Use batch_size=32 (~41.3 GB GPU)
+      # only on a dedicated GPU — it does not fit the shared H100 layout.
+      NIM_TAGS_SELECTOR: name=magpie-tts-zeroshot,batch_size=8
+    ports:
+      - "50151:50051"
+      - "9000:9000"
+    volumes:
+      - magpie_zeroshot_tts_cache:/opt/nim/.cache
+    shm_size: 16GB
+    ulimits:
+      nofile: 2048
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import json, urllib.request; data=json.load(urllib.request.urlopen(\"http://127.0.0.1:9000/v1/health/ready\", timeout=5)); raise SystemExit(0 if data.get(\"status\") == \"ready\" or data.get(\"ready\") is True else 1)'"]
+      interval: 60s
+      timeout: 10s
+      retries: 10
+      start_period: 3000s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # ~10.87 GB VRAM at batch_size=8. Edit device_ids for a second GPU.
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  magpie_zeroshot_tts_cache:
