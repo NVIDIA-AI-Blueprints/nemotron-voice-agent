@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Service-backed Pipecat evals. These use NVIDIA cloud ASR/LLM/TTS services,
+# a local Ollama judge, and the local frontend-backend booking server.
+
+name: Pipecat Service Evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: "Pipecat eval manifest to run"
+        required: true
+        default: "tests/pipecat_evals/service/cloud_tts_manifest.yaml"
+      scenario:
+        description: "Optional single scenario name"
+        required: false
+        default: ""
+      timeout_seconds:
+        description: "Per-scenario Pipecat timeout in seconds"
+        required: true
+        default: "360"
+      retries:
+        description: "Retries per scenario"
+        required: true
+        default: "2"
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pipecat-service-evals:
+    name: Pipecat service evals
+    runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 180
+
+    env:
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      PYTHONPATH: src
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --group eval
+
+      - name: Validate NVIDIA API key
+        run: |
+          if [ -z "$NVIDIA_API_KEY" ]; then
+            echo "NVIDIA_API_KEY repository secret is required for service-backed Pipecat evals."
+            exit 1
+          fi
+
+      - name: Inspect runner
+        run: |
+          uname -a
+          python --version
+          uv --version
+          nvidia-smi || true
+
+      - name: Start Ollama judge
+        env:
+          OLLAMA_MODEL: gemma2:9b
+        run: |
+          if ! command -v ollama >/dev/null 2>&1; then
+            curl -fsSL https://ollama.com/install.sh | sh
+          fi
+
+          if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+            nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          fi
+
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              cat "$RUNNER_TEMP/ollama.log" || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          ollama pull "$OLLAMA_MODEL"
+
+      - name: Start booking backend
+        run: |
+          if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          mkdir -p "$RUNNER_TEMP/booking-db"
+          BOOKING_DB_PATH="$RUNNER_TEMP/booking-db/bookings.db" \
+            BOOKING_HOST=127.0.0.1 \
+            BOOKING_PORT=8001 \
+            uv run --group eval python -m examples.frontend_backend_agent.airline.database.server \
+            > "$RUNNER_TEMP/booking-server.log" 2>&1 &
+
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              cat "$RUNNER_TEMP/booking-server.log" || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Run Pipecat service evals
+        env:
+          SERVICE_EVAL_MANIFEST: ${{ github.event.inputs.manifest || 'tests/pipecat_evals/service/cloud_tts_manifest.yaml' }}
+          SERVICE_EVAL_SCENARIO: ${{ github.event.inputs.scenario || '' }}
+          SERVICE_EVAL_TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds || '360' }}
+          SERVICE_EVAL_RETRIES: ${{ github.event.inputs.retries || '2' }}
+        run: |
+          args=(
+            --manifest "$SERVICE_EVAL_MANIFEST"
+            --timeout "$SERVICE_EVAL_TIMEOUT_SECONDS"
+            --retries "$SERVICE_EVAL_RETRIES"
+          )
+
+          if [ -n "$SERVICE_EVAL_SCENARIO" ]; then
+            args+=(--scenario "$SERVICE_EVAL_SCENARIO")
+          fi
+
+          uv run --group eval python tests/pipecat_evals/service/run_cloud_tts_evals.py "${args[@]}"
+
+      - name: Upload eval logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipecat-service-eval-logs
+          path: |
+            eval-runs/
+            ${{ runner.temp }}/ollama.log
+            ${{ runner.temp }}/booking-server.log
