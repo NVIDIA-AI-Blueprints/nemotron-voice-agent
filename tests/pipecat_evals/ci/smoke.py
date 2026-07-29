@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from argparse import Namespace
 from pathlib import Path
 
 from pipecat.evals.transport import EvalTransport
@@ -36,11 +37,12 @@ def _check_eval_bot_uploaded_attachment_body() -> None:
     body_path = ROOT / "tests/pipecat_evals/service/runner_bodies/omni_uploaded_image.json"
     body = json.loads(body_path.read_text(encoding="utf-8"))
     args = EvalRunnerArguments(body=body, session_id=str(body.get("session_id") or ""))
+    args.cli_args = Namespace(runner_body=str(body_path))
     example = eval_bot._select_example(body)
     prepared = eval_bot._prepare_body(body, example, args)
 
     try:
-        eval_bot._preload_eval_attachment(body, prepared["session_id"])
+        eval_bot._preload_eval_attachment(body, prepared["session_id"], args)
         attachment = latest_attachment(prepared["session_id"])
         if attachment is None:
             raise AssertionError("eval attachment was not stored")

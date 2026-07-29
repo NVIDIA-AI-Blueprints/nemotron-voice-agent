@@ -4,8 +4,12 @@
 # ruff: noqa: D100, D101, D102
 
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
+
+from pipecat.runner.types import EvalRunnerArguments
 
 import eval_bot
 
@@ -34,6 +38,37 @@ class EvalBotAttachmentTests(unittest.TestCase):
         self.assertEqual(kwargs["name"], fixture.name)
         self.assertEqual(kwargs["content_type"], "image/png")
         self.assertEqual(kwargs["data"], fixture.read_bytes())
+
+    def test_preload_eval_attachment_resolves_relative_path_from_runner_body_parent(self) -> None:
+        fixture = eval_bot._EVAL_ATTACHMENT_FIXTURE_ROOT / "omni-assistant-architecture.png"
+        runner_args = EvalRunnerArguments()
+        runner_args.cli_args = Namespace(runner_body=str(fixture.parent / "manual-body.json"))
+
+        with (
+            TemporaryDirectory() as other_cwd,
+            patch("eval_bot.Path.cwd", return_value=Path(other_cwd)),
+            patch("eval_bot.store_attachment") as store_attachment,
+        ):
+            eval_bot._preload_eval_attachment(
+                self._body_for_path(fixture.name),
+                "eval-session",
+                runner_args,
+            )
+
+        store_attachment.assert_called_once()
+        self.assertEqual(store_attachment.call_args.kwargs["data"], fixture.read_bytes())
+
+    def test_preload_eval_attachment_resolves_relative_path_from_cwd_without_runner_body(self) -> None:
+        fixture = eval_bot._EVAL_ATTACHMENT_FIXTURE_ROOT / "omni-assistant-architecture.png"
+
+        with (
+            patch("eval_bot.Path.cwd", return_value=fixture.parent),
+            patch("eval_bot.store_attachment") as store_attachment,
+        ):
+            eval_bot._preload_eval_attachment(self._body_for_path(fixture.name), "eval-session")
+
+        store_attachment.assert_called_once()
+        self.assertEqual(store_attachment.call_args.kwargs["data"], fixture.read_bytes())
 
     def test_preload_eval_attachment_rejects_path_outside_fixture_root(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be under"):
