@@ -103,7 +103,13 @@ jobs:
           OLLAMA_MODEL: gemma2:9b
         run: |
           if ! command -v ollama >/dev/null 2>&1; then
-            curl -fsSL https://ollama.com/install.sh | sh
+            if ! curl -fsSL https://ollama.com/install.sh | sh; then
+              if ! command -v ollama >/dev/null 2>&1; then
+                echo "Ollama installer failed before installing the ollama binary."
+                exit 1
+              fi
+              echo "Ollama installer exited non-zero after installing the binary; continuing with explicit startup check."
+            fi
           fi
 
           if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
