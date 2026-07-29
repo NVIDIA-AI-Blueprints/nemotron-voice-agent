@@ -54,7 +54,11 @@ def _prepare_body(body: dict, example: dict, runner_args: RunnerArguments) -> di
     return prepared
 
 
-def _preload_eval_attachment(body: dict, session_id: str) -> None:
+def _preload_eval_attachment(
+    body: dict,
+    session_id: str,
+    runner_args: RunnerArguments | None = None,
+) -> None:
     """Store one eval-supplied attachment so upload-backed examples can see it."""
     attachment = body.get(_EVAL_ATTACHMENT_KEY)
     if not attachment:
@@ -69,7 +73,10 @@ def _preload_eval_attachment(body: dict, session_id: str) -> None:
         raise ValueError(f"{_EVAL_ATTACHMENT_KEY}.path is required")
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
-        path = _PROJECT_ROOT / path
+        cli_args = getattr(runner_args, "cli_args", None)
+        runner_body = getattr(cli_args, "runner_body", None)
+        base_dir = Path(runner_body).expanduser().resolve().parent if runner_body else Path.cwd()
+        path = base_dir / path
     path = path.resolve()
     fixture_root = _EVAL_ATTACHMENT_FIXTURE_ROOT.resolve()
     try:
@@ -102,7 +109,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     example = _select_example(body)
     _bind_example_context(example)
     runner_args.body = _prepare_body(body, example, runner_args)
-    _preload_eval_attachment(body, str(runner_args.body.get("session_id") or ""))
+    _preload_eval_attachment(body, str(runner_args.body.get("session_id") or ""), runner_args)
     bot_fn = examples_registry.resolve_bot(example)
     await bot_fn(runner_args)
 
