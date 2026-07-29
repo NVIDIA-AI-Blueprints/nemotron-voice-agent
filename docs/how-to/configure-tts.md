@@ -17,17 +17,17 @@ Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Ch
 
 ### Supported languages
 
-The client discovers the active TTS service's voices and language codes at runtime. Use this table as a model reference; exact availability can differ by endpoint, deployment profile, or selected NIM image.
+The client discovers the active TTS service's available voices and language codes at runtime. Treat this table as model-level guidance, because exact availability can vary by endpoint, deployment profile, and selected NIM image.
 
 | Model | Supported languages |
 | --- | --- |
-| [Magpie TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#magpie-tts-multilingual-supported-languages) | English (`en-US`) · Spanish (`es-US`) · French (`fr-FR`) · German (`de-DE`) · Italian (`it-IT`) · Vietnamese (`vi-VN`) · Mandarin (`zh-CN`) · Hindi (`hi-IN`) · Japanese (`ja-JP`) · Modern Standard Arabic (`ar-AR`) · Korean (`ko-KR`) · Brazilian Portuguese (`pt-BR`) |
-| [Chatterbox TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#chatterbox-tts-multilingual-supported-languages) | Arabic (`ar-SA`) · Danish (`da-DK`) · German (`de-DE`) · Greek (`el-GR`) · English (`en-US`) · Spanish (`es-ES`) · Finnish (`fi-FI`) · French (`fr-FR`) · Hebrew (`he-IL`) · Hindi (`hi-IN`) · Italian (`it-IT`) · Japanese (`ja-JP`) · Korean (`ko-KR`) · Malay (`ms-MY`) · Dutch (`nl-NL`) · Norwegian (`nb-NO`) · Polish (`pl-PL`) · Brazilian Portuguese (`pt-BR`) · Russian (`ru-RU`) · Swedish (`sv-SE`) · Swahili (`sw-KE`) · Turkish (`tr-TR`) · Mandarin (`zh-CN`) |
+| [Magpie TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#magpie-tts-multilingual) | English (`en-US`) · Spanish (`es-US`) · French (`fr-FR`) · German (`de-DE`) · Italian (`it-IT`) · Vietnamese (`vi-VN`) · Mandarin (`zh-CN`) · Hindi (`hi-IN`) · Japanese (`ja-JP`) · Modern Standard Arabic (`ar-AR`) · Korean (`ko-KR`) · Brazilian Portuguese (`pt-BR`) |
+| [Chatterbox TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#chatterbox-tts-multilingual) | Arabic (`ar-SA`) · Danish (`da-DK`) · German (`de-DE`) · Greek (`el-GR`) · English (`en-US`) · Spanish (`es-ES`) · Finnish (`fi-FI`) · French (`fr-FR`) · Hebrew (`he-IL`) · Hindi (`hi-IN`) · Italian (`it-IT`) · Japanese (`ja-JP`) · Korean (`ko-KR`) · Malay (`ms-MY`) · Dutch (`nl-NL`) · Norwegian (`nb-NO`) · Polish (`pl-PL`) · Brazilian Portuguese (`pt-BR`) · Russian (`ru-RU`) · Swedish (`sv-SE`) · Swahili (`sw-KE`) · Turkish (`tr-TR`) · Mandarin (`zh-CN`) |
 
 For NVIDIA's current model and deployment support details, see the [TTS support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html).
 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
-
+>
 > **Streaming only.** The real-time pipeline needs a **streaming** TTS model. The streaming-capable TTS NIMs are **Magpie TTS Multilingual**, **Magpie TTS Zeroshot**, and **Chatterbox TTS Multilingual**. Check the [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) for supported request fields and model-specific options. This blueprint ships Magpie TTS Multilingual as the default local TTS sidecar.
 
 ## Hardware requirements and deployment configs
