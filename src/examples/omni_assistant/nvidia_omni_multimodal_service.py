@@ -1,23 +1,26 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Nemotron Omni multimodal-input, text-output LLM service.
+"""NVIDIA Nemotron Omni service implementation.
 
-Designed to be upstream-compatible with Pipecat's :class:`LLMService`
-contract:
+This module provides a service for interacting with NVIDIA's Nemotron Omni
+models, which accept speech as well as text input and reply with text. It
+extends ``NvidiaLLMService``, so reasoning frames, NIM's incremental token
+accounting, and every OpenAI-compatible behaviour come from there unchanged.
 
-* accepts text, audio, image, and video inputs as OpenAI-compatible
-  multimodal content parts;
-* emits standard Pipecat frames only, with optional ``TranscriptionFrame``
-  output when structured audio parsing is enabled via
-  ``Settings.emit_transcriptions``;
-* records processing, TTFB, and token-usage metrics through the standard
-  :class:`LLMService` helpers;
-* exposes the ``_on_turn_result``,
-  ``_structured_response_control_fields``, and
-  ``_should_emit_streamed_structured_response`` extension hooks so
-  application-layer policy (attachment routing, webcam summaries, visual
-  barge-in orchestration, etc.) lives outside this provider class.
+``Settings.input_modalities`` selects what starts a pipeline turn. ``"text"``
+expects an upstream STT service to produce the user turn, while ``"audio"`` lets
+Omni buffer user speech on VAD boundaries and perform ASR and generation in a
+single request. Both turn kinds run through the inherited completion path, so
+tool calling, streaming, metrics, and context aggregation are unchanged, and a
+tool result is answered whichever modality asked for the call.
+
+Media travels in Pipecat's universal LLM context, so ``create_audio_message()``,
+``add_audio_frames_message()``, and the image equivalents work here as they do
+for any other service: ``NvidiaOmniLLMAdapter`` converts each content part to
+the shape NIM names it by. Video, which the universal context has no part for,
+and one-shot inference with streaming or reasoning callbacks are available
+through ``run_multimodal_inference()`` and the module-level part helpers.
 """
 
 from __future__ import annotations
@@ -26,124 +29,161 @@ import asyncio
 import base64
 import contextlib
 import io
-import json
 import time
 import wave
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast, get_args
 
+import httpx
 from loguru import logger
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient, NotGiven
+from openai.types.chat import ChatCompletionMessageParam
+from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter, OpenAILLMInvocationParams
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
-    ErrorFrame,
+    CancelFrame,
+    EndFrame,
     Frame,
     InputAudioRawFrame,
-    InputImageRawFrame,
     InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMRunFrame,
-    LLMTextFrame,
+    LLMServiceMetadataFrame,
     StartFrame,
     TranscriptionFrame,
-    UserImageRawFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
     VADUserStartedSpeakingFrame,
 )
-from pipecat.metrics.metrics import LLMTokenUsage
-from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
-from pipecat.services.settings import NOT_GIVEN, LLMSettings, _NotGiven
+from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
+from pipecat.services.settings import NOT_GIVEN, _NotGiven, assert_given
 from pipecat.utils.time import time_now_iso8601
 
-InputModality = Literal["text", "audio", "image", "video"]
-OutputModality = Literal["text"]
+InputModality = Literal["text", "audio"]
+MediaModality = Literal["text", "audio", "image", "video"]
 OpenAIContentPart = dict[str, Any]
-OpenAIMessage = dict[str, Any]
 
-DEFAULT_AUDIO_RESPONSE_INSTRUCTION = (
-    "Listen to the user's speech in the attached audio and answer them helpfully in plain "
-    "speech-ready text. Do not use markdown, bullets, asterisks, or visual formatting symbols."
+DEFAULT_AUDIO_RESPONSE_INSTRUCTION = "Listen to the user's speech in the attached audio and answer them."
+
+TRANSCRIPT_AUDIO_RESPONSE_INSTRUCTION = (
+    "Listen to the user's speech in the attached audio. First write exactly what the user "
+    "said inside <transcript>...</transcript>, then write your spoken reply inside "
+    "<response>...</response>."
 )
 
-JSON_AUDIO_RESPONSE_INSTRUCTION = (
-    "Listen to the user's speech in the attached audio. First, transcribe what they said exactly. "
-    "Then answer them helpfully in plain speech-ready text. Return strict JSON with exactly "
-    "these fields: "
-    '{"transcript": "...", "response": "..."}'
-)
+SUPPORTED_INPUT_MODALITIES: frozenset[str] = frozenset(get_args(InputModality))
+DEFAULT_INPUT_MODALITIES: tuple[InputModality, ...] = ("text", "audio")
 
-DEFAULT_MULTIMODAL_RESPONSE_INSTRUCTION = (
-    "Answer the user's latest request using the provided context and any attached media. "
-    "Return plain text suitable for speech. Do not use markdown, bullets, asterisks, or visual "
-    "formatting symbols."
-)
-
-DEFAULT_INPUT_MODALITIES: tuple[InputModality, ...] = ("text", "audio", "image", "video")
-SUPPORTED_INPUT_MODALITIES: set[str] = set(DEFAULT_INPUT_MODALITIES)
+_TRANSCRIPT_OPEN = "<transcript>"
+_TRANSCRIPT_CLOSE = "</transcript>"
+_RESPONSE_OPEN = "<response>"
+_RESPONSE_CLOSE = "</response>"
 
 
 @dataclass
-class NvidiaOmniSettings(LLMSettings):
-    """Runtime settings for ``NvidiaOmniMultimodalService``.
+class NvidiaOmniSettings(NvidiaLLMSettings):
+    """Settings for NvidiaOmniLLMService.
 
-    ``output_modality`` is intentionally text-only for cascaded pipelines: the
-    service replaces ASR+LLM, while a normal downstream TTS service speaks the
-    emitted ``LLMTextFrame`` content.
+    Extends ``NvidiaLLMSettings``, so every standard OpenAI-compatible field
+    (sampling, penalties, seed, tools, ``extra``) is inherited unchanged.
+
+    Parameters:
+        input_modalities: What starts a pipeline turn. ``"text"`` runs turns from
+            upstream STT output; ``"audio"`` buffers user speech and lets Omni do
+            ASR itself. This does not limit what a turn may carry: media placed
+            in the context, an image message for instance, is sent with whichever
+            turn kind picks the context up.
+        emit_transcriptions: Whether audio turns should also produce a
+            ``TranscriptionFrame`` for the user's speech. Enabling it opts into a
+            response contract: the model is asked for
+            ``<transcript>``/``<response>`` sections, which the service strips
+            before any text reaches TTS. Buffered audio is sent as a transient
+            message rather than stored, so this frame is what gives the user side
+            of an audio conversation its history: enable it for conversations
+            that need one across turns, and for tool calling on audio turns,
+            whose follow-up completion would otherwise hold no record of the
+            request the user spoke.
+        audio_response_instruction: Overrides the instruction appended to audio
+            turns.
+        min_user_audio_secs: Shortest buffered utterance that starts a turn.
+        pre_speech_buffer_secs: Amount of pre-speech audio retained so the start
+            of an utterance is not clipped.
     """
 
-    stream: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    response_format: dict[str, Any] | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     input_modalities: tuple[InputModality, ...] | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    output_modality: OutputModality | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     emit_transcriptions: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     audio_response_instruction: str | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    multimodal_response_instruction: str | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     min_user_audio_secs: float | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
     pre_speech_buffer_secs: float | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    image_mime_type: str | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-
-
-@dataclass(frozen=True)
-class NvidiaOmniTurnResult:
-    """Parsed Omni response."""
-
-    transcript: str = ""
-    response: str = ""
-    raw_content: str = ""
-    payload: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class NvidiaOmniInferenceResult:
-    """Result from an out-of-pipeline Omni inference."""
+    """Result of an out-of-pipeline Omni inference."""
 
     text: str = ""
     reasoning: str = ""
     finish_reason: str = ""
 
 
-class NvidiaOmniMultimodalService(LLMService):
-    """Nemotron Omni multimodal-input, text-output LLM service.
+class NvidiaOmniLLMAdapter(OpenAILLMAdapter):
+    """Names the universal context's media parts the way NIM's Omni endpoint does.
 
-    Typical cascaded pipeline:
+    Pipecat's universal context carries audio as an ``input_audio`` part holding
+    base64 WAV data, which is what ``LLMContext.create_audio_message()`` and
+    ``add_audio_frames_message()`` produce. Omni reads a data URL under
+    ``audio_url`` instead, so the two are reconciled here, at the provider
+    boundary, leaving every caller free to build a context the standard way.
+    Image parts already agree, and text is untouched.
+    """
 
-    ``transport.input() -> VAD/UserTurnProcessor -> NvidiaOmniMultimodalService
-    -> TTS -> transport.output() -> LLMAssistantAggregator``
+    def _from_universal_context_messages(
+        self,
+        messages: list[LLMContextMessage],
+        *,
+        convert_developer_to_user: bool,
+    ) -> list[ChatCompletionMessageParam]:
+        converted = super()._from_universal_context_messages(
+            messages, convert_developer_to_user=convert_developer_to_user
+        )
+        return [_to_omni_message(message) for message in converted]
 
-    By default, the assistant response is plain model text.  If callers opt into
-    ``emit_transcriptions=True``, the service can also parse and emit a
-    ``TranscriptionFrame`` from the same Omni response.
+
+class NvidiaOmniLLMService(NvidiaLLMService):
+    """Nemotron Omni LLM service accepting text and speech pipeline input.
+
+    Cascaded pipeline with an upstream STT service::
+
+        transport.input() -> stt -> user_aggregator -> NvidiaOmniLLMService
+        -> tts -> transport.output() -> assistant_aggregator
+
+    Or with Omni handling ASR itself, replacing the STT stage::
+
+        transport.input() -> user_aggregator -> NvidiaOmniLLMService
+        -> tts -> transport.output() -> assistant_aggregator
+
+    Every turn is executed by the inherited completion path, so tool calling,
+    function-call re-prompting, token-level streaming, and metrics match a
+    standard OpenAI-compatible service regardless of input modality. Reasoning
+    handling, both the ``reasoning_content`` delta field and a leading
+    ``<think>`` block, is inherited from ``NvidiaLLMService``; this service adds
+    audio turns on top of it.
+
+    A transcribed spoken turn is reported as a ``TranscriptionFrame`` and written
+    to the context by the user aggregator, as an STT service's transcript is, so
+    the aggregator remains the only writer of the conversation history.
     """
 
     Settings = NvidiaOmniSettings
     _settings: Settings
+    adapter_class = NvidiaOmniLLMAdapter
 
     def __init__(
         self,
@@ -157,40 +197,34 @@ class NvidiaOmniMultimodalService(LLMService):
         extra: dict[str, Any] | None = None,
         **kwargs,
     ) -> None:
-        """Initialize the multimodal Omni service.
+        """Initialize the Omni service.
 
         Args:
-            api_key: NVIDIA API key. For local deployments, an empty key is accepted.
+            api_key: NVIDIA API key. An empty key is accepted for local deployments.
             base_url: OpenAI-compatible endpoint base URL.
-            model: Deprecated direct model override. Prefer ``settings.model``.
-            context: Shared LLM context. If omitted, the first ``LLMContextFrame`` supplies it.
+            model: Deprecated direct model override.
+
+                .. deprecated::
+                    Use ``settings=NvidiaOmniLLMService.Settings(model=...)`` instead.
+
+            context: Shared LLM context. If omitted, the first ``LLMContextFrame``
+                supplies it.
             settings: Runtime-updatable service settings.
             request_timeout_secs: HTTP client timeout.
             extra: Extra request fields merged into every chat completion call.
-            **kwargs: Additional ``LLMService`` arguments.
+            **kwargs: Additional arguments passed to ``NvidiaLLMService``.
         """
         default_settings = self.Settings(
             model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             system_instruction=None,
             temperature=0.6,
-            max_tokens=65536,
             top_p=0.95,
-            top_k=None,
-            frequency_penalty=None,
-            presence_penalty=None,
-            seed=None,
-            filter_incomplete_user_turns=False,
-            user_turn_completion_config=None,
-            stream=True,
-            response_format=None,
+            extra=dict(extra or {}),
             input_modalities=DEFAULT_INPUT_MODALITIES,
-            output_modality="text",
             emit_transcriptions=False,
             audio_response_instruction=None,
-            multimodal_response_instruction=DEFAULT_MULTIMODAL_RESPONSE_INSTRUCTION,
             min_user_audio_secs=0.3,
             pre_speech_buffer_secs=0.2,
-            image_mime_type="image/jpeg",
         )
         if model is not None:
             self._warn_init_param_moved_to_settings("model", "model")
@@ -199,19 +233,13 @@ class NvidiaOmniMultimodalService(LLMService):
             default_settings.apply_update(settings)
         self._validate_settings(default_settings)
 
-        super().__init__(settings=default_settings, **kwargs)
-        self._client = AsyncOpenAI(
-            base_url=base_url,
-            api_key=api_key or "not-needed",
-            timeout=request_timeout_secs,
-        )
-        self._base_url = base_url
+        self._request_timeout_secs = request_timeout_secs
+        super().__init__(api_key=api_key, base_url=base_url, settings=default_settings, **kwargs)
+
         self._context = context
-        self._extra = dict(extra or {})
 
         self._audio_buffer: list[bytes] = []
         self._pre_speech_buffer: list[bytes] = []
-        self._pending_content_parts: list[OpenAIContentPart] = []
         self._sample_rate = 16000
         self._channels = 1
         self._user_speaking = False
@@ -220,48 +248,130 @@ class NvidiaOmniMultimodalService(LLMService):
         self._pending_request_is_audio = False
         self._last_user_eou_at: float | None = None
 
-    def can_generate_metrics(self) -> bool:
-        """Return whether Pipecat metrics can be emitted."""
-        return True
+        self._active_turn_parts: list[OpenAIContentPart] | None = None
+        self._transcript_extractor: _TranscriptResponseExtractor | None = None
+        self._transcript_emitted = False
+        self._answered_transcript = ""
+
+    def create_client(
+        self,
+        api_key=None,
+        base_url=None,
+        organization=None,
+        project=None,
+        default_headers=None,
+        **kwargs,
+    ):
+        """Create the AsyncOpenAI client with connection pooling and the Omni timeout.
+
+        Args:
+            api_key: NVIDIA API key. Empty is accepted for local deployments.
+            base_url: OpenAI-compatible endpoint base URL.
+            organization: OpenAI organization ID.
+            project: OpenAI project ID.
+            default_headers: Additional HTTP headers.
+            **kwargs: Service arguments forwarded by the base class. Unused
+                here, as in the base implementation, and kept for signature
+                parity.
+
+        Returns:
+            Configured AsyncOpenAI client instance.
+        """
+        return AsyncOpenAI(
+            api_key=api_key or "not-needed",
+            base_url=base_url,
+            timeout=self._request_timeout_secs,
+            organization=organization,
+            project=project,
+            http_client=DefaultAsyncHttpxClient(
+                limits=httpx.Limits(max_keepalive_connections=100, max_connections=1000, keepalive_expiry=None)
+            ),
+            default_headers=default_headers,
+        )
+
+    def service_metadata_frame(self) -> LLMServiceMetadataFrame:
+        """Announce an audio pipeline as a realtime service, a cascade as a plain one.
+
+        With audio input Omni transcribes the user itself, so the user's turn
+        only exists once the model reports it — after the boundary at which a
+        cascade aggregator writes the user message. Realtime mode moves that
+        write to the start of the assistant's response, which is late enough for
+        the transcript to have landed, and keeps the aggregator the single owner
+        of the conversation history.
+
+        Turns stay pipeline-driven, so no turn strategies are recommended and no
+        warning about absent turn frames is raised: Omni has no server-side turn
+        of its own to align with, and the pipeline's VAD and turn analyzer decide
+        every boundary.
+
+        Returns:
+            The metadata frame broadcast at pipeline start.
+        """
+        if not self._modality_enabled("audio"):
+            return super().service_metadata_frame()
+        return LLMServiceMetadataFrame(service_name=self.name, is_realtime_service=True)
 
     async def start(self, frame: StartFrame) -> None:
-        """Start the service and reset per-session buffers."""
+        """Start the service and reset per-session audio state."""
         await super().start(frame)
-        self._audio_buffer = []
-        self._pre_speech_buffer = []
-        self._pending_content_parts = []
-        self._user_speaking = False
-        self._bot_responding = False
-        self._pending_request_is_audio = False
-        self._last_user_eou_at = None
+        self._reset_audio_state()
 
-    async def stop(self, frame) -> None:
-        """Stop the service and cancel an in-flight Omni request."""
+    async def stop(self, frame: EndFrame) -> None:
+        """Stop the service and cancel an in-flight turn."""
         await self._cancel_pending_request()
         await super().stop(frame)
 
-    async def cancel(self, frame) -> None:
-        """Cancel the service and any in-flight Omni request."""
+    async def cancel(self, frame: CancelFrame) -> None:
+        """Cancel the service and any in-flight turn."""
         await self._cancel_pending_request()
         await super().cancel(frame)
 
-    async def run_inference(
-        self,
-        context: LLMContext,
-        max_tokens: int | None = None,
-        system_instruction: str | None = None,
-    ) -> str | None:
-        """Run a text-only, out-of-pipeline inference."""
-        messages = self._messages_from_context(context)
-        if system_instruction:
-            messages.insert(0, {"role": "system", "content": system_instruction})
-        request_kwargs = self._build_request_kwargs(messages=messages, has_audio=False)
-        if max_tokens is not None:
-            request_kwargs["max_tokens"] = max_tokens
-        request_kwargs["stream"] = False
-        completion = await self._client.chat.completions.create(**request_kwargs)
-        message = completion.choices[0].message if completion.choices else None
-        return _extract_text_content(getattr(message, "content", ""))
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        """Process pipeline frames, driving text and audio Omni turns.
+
+        This calls ``LLMService.process_frame()`` rather than the
+        ``BaseOpenAILLMService`` implementation because Omni owns its turn
+        timing: an audio turn starts on a VAD boundary, not on every
+        ``LLMContextFrame``. The grandparent still applies settings updates, tool
+        registration, and function-call cancellation.
+
+        ``LLMContextFrame`` and ``LLMRunFrame`` are consumed here; every other
+        frame is forwarded. A user aggregator turns ``LLMRunFrame`` into a
+        context frame, so it only reaches this service when the pipeline drives
+        it without one, as a worker-style pipeline does.
+
+        Args:
+            frame: The frame to process.
+            direction: The direction of frame processing.
+        """
+        await LLMService.process_frame(self, frame, direction)
+
+        if isinstance(frame, InterruptionFrame):
+            await self.stop_all_metrics()
+            await self._cancel_pending_request()
+            self._bot_responding = False
+            if not self._user_speaking:
+                self._audio_buffer = []
+                self._pre_speech_buffer = []
+        elif isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_responding = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_responding = False
+        elif isinstance(frame, LLMContextFrame):
+            self._context = frame.context
+            await self._maybe_run_text_turn(frame.context)
+            return
+        elif isinstance(frame, LLMRunFrame):
+            await self._maybe_run_text_turn(self._context, force=True)
+            return
+        elif isinstance(frame, InputAudioRawFrame):
+            self._handle_audio_frame(frame)
+        elif isinstance(frame, (UserStartedSpeakingFrame, VADUserStartedSpeakingFrame)):
+            await self._handle_user_started()
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            await self._handle_user_stopped()
+
+        await self.push_frame(frame, direction)
 
     async def run_multimodal_inference(
         self,
@@ -274,13 +384,31 @@ class NvidiaOmniMultimodalService(LLMService):
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> NvidiaOmniInferenceResult:
-        """Run an out-of-pipeline multimodal inference with optional streaming callbacks.
+        """Run a one-shot, out-of-pipeline inference over any Omni modality.
 
-        This is useful for worker-style agents that need Omni multimodal input
-        support without inserting the service into a Pipecat pipeline.
+        Extends ``run_inference()`` with what a worker-style agent needs from a
+        one-shot call and the standard contract does not offer: the reasoning the
+        model produced, deltas as they arrive, and a per-call reasoning budget.
+        Request parameters are built with ``build_chat_completion_params()``, so
+        sampling settings and media conversion match pipeline turns.
+
+        Args:
+            context: Context whose messages carry the media content parts.
+            max_tokens: Overrides the configured token limit.
+            reasoning_budget: Optional NVIDIA ``reasoning_budget`` extra body field.
+            temperature: Overrides the configured temperature.
+            stream: Whether to stream the completion and invoke the delta callbacks.
+            on_text_delta: Called with each visible text delta while streaming.
+            on_reasoning_delta: Called with each reasoning delta while streaming.
+
+        Returns:
+            The generated text, reasoning, and finish reason.
         """
-        request_kwargs = self._build_request_kwargs(messages=self._messages_from_context(context), has_audio=False)
+        request_kwargs = self._out_of_band_request_kwargs(context)
         if max_tokens is not None:
+            # One limit, one field: an endpoint given both is free to honour
+            # either, so the one this call asks for replaces both.
+            request_kwargs.pop("max_completion_tokens", None)
             request_kwargs["max_tokens"] = max_tokens
         if reasoning_budget is not None:
             extra_body = dict(request_kwargs.get("extra_body") or {})
@@ -288,17 +416,21 @@ class NvidiaOmniMultimodalService(LLMService):
             request_kwargs["extra_body"] = extra_body
         if temperature is not None:
             request_kwargs["temperature"] = temperature
+
         if not stream:
             request_kwargs["stream"] = False
+            request_kwargs.pop("stream_options", None)
             completion = await self._client.chat.completions.create(**request_kwargs)
             choice = completion.choices[0] if completion.choices else None
             message = choice.message if choice else None
             return NvidiaOmniInferenceResult(
                 text=_extract_text_content(getattr(message, "content", "")).strip(),
+                reasoning=_extract_reasoning_content(message).strip(),
                 finish_reason=str(getattr(choice, "finish_reason", "") or ""),
             )
 
         request_kwargs["stream"] = True
+        request_kwargs.setdefault("stream_options", {"include_usage": True})
         text = ""
         reasoning = ""
         finish_reason = ""
@@ -307,11 +439,10 @@ class NvidiaOmniMultimodalService(LLMService):
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
-            delta = choice.delta
             if choice.finish_reason:
                 finish_reason = str(choice.finish_reason)
-            reasoning_delta = _extract_delta_reasoning_content(delta)
-            text_delta = _extract_text_content(getattr(delta, "content", ""))
+            reasoning_delta = _extract_reasoning_content(choice.delta)
+            text_delta = _extract_text_content(getattr(choice.delta, "content", ""))
             if reasoning_delta:
                 reasoning += reasoning_delta
                 if on_reasoning_delta is not None:
@@ -326,74 +457,97 @@ class NvidiaOmniMultimodalService(LLMService):
             finish_reason=finish_reason,
         )
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        """Process pipeline frames for multimodal Omni turns."""
-        await super().process_frame(frame, direction)
+    def build_chat_completion_params(self, params_from_context: OpenAILLMInvocationParams) -> dict:
+        """Build chat completion params, appending the active audio turn.
 
-        if isinstance(frame, InterruptionFrame):
-            await self.stop_all_metrics()
-            await self._cancel_pending_request()
-            self._bot_responding = False
-            if not self._user_speaking:
-                self._audio_buffer = []
-                self._pre_speech_buffer = []
-            await self.push_frame(frame, direction)
+        Delegates to the base implementation so inherited settings, tools, and
+        tool choice are forwarded unchanged. While an audio turn is active, its
+        content parts are appended as a transient trailing user message instead
+        of mutating the shared context.
+
+        A field nobody configured is dropped rather than sent as ``NOT_GIVEN``,
+        which the client omits from the request anyway. That keeps one token
+        limit on the wire: the inherited one-shot path overrides
+        ``max_completion_tokens`` whenever that key is merely present, and would
+        otherwise send it beside the ``max_tokens`` from settings.
+
+        Args:
+            params_from_context: Parameters derived from the LLM context.
+
+        Returns:
+            Dictionary of parameters for the chat completion request.
+        """
+        params = {
+            name: value
+            for name, value in super().build_chat_completion_params(params_from_context).items()
+            if not isinstance(value, (NotGiven, _NotGiven))
+        }
+        if self._active_turn_parts:
+            messages = list(params.get("messages") or [])
+            messages.append(
+                {"role": "user", "content": [_to_omni_content_part(part) for part in self._active_turn_parts]}
+            )
+            params["messages"] = messages
+        return params
+
+    async def _push_llm_text(self, text: str) -> None:
+        """Split the transcript section out of visible content before TTS.
+
+        The base loop routes every content delta through here. When transcripts
+        are enabled, the ``<transcript>`` section becomes a
+        ``TranscriptionFrame`` and only the ``<response>`` text travels onward,
+        so neither TTS nor the assistant's context sees the tags.
+
+        Args:
+            text: Visible content from the model, reasoning already removed.
+        """
+        extractor = self._transcript_extractor
+        if extractor is None:
+            await super()._push_llm_text(text)
             return
+        response_text = extractor.feed(text)
+        await self._maybe_emit_transcript(extractor)
+        if response_text:
+            await super()._push_llm_text(response_text)
 
-        if isinstance(frame, BotStartedSpeakingFrame):
-            self._bot_responding = True
-            await self.push_frame(frame, direction)
+    async def _finalize_reasoning_state(self, *, flush_buffered_text: bool) -> None:
+        """Close reasoning state, then flush what the transcript split still holds.
+
+        Args:
+            flush_buffered_text: Whether buffered text may still be forwarded.
+                ``False`` when the stream ended early through interruption or
+                cancellation.
+        """
+        await super()._finalize_reasoning_state(flush_buffered_text=flush_buffered_text)
+        extractor = self._transcript_extractor
+        if extractor is None:
             return
+        # The split is over, so clear it before pushing: the remainder is plain
+        # response text and must not be fed through the extractor again.
+        self._transcript_extractor = None
+        pending = extractor.finalize()
+        await self._maybe_emit_transcript(extractor)
+        if pending and flush_buffered_text:
+            await self._push_llm_text(pending)
 
-        if isinstance(frame, BotStoppedSpeakingFrame):
-            self._bot_responding = False
-            await self.push_frame(frame, direction)
-            return
+    async def _handle_user_started(self) -> None:
+        """Open a fresh audio buffer for the utterance the user just started.
 
-        if isinstance(frame, LLMContextFrame):
-            self._context = frame.context
-            await self._maybe_run_text_or_multimodal_turn(frame.context)
-            return
-
-        if isinstance(frame, LLMRunFrame):
-            await self._maybe_run_text_or_multimodal_turn(self._context)
-            return
-
-        if isinstance(frame, InputImageRawFrame):
-            await self._handle_image_frame(frame)
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, InputAudioRawFrame):
-            self._handle_audio_frame(frame)
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, (UserStartedSpeakingFrame, VADUserStartedSpeakingFrame)):
-            await self._handle_user_started(frame)
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, UserStoppedSpeakingFrame):
-            await self._handle_user_stopped(frame)
-            await self.push_frame(frame, direction)
-            return
-
-        await self.push_frame(frame, direction)
-
-    async def _handle_user_started(self, frame: Frame) -> None:
-        if self._user_speaking:
+        Interrupting the bot is the turn controller's job, not this service's, so
+        this only drops the turn Omni is generating for the previous utterance.
+        """
+        if self._user_speaking or not self._modality_enabled("audio"):
             return
         if self._bot_responding:
-            logger.info("NVIDIA Omni: barge-in detected, interrupting bot output")
+            logger.debug(f"{self}: barge-in detected, dropping the turn being generated")
             await self._cancel_pending_request()
             self._bot_responding = False
-            await self.broadcast_interruption()
         self._user_speaking = True
         self._audio_buffer = list(self._pre_speech_buffer)
         self._pre_speech_buffer = []
 
-    async def _handle_user_stopped(self, frame: Frame) -> None:
+    async def _handle_user_stopped(self) -> None:
+        """Close the utterance at the end-of-turn boundary and answer it."""
         if not self._user_speaking:
             return
         self._user_speaking = False
@@ -401,6 +555,7 @@ class NvidiaOmniMultimodalService(LLMService):
         await self._maybe_run_audio_turn()
 
     def _handle_audio_frame(self, frame: InputAudioRawFrame) -> None:
+        """Buffer input audio, tracking the format the transport delivers."""
         self._sample_rate = frame.sample_rate
         self._channels = frame.num_channels
         if not self._modality_enabled("audio"):
@@ -410,345 +565,212 @@ class NvidiaOmniMultimodalService(LLMService):
         else:
             self._append_pre_speech_audio(frame)
 
-    async def _handle_image_frame(self, frame: InputImageRawFrame) -> None:
-        if not self._modality_enabled("image"):
-            return
-        if isinstance(frame, UserImageRawFrame) and frame.append_to_context is False:
-            return
-        try:
-            self._pending_content_parts.append(
-                input_image_frame_to_message_part(frame, mime_type=str(self._settings.image_mime_type))
-            )
-            if isinstance(frame, UserImageRawFrame) and frame.text:
-                self._pending_content_parts.append(text_message_part(frame.text))
-        except Exception as exc:
-            logger.warning(f"NVIDIA Omni: could not encode input image frame: {exc}")
+    def _append_pre_speech_audio(self, frame: InputAudioRawFrame) -> None:
+        """Keep a rolling window of pre-speech audio so utterances start intact."""
+        self._pre_speech_buffer.append(frame.audio)
+        bytes_per_second = max(frame.sample_rate * frame.num_channels * 2, 1)
+        max_bytes = int(bytes_per_second * float(self._settings.pre_speech_buffer_secs))
+        total = sum(len(chunk) for chunk in self._pre_speech_buffer)
+        while self._pre_speech_buffer and total > max_bytes:
+            total -= len(self._pre_speech_buffer.pop(0))
 
     async def _maybe_run_audio_turn(self) -> None:
+        """Answer the buffered utterance, letting Omni transcribe it itself."""
         if self._bot_responding:
-            logger.debug("NVIDIA Omni: ignoring audio turn while bot is responding")
+            logger.debug(f"{self}: ignoring audio turn while bot is responding")
             return
 
-        audio_chunks = list(self._audio_buffer)
-        content_parts = list(self._pending_content_parts)
+        audio_payload = b"".join(self._audio_buffer)
         self._audio_buffer = []
         self._pre_speech_buffer = []
-        self._pending_content_parts = []
-        if not audio_chunks:
-            logger.debug("NVIDIA Omni: no buffered audio for audio turn, skipping")
+        if not audio_payload:
             return
 
-        audio_payload = b"".join(audio_chunks)
-        min_bytes = int(self._sample_rate * self._channels * 2 * float(self._settings.min_user_audio_secs))
-        if len(audio_payload) < min_bytes:
-            logger.debug(
-                f"NVIDIA Omni: dropping {len(audio_payload)} bytes "
-                f"(< {float(self._settings.min_user_audio_secs) * 1000:.0f} ms)"
-            )
+        bytes_per_second = max(self._sample_rate * self._channels * 2, 1)
+        min_secs = float(self._settings.min_user_audio_secs)
+        if len(audio_payload) < int(bytes_per_second * min_secs):
+            logger.debug(f"{self}: dropping utterance shorter than {min_secs * 1000:.0f} ms")
             return
 
         if self._pending_request is not None and not self._pending_request.done():
-            logger.debug("NVIDIA Omni: previous turn still in flight, cancelling it to run the newer turn")
+            logger.debug(f"{self}: preempting the in-flight turn with a newer one")
             await self.stop_all_metrics()
             await self._cancel_pending_request()
 
         eou_at = self._last_user_eou_at
         self._last_user_eou_at = None
+        context = self._context
+        if context is None:
+            # A pipeline that never sends a context frame still has a user
+            # waiting for an answer, so the utterance is answered on its own
+            # rather than dropped, with no conversation history behind it.
+            logger.warning(f"{self}: answering an utterance that arrived before any context")
+            context = LLMContext([])
+        instruction = self._audio_response_instruction()
+        turn_parts = [
+            audio_message_part(audio_payload, self._sample_rate, self._channels),
+            text_message_part(instruction),
+        ]
+        expect_transcript = bool(self._settings.emit_transcriptions)
+        # The audio and its instruction never enter the context, so this is the
+        # only place they can be seen: the inherited context log won't show them.
+        logger.debug(
+            f"{self}: audio turn of {len(audio_payload) / bytes_per_second:.2f}s with a "
+            f"{len(instruction)}-character instruction, transcript={expect_transcript}"
+        )
 
-        async def _run() -> None:
-            await self._run_omni_turn(
-                audio_payload=audio_payload,
-                content_parts=content_parts,
-                context=self._context,
+        async def run() -> None:
+            await self._run_turn(
+                context,
+                turn_parts=turn_parts,
+                expect_transcript=expect_transcript,
                 metrics_start_time=eou_at,
             )
 
-        self._pending_request = self.create_task(_run(), name="nvidia-omni-audio-turn")
+        self._pending_request = self.create_task(run(), name="nvidia-omni-audio-turn")
         self._pending_request_is_audio = True
 
-    async def _maybe_run_text_or_multimodal_turn(self, context: LLMContext | None) -> None:
-        if self._bot_responding:
-            logger.debug("NVIDIA Omni: ignoring text/multimodal trigger while bot is responding")
-            return
-        if not _context_has_pending_user_message(context) and not self._pending_content_parts:
-            logger.debug("NVIDIA Omni: no pending user text or media, skipping text/multimodal turn")
+    async def _maybe_run_text_turn(self, context: LLMContext | None, *, force: bool = False) -> None:
+        """Answer a context frame, unless the audio path owns the same turn.
+
+        A tool result is answered whatever the input modality is: the completion
+        that requested the call can only be finished by another completion, and
+        an audio-only pipeline would otherwise leave the function's result
+        unspoken.
+
+        Args:
+            context: The context to complete, or ``None`` when none arrived yet.
+            force: Whether the frame asks for a completion outright, as
+                ``LLMRunFrame`` does, rather than carrying a new user turn.
+        """
+        if context is None:
+            logger.warning(f"{self}: asked for a completion before any context arrived, ignoring")
             return
 
-        if self._pending_request is not None and not self._pending_request.done():
-            if self._pending_request_is_audio:
-                logger.debug("NVIDIA Omni: audio turn in flight, ignoring redundant context/run trigger")
+        trigger = "user" if force else _completion_trigger(context)
+        if trigger != "tool":
+            if not self._modality_enabled("text"):
                 return
-            logger.debug("NVIDIA Omni: previous turn still in flight, cancelling it to run the newer turn")
-            await self.stop_all_metrics()
-            await self._cancel_pending_request()
+            if self._modality_enabled("audio") and self._echoes_an_audio_turn(trigger, context, force=force):
+                return
 
-        content_parts = list(self._pending_content_parts)
-        self._pending_content_parts = []
+        pending = self._pending_request
+        if pending is not None and not pending.done():
+            if trigger == "tool":
+                # The in-flight turn is the one that requested the tool call, so
+                # let it finish instead of preempting its own follow-up.
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pending
+            elif self._pending_request_is_audio:
+                logger.debug(f"{self}: audio turn in flight, ignoring the context echo")
+                return
+            else:
+                logger.debug(f"{self}: preempting the in-flight turn with a newer one")
+                await self.stop_all_metrics()
+                await self._cancel_pending_request()
 
-        async def _run() -> None:
-            await self._run_omni_turn(
-                audio_payload=b"",
-                content_parts=content_parts,
-                context=context,
-                metrics_start_time=None,
-            )
+        async def run() -> None:
+            await self._run_turn(context, turn_parts=self._unwritten_spoken_turn(trigger, context))
 
-        self._pending_request = self.create_task(_run(), name="nvidia-omni-text-turn")
+        self._pending_request = self.create_task(run(), name="nvidia-omni-text-turn")
         self._pending_request_is_audio = False
 
-    async def _run_omni_turn(
+    def _echoes_an_audio_turn(
         self,
-        *,
-        audio_payload: bytes,
-        content_parts: Sequence[OpenAIContentPart],
+        trigger: Literal["user", "tool"] | None,
         context: LLMContext | None,
-        metrics_start_time: float | None,
-    ) -> None:
-        has_audio = bool(audio_payload)
-        messages = self._messages_from_context(context)
-        current_parts = list(content_parts)
-        if has_audio:
-            current_parts.append(audio_message_part(audio_payload, self._sample_rate, self._channels))
-            current_parts.append(text_message_part(self._audio_response_instruction()))
-        elif current_parts:
-            current_parts.append(text_message_part(str(self._settings.multimodal_response_instruction)))
+        *,
+        force: bool,
+    ) -> bool:
+        """Whether a context frame repeats a user turn the audio path already owns.
 
-        if current_parts:
-            messages.append({"role": "user", "content": current_parts})
+        A pipeline that also accepts audio sees the same user turn twice: once as
+        buffered speech, and again as the context frame the aggregator pushes
+        once a transcript exists for it. Only asked when audio is enabled, so a
+        text-only pipeline completes every context frame it is given, like any
+        other OpenAI-compatible service.
+        """
+        if trigger is None:
+            # Omni starts audio turns on speech boundaries rather than on context
+            # frames, so a frame carrying no unanswered user turn is an echo.
+            return True
+        if force:
+            return False
+        if self._answered_transcript and _latest_user_text(context) == self._answered_transcript:
+            logger.debug(f"{self}: the audio turn already answered this transcript, ignoring the echo")
+            return True
+        return False
 
-        request_kwargs = self._build_request_kwargs(messages=messages, has_audio=has_audio)
-        logger.info(
-            "NVIDIA Omni request: "
-            f"base_url={self._base_url}, model={self._settings.model}, "
-            f"mode={'audio' if has_audio else 'text'}, "
-            f"content_parts={len(current_parts)}, context_messages={len(messages) - (1 if current_parts else 0)}"
-        )
-
-        if bool(self._settings.stream):
-            await self._run_streaming_omni_turn(request_kwargs, has_audio, metrics_start_time)
-        else:
-            await self._run_non_streaming_omni_turn(request_kwargs, has_audio, metrics_start_time)
-
-    def _build_request_kwargs(self, *, messages: list[OpenAIMessage], has_audio: bool) -> dict[str, Any]:
-        request_kwargs: dict[str, Any] = {
-            "model": self._settings.model,
-            "messages": messages,
-            "max_tokens": self._settings.max_tokens,
-            "temperature": self._settings.temperature,
-        }
-        if self._settings.top_p is not None:
-            request_kwargs["top_p"] = self._settings.top_p
-        if self._expects_structured_audio_response(has_audio) and self._settings.response_format:
-            request_kwargs["response_format"] = self._settings.response_format
-        request_kwargs.update(self._extra)
-        return request_kwargs
-
-    def _audio_response_instruction(self) -> str:
-        if self._settings.audio_response_instruction:
-            return str(self._settings.audio_response_instruction)
-        if self._settings.emit_transcriptions:
-            return JSON_AUDIO_RESPONSE_INSTRUCTION
-        return DEFAULT_AUDIO_RESPONSE_INSTRUCTION
-
-    def _expects_structured_audio_response(self, has_audio: bool) -> bool:
-        return has_audio and bool(self._settings.emit_transcriptions)
-
-    async def _run_non_streaming_omni_turn(
+    def _unwritten_spoken_turn(
         self,
-        request_kwargs: dict[str, Any],
-        has_audio: bool,
-        metrics_start_time: float | None,
+        trigger: Literal["user", "tool"] | None,
+        context: LLMContext | None,
+    ) -> list[OpenAIContentPart] | None:
+        """The spoken turn a tool follow-up still needs, as transient content parts.
+
+        A spoken turn enters the context through the user aggregator, which
+        writes it once the assistant response starts. The follow-up completion a
+        tool result asks for belongs to that same response, so it can run before
+        that write lands, and replaying the context alone would drop the request
+        the user spoke. ``None`` when the context already carries the turn, or
+        when nothing was transcribed for it.
+        """
+        transcript = self._answered_transcript
+        if trigger != "tool" or not transcript or _latest_user_text(context) == transcript:
+            return None
+        return [text_message_part(transcript)]
+
+    async def _run_turn(
+        self,
+        context: LLMContext,
+        *,
+        turn_parts: Sequence[OpenAIContentPart] | None = None,
+        expect_transcript: bool = False,
+        metrics_start_time: float | None = None,
     ) -> None:
-        await self.start_processing_metrics(start_time=metrics_start_time)
-        await self.start_ttfb_metrics(start_time=metrics_start_time)
-        try:
-            completion = await self._client.chat.completions.create(**request_kwargs)
-        except asyncio.CancelledError:
-            await self.stop_processing_metrics()
-            raise
-        except Exception as exc:
-            await self.stop_processing_metrics()
-            logger.exception(f"NVIDIA Omni request failed: {exc}")
-            await self.push_error_frame(ErrorFrame(error=f"NVIDIA Omni request failed: {exc}", fatal=False))
-            return
+        """Run one turn through the base OpenAI completion path.
 
-        message = completion.choices[0].message if completion.choices else None
-        raw_content = _extract_text_content(getattr(message, "content", ""))
-        await self._emit_llm_usage_metrics(getattr(completion, "usage", None))
-        structured_audio_response = self._expects_structured_audio_response(has_audio)
-        result = self._parse_turn_result(raw_content, parse_json=structured_audio_response)
-        result = await self._on_turn_result(result) or result
-        if structured_audio_response and result.transcript:
-            await self._emit_user_transcript(result.transcript)
+        Mirrors the frame and metrics contract of the base ``LLMContextFrame``
+        handler while letting Omni decide when a turn starts and inject audio
+        content parts into it. Reasoning state is reset by the inherited
+        ``_process_context()``.
+        """
+        self._active_turn_parts = list(turn_parts) if turn_parts else None
+        self._transcript_extractor = _TranscriptResponseExtractor() if expect_transcript else None
+        self._transcript_emitted = False
 
-        response = result.response
-        if not response:
-            response = "Sorry, I could not generate a response."
         await self.push_frame(LLMFullResponseStartFrame())
-        await self.stop_ttfb_metrics()
-        await self.push_frame(LLMTextFrame(text=response))
-        await self.stop_processing_metrics()
-        await self.push_frame(LLMFullResponseEndFrame())
-
-    async def _run_streaming_omni_turn(
-        self,
-        request_kwargs: dict[str, Any],
-        has_audio: bool,
-        metrics_start_time: float | None,
-    ) -> None:
-        request_kwargs = dict(request_kwargs)
-        request_kwargs["stream"] = True
-        request_kwargs.setdefault("stream_options", {"include_usage": True})
-        structured_audio_response = self._expects_structured_audio_response(has_audio)
-        transcript_streamer = _JsonStringFieldStreamer("transcript") if structured_audio_response else None
-        response_streamer = _JsonStringFieldStreamer("response") if structured_audio_response else None
-        control_streamers = (
-            {
-                field_name: _JsonStringFieldStreamer(field_name)
-                for field_name in self._structured_response_control_fields()
-            }
-            if structured_audio_response
-            else {}
-        )
-        control_field_values: dict[str, str] = {}
-        suppress_structured_response_stream = False
-        transcript_emitted = False
-        streamed_transcript = ""
-        raw_content = ""
-        response_started = False
-        sentence_buffer = ""
-        ttfb_stopped = False
-
         await self.start_processing_metrics(start_time=metrics_start_time)
-        await self.start_ttfb_metrics(start_time=metrics_start_time)
         try:
-            stream = await self._client.chat.completions.create(**request_kwargs)
-            async for chunk in stream:
-                await self._emit_llm_usage_metrics(getattr(chunk, "usage", None))
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                content = _extract_text_content(getattr(delta, "content", ""))
-                if not content:
-                    continue
-                raw_content += content
-
-                if not ttfb_stopped:
-                    await self.stop_ttfb_metrics()
-                    ttfb_stopped = True
-
-                if transcript_streamer and not transcript_emitted:
-                    streamed_transcript += transcript_streamer.feed(content)
-                    if transcript_streamer.done:
-                        transcript = streamed_transcript.strip()
-                        if transcript:
-                            await self._emit_user_transcript(transcript)
-                            transcript_emitted = True
-
-                for field_name, streamer in control_streamers.items():
-                    if streamer.done:
-                        continue
-                    control_field_values[field_name] = control_field_values.get(field_name, "") + streamer.feed(content)
-
-                response_chunk = response_streamer.feed(content) if response_streamer else content
-                if not response_chunk:
-                    continue
-                if structured_audio_response:
-                    if not suppress_structured_response_stream and not self._should_emit_streamed_structured_response(
-                        control_field_values
-                    ):
-                        suppress_structured_response_stream = True
-                    if suppress_structured_response_stream:
-                        continue
-                if not response_started:
-                    response_started = True
-                    await self.push_frame(LLMFullResponseStartFrame())
-                    if not ttfb_stopped:
-                        await self.stop_ttfb_metrics()
-                        ttfb_stopped = True
-                sentence_buffer += response_chunk
-                sentences, sentence_buffer = _pop_complete_sentences(sentence_buffer)
-                for sentence in sentences:
-                    response_started = await self._emit_assistant_text(
-                        sentence,
-                        response_started=response_started,
-                    )
-        except asyncio.CancelledError:
-            await self.stop_processing_metrics()
-            raise
+            await self._process_context(context)
+        except httpx.TimeoutException as exc:
+            await self._call_event_handler("on_completion_timeout")
+            await self.push_error(error_msg="LLM completion timeout", exception=exc)
         except Exception as exc:
+            await self.push_error(error_msg=f"Error during completion: {exc}", exception=exc)
+        finally:
+            self._active_turn_parts = None
+            self._transcript_extractor = None
             await self.stop_processing_metrics()
-            logger.exception(f"NVIDIA Omni streaming request failed: {exc}")
-            await self.push_error_frame(ErrorFrame(error=f"NVIDIA Omni streaming request failed: {exc}", fatal=False))
-            return
-
-        trailing_text = sentence_buffer.strip()
-        if structured_audio_response:
-            result = self._parse_turn_result(raw_content, parse_json=True)
-            corrected_result = await self._on_turn_result(result)
-            if corrected_result is not None:
-                result = corrected_result
-                if response_started and result.response:
-                    response_started = await self._emit_assistant_text(
-                        result.response,
-                        response_started=response_started,
-                    )
-            if result.transcript and not transcript_emitted:
-                await self._emit_user_transcript(result.transcript)
-            if trailing_text:
-                response_started = await self._emit_assistant_text(
-                    trailing_text,
-                    response_started=response_started,
-                )
-            elif not response_started and result.response:
-                response_started = await self._emit_assistant_text(
-                    result.response,
-                    response_started=response_started,
-                )
-        elif trailing_text:
-            response_started = await self._emit_assistant_text(
-                trailing_text,
-                response_started=response_started,
-            )
-        elif not response_started and raw_content.strip():
-            response_started = await self._emit_assistant_text(
-                raw_content.strip(),
-                response_started=response_started,
-            )
-
-        await self.stop_processing_metrics()
-        if response_started:
             await self.push_frame(LLMFullResponseEndFrame())
-        else:
-            await self.stop_ttfb_metrics()
 
-    async def _emit_assistant_text(self, text: str, *, response_started: bool) -> bool:
-        cleaned = text.strip()
-        if not cleaned:
-            return response_started
-        if not response_started:
-            response_started = True
-            await self.push_frame(LLMFullResponseStartFrame())
-            await self.stop_ttfb_metrics()
-        await self.push_frame(LLMTextFrame(text=f"{cleaned} "))
-        return response_started
-
-    def _structured_response_control_fields(self) -> tuple[str, ...]:
-        """Return structured JSON string fields needed before streaming response text."""
-        return ()
-
-    def _should_emit_streamed_structured_response(self, field_values: Mapping[str, str]) -> bool:
-        """Allow subclasses to suppress streamed response text until full JSON is parsed."""
-        return True
-
-    async def _emit_llm_usage_metrics(self, usage: Any) -> None:
-        tokens = _llm_token_usage_from_openai_usage(usage)
-        if tokens is not None:
-            await self.start_llm_usage_metrics(tokens)
+    async def _maybe_emit_transcript(self, extractor: _TranscriptResponseExtractor) -> None:
+        """Report the user's speech once the transcript section is complete."""
+        if self._transcript_emitted:
+            return
+        if extractor.transcript_done and extractor.transcript:
+            self._transcript_emitted = True
+            await self._emit_user_transcript(extractor.transcript)
 
     async def _emit_user_transcript(self, transcript: str) -> None:
-        if self._context is not None:
-            self._context.add_message({"role": "user", "content": transcript})
+        """Report the user's spoken turn upstream, for the aggregator and the UI.
+
+        The transcript is not written to the context here. The user aggregator
+        upstream writes what this frame carries, exactly as it does for an STT
+        service, and writing it here as well would leave the same spoken turn in
+        the conversation twice.
+        """
+        self._answered_transcript = transcript
         await self.push_frame(
             TranscriptionFrame(
                 text=transcript,
@@ -759,71 +781,76 @@ class NvidiaOmniMultimodalService(LLMService):
             FrameDirection.UPSTREAM,
         )
 
-    def _parse_turn_result(self, raw_content: str, *, parse_json: bool) -> NvidiaOmniTurnResult:
-        if not parse_json:
-            return NvidiaOmniTurnResult(response=raw_content.strip(), raw_content=raw_content)
-        payload = _extract_json_payload(raw_content)
-        transcript = str(payload.get("transcript", "")).strip()
-        response = str(payload.get("response", "")).strip()
-        if not payload:
-            logger.warning(
-                "NVIDIA Omni: audio response did not parse as JSON; "
-                f"user transcript will be missing. Raw response: {raw_content[:500]!r}"
-            )
-        return NvidiaOmniTurnResult(
-            transcript=transcript,
-            response=response,
-            raw_content=raw_content,
-            payload=payload,
+    async def run_inference(
+        self,
+        context: LLMContext,
+        max_tokens: int | None = None,
+        system_instruction: str | None = None,
+    ) -> str | None:
+        """Run a one-shot completion without attaching the active audio turn.
+
+        Args:
+            context: The LLM context containing conversation history.
+            max_tokens: Optional override for the generated token limit.
+            system_instruction: Optional system instruction for this inference.
+
+        Returns:
+            The model's response text, or ``None`` when nothing was generated.
+        """
+        with self._without_active_turn():
+            return await super().run_inference(context, max_tokens, system_instruction)
+
+    def current_turn_has_user_audio(self) -> bool:
+        """Whether the request being generated carries the user's speech.
+
+        True on an audio turn, where the model hears the user; false on a text
+        turn, which sends the context alone.
+        """
+        return any(part.get("type") == "input_audio" for part in self._active_turn_parts or ())
+
+    @contextlib.contextmanager
+    def _without_active_turn(self):
+        """Hide the in-flight audio turn from out-of-band requests."""
+        active = self._active_turn_parts
+        self._active_turn_parts = None
+        try:
+            yield
+        finally:
+            self._active_turn_parts = active
+
+    def _out_of_band_request_kwargs(self, context: LLMContext) -> dict[str, Any]:
+        """Build request kwargs for a one-shot call outside the pipeline turn."""
+        invocation_params = self.get_llm_adapter().get_llm_invocation_params(
+            context,
+            system_instruction=assert_given(self._settings.system_instruction),
+            convert_developer_to_user=not self.supports_developer_role,
         )
+        with self._without_active_turn():
+            return self.build_chat_completion_params(invocation_params)
 
-    async def _on_turn_result(self, result: NvidiaOmniTurnResult) -> NvidiaOmniTurnResult | None:
-        """Inspect a parsed response and optionally replace it before final emission."""
-        return None
-
-    def _messages_from_context(self, context: LLMContext | None) -> list[OpenAIMessage]:
-        if context is None:
-            return []
-        messages: list[OpenAIMessage] = []
-        for message in context.get_messages():
-            converted = self._normalize_context_message(message)
-            if converted is not None:
-                messages.append(converted)
-        return messages
-
-    def _normalize_context_message(self, message: Any) -> OpenAIMessage | None:
-        if not isinstance(message, Mapping):
-            return None
-        role = message.get("role")
-        if role not in {"system", "user", "assistant", "tool"}:
-            return None
-        content = message.get("content")
-        if isinstance(content, str):
-            return {"role": role, "content": content}
-        if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
-            parts = [part for part in content if self._content_part_allowed(part)]
-            if parts:
-                return {"role": role, "content": parts}
-        return None
-
-    def _content_part_allowed(self, part: Any) -> bool:
-        if not isinstance(part, Mapping):
-            return False
-        modality = _content_part_modality(part)
-        return modality is not None and self._modality_enabled(modality)
-
-    def _append_pre_speech_audio(self, frame: InputAudioRawFrame) -> None:
-        self._pre_speech_buffer.append(frame.audio)
-        bytes_per_second = max(frame.sample_rate * frame.num_channels * 2, 1)
-        max_bytes = int(bytes_per_second * float(self._settings.pre_speech_buffer_secs))
-        total = sum(len(chunk) for chunk in self._pre_speech_buffer)
-        while self._pre_speech_buffer and total > max_bytes:
-            total -= len(self._pre_speech_buffer.pop(0))
+    def _audio_response_instruction(self) -> str:
+        """The instruction that accompanies buffered speech in an audio turn."""
+        if self._settings.audio_response_instruction:
+            return str(self._settings.audio_response_instruction)
+        if self._settings.emit_transcriptions:
+            return TRANSCRIPT_AUDIO_RESPONSE_INSTRUCTION
+        return DEFAULT_AUDIO_RESPONSE_INSTRUCTION
 
     def _modality_enabled(self, modality: InputModality) -> bool:
-        return modality in set(self._settings.input_modalities)
+        """Whether this pipeline input kind is configured."""
+        return modality in tuple(self._settings.input_modalities)
+
+    def _reset_audio_state(self) -> None:
+        """Drop buffered speech and turn state at session start."""
+        self._audio_buffer = []
+        self._pre_speech_buffer = []
+        self._user_speaking = False
+        self._bot_responding = False
+        self._pending_request_is_audio = False
+        self._last_user_eou_at = None
 
     async def _cancel_pending_request(self) -> None:
+        """Cancel the turn being generated, if any, and wait for it to unwind."""
         if self._pending_request and not self._pending_request.done():
             self._pending_request.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -833,16 +860,16 @@ class NvidiaOmniMultimodalService(LLMService):
 
     @staticmethod
     def _validate_settings(settings: Settings) -> None:
-        modalities = tuple(settings.input_modalities)
-        unknown = sorted(set(modalities) - SUPPORTED_INPUT_MODALITIES)
+        """Reject input kinds that cannot start a pipeline turn."""
+        unknown = sorted(set(settings.input_modalities) - SUPPORTED_INPUT_MODALITIES)
         if unknown:
-            raise ValueError(f"Unsupported NvidiaOmni input modalities: {unknown}")
-        if settings.output_modality != "text":
-            raise ValueError("NvidiaOmniMultimodalService currently supports output_modality='text' only")
-
-
-# Short alias used by pipelines that prefer ``NvidiaOmniService``.
-NvidiaOmniService = NvidiaOmniMultimodalService
+            raise ValueError(
+                f"Unsupported pipeline input modalities: {unknown}. "
+                f"Supported: {sorted(SUPPORTED_INPUT_MODALITIES)}. "
+                "Other media travels in the context instead of starting a turn."
+            )
+        if not settings.input_modalities:
+            raise ValueError("At least one pipeline input modality is required")
 
 
 def text_message_part(text: str) -> OpenAIContentPart:
@@ -851,8 +878,15 @@ def text_message_part(text: str) -> OpenAIContentPart:
 
 
 def audio_message_part(audio: bytes, sample_rate: int, channels: int) -> OpenAIContentPart:
-    """Create an OpenAI-compatible audio content part from int16 PCM audio."""
-    return {"type": "audio_url", "audio_url": {"url": audio_to_data_url(audio, sample_rate, channels)}}
+    """Create the universal audio content part from int16 PCM audio.
+
+    Produces the same shape as ``LLMContext.create_audio_message()``;
+    ``NvidiaOmniLLMAdapter`` renames it for the endpoint.
+    """
+    return {
+        "type": "input_audio",
+        "input_audio": {"data": audio_to_wav_base64(audio, sample_rate, channels), "format": "wav"},
+    }
 
 
 def image_message_part(data: bytes, mime_type: str = "image/jpeg") -> OpenAIContentPart:
@@ -865,26 +899,18 @@ def video_message_part(data: bytes, mime_type: str = "video/mp4") -> OpenAIConte
     return {"type": "video_url", "video_url": {"url": data_to_data_url(data, mime_type)}}
 
 
-def media_message_part(data: bytes, *, modality: InputModality, mime_type: str) -> OpenAIContentPart:
-    """Create a multimodal content part for text/audio/image/video media."""
+def media_message_part(data: bytes, *, modality: MediaModality, mime_type: str) -> OpenAIContentPart:
+    """Create a content part for text, audio, image, or video media."""
     if modality == "text":
         return text_message_part(data.decode("utf-8"))
     if modality == "audio":
-        return {"type": "audio_url", "audio_url": {"url": data_to_data_url(data, mime_type)}}
+        encoded = base64.b64encode(data).decode("ascii")
+        return {"type": "input_audio", "input_audio": {"data": encoded, "format": _audio_format(mime_type)}}
     if modality == "image":
         return image_message_part(data, mime_type)
     if modality == "video":
         return video_message_part(data, mime_type)
     raise ValueError(f"Unsupported modality: {modality}")
-
-
-def input_image_frame_to_message_part(
-    frame: InputImageRawFrame,
-    *,
-    mime_type: str = "image/jpeg",
-) -> OpenAIContentPart:
-    """Encode an ``InputImageRawFrame`` as an image content part."""
-    return image_message_part(encode_image_frame(frame, mime_type=mime_type), mime_type=mime_type)
 
 
 def data_to_data_url(data: bytes, mime_type: str) -> str:
@@ -893,47 +919,47 @@ def data_to_data_url(data: bytes, mime_type: str) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
-def audio_to_data_url(audio: bytes, sample_rate: int, channels: int) -> str:
-    """Encode little-endian int16 PCM bytes as a WAV data URL."""
+def audio_to_wav_base64(audio: bytes, sample_rate: int, channels: int) -> str:
+    """Encode little-endian int16 PCM bytes as base64 WAV."""
     with io.BytesIO() as buffer:
         with wave.open(buffer, "wb") as wav:
             wav.setnchannels(channels)
             wav.setsampwidth(2)
             wav.setframerate(sample_rate)
             wav.writeframes(audio)
-        return data_to_data_url(buffer.getvalue(), "audio/wav")
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def encode_image_frame(frame: InputImageRawFrame, *, mime_type: str = "image/jpeg") -> bytes:
-    """Encode a raw Pipecat image frame to JPEG/PNG bytes for multimodal APIs."""
-    try:
-        from PIL import Image
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("Pillow is required to encode InputImageRawFrame media parts") from exc
-
-    image_format = (frame.format or "RGB").upper()
-    image = Image.frombytes(image_format, frame.size, frame.image)
-    with io.BytesIO() as buffer:
-        if mime_type == "image/png":
-            image.save(buffer, format="PNG")
-        else:
-            if image.mode not in {"RGB", "L"}:
-                image = image.convert("RGB")
-            image.save(buffer, format="JPEG")
-        return buffer.getvalue()
+def _audio_format(mime_type: str) -> str:
+    """The audio format name a universal ``input_audio`` part carries."""
+    return mime_type.split("/")[-1] or "wav"
 
 
-def _content_part_modality(part: Mapping[str, Any]) -> InputModality | None:
-    part_type = str(part.get("type") or "")
-    if part_type == "text":
-        return "text"
-    if part_type == "audio_url":
-        return "audio"
-    if part_type == "image_url":
-        return "image"
-    if part_type == "video_url":
-        return "video"
-    return None
+def _to_omni_content_part(part: OpenAIContentPart) -> OpenAIContentPart:
+    """Rewrite one content part in the shape Omni's endpoint reads.
+
+    Only audio is renamed: Omni takes a data URL under ``audio_url`` where the
+    universal context carries base64 data under ``input_audio``.
+    """
+    if part.get("type") != "input_audio":
+        return part
+    payload = part.get("input_audio") or {}
+    audio_format = str(payload.get("format") or "wav")
+    encoded = str(payload.get("data") or "")
+    return {"type": "audio_url", "audio_url": {"url": f"data:audio/{audio_format};base64,{encoded}"}}
+
+
+def _to_omni_message(message: ChatCompletionMessageParam) -> ChatCompletionMessageParam:
+    """Rewrite a message's media parts, leaving plain text messages untouched.
+
+    Returns a new message: the ones the base adapter hands back are the objects
+    the context stores, and the provider's shape must not leak back into it.
+    """
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+    parts = [_to_omni_content_part(part) if isinstance(part, Mapping) else part for part in content]
+    return cast(ChatCompletionMessageParam, {**message, "content": parts})
 
 
 def _extract_text_content(raw: Any) -> str:
@@ -956,14 +982,14 @@ def _extract_text_content(raw: Any) -> str:
     return str(raw)
 
 
-def _extract_delta_reasoning_content(delta: Any) -> str:
-    """Return provider-specific reasoning content from a streamed delta."""
+def _extract_reasoning_content(payload: Any) -> str:
+    """Return provider-specific reasoning content from a delta or message."""
     for attr in ("reasoning", "reasoning_content"):
-        value = getattr(delta, attr, None)
+        value = getattr(payload, attr, None)
         if isinstance(value, str) and value:
             return value
 
-    model_extra = getattr(delta, "model_extra", None)
+    model_extra = getattr(payload, "model_extra", None)
     if isinstance(model_extra, dict):
         for key in ("reasoning", "reasoning_content"):
             value = model_extra.get(key)
@@ -972,185 +998,144 @@ def _extract_delta_reasoning_content(delta: Any) -> str:
     return ""
 
 
-def _extract_json_payload(text: str) -> dict[str, Any]:
-    """Parse raw or fenced JSON from model output."""
-    if not text:
-        return {}
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        candidate = candidate.strip("`")
-        if candidate.startswith("json"):
-            candidate = candidate[4:].strip()
-    try:
-        parsed = json.loads(candidate)
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        start = candidate.find("{")
-        end = candidate.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return {}
-        try:
-            parsed = json.loads(candidate[start : end + 1])
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
+def _completion_trigger(context: LLMContext | None) -> Literal["user", "tool"] | None:
+    """Why the context needs a completion, or ``None`` when it already has one.
 
-
-def _llm_token_usage_from_openai_usage(usage: Any) -> LLMTokenUsage | None:
-    """Convert OpenAI-compatible usage objects into Pipecat token metrics."""
-    if usage is None:
-        return None
-
-    prompt_tokens = int(_usage_value(usage, "prompt_tokens") or 0)
-    completion_tokens = int(_usage_value(usage, "completion_tokens") or 0)
-    total_tokens = int(_usage_value(usage, "total_tokens") or (prompt_tokens + completion_tokens))
-    if prompt_tokens == 0 and completion_tokens == 0 and total_tokens == 0:
-        return None
-
-    prompt_details = _usage_value(usage, "prompt_tokens_details")
-    completion_details = _usage_value(usage, "completion_tokens_details")
-    return LLMTokenUsage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=total_tokens,
-        cache_read_input_tokens=_usage_value(prompt_details, "cached_tokens"),
-        reasoning_tokens=_usage_value(completion_details, "reasoning_tokens"),
-    )
-
-
-def _usage_value(source: Any, key: str) -> Any:
-    if source is None:
-        return None
-    if isinstance(source, Mapping):
-        return source.get(key)
-    return getattr(source, key, None)
-
-
-def _context_has_pending_user_message(context: LLMContext | None) -> bool:
+    ``"tool"`` marks the follow-up completion a function-call result asks for,
+    which must never preempt the turn that requested it.
+    """
     if context is None:
-        return False
+        return None
     for message in reversed(list(context.get_messages())):
         if not isinstance(message, Mapping):
             continue
         role = message.get("role")
         if role == "assistant":
-            return False
+            return None
+        if role == "tool":
+            return "tool"
         if role == "user" and message.get("content"):
-            return True
-    return False
+            return "user"
+    return None
 
 
-def _pop_complete_sentences(buffer: str) -> tuple[list[str], str]:
-    """Return complete sentence chunks and the remaining incomplete suffix."""
-    sentences: list[str] = []
-    start = 0
-    for idx, ch in enumerate(buffer):
-        if ch not in ".!?":
-            continue
-        next_idx = idx + 1
-        if next_idx < len(buffer) and buffer[next_idx] not in " \n\r\t\"'”’)]}":
-            continue
-        sentence = buffer[start:next_idx].strip()
-        if sentence:
-            sentences.append(sentence)
-        start = next_idx
-    return sentences, buffer[start:]
+def _latest_user_text(context: LLMContext | None) -> str:
+    """Return the newest user message rendered as plain text."""
+    if context is None:
+        return ""
+    for message in reversed(list(context.get_messages())):
+        if isinstance(message, Mapping) and message.get("role") == "user":
+            return _extract_text_content(message.get("content")).strip()
+    return ""
 
 
-class _JsonStringFieldStreamer:
-    """Incrementally extract a string field from streamed JSON text."""
+def _tag_match(text: str, tag: str) -> Literal["match", "partial", "no"]:
+    """Return ``match``, ``partial``, or ``no`` for a tag at the start of ``text``."""
+    if text.startswith(tag):
+        return "match"
+    if len(text) < len(tag) and tag.startswith(text):
+        return "partial"
+    return "no"
 
-    def __init__(self, field_name: str) -> None:
-        self._needle = f'"{field_name}"'
-        self._state = "search"
+
+class _TranscriptResponseExtractor:
+    """Incrementally splits ``<transcript>`` and ``<response>`` sections.
+
+    ``feed()`` returns the response text to stream onward; the transcript is
+    accumulated and exposed through ``transcript`` once ``transcript_done`` is
+    set. Output that does not open with a ``<transcript>`` tag is treated
+    entirely as response text, so an unexpected plain reply still reaches TTS.
+    """
+
+    def __init__(self) -> None:
+        self._state = "detecting"
         self._buffer = ""
-        self._escaped = False
-        self._unicode_remaining = 0
-        self._unicode_buffer = ""
-        self.done = False
+        self._transcript = ""
+        self.transcript = ""
+        self.transcript_done = False
 
     def feed(self, text: str) -> str:
-        if self.done or not text:
+        """Consume a content delta and return response text ready to stream."""
+        if self._state == "done":
             return ""
-        if self._state != "in_string":
-            self._buffer += text
-            emitted = self._advance_to_string()
-            if self._state != "in_string":
-                return ""
-            text = emitted
-        return self._consume_string_chars(text)
-
-    def _advance_to_string(self) -> str:
-        while True:
-            if self._state == "search":
-                idx = self._buffer.find(self._needle)
-                if idx < 0:
-                    self._buffer = self._buffer[-len(self._needle) :]
-                    return ""
-                self._buffer = self._buffer[idx + len(self._needle) :]
-                self._state = "colon"
-            if self._state == "colon":
-                stripped = self._buffer.lstrip()
-                if not stripped:
-                    self._buffer = ""
-                    return ""
-                if stripped[0] != ":":
-                    self._state = "search"
-                    self._buffer = stripped
-                    continue
-                self._buffer = stripped[1:]
-                self._state = "quote"
-            if self._state == "quote":
-                stripped = self._buffer.lstrip()
-                if not stripped:
-                    self._buffer = ""
-                    return ""
-                if stripped[0] != '"':
-                    self._state = "search"
-                    self._buffer = stripped
-                    continue
-                self._state = "in_string"
-                emitted = stripped[1:]
-                self._buffer = ""
-                return emitted
-
-    def _consume_string_chars(self, text: str) -> str:
+        self._buffer += text
         out: list[str] = []
-        for ch in text:
-            if self._unicode_remaining:
-                self._unicode_buffer += ch
-                self._unicode_remaining -= 1
-                if self._unicode_remaining == 0:
-                    try:
-                        out.append(chr(int(self._unicode_buffer, 16)))
-                    except ValueError:
-                        out.append(f"\\u{self._unicode_buffer}")
-                    self._unicode_buffer = ""
-                continue
-            if self._escaped:
-                self._escaped = False
-                if ch == "u":
-                    self._unicode_remaining = 4
-                    self._unicode_buffer = ""
+        while self._buffer:
+            if self._state == "detecting":
+                stripped = self._buffer.lstrip()
+                if not stripped:
+                    return "".join(out)
+                match = _tag_match(stripped, _TRANSCRIPT_OPEN)
+                if match == "partial":
+                    return "".join(out)
+                if match == "match":
+                    self._buffer = stripped[len(_TRANSCRIPT_OPEN) :]
+                    self._state = "transcript"
                 else:
-                    out.append(
-                        {
-                            '"': '"',
-                            "\\": "\\",
-                            "/": "/",
-                            "b": "\b",
-                            "f": "\f",
-                            "n": "\n",
-                            "r": "\r",
-                            "t": "\t",
-                        }.get(ch, ch)
-                    )
+                    self._buffer = stripped
+                    self._state = "passthrough"
                 continue
-            if ch == "\\":
-                self._escaped = True
+
+            if self._state == "transcript":
+                idx = self._buffer.find(_TRANSCRIPT_CLOSE)
+                if idx == -1:
+                    safe = len(self._buffer) - (len(_TRANSCRIPT_CLOSE) - 1)
+                    if safe > 0:
+                        self._transcript += self._buffer[:safe]
+                        self._buffer = self._buffer[safe:]
+                    return "".join(out)
+                self._transcript += self._buffer[:idx]
+                self.transcript = self._transcript.strip()
+                self.transcript_done = True
+                self._buffer = self._buffer[idx + len(_TRANSCRIPT_CLOSE) :]
+                self._state = "between"
                 continue
-            if ch == '"':
-                self.done = True
-                break
-            out.append(ch)
+
+            if self._state == "between":
+                stripped = self._buffer.lstrip()
+                if not stripped:
+                    self._buffer = ""
+                    return "".join(out)
+                match = _tag_match(stripped, _RESPONSE_OPEN)
+                if match == "partial":
+                    self._buffer = stripped
+                    return "".join(out)
+                if match == "match":
+                    self._buffer = stripped[len(_RESPONSE_OPEN) :]
+                    self._state = "response"
+                else:
+                    self._buffer = stripped
+                    self._state = "passthrough"
+                continue
+
+            if self._state == "passthrough":
+                out.append(self._buffer)
+                self._buffer = ""
+                return "".join(out)
+
+            idx = self._buffer.find(_RESPONSE_CLOSE)
+            if idx != -1:
+                out.append(self._buffer[:idx])
+                self._buffer = ""
+                self._state = "done"
+                return "".join(out)
+            safe = len(self._buffer) - (len(_RESPONSE_CLOSE) - 1)
+            if safe > 0:
+                out.append(self._buffer[:safe])
+                self._buffer = self._buffer[safe:]
+            return "".join(out)
+
         return "".join(out)
+
+    def finalize(self) -> str:
+        """Flush buffered response text once the stream has ended."""
+        remainder = self._buffer
+        self._buffer = ""
+        if self._state == "transcript":
+            if self._transcript and not self.transcript_done:
+                self.transcript = self._transcript.strip()
+                self.transcript_done = bool(self.transcript)
+            return ""
+        if self._state == "done":
+            return ""
+        return remainder

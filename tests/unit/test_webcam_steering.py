@@ -52,9 +52,7 @@ class VisualStatusTests(unittest.TestCase):
         controller = _controller(lambda: "")
         controller._enabled = True
         controller._board_state = "a GoPro and a small tripod"
-        status = controller.current_visual_status()
-        self.assertIn("currently see", status)
-        self.assertIn("GoPro", status)
+        self.assertEqual(controller.current_visual_status(), "a GoPro and a small tripod")
 
 
 class WebcamStateTests(unittest.IsolatedAsyncioTestCase):
