@@ -15,9 +15,20 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 
 Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Chatterbox-Multilingual.en-US.Male`). The available voices and emotions depend on the deployed NIM. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
-> The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
+### Supported languages
 
-> **Streaming only.** The real-time pipeline needs a **streaming** TTS model. The streaming-capable TTS NIMs are **Magpie TTS Multilingual**, **Magpie TTS Zeroshot**, and **Chatterbox TTS Multilingual**. All three can be enabled with the latest Pipecat (**> 1.4.0**). Check the [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) for details. This blueprint pins `pipecat-ai==1.3.0` and ships Magpie TTS Multilingual.
+The client discovers the active TTS service's available voices and language codes at runtime. Treat this table as model-level guidance, because exact availability can vary by endpoint, deployment profile, and selected NIM image.
+
+| Model | Supported languages |
+| --- | --- |
+| [Magpie TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#magpie-tts-multilingual) | English (`en-US`) · Spanish (`es-US`) · French (`fr-FR`) · German (`de-DE`) · Italian (`it-IT`) · Vietnamese (`vi-VN`) · Mandarin (`zh-CN`) · Hindi (`hi-IN`) · Japanese (`ja-JP`) · Modern Standard Arabic (`ar-AR`) · Korean (`ko-KR`) · Brazilian Portuguese (`pt-BR`) |
+| [Chatterbox TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#chatterbox-tts-multilingual) | Arabic (`ar-SA`) · Danish (`da-DK`) · German (`de-DE`) · Greek (`el-GR`) · English (`en-US`) · Spanish (`es-ES`) · Finnish (`fi-FI`) · French (`fr-FR`) · Hebrew (`he-IL`) · Hindi (`hi-IN`) · Italian (`it-IT`) · Japanese (`ja-JP`) · Korean (`ko-KR`) · Malay (`ms-MY`) · Dutch (`nl-NL`) · Norwegian (`nb-NO`) · Polish (`pl-PL`) · Brazilian Portuguese (`pt-BR`) · Russian (`ru-RU`) · Swedish (`sv-SE`) · Swahili (`sw-KE`) · Turkish (`tr-TR`) · Mandarin (`zh-CN`) |
+
+For NVIDIA's current model and deployment support details, see the [TTS support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html).
+
+> The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
+>
+> **Streaming only.** The real-time pipeline needs a **streaming** TTS model. The streaming-capable TTS NIMs are **Magpie TTS Multilingual**, **Magpie TTS Zeroshot**, and **Chatterbox TTS Multilingual**. Check the [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) for supported request fields and model-specific options. This blueprint ships Magpie TTS Multilingual as the default local TTS sidecar.
 
 ## Hardware requirements and deployment configs
 
@@ -146,7 +157,7 @@ tts = NvidiaTTSService(
 
 ### Voice cloning / zero-shot
 
-Magpie TTS Zeroshot clones a voice from a short reference clip. See [voice cloning](https://docs.nvidia.com/nim/speech/latest/tts/voice-cloning.html). Pipecat's `NvidiaTTSService` does not expose zero-shot voice cloning in releases **≤ 1.4.0** (this repo pins `pipecat-ai==1.3.0`). To use it, upgrade to the latest Pipecat release or run from its `main` branch.
+Magpie TTS Zeroshot clones a voice from a short reference clip. See [voice cloning](https://docs.nvidia.com/nim/speech/latest/tts/voice-cloning.html). Verify the current [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) request fields before wiring zero-shot voice cloning into a pipeline.
 
 ## Reference
 
