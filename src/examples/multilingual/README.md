@@ -55,7 +55,7 @@ After deploying, validate the session language with the steps in [Testing](#test
 
 On-prem recipes default to **Nemotron ASR Streaming Multilingual** (`nemotron-asr-streaming-multilingual`) via `examples_registry.yaml` and `services.local.yaml`. The `multilingual-assistant/workstation` and `/dgx-spark` recipe profiles start that sidecar locally. There is no NVCF endpoint for it, so the cloud recipe falls back to **Parakeet 1.1B RNNT Multilingual** (`parakeet-rnnt`), the only multilingual ASR available on NVCF.
 
-TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service, and the UI language selector is populated from the languages shared by the ASR and TTS services. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection.
+TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service, and the UI language selector is populated from the languages shared by the ASR and TTS services. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
 
 | Path | Role |
 | --- | --- |
