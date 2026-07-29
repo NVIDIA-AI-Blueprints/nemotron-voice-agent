@@ -6,7 +6,7 @@
   "tts_voice_id": "Magpie-Multilingual.EN-US.Aria",
   "session_id": "eval-omni-uploaded-image",
   "eval_attachment": {
-    "path": "src/examples/omni_assistant/images/omni-assistant-architecture.png",
+    "path": "../../../../src/examples/omni_assistant/images/omni-assistant-architecture.png",
     "kind": "image",
     "content_type": "image/png",
     "name": "omni-assistant-architecture.png"
