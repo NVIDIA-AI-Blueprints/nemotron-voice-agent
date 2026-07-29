@@ -6,7 +6,7 @@
 import asyncio
 import unittest
 
-from pipecat.frames.frames import EndTaskFrame
+from pipecat.frames.frames import EndTaskFrame, UserStartedSpeakingFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 
@@ -108,6 +108,27 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
 
         await asyncio.wait_for(self._wait_for_end_task(processor), timeout=0.5)
         self.assertEqual(processor._retired_warning_completions, 0)
+
+    async def test_user_speech_after_final_warning_cancels_pending_disconnect(self) -> None:
+        async def on_warning(stage: int) -> None:
+            pass
+
+        processor = _TestActivityCheckProcessor(
+            activity_check_interval_s=1.0,
+            second_warning_s=1.0,
+            warning_completion_timeout_s=1.0,
+            on_warning=on_warning,
+        )
+
+        await processor._emit_warning(2)
+        processor._handle_bot_stopped_speaking()
+        self.assertIsNotNone(processor._disconnect_task)
+
+        await processor.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+        await asyncio.sleep(0)
+
+        self.assertIsNone(processor._disconnect_task)
+        self.assertFalse(any(isinstance(frame, EndTaskFrame) for frame, _ in processor.emitted_frames))
 
     async def test_processor_appends_developer_instruction_to_context(self) -> None:
         context = LLMContext(messages=[])

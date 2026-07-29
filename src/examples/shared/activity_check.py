@@ -145,6 +145,7 @@ class ActivityCheckProcessor(FrameProcessor):
         self._warning_audio_started_stages: set[int] = set()
         self._timer: asyncio.Task[None] | None = None
         self._warning_completion_timer: asyncio.Task[None] | None = None
+        self._disconnect_task: asyncio.Task[None] | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Track speech-boundary frames and forward every pipeline frame."""
@@ -175,6 +176,7 @@ class ActivityCheckProcessor(FrameProcessor):
             self._timer.cancel()
             self._timer = None
         self._cancel_warning_completion_timer()
+        self._cancel_disconnect_task()
         self._stage = 0
         self._disconnect_after_speech = False
         self._retired_warning_completions = 0
@@ -215,7 +217,7 @@ class ActivityCheckProcessor(FrameProcessor):
         if self._disconnect_after_speech:
             self._disconnect_after_speech = False
             logger.info("Final activity check finished; disconnecting session")
-            self.create_task(self._request_disconnect(), "disconnect")
+            self._schedule_disconnect()
         else:
             self._arm_timer()
 
@@ -266,7 +268,7 @@ class ActivityCheckProcessor(FrameProcessor):
             )
             if stage == len(self._intervals):
                 self._disconnect_after_speech = False
-                await self._request_disconnect()
+                self._schedule_disconnect()
             else:
                 if stage in self._warning_audio_started_stages:
                     self._retired_warning_completions += 1
@@ -282,10 +284,19 @@ class ActivityCheckProcessor(FrameProcessor):
             FrameDirection.UPSTREAM,
         )
 
+    def _schedule_disconnect(self) -> None:
+        if self._disconnect_task is None or self._disconnect_task.done():
+            self._disconnect_task = self.create_task(self._request_disconnect(), "disconnect")
+
     def _cancel_warning_completion_timer(self) -> None:
         if self._warning_completion_timer is not None:
             self._warning_completion_timer.cancel()
             self._warning_completion_timer = None
+
+    def _cancel_disconnect_task(self) -> None:
+        if self._disconnect_task is not None:
+            self._disconnect_task.cancel()
+            self._disconnect_task = None
 
     async def cleanup(self) -> None:
         """Cancel any pending inactivity timer during pipeline teardown."""
