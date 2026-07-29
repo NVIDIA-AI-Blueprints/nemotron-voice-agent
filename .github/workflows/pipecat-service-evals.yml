@@ -79,6 +79,25 @@ jobs:
           uv --version
           nvidia-smi || true
 
+      - name: Install Ollama prerequisites
+        run: |
+          if command -v zstd >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "zstd is required to install Ollama, and apt-get is not available."
+            exit 1
+          fi
+
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          else
+            apt-get update
+            apt-get install -y zstd
+          fi
+
       - name: Start Ollama judge
         env:
           OLLAMA_MODEL: gemma2:9b
