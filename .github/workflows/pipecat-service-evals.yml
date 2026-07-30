@@ -45,27 +45,28 @@ jobs:
     timeout-minutes: 180
 
     env:
-      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
       PYTHONPATH: src
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: uv sync --group eval
+        run: uv sync --locked --group eval
 
       - name: Validate NVIDIA API key
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
           if [ -z "$NVIDIA_API_KEY" ]; then
             echo "NVIDIA_API_KEY repository secret is required for service-backed Pipecat evals."
@@ -90,12 +91,15 @@ jobs:
             exit 1
           fi
 
-          if command -v sudo >/dev/null 2>&1; then
+          if command -v sudo >/dev/null 2>&1 && sudo -n true; then
             sudo apt-get update
             sudo apt-get install -y zstd
-          else
+          elif [ "$(id -u)" -eq 0 ]; then
             apt-get update
             apt-get install -y zstd
+          else
+            echo "zstd is required to install Ollama. Install zstd in the runner image or grant passwordless sudo."
+            exit 1
           fi
 
       - name: Start Ollama judge
@@ -132,17 +136,37 @@ jobs:
       - name: Start booking backend
         run: |
           if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
-            exit 0
+            echo "A booking backend is already serving on localhost:8001; refusing to reuse a stale service."
+            exit 1
+          fi
+
+          if python - <<'PY'
+          import socket
+          import sys
+
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+              sock.settimeout(1)
+              sys.exit(0 if sock.connect_ex(("127.0.0.1", 8001)) == 0 else 1)
+          PY
+          then
+            echo "Port 8001 is already in use before this workflow started the booking backend."
+            exit 1
           fi
 
           mkdir -p "$RUNNER_TEMP/booking-db"
           BOOKING_DB_PATH="$RUNNER_TEMP/booking-db/bookings.db" \
             BOOKING_HOST=127.0.0.1 \
             BOOKING_PORT=8001 \
-            uv run --group eval python -m examples.frontend_backend_agent.airline.database.server \
+            nohup uv run --group eval python -m examples.frontend_backend_agent.airline.database.server \
             > "$RUNNER_TEMP/booking-server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/booking-server.pid"
 
           for attempt in {1..60}; do
+            if ! kill -0 "$(cat "$RUNNER_TEMP/booking-server.pid")" 2>/dev/null; then
+              cat "$RUNNER_TEMP/booking-server.log" || true
+              exit 1
+            fi
+
             if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
               exit 0
             fi
@@ -159,6 +183,7 @@ jobs:
           SERVICE_EVAL_SCENARIO: ${{ github.event.inputs.scenario || '' }}
           SERVICE_EVAL_TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds || '360' }}
           SERVICE_EVAL_RETRIES: ${{ github.event.inputs.retries || '2' }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
           args=(
             --manifest "$SERVICE_EVAL_MANIFEST"
@@ -174,10 +199,32 @@ jobs:
 
       - name: Upload eval logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pipecat-service-eval-logs
           path: |
             eval-runs/
             ${{ runner.temp }}/ollama.log
             ${{ runner.temp }}/booking-server.log
+
+      - name: Stop booking backend
+        if: always()
+        run: |
+          if [ ! -f "$RUNNER_TEMP/booking-server.pid" ]; then
+            exit 0
+          fi
+
+          pid="$(cat "$RUNNER_TEMP/booking-server.pid")"
+          if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+            exit 0
+          fi
+
+          kill "$pid" || true
+          for attempt in {1..10}; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          kill -9 "$pid" || true
