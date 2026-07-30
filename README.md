@@ -30,6 +30,8 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 | | [Parakeet CTC 1.1B ASR](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) | |
 | | [Parakeet 1.1B RNNT Multilingual ASR](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) | |
 | **TTS** | [Magpie TTS Multilingual](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) | Any NIM TTS |
+| | [Magpie TTS Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) | |
+| | [Chatterbox TTS Multilingual](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) | |
 | **LLM** | [Nemotron 3 Nano 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) | Any OpenAI-compatible |
 | | [Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) | |
 | | [Nemotron 3 Nano Omni 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) | |
@@ -136,56 +138,6 @@ npx skills add .
 
 - [`deploy`](skills/deploy/SKILL.md): NGC login, deployment-profile selection, and compose bring-up.
 - [`configure-pipeline`](skills/configure-pipeline/SKILL.md): edit `.env`, prompts, and example service catalogs, then re-apply the change.
-
----
-
-## Magpie TTS Zeroshot (local opt-in)
-
-Magpie TTS Zeroshot is a **local-only** alternate TTS (no cloud NVCF function). It synthesizes speech in en-US, es-US, fr-FR, de-DE, zh-CN, vi-VN, it-IT, hi-IN, ja-JP, ar-AR, pt-BR, and ko-KR from built-in voices or a 3–10 second audio prompt for zero-shot cloning. It shares Magpie Multilingual's host ports (`50151` / `9000`), so only one of Magpie Multilingual, Chatterbox, or Zeroshot can run at a time. NGC access to the image is restricted.
-
-### Enable the sidecar and select the catalog entry
-
-```bash
-docker compose --profile generic-assistant/workstation --profile magpie-zeroshot-tts \
-  up -d --scale tts-service=0
-```
-
-Use `generic-assistant/dgx-spark` (or another recipe) the same way. Then open the UI Services tab and select **Magpie TTS Zeroshot** (`magpie-zeroshot-tts`), or set `defaults.tts: [magpie-zeroshot-tts]` in `examples_registry.yaml`.
-
-Built-in voices (same across supported languages):
-
-- `Magpie-ZeroShot-Multilingual.Female` (default)
-- `Magpie-ZeroShot-Multilingual.Male`
-
-Compose uses `NIM_TAGS_SELECTOR=name=magpie-tts-zeroshot,batch_size=8` (~10.87 GB GPU). Prefer that on the shared H100 layout. `batch_size=32` needs ~41.3 GB GPU.
-
-To return to Magpie Multilingual:
-
-```bash
-docker compose --profile magpie-zeroshot-tts stop magpie-zeroshot-tts-service
-docker compose --profile generic-assistant/workstation up -d
-```
-
-### Voice cloning from an audio prompt
-
-1. Prepare a short reference clip (16-bit mono WAV, sample rate ≥ 22.05 kHz, about 3–10 seconds).
-2. Edit the active example's `services.local.yaml` under `workstation` or `dgxspark`:
-
-   ```yaml
-   magpie-zeroshot-tts:
-     name: "Magpie TTS Zeroshot"
-     server: "magpie-zeroshot-tts-service:50051"
-     voice_id: "Magpie-ZeroShot-Multilingual.Female"
-     model: "magpie-tts-zeroshot"
-     function_id: ""
-     synthesis_mode: stitched
-     zero_shot_audio_prompt_file: "/path/visible/to/the/voice-agent/process/prompt.wav"
-   ```
-
-3. If the voice agent runs in Docker, mount that file into the app container and use the container path. Host-native runs can use a host absolute path.
-4. Restart or reselect the TTS entry so catalog hydration picks up the field, then start a new session.
-
-Omit `zero_shot_audio_prompt_file` to use built-in Zeroshot voices only. Full model notes: [Configure TTS](docs/how-to/configure-tts.md).
 
 ---
 

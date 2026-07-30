@@ -80,7 +80,7 @@ def _parse_tts_config(raw_config, model_prefix: str) -> dict:
             parts = short_id.split(".")
             if len(parts) < 2:
                 continue
-            lang = parts[0]
+            lang = normalize_lang_code(parts[0])
             name = ".".join(parts[1:])
             full_id = f"{prefix}.{short_id}" if prefix else short_id
             if full_id in seen:

@@ -1,5 +1,5 @@
 # Magpie TTS Zeroshot: alternate to Magpie Multilingual (local only).
-# Access is restricted on NGC. Apply for access before pulling the image.
+# Access is restricted on NGC. Apply for access at https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/magpie-tts-zeroshot before pulling the image.
 #
 # Opt-in alternate (shared ports 50151/9000. Only one TTS can run):
 #   docker compose --profile <recipe>/workstation --profile magpie-zeroshot-tts \
@@ -10,9 +10,6 @@
 #   docker compose --profile magpie-zeroshot-tts stop magpie-zeroshot-tts-service
 #   docker compose --profile <recipe>/workstation up -d
 # Then pick magpie-zeroshot-tts (or Magpie Multilingual) in the Services tab.
-#
-# NGC publishes this image as :latest (restricted). Pin a numeric tag when NGC
-# lists one for your release train.
 
 services:
   magpie-zeroshot-tts-service:

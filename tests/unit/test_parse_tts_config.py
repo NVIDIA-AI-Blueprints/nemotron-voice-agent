@@ -27,8 +27,8 @@ class ParseTtsConfigTests(unittest.TestCase):
         self.assertEqual(
             parsed["voices"],
             [
-                {"id": "Magpie-Multilingual.EN-US.Aria", "name": "Aria", "language": "EN-US"},
-                {"id": "Magpie-Multilingual.ES-US.Isabela", "name": "Isabela", "language": "ES-US"},
+                {"id": "Magpie-Multilingual.EN-US.Aria", "name": "Aria", "language": "en-US"},
+                {"id": "Magpie-Multilingual.ES-US.Isabela", "name": "Isabela", "language": "es-US"},
             ],
         )
 

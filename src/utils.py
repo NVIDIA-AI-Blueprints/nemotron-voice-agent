@@ -52,7 +52,6 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
             "tts_function_id",
             "tts_model",
             "tts_synthesis_mode",
-            "tts_zero_shot_audio_prompt_file",
         }
     ),
 }
@@ -482,7 +481,6 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "tts_function_id",
         "tts_model",
         "tts_synthesis_mode",
-        "tts_zero_shot_audio_prompt_file",
     }
 )
 
@@ -569,6 +567,8 @@ def filter_session_config(data: dict) -> dict:
 
     Keeps only keys in ``SESSION_CONFIG_KEYS`` and hydrates built-in catalog
     selections from YAML (see :func:`hydrate_config_from_catalog`).
+    Client-supplied ``tts_zero_shot_audio_prompt_file`` is always dropped;
+    catalog hydration may re-add a trusted path afterward.
     """
     filtered = {k: v for k, v in data.items() if k in SESSION_CONFIG_KEYS and v not in ("", None)}
     active_slots = _effective_active_slots()
@@ -577,6 +577,8 @@ def filter_session_config(data: dict) -> dict:
         for slot in active_slots:
             allowed |= _SLOT_CONFIG_KEYS.get(slot, frozenset())
         filtered = {k: v for k, v in filtered.items() if k in allowed}
+    # Defense in depth: never trust a client path even if it bypasses the allowlists.
+    filtered.pop("tts_zero_shot_audio_prompt_file", None)
     hydrate_config_from_catalog(filtered)
     return filtered
 
