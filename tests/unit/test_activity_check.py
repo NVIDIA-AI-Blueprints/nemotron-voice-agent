@@ -24,11 +24,17 @@ class _TestActivityCheckProcessor(ActivityCheckProcessor):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.emitted_frames = []
+        self.block_end_task_push = False
+        self.end_task_push_started = asyncio.Event()
+        self.allow_end_task_push = asyncio.Event()
 
     def create_task(self, coroutine, name=None):
         return asyncio.create_task(coroutine, name=name)
 
     async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
+        if self.block_end_task_push and isinstance(frame, EndTaskFrame):
+            self.end_task_push_started.set()
+            await self.allow_end_task_push.wait()
         self.emitted_frames.append((frame, direction))
 
 
@@ -121,8 +127,10 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         await processor._emit_warning(2)
+        processor.block_end_task_push = True
         processor._handle_bot_stopped_speaking()
         self.assertIsNotNone(processor._disconnect_task)
+        await asyncio.wait_for(processor.end_task_push_started.wait(), timeout=0.5)
 
         await processor.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
         await asyncio.sleep(0)
