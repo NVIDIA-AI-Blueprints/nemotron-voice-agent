@@ -13,7 +13,7 @@
 
 services:
   magpie-zeroshot-tts-service:
-    image: nvcr.io/nim/nvidia/magpie-tts-zeroshot:latest
+    image: nvcr.io/nim/nvidia/magpie-tts-zeroshot:1.2.0
     user: "0:0"
     profiles:
       - magpie-zeroshot-tts
