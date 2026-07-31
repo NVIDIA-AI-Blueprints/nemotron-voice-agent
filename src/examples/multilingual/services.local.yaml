@@ -24,6 +24,13 @@ workstation:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+    magpie-zeroshot-tts:
+      name: "Magpie TTS Zeroshot"
+      server: "magpie-zeroshot-tts-service:50051"
+      voice_id: "Magpie-ZeroShot-Multilingual.Female"
+      model: "magpie-tts-zeroshot"
+      function_id: ""
+      synthesis_mode: stitched
   asr:
     parakeet-rnnt:
       name: "Parakeet 1.1B RNNT Multilingual ASR"
@@ -59,6 +66,13 @@ dgxspark:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+    magpie-zeroshot-tts:
+      name: "Magpie TTS Zeroshot"
+      server: "magpie-zeroshot-tts-service:50051"
+      voice_id: "Magpie-ZeroShot-Multilingual.Female"
+      model: "magpie-tts-zeroshot"
+      function_id: ""
+      synthesis_mode: stitched
   asr:
     parakeet-rnnt:
       name: "Parakeet 1.1B RNNT Multilingual ASR"

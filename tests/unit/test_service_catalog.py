@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import examples_registry
 import utils
-from utils import build_services_api_response, hydrate_config_from_catalog, load_service_entry
+from utils import build_services_api_response, filter_session_config, hydrate_config_from_catalog, load_service_entry
 
 
 class ServiceCatalogHydrationTests(unittest.TestCase):
@@ -43,6 +43,7 @@ tts:
     model: magpie-tts-multilingual
     voice_id: Magpie-Multilingual.EN-US.Aria
     synthesis_mode: stitched
+    zero_shot_audio_prompt_file: /data/prompts/clone.wav
 """,
                 encoding="utf-8",
             )
@@ -91,6 +92,62 @@ tts:
             self.assertEqual(config["tts_model"], "magpie-tts-multilingual")
             self.assertEqual(config["tts_voice_id"], "client-voice")
             self.assertEqual(config["tts_synthesis_mode"], "stitched")
+            self.assertEqual(config["tts_zero_shot_audio_prompt_file"], "/data/prompts/clone.wav")
+
+    def test_zero_shot_prompt_file_is_catalog_only_not_client_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text(
+                dedent(
+                    """\
+                    tts:
+                      magpie:
+                        name: Magpie
+                        server: catalog-tts:443
+                        function_id: catalog-tts-function
+                        model: magpie-tts-zeroshot
+                        voice_id: Magpie-ZeroShot-Multilingual.Female
+                        zero_shot_audio_prompt_file: /data/prompts/clone.wav
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                filtered = filter_session_config(
+                    {
+                        "tts_id": "cloud-nim:magpie",
+                        "tts_zero_shot_audio_prompt_file": "/evil/client/path.wav",
+                    }
+                )
+
+            self.assertEqual(filtered["tts_zero_shot_audio_prompt_file"], "/data/prompts/clone.wav")
+
+    def test_zero_shot_prompt_file_dropped_without_catalog_tts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text("tts: {}\n", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                for tts_id in ("", "custom-tts"):
+                    with self.subTest(tts_id=tts_id):
+                        body = {"tts_zero_shot_audio_prompt_file": "/evil/client/path.wav"}
+                        if tts_id:
+                            body["tts_id"] = tts_id
+                        filtered = filter_session_config(body)
+                        self.assertNotIn("tts_zero_shot_audio_prompt_file", filtered)
 
     def test_hydrates_raw_catalog_key_for_direct_clients(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -227,7 +284,11 @@ llm:
         self_hosted_ids = {entry["id"] for entry in self_hosted}
         self.assertEqual(
             self_hosted_ids,
-            {"self-hosted:magpie-multilingual-tts", "self-hosted:chatterbox-multilingual-tts"},
+            {
+                "self-hosted:magpie-multilingual-tts",
+                "self-hosted:chatterbox-multilingual-tts",
+                "self-hosted:magpie-zeroshot-tts",
+            },
         )
         for entry in self_hosted:
             self.assertEqual(entry["server"], "localhost:50151")

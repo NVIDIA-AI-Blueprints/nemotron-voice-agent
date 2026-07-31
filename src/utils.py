@@ -223,6 +223,7 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm-vllm", 8000): 18000,
     ("tts-service", 50051): 50151,
     ("chatterbox-tts-service", 50051): 50151,
+    ("magpie-zeroshot-tts-service", 50051): 50151,
     ("nemotron-asr-streaming-english", 50052): 50152,
     ("nemotron-asr-streaming-multilingual", 50052): 50152,
     ("parakeet-ctc-asr", 50052): 50152,
@@ -527,6 +528,7 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "model": "tts_model",
             "voice_id": "tts_voice_id",
             "synthesis_mode": "tts_synthesis_mode",
+            "zero_shot_audio_prompt_file": "tts_zero_shot_audio_prompt_file",
         },
     ),
 )
@@ -565,6 +567,8 @@ def filter_session_config(data: dict) -> dict:
 
     Keeps only keys in ``SESSION_CONFIG_KEYS`` and hydrates built-in catalog
     selections from YAML (see :func:`hydrate_config_from_catalog`).
+    Client-supplied ``tts_zero_shot_audio_prompt_file`` is always dropped;
+    catalog hydration may re-add a trusted path afterward.
     """
     filtered = {k: v for k, v in data.items() if k in SESSION_CONFIG_KEYS and v not in ("", None)}
     active_slots = _effective_active_slots()
@@ -573,6 +577,8 @@ def filter_session_config(data: dict) -> dict:
         for slot in active_slots:
             allowed |= _SLOT_CONFIG_KEYS.get(slot, frozenset())
         filtered = {k: v for k, v in filtered.items() if k in allowed}
+    # Defense in depth: never trust a client path even if it bypasses the allowlists.
+    filtered.pop("tts_zero_shot_audio_prompt_file", None)
     hydrate_config_from_catalog(filtered)
     return filtered
 

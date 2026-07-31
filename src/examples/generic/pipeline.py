@@ -140,6 +140,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
     )
     tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
     custom_dictionary = load_ipa_dictionary()
 
     tts_settings_kwargs: dict = {"voice": tts_voice}
@@ -158,12 +161,15 @@ async def bot(runner_args: RunnerArguments) -> None:
             "function_id": tts_function_id,
             "model_name": tts_model,
         }
+    if tts_zero_shot_audio_prompt_file:
+        tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
     tts = NvidiaTTSService(**tts_kwargs)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
         f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"text_filters=[NemotronSpeechTextFilter]"
     )
 
