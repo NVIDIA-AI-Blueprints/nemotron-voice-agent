@@ -117,8 +117,11 @@ jobs:
           fi
 
           if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+            rm -f "$RUNNER_TEMP/ollama.pid" "$RUNNER_TEMP/ollama.starttime"
             nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
-            echo "$!" > "$RUNNER_TEMP/ollama.pid"
+            pid="$!"
+            echo "$pid" > "$RUNNER_TEMP/ollama.pid"
+            awk '{print $22}' "/proc/$pid/stat" > "$RUNNER_TEMP/ollama.starttime"
           fi
 
           for attempt in {1..60}; do
@@ -155,15 +158,20 @@ jobs:
           fi
 
           mkdir -p "$RUNNER_TEMP/booking-db"
+          rm -f "$RUNNER_TEMP/booking-server.pid" "$RUNNER_TEMP/booking-server.starttime"
           BOOKING_DB_PATH="$RUNNER_TEMP/booking-db/bookings.db" \
             BOOKING_HOST=127.0.0.1 \
             BOOKING_PORT=8001 \
             nohup uv run --group eval python -m examples.frontend_backend_agent.airline.database.server \
             > "$RUNNER_TEMP/booking-server.log" 2>&1 &
-          echo "$!" > "$RUNNER_TEMP/booking-server.pid"
+          pid="$!"
+          echo "$pid" > "$RUNNER_TEMP/booking-server.pid"
+          awk '{print $22}' "/proc/$pid/stat" > "$RUNNER_TEMP/booking-server.starttime"
 
           for attempt in {1..60}; do
-            if ! kill -0 "$(cat "$RUNNER_TEMP/booking-server.pid")" 2>/dev/null; then
+            current_starttime="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
+            expected_starttime="$(cat "$RUNNER_TEMP/booking-server.starttime")"
+            if [ "$current_starttime" != "$expected_starttime" ]; then
               cat "$RUNNER_TEMP/booking-server.log" || true
               exit 1
             fi
@@ -211,43 +219,69 @@ jobs:
       - name: Stop Ollama judge
         if: always()
         run: |
-          if [ ! -f "$RUNNER_TEMP/ollama.pid" ]; then
+          pid_file="$RUNNER_TEMP/ollama.pid"
+          starttime_file="$RUNNER_TEMP/ollama.starttime"
+
+          if [ ! -f "$pid_file" ] || [ ! -f "$starttime_file" ]; then
+            rm -f "$pid_file" "$starttime_file"
             exit 0
           fi
 
-          pid="$(cat "$RUNNER_TEMP/ollama.pid")"
-          if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-            exit 0
-          fi
+          pid="$(cat "$pid_file")"
+          expected_starttime="$(cat "$starttime_file")"
+          rm -f "$pid_file" "$starttime_file"
+
+          is_owned_process() {
+            [ -n "$pid" ] || return 1
+            current_starttime="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
+            [ "$current_starttime" = "$expected_starttime" ]
+          }
+
+          is_owned_process || exit 0
 
           kill "$pid" || true
           for attempt in {1..10}; do
-            if ! kill -0 "$pid" 2>/dev/null; then
+            if ! is_owned_process; then
               exit 0
             fi
             sleep 1
           done
 
-          kill -9 "$pid" || true
+          if is_owned_process; then
+            kill -9 "$pid" || true
+          fi
 
       - name: Stop booking backend
         if: always()
         run: |
-          if [ ! -f "$RUNNER_TEMP/booking-server.pid" ]; then
+          pid_file="$RUNNER_TEMP/booking-server.pid"
+          starttime_file="$RUNNER_TEMP/booking-server.starttime"
+
+          if [ ! -f "$pid_file" ] || [ ! -f "$starttime_file" ]; then
+            rm -f "$pid_file" "$starttime_file"
             exit 0
           fi
 
-          pid="$(cat "$RUNNER_TEMP/booking-server.pid")"
-          if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-            exit 0
-          fi
+          pid="$(cat "$pid_file")"
+          expected_starttime="$(cat "$starttime_file")"
+          rm -f "$pid_file" "$starttime_file"
+
+          is_owned_process() {
+            [ -n "$pid" ] || return 1
+            current_starttime="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
+            [ "$current_starttime" = "$expected_starttime" ]
+          }
+
+          is_owned_process || exit 0
 
           kill "$pid" || true
           for attempt in {1..10}; do
-            if ! kill -0 "$pid" 2>/dev/null; then
+            if ! is_owned_process; then
               exit 0
             fi
             sleep 1
           done
 
-          kill -9 "$pid" || true
+          if is_owned_process; then
+            kill -9 "$pid" || true
+          fi
