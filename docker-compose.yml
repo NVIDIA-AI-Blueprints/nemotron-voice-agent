@@ -88,6 +88,7 @@ x-app: &app-base
 x-app-env: &app-env
   APP_RUNTIME: container
   TRANSPORT_SELECTION: ${TRANSPORT_SELECTION:-}
+  PIPELINE_TLS: ${PIPELINE_TLS:-true}
 
 # Platform overrides keep recipe services small and make future hardware targets
 # a one-anchor addition.
