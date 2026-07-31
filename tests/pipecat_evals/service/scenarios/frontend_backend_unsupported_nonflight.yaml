@@ -13,5 +13,5 @@ turns:
   - user: "Can you order a pizza for me?"
     expect:
       - event: response
-        eval: "the reply says this assistant supports flight searches, new bookings, cancellation of pending flight tasks, or PNR status, and does not offer to order pizza"
+        eval: "the reply politely declines or says it cannot help with ordering pizza. It must not say it can order pizza, must not offer to place a pizza order, and must not ask for pizza order details. It may optionally redirect to flight or airline help."
         within_ms: 90000
