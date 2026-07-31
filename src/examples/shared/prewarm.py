@@ -48,8 +48,14 @@ def _parse_language_codes_param(raw: str) -> list[str]:
 def _parse_tts_config(raw_config, model_prefix: str) -> dict:
     """Parse the TTS synthesis config into a frontend-friendly structure.
 
-    Voice IDs are returned in full form (e.g. "Magpie-Multilingual.EN-US.Aria")
-    so the frontend can use them as-is without any prefix manipulation.
+    Voice IDs are returned in full form so the frontend can use them as-is:
+
+    - Magpie Multilingual ``subvoices`` entries look like ``EN-US.Aria:0`` and
+      become ``{prefix}.EN-US.Aria``.
+    - Magpie Zeroshot ``subvoices`` entries look like ``Female:0`` / ``Male:6``
+      (no language in the token). The same voice IDs are valid across every
+      ``language_code``, so each subvoice is expanded once per language as
+      ``{prefix}.Female`` / ``{prefix}.Male``.
     """
     if not raw_config or not raw_config.model_config:
         return {"languages": [], "voices": []}
@@ -57,24 +63,41 @@ def _parse_tts_config(raw_config, model_prefix: str) -> dict:
     params = dict(raw_config.model_config[0].parameters)
     languages = _parse_language_codes_param(params.get("language_code", ""))
     subvoices_raw = params.get("subvoices", "")
+    prefix = (model_prefix or params.get("voice_name", "") or "").strip()
 
     voices: list[dict] = []
     seen: set[str] = set()
     for entry in subvoices_raw.split(","):
         entry = entry.strip()
-        if ":" not in entry or "." not in entry:
+        if ":" not in entry:
             continue
-        short_id = entry.split(":")[0]
-        parts = short_id.split(".")
-        if len(parts) < 2:
+        short_id = entry.split(":", 1)[0].strip()
+        if not short_id:
             continue
-        if short_id in seen:
+
+        if "." in short_id:
+            # Magpie Multilingual: Language.VoiceName:index
+            parts = short_id.split(".")
+            if len(parts) < 2:
+                continue
+            lang = normalize_lang_code(parts[0])
+            name = ".".join(parts[1:])
+            full_id = f"{prefix}.{short_id}" if prefix else short_id
+            if full_id in seen:
+                continue
+            seen.add(full_id)
+            voices.append({"id": full_id, "name": name, "language": lang})
             continue
-        seen.add(short_id)
-        full_id = f"{model_prefix}.{short_id}" if model_prefix else short_id
-        lang = parts[0]
-        name = ".".join(parts[1:])
-        voices.append({"id": full_id, "name": name, "language": lang})
+
+        # Magpie Zeroshot: VoiceName:index (same voices for every locale)
+        name = short_id
+        full_id = f"{prefix}.{name}" if prefix else name
+        for lang in languages or ["en-US"]:
+            key = f"{full_id}|{lang}"
+            if key in seen:
+                continue
+            seen.add(key)
+            voices.append({"id": full_id, "name": name, "language": lang})
 
     return {
         "languages": languages,
