@@ -98,6 +98,7 @@ class OmniTransportAgent(PipelineWorker):
         tts_synthesis_mode: str,
         tts_function_id: str,
         tts_model: str,
+        tts_zero_shot_audio_prompt_file: str,
         runner_args: RunnerArguments,
         session_id: str,
         subagent_registry: SubagentRegistry,
@@ -144,12 +145,15 @@ class OmniTransportAgent(PipelineWorker):
                 "function_id": tts_function_id,
                 "model_name": tts_model,
             }
+        if tts_zero_shot_audio_prompt_file:
+            tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
         self._tts = NvidiaTTSService(**tts_kwargs)
         logger.info(
             f"Nemotron Omni subagents TTS: server={tts_server}, ssl={tts_ssl}, "
             f"voice={tts_voice}, model={tts_model or '(pipecat default)'}, "
             f"function_id={tts_function_id or '(pipecat default)'}, "
-            f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}"
+            f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+            f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}"
         )
 
         self._speaker_context = SpeakerContextManager(context=self._context)

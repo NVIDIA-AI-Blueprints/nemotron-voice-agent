@@ -130,6 +130,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
     )
     tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
     api_key = os.getenv("NVIDIA_API_KEY")
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
@@ -144,6 +147,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         tts_synthesis_mode=tts_synthesis_mode,
         tts_function_id=tts_function_id,
         tts_model=tts_model,
+        tts_zero_shot_audio_prompt_file=tts_zero_shot_audio_prompt_file,
         runner_args=runner_args,
         session_id=session_id,
         subagent_registry=registry,

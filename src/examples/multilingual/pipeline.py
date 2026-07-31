@@ -245,6 +245,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     # --- TTS ---
     custom_dictionary = load_ipa_dictionary()
     tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
     tts_settings_kwargs: dict = {"voice": tts_voice}
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
@@ -274,12 +277,15 @@ async def bot(runner_args: RunnerArguments) -> None:
             "function_id": tts_function_id,
             "model_name": tts_model,
         }
+    if tts_zero_shot_audio_prompt_file:
+        tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
     tts = NvidiaTTSService(**tts_kwargs)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
         f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"lang_codes={lang_codes or '(no voices discovered)'}, "
         f"text_filters=[NemotronSpeechTextFilter]"
     )
