@@ -138,7 +138,7 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(processor._disconnect_task)
         self.assertFalse(any(isinstance(frame, EndTaskFrame) for frame, _ in processor.emitted_frames))
 
-    async def test_processor_appends_developer_instruction_to_context(self) -> None:
+    async def test_processor_appends_user_instruction_to_context(self) -> None:
         context = LLMContext(messages=[])
         runs = 0
 
@@ -154,14 +154,14 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
             },
             context=context,
             queue_llm_run=queue_llm_run,
-            instruction_role="developer",
+            instruction_role="user",
         )
 
         self.assertIsNotNone(processor)
         await processor._on_warning(1)
 
         self.assertEqual(runs, 1)
-        self.assertEqual(context.get_messages()[-1]["role"], "developer")
+        self.assertEqual(context.get_messages()[-1]["role"], "user")
         self.assertEqual(context.get_messages()[-1]["content"], activity_check_instruction(1))
 
     def test_activity_instructions_require_a_single_clean_spoken_sentence(self) -> None:

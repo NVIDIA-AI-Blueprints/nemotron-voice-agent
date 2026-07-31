@@ -28,7 +28,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 ActivityCallback = Callable[[int], Awaitable[None]]
 QueueLLMRunCallback = Callable[[], Awaitable[None]]
-ActivityInstructionRole = Literal["developer", "system"]
+ActivityInstructionRole = Literal["developer", "system", "user"]
 
 
 @dataclass(frozen=True)

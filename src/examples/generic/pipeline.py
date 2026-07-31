@@ -173,7 +173,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         examples_registry.activity_check_config(body.get("pipeline_mode", "generic-assistant")),
         context=context,
         queue_llm_run=queue_activity_llm_run,
-        instruction_role="developer",
+        instruction_role="user",
     )
     logger.info(f"Proactive activity checks: {'enabled' if activity_check else 'disabled'}")
 
