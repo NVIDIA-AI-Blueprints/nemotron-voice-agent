@@ -77,7 +77,7 @@ These control VRAM fit, precision, hardware mapping, and scaling.
 ```bash
 docker run --rm --gpus all \
   -e NGC_API_KEY="$NVIDIA_API_KEY" \
-  nvcr.io/nim/nvidia/nemotron-3-nano:2.0.5 \
+  nvcr.io/nim/nvidia/nemotron-3-nano:2.0.9 \
   list-model-profiles
 ```
 
