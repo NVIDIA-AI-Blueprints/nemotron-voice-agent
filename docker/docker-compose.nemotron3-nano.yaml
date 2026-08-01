@@ -2,7 +2,7 @@
 # only per-platform difference is the NVFP4 MoE kernel backend (--moe-backend),
 # so dgx-spark and jetson-thor are split into two profile-scoped services below.
 x-vllm-nano: &vllm-nano
-  image: nvcr.io/nvidia/vllm:26.05.post1-py3
+  image: nvcr.io/nvidia/vllm:26.07-py3
   pull_policy: if_not_present
   shm_size: 16GB
   env_file:
@@ -38,7 +38,7 @@ x-vllm-nano: &vllm-nano
       max-file: "5"
 
 x-nim-llm: &nim-llm
-  image: nvcr.io/nim/nvidia/nemotron-3-nano:2.0.5
+  image: nvcr.io/nim/nvidia/nemotron-3-nano:2.0.9
   user: "0:0"
   ports:
     - "18000:8000"

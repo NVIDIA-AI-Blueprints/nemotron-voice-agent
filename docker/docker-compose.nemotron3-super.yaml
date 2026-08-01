@@ -3,7 +3,7 @@ services:
   nemotron-3-super:
     profiles:
       - nemotron-3-super
-    image: nvcr.io/nim/nvidia/nemotron-3-super-120b-a12b:2.0.5
+    image: nvcr.io/nim/nvidia/nemotron-3-super-120b-a12b:2.0.9
     user: "0:0"
     environment:
       - NGC_API_KEY=${NVIDIA_API_KEY}

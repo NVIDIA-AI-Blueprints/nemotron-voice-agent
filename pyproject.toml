@@ -24,6 +24,7 @@ override-dependencies = [
     "protobuf>=6.33.6",
     "langchain-core>=1.4.1",
     "uuid-utils>=0.16.0",
+    "pillow>=12.3.0",
 ]
 
 [dependency-groups]
