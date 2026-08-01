@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 # Base image - OSRB approved Ubuntu base (Bug 4960044)
-FROM nvcr.io/nvidia/base/ubuntu:noble-20251013 AS client-builder
+FROM nvcr.io/nvidia/base/ubuntu:noble-20260610 AS client-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -20,7 +20,7 @@ RUN npm ci
 COPY client/ ./
 RUN npm run build
 
-FROM nvcr.io/nvidia/base/ubuntu:noble-20251013
+FROM nvcr.io/nvidia/base/ubuntu:noble-20260610
 
 # Image metadata
 LABEL maintainer="NVIDIA"

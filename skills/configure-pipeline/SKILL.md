@@ -80,4 +80,4 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 - **Multilingual responses do not use the right ASR/TTS** -> reorder catalog so a multilingual ASR/TTS sits first, or pick the entry from the UI Services tab.
 - **ASR/TTS sidecar image fails to pull** -> log in to `nvcr.io` with a `NVIDIA_API_KEY` that has access to the image. The active image is set in `docker/docker-compose.<variant>.yaml`.
 - **Local LLM 400 (`auto tool choice requires ...`), or reasoning spoken / `<think>` leaks** -> self-hosted Nemotron-3 2.x needs the parsers set (already in `docker/docker-compose.nemotron3-*.yaml`): NIM `NIM_PASSTHROUGH_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3`, or the same flags on `vllm serve`. See `docs/06-troubleshooting.md`.
-- **Raw vLLM `nemotron_v3` not found / Super (`MIXED_PRECISION`) won't load** -> image's vLLM too old; use NGC `vllm:26.05.post1-py3` (vLLM ≥ 0.20), not `vllm:25.12.post1-py3` (0.12.0).
+- **Raw vLLM `nemotron_v3` not found / Super (`MIXED_PRECISION`) won't load** -> image's vLLM too old; use NGC `vllm:26.07-py3` (vLLM ≥ 0.20), not `vllm:25.12.post1-py3` (0.12.0).
