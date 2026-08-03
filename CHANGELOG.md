@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - TBD
+
+Patch release with expanded TTS options, improved turn-taking, Omni Assistant Subagents refinements, more languages support in Multilingual assistant, and broader eval coverage.
+
+### Added
+
+- **Model updates**: Chatterbox TTS Multilingual with 23 languages, Magpie TTS Multilingual with 12-language support, and Magpie TTS Zeroshot with optional voice cloning.
+- Omni Assistant webcam steering, thinker reasoning, and subagent handoff improvements.
+- More language support in Multilingual Voice Assistant via Magpie TTS and Chatterbox TTS NIM.
+- Pipecat eval based evaluation setup for coverage across core examples, latency, and tool scenarios.
+
+### Changed
+
+- Upgraded Pipecat to **1.5.0** and refreshed NIM, vLLM, and CVE-related dependency pins.
+- Improved Smart Turn defaults and added inactivity checks for the Generic Assistant.
+- Refactored `NvidiaOmniLLMService` on Pipecat's `NvidiaLLMService` base.
+
 ## [2.0.0] - 2026-07-09
 
 Re-architecture by upstreaming `nvidia-pipecat` changes to [Pipecat](https://github.com/pipecat-ai/pipecat) and a unified React UI client, new multimodal Nemotron Omni and Frontend Backend Agent examples and recipe-style deployment profiles.
