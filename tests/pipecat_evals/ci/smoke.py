@@ -14,8 +14,8 @@ from pipecat.runner.types import EvalRunnerArguments
 
 import eval_bot
 from attachment_store import clear_session_attachments, latest_attachment
-from examples.frontend_backend_agent.pipeline import _create_transport as create_frontend_backend_transport
-from examples.omni_assistant.pipeline import _create_transport as create_omni_transport
+from examples.frontend_backend_agent.pipeline import create_transport as create_frontend_backend_transport
+from examples.omni_assistant.pipeline import create_transport as create_omni_transport
 from examples.shared.pipeline_utils import create_transport as create_shared_transport
 
 ROOT = Path(__file__).resolve().parents[3]
