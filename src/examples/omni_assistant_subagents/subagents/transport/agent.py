@@ -39,6 +39,7 @@ from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy im
     MuteUntilFirstBotCompleteUserMuteStrategy,
 )
 
+import examples_registry
 from attachment_store import (
     clear_session_attachments,
     create_capture_request,
@@ -198,7 +199,7 @@ class OmniTransportAgent(PipelineWorker):
             active=True,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
             idle_timeout_secs=self._runner_args.pipeline_idle_timeout_secs,
-            observers=[self._build_latency_observer()],
+            observers=self._build_observers(),
             enable_tracing=IS_TRACING_ENABLED,
             enable_rtvi=True,
         )
@@ -314,17 +315,54 @@ class OmniTransportAgent(PipelineWorker):
 
         return latency_observer
 
-    def _register_client_handlers(self) -> None:
-        """Register RTVI client and transport event handlers on this worker."""
+    def _build_observers(self) -> list:
+        """Latency observer plus Realtime lifecycle observer when applicable."""
+        from examples.shared.pipeline_utils import with_realtime_observers
 
-        @self.rtvi.event_handler("on_client_ready")
-        async def on_client_connected(rtvi):
-            logger.info("Nemotron Omni subagents client connected")
+        return with_realtime_observers(
+            self._build_latency_observer(),
+            transport=self._transport,
+        )
+
+    def _register_client_handlers(self) -> None:
+        """Register RTVI/Realtime client and transport event handlers on this worker."""
+        from examples.shared.pipeline_utils import runner_protocol
+
+        body = self._runner_args.body if isinstance(getattr(self._runner_args, "body", None), dict) else {}
+        welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+        started = False
+
+        async def _start_session(source: str) -> None:
+            nonlocal started
+            if started:
+                return
+            started = True
+            logger.info(f"Nemotron Omni subagents client session start via {source}")
             self._start_attachment_state_listener()
-            intro_prompt = "Please introduce yourself to the user."
-            self._context.add_message({"role": "user", "content": intro_prompt})
             self._webcam_controller.start_summary_loop()
+            if not welcome_enabled:
+                logger.info("Welcome message disabled; waiting for the user to speak first")
+                return
+            self._context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
             await self.queue_frame(LLMRunFrame())
+
+        if runner_protocol(self._runner_args) == "realtime":
+            # Align with shared register_session_start_handlers: no welcome race window.
+            if not welcome_enabled:
+                serializer = getattr(self._transport, "_realtime_serializer", None)
+                conversation = getattr(serializer, "conversation", None)
+                if conversation is not None:
+                    conversation.open_client_text()
+
+            @self._transport.event_handler("on_client_connected")
+            async def on_realtime_connected(transport, client):  # noqa: ARG001
+                await _start_session("realtime-transport-connected")
+
+        else:
+
+            @self.rtvi.event_handler("on_client_ready")
+            async def on_client_connected(rtvi):  # noqa: ARG001
+                await _start_session("rtvi-client-ready")
 
         @self._transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
