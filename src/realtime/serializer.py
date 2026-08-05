@@ -59,7 +59,12 @@ from realtime.events import (
     with_beta_aliases,
 )
 from realtime.lifecycle import announce_response, finish_response
-from realtime.session import deep_merge_dicts, live_session_patch, nvidia_public_view, unsupported_live_session_fields
+from realtime.session import (
+    live_session_patch,
+    merge_session_patch,
+    nvidia_public_view,
+    unsupported_live_session_fields,
+)
 from realtime.voice import resolve_realtime_tts_voice
 
 CancelHook = Callable[[], str]
@@ -326,9 +331,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                 "tts_function_id": nvidia.get("tts_function_id", ""),
                 "tts_model": nvidia.get("tts_model", ""),
             }
-            resolved = (
-                await asyncio.to_thread(resolve_realtime_tts_voice, voice_config, voice_was_set=True) or voice
-            )
+            resolved = await asyncio.to_thread(resolve_realtime_tts_voice, voice_config, voice_was_set=True) or voice
             voice = resolved
             if isinstance(patch.get("voice"), str):
                 patch["voice"] = voice
@@ -338,7 +341,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                 if isinstance(output_patch, dict) and "voice" in output_patch:
                     output_patch["voice"] = voice
 
-        self._session_view = deep_merge_dicts(self._session_view, patch)
+        self._session_view = merge_session_patch(self._session_view, patch)
         if voice:
             audio = dict(self._session_view.get("audio") or {})
             output = dict(audio.get("output") or {})

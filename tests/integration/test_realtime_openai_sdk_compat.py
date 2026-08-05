@@ -435,37 +435,6 @@ async def _send_user_text(ws: Any, text: str) -> None:
     await ws.send(json.dumps({"type": "response.create"}))
 
 
-async def _tool_output(ws: Any, call_id: str, output: dict[str, Any]) -> None:
-    await ws.send(
-        json.dumps(
-            {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": json.dumps(output),
-                },
-            }
-        )
-    )
-    ack = await _ws_wait_until(
-        ws,
-        predicate=lambda t, e: (
-            (
-                _event_type(e) == "conversation.item.created"
-                and isinstance(e.get("item"), dict)
-                and e["item"].get("type") == "function_call_output"
-            )
-            or any(err.get("code") == "invalid_item" for err in t.errors)
-        ),
-        timeout_s=15.0,
-        label=f"tool-output-ack-{call_id[:8]}",
-        allow_error_codes=frozenset({"invalid_item"}),
-    )
-    assert not any(err.get("code") == "invalid_item" for err in ack.errors), ack.errors
-    await ws.send(json.dumps({"type": "response.create"}))
-
-
 def _is_spoken(turn: TurnResult) -> bool:
     return bool(turn.saw_done and turn.transcript and turn.audio_deltas > 0)
 
@@ -484,62 +453,6 @@ async def _settle(ws: Any, *, transcript: str = "", min_s: float = 1.0) -> None:
             continue
         except Exception:
             break
-
-
-async def _await_spoken_or_tools(
-    ws: Any,
-    *,
-    label: str,
-    timeout_s: float,
-    allow_error_codes: frozenset[str] | None = None,
-) -> TurnResult:
-    return await _ws_wait_until(
-        ws,
-        predicate=lambda t, _e: bool(t.function_calls) or _is_spoken(t),
-        timeout_s=timeout_s,
-        label=label,
-        allow_error_codes=allow_error_codes,
-    )
-
-
-async def _run_tool_until_spoken(
-    ws: Any,
-    *,
-    user_text: str,
-    outputs_by_name: dict[str, dict[str, Any]],
-    turn_timeout_s: float,
-    label: str,
-) -> tuple[list[dict[str, Any]], TurnResult]:
-    """Send user text, answer tool calls, return (calls, final spoken turn)."""
-    await _send_user_text(ws, user_text)
-    calls: list[dict[str, Any]] = []
-    answered: set[str] = set()
-    for round_i in range(8):
-        turn = await _await_spoken_or_tools(
-            ws,
-            label=f"{label}-r{round_i}",
-            timeout_s=turn_timeout_s,
-        )
-        pending = [c for c in turn.function_calls if str(c.get("call_id") or "") not in answered]
-        if pending:
-            call = pending[0]
-            name = str(call.get("name") or "")
-            call_id = call.get("call_id")
-            assert isinstance(call_id, str) and call_id, call
-            assert name in outputs_by_name, f"{label}: unexpected tool {name!r} calls={calls!r}"
-            answered.add(call_id)
-            calls.append(call)
-            await _tool_output(ws, call_id, outputs_by_name[name])
-            continue
-        if _is_spoken(turn):
-            if not calls:
-                raise AssertionError(f"{label}: spoken without tool call; transcript={turn.transcript!r}")
-            return calls, turn
-        raise AssertionError(
-            f"{label}: timed out waiting for tool call or spoken response "
-            f"(round={round_i}, calls={calls!r}, status={turn.status!r})"
-        )
-    raise AssertionError(f"{label}: exceeded tool rounds without spoken response; calls={calls!r}")
 
 
 async def _run_feature_checks(
@@ -584,17 +497,19 @@ async def _run_feature_checks(
         summary["session"] = {
             "voice": session_obj.get("voice"),
             "temperature": session_obj.get("temperature"),
-            "tools": [],
+            "tools": session_obj.get("tools"),
         }
 
         # Welcome gate: reject text until first assistant response.done.
+        # `_send_user_text` also sends response.create; both reject codes are expected.
+        pre_intro_codes = frozenset({"item_rejected_pre_intro", "response_create_rejected_pre_intro"})
         await _send_user_text(ws, "Hello!")
         pre = await _ws_wait_until(
             ws,
             predicate=lambda t, _e: any(err.get("code") == "item_rejected_pre_intro" for err in t.errors) or t.saw_done,
             timeout_s=intro_timeout_s,
             label="pre-intro",
-            allow_error_codes=frozenset({"item_rejected_pre_intro"}),
+            allow_error_codes=pre_intro_codes,
         )
         assert any(err.get("code") == "item_rejected_pre_intro" for err in pre.errors), pre.errors
         summary["pre_intro_rejected"] = True
@@ -605,7 +520,7 @@ async def _run_feature_checks(
                 predicate=lambda t, _e: _is_spoken(t),
                 timeout_s=intro_timeout_s,
                 label="intro",
-                allow_error_codes=frozenset({"item_rejected_pre_intro"}),
+                allow_error_codes=pre_intro_codes,
             )
             assert intro.matched and _is_spoken(intro), "timed out waiting for welcome spoken response.done"
             assert intro.status == "completed", f"intro status={intro.status!r}"

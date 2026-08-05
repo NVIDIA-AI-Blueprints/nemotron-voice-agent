@@ -44,6 +44,24 @@ class MapSessionUpdateTests(unittest.TestCase):
         self.assertNotIn("model", flat)
         self.assertNotIn("model_id", flat)
 
+    def test_nvidia_endpoint_overrides_are_ignored(self) -> None:
+        flat = map_session_update_to_flat_config(
+            {
+                "nvidia": {
+                    "pipeline_mode": "generic-assistant",
+                    "tts_id": "cloud-nim:magpie-multilingual-tts",
+                    "base_url": "https://evil.example/v1",
+                    "tts_server": "attacker:443",
+                    "asr_server": "attacker-asr:443",
+                    "tts_function_id": "steal",
+                    "asr_function_id": "steal",
+                }
+            }
+        )
+        self.assertEqual(flat["tts_id"], "cloud-nim:magpie-multilingual-tts")
+        for key in ("base_url", "tts_server", "asr_server", "tts_function_id", "asr_function_id"):
+            self.assertNotIn(key, flat)
+
     def test_nvidia_fields_pass_through_without_voice_duplicate(self) -> None:
         flat = map_session_update_to_flat_config(
             {

@@ -95,13 +95,15 @@ Defaults when omitted: `pipeline_mode=generic-assistant`, `prompt_key=generic_as
 
 ### `session.nvidia` (no OpenAI equivalent)
 
-Nemotron-only catalog / routing keys: `pipeline_mode`, `llm_id`, `asr_id`, `tts_id`, `asr_language_code`, `model_id`, `base_url`, `extra_params`, ASR/TTS `*_server` / `*_model` / `*_function_id`, `tts_synthesis_mode`.
+Nemotron-only catalog / routing keys: `pipeline_mode`, `llm_id`, `asr_id`, `tts_id`, `asr_language_code`, `model_id`, `extra_params`, ASR/TTS `*_model`, `tts_synthesis_mode`.
 
 Prefer OpenAI fields for prompt and generation settings: use `prompt.id`, `instructions`, `temperature`, and `max_output_tokens`. Do not put `tts_voice_id`, `system_prompt`, `max_tokens`, or `temperature` under `nvidia`.
 
-Public `session.updated` echoes a **redacted** `nvidia` view (pipeline / catalog ids only). Internal ASR/TTS endpoints and function ids are not returned to the client.
+Do **not** send `base_url`, `asr_server`, `tts_server`, or `*_function_id` under `nvidia` — those are ignored. Endpoints resolve from the selected catalog service ids only (prevents client-controlled SSRF).
 
-Changing `tts_id` / `tts_server` / `tts_model` / `tts_function_id` at connect time re-lists voices for that TTS selection only when that routing key is not already cached (same catalog path as RTVI `GET /api/tts-config`), then re-resolves `voice` against the cached list.
+Public `session.updated` echoes catalog ids only (no internal ASR/TTS endpoints or function ids).
+
+Changing `tts_id` / `tts_model` at connect time re-lists voices for that TTS selection only when that routing key is not already cached (same catalog path as RTVI `GET /api/tts-config`), then re-resolves `voice` against the cached list.
 
 ## Realtime API reference (v1)
 
@@ -123,7 +125,7 @@ Changing `tts_id` / `tts_server` / `tts_model` / `tts_function_id` at connect ti
 | Event | Notes |
 |-------|--------|
 | `session.created` / `session.updated` | Session object (OpenAI-shaped + optional `nvidia`) |
-| `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `response_create_rejected_pre_intro` |
+| `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `item_rejected_pre_intro`, `response_create_rejected_pre_intro`, `invalid_item`, `invalid_truncate` |
 | `input_audio_buffer.*` | Speech / commit / clear acks |
 | `conversation.item.*` | Item created; cascaded ASR input transcription. `conversation.item.truncated` is not emitted. |
 | `response.*` | Lifecycle, audio, transcript, text, function-call events |

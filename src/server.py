@@ -1051,6 +1051,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             # Cache-first (sync): only prewarm_tts when this TTS routing key is cold.
             cached = peek_cached_tts_config(tts_server, tts_voice, tts_function_id, tts_model)
             if cached is not None:
+                config_store.set("tts", cached)
                 return cached
             return await _run_blocking(
                 prewarm_tts,
