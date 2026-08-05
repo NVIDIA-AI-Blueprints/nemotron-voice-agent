@@ -12,7 +12,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from riva.client.proto import riva_asr_pb2
 
 import config_store
-from utils import is_nvcf, normalize_lang_code
+from utils import is_nvcf, normalize_lang_code, parse_env_float
 
 
 def _create_tts_service(
@@ -209,11 +209,13 @@ def get_tts_config(
     """
     cached = peek_cached_tts_config(server, voice_id, function_id, model)
     if cached is not None:
+        # Keep legacy config_store["tts"] in sync for fallback readers.
+        config_store.set("tts", cached)
         return cached
     return prewarm_tts(server, voice_id, function_id, model)
 
 
-_TTS_PREWARM_RPC_TIMEOUT_SECS = float(os.getenv("TTS_PREWARM_RPC_TIMEOUT_SECS", "20"))
+_TTS_PREWARM_RPC_TIMEOUT_SECS = parse_env_float("TTS_PREWARM_RPC_TIMEOUT_SECS", 20.0, min_value=1.0)
 
 
 def prewarm_tts(
@@ -268,9 +270,7 @@ def prewarm_tts(
         logger.info(f"TTS pre-warmed ({server}) — {n_langs} languages, {n_voices} voices")
         return tts_config
     except concurrent.futures.TimeoutError:
-        logger.warning(
-            f"TTS pre-warm timed out for {server} after {_TTS_PREWARM_RPC_TIMEOUT_SECS}s"
-        )
+        logger.warning(f"TTS pre-warm timed out for {server} after {_TTS_PREWARM_RPC_TIMEOUT_SECS}s")
         return {
             "languages": [],
             "voices": [],

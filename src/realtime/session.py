@@ -13,31 +13,52 @@ from typing import Any
 from loguru import logger
 
 from realtime.audio import validate_session_audio_config
+from utils import _SLOT_AGNOSTIC_KEYS, _SLOT_CONFIG_KEYS, SESSION_CONFIG_KEYS
 
 DEFAULT_PIPELINE_MODE = "generic-assistant"
 DEFAULT_PROMPT_KEY = "generic_assistant_without_tools"
 
-# Keys accepted under ``session.nvidia`` (no OpenAI top-level duplicates).
-_NVIDIA_SESSION_KEYS = frozenset(
+# Flat keys owned by OpenAI top-level session fields — not accepted under ``session.nvidia``.
+_OPENAI_MAPPED_FLAT_KEYS = frozenset(
     {
-        "pipeline_mode",
-        "llm_id",
-        "asr_id",
-        "tts_id",
-        "prompt_key",
-        "model_id",
+        "prompt_content",
+        "system_prompt",
+        "tts_voice_id",
+        "temperature",
+        "max_tokens",
+        "tool_choice",
+    }
+)
+
+# Endpoints / function ids — accepted under ``session.nvidia`` but redacted from public echo.
+_NVIDIA_INTERNAL_KEYS = frozenset(
+    {
         "base_url",
-        "extra_params",
-        "asr_language_code",
         "asr_server",
-        "asr_model",
         "asr_function_id",
-        "tts_synthesis_mode",
         "tts_server",
-        "tts_model",
         "tts_function_id",
     }
 )
+
+
+def _nvidia_keys_from_slot_config() -> frozenset[str]:
+    """Derive ``session.nvidia`` allowlist from shared flat session/slot keys."""
+    keys: set[str] = set(_SLOT_AGNOSTIC_KEYS)
+    for slot_keys in _SLOT_CONFIG_KEYS.values():
+        keys |= set(slot_keys)
+    keys -= {key for key in keys if key.startswith("thinker_")}
+    keys -= _OPENAI_MAPPED_FLAT_KEYS
+    keys &= set(SESSION_CONFIG_KEYS)
+    return frozenset(keys)
+
+
+# Client ``session.nvidia`` allowlist: catalog / routing ids only. Endpoints and
+# function ids are not accepted from the client (SSRF); sanitize/hydrate fills
+# them from the selected catalog entries.
+_NVIDIA_SESSION_KEYS = _nvidia_keys_from_slot_config() - _NVIDIA_INTERNAL_KEYS
+# Echoed on session.created/updated (same surface; internals never accepted).
+_NVIDIA_PUBLIC_KEYS = _NVIDIA_SESSION_KEYS
 
 _DEFAULT_AUDIO = {
     "input": {
@@ -51,7 +72,7 @@ _DEFAULT_AUDIO = {
 }
 
 
-def deep_merge_dicts(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+def merge_session_patch(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge ``patch`` into a copy of ``base`` (dicts only).
 
     Nested dicts are merged; ``None`` values overwrite. Lists and scalars
@@ -64,7 +85,7 @@ def deep_merge_dicts(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, A
             out[key] = None
             continue
         if isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = deep_merge_dicts(out[key], value)
+            out[key] = merge_session_patch(out[key], value)
         else:
             out[key] = copy.deepcopy(value)
     return out
@@ -150,27 +171,17 @@ def _map_tool_choice(raw: Any) -> Any:
     raise ValueError("session.tool_choice must be a string or function object")
 
 
-def _validate_output_modalities(raw: Any) -> None:
+def _validate_modalities_field(raw: Any, *, field: str) -> None:
+    """Require a non-empty string list that includes ``audio`` (GA or beta field name)."""
     if raw is None:
         return
+    param = f"session.{field}"
     if not isinstance(raw, list) or not raw:
-        raise ValueError("session.output_modalities must be a non-empty array")
+        raise ValueError(f"{param} must be a non-empty array")
     if not all(isinstance(item, str) for item in raw):
-        raise ValueError("session.output_modalities entries must be strings")
+        raise ValueError(f"{param} entries must be strings")
     if "audio" not in raw:
-        raise ValueError("session.output_modalities must include 'audio' for Nemotron Voice Agent v1")
-
-
-def _validate_modalities(raw: Any) -> None:
-    """Beta clients send ``modalities``; same rule as GA ``output_modalities``."""
-    if raw is None:
-        return
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("session.modalities must be a non-empty array")
-    if not all(isinstance(item, str) for item in raw):
-        raise ValueError("session.modalities entries must be strings")
-    if "audio" not in raw:
-        raise ValueError("session.modalities must include 'audio' for Nemotron Voice Agent v1")
+        raise ValueError(f"{param} must include 'audio' for Nemotron Voice Agent v1")
 
 
 def _validate_input_transcription(session_patch: dict[str, Any]) -> None:
@@ -219,8 +230,8 @@ def map_session_update_to_flat_config(
             "Catalog tools follow prompt.id / prompt_key / prompts.yaml tools_available"
         )
 
-    _validate_output_modalities(session_patch.get("output_modalities"))
-    _validate_modalities(session_patch.get("modalities"))
+    _validate_modalities_field(session_patch.get("output_modalities"), field="output_modalities")
+    _validate_modalities_field(session_patch.get("modalities"), field="modalities")
     _validate_input_transcription(session_patch)
     validate_session_audio_config(session_patch)
 
@@ -281,24 +292,6 @@ def map_session_update_to_flat_config(
     return flat
 
 
-# Echoed on session.created/updated — exclude internal ASR/TTS endpoints & function ids.
-_NVIDIA_PUBLIC_KEYS = frozenset(
-    {
-        "pipeline_mode",
-        "prompt_key",
-        "llm_id",
-        "asr_id",
-        "tts_id",
-        "asr_language_code",
-        "model_id",
-        "extra_params",
-        "tts_synthesis_mode",
-        "asr_model",
-        "tts_model",
-    }
-)
-
-
 def nvidia_public_view(nvidia: dict[str, Any]) -> dict[str, Any]:
     """Return a client-safe ``session.nvidia`` object (no internal service endpoints)."""
     return {key: value for key, value in nvidia.items() if key in _NVIDIA_PUBLIC_KEYS}
@@ -349,14 +342,14 @@ class RealtimeSession:
             raise ValueError("session must be a JSON object")
 
         patch_without_nvidia = {k: v for k, v in session_patch.items() if k != "nvidia"}
-        self.view = deep_merge_dicts(self.view, patch_without_nvidia)
+        self.view = merge_session_patch(self.view, patch_without_nvidia)
         self.view["id"] = self.id
         self.view["object"] = "realtime.session"
         self.view["type"] = "realtime"
 
         nvidia = dict(self.view.get("nvidia") or {})
         if isinstance(session_patch.get("nvidia"), dict):
-            nvidia = deep_merge_dicts(nvidia, session_patch["nvidia"])
+            nvidia = merge_session_patch(nvidia, session_patch["nvidia"])
 
         for key in _NVIDIA_SESSION_KEYS:
             if key in sanitized_flat and sanitized_flat[key] not in ("", None):

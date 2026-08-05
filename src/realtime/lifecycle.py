@@ -111,7 +111,8 @@ async def emit_finish_from_snapshot(
     response_id = snap.response_id
     item_id = snap.item_id
     transcript = snap.transcript
-    item_status = "completed" if snap.status == "completed" else snap.status
+    # Item statuses are in_progress|completed|incomplete; cancelled is response-only.
+    item_status = "completed" if snap.status == "completed" else "incomplete"
     text_done = output_text or transcript
 
     if not snap.audio_done_emitted:
