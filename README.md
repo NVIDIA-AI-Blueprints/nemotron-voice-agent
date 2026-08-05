@@ -13,6 +13,7 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 - **Multimodal Understanding**: reason over speech and vision together, analyzing live camera input and uploaded media (images, documents) within a single conversation, powered by Nemotron Omni.
 - **Multi-Agent and Tool Calling**: orchestrate cooperating agents that invoke external tools and functions for task-oriented workflows, while decoupling reasoning from response generation for lower perceived latency.
 - **Edge Support**: deploy anywhere, from cloud and workstation to DGX Spark and edge devices like Jetson Thor, using self-contained deployment recipes.
+- **OpenAI Realtime–compatible gateway**: `WS /v1/realtime` alongside RTVI `/api/ws`. See [Use the Realtime Gateway](docs/how-to/use-realtime-gateway.md).
 
 ---
 
@@ -152,8 +153,9 @@ npx skills add .
 | Reference | [Evaluation & Performance](docs/04-evaluation-and-performance.md) | Accuracy and latency/scaling benchmarks |
 | Explanation | [Best Practices](docs/05-best-practices.md) | Production latency, UX, and scaling guidance |
 | How-to | [Troubleshooting](docs/06-troubleshooting.md) | Startup & deployment known issues |
+| How-to | [Realtime Gateway](docs/how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime`: how it works and how to connect |
 
-Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-configuration-guide.md). They cover configuring .env, models, and prompts, and enabling opentelemetry tracing, a TURN Server, and the audio recorder for debugging.
+Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-configuration-guide.md). They cover configuring .env, models, and prompts, enabling opentelemetry tracing, a TURN Server, and the audio recorder for debugging, plus the Realtime integrator gateway.
 
 ---
 

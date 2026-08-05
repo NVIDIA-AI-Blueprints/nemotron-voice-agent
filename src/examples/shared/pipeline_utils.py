@@ -59,6 +59,83 @@ def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotC
     return [MuteUntilFirstBotCompleteUserMuteStrategy()]
 
 
+def runner_protocol(runner_args: RunnerArguments) -> str:
+    """Return the wire protocol for this session (``rtvi`` or ``realtime``)."""
+    body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
+    protocol = str(body.get("protocol") or "").strip().lower()
+    return protocol if protocol else "rtvi"
+
+
+def with_realtime_observers(*observers, transport=None) -> list:
+    """Append the Realtime lifecycle observer when the transport speaks Realtime.
+
+    Example::
+
+        observers=with_realtime_observers(latency_observer, transport=transport)
+    """
+    out = list(observers)
+    if transport is None:
+        return out
+    from realtime.transport import realtime_lifecycle_observer
+
+    realtime_obs = realtime_lifecycle_observer(transport)
+    if realtime_obs is not None:
+        out.append(realtime_obs)
+    return out
+
+
+def register_session_start_handlers(
+    *,
+    transport,
+    task,
+    context,
+    runner_args: RunnerArguments,
+    intro_prompt: str = "Please introduce yourself to the user.",
+    on_start=None,
+    welcome_enabled: bool = True,
+) -> None:
+    """Start the session using the correct signal for the wire protocol.
+
+    RTVI/WebRTC uses ``on_client_ready``; Realtime uses ``on_client_connected``.
+    Both share the same optional ``on_start`` + welcome intro path. When welcome
+    is off, skip the intro and (on Realtime) open the client text gate.
+    """
+    from pipecat.frames.frames import LLMRunFrame
+
+    started = False
+
+    async def _start_session(source: str) -> None:
+        nonlocal started
+        if started:
+            return
+        started = True
+        logger.info(f"Client session start via {source}")
+        if on_start is not None:
+            await on_start()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
+        context.add_message({"role": "user", "content": intro_prompt})
+        await task.queue_frames([LLMRunFrame()])
+
+    if runner_protocol(runner_args) == "realtime":
+        if not welcome_enabled:
+            serializer = getattr(transport, "_realtime_serializer", None)
+            conversation = getattr(serializer, "conversation", None)
+            if conversation is not None:
+                conversation.open_client_text()
+
+        @transport.event_handler("on_client_connected")
+        async def _on_realtime_connected(transport_obj, client):  # noqa: ARG001
+            await _start_session("realtime-transport-connected")
+
+    else:
+
+        @task.rtvi.event_handler("on_client_ready")
+        async def _on_rtvi_ready(rtvi):  # noqa: ARG001
+            await _start_session("rtvi-client-ready")
+
+
 def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
     """Return user-turn configuration, defaulting to Pipecat smart turn."""
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
@@ -197,7 +274,7 @@ async def apply_pinned_prompt_summary(
 
 
 def create_transport(runner_args: RunnerArguments):
-    """Create a transport from runner arguments (WebRTC, WebSocket, or eval)."""
+    """Create a transport from runner arguments (WebRTC, WebSocket, Realtime, or eval)."""
     from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
 
     if isinstance(runner_args, SmallWebRTCRunnerArguments):
@@ -230,16 +307,27 @@ def create_transport(runner_args: RunnerArguments):
             port=runner_args.port,
         )
 
+    websocket = getattr(runner_args, "websocket", None)
+    if websocket is None:
+        raise TypeError(f"Unsupported runner args type: {type(runner_args)}")
+
+    body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
+    if runner_protocol(runner_args) == "realtime":
+        from realtime.transport import create_realtime_transport
+
+        return create_realtime_transport(
+            websocket,
+            session_view=body.get("realtime_session_view")
+            if isinstance(body.get("realtime_session_view"), dict)
+            else None,
+        )
+
     from pipecat.serializers.base_serializer import FrameSerializer
     from pipecat.serializers.protobuf import ProtobufFrameSerializer
     from pipecat.transports.websocket.fastapi import (
         FastAPIWebsocketParams,
         FastAPIWebsocketTransport,
     )
-
-    websocket = getattr(runner_args, "websocket", None)
-    if websocket is None:
-        raise TypeError(f"Unsupported runner args type: {type(runner_args)}")
 
     return FastAPIWebsocketTransport(
         websocket=websocket,

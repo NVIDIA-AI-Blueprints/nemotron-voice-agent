@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
+from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -53,6 +53,8 @@ from examples.shared.pipeline_utils import (
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
+    register_session_start_handlers,
+    with_realtime_observers,
 )
 from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
 from tracing import IS_TRACING_ENABLED
@@ -244,7 +246,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- TTS ---
     custom_dictionary = load_ipa_dictionary()
-    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
         "zero_shot_audio_prompt_file", ""
     )
@@ -394,7 +396,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=[latency_observer],
+        observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
     )
 
@@ -411,16 +413,19 @@ async def bot(runner_args: RunnerArguments) -> None:
             )
         )
 
-    @task.rtvi.event_handler("on_client_ready")
-    async def on_client_connected(rtvi):
-        logger.info("Client connected")
+    async def _on_session_start() -> None:
         if audio_recorder:
             await audio_recorder.start_recording()
-        if not welcome_enabled:
-            logger.info("Welcome message disabled; waiting for the user to speak first")
-            return
-        context.add_message({"role": "user", "content": FIXED_SESSION_GREETING_TRIGGER})
-        await task.queue_frames([LLMRunFrame()])
+
+    register_session_start_handlers(
+        transport=transport,
+        task=task,
+        context=context,
+        runner_args=runner_args,
+        intro_prompt=FIXED_SESSION_GREETING_TRIGGER,
+        on_start=_on_session_start,
+        welcome_enabled=welcome_enabled,
+    )
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

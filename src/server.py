@@ -7,7 +7,8 @@ Routes:
   POST      /api/start       - WebRTC start (TTS readiness gate + session creation)
   POST      /api/offer       - WebRTC SDP offer
   PATCH     /api/offer       - WebRTC ICE candidate trickle
-  WebSocket /api/ws          - WebSocket transport
+  WebSocket /api/ws          - WebSocket transport (RTVI / Pipecat)
+  WebSocket /v1/realtime     - OpenAI Realtime–shaped JSON (session + pipeline handoff)
   GET       /api/deployment  - Active example metadata
   GET       /api/prompts     - Prompt catalog
   GET       /api/services    - Service catalog (LLM, TTS, ASR)
@@ -66,7 +67,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 import config_store
 import examples_registry
 from attachment_store import consume_capture_request, store_attachment
-from examples.shared.prewarm import build_session_languages, prewarm_tts, warmup_tts_synthesis
+from examples.shared.prewarm import build_session_languages, peek_cached_tts_config, prewarm_tts, warmup_tts_synthesis
 from examples.shared.subagents import load_subagent_registry
 from utils import (
     PROJECT_ROOT,
@@ -873,6 +874,57 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 with contextlib.suppress(Exception):
                     await websocket.close()
 
+    # ---- OpenAI Realtime–shaped JSON WebSocket ----
+
+    @app.websocket("/v1/realtime")
+    async def realtime_websocket_endpoint(websocket: WebSocket):
+        """OpenAI Realtime–compatible session endpoint (no REST bootstrap).
+
+        After ``session.update`` + the same readiness checks as ``/api/ws``,
+        hands the socket to the selected example bot (``protocol=realtime``).
+        """
+        from realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
+
+        async def _ensure_ready(config: dict) -> None:
+            await _ensure_services_ready_for_connection(config, _resolve_example(config))
+
+        async def _start_bot(ws: WebSocket, config: dict, session_view: dict) -> None:
+            selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
+            bot_fn = examples_registry.resolve_bot(selected)
+            _bind_example_context_by_key(selected["key"])
+            session_id = str(session_view.get("id") or "")
+            if session_id:
+                _active_session_configs[session_id] = dict(config)
+            runner_args = SimpleNamespace(
+                websocket=ws,
+                body={
+                    **config,
+                    "protocol": "realtime",
+                    "realtime_session_view": session_view,
+                    "session_id": session_id,
+                },
+                handle_sigint=False,
+                pipeline_idle_timeout_secs=parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300),
+            )
+            try:
+                await bot_fn(runner_args)
+            except Exception as e:
+                logger.error(f"Realtime pipeline session error: {e}")
+            finally:
+                if session_id:
+                    _active_session_configs.pop(session_id, None)
+                with contextlib.suppress(Exception):
+                    await ws.close()
+
+        await handle_realtime_websocket(
+            websocket,
+            sanitize_session_config=_sanitize_session_config,
+            ensure_services_ready=_ensure_ready,
+            start_bot=_start_bot,
+            fallback_example_key=fallback_example_key,
+            default_pipeline_mode=DEFAULT_PIPELINE_MODE,
+        )
+
     # ---- Prompt catalog (read-only, scoped to the active example) ----
 
     @app.get("/api/prompts")
@@ -996,12 +1048,11 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
                 server, voice_id, function_id, model
             )
-            cached = config_store.get(f"tts:{tts_server}:{tts_function_id}:{tts_model}")
-            if cached:
-                result = dict(cached)
-                if tts_voice:
-                    result["defaultVoiceId"] = tts_voice
-                return result
+            # Cache-first (sync): only prewarm_tts when this TTS routing key is cold.
+            cached = peek_cached_tts_config(tts_server, tts_voice, tts_function_id, tts_model)
+            if cached is not None:
+                config_store.set("tts", cached)
+                return cached
             return await _run_blocking(
                 prewarm_tts,
                 tts_server,

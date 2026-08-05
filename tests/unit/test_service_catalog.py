@@ -12,10 +12,30 @@ from unittest.mock import patch
 
 import examples_registry
 import utils
-from utils import build_services_api_response, filter_session_config, hydrate_config_from_catalog, load_service_entry
+from utils import (
+    build_services_api_response,
+    clear_service_context,
+    filter_session_config,
+    hydrate_config_from_catalog,
+    load_service_entry,
+)
 
 
 class ServiceCatalogHydrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Env-based catalog patches must win; clear any leftover request context.
+        clear_service_context()
+        # Importing server/pipelines load_dotenv(override=True) and can set PLATFORM
+        # from a local .env — stash and clear so platform-filter tests stay hermetic.
+        self._saved_platform = os.environ.pop("PLATFORM", None)
+
+    def tearDown(self) -> None:
+        clear_service_context()
+        if self._saved_platform is None:
+            os.environ.pop("PLATFORM", None)
+        else:
+            os.environ["PLATFORM"] = self._saved_platform
+
     def test_hydrates_selected_builtin_details_from_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cloud_path = Path(tmpdir) / "services.cloud.yaml"
