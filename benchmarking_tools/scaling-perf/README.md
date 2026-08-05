@@ -86,7 +86,7 @@ scaling configuration:
 - `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=fp8,tp=2`, GPUs `2,3`, alias
   `nvidia-llm`
 - `nemotron-asr-streaming-english`:
-  `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=64`, GPU `0`, alias
+  `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
   `nemotron-asr-streaming-english`
 - `tts-service`: `NIM_TAGS_SELECTOR=name=magpie-tts-multilingual,batch_size=64`,
   GPU `1`, alias `tts-service`
