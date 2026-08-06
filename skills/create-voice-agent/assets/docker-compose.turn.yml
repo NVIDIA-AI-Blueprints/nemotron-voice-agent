@@ -1,0 +1,25 @@
+# coturn for Pipecat WebRTC + SSH tunnel from Mac browser.
+# Usage (VM_IP required — do not advertise loopback):
+#   export VM_IP=$(hostname -I | awk '{print $1}')
+#   export TURN_USERNAME='your-turn-user' TURN_PASSWORD='your-strong-secret'
+#   docker compose -f docker-compose.turn.yml up -d
+
+services:
+  coturn:
+    image: ${COTURN_IMAGE:-instrumentisto/coturn:4}
+    network_mode: host
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--listening-ip=0.0.0.0"
+      - "--listening-port=3478"
+      - "--external-ip=${VM_IP:?Set VM_IP to the VM LAN/reachable address}"
+      - "--min-port=49160"
+      - "--max-port=49200"
+      - "--realm=voiceagent"
+      - "--lt-cred-mech"
+      - "--user=${TURN_USERNAME:?Set TURN_USERNAME}:${TURN_PASSWORD:?Set TURN_PASSWORD}"
+      - "--no-multicast-peers"
+      - "--no-cli"
+      - "--fingerprint"
+    restart: unless-stopped
