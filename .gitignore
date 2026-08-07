@@ -65,3 +65,6 @@ docs/how-to/evaluate-thinker-talker-airline.md
 eval/
 tests/test_voice_agent_eval.py
 .ipynb_checkpoints/
+
+# Local contributor documentation routing status
+.dori_user_status
