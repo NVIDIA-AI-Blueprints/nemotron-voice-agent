@@ -43,6 +43,7 @@ tts:
     model: magpie-tts-multilingual
     voice_id: Magpie-Multilingual.EN-US.Aria
     synthesis_mode: stitched
+    language_code: en-US
     zero_shot_audio_prompt_file: /data/prompts/clone.wav
 """,
                 encoding="utf-8",
@@ -92,7 +93,39 @@ tts:
             self.assertEqual(config["tts_model"], "magpie-tts-multilingual")
             self.assertEqual(config["tts_voice_id"], "client-voice")
             self.assertEqual(config["tts_synthesis_mode"], "stitched")
+            self.assertEqual(config["tts_language_code"], "en-US")
             self.assertEqual(config["tts_zero_shot_audio_prompt_file"], "/data/prompts/clone.wav")
+
+    def test_tts_language_code_client_override_wins_over_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text(
+                dedent(
+                    """\
+                    tts:
+                      magpie:
+                        name: Magpie
+                        server: catalog-tts:443
+                        model: magpie-tts-zeroshot
+                        voice_id: Magpie-ZeroShot-Multilingual.Female
+                        language_code: en-US
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "tts_id": "cloud-nim:magpie",
+                "tts_language_code": "es-US",
+            }
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                hydrate_config_from_catalog(config)
+            self.assertEqual(config["tts_language_code"], "es-US")
 
     def test_zero_shot_prompt_file_is_catalog_only_not_client_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

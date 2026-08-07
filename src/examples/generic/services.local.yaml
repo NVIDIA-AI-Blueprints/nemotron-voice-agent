@@ -49,6 +49,7 @@ workstation:
       model: "magpie-tts-zeroshot"
       function_id: ""
       synthesis_mode: stitched
+      language_code: en-US
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -101,6 +102,7 @@ dgxspark:
       model: "magpie-tts-zeroshot"
       function_id: ""
       synthesis_mode: stitched
+      language_code: en-US
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"

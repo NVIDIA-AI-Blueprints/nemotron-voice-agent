@@ -52,6 +52,7 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
             "tts_function_id",
             "tts_model",
             "tts_synthesis_mode",
+            "tts_language_code",
         }
     ),
 }
@@ -481,6 +482,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "tts_function_id",
         "tts_model",
         "tts_synthesis_mode",
+        "tts_language_code",
     }
 )
 
@@ -528,13 +530,14 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "model": "tts_model",
             "voice_id": "tts_voice_id",
             "synthesis_mode": "tts_synthesis_mode",
+            "language_code": "tts_language_code",
             "zero_shot_audio_prompt_file": "tts_zero_shot_audio_prompt_file",
         },
     ),
 )
 
 # Body fields the client may set explicitly; catalog hydration must not overwrite them.
-_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_voice_id"})
+_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_language_code", "tts_voice_id"})
 
 
 def hydrate_config_from_catalog(config: dict) -> None:
