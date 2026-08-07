@@ -9,12 +9,12 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 | Model | Catalog key | Self-hosted compose service | Modelcard |
 |-------|-------------|-----------------------------|-----------|
 | **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
-| **Magpie TTS Zeroshot**: ZeroShot voice cloning-capable multilingual streaming TTS with built-in Female/Male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
+| **Magpie TTS Zeroshot**: multilingual streaming TTS that supports zero-shot voice cloning and includes built-in female and male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
 | **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
 > Magpie Multilingual is the registry default and the TTS sidecar started by local recipes. Chatterbox and Magpie Zeroshot are opt-in: select their catalog key in the Services tab (or `defaults.tts` in [`examples_registry.yaml`](../../examples_registry.yaml)). For local NIM, also enable the matching Compose profile (see [Hardware requirements](#hardware-requirements-and-deployment-configs)).
 
-Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, `Chatterbox-Multilingual.en-US.Male`). The available voices and emotions depend on the deployed NIM. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
+Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, or `Chatterbox-Multilingual.en-US.Male`. The available voices and emotions depend on the deployed NIM. Refer to [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
 ### Supported languages
 
@@ -72,13 +72,13 @@ TTS runs one of these ways, and the repo wires the right one per profile:
 - Magpie Zeroshot: `batch_size=8` (default) or `batch_size=32` — keep `8` on shared single-GPU recipes
 - Chatterbox: single profile `name=chatterbox-tts-multilingual` (no `batch_size` selector)
 
-For first-chunk / inter-chunk latency and throughput (RTFX) across GPUs, see the **[TTS performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/tts/performance.html)**. For end-to-end pipeline latency (TTS time-to-first-byte) in this blueprint, see [Evaluation and Performance](../04-evaluation-and-performance.md).
+For first-chunk and inter-chunk latency and throughput (RTFX) across GPUs, refer to the **[TTS performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/tts/performance.html)**. For end-to-end pipeline latency (TTS time-to-first-byte) in this blueprint, refer to [Evaluation and Performance](../04-evaluation-and-performance.md).
 
 ## Customization
 
 ### Voices & emotions
 
-The active voice is the `voice_id` in the catalog entry. The client UI also has a voice selector that auto-discovers the connected service's available voices and languages, so you can switch mid-session. Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, `Chatterbox-Multilingual.en-US.Male`). Available voices/emotions depend on the deployed NIM (and can be discovered at runtime over gRPC/HTTP); see [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
+The active voice is the `voice_id` in the catalog entry. The client UI includes a voice selector that discovers the connected service's available voices and languages, so you can switch mid-session. Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, or `Chatterbox-Multilingual.en-US.Male`. Available voices and emotions depend on the deployed NIM and can be discovered at runtime over gRPC or HTTP. Refer to [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
 - **Magpie Multilingual**: multiple voices and emotional styles per locale.
 - **Magpie Zeroshot**: languages listed in [Supported languages](#supported-languages); built-in voices across locales are `Magpie-ZeroShot-Multilingual.Female` (default) and `Magpie-ZeroShot-Multilingual.Male` ([model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard)).
@@ -115,7 +115,7 @@ tts:
     # zero_shot_audio_prompt_file: "/path/to/prompt.wav"
 ```
 
-Catalog `model` + `function_id` (+ optional `zero_shot_audio_prompt_file`) are hydrated into the session and passed to Pipecat's `NvidiaTTSService`.
+The catalog hydrates the required `model` and `function_id` fields and the optional `zero_shot_audio_prompt_file` field into the session, then passes them to Pipecat's `NvidiaTTSService`.
 
 ### Synthesis mode
 
@@ -123,7 +123,7 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes via the catalog field 
 
 | Value | Behavior |
 |-------|----------|
-| `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Use this for Magpie multilingual / zero-shot ≥ v1.7.0. |
+| `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Use this mode with Magpie TTS Multilingual and Magpie TTS Zeroshot version 1.7.0 or later. |
 | `per_sentence` | Open a fresh synthesis call per sentence. Safe for models without cross-sentence stitching. |
 
 Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie ships with `stitched`. Omit the field on other models to leave Pipecat's default (`per_sentence`).
