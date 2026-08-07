@@ -113,28 +113,3 @@ mode. Use the following command to measure adoption. The report also supports
 ```bash
 python scripts/docs-review-receipt.py report --since <YYYY-MM-DD> --format summary
 ```
-
-### NVIDIA DORI Routing
-
-Select the documentation path from current host capabilities.
-Do not ask the user to classify themselves or store repository-scoped identity
-state during a normal documentation task.
-
-1. Check whether the current agent exposes `dori_handle` or `dori_route` and
-   `dori_collections`.
-   If the user explicitly asks not to use DORI, use the
-   [Writing Style Guide](docs/AGENTS.md#writing-style-guide) instead.
-2. When those tools are available, list the installed collections.
-   - If a collection source exactly matches `gitlab:tech-docs/skill-library`, use DORI for
-     task routing.
-   - If the collection is missing, inaccessible, or cannot be verified,
-     continue with the
-     [Writing Style Guide](docs/AGENTS.md#writing-style-guide).
-3. When the DORI tools are unavailable, continue with the Writing Style Guide.
-   Do not inspect a shell-visible CLI, install software, or configure the host
-   during a normal documentation task.
-4. Use [NVIDIA DORI Setup](docs/DORI_SETUP.md) only when the user explicitly
-   asks to install or configure DORI.
-
-Capability detection does not approve installation or host configuration.
-DORI unavailability must not block documentation work.

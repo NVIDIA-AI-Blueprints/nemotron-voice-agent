@@ -57,9 +57,30 @@ notes that you create or edit.
 - Apply rules to improve clarity. Do not make mechanical changes that reduce
   technical accuracy or readability.
 
-## Use DORI for Complete NVIDIA Doc Tools
+## NVIDIA DORI Routing
 
-Follow [NVIDIA DORI Routing](../AGENTS.md#nvidia-dori-routing).
+Select the documentation path from current host capabilities.
+Do not ask the user to classify themselves or store repository-scoped identity
+state during a normal documentation task.
+
+1. Check whether the current agent exposes `dori_handle` or `dori_route` and
+   `dori_collections`.
+   If the user explicitly asks not to use DORI, use the
+   [Writing Style Guide](#writing-style-guide) instead.
+2. When those tools are available, list the installed collections.
+   - If a collection source exactly matches `gitlab:tech-docs/skill-library`,
+     use DORI for task routing.
+   - If the collection is missing, inaccessible, or cannot be verified,
+     continue with the [Writing Style Guide](#writing-style-guide).
+3. When the DORI tools are unavailable, continue with the Writing Style Guide.
+   Do not inspect a shell-visible CLI, install software, or configure the host
+   during a normal documentation task.
+4. Use [NVIDIA DORI Setup](DORI_SETUP.md) only when the user explicitly asks to
+   install or configure DORI.
+
+Capability detection does not approve installation or host configuration.
+DORI unavailability must not block documentation work.
+
 Use the following DORI workflow only when current host capabilities include the
 verified NVIDIA documentation Skill Library. Complete the documentation before
 the developer opens the pull or merge request.
