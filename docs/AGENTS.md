@@ -129,6 +129,10 @@ Markdown link checker. For documentation-only changes:
 4. Record any validation that requires unavailable credentials, NVIDIA
    services, GPUs, or deployment hardware as a gap.
 
+Return the review result, changed documentation paths or rationale, validation
+evidence, and agent surface to the primary task for the pull request's
+Documentation Writer Review receipt.
+
 When documentation accompanies code, configuration, Compose, or client
 changes, also run the applicable validation commands from the root
 `AGENTS.md`.

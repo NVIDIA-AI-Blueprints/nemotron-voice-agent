@@ -88,6 +88,32 @@ If the host cannot run subagents, the primary task must read `docs/AGENTS.md`,
 complete the documentation work, and run the same validation. Do not omit
 required documentation because parallel execution is unavailable.
 
+### Documentation Writer Review Receipt
+
+Every pull request that changes code or documentation must include one
+`## Documentation Writer Review` section from
+`.github/PULL_REQUEST_TEMPLATE.md`. Complete the review after the changes and
+applicable validation are finished.
+
+- Check the review-completion box and keep exactly one result:
+  `docs-updated`, `no-docs-needed`, or `blocked`.
+- Name the changed documentation in **Evidence**, or explain why documentation
+  is not needed or why the review is blocked.
+- Record the agent product and surface that performed the review.
+- After committing the reviewed changes, fill the hidden head and guidance
+  fields with `git rev-parse --short HEAD` and
+  `git rev-parse --short HEAD:AGENTS.md`.
+- Any later commit makes the receipt stale. Rerun the documentation review and
+  refresh both hidden fields.
+
+The `CI / Documentation Writer Review` workflow checks the receipt in advisory
+mode. Use the following command to measure adoption. The report also supports
+`json` and `csv` formats.
+
+```bash
+python scripts/docs-review-receipt.py report --since <YYYY-MM-DD> --format summary
+```
+
 ### NVIDIA DORI Routing
 
 Select the documentation path from current host capabilities.
