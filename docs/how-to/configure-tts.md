@@ -112,6 +112,7 @@ tts:
     model: "magpie-tts-zeroshot"
     function_id: ""
     synthesis_mode: stitched
+    language_code: en-US
     # optional voice cloning:
     # zero_shot_audio_prompt_file: "/path/to/prompt.wav"
 ```
