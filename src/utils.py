@@ -582,6 +582,14 @@ def filter_session_config(data: dict) -> dict:
         filtered = {k: v for k, v in filtered.items() if k in allowed}
     # Defense in depth: never trust a client path even if it bypasses the allowlists.
     filtered.pop("tts_zero_shot_audio_prompt_file", None)
+    # Custom (non-catalog) selections skip hydration, so the raw client value would
+    # reach ``normalize_lang_code`` in the pipeline. Keep only usable strings.
+    raw_tts_language_code = filtered.get("tts_language_code")
+    if raw_tts_language_code is not None:
+        if isinstance(raw_tts_language_code, str) and raw_tts_language_code.strip():
+            filtered["tts_language_code"] = raw_tts_language_code.strip()
+        else:
+            filtered.pop("tts_language_code", None)
     hydrate_config_from_catalog(filtered)
     return filtered
 

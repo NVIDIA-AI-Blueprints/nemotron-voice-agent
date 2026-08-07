@@ -127,6 +127,26 @@ tts:
                 hydrate_config_from_catalog(config)
             self.assertEqual(config["tts_language_code"], "es-US")
 
+    def test_custom_tts_language_code_keeps_only_usable_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text("tts: {}\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                # Custom selections skip hydration, so the raw client value survives.
+                for value in ({"evil": 1}, ["en-US"], True, "   "):
+                    with self.subTest(value=value):
+                        filtered = filter_session_config({"tts_id": "custom-tts", "tts_language_code": value})
+                        self.assertNotIn("tts_language_code", filtered)
+
+                filtered = filter_session_config({"tts_id": "custom-tts", "tts_language_code": " en-US "})
+                self.assertEqual(filtered["tts_language_code"], "en-US")
+
     def test_zero_shot_prompt_file_is_catalog_only_not_client_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cloud_path = Path(tmpdir) / "services.cloud.yaml"
