@@ -54,13 +54,19 @@ from examples.shared.pipeline_utils import (
     build_user_mute_strategies,
     create_transport,
 )
-from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
+from examples.shared.prewarm import (
+    prewarm_asr,
+    prewarm_tts,
+    resolve_voice_for_language,
+    validate_llm_session_language,
+)
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
     load_ipa_dictionary,
     load_prompt_catalog,
     load_service_entry,
+    load_service_entry_by_id,
     normalize_lang_code,
     parse_env_bool,
     parse_env_float,
@@ -114,6 +120,7 @@ async def _prepare_session_language_codes(
     asr_server: str,
     asr_model: str,
     asr_function_id: str,
+    llm_supported_languages=None,
 ) -> str:
     """Prewarm speech services and return UI language codes when startup should probe them."""
     if _is_eval_transport(runner_args):
@@ -125,13 +132,16 @@ async def _prepare_session_language_codes(
         asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model),
     ]
     await asyncio.gather(*prewarm_tasks)
-    return get_lang_codes(
-        asr_server=asr_server,
-        asr_model=asr_model,
-        asr_function_id=asr_function_id,
-        tts_server=tts_server,
-        tts_voice_id=tts_voice,
-    )
+    language_catalog_kwargs = {
+        "asr_server": asr_server,
+        "asr_model": asr_model,
+        "asr_function_id": asr_function_id,
+        "tts_server": tts_server,
+        "tts_voice_id": tts_voice,
+    }
+    if llm_supported_languages is not None:
+        language_catalog_kwargs["llm_supported_languages"] = llm_supported_languages
+    return get_lang_codes(**language_catalog_kwargs)
 
 
 async def bot(runner_args: RunnerArguments) -> None:
@@ -148,6 +158,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
+    selected_llm_id = str(body.get("llm_id", "") or "")
+    custom_llm = selected_llm_id.startswith("custom-") or (not selected_llm_id and bool(body.get("model_id")))
+    selected_llm_entry = {}
+    if not custom_llm:
+        selected_llm_entry = load_service_entry_by_id("llm", selected_llm_id) if selected_llm_id else default_llm
+        if not selected_llm_entry:
+            selected_llm_entry = default_llm
+    llm_supported_languages = selected_llm_entry.get("supported_languages") if selected_llm_entry else None
 
     # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
@@ -166,6 +184,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if not asr_language_code or asr_language_code.strip().lower() == "auto":
         asr_language_code = DEFAULT_SESSION_LANGUAGE
     fixed_session_language = normalize_lang_code(asr_language_code)
+    validate_llm_session_language(fixed_session_language, llm_supported_languages)
     if asr_function_id or asr_model:
         asr_kwargs["model_function_map"] = {
             "function_id": asr_function_id,
@@ -196,6 +215,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         asr_server=asr_server,
         asr_model=asr_model,
         asr_function_id=asr_function_id,
+        llm_supported_languages=llm_supported_languages,
     )
 
     # --- LLM ---

@@ -27,6 +27,7 @@ export function VoiceSettings() {
   const { isConnected, isConnecting, isLocked } = useConnectionState();
   const {
     selectedExample,
+    selectedLLM,
     selectedASR,
     selectedTTS,
     selectedSessionLanguage,
@@ -45,6 +46,8 @@ export function VoiceSettings() {
     sessionLanguagesEnabled ? selectedASR?.functionId : undefined,
     selectedTTS?.functionId,
     selectedTTS?.model,
+    sessionLanguagesEnabled ? selectedExample?.key : undefined,
+    sessionLanguagesEnabled ? selectedLLM?.id : undefined,
   );
 
   const [voiceOverride, setVoiceOverride] = useState<VoiceOverrideState>({
@@ -146,7 +149,7 @@ export function VoiceSettings() {
       return (
         <PanelSection label="VOICE SETTINGS">
           <p style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-            No shared ASR/TTS languages found for the selected services
+            No shared ASR/TTS/LLM languages found for the selected services
           </p>
         </PanelSection>
       );
