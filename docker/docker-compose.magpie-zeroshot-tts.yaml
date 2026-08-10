@@ -21,8 +21,8 @@ services:
       NGC_API_KEY: ${NVIDIA_API_KEY}
       NIM_HTTP_API_PORT: "9000"
       NIM_GRPC_API_PORT: "50051"
-      # batch_size=8 (~10.87 GB GPU / ~9.74 GB CPU). Use batch_size=32 (~41.3 GB GPU)
-      # only on a dedicated GPU — it does not fit the shared H100 layout.
+      # batch_size=8 (~13.06 GB GPU / ~4.00 GB CPU). Use batch_size=32 (~41.30 GB GPU /
+      # ~7.08 GB CPU) only on a dedicated GPU — it does not fit the shared H100 layout.
       NIM_TAGS_SELECTOR: name=magpie-tts-zeroshot,batch_size=8
     ports:
       - "50151:50051"
@@ -42,7 +42,7 @@ services:
       resources:
         reservations:
           devices:
-            # ~10.87 GB VRAM at batch_size=8. Edit device_ids for a second GPU.
+            # ~13.06 GB VRAM at batch_size=8. Edit device_ids for a second GPU.
             - driver: nvidia
               device_ids: ['0']
               capabilities: [gpu]
