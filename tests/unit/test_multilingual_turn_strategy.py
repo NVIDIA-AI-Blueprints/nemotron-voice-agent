@@ -158,7 +158,25 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
             tts_voice_id="Magpie-Multilingual.EN-US.Aria",
         )
 
-    def _run_prepare_session_language_codes(self, runner_args: RunnerArguments) -> str:
+    def test_non_eval_transport_passes_llm_language_capabilities(self) -> None:
+        get_lang_codes = Mock(return_value="en-US,de-DE")
+
+        with (
+            patch("examples.multilingual.pipeline.asyncio.to_thread", AsyncMock()),
+            patch("examples.multilingual.pipeline.get_lang_codes", get_lang_codes),
+        ):
+            self._run_prepare_session_language_codes(
+                RunnerArguments(),
+                llm_supported_languages=["en", "de"],
+            )
+
+        self.assertEqual(get_lang_codes.call_args.kwargs["llm_supported_languages"], ["en", "de"])
+
+    def _run_prepare_session_language_codes(
+        self,
+        runner_args: RunnerArguments,
+        llm_supported_languages=None,
+    ) -> str:
         return asyncio.run(
             _prepare_session_language_codes(
                 runner_args,
@@ -169,5 +187,6 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
                 asr_server="asr.example:443",
                 asr_model="parakeet",
                 asr_function_id="fn-123",
+                llm_supported_languages=llm_supported_languages,
             )
         )
