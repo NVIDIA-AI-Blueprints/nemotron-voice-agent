@@ -39,7 +39,7 @@ def _services_local_path() -> Path:
 
 
 _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
-    "llm": frozenset({"llm_id", "model_id", "base_url", "system_prompt", "max_tokens", "extra_params"}),
+    "llm": frozenset({"llm_id", "model_id", "base_url", "system_prompt", "max_tokens", "temperature", "extra_params"}),
     "thinker-llm": frozenset(
         {"thinker_llm_id", "thinker_model_id", "thinker_base_url", "thinker_max_tokens", "thinker_extra_params"}
     ),
@@ -55,7 +55,7 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
         }
     ),
 }
-_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content"})
+_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content", "tool_choice"})
 _active_slots: frozenset[str] | None = None
 _active_slot_order: tuple[str, ...] | None = None
 
@@ -74,6 +74,11 @@ def set_active_slots(slots: list[str] | tuple[str, ...] | None) -> None:
 def set_service_context(example_dir: str | Path, slots: Iterable[str] | None) -> None:
     """Bind service catalogs and active slots to the current request context."""
     _service_context.set((Path(example_dir), tuple(slots) if slots is not None else ()))
+
+
+def clear_service_context() -> None:
+    """Clear the request-scoped service catalog binding."""
+    _service_context.set(None)
 
 
 def _effective_active_slots() -> frozenset[str] | None:
@@ -464,6 +469,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "base_url",
         "system_prompt",
         "max_tokens",
+        "temperature",
         "extra_params",
         "thinker_llm_id",
         "thinker_model_id",
@@ -472,6 +478,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "thinker_max_tokens",
         "prompt_key",
         "prompt_content",
+        "tool_choice",
         "asr_server",
         "asr_model",
         "asr_function_id",
@@ -496,6 +503,7 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "base_url": "base_url",
             "system_prompt": "system_prompt",
             "max_tokens": "max_tokens",
+            "temperature": "temperature",
             "extra_params": "extra_params",
         },
     ),
@@ -534,7 +542,7 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
 )
 
 # Body fields the client may set explicitly; catalog hydration must not overwrite them.
-_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_voice_id"})
+_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_voice_id", "max_tokens", "temperature"})
 
 
 def hydrate_config_from_catalog(config: dict) -> None:
@@ -549,10 +557,15 @@ def hydrate_config_from_catalog(config: dict) -> None:
             continue
         for yaml_field, body_field in field_map.items():
             if body_field in _CLIENT_OVERRIDABLE_BODY_FIELDS:
-                user_value = str(config.get(body_field, "") or "").strip()
-                if user_value:
-                    config[body_field] = user_value
-                    continue
+                raw_user_value = config.get(body_field, "")
+                if isinstance(raw_user_value, bool | dict | list):
+                    # Reject non-scalar overrides; fall through to catalog.
+                    pass
+                else:
+                    user_value = str(raw_user_value).strip() if raw_user_value not in ("", None) else ""
+                    if user_value:
+                        config[body_field] = user_value
+                        continue
             value = entry.get(yaml_field, "")
             if value in ("", None):
                 config.pop(body_field, None)

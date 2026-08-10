@@ -3,6 +3,7 @@
 
 """Service pre-warming to avoid blocking the event loop during first connection."""
 
+import concurrent.futures
 import os
 from collections.abc import Iterable
 
@@ -12,7 +13,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from riva.client.proto import riva_asr_pb2
 
 import config_store
-from utils import is_nvcf, normalize_lang_code
+from utils import is_nvcf, normalize_lang_code, parse_env_float
 
 
 def _create_tts_service(
@@ -226,17 +227,62 @@ def _asr_cache_key(server: str, model: str, function_id: str) -> str:
     return f"asr:{server}:{model}:{function_id}"
 
 
+def peek_cached_tts_config(
+    server: str,
+    voice_id: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> dict | None:
+    """Return the cached TTS catalog for a routing key, or ``None`` on miss."""
+    cached = config_store.get(_tts_cache_key(server, function_id, model))
+    if not cached:
+        return None
+    result = dict(cached)
+    if voice_id:
+        result["defaultVoiceId"] = voice_id
+    return result
+
+
+def get_tts_config(
+    server: str,
+    voice_id: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> dict:
+    """Return TTS languages/voices for a routing key, fetching only on cache miss.
+
+    Same primitive as ``GET /api/tts-config``: when this ``server`` /
+    ``function_id`` / ``model`` was already listed (first connect or after a TTS
+    model switch), reuse the cached voice list. Call ``prewarm_tts`` only when
+    that routing key has not been fetched yet.
+    """
+    cached = peek_cached_tts_config(server, voice_id, function_id, model)
+    if cached is not None:
+        # Keep legacy config_store["tts"] in sync for fallback readers.
+        config_store.set("tts", cached)
+        return cached
+    return prewarm_tts(server, voice_id, function_id, model)
+
+
+_TTS_PREWARM_RPC_TIMEOUT_SECS = parse_env_float("TTS_PREWARM_RPC_TIMEOUT_SECS", 20.0, min_value=1.0)
+
+
 def prewarm_tts(
     server: str,
     voice_id: str,
     function_id: str = "",
     model: str = "",
 ) -> dict:
-    """Pre-warm a TTS server and cache its voice/language config.
+    """Fetch TTS voice/language config and cache it for the routing key.
 
     Returns the TTS config dict (languages, voices, defaultVoiceId).
     Results are cached per server + function_id + model in config_store so
     multiple cloud NIMs on ``grpc.nvcf.nvidia.com`` do not collide.
+
+    Prefer :func:`get_tts_config` at call sites that only need membership /
+    listing — it skips this fetch when the catalog is already cached.
+
+    The list RPC is bounded by ``TTS_PREWARM_RPC_TIMEOUT_SECS`` (default 20s).
     """
     cache_key = _tts_cache_key(server, function_id, model)
     cached = config_store.get(cache_key)
@@ -249,7 +295,8 @@ def prewarm_tts(
         return result
 
     logger.info(f"Pre-warming TTS on {server} (this may take 10-20s on first run)...")
-    try:
+
+    def _fetch() -> dict:
         svc = _create_tts_service(server, voice_id, function_id, model)
         svc._initialize_client()
         raw_config = svc._create_synthesis_config()
@@ -258,6 +305,11 @@ def prewarm_tts(
         tts_config = _parse_tts_config(raw_config, model_prefix)
         tts_config["defaultVoiceId"] = voice_id
         tts_config["server"] = server
+        return tts_config
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            tts_config = pool.submit(_fetch).result(timeout=_TTS_PREWARM_RPC_TIMEOUT_SECS)
 
         config_store.set(cache_key, tts_config)
         config_store.set("tts", tts_config)
@@ -266,6 +318,15 @@ def prewarm_tts(
         n_voices = len(tts_config["voices"])
         logger.info(f"TTS pre-warmed ({server}) — {n_langs} languages, {n_voices} voices")
         return tts_config
+    except concurrent.futures.TimeoutError:
+        logger.warning(f"TTS pre-warm timed out for {server} after {_TTS_PREWARM_RPC_TIMEOUT_SECS}s")
+        return {
+            "languages": [],
+            "voices": [],
+            "defaultVoiceId": voice_id,
+            "server": server,
+            "error": f"TTS catalog list timed out after {_TTS_PREWARM_RPC_TIMEOUT_SECS}s",
+        }
     except Exception as e:
         logger.warning(f"TTS pre-warm failed for {server}: {e}")
         return {
