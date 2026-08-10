@@ -547,7 +547,7 @@ def hydrate_config_from_catalog(config: dict) -> None:
     the client-provided details continue to drive the pipeline.
     """
     for id_field, category, field_map in _CATALOG_HYDRATION:
-        entry = _load_catalog_entry_by_id(category, config.get(id_field, ""))
+        entry = load_service_entry_by_id(category, config.get(id_field, ""))
         if not entry:
             continue
         for yaml_field, body_field in field_map.items():
@@ -594,7 +594,7 @@ def filter_session_config(data: dict) -> dict:
     return filtered
 
 
-def _load_catalog_entry_by_id(category: str, entry_id: str) -> dict:
+def load_service_entry_by_id(category: str, entry_id: str) -> dict:
     """Look up a built-in catalog entry by category and API id.
 
     Supports UI ids (``<source>:<key>``) and raw catalog keys for direct
