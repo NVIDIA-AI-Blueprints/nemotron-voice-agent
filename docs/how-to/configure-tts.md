@@ -102,6 +102,7 @@ tts:
     voice_id: "Chatterbox-Multilingual.en-US.Male"
     model: "chatterbox-tts-multilingual"
     function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
+    synthesis_mode: per_sentence
 
   # Local only (services.local.yaml workstation / dgxspark). No cloud function_id.
   magpie-zeroshot-tts:
@@ -111,6 +112,7 @@ tts:
     model: "magpie-tts-zeroshot"
     function_id: ""
     synthesis_mode: stitched
+    language_code: en-US
     # optional voice cloning:
     # zero_shot_audio_prompt_file: "/path/to/prompt.wav"
 ```
@@ -126,7 +128,7 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes via the catalog field 
 | `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Use this mode with Magpie TTS Multilingual and Magpie TTS Zeroshot version 1.7.0 or later. |
 | `per_sentence` | Open a fresh synthesis call per sentence. Safe for models without cross-sentence stitching. |
 
-Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie ships with `stitched`. Omit the field on other models to leave Pipecat's default (`per_sentence`).
+Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode via the registry-default fallback in the pipeline.
 
 ### Pronunciation (IPA)
 
