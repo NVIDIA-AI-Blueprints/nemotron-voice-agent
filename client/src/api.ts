@@ -120,6 +120,7 @@ export interface SimpleService {
   model?: string;
   voiceId?: string;
   functionId?: string;
+  languageCode?: string;
   builtIn: boolean;
   source?: BuiltInServiceSource;
 }
@@ -151,6 +152,7 @@ export function useDefaultTTS(pipelineMode = "") {
         model: e.model ? String(e.model) : undefined,
         voiceId: e.voice_id ? String(e.voice_id) : undefined,
         functionId: e.function_id ? String(e.function_id) : undefined,
+        languageCode: e.language_code ? String(e.language_code) : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
       })),

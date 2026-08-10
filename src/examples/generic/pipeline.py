@@ -165,11 +165,16 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
         "zero_shot_audio_prompt_file", ""
     )
+    tts_language_code = body.get("tts_language_code", "") or default_tts.get("language_code", "")
+    if tts_language_code:
+        tts_language_code = normalize_lang_code(tts_language_code)
     custom_dictionary = load_ipa_dictionary()
 
     tts_settings_kwargs: dict = {"voice": tts_voice}
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
+    if tts_language_code:
+        tts_settings_kwargs["language"] = tts_language_code
     tts_kwargs: dict = {
         "api_key": os.getenv("NVIDIA_API_KEY"),
         "server": tts_server,
@@ -191,6 +196,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
         f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"language={tts_language_code or '(pipecat default)'}, "
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"text_filters=[NemotronSpeechTextFilter]"
     )
