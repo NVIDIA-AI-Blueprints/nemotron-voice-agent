@@ -52,6 +52,7 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
             "tts_function_id",
             "tts_model",
             "tts_synthesis_mode",
+            "tts_language_code",
         }
     ),
 }
@@ -481,6 +482,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "tts_function_id",
         "tts_model",
         "tts_synthesis_mode",
+        "tts_language_code",
     }
 )
 
@@ -528,13 +530,14 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "model": "tts_model",
             "voice_id": "tts_voice_id",
             "synthesis_mode": "tts_synthesis_mode",
+            "language_code": "tts_language_code",
             "zero_shot_audio_prompt_file": "tts_zero_shot_audio_prompt_file",
         },
     ),
 )
 
 # Body fields the client may set explicitly; catalog hydration must not overwrite them.
-_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_voice_id"})
+_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_language_code", "tts_voice_id"})
 
 
 def hydrate_config_from_catalog(config: dict) -> None:
@@ -579,6 +582,14 @@ def filter_session_config(data: dict) -> dict:
         filtered = {k: v for k, v in filtered.items() if k in allowed}
     # Defense in depth: never trust a client path even if it bypasses the allowlists.
     filtered.pop("tts_zero_shot_audio_prompt_file", None)
+    # Custom (non-catalog) selections skip hydration, so the raw client value would
+    # reach ``normalize_lang_code`` in the pipeline. Keep only usable strings.
+    raw_tts_language_code = filtered.get("tts_language_code")
+    if raw_tts_language_code is not None:
+        if isinstance(raw_tts_language_code, str) and raw_tts_language_code.strip():
+            filtered["tts_language_code"] = raw_tts_language_code.strip()
+        else:
+            filtered.pop("tts_language_code", None)
     hydrate_config_from_catalog(filtered)
     return filtered
 

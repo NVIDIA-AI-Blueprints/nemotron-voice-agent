@@ -43,6 +43,7 @@ tts:
     model: magpie-tts-multilingual
     voice_id: Magpie-Multilingual.EN-US.Aria
     synthesis_mode: stitched
+    language_code: en-US
     zero_shot_audio_prompt_file: /data/prompts/clone.wav
 """,
                 encoding="utf-8",
@@ -92,7 +93,99 @@ tts:
             self.assertEqual(config["tts_model"], "magpie-tts-multilingual")
             self.assertEqual(config["tts_voice_id"], "client-voice")
             self.assertEqual(config["tts_synthesis_mode"], "stitched")
+            self.assertEqual(config["tts_language_code"], "en-US")
             self.assertEqual(config["tts_zero_shot_audio_prompt_file"], "/data/prompts/clone.wav")
+
+    def test_chatterbox_hydrates_per_sentence_even_with_sticky_stitched(self) -> None:
+        """UI TTS switches must not keep Magpie's stitched mode on Chatterbox."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text(
+                dedent(
+                    """\
+                    tts:
+                      magpie:
+                        name: Magpie
+                        server: catalog-tts:443
+                        model: magpie-tts-multilingual
+                        voice_id: Magpie-Multilingual.EN-US.Aria
+                        synthesis_mode: stitched
+                      chatterbox:
+                        name: Chatterbox
+                        server: catalog-tts:443
+                        model: chatterbox-tts-multilingual
+                        voice_id: Chatterbox-Multilingual.en-US.Male
+                        synthesis_mode: per_sentence
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "tts_id": "cloud-nim:chatterbox",
+                # Leftover from a prior Magpie selection / registry-default body.
+                "tts_synthesis_mode": "stitched",
+            }
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                hydrate_config_from_catalog(config)
+            self.assertEqual(config["tts_model"], "chatterbox-tts-multilingual")
+            self.assertEqual(config["tts_synthesis_mode"], "per_sentence")
+
+    def test_tts_language_code_client_override_wins_over_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text(
+                dedent(
+                    """\
+                    tts:
+                      magpie:
+                        name: Magpie
+                        server: catalog-tts:443
+                        model: magpie-tts-zeroshot
+                        voice_id: Magpie-ZeroShot-Multilingual.Female
+                        language_code: en-US
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "tts_id": "cloud-nim:magpie",
+                "tts_language_code": "es-US",
+            }
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                hydrate_config_from_catalog(config)
+            self.assertEqual(config["tts_language_code"], "es-US")
+
+    def test_custom_tts_language_code_keeps_only_usable_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text("tts: {}\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                # Custom selections skip hydration, so the raw client value survives.
+                for value in ({"evil": 1}, ["en-US"], True, "   "):
+                    with self.subTest(value=value):
+                        filtered = filter_session_config({"tts_id": "custom-tts", "tts_language_code": value})
+                        self.assertNotIn("tts_language_code", filtered)
+
+                filtered = filter_session_config({"tts_id": "custom-tts", "tts_language_code": " en-US "})
+                self.assertEqual(filtered["tts_language_code"], "en-US")
 
     def test_zero_shot_prompt_file_is_catalog_only_not_client_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
