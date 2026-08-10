@@ -78,6 +78,7 @@ from utils import (
     is_nvcf,
     load_prompt_catalog,
     load_service_entry,
+    load_service_entry_by_id,
     load_tools_catalog,
     parse_endpoint,
     set_active_slots,
@@ -1009,6 +1010,8 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
     @app.get("/api/tts-config")
     async def tts_config(
+        pipeline_mode: str = Query(default=""),
+        llm_id: str = Query(default=""),
         server: str = Query(default=""),
         voice_id: str = Query(default=""),
         function_id: str = Query(default=""),
@@ -1017,8 +1020,16 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         asr_model: str = Query(default=""),
         asr_function_id: str = Query(default=""),
     ):
+        _bind_example_context_by_key(pipeline_mode or fallback_example_key)
         if asr_server or asr_model or asr_function_id:
             default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
+            if llm_id.startswith("custom-"):
+                llm_entry = {}
+            elif llm_id:
+                llm_entry = load_service_entry_by_id("llm", llm_id) or load_service_entry("llm", "")
+            else:
+                llm_entry = load_service_entry("llm", "")
+            llm_supported_languages = llm_entry.get("supported_languages") if llm_entry else None
             tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
                 server, voice_id, function_id, model
             )
@@ -1032,11 +1043,12 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                     tts_voice,
                     tts_function_id,
                     tts_model,
+                    llm_supported_languages,
                     timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
                 )
             except TimeoutError:
                 logger.warning(
-                    "tts-config ASR/TTS intersection timed out after {}s",
+                    "tts-config ASR/TTS/LLM intersection timed out after {}s",
                     _CONNECT_PREWARM_TIMEOUT_SECS,
                 )
                 return JSONResponse(

@@ -5,6 +5,7 @@
 
 import concurrent.futures
 import os
+from collections.abc import Iterable
 
 from loguru import logger
 from pipecat.services.nvidia.stt import NvidiaSTTService
@@ -128,11 +129,55 @@ def _normalize_catalog_code(code: str) -> str:
     return normalize_lang_code(code).lower()
 
 
+def _llm_language_set(supported_languages: Iterable[str] | str) -> set[str]:
+    """Normalize LLM language capabilities to base language codes."""
+    if isinstance(supported_languages, str):
+        supported_languages = supported_languages.split(",")
+    return {
+        _normalize_catalog_code(code.strip()).split("-", 1)[0]
+        for code in supported_languages
+        if isinstance(code, str) and code.strip()
+    }
+
+
+def llm_supports_session_language(
+    language_code: str,
+    supported_languages: Iterable[str] | str | None,
+) -> bool:
+    """Return whether an LLM capability list supports a BCP-47 session locale.
+
+    ``None`` preserves compatibility for custom LLMs whose capabilities are not
+    declared. An explicit empty collection supports no session languages.
+    """
+    if supported_languages is None:
+        return True
+    language_base = _normalize_catalog_code(language_code).split("-", 1)[0]
+    return language_base in _llm_language_set(supported_languages)
+
+
+def validate_llm_session_language(
+    language_code: str,
+    supported_languages: Iterable[str] | str | None,
+) -> None:
+    """Reject a session locale that the selected built-in LLM cannot serve."""
+    if llm_supports_session_language(language_code, supported_languages):
+        return
+    supported = ", ".join(sorted(_llm_language_set(supported_languages or []))) or "none"
+    raise ValueError(
+        f"Session language {normalize_lang_code(language_code)!r} is not supported by the selected LLM "
+        f"(supported languages: {supported})"
+    )
+
+
 _EMPTY_ASR_LANGUAGE_FALLBACK = "es-US"
 
 
-def intersect_session_languages(asr_config: dict, tts_config: dict) -> list[str]:
-    """Languages supported by both ASR and TTS (LLM prompt uses the TTS catalog)."""
+def intersect_session_languages(
+    asr_config: dict,
+    tts_config: dict,
+    llm_supported_languages: Iterable[str] | str | None = None,
+) -> list[str]:
+    """Languages supported by ASR, TTS, and the selected LLM when declared."""
     tts_langs = _tts_language_set(tts_config)
     if not tts_langs:
         return []
@@ -142,6 +187,9 @@ def intersect_session_languages(asr_config: dict, tts_config: dict) -> list[str]
         asr_langs = {_normalize_catalog_code(_EMPTY_ASR_LANGUAGE_FALLBACK)}
 
     result = asr_langs & tts_langs
+    if llm_supported_languages is not None:
+        llm_langs = _llm_language_set(llm_supported_languages)
+        result = {code for code in result if code.split("-", 1)[0] in llm_langs}
 
     return sorted(
         (normalize_lang_code(code) for code in result),
@@ -157,8 +205,9 @@ def build_session_languages(
     tts_voice_id: str,
     tts_function_id: str = "",
     tts_model: str = "",
+    llm_supported_languages: Iterable[str] | str | None = None,
 ) -> dict:
-    """Return the ASR∩TTS language catalog and TTS voices for session configuration."""
+    """Return the compatible session-language catalog and TTS voices."""
     tts_config = prewarm_tts(
         tts_server,
         tts_voice_id,
@@ -166,7 +215,7 @@ def build_session_languages(
         tts_model,
     )
     asr_config = prewarm_asr(asr_server, asr_model, asr_function_id)
-    languages = intersect_session_languages(asr_config, tts_config)
+    languages = intersect_session_languages(asr_config, tts_config, llm_supported_languages)
     return {
         "languages": languages,
         "voices": tts_config.get("voices", []),
