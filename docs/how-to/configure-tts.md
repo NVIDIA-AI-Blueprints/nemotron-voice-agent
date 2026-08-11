@@ -205,17 +205,15 @@ Magpie TTS Zeroshot clones a voice from a short reference clip via Pipecat's `Nv
    ```
 
    - **Host-native** (`uv run` / local Python): use a host absolute path (for example `/home/you/prompts/clone.wav`).
-   - **Compose / Docker**: mount the file into the example app service (there is no `voice-agent` service; apps inherit `x-app` in [`docker-compose.yml`](../../docker-compose.yml), for example `generic-assistant`). Use a Compose override, then set `zero_shot_audio_prompt_file` to that **container** absolute path. Relative paths are not resolved from the repo root.
+   - **Compose / Docker**: mount the file into the app service for your Compose profile (for example `generic-assistant` with `--profile generic-assistant`, or `generic-assistant-workstation` with `--profile generic-assistant/workstation`). Use a Compose override, then set `zero_shot_audio_prompt_file` to that **container** absolute path. Relative paths are not resolved from the repo root.
 
      ```yaml
-     # docker-compose.override.yaml (example for generic-assistant)
+     # docker-compose.override.yaml (example for --profile generic-assistant)
      services:
        generic-assistant:
          volumes:
            - /home/you/prompts/clone.wav:/data/prompts/clone.wav:ro
      ```
-
-     Match the service name to the recipe you launched (`generic-assistant`, `generic-assistant-workstation`, `multilingual-assistant`, and so on).
 
    The catalog field is hydrated as `tts_zero_shot_audio_prompt_file` and passed into `NvidiaTTSService`.
 4. Start a session.
