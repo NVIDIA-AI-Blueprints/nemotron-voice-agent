@@ -119,6 +119,17 @@ class SessionLanguageCatalogTests(unittest.TestCase):
 
         self.assertEqual(languages, ["el-GR"])
 
+    def test_empty_llm_capabilities_exclude_and_reject_all_languages(self) -> None:
+        languages = intersect_session_languages(
+            {"languages": ["de-DE", "en-US"]},
+            {"languages": ["de-DE", "en-US"], "voices": []},
+            [],
+        )
+
+        self.assertEqual(languages, [])
+        with self.assertRaisesRegex(ValueError, "en-US.*not supported.*none"):
+            validate_llm_session_language("en-US", [])
+
     def test_runtime_validation_rejects_greek_for_nano(self) -> None:
         with self.assertRaisesRegex(ValueError, "el-GR.*not supported"):
             validate_llm_session_language("el-GR", ["en", "de", "es", "fr", "it", "ja"])
