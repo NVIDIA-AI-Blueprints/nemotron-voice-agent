@@ -36,6 +36,7 @@ Invalid session config that would break audio (bad PCM format/rate, text-only mo
 import asyncio
 from openai import AsyncOpenAI
 
+
 async def main():
     client = AsyncOpenAI(
         api_key="unused",  # gateway does not require OpenAI auth
@@ -45,6 +46,7 @@ async def main():
         assert (await conn.recv()).type == "session.created"
         await conn.send({"type": "session.update", "session": {"type": "realtime"}})
         print(await conn.recv())  # session.updated
+
 
 asyncio.run(main())
 ```

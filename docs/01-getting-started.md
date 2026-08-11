@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through different deployment options for the Nemotron Voice Agent on your system, from a cloud-only quick start to local GPU, DGX Spark, and Jetson Thor deployments.
+This guide walks you through the cloud-only, server, and single-GPU deployment options for the Nemotron Voice Agent. The single-GPU recipes cover supported workstation GPUs, DGX Spark, and Jetson Thor.
 
 ## Prerequisites
 
@@ -14,17 +14,17 @@ For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU
 
 ## Docker based Deployment
 
-Each example ships as Docker Compose **profiles**. Pick exactly one per deployment. The bare **`<example>`** profile runs cloud-only (no local GPU, using NVIDIA cloud API endpoints), while **`<example>/workstation`**, **`<example>/dgx-spark`**, and **`<example>/jetson-thor`** deploy models locally. Pick the profile that matches the example you want to run. `docker compose up` with no profile is intentionally a no-op so the deployment is always explicit.
+Each example ships as Docker Compose **profiles**. Pick exactly one per deployment. The bare **`<example>`** profile runs cloud-only (no local GPU, using NVIDIA cloud API endpoints). **`<example>/server`** is the scaling-oriented NIM stack. **`<example>/single-gpu`** is the universal one-GPU path. Supported hardware varies by example and is listed below. `docker compose up` with no profile is intentionally a no-op so the deployment is always explicit.
 
 > **Note:** For example-specific architecture, configuration, and tunables, see each example's README (linked in the table below).
 
 | Example | Description | Supported profiles |
 |---------|-------------|--------------------|
-| [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/workstation`, `generic-assistant/dgx-spark`, `generic-assistant/jetson-thor` |
-| [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/workstation`, `multilingual-assistant/dgx-spark` |
-| [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/workstation`, `omni-assistant/dgx-spark`, `omni-assistant/jetson-thor` |
-| [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/workstation`, `omni-assistant-subagents/dgx-spark` |
-| [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/workstation` |
+| [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
+| [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
 
@@ -46,7 +46,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     # Edit .env and replace the placeholder with your key:
     # NVIDIA_API_KEY=<your-nvidia-api-key>
     ```
-    > **Optional (DGX Spark / Jetson Thor):** Set `HF_TOKEN` in `.env` for the LLM model download from huggingface.
+    > **Local vLLM recipes:** Set `HF_TOKEN` in `.env` for the LLM model download from Hugging Face.
 
 3. Export the same NVIDIA API key in your shell for Docker registry login:
 
@@ -72,30 +72,32 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile frontend-backend-agent up -d       # Frontend/Backend Agent Airline Assistant
     ```
 
-    **5.2 Workstation** (local workstation / server GPUs):
+    **5.2 Server** (scaling-oriented NIM stack):
 
     ```bash
-    docker compose --profile generic-assistant/workstation up -d         # Generic Cascaded
-    docker compose --profile multilingual-assistant/workstation up -d    # Multilingual Cascaded
-    docker compose --profile omni-assistant/workstation up -d            # Nemotron Omni Assistant
-    docker compose --profile omni-assistant-subagents/workstation up -d  # Nemotron Omni Assistant Subagents
-    docker compose --profile frontend-backend-agent/workstation up -d    # Frontend/Backend Agent Airline Assistant
+    docker compose --profile generic-assistant/server up -d         # Generic Cascaded
+    docker compose --profile multilingual-assistant/server up -d    # Multilingual Cascaded
+    docker compose --profile omni-assistant/server up -d            # Nemotron Omni Assistant
+    docker compose --profile omni-assistant-subagents/server up -d  # Nemotron Omni Assistant Subagents
+    docker compose --profile frontend-backend-agent/server up -d    # Frontend/Backend Agent Airline Assistant
     ```
 
-    **5.3 DGX Spark** (Blackwell, 128 GB unified memory):
+    **5.3 Single GPU** (one supported GPU). This is the universal one-GPU deployment path. Hardware support varies by example as listed above. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container selects NVFP4 or FP8 from the supported platform and GPU compute capability. DGX Spark enables DSpark speculative decoding and Blackwell workstations enable DFlash automatically. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
+
+    Download the NeMo-Speech.cpp weights **once, as your user** (do not use `sudo`). The script reads `HF_TOKEN` from `.env` and creates `models/nemo-speech`:
 
     ```bash
-    docker compose --profile generic-assistant/dgx-spark up -d           # Generic Cascaded
-    docker compose --profile multilingual-assistant/dgx-spark up -d      # Multilingual Cascaded
-    docker compose --profile omni-assistant/dgx-spark up -d              # Nemotron Omni Assistant
-    docker compose --profile omni-assistant-subagents/dgx-spark up -d    # Nemotron Omni Assistant Subagents
+    bash scripts/download-nemo-speech-models.sh
     ```
 
-    **5.4 Jetson Thor** (edge support). Follow the [Jetson Thor guide](03-jetson-thor.md) for the one-time Riva model build first:
+    Then start the stack:
 
     ```bash
-    docker compose --profile generic-assistant/jetson-thor up -d         # Generic Cascaded
-    docker compose --profile omni-assistant/jetson-thor up -d            # Nemotron Omni Assistant
+    docker compose --profile generic-assistant/single-gpu up -d          # Generic Cascaded
+    docker compose --profile multilingual-assistant/single-gpu up -d     # Multilingual Cascaded
+    docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
+    docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
+    docker compose --profile frontend-backend-agent/single-gpu up -d     # Frontend/Backend Agent
     ```
 
 
@@ -155,9 +157,9 @@ For development and debugging, you can run the server directly:
     PIPELINE_TLS=false uv run python src/server.py --host 0.0.0.0 --port 7860
     ```
 
-    Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `selection` field to choose what the UI exposes, then start the server normally. The server has no example/pipeline CLI flags.
+    Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `selection` field to choose what the UI exposes, then start the server normally. The server has no example-selection CLI flag. Pipeline options such as `--prompt-file` remain available.
 
-    By default a host-native server uses the cloud (NVCF) service endpoints. To run against **local on-prem services** instead, set `PLATFORM` in `.env` to the hardware whose local catalog you want: `workstation`, `dgxspark`, or `jetsonthor`. This selects the matching section of the example's `services.local.yaml`, so the server connects to the local ASR, LLM, and TTS sidecars for that hardware instead of the cloud endpoints. Docker Compose recipe profiles set `PLATFORM` automatically (for example, `<example>/workstation` sets `PLATFORM=workstation`), so you only set it by hand for host-native runs.
+    By default a host-native server uses the cloud (NVCF) service endpoints. To run against **local on-prem services**, start the matching Compose sidecars first. The catalog merges `services.local.yaml` and exposes only endpoints that are reachable, so NIM (`/server`) or NeMo-Speech.cpp (`/single-gpu`) entries appear automatically.
 
     | `selection` in `examples_registry.yaml` | UI behavior |
     |-----------------------------------------|-------------|

@@ -8,7 +8,7 @@ The pattern replaces the separate ASR and text LLM stages with one audio-input L
 
 ## Running the example
 
-This example runs on every deployment profile: **Cloud** (no local GPU, NVCF endpoints), **Workstation** (single GPU), **DGX Spark** (Blackwell, 128 GB unified memory), and **Jetson Thor** (edge). See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended for scaling), and universal **Single GPU** profiles. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
 1. Create your `.env` from the template and set your NVIDIA API key:
 
@@ -17,7 +17,7 @@ This example runs on every deployment profile: **Cloud** (no local GPU, NVCF end
    export NVIDIA_API_KEY=<your-nvidia-api-key>
    ```
 
-   > **Local profiles (Workstation, DGX Spark, Jetson Thor):** also set `HF_TOKEN` in `.env`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
+   > **Single-GPU profile:** also set `HF_TOKEN` in `.env`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
 
 2. Log in to the NVIDIA NGC container registry:
 
@@ -29,26 +29,29 @@ This example runs on every deployment profile: **Cloud** (no local GPU, NVCF end
 
    ```bash
    docker compose --profile omni-assistant up -d              # Cloud (no local GPU)
-   docker compose --profile omni-assistant/workstation up -d  # Workstation
-   docker compose --profile omni-assistant/dgx-spark up -d    # DGX Spark
-   docker compose --profile omni-assistant/jetson-thor up -d  # Jetson Thor
+   docker compose --profile omni-assistant/server up -d  # Server (Omni NIM + NIM TTS, recommended for scaling)
+
+   # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
+   bash scripts/download-nemo-speech-models.sh
+   docker compose --profile omni-assistant/single-gpu up -d
    ```
 
    | Recipe profile | App service | Shared sidecars pulled from `docker/` |
    | --- | --- | --- |
    | `omni-assistant` | `omni-assistant` | none (cloud NVCF) |
-   | `omni-assistant/workstation` | `omni-assistant` | `nvidia-llm-vllm-omni`, `tts-service` |
-   | `omni-assistant/dgx-spark` | `omni-assistant` | `nvidia-llm-vllm-omni`, `tts-service` |
-   | `omni-assistant/jetson-thor` | `omni-assistant` | `nvidia-llm-vllm-omni`, `nemotron-speech-tts` (Riva TTS) |
+   | `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `tts-service` |
+   | `omni-assistant/single-gpu` | `omni-assistant-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
-   > Jetson Thor (128 GB unified memory) fits the 30B Omni NVFP4 model and reuses the same Omni vLLM sidecar, with TTS served by the on-device Riva `nemotron-speech-tts` service instead of the Magpie NIM. It needs a one-time Riva model build first, so follow the [Jetson Thor guide](../../../docs/03-jetson-thor.md). Orin-class Jetson hardware is not supported because the models does not fit.
+   > The single-GPU recipe uses the Omni vLLM sidecar and takes TTS from the on-device NeMo-Speech.cpp `nemo-speech-tts` service instead of the NIM sidecars. Jetson Thor (128 GB unified memory) fits the 30B Omni NVFP4 model. Follow the [Jetson Thor guide](../../../docs/03-jetson-thor.md). Orin-class Jetson hardware is not supported because the models do not fit.
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
 5. Clean up when you are done by tearing down with the same profile you started with:
 
    ```bash
-   docker compose --profile omni-assistant/workstation down
+   docker compose --profile omni-assistant down              # Cloud (no local GPU)
+   docker compose --profile omni-assistant/server down       # Server
+   docker compose --profile omni-assistant/single-gpu down   # One GPU (incl. DGX Spark and Jetson Thor)
    ```
 
 To run host-native without Docker, set `selection: omni-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.
@@ -79,6 +82,6 @@ For model selection, voices, and shared service-catalog mechanics, see [Configur
 
 ## Tips & best practices
 
-- **Omni model and hardware.** Omni serves the NVFP4 30B model through the `nvidia-llm-vllm-omni` vLLM sidecar, which needs a Blackwell GPU. For older hardware, see the [Hugging Face documentation](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16) for deploying with FP8 or BF16 precision.
+- **Omni model and hardware.** The Server recipe uses the `nvidia-llm-omni` NIM sidecar with automatic model-profile selection. The Single-GPU recipe uses `nvidia-llm-vllm-omni` and selects the model precision from the GPU at startup. Blackwell workstations, DGX Spark, and Jetson Thor use NVFP4. Hopper and Ada use FP8. See [Configure LLM](../../../docs/how-to/configure-llm.md#vram--hardware-support).
 - **Tune Omni behavior** with the environment variables in the table above: keep user transcript on so the UI shows the user's words, raise the minimum-audio threshold if noise triggers spurious turns, and adjust max-tokens and sampling for your latency and verbosity targets.
 - For deployment and general failure modes, see the [Troubleshooting guide](../../../docs/06-troubleshooting.md). VRAM sizing for the Omni vLLM sidecar is covered in [Configure LLM](../../../docs/how-to/configure-llm.md#vram--hardware-support), and edge deployment in the [Jetson Thor guide](../../../docs/03-jetson-thor.md).

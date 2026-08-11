@@ -55,10 +55,10 @@ To use one of these, configure the NIM endpoint to point to the corresponding mo
 ASR runs one of three ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. The simplest starting point.
-- **NIM for Speech sidecar**: an ASR NIM microservice on the `*/workstation` and `*/dgx-spark` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
-- **Riva embedded (Jetson Thor)**: on `*/jetson-thor`, Riva Embedded SDK (`nemotron-speech`, `docker-compose.speech-jetson.yaml`) serves **ASR + TTS together**. See [Jetson Thor](../03-jetson-thor.md) and [Riva embedded ASR](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide/asr.html).
+- **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
+- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, one sidecar serves **ASR + TTS together** from local GGUF weights (`nemo-speech` for English, `nemo-speech-multilingual` for the multilingual example, both in `docker-compose.nemo-speech-cpp.yaml`). See [Jetson Thor](../03-jetson-thor.md).
 
-> Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs run on compute capability **≥ 8.0** (Ampere and newer) with **≥ 16 GB** VRAM.
+> Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs require compute capability **≥ 8.0** and **≥ 16 GB** VRAM.
 
 ### VRAM & hardware support
 
@@ -112,4 +112,3 @@ asr:
 - [Multilingual example](../../src/examples/multilingual/README.md): multilingual ASR/TTS behavior and example-specific troubleshooting.
 - [NVIDIA NIM for Speech — ASR](https://docs.nvidia.com/nim/speech/latest/asr/index.html): [customization / word boosting](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html), [support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html), [performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/asr/performance.html), [ASR troubleshooting](https://docs.nvidia.com/nim/speech/latest/troubleshooting/asr.html).
 - [Pipecat NVIDIA ASR service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/stt.py): `NvidiaSTTService`.
-- [Riva embedded (Jetson) ASR](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide/asr.html): L4T / Jetson Thor ASR via the Riva quick-start.

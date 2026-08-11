@@ -12,7 +12,7 @@ The diagram shows the full runtime path. User audio enters through the WebRTC/We
 
 ## Running the example
 
-See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
 1. Create your `.env` from the template and set your NVIDIA API key:
 
@@ -20,6 +20,8 @@ See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequ
    cp .env.example .env
    export NVIDIA_API_KEY=<your-nvidia-api-key>
    ```
+
+   > **Single-GPU profile:** also set `HF_TOKEN` in `.env`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server profile uses a NIM from NGC and does not need it.
 
 2. Log in to the NVIDIA NGC container registry:
 
@@ -31,13 +33,18 @@ See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequ
 
    ```bash
    docker compose --profile frontend-backend-agent up -d              # Cloud ASR, LLM, TTS + booking-server
-   docker compose --profile frontend-backend-agent/workstation up -d  # Local NIM ASR, TTS, LLM + booking-server
+   docker compose --profile frontend-backend-agent/server up -d  # Local NIM ASR, TTS, LLM + booking-server
+
+   # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
+   bash scripts/download-nemo-speech-models.sh
+   docker compose --profile frontend-backend-agent/single-gpu up -d   # Lightning + NeMo-Speech.cpp + booking-server
    ```
 
    | Recipe profile | App service | Sidecars |
    | --- | --- | --- |
    | `frontend-backend-agent` | `frontend-backend-agent` | `booking-server` |
-   | `frontend-backend-agent/workstation` | `frontend-backend-agent` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service` |
+   | `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service` |
+   | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech` |
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
@@ -45,7 +52,8 @@ See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequ
 
    ```bash
    docker compose --profile frontend-backend-agent down              # Cloud
-   docker compose --profile frontend-backend-agent/workstation down  # Workstation
+   docker compose --profile frontend-backend-agent/server down  # Server
+   docker compose --profile frontend-backend-agent/single-gpu down   # Single GPU
    ```
 
 To run host-native without Docker, set `selection: frontend-backend-agent` in [`examples_registry.yaml`](../../../examples_registry.yaml). Start the booking server in one shell:

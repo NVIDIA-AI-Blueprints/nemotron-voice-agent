@@ -10,6 +10,7 @@ from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.pipeline.worker import PipelineParams
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
@@ -33,6 +34,18 @@ from utils import parse_env_bool, parse_env_float, parse_env_int
 # Smart Turn silence fallback default (seconds); override via SMART_TURN_STOP_SECS.
 # Pipecat's stock default is 3.0s.
 SMART_TURN_FALLBACK_SECS = 1.0
+
+# Magpie TTS (nemo-speech) accepts sample_rate_hz in [8000, 22050] or 0 (auto).
+# Use Magpie's native max for output. Pipecat's default out rate (24000) is rejected.
+PIPELINE_AUDIO_IN_SAMPLE_RATE = 16000
+PIPELINE_AUDIO_OUT_SAMPLE_RATE = 22050
+
+
+def build_pipeline_params(**kwargs) -> PipelineParams:
+    """Build PipelineParams with Magpie-safe audio sample rates."""
+    kwargs.setdefault("audio_in_sample_rate", PIPELINE_AUDIO_IN_SAMPLE_RATE)
+    kwargs.setdefault("audio_out_sample_rate", PIPELINE_AUDIO_OUT_SAMPLE_RATE)
+    return PipelineParams(**kwargs)
 
 
 def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
@@ -283,7 +296,9 @@ def create_transport(runner_args: RunnerArguments):
         return SmallWebRTCTransport(
             params=TransportParams(
                 audio_in_enabled=True,
+                audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
                 audio_out_enabled=True,
+                audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
             ),
             webrtc_connection=runner_args.webrtc_connection,
@@ -296,9 +311,9 @@ def create_transport(runner_args: RunnerArguments):
         return EvalTransport(
             params=EvalTransportParams(
                 audio_in_enabled=True,
-                audio_in_sample_rate=16000,
+                audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
                 audio_out_enabled=True,
-                audio_out_sample_rate=16000,
+                audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
                 add_wav_header=False,
                 serializer=RTVIEvalSerializer(),
@@ -333,9 +348,9 @@ def create_transport(runner_args: RunnerArguments):
         websocket=websocket,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
-            audio_in_sample_rate=16000,
+            audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
             audio_out_enabled=True,
-            audio_out_sample_rate=16000,
+            audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
             audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
             add_wav_header=False,
             serializer=ProtobufFrameSerializer(params=FrameSerializer.InputParams(ignore_rtvi_messages=False)),

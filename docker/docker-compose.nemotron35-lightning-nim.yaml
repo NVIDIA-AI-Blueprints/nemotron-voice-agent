@@ -1,0 +1,70 @@
+# Nemotron 3.5 Lightning served as a NIM for cascaded */server recipes.
+x-nim-llm: &nim-llm
+  image: nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:latest
+  user: "0:0"
+  ports:
+    - "18000:8000"
+  volumes:
+    - llm_cache:/opt/nim/.cache
+  shm_size: 16GB
+  ulimits:
+    nofile: 2048
+  healthcheck:
+    test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/v1/health/ready\").read()' || exit 1"]
+    interval: 30s
+    timeout: 15s
+    retries: 5
+    start_period: 1800s
+  restart: unless-stopped
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+x-nim-llm-env: &nim-llm-env
+  NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
+  NIM_HTTP_API_PORT: "8000"
+  NIM_KVCACHE_PERCENT: ${NIM_KVCACHE_PERCENT:-0.6}
+  NIM_MAX_MODEL_LEN: "32768"
+  NIM_PASSTHROUGH_ARGS: --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 --max-num-seqs ${LLM_MAX_NUM_SEQS:-256}
+
+services:
+  nvidia-llm:
+    <<: *nim-llm
+    profiles:
+      - generic-assistant/server
+      - multilingual-assistant/server
+      - frontend-backend-agent/server
+    environment:
+      <<: *nim-llm-env
+      NIM_TAGS_SELECTOR: ${NIM_TAGS_SELECTOR:-precision=fp8,tp=1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+
+  nvidia-llm-perf:
+    <<: *nim-llm
+    profiles:
+      - generic-assistant/server-perf
+    environment:
+      <<: *nim-llm-env
+      NIM_TAGS_SELECTOR: "precision=fp8,tp=2"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['2', '3']
+              capabilities: [gpu]
+    networks:
+      default:
+        aliases:
+          - nvidia-llm
+
+volumes:
+  llm_cache:

@@ -10,14 +10,13 @@ Uses pipecat's built-in NVIDIA classes directly:
 """
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -37,6 +36,7 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
+    build_pipeline_params,
     build_user_aggregator_params,
     create_transport,
     register_session_start_handlers,
@@ -48,6 +48,7 @@ from utils import (
     load_ipa_dictionary,
     load_service_entry,
     normalize_lang_code,
+    nvidia_api_key,
     parse_env_int,
     parse_json_dict,
     resolve_prompt,
@@ -77,7 +78,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": asr_server,
         "use_ssl": asr_ssl,
     }
@@ -98,7 +99,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # --- LLM ---
-    model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3-nano-30b-a3b")
+    model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
     extra_params = parse_json_dict(
@@ -134,7 +135,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"extra_params={extra_params or '(none)'}"
     )
     llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
     )
@@ -176,7 +177,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_language_code:
         tts_settings_kwargs["language"] = tts_language_code
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -307,7 +308,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=PipelineParams(
+        params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),

@@ -19,9 +19,8 @@ docker compose --profile <recipe> up -d
 | Recipe profile | App service | Sidecars from `docker/` |
 | --- | --- | --- |
 | `generic-assistant` | `generic-assistant` | none (cloud NVCF) |
-| `generic-assistant/workstation` | `generic-assistant` | `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service` |
-| `generic-assistant/dgx-spark` | `generic-assistant` | `nvidia-llm-vllm`, `nemotron-asr-streaming-english`, `tts-service` |
-| `generic-assistant/jetson-thor` | `generic-assistant` | `nvidia-llm-vllm`, `nemotron-speech` |
+| `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service` |
+| `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
 
 Tear down with the same recipe used at `up` time:
 
@@ -41,7 +40,7 @@ docker compose --profile <recipe> down
 ```bash
 docker run --rm --gpus all \
   -e NGC_API_KEY="$NVIDIA_API_KEY" \
-  nvcr.io/nim/nvidia/nemotron-3-nano:2.0.9 \
+  nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:latest \
   list-model-profiles
 ```
 
@@ -53,5 +52,5 @@ docker run --rm --gpus all \
 ## Common failures
 
 - **`pull access denied` / `unauthorized`** -> NGC login was not done or expired. See the root `deploy` skill.
-- **Jetson startup hangs or fails with kernel/CASK errors** -> `riva_init.sh` was not run, or MPS/cpuset is misconfigured. Follow `platform-deployment.md`.
+- **Single-GPU startup hangs or fails on memory** -> the speech GGUFs were never downloaded, or `--gpu-memory-utilization` was not sized with the speech sidecar loaded. Follow `platform-deployment.md`.
 - **Tear-down leaves orphan services after a service rename** -> rerun `up` or `down` with `--remove-orphans`.

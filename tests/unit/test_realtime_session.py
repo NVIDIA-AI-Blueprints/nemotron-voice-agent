@@ -67,7 +67,7 @@ class MapSessionUpdateTests(unittest.TestCase):
             {
                 "nvidia": {
                     "pipeline_mode": "generic-assistant",
-                    "llm_id": "cloud-nim:nemotron-nano",
+                    "llm_id": "cloud-nim:nemotron-lightning",
                     "asr_id": "cloud-nim:nemotron-asr",
                     "tts_id": "cloud-nim:magpie-multilingual-tts",
                     "prompt_key": "generic_assistant",
@@ -75,7 +75,7 @@ class MapSessionUpdateTests(unittest.TestCase):
                 }
             }
         )
-        self.assertEqual(flat["llm_id"], "cloud-nim:nemotron-nano")
+        self.assertEqual(flat["llm_id"], "cloud-nim:nemotron-lightning")
         self.assertEqual(flat["prompt_key"], "generic_assistant")
         self.assertNotIn("tts_voice_id", flat)
 
@@ -202,11 +202,11 @@ class RealtimeSessionApplyTests(unittest.TestCase):
                 "tts_server": "tts.internal:443",
                 "asr_function_id": "asr-fn",
                 "tts_function_id": "tts-fn",
-                "llm_id": "cloud-nim:nemotron-nano",
+                "llm_id": "cloud-nim:nemotron-lightning",
             },
         )
         nvidia = public["nvidia"]
-        self.assertEqual(nvidia["llm_id"], "cloud-nim:nemotron-nano")
+        self.assertEqual(nvidia["llm_id"], "cloud-nim:nemotron-lightning")
         for key in ("base_url", "asr_server", "tts_server", "asr_function_id", "tts_function_id"):
             self.assertNotIn(key, nvidia)
 
@@ -239,7 +239,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                             "instructions": "Speak briefly.",
                             "nvidia": {
                                 "pipeline_mode": "generic-assistant",
-                                "llm_id": "cloud-nim:nemotron-nano",
+                                "llm_id": "cloud-nim:nemotron-lightning",
                             },
                         },
                     }
@@ -265,7 +265,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ws.sent[1]["type"], SERVER_SESSION_UPDATED)
         self.assertEqual(ws.sent[1]["session"]["instructions"], "Speak briefly.")
-        self.assertEqual(ws.sent[1]["session"]["nvidia"]["llm_id"], "cloud-nim:nemotron-nano")
+        self.assertEqual(ws.sent[1]["session"]["nvidia"]["llm_id"], "cloud-nim:nemotron-lightning")
         self.assertEqual(ws.sent[1]["session"]["nvidia"]["model_id"], "from-sanitize")
 
     async def test_unsupported_event_returns_error(self) -> None:

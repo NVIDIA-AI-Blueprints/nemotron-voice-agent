@@ -32,14 +32,14 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 2. Edit the smallest configuration surface that satisfies the request:
    - `.env`: feature flags, tracing, chat history, audio debugging, and buffering.
    - `examples_registry.yaml`: visible examples (`selection`), allowed transports (`transports`), and per-example slot defaults (`defaults`).
-   - `<example-package-dir>/services.cloud.yaml` (remote / NVCF) and `<example-package-dir>/services.local.yaml` (Compose-managed local NIMs nested under `workstation` / `dgxspark` / `jetson`, matching the example's supported `<example-id>/<hardware>` recipes): built-in LLM, ASR, TTS, and example-specific role catalogs.
+   - `<example-package-dir>/services.cloud.yaml` (remote / NVCF) and `<example-package-dir>/services.local.yaml` (Compose-managed local services nested under `server` / `singlegpu`, matching the example's supported `<example-id>/<hardware>` recipes): built-in LLM, ASR, TTS, and example-specific role catalogs.
    - `<example-package>/prompts.yaml`: built-in prompt presets and prompt content for the active example.
 
 3. Validate:
    - Multilingual prompts must use multilingual-capable ASR and TTS from the active catalog (e.g. `parakeet-rnnt`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts`, `chatterbox-multilingual-tts`). Verify the keys exist before referencing them.
-   - Local catalog endpoints must use Compose service names (`nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `parakeet-ctc-asr:50052`, `parakeet-rnnt-asr:50052`, `tts-service:50051`, `chatterbox-tts-service:50051`, `nvidia-llm:8000`, `nvidia-llm-vllm:8000`, `nvidia-llm-vllm-omni:8002`, `nemotron-speech:50051`, `booking-server:8001`). Host-run backends auto-rewrite to the matching `localhost` ports.
+   - Local catalog endpoints must use Compose service names (`nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `parakeet-ctc-asr:50052`, `parakeet-rnnt-asr:50052`, `tts-service:50051`, `chatterbox-tts-service:50051`, `nvidia-llm:8000`, `nvidia-llm-vllm:8000`, `nvidia-llm-vllm-omni:8002`, `nemo-speech:50051`, `nemo-speech-multilingual:50051`, `nemo-speech-tts:50051`, `booking-server:8001`). Host-run backends auto-rewrite to the matching `localhost` ports.
    - Alternate local ASR/TTS use Compose profiles (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`) and share ports with the default. Scale the default off (e.g. `--scale tts-service=0` or `--scale nemotron-asr-streaming-multilingual=0`). Stop an opt-in alternate before returning to the default if it still holds the shared ports.
-   - Workstation local Compose runs ASR/TTS and NIM LLM on GPU `0` by default. Single-GPU deployments are supported only when at least 80 GB of VRAM is available.
+   - Server local Compose runs ASR/TTS and NIM LLM on GPU `0` by default. Single-GPU deployments are supported only when at least 80 GB of VRAM is available.
 
 4. Apply and verify using `references/apply-changes.md`.
 
@@ -55,7 +55,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 **Switch the default LLM to a different cloud model:**
 
-1. Open `examples_registry.yaml` and update the relevant `defaults` entry for the active example (e.g. change `llm: [nemotron-nano]` to `llm: [nemotron-super]`). The catalog key must exist in the active example's `services.cloud.yaml` / `services.local.yaml`.
+1. Open `examples_registry.yaml` and update the relevant `defaults` entry for the active example (e.g. change `llm: [nemotron-lightning]` to `llm: [nemotron-super]`). The catalog key must exist in the active example's `services.cloud.yaml` / `services.local.yaml`.
 2. Compose restart of the example service and refresh browser.
 
 **Add a multilingual persona prompt:**
@@ -76,7 +76,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 - **YAML catalog change does not appear in the UI** -> compose re-apply and refresh browser.
 - **`.env` change has no effect on a running container** -> environment is read at container start. Re-apply Compose so the container restarts.
 - **Local LLM/ASR/TTS missing from the Services tab** -> the corresponding sidecar is not deployed or is unreachable. The catalog filters local entries by TCP reachability.
-- **Local workstation LLM won't start or OOMs** -> match it to the GPU in `.env`: `NIM_KVCACHE_PERCENT` (**raise** on `No available memory for the cache blocks`, lower on an OOM kill), `NIM_TAGS_SELECTOR` (weight precision and tensor-parallel size), and `LLM_MAX_NUM_SEQS` (lower if CUDA-graph capture fails). On multi-GPU hosts, match the NIM profile `tp` to the exposed GPUs. See "VRAM & hardware support" in `docs/how-to/configure-llm.md`.
+- **Local cascaded single-GPU LLM won't start or OOMs** -> inspect the capability-selected Lightning recipe in `docker/docker-compose.nemotron35-lightning.yaml` and verify the host meets its memory requirement. Keep vLLM tuning out of `.env`; use cloud services when the supported recipe does not fit.
 - **Multilingual responses do not use the right ASR/TTS** -> reorder catalog so a multilingual ASR/TTS sits first, or pick the entry from the UI Services tab.
 - **ASR/TTS sidecar image fails to pull** -> log in to `nvcr.io` with a `NVIDIA_API_KEY` that has access to the image. The active image is set in `docker/docker-compose.<variant>.yaml`.
 - **Local LLM 400 (`auto tool choice requires ...`), or reasoning spoken / `<think>` leaks** -> self-hosted Nemotron-3 2.x needs the parsers set (already in `docker/docker-compose.nemotron3-*.yaml`): NIM `NIM_PASSTHROUGH_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3`, or the same flags on `vllm serve`. See `docs/06-troubleshooting.md`.

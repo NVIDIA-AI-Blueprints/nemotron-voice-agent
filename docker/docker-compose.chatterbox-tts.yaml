@@ -1,13 +1,12 @@
 # Chatterbox TTS Multilingual: alternate to Magpie.
 #
 # Opt-in alternate to Magpie (shared ports 50151/9000. Only one TTS can run):
-#   docker compose --profile <recipe>/workstation --profile chatterbox-tts \
+#   docker compose --profile <recipe>/server --profile chatterbox-tts \
 #     up -d --scale tts-service=0
-#   # same with <recipe>/dgx-spark instead of workstation
 # Omitting --profile chatterbox-tts leaves Chatterbox running and holding the
 # ports. Stop it before Magpie can bind again:
 #   docker compose --profile chatterbox-tts stop chatterbox-tts-service
-#   docker compose --profile <recipe>/workstation up -d
+#   docker compose --profile <recipe>/server up -d
 # Then pick chatterbox-multilingual-tts (or Magpie) in the Services tab.
 
 services:
@@ -17,7 +16,7 @@ services:
     profiles:
       - chatterbox-tts
     environment:
-      NGC_API_KEY: ${NVIDIA_API_KEY}
+      NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
       NIM_HTTP_API_PORT: "9000"
       NIM_GRPC_API_PORT: "50051"
       # Single profile (~52.5 GB GPU / ~6.4 GB CPU). No batch_size selector.

@@ -1,21 +1,21 @@
 # Cloud service catalog for the Frontend/Backend Agent cascaded example.
 
 llm:
-  nemotron-nano:
-    name: "Nemotron 3 Nano 30B A3B"
-    model_id: "nvidia/nemotron-3-nano-30b-a3b"
+  nemotron-lightning:
+    name: "Nemotron 3.5 Lightning 30B A3B"
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
     base_url: "https://integrate.api.nvidia.com/v1"
     system_prompt: ""
     max_tokens: 2048
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
 
 thinker-llm:
-  nemotron-nano:
-    name: "Nemotron 3 Nano 30B A3B Thinker"
-    model_id: "nvidia/nemotron-3-nano-30b-a3b"
+  nemotron-lightning:
+    name: "Nemotron 3.5 Lightning 30B A3B Thinker"
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
     base_url: "https://integrate.api.nvidia.com/v1"
     max_tokens: 4096
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true,"thinking_budget":1024},"repetition_penalty":1.05}}'
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true,"reasoning_budget":1024},"repetition_penalty":1.05}}'
 
 booking-server:
   default:

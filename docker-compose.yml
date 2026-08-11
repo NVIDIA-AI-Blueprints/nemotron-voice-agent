@@ -15,9 +15,10 @@ name: nemotron-voice-agent
 #   frontend-backend-agent               Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
 #
 # Hardware targets:
-#   workstation               Single GPU with 80+ GB VRAM or modify to support multiple GPUs
-#   dgx-spark                 DGX Spark with 128 GB unified memory
-#   jetson-thor               Jetson Thor with 128 GB unified memory
+#   server                    NIM ASR + LLM + TTS. Recommended for scaling
+#                             on workstation / server GPUs.
+#   single-gpu                One GPU (workstation, DGX Spark, or Jetson Thor)
+#                             running the NeMo-Speech.cpp speech stack alongside vLLM
 #
 # Cloud-only recipes:
 #   docker compose --profile generic-assistant up
@@ -27,33 +28,34 @@ name: nemotron-voice-agent
 #   docker compose --profile frontend-backend-agent up
 #
 # On-prem recipes:
-#   docker compose --profile generic-assistant/workstation up
-#   docker compose --profile generic-assistant/workstation-perf up
-#   docker compose --profile generic-assistant/dgx-spark up
-#   docker compose --profile generic-assistant/jetson-thor up
-#   docker compose --profile multilingual-assistant/workstation up
-#   docker compose --profile multilingual-assistant/dgx-spark up
-#   docker compose --profile omni-assistant/workstation up
-#   docker compose --profile omni-assistant/dgx-spark up
-#   docker compose --profile omni-assistant/jetson-thor up
-#   docker compose --profile omni-assistant-subagents/workstation up
-#   docker compose --profile omni-assistant-subagents/dgx-spark up
-#   docker compose --profile frontend-backend-agent/workstation up
+#   docker compose --profile generic-assistant/server up
+#   docker compose --profile generic-assistant/server-perf up
+#   docker compose --profile generic-assistant/single-gpu up
+#   docker compose --profile multilingual-assistant/server up
+#   docker compose --profile multilingual-assistant/single-gpu up
+#   docker compose --profile omni-assistant/server up
+#   docker compose --profile omni-assistant/single-gpu up
+#   docker compose --profile omni-assistant-subagents/server up
+#   docker compose --profile omni-assistant-subagents/single-gpu up
+#   docker compose --profile frontend-backend-agent/server up
+#   docker compose --profile frontend-backend-agent/single-gpu up
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
 #   docker compose --profile <recipe> --profile turn up      # coturn TURN
 
 include:
-  - path: docker/docker-compose.nemotron3-nano.yaml
+  - path: docker/docker-compose.nemotron35-lightning-nim.yaml
+  - path: docker/docker-compose.nemotron35-lightning.yaml
   - path: docker/docker-compose.nemotron3-super.yaml
+  - path: docker/docker-compose.nemotron3-omni-nim.yaml
   - path: docker/docker-compose.nemotron-asr.yaml
   - path: docker/docker-compose.parakeet-asr.yaml
   - path: docker/docker-compose.magpie-tts.yaml
   - path: docker/docker-compose.chatterbox-tts.yaml
   - path: docker/docker-compose.magpie-zeroshot-tts.yaml
   - path: docker/docker-compose.nemotron3-omni.yaml
-  - path: docker/docker-compose.speech-jetson.yaml
+  - path: docker/docker-compose.nemo-speech-cpp.yaml
   - path: docker/docker-compose.coturn.yaml
   - path: docker/docker-compose.phoenix.yaml
   - path: src/examples/frontend_backend_agent/airline/database/docker-compose.yml
@@ -63,7 +65,6 @@ x-app: &app-base
     context: .
     dockerfile: docker/Dockerfile
   image: nemotron-voice-agent:latest
-  cpuset: ${PIPECAT_CPUSET:-}
   command: ["uv", "run", "python", "src/server.py", "--host", "0.0.0.0"]
   ports:
     - "${PIPELINE_APP_PORT:-7860}:7860"
@@ -92,59 +93,37 @@ x-app-env: &app-env
   TRANSPORT_SELECTION: ${TRANSPORT_SELECTION:-}
   PIPELINE_TLS: ${PIPELINE_TLS:-true}
 
-# Platform overrides keep recipe services small and make future hardware targets
-# a one-anchor addition.
-x-platform-cloud: &platform-cloud
-  PLATFORM: cloud
-
-x-platform-workstation: &platform-workstation
-  PLATFORM: workstation
-
-x-platform-dgx-spark: &platform-dgx-spark
-  PLATFORM: dgxspark
-
-x-platform-jetson-thor: &platform-jetson-thor
-  PLATFORM: jetsonthor
-
 services:
   generic-assistant:
     <<: *app-base
     profiles:
       - generic-assistant
     environment:
-      <<: [*app-env, *platform-cloud]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
-  generic-assistant-workstation:
+  generic-assistant-server:
     <<: *app-base
     profiles:
-      - generic-assistant/workstation
+      - generic-assistant/server
     environment:
-      <<: [*app-env, *platform-workstation]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
-  generic-assistant-dgx-spark:
+  generic-assistant-single-gpu:
     <<: *app-base
     profiles:
-      - generic-assistant/dgx-spark
+      - generic-assistant/single-gpu
     environment:
-      <<: [*app-env, *platform-dgx-spark]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
-  generic-assistant-jetson-thor:
+  generic-assistant-server-perf:
     <<: *app-base
     profiles:
-      - generic-assistant/jetson-thor
+      - generic-assistant/server-perf
     environment:
-      <<: [*app-env, *platform-jetson-thor]
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
-
-  generic-assistant-workstation-perf:
-    <<: *app-base
-    profiles:
-      - generic-assistant/workstation-perf
-    environment:
-      <<: [*app-env, *platform-workstation]
+      <<: *app-env
       EXAMPLE_SELECTION: generic-assistant
       UVICORN_WORKERS: "200"
       PROMPT_FILE_PATH: ${PROMPT_FILE_PATH:-}
@@ -159,23 +138,23 @@ services:
     profiles:
       - multilingual-assistant
     environment:
-      <<: [*app-env, *platform-cloud]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
-  multilingual-assistant-workstation:
+  multilingual-assistant-server:
     <<: *app-base
     profiles:
-      - multilingual-assistant/workstation
+      - multilingual-assistant/server
     environment:
-      <<: [*app-env, *platform-workstation]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
-  multilingual-assistant-dgx-spark:
+  multilingual-assistant-single-gpu:
     <<: *app-base
     profiles:
-      - multilingual-assistant/dgx-spark
+      - multilingual-assistant/single-gpu
     environment:
-      <<: [*app-env, *platform-dgx-spark]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
   omni-assistant:
@@ -183,31 +162,23 @@ services:
     profiles:
       - omni-assistant
     environment:
-      <<: [*app-env, *platform-cloud]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
-  omni-assistant-workstation:
+  omni-assistant-server:
     <<: *app-base
     profiles:
-      - omni-assistant/workstation
+      - omni-assistant/server
     environment:
-      <<: [*app-env, *platform-workstation]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
-  omni-assistant-dgx-spark:
+  omni-assistant-single-gpu:
     <<: *app-base
     profiles:
-      - omni-assistant/dgx-spark
+      - omni-assistant/single-gpu
     environment:
-      <<: [*app-env, *platform-dgx-spark]
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
-
-  omni-assistant-jetson-thor:
-    <<: *app-base
-    profiles:
-      - omni-assistant/jetson-thor
-    environment:
-      <<: [*app-env, *platform-jetson-thor]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
   omni-assistant-subagents:
@@ -215,23 +186,23 @@ services:
     profiles:
       - omni-assistant-subagents
     environment:
-      <<: [*app-env, *platform-cloud]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
-  omni-assistant-subagents-workstation:
+  omni-assistant-subagents-server:
     <<: *app-base
     profiles:
-      - omni-assistant-subagents/workstation
+      - omni-assistant-subagents/server
     environment:
-      <<: [*app-env, *platform-workstation]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
-  omni-assistant-subagents-dgx-spark:
+  omni-assistant-subagents-single-gpu:
     <<: *app-base
     profiles:
-      - omni-assistant-subagents/dgx-spark
+      - omni-assistant-subagents/single-gpu
     environment:
-      <<: [*app-env, *platform-dgx-spark]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
   frontend-backend-agent:
@@ -239,13 +210,21 @@ services:
     profiles:
       - frontend-backend-agent
     environment:
-      <<: [*app-env, *platform-cloud]
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
 
-  frontend-backend-agent-workstation:
+  frontend-backend-agent-server:
     <<: *app-base
     profiles:
-      - frontend-backend-agent/workstation
+      - frontend-backend-agent/server
     environment:
-      <<: [*app-env, *platform-workstation]
+      <<: *app-env
+      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
+
+  frontend-backend-agent-single-gpu:
+    <<: *app-base
+    profiles:
+      - frontend-backend-agent/single-gpu
+    environment:
+      <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}

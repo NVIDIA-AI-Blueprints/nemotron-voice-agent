@@ -9,7 +9,7 @@ multiple concurrency levels.
 
 The scaling benchmark connects directly to `WS /api/ws` and does not use the
 server's session-config flow. That keeps it compatible with multi-worker
-deployments such as `generic-assistant/workstation-perf`.
+deployments such as `generic-assistant/server-perf`.
 
 **RTVI** (Real-Time Voice/Video Inference) is the Pipecat-standard
 protocol the server uses to push per-turn timing breakdowns (LLM / TTS /
@@ -56,8 +56,8 @@ straight from a fresh `uv sync --group benchmark`.
 
 ### Prompt override for perf runs
 
-By default, `generic-assistant/workstation-perf` uses the same default prompt
-as the normal Generic Assistant workstation profile.
+By default, `generic-assistant/server-perf` uses the same default prompt
+as the normal Generic Assistant server profile.
 
 If you want to experiment with custom prompts with different input-token sizes,
 point the server at the prompt catalog in this directory and select the prompt
@@ -66,7 +66,7 @@ key you want:
 ```bash
 PROMPT_FILE_PATH=/app/benchmarking_tools/scaling-perf/perf_prompts.yaml \
 PROMPT_SELECTOR=prompt_200_tokens \
-docker compose --profile generic-assistant/workstation-perf up -d
+docker compose --profile generic-assistant/server-perf up -d
 ```
 
 This catalog defaults to `prompt_1000_tokens`. Available prompt entries are
@@ -75,13 +75,13 @@ This catalog defaults to `prompt_1000_tokens`. Available prompt entries are
 ## Reproducing the best scaling setup
 
 For the best scaling numbers, use a `4xH100` setup with `1 GPU` for ASR,
-`1 GPU` for TTS, and `2 GPUs` for the `Nemotron Nano 30B` LLM.
+`1 GPU` for TTS, and `2 GPUs` for the `Nemotron 3.5 Lightning 30B` LLM.
 
 This setup is available as the dedicated Compose recipe
-`generic-assistant/workstation-perf`. It automatically applies the published
+`generic-assistant/server-perf`. It automatically applies the published
 scaling configuration:
 
-- Generic Assistant inherits the existing `nemotron-nano` default from
+- Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
 - `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=fp8,tp=2`, GPUs `2,3`, alias
   `nvidia-llm`
@@ -97,7 +97,7 @@ scaling configuration:
 Deploy it with:
 
 ```bash
-docker compose --profile generic-assistant/workstation-perf up -d
+docker compose --profile generic-assistant/server-perf up -d
 ```
 
 After the stack is healthy, run the sweep from this directory:

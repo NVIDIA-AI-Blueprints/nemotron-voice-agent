@@ -10,7 +10,7 @@ This example declares `capabilities: [attachments, webcam]` in `examples_registr
 
 Per-example catalogs at `src/examples/omni_assistant_subagents/services.{cloud,local}.yaml` are auto-selected on container startup because the registry resolves the example for the active recipe.
 
-Hardware support: cloud-only, workstation, and `dgx-spark`, matching `omni-assistant`.
+Hardware support: cloud-only, `server`, and universal `single-gpu`, matching `omni-assistant`.
 
 ## Compose deploy
 
@@ -18,18 +18,18 @@ Hardware support: cloud-only, workstation, and `dgx-spark`, matching `omni-assis
 # Cloud (NVCF)
 docker compose --profile omni-assistant-subagents up -d
 
-# Workstation (local Omni vLLM + NIM TTS)
-docker compose --profile omni-assistant-subagents/workstation up -d
+# Server (local Omni vLLM + NIM TTS, recommended for scaling)
+docker compose --profile omni-assistant-subagents/server up -d
 
-# DGX Spark (local Omni vLLM + NIM TTS)
-docker compose --profile omni-assistant-subagents/dgx-spark up -d
+# One GPU, including DGX Spark and Jetson Thor
+docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```
 
 | Recipe profile | App service | Sidecars from `docker/` |
 | --- | --- | --- |
 | `omni-assistant-subagents` | `omni-assistant-subagents` | none (cloud NVCF) |
-| `omni-assistant-subagents/workstation` | `omni-assistant-subagents` | `nvidia-llm-vllm-omni`, `tts-service` |
-| `omni-assistant-subagents/dgx-spark` | `omni-assistant-subagents` | `nvidia-llm-vllm-omni`, `tts-service` |
+| `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-vllm-omni`, `tts-service` |
+| `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
 Tear down with the same recipe used at `up` time.
 

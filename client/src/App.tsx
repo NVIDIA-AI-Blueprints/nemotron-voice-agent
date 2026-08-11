@@ -7,7 +7,7 @@ import { PipecatClientProvider, PipecatClientAudio } from "@pipecat-ai/client-re
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 import { WebSocketTransport, ProtobufFrameSerializer } from "@pipecat-ai/websocket-transport";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { queryClient, useIceServers } from "./api";
+import { queryClient, useDeployment, useIceServers } from "./api";
 import { AppProvider } from "./context/AppContext";
 import { useApp } from "./context/useApp";
 import { Header } from "./components/Header";
@@ -16,20 +16,26 @@ import { Sidebar } from "./components/Sidebar";
 import { CenterPanel } from "./components/content";
 
 const EMPTY_ICE_SERVERS: RTCIceServer[] = [];
+const DEFAULT_AUDIO_INPUT_SAMPLE_RATE = 16000;
+const DEFAULT_AUDIO_OUTPUT_SAMPLE_RATE = 22050;
 type ProviderClient = ComponentProps<typeof PipecatClientProvider>["client"];
 
 function AppInner() {
   const { selectedTransport } = useApp();
+  const { data: deployment, isFetched: deploymentLoaded } = useDeployment();
   const { data: iceConfig, isFetched: iceServersLoaded } = useIceServers();
   const iceServers = iceConfig?.iceServers ?? EMPTY_ICE_SERVERS;
+  const recorderSampleRate = deployment?.audio?.input_sample_rate ?? DEFAULT_AUDIO_INPUT_SAMPLE_RATE;
+  const playerSampleRate = deployment?.audio?.output_sample_rate ?? DEFAULT_AUDIO_OUTPUT_SAMPLE_RATE;
 
   const client = useMemo(() => {
     if (selectedTransport === "websocket") {
+      if (!deploymentLoaded) return null;
       return new PipecatClient({
         transport: new WebSocketTransport({
           serializer: new ProtobufFrameSerializer(),
-          recorderSampleRate: 16000,
-          playerSampleRate: 16000,
+          recorderSampleRate,
+          playerSampleRate,
         }),
         enableMic: true,
         enableCam: false,
@@ -41,7 +47,14 @@ function AppInner() {
       transport: new SmallWebRTCTransport({ iceServers }),
       enableMic: true,
     });
-  }, [iceServers, iceServersLoaded, selectedTransport]);
+  }, [
+    deploymentLoaded,
+    iceServers,
+    iceServersLoaded,
+    playerSampleRate,
+    recorderSampleRate,
+    selectedTransport,
+  ]);
 
   if (!client) {
     return <div className="h-screen d-flex items-center justify-center">Loading connection...</div>;

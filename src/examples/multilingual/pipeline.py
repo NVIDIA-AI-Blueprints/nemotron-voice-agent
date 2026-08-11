@@ -4,13 +4,13 @@
 """Multilingual cascaded pipeline: NVIDIA STT -> Nemotron LLM -> Magpie TTS.
 
 The session is locked to a single language for the whole connection (selected in
-the UI, default ``de-DE``): the ASR, the TTS voice, and the LLM all operate in
-that one language. The LLM replies with plain spoken text, kept on-language by
-the fixed-session prompt addon plus a per-turn reminder.
+the UI, defaulting to ``default_session_language`` in ``examples_registry.yaml``):
+the ASR, the TTS voice, and the LLM all operate in that one language. The LLM
+replies with plain spoken text, kept on-language by the fixed-session prompt
+addon plus a per-turn reminder.
 """
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -19,7 +19,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -50,6 +50,7 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
+    build_pipeline_params,
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
@@ -70,6 +71,7 @@ from utils import (
     load_service_entry,
     load_service_entry_by_id,
     normalize_lang_code,
+    nvidia_api_key,
     parse_env_bool,
     parse_env_float,
     parse_env_int,
@@ -181,7 +183,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": asr_server,
         "use_ssl": asr_ssl,
     }
@@ -192,7 +194,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_model = body.get("asr_model", "") or default_asr.get("model", "")
     asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
     if not asr_language_code or asr_language_code.strip().lower() == "auto":
-        asr_language_code = DEFAULT_SESSION_LANGUAGE
+        registry_language = examples_registry.default_session_language(body.get("pipeline_mode", ""))
+        asr_language_code = registry_language or DEFAULT_SESSION_LANGUAGE
     fixed_session_language = normalize_lang_code(asr_language_code)
     validate_llm_session_language(fixed_session_language, llm_supported_languages)
     if asr_function_id or asr_model:
@@ -229,7 +232,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # --- LLM ---
-    model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3-nano-30b-a3b")
+    model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
     base_extra = parse_json_dict(
@@ -255,7 +258,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if llm_temperature is not None:
         llm_settings.temperature = llm_temperature
     llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
     )
@@ -267,7 +270,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if llm_temperature is not None:
         summary_llm_settings.temperature = llm_temperature
     summary_llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         settings=summary_llm_settings,
     )
@@ -295,7 +298,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             tts_settings_kwargs["voice"] = resolved_voice
 
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -419,7 +422,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=PipelineParams(
+        params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),

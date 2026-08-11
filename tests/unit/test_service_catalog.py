@@ -26,16 +26,9 @@ class ServiceCatalogHydrationTests(unittest.TestCase):
     def setUp(self) -> None:
         # Env-based catalog patches must win; clear any leftover request context.
         clear_service_context()
-        # Importing server/pipelines load_dotenv(override=True) and can set PLATFORM
-        # from a local .env — stash and clear so platform-filter tests stay hermetic.
-        self._saved_platform = os.environ.pop("PLATFORM", None)
 
     def tearDown(self) -> None:
         clear_service_context()
-        if self._saved_platform is None:
-            os.environ.pop("PLATFORM", None)
-        else:
-            os.environ["PLATFORM"] = self._saved_platform
 
     def test_hydrates_selected_builtin_details_from_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -325,27 +318,27 @@ llm:
         cloud = utils.load_yaml_file(Path("src/examples/multilingual/services.cloud.yaml"))["llm"]
         local = utils.load_yaml_file(Path("src/examples/multilingual/services.local.yaml"))
 
-        nano_languages = ["en", "de", "es", "fr", "it", "ja"]
-        super_languages = [*nano_languages, "zh"]
-        self.assertEqual(cloud["nemotron-nano"]["supported_languages"], nano_languages)
-        self.assertEqual(cloud["nemotron-nano-reasoning"]["supported_languages"], nano_languages)
+        lightning_languages = ["en", "de", "es", "fr", "it", "ja"]
+        super_languages = [*lightning_languages, "zh"]
+        self.assertEqual(cloud["nemotron-lightning"]["supported_languages"], lightning_languages)
+        self.assertEqual(cloud["nemotron-lightning-reasoning"]["supported_languages"], lightning_languages)
         self.assertEqual(cloud["nemotron-super"]["supported_languages"], super_languages)
         self.assertEqual(cloud["nemotron-super-reasoning"]["supported_languages"], super_languages)
         self.assertEqual(
-            local["workstation"]["llm"]["nemotron-nano"]["supported_languages"],
-            nano_languages,
+            local["server"]["llm"]["nemotron-lightning"]["supported_languages"],
+            lightning_languages,
         )
         self.assertEqual(
-            local["dgxspark"]["llm"]["nemotron-nano"]["supported_languages"],
-            nano_languages,
+            local["singlegpu"]["llm"]["nemotron-lightning"]["supported_languages"],
+            lightning_languages,
         )
 
         token = utils._service_context.set((Path("src/examples/multilingual"), ("llm", "asr", "tts")))
         try:
-            selected_nano = load_service_entry_by_id("llm", "cloud-nim:nemotron-nano")
+            selected_lightning = load_service_entry_by_id("llm", "cloud-nim:nemotron-lightning")
         finally:
             utils._service_context.reset(token)
-        self.assertEqual(selected_nano["supported_languages"], nano_languages)
+        self.assertEqual(selected_lightning["supported_languages"], lightning_languages)
 
     def test_multilingual_agent_prompt_keys_are_registry_declared(self) -> None:
         unlocked = examples_registry.Selection(
@@ -377,24 +370,25 @@ llm:
         self.assertEqual(defaults["asr"][0]["id"], "self-hosted:nemotron-asr-streaming-multilingual")
         self.assertEqual(defaults["asr"][0]["model"], "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer")
 
-    def test_jetson_default_uses_reachable_nemotron_speech_asr(self) -> None:
+    def test_registry_default_uses_reachable_nemo_speech_asr(self) -> None:
         example = examples_registry._lookup_by_key("generic-assistant")
 
         def reachable(endpoint: str) -> bool:
-            return endpoint in {"nemotron-speech:50051", "localhost:50051"}
+            return endpoint in {"nemo-speech:50051", "localhost:50051"}
 
         with patch("examples_registry.is_endpoint_reachable", side_effect=reachable):
             defaults = examples_registry.metadata(example)["defaults"]
 
-        self.assertEqual(defaults["asr"][0]["id"], "self-hosted:parakeet-ctc")
-        self.assertIn(defaults["asr"][0]["server"], {"nemotron-speech:50051", "localhost:50051"})
+        self.assertEqual(defaults["asr"][0]["id"], "self-hosted:nemotron-asr-streaming-english")
+        self.assertEqual(defaults["asr"][0]["model"], "nemotron-speech-streaming-en-0.6b")
+        self.assertIn(defaults["asr"][0]["server"], {"nemo-speech:50051", "localhost:50051"})
 
-    def test_runtime_default_uses_reachable_nemotron_speech_asr(self) -> None:
+    def test_runtime_default_uses_reachable_nemo_speech_asr(self) -> None:
         token = utils._service_context.set((Path("src/examples/generic"), ("llm", "asr", "tts")))
         try:
 
             def reachable(endpoint: str) -> bool:
-                return endpoint in {"nemotron-speech:50051", "localhost:50051"}
+                return endpoint in {"nemo-speech:50051", "localhost:50051"}
 
             with patch("utils.is_endpoint_reachable", side_effect=reachable):
                 default_asr = load_service_entry("asr", "")
@@ -402,13 +396,13 @@ llm:
         finally:
             utils._service_context.reset(token)
 
-        self.assertIn(default_asr["server"], {"nemotron-speech:50051", "localhost:50051"})
-        self.assertEqual(default_asr["model"], "parakeet-ctc-1.1b-asr")
+        self.assertIn(default_asr["server"], {"nemo-speech:50051", "localhost:50051"})
+        self.assertEqual(default_asr["model"], "nemotron-speech-streaming-en-0.6b")
         selected = [entry for entry in services if entry.get("selected")]
         self.assertEqual(len(selected), 1)
-        self.assertEqual(selected[0]["id"], "self-hosted:parakeet-ctc")
+        self.assertEqual(selected[0]["id"], "self-hosted:nemotron-asr-streaming-english")
 
-    def test_workstation_tts_has_no_duplicate_self_hosted_entry(self) -> None:
+    def test_server_tts_has_no_duplicate_self_hosted_entry(self) -> None:
         token = utils._service_context.set((Path("src/examples/generic"), ("llm", "asr", "tts")))
         try:
 
@@ -433,7 +427,7 @@ llm:
         for entry in self_hosted:
             self.assertEqual(entry["server"], "localhost:50151")
 
-    def test_runtime_platform_filters_local_services(self) -> None:
+    def test_reachable_local_services_win_over_other_recipe_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cloud_path = Path(tmpdir) / "services.cloud.yaml"
             cloud_path.write_text(
@@ -451,20 +445,23 @@ llm:
             local_path.write_text(
                 dedent(
                     """\
-                    workstation:
+                    server:
                       asr:
-                        workstation-asr:
-                          name: Workstation ASR
-                          server: workstation-asr:50052
-                    jetson:
+                        server-asr:
+                          name: Server ASR
+                          server: nvidia-llm:8000
+                    singlegpu:
                       asr:
-                        jetson-asr:
-                          name: Jetson ASR
-                          server: jetson-asr:50051
+                        single-gpu-asr:
+                          name: Single GPU ASR
+                          server: nemo-speech:50051
                     """
                 ),
                 encoding="utf-8",
             )
+
+            def reachable(endpoint: str) -> bool:
+                return endpoint in {"nemo-speech:50051", "localhost:50051"}
 
             with (
                 patch.dict(
@@ -472,16 +469,33 @@ llm:
                     {
                         "SERVICES_CLOUD_PATH": str(cloud_path),
                         "SERVICES_LOCAL_PATH": str(local_path),
-                        "PLATFORM": "jetsonthor",
                     },
                 ),
-                patch("utils.is_endpoint_reachable", return_value=True),
+                patch("utils.is_endpoint_reachable", side_effect=reachable),
             ):
                 services = build_services_api_response()["asr"]
 
         service_ids = {entry["id"] for entry in services}
-        self.assertIn("self-hosted:jetson-asr", service_ids)
-        self.assertNotIn("self-hosted:workstation-asr", service_ids)
+        self.assertIn("self-hosted:single-gpu-asr", service_ids)
+        self.assertNotIn("self-hosted:server-asr", service_ids)
+
+    def test_host_runtime_rewrites_omni_nim_endpoint(self) -> None:
+        entry = {"base_url": "http://nvidia-llm-omni:8000/v1"}
+
+        with patch.dict(os.environ, {"APP_RUNTIME": ""}):
+            rewritten = utils._rewrite_local_runtime_endpoints({"llm": {"omni": entry}})
+
+        self.assertEqual(rewritten["llm"]["omni"]["base_url"], "http://localhost:18002/v1")
+
+    def test_registry_host_runtime_rewrites_omni_endpoints(self) -> None:
+        with patch.dict(os.environ, {"APP_RUNTIME": ""}):
+            nim = examples_registry._rewrite_entry_for_host_runtime({"base_url": "http://nvidia-llm-omni:8000/v1"})
+            vllm = examples_registry._rewrite_entry_for_host_runtime(
+                {"base_url": "http://nvidia-llm-vllm-omni:8002/v1"}
+            )
+
+        self.assertEqual(nim["base_url"], "http://localhost:18002/v1")
+        self.assertEqual(vllm["base_url"], "http://localhost:8002/v1")
 
 
 if __name__ == "__main__":

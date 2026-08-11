@@ -14,7 +14,7 @@ from loguru import logger
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -37,6 +37,7 @@ from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backen
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
+    build_pipeline_params,
     build_user_aggregator_params,
     create_transport,
     register_session_start_handlers,
@@ -49,6 +50,7 @@ from utils import (
     load_prompt_catalog,
     load_service_entry,
     normalize_lang_code,
+    nvidia_api_key,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
@@ -122,7 +124,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": asr_server,
         "use_ssl": asr_ssl,
     }
@@ -143,7 +145,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # --- Talker LLM ---
-    model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3-nano-30b-a3b")
+    model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
     talker_max_tokens = _parse_optional_int(body.get("max_tokens", "") or default_llm.get("max_tokens"), 2048)
@@ -155,7 +157,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if extra_params:
         llm_settings.extra = extra_params
     talker_llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
     )
@@ -181,7 +183,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if thinker_extra_params:
         thinker_llm_settings.extra = thinker_extra_params
     thinker_llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=thinker_base_url,
         settings=thinker_llm_settings,
     )
@@ -235,7 +237,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -305,7 +307,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,

@@ -42,7 +42,7 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 
     Keep TLS enabled for the scaling benchmark. `PIPELINE_TLS=false` is for HTTP-only API tests and browser debugging, not for this WebSocket benchmark.
 
-    Or run it under Docker Compose with the matching example profile, for example `--profile generic-assistant`. See [Getting Started](../01-getting-started.md) for the full list of profile combinations.
+    Or run it under Docker Compose with `--profile generic-assistant/server-perf`. See the [scaling-perf README](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup) for the 4×H100 layout and tuning variables.
 
 ## Run
 

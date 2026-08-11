@@ -1,13 +1,15 @@
 # Booking server sidecar used by the Frontend/Backend Agent airline example.
 #
 #   docker compose --profile frontend-backend-agent up
-#   docker compose --profile frontend-backend-agent/workstation up
+#   docker compose --profile frontend-backend-agent/server up
+#   docker compose --profile frontend-backend-agent/single-gpu up
 
 services:
   booking-server:
     profiles:
       - frontend-backend-agent
-      - frontend-backend-agent/workstation
+      - frontend-backend-agent/server
+      - frontend-backend-agent/single-gpu
     build:
       context: ../../../../..
       dockerfile: docker/Dockerfile

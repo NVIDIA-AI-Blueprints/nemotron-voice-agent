@@ -18,7 +18,6 @@ workers under ``examples.omni_assistant_subagents.subagents``:
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -35,7 +34,14 @@ from examples.omni_assistant_subagents.subagents.transport import OmniTransportA
 from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from examples.shared.pipeline_utils import create_transport as _create_transport
 from examples.shared.subagents import SubagentRegistry, load_subagent_registry
-from utils import is_nvcf, load_prompt_catalog, load_service_entry, parse_json_dict, resolve_prompt
+from utils import (
+    is_nvcf,
+    load_prompt_catalog,
+    load_service_entry,
+    nvidia_api_key,
+    parse_json_dict,
+    resolve_prompt,
+)
 
 load_dotenv(override=True)
 
@@ -133,7 +139,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
         "zero_shot_audio_prompt_file", ""
     )
-    api_key = os.getenv("NVIDIA_API_KEY")
+    api_key = nvidia_api_key()
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     transport_agent = OmniTransportAgent(

@@ -28,7 +28,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -64,6 +64,7 @@ from examples.omni_assistant_subagents.subagents.transport.webcam_controller imp
 )
 from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.pipeline_utils import build_pipeline_params
 from examples.shared.subagents import SubagentRegistry
 from tracing import IS_TRACING_ENABLED
 from utils import load_ipa_dictionary, normalize_lang_code, parse_env_float
@@ -197,7 +198,7 @@ class OmniTransportAgent(PipelineWorker):
             pipeline,
             name=resolved_name,
             active=True,
-            params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+            params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
             idle_timeout_secs=self._runner_args.pipeline_idle_timeout_secs,
             observers=self._build_observers(),
             enable_tracing=IS_TRACING_ENABLED,

@@ -67,6 +67,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 import config_store
 import examples_registry
 from attachment_store import consume_capture_request, store_attachment
+from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, PIPELINE_AUDIO_OUT_SAMPLE_RATE
 from examples.shared.prewarm import build_session_languages, peek_cached_tts_config, prewarm_tts, warmup_tts_synthesis
 from examples.shared.subagents import load_subagent_registry
 from utils import (
@@ -202,6 +203,10 @@ def _deployment_response(active: dict, options: list[dict]) -> dict:
         "selectable": not examples_registry.is_locked(),
         "options": options,
         "transports": [option for option in _TRANSPORT_OPTIONS if option["id"] in transports],
+        "audio": {
+            "input_sample_rate": PIPELINE_AUDIO_IN_SAMPLE_RATE,
+            "output_sample_rate": PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+        },
     }
 
 
@@ -313,7 +318,7 @@ def _get_default_llm_selection() -> tuple[str, str]:
     default_llm = load_service_entry("llm", "")
     return (
         default_llm.get("base_url", "https://integrate.api.nvidia.com/v1"),
-        default_llm.get("model_id", "nvidia/nemotron-3-nano-30b-a3b"),
+        default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b"),
     )
 
 
@@ -454,6 +459,8 @@ def _local_llm_health_url(base_url: str, model_id: str) -> tuple[str, bool]:
 
     if normalized_host == "nvidia-llm" and port == 8000:
         return f"{scheme}://nvidia-llm:8000{_NIM_READY_PATH}", False
+    if normalized_host == "nvidia-llm-omni" and port == 8000:
+        return f"{scheme}://nvidia-llm-omni:8000{_NIM_READY_PATH}", False
     if normalized_host == "nvidia-llm-vllm" and port == 8000:
         return f"{scheme}://nvidia-llm-vllm:8000/health", False
     if normalized_host == "nvidia-llm-vllm-omni" and port == 8002:
@@ -463,6 +470,8 @@ def _local_llm_health_url(base_url: str, model_id: str) -> tuple[str, bool]:
         is_vllm = "30b-a3b" in model_id.lower() or "nvfp4" in model_id.lower()
         health_path = "/health" if is_vllm else _NIM_READY_PATH
         return f"{scheme}://{http_host}:18000{health_path}", False
+    if normalized_host in _LOCAL_SERVICE_HOSTS and port == 18002:
+        return f"{scheme}://{http_host}:18002{_NIM_READY_PATH}", False
     if normalized_host in _LOCAL_SERVICE_HOSTS and port == 8002:
         return f"{scheme}://{http_host}:8002/health", False
 

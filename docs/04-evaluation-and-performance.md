@@ -10,7 +10,9 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 
 The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x H100 GPU** setup (one GPU for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM). Most tested concurrency levels are below one second E2E latency, and the 64-stream run reaches 1.00 second. All latencies are in seconds.
 
-> **Note:** This benchmark uses a 4-GPU setup to measure scalability. The [minimum deployment requirement](01-getting-started.md#docker-based-deployment) is cloud-only (no local GPUs) or 1 GPU with roughly 80 GB available VRAM for a local profile.
+> **Note:** This benchmark uses a 4-GPU setup to measure scalability. Deployment options include cloud-only with no local GPUs, about 80 GB VRAM for the default all-on-one-GPU `*/server` NIM layout, or a supported one-GPU host for `*/single-gpu`. See [Configure LLM](how-to/configure-llm.md#vram--hardware-support) for the automatic VRAM plan.
+>
+> **Note:** These reference results were collected with the previous Nemotron 3 Nano configuration. Nemotron 3.5 Lightning is the current default cascaded LLM.
 
 | Parallel Streams | E2E Latency | ASR Latency | TTS TTFB | LLM TTFT | LLM First-Sentence Latency |
 | --- | --- | --- | --- | --- | --- |
@@ -36,6 +38,8 @@ BigBench Audio evaluates **answer correctness** on the [ArtificialAnalysis/big_b
 ### Reference Results
 
 The following table shows accuracy (%) on Big Bench Audio for the LLM standalone (text-only) vs the LLM running in the voice agent pipeline:
+
+> **Note:** The Nemotron 3 Nano rows are historical benchmark results and do not represent the current default model.
 
 | Model / API | Reasoning Mode | Text Only Standalone LLM (%) | LLM In Voice Agent Pipeline (%) |
 | --- | --- | --- | --- |

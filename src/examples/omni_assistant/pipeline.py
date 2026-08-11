@@ -13,7 +13,6 @@ This is the current experimental pipeline for the clean
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from dotenv import load_dotenv
@@ -25,7 +24,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -48,6 +47,7 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
+    build_pipeline_params,
     build_smart_turn_analyzer,
     build_user_mute_strategies,
     create_transport,
@@ -60,6 +60,7 @@ from utils import (
     load_ipa_dictionary,
     load_service_entry,
     normalize_lang_code,
+    nvidia_api_key,
     parse_env_bool,
     parse_env_float,
     parse_env_int,
@@ -122,7 +123,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         # benchmark) attribute Omni's TTFB/processing/token-usage metrics to the
         # LLM stage. Omni fuses ASR+LLM, so these are the pipeline's LLM metrics.
         name="NemotronOmniLLM",
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         context=context,
         extra=extra_params,
@@ -155,7 +156,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -317,7 +318,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=PipelineParams(
+        params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
