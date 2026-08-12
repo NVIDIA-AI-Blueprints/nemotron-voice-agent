@@ -312,6 +312,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if activity_check:
+            activity_check.start()
         if not welcome_enabled:
             logger.info("Welcome message disabled; waiting for the user to speak first")
             return

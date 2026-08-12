@@ -39,6 +39,22 @@ class _TestActivityCheckProcessor(ActivityCheckProcessor):
 
 
 class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_arms_inactivity_timer_without_bot_speech(self) -> None:
+        async def on_warning(stage: int) -> None:
+            pass
+
+        processor = _TestActivityCheckProcessor(
+            activity_check_interval_s=60.0,
+            second_warning_s=30.0,
+            warning_completion_timeout_s=45.0,
+            on_warning=on_warning,
+        )
+
+        processor.start()
+
+        self.assertIsNotNone(processor._timer)
+        processor.reset()
+
     async def test_warning_watchdog_advances_then_requests_graceful_stop(self) -> None:
         warnings: list[int] = []
 
@@ -174,7 +190,7 @@ class ActivityCheckProcessorTests(unittest.IsolatedAsyncioTestCase):
     def test_generic_example_enables_activity_check_in_registry(self) -> None:
         config = examples_registry.activity_check_config("generic-assistant")
 
-        self.assertEqual(config["first_warning_s"], 600.0)
+        self.assertEqual(config["first_warning_s"], 480.0)
         self.assertEqual(config["second_warning_s"], 30.0)
         self.assertIsNone(examples_registry.activity_check_config("multilingual-assistant"))
 
