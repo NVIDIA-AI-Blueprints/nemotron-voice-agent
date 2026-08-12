@@ -18,7 +18,7 @@ Known issues and fixes for **startup and deployment** of the Nemotron Voice Agen
 |-----------------|-------------|-----------|
 | `No available memory for the cache blocks` | The LLM's VRAM fraction is too **low**, leaving no room for the KV cache after the weights. **Raise** `NIM_KVCACHE_PERCENT` (NIM) or `--gpu-memory-utilization` (Omni vLLM). Do not lower it. | [Configure LLM → VRAM](how-to/configure-llm.md#vram--hardware-support) · [NIM GPU memory](https://docs.nvidia.com/nim/large-language-models/latest/troubleshooting/memory.html) |
 | LLM process killed / true CUDA OOM / latency degrades under load | Too much on one GPU. Put speech sidecars on a second GPU (their `device_ids`), reduce KV cache / context length, or lower batch size / precision. Confirm `NVIDIA_API_KEY` / `HF_TOKEN` so an auth failure isn't mistaken for OOM. | [Configure LLM → VRAM](how-to/configure-llm.md#vram--hardware-support) · [NIM GPU memory](https://docs.nvidia.com/nim/large-language-models/latest/troubleshooting/memory.html) |
-| Startup fails CUDA-graph capture | The cache holds fewer Mamba blocks than `LLM_MAX_NUM_SEQS` sequences (Nemotron-3 Nano is a hybrid Mamba model). Lower `LLM_MAX_NUM_SEQS` (e.g. `64`–`128`). | [Configure LLM → Deployment tuning parameters](how-to/configure-llm.md#deployment-tuning-parameters) |
+| Startup fails CUDA-graph capture | The cache holds fewer Mamba blocks than `LLM_MAX_NUM_SEQS` sequences (Nemotron 3 Nano is a hybrid Mamba model). Lower `LLM_MAX_NUM_SEQS` (e.g. `64`–`128`). | [Configure LLM → Deployment tuning parameters](how-to/configure-llm.md#deployment-tuning-parameters) |
 | `The quantization method modelopt is not supported … Minimum capability: 89. Current capability: 80` | FP8 isn't supported on Ampere (A100) or older. Switch to BF16 with `NIM_TAGS_SELECTOR=precision=bf16,tp=1` and raise `NIM_KVCACHE_PERCENT=0.9` (BF16 weights are ~2× larger). NVFP4 needs a Blackwell GPU or newer. | [Configure LLM → VRAM](how-to/configure-llm.md#vram--hardware-support) · [NIM support matrix](https://docs.nvidia.com/nim/large-language-models/latest/reference/support-matrix.html) |
 | LLM weights fail to download (DGX Spark / Jetson vLLM recipes) | Set `HF_TOKEN` in `.env`. The raw-vLLM recipes pull the Nemotron weights from Hugging Face, which needs a valid token. | [Getting Started](01-getting-started.md#docker-based-deployment) · [Jetson Thor](03-jetson-thor.md) |
 
@@ -75,7 +75,7 @@ The hosted **[build.nvidia.com](https://build.nvidia.com/)** endpoints are for *
 |-----------------|-------------|-----------|
 | `Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}` | The hosted API key hit its rate limit (tied to your `NVIDIA_API_KEY` / account, not the machine). Check the current per-model rate limits on build.nvidia.com and request a higher limit if needed. For production use, self-host with a local NIM / vLLM sidecar. | [build.nvidia.com](https://build.nvidia.com/) · [Configure LLM](how-to/configure-llm.md) |
 
-> Cloud responses for large models are also slower (Super 120B is higher latency than Nano, especially with reasoning on). High latency on its own is not a rate-limit error. Only an explicit `429` indicates rate limiting.
+> Cloud responses for large models are also slower (Nemotron 3 Super 120B is higher latency than Nemotron 3 Nano, especially with reasoning on). High latency on its own is not a rate-limit error. Only an explicit `429` indicates rate limiting.
 
 ## Jetson Thor
 

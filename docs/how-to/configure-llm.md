@@ -4,7 +4,7 @@ The cascaded pipeline calls a text **LLM** for response generation. The **Omni**
 
 Nemotron models are **transparent**: weights and training data are open on [Hugging Face](https://huggingface.co/nvidia) and the technical reports for reproducing them are public, so you can evaluate a model before putting it in production. The **Nemotron 3** family pairs a hybrid **Mamba-Transformer MoE** architecture for efficient, high-throughput, multimodal agentic AI, and deploys with open frameworks (vLLM, SGLang, Ollama, llama.cpp) on any NVIDIA GPU (edge, cloud, or data center) or as NVIDIA NIM microservices.
 
-The reasoning family is tiered by platform. **Nano** is cost-efficient with high accuracy for specialized sub-agents, and is multimodal via **Nano Omni**. **Super** offers the highest efficiency with leading accuracy for reasoning and tool calling in multi-agent apps. **Ultra** gives the highest reasoning accuracy for the most complex agentic tasks. Learn more at [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron).
+The reasoning family is tiered by platform. **Nemotron 3 Nano** is cost-efficient with high accuracy for specialized sub-agents, and is multimodal via **Nemotron 3 Nano Omni**. **Nemotron 3 Super** offers the highest efficiency with leading accuracy for reasoning and tool calling in multi-agent apps. **Ultra** gives the highest reasoning accuracy for the most complex agentic tasks. Learn more at [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron).
 
 Models are declared per example in `services.cloud.yaml` (remote / NVCF) and `services.local.yaml` (Compose-managed sidecars). This page is the **model reference**. It covers what's available, how to deploy and size it, how to control reasoning and tool calling, and how to tune per-request sampling. For how the catalog is loaded, switched in the UI, and overridden, see [Configure Services](configure-services.md).
 
@@ -37,13 +37,13 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 | Nemotron 3 Nano (`nemotron-nano`, `nemotron-nano-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 | Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
 
-The source of truth for the built-in capability metadata is the NVIDIA [Nano model card](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) and [Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
+The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3 Nano model card](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) and [Nemotron 3 Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
 
 ## Hardware requirements and deployment configs
 
 You can self-host the LLM two ways, and the repo wires the right one per profile:
 
-- **NIM** (`nvidia-llm`, `nemotron-3-super`): a prebuilt, optimized inference microservice with automatic, hardware-aware **model-profile** selection. Recommended for Nano and Super on supported data-center / workstation GPUs. Used by the `*/workstation` profiles.
+- **NIM** (`nvidia-llm`, `nemotron-3-super`): a prebuilt, optimized inference microservice with automatic, hardware-aware **model-profile** selection. Recommended for Nemotron 3 Nano and Nemotron 3 Super on supported data-center / workstation GPUs. Used by the `*/workstation` profiles.
 - **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`): serves the weights directly with `vllm serve`, giving explicit control over every flag. Used where a NIM profile isn't the right fit: the **Omni** NVFP4 model, and **DGX Spark** / **Jetson Thor** edge deployments. This is more manual, since you set precision, parsers, and memory flags yourself.
 
 Both expose the same OpenAI-compatible API, so the pipeline and the request tuning below behave identically against either.
@@ -77,7 +77,7 @@ These control VRAM fit, precision, hardware mapping, and scaling.
 | **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` | Max concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this (e.g. `64`–`128`). |
 | **Explicit profile** | `NIM_MODEL_PROFILE=<id>` | n/a | Pin a specific NIM profile instead of auto-selection. |
 
-**Cascaded NIM sizing (`nvidia-llm`).** FP8 Nano weights are ~30 GB, so `NIM_KVCACHE_PERCENT × (GPU VRAM)` must stay above ~40 GB (weights + a usable KV cache). The default `0.6` suits one ~80 GB GPU shared with ASR (~15 GB) and TTS (~14 GB). On a smaller GPU, move ASR/TTS to a second card (their `device_ids`) and raise `NIM_KVCACHE_PERCENT` (e.g. `0.9` on a 48 GB L40). For A100/Ampere, switch to BF16. The weights are ~2× larger, so set `NIM_TAGS_SELECTOR=precision=bf16,tp=1` and `NIM_KVCACHE_PERCENT=0.9` on a dedicated 80 GB GPU, or split with `tp=N`.
+**Cascaded NIM sizing (`nvidia-llm`).** FP8 Nemotron 3 Nano weights are ~30 GB, so `NIM_KVCACHE_PERCENT × (GPU VRAM)` must stay above ~40 GB (weights + a usable KV cache). The default `0.6` suits one ~80 GB GPU shared with ASR (~15 GB) and TTS (~14 GB). On a smaller GPU, move ASR/TTS to a second card (their `device_ids`) and raise `NIM_KVCACHE_PERCENT` (e.g. `0.9` on a 48 GB L40). For A100/Ampere, switch to BF16. The weights are ~2× larger, so set `NIM_TAGS_SELECTOR=precision=bf16,tp=1` and `NIM_KVCACHE_PERCENT=0.9` on a dedicated 80 GB GPU, or split with `tp=N`.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** NVFP4 weights are smaller (~15 GB) and ASR runs in-process, so it ships a lower `--gpu-memory-utilization 0.3` when sharing an 80 GB GPU with TTS. Increase it up to `0.9` on a dedicated GPU. NVFP4 requires a **Blackwell** GPU (DGX Spark, Jetson Thor, or a Blackwell workstation GPU). Only NVFP4 is supported in the compose profiles. To deploy other precisions, see the [Hugging Face documentation](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16).
 
@@ -122,7 +122,7 @@ Cloud (NVCF) endpoints enable the parsers server-side. **Self-hosted NIM and vLL
 | Reasoning parser | `--reasoning-parser nemotron_v3` | Separates `<think>` reasoning from `content`, so TTS speaks only the answer and reasoning-OFF works. |
 | Tool calling | `--enable-auto-tool-choice --tool-call-parser qwen3_coder` | Enables OpenAI-style function calling. Without it, `tool_choice:"auto"` returns `HTTP 400`. |
 
-- **NIM** passes them via `NIM_PASSTHROUGH_ARGS` (already set in the Nano / Super compose files).
+- **NIM** passes them via `NIM_PASSTHROUGH_ARGS` (already set in the Nemotron 3 Nano / Nemotron 3 Super compose files).
 - **Raw vLLM** (DGX Spark / Jetson / Omni) takes the same flags directly on `vllm serve`.
 
 ## Tuning LLM request parameters
