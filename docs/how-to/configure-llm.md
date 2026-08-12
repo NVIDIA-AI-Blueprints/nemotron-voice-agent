@@ -37,8 +37,6 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 | Nemotron 3 Nano (`nemotron-nano`, `nemotron-nano-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 | Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
 
-The runtime selector is therefore narrower than an ASR or TTS model's language list. For example, Arabic and Greek TTS locales are not offered with the built-in Nano or Super LLMs. Custom LLMs without declared language capabilities remain available for backward compatibility; validate their language quality before production use.
-
 The source of truth for the built-in capability metadata is the NVIDIA [Nano model card](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) and [Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
 
 ## Hardware requirements and deployment configs
