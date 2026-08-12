@@ -296,6 +296,26 @@ class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
         # Already streamed, so the parsed envelope must not repeat it.
         self.assertEqual(self.spoken, [])
 
+    async def test_streamed_repeat_is_replaced_before_reaching_tts(self) -> None:
+        service = self._service()
+        envelope = {
+            "transcript": "White",
+            "turn_action": "respond",
+            "response": "Could you confirm what color the comb is?",
+            "selected_input_source": "none",
+            "media_analysis_action": "none",
+            "media_analysis_prompt": "",
+            "highres_query": "",
+        }
+
+        first = await self._drain(service, envelope)
+        repeated = await self._drain(service, envelope)
+
+        self.assertEqual(first, envelope["response"])
+        self.assertIn(repeated, BRIDGE_FILLERS)
+        self.assertNotIn(envelope["response"], repeated)
+        service._thinking_handler.assert_awaited_once_with("White", "high", "repetition")
+
     async def test_invalid_action_withholds_streamed_text(self) -> None:
         service = self._service()
         visible = await self._drain(
