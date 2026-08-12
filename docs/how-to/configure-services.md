@@ -69,9 +69,12 @@ llm:
     name: "My Custom LLM"
     model_id: "org/model-name"
     base_url: "https://integrate.api.nvidia.com/v1"
+    supported_languages: [en, de]
     system_prompt: ""
     extra_params: ""
 ```
+
+`supported_languages` is optional LLM capability metadata for the multilingual assistant. When present, the UI offers only session locales whose base language appears in the list. Omit it for a custom LLM when its language capabilities are unknown; this preserves unrestricted, backward-compatible behavior. An explicitly empty list permits no session locales.
 
 ```yaml
 asr:

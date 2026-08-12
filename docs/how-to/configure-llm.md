@@ -28,7 +28,18 @@ Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` /
 
 The `*-reasoning` keys are the **same weights** with thinking enabled (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) under `defaults`.
 
-> **Multilingual conversation quality.** Nemotron 3 Nano's conversation quality is weaker in some languages (for example Hindi). For multilingual deployments where language fidelity matters, prefer **Nemotron 3 Super** (`nemotron-super`). It stays more reliably in the target language and reads more naturally across languages.
+### Multilingual session languages
+
+The multilingual assistant exposes only locales supported by the selected ASR, TTS, and built-in LLM. The LLM lists below are the model-level capability sets; locale variants match their base language (for example, `de-DE` matches `de`).
+
+| Built-in LLM | Supported language bases |
+| --- | --- |
+| Nemotron 3 Nano (`nemotron-nano`, `nemotron-nano-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
+| Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`) | Nano languages plus Chinese (`zh`) |
+
+The runtime selector is therefore narrower than an ASR or TTS model's language list. For example, Arabic and Greek TTS locales are not offered with the built-in Nano or Super LLMs. Custom LLMs without declared language capabilities remain available for backward compatibility; validate their language quality before production use.
+
+The source of truth for the built-in capability metadata is the NVIDIA [Nano model card](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) and [Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
 
 ## Hardware requirements and deployment configs
 
