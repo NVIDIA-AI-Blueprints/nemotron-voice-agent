@@ -332,6 +332,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     async def _on_session_start() -> None:
         if audio_recorder:
             await audio_recorder.start_recording()
+        if activity_check:
+            activity_check.start()
 
     register_session_start_handlers(
         transport=transport,

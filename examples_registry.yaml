@@ -25,7 +25,7 @@ examples:
     label: Generic Assistant
     slots: [llm, asr, tts]
     activity_check:
-      first_warning_s: 600
+      first_warning_s: 480
       second_warning_s: 30
       warning_completion_timeout_s: 45
     defaults:
