@@ -55,7 +55,7 @@ After deploying, validate the session language with the steps in [Testing](#test
 
 On-prem recipes default to **Nemotron ASR Streaming Multilingual** (`nemotron-asr-streaming-multilingual`) via `examples_registry.yaml` and `services.local.yaml`. The `multilingual-assistant/workstation` and `/dgx-spark` recipe profiles start that sidecar locally. There is no NVCF endpoint for it, so the cloud recipe falls back to **Parakeet 1.1B RNNT Multilingual** (`parakeet-rnnt`), the only multilingual ASR available on NVCF.
 
-TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service, and the UI language selector is populated from the languages shared by the ASR and TTS services. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
+TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service. The UI language selector contains only locales supported by the selected ASR, TTS, and built-in LLM. Changing the LLM refreshes that compatible set. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
 
 | Path | Role |
 | --- | --- |
@@ -66,7 +66,7 @@ TTS voices and supported language codes are discovered at runtime by prewarming 
 
 ### How it works
 
-1. The user selects the session language in the UI (default `de-DE`) before connecting.
+1. The user selects a locale compatible with the active ASR, TTS, and LLM in the UI (default `de-DE`) before connecting.
 2. The ASR and the TTS voice are pinned to that language when the connection starts. They do not change mid-session.
 3. The fixed-session prompt addon instructs the LLM to reply only in that language, and the LLM returns plain spoken text (no JSON, labels, or metadata) that flows straight to TTS, the client transcript, and chat history.
 4. `PerTurnReminderProcessor` re-states the "reply only in <language>" reminder on each user turn at request time only, so the reminder never pollutes stored history.
@@ -100,8 +100,8 @@ Multilingual behavior depends on the ASR model, the LLM, and the selected TTS vo
 | --- | --- |
 | Nemotron ASR Streaming Multilingual | Prefer this model when latency and throughput are the main constraints. It is faster in this pipeline, but recognition quality is currently weaker for a few languages. Since the session language is fixed, its pinned-language recognition is a good fit here. In noisy environments, it can occasionally emit an empty transcript for turns, so the user may need to repeat themselves. A good microphone and reduced background noise help. |
 | Parakeet 1.1B RNNT Multilingual | Prefer this model when multilingual recognition quality matters more than raw latency. Hindi and Chinese recognition are generally better than Nemotron ASR in this setup. The trade-off is slower latency and throughput. It can also miss the first word of an utterance in some cases and may produce occasional false transcripts when the microphone is muted or no user speech is intended, so validate turn-start and silence handling for production. |
-| Nemotron 3 Super LLM | **Recommended for multilingual.** Stays more reliably in the fixed session language and delivers better conversation quality across languages, especially where Nemotron 3 Nano is weak (for example Hindi). Generally more concise as well. |
-| Nemotron 3 Nano LLM | Useful for lower latency, lower resource usage, and faster local experiments. Its conversation quality is weaker in some languages (for example Hindi), and with reasoning disabled it can occasionally slip in foreign words on quantized builds, so the fixed-session prompt addon and the per-turn reminder both enforce a single language. Prefer Nemotron 3 Super when multilingual quality matters. |
+| Nemotron 3 Super LLM | **Recommended for multilingual.** Supports English, German, Spanish, French, Italian, Japanese, and Chinese, and generally delivers stronger conversation quality across that set. |
+| Nemotron 3 Nano LLM | Useful for lower latency, lower resource usage, and faster local experiments. It supports English, German, Spanish, French, Italian, and Japanese. The fixed-session prompt addon and per-turn reminder keep replies in the selected language. |
 
 ### Testing
 
@@ -119,6 +119,7 @@ Multilingual behavior depends on the ASR model, the LLM, and the selected TTS vo
 |-------|-------|---------------|
 | Bot responds in the wrong language | LLM ignored the fixed session language | Confirm the fixed-session prompt addon and per-turn reminder name the selected language. Try the larger Nemotron 3 Super LLM |
 | Bot slips in foreign words | Quantized small-model sampling artifacts | Lower the LLM `temperature` in `services.*.yaml`, or use a larger LLM |
+| Session language is unavailable or startup is rejected | The selected locale is not supported by the active ASR, TTS, or built-in LLM | Select a locale shown in Voice Settings. For built-in LLM support, see [Configure LLM](../../../docs/how-to/configure-llm.md#multilingual-session-languages). |
 | TTS uses the wrong voice or language | Selected session language is not supported by the active TTS service | Check the configured TTS service exposes that language code, or pick a supported language |
 | No voices discovered at startup | TTS prewarm failed | Check TTS sidecar health (`docker compose ps`) and `NVIDIA_API_KEY` |
 | Bot does not respond to a turn (no transcript) | Nemotron ASR Multilingual can drop a turn in noisy environments | Speak again, reduce background noise, and use a good microphone. See [Configure ASR](../../../docs/how-to/configure-asr.md#choosing-a-multilingual-asr-model) |
