@@ -20,7 +20,7 @@ Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-U
 
 The client discovers the active TTS service's available voices and language codes at runtime. Treat this table as model-level guidance, because exact availability can vary by endpoint, deployment profile, and selected NIM image.
 
-For the multilingual assistant, this is **TTS-only** coverage, not the final session-language list. Voice Settings shows only the intersection of the selected ASR, TTS, and built-in LLM capabilities. For example, a Chatterbox deployment can advertise Arabic or Greek voices, but those locales are not available with the built-in Nemotron 3 Nano or Super LLMs. See [Configure LLM](configure-llm.md#multilingual-session-languages).
+For the multilingual assistant, this is **TTS-only** coverage, not the final session-language list. Voice Settings shows only the intersection of the selected ASR, TTS, and built-in LLM capabilities. For example, a Chatterbox deployment can advertise Arabic or Greek voices, but those locales are not available with the built-in Nemotron 3 Nano or Nemotron 3 Super LLMs. See [Configure LLM](configure-llm.md#multilingual-session-languages).
 
 | Model | Supported languages |
 | --- | --- |
