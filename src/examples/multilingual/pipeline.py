@@ -144,6 +144,21 @@ async def _prepare_session_language_codes(
     return get_lang_codes(**language_catalog_kwargs)
 
 
+def _resolve_llm_supported_languages(body: dict, default_llm: dict):
+    """Return selected LLM capabilities, rejecting unknown built-in selections."""
+    selected_llm_id = str(body.get("llm_id", "") or "")
+    custom_llm = selected_llm_id.startswith("custom-") or (not selected_llm_id and bool(body.get("model_id")))
+    if custom_llm:
+        return None
+    if not selected_llm_id:
+        return default_llm.get("supported_languages")
+
+    selected_llm_entry = load_service_entry_by_id("llm", selected_llm_id)
+    if not selected_llm_entry:
+        raise ValueError(f"Unknown built-in LLM selection: {selected_llm_id}")
+    return selected_llm_entry.get("supported_languages")
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the multilingual NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
@@ -158,14 +173,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
-    selected_llm_id = str(body.get("llm_id", "") or "")
-    custom_llm = selected_llm_id.startswith("custom-") or (not selected_llm_id and bool(body.get("model_id")))
-    selected_llm_entry = {}
-    if not custom_llm:
-        selected_llm_entry = load_service_entry_by_id("llm", selected_llm_id) if selected_llm_id else default_llm
-        if not selected_llm_entry:
-            selected_llm_entry = default_llm
-    llm_supported_languages = selected_llm_entry.get("supported_languages") if selected_llm_entry else None
+    llm_supported_languages = _resolve_llm_supported_languages(body, default_llm)
 
     # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")

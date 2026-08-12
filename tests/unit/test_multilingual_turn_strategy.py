@@ -18,6 +18,7 @@ from examples.multilingual.pipeline import (
     _build_multilingual_user_aggregator_params,
     _is_eval_transport,
     _prepare_session_language_codes,
+    _resolve_llm_supported_languages,
 )
 from examples.shared.pipeline_utils import SMART_TURN_FALLBACK_SECS
 
@@ -40,6 +41,33 @@ def _assert_vad_only_start(testcase: unittest.TestCase, strategies) -> None:
 
 
 class MultilingualTurnStrategyTests(unittest.TestCase):
+    def test_unknown_builtin_llm_id_is_rejected(self) -> None:
+        with (
+            patch("examples.multilingual.pipeline.load_service_entry_by_id", return_value={}),
+            self.assertRaisesRegex(ValueError, "Unknown built-in LLM selection: cloud-nim:missing"),
+        ):
+            _resolve_llm_supported_languages(
+                {"llm_id": "cloud-nim:missing", "model_id": "untrusted-model"},
+                {"supported_languages": ["en"]},
+            )
+
+    def test_llm_capabilities_preserve_default_and_custom_behavior(self) -> None:
+        default_llm = {"supported_languages": ["en", "de"]}
+
+        self.assertEqual(_resolve_llm_supported_languages({}, default_llm), ["en", "de"])
+        self.assertIsNone(_resolve_llm_supported_languages({"llm_id": "custom-user-llm"}, default_llm))
+        self.assertIsNone(_resolve_llm_supported_languages({"model_id": "user/model"}, default_llm))
+
+        with patch(
+            "examples.multilingual.pipeline.load_service_entry_by_id",
+            return_value={"supported_languages": ["fr"]},
+        ) as load_entry:
+            self.assertEqual(
+                _resolve_llm_supported_languages({"llm_id": "cloud-nim:nemotron"}, default_llm),
+                ["fr"],
+            )
+        load_entry.assert_called_once_with("llm", "cloud-nim:nemotron")
+
     def test_eval_transport_detects_runner_cli_transport(self) -> None:
         args = RunnerArguments()
         args.cli_args = Namespace(transport="eval")
