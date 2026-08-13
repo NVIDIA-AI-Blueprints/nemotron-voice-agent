@@ -70,12 +70,16 @@ def _steering_preamble(conversation: str) -> str:
             f"RECENT CONVERSATION (context only; the person cannot be heard in this silent video):\n{conversation}\n"
         )
     parts.append(
-        "Lead with what the person is actively holding, showing, or doing right now, and describe ALL the items "
-        "they are presenting or interacting with, not just one. When the conversation above is about something "
-        "visible, emphasize that; otherwise simply prioritize their current activity. Report ONLY what is genuinely "
-        "visible in this video: never state a detail the conversation implies but the video does not actually show, "
-        "and if a relevant detail is not visually clear, say so rather than guessing. Still obey the output format, "
-        "the rule against reading fine printed text, and the gesture rules below exactly.\n"
+        "TEMPORAL PRIORITY: this video is ordered oldest to newest. Treat its earlier portion only as background "
+        "for understanding how the scene reached its current state. The final roughly 1.5 seconds are the source of "
+        "truth for what is happening NOW. Lead with what the person is actively holding, showing, or doing in those "
+        "newest frames, and describe ALL items they are currently presenting or interacting with, not stale items that "
+        "disappeared earlier. Mention an earlier event only when it is necessary to explain the current action. "
+        "When the conversation above is about something visible, emphasize that; otherwise simply prioritize their "
+        "current activity. Report ONLY what is genuinely visible in this video: never state a detail the conversation "
+        "implies but the video does not actually show, and if a relevant detail is not visually clear, say so rather "
+        "than guessing. Still obey the output format, the rule against reading fine printed text, and the gesture "
+        "rules below exactly.\n"
     )
     return "".join(parts)
 

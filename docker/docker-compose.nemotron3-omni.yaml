@@ -36,7 +36,7 @@ services:
           --max-model-len 32768 \
           --port 8002 \
           --trust-remote-code \
-          --gpu-memory-utilization 0.3 \
+          --gpu-memory-utilization 0.5 \
           --limit-mm-per-prompt '{"video": 999, "image": 999, "audio": 999}' \
           --media-io-kwargs '{"video": {"fps": 2,  "num_frames": 256}}' \
           --video-pruning-rate 0.5 \

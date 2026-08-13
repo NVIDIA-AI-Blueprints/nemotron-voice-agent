@@ -72,8 +72,10 @@ class SteeringPreambleTests(unittest.TestCase):
         block = _steering_preamble("")
         self.assertNotIn("RECENT CONVERSATION", block)
         self.assertIn("actively holding, showing, or doing", block)
-        self.assertIn("describe ALL the items", block)
+        self.assertIn("describe ALL items", block)
         self.assertIn("ONLY what is genuinely visible", block)
+        self.assertIn("final roughly 1.5 seconds", block)
+        self.assertIn("earlier portion only as background", block)
 
     def test_conversation_is_included_and_grounded(self) -> None:
         block = _steering_preamble("User: what am I holding?\nAssistant: a camera")
