@@ -63,6 +63,13 @@ class RepeatGuard:
         self._filler_index += 1
         return self.filler
 
+    def could_be_repeat_prefix(self, text: str) -> bool:
+        """Whether an incomplete streamed reply could still become an exact recent repeat."""
+        normalized = normalize_text(text)
+        if not normalized:
+            return bool(self._recent)
+        return any(recent.startswith(normalized) for recent in self._recent)
+
     def note_spoken(self, text: str) -> None:
         """Record a reply that already streamed to TTS.
 

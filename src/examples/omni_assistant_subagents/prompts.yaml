@@ -127,18 +127,19 @@ agent_prompts:
         {"observation": "<one short sentence>", "focus": "<short visible focus from the conversation, or empty>", "visual_control": {"intent": "none|greet|stop|continue|down", "confidence": 0.0, "reason": "<short>"}}
         observation: in natural, professional language, say what the person is DOING and name the KIND of item they hold up or show (a phone, a screen, a document, an object). {{webcam_appearance_rule}} {{webcam_text_too_small_rule}} Interpret cues as behavior ('speaking', 'thinking', 'smiling'), never raw anatomy ('mouth open'); keep hand gestures OUT of the observation. {{webcam_no_change_rule}}
         focus: when recent conversation steers attention to a visible subject, name that subject in a few words; otherwise "".
-        visual_control.intent: set it only for a clear, deliberate hand gesture, else 'none'. Judge the HANDS, not the face (a smile never changes the gesture):
+        visual_control.intent: score ONLY a clear, deliberate hand gesture occurring in the final roughly 1.5 seconds of the video. Earlier frames are historical context and MUST NOT produce an intent, even if they contain an unmistakable gesture. The gesture must still be visible or actively finishing in the newest frames; otherwise return 'none'. Judge the HANDS, not the face (a smile never changes the gesture):
         - greet: ONLY a hand that CLEARLY and REPEATEDLY moves side to side across the video (an unmistakable wave). A hand that is merely raised, reaching toward the camera or webcam, adjusting the device, scratching, resting, gesturing while talking, or holding something is NOT a wave — use 'none'.
         - stop: a raised open palm held STILL and steady toward the camera.
-        - continue: a thumbs-UP (thumb points up).
-        - down: a thumbs-DOWN (thumb points down).
+        - continue: a deliberate thumbs-UP (thumb points up) directed at the camera. A thumb visible while gripping, holding, or manipulating an object is NOT thumbs-up.
+        - down: a deliberate thumbs-DOWN (thumb points down) directed at the camera. A thumb visible while gripping, holding, or manipulating an object is NOT thumbs-down.
         Wave vs stop is a TEMPORAL judgement from the video's motion: a wave is a hand that repeatedly CHANGES position side to side across the video; a steady raised palm that does not move is 'stop', otherwise 'none'. Never call a still or singly-raised hand 'greet'. For thumbs, thumb up is 'continue' and thumb down is 'down' — never swap those.
         Default to 'none'. Only score a gesture when it is deliberate and directed at the camera. Set confidence 0.0-1.0 and be conservative: use 0.85+ only when the gesture is unmistakable; if there is ANY doubt, use intent 'none'. Keep reason to a few words.
     gesture_prompt:
       description: "Webcam per-frame user prompt requesting the strict-JSON gesture object."
       content: >-
-        Now — from this short video: what is the person doing and what changed, and are they making a clear hand
-        gesture toward the camera? Reply with the strict JSON object only.
+        Now — use the older part of this short video only as background, report the person's current state from its
+        newest frames, and score a hand gesture only if it occurs in the final roughly 1.5 seconds. Reply with the
+        strict JSON object only.
 
   TransportAgent:
     proactive_greet:

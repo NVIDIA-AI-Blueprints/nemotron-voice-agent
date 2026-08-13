@@ -185,6 +185,8 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         action_text = ""
         raw_content = ""
         spoken_text = ""
+        response_buffer = ""
+        stream_released = False
         transcript_emitted = False
         spoke = False
         gated = False
@@ -206,13 +208,29 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
             if not action_field.done:
                 action_text += action_field.feed(content)
 
-            spoken = response_field.feed(content)
-            if spoken and not gated and not spoke:
+            response_delta = response_field.feed(content)
+            if response_delta and not gated and not spoke:
                 gated = normalize_turn_action(action_text) not in TURN_ACTIONS
                 if gated:
                     logger.info("Speaker Omni withheld streamed text: turn ownership was not declared first")
             if gated:
                 spoken = ""
+            elif stream_released:
+                spoken = response_delta
+            else:
+                response_buffer += response_delta
+                spoken = ""
+                if response_buffer and response_field.done:
+                    filler = self._repeat.bridge_filler(response_buffer)
+                    if filler is not None:
+                        logger.info(
+                            f"Speaker Omni suppressed a streamed verbatim repeat; bridging with filler={filler!r}"
+                        )
+                    spoken = filler or response_buffer
+                    stream_released = True
+                elif response_buffer and not self._repeat.could_be_repeat_prefix(response_buffer):
+                    spoken = response_buffer
+                    stream_released = True
             spoke = spoke or bool(spoken)
             spoken_text += spoken
             delta.content = spoken or None
