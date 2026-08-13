@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { RTVIEvent } from "@pipecat-ai/client-js";
+import { RTVIEvent, type BotLLMTextData } from "@pipecat-ai/client-js";
 import {
   usePipecatConversation,
   useRTVIClientEvent,
@@ -206,6 +206,12 @@ export function ConversationPanel() {
   // ``_ANALYZER_FOLLOWUP_TURN_DELAY_SECS`` in
   // ``examples.omni_assistant_subagents.subagents.transport``.
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
+  // WordTTS sets push_text_frames=False, so usePipecatConversation never gets
+  // botOutput/TTS text. Stream full LLM text onto the UI via botLlmText instead.
+  const [llmBotText, setLlmBotText] = useState("");
+  const [llmBotStreaming, setLlmBotStreaming] = useState(false);
+  const [llmBotCreatedAt, setLlmBotCreatedAt] = useState("");
+  const [finalizedLlmTurns, setFinalizedLlmTurns] = useState<AssistantTurn[]>([]);
   const canUploadAttachments = selectedExample?.capabilities?.includes("attachments") ?? false;
   const [currentUserTurnActive, setCurrentUserTurnActive] = useState(false);
   const [userTurnAnchors, setUserTurnAnchors] =
@@ -241,7 +247,48 @@ export function ConversationPanel() {
     });
     setAgentTasks([]);
     setAssistantTurns([]);
+    setLlmBotText("");
+    setLlmBotStreaming(false);
+    setLlmBotCreatedAt("");
+    setFinalizedLlmTurns([]);
   }, []);
+
+  useRTVIClientEvent(
+    RTVIEvent.BotLlmStarted,
+    useCallback(() => {
+      setLlmBotText("");
+      setLlmBotStreaming(true);
+      setLlmBotCreatedAt(new Date().toISOString());
+    }, [])
+  );
+
+  useRTVIClientEvent(
+    RTVIEvent.BotLlmText,
+    useCallback((data: BotLLMTextData) => {
+      const piece = data?.text ?? "";
+      if (!piece) return;
+      setLlmBotText((prev) => prev + piece);
+      setLlmBotStreaming(true);
+      setLlmBotCreatedAt((prev) => prev || new Date().toISOString());
+    }, [])
+  );
+
+  useRTVIClientEvent(
+    RTVIEvent.BotLlmStopped,
+    useCallback(() => {
+      setLlmBotStreaming(false);
+      setLlmBotText((text) => {
+        const trimmed = text.trim();
+        if (!trimmed) return text;
+        const createdAt = new Date().toISOString();
+        setFinalizedLlmTurns((prev) =>
+          [...prev, { id: `llm-${createdAt}`, text: trimmed, createdAt }].slice(-40)
+        );
+        setLlmBotCreatedAt("");
+        return "";
+      });
+    }, [])
+  );
 
   const visibleMessages = useMemo(
     () => filterEmptyMessages(messages).filter(isUserOrAssistant),
@@ -414,13 +461,26 @@ export function ConversationPanel() {
       task,
       index: 101,
     }));
-    const assistantTurnItems = assistantTurns.map((turn) => ({
+    const assistantTurnItems = [...assistantTurns, ...finalizedLlmTurns].map((turn) => ({
       type: "assistant-turn" as const,
       id: turn.id,
       createdAt: turn.createdAt,
       turn,
       index: 102,
     }));
+    const llmStreamItems =
+      llmBotText.trim().length > 0
+        ? [
+            {
+              type: "llm-stream" as const,
+              id: `llm-stream-${llmBotCreatedAt || "live"}`,
+              createdAt: llmBotCreatedAt || new Date().toISOString(),
+              text: llmBotText,
+              streaming: llmBotStreaming,
+              index: 102,
+            },
+          ]
+        : [];
     const attachmentItems = attachments.map((attachment) => ({
       type: "attachment" as const,
       id: attachment.id,
@@ -433,7 +493,13 @@ export function ConversationPanel() {
       const anchor = userTurnAnchors.get(createdAt);
       return anchor ? Math.min(created, new Date(anchor).getTime()) : created;
     };
-    const sorted = [...messageItems, ...taskItems, ...assistantTurnItems, ...attachmentItems].sort((a, b) => {
+    const sorted = [
+      ...messageItems,
+      ...taskItems,
+      ...assistantTurnItems,
+      ...llmStreamItems,
+      ...attachmentItems,
+    ].sort((a, b) => {
       const timeDelta = orderTimeMs(a.createdAt) - orderTimeMs(b.createdAt);
       return timeDelta || a.index - b.index;
     });
@@ -464,10 +530,26 @@ export function ConversationPanel() {
         ? { ...item, text: mergedChunks[idx].join(" ") }
         : item
     );
-  }, [agentTasks, assistantTurns, attachments, visibleMessages, userTurnAnchors]);
+  }, [
+    agentTasks,
+    assistantTurns,
+    attachments,
+    finalizedLlmTurns,
+    llmBotCreatedAt,
+    llmBotStreaming,
+    llmBotText,
+    visibleMessages,
+    userTurnAnchors,
+  ]);
 
   const showAttachmentControl = Boolean(currentSessionId) && canUploadAttachments && visibleMessages.length > 0;
   const bottomAnchorRef = useStickToBottom(conversationItems);
+
+  // Prefer LLM text when WordTTS suppresses TTS botOutput frames. Hide empty
+  // assistant conversation bubbles that would otherwise duplicate once we also
+  // get botOutput (other pipelines).
+  const hasLlmBotDisplay =
+    llmBotText.trim().length > 0 || finalizedLlmTurns.length > 0;
 
   return (
     <div className="p-4">
@@ -475,6 +557,17 @@ export function ConversationPanel() {
         {conversationItems.map((item) => {
           if (item.type === "task") return <AgentTaskCard key={item.id} task={item.task} />;
           if (item.type === "attachment") return <AttachmentPreview key={item.id} attachment={item.attachment} />;
+          if (item.type === "llm-stream") {
+            return (
+              <TranscriptMessage
+                key={item.id}
+                role="bot"
+                text={item.text}
+                timestamp={item.createdAt}
+                streaming={item.streaming}
+              />
+            );
+          }
           if (item.type === "assistant-turn") {
             return (
               <TranscriptMessage
@@ -488,6 +581,7 @@ export function ConversationPanel() {
           }
 
           const msg = item.message;
+          if (hasLlmBotDisplay && msg.role === "assistant") return null;
           return (
             <Fragment key={item.id}>
               <TranscriptMessage

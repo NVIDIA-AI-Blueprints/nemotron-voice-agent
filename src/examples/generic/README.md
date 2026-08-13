@@ -1,6 +1,16 @@
 # Generic - cascaded pipeline example
 
-Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`NvidiaSTTService` -> `NvidiaLLMService` with function calling -> `NvidiaTTSService`). It is a minimal, production-shaped cascaded voice assistant that keeps ASR, LLM, tools, and TTS as separate services, and it works as the baseline cascaded reference or the starting point for your own use case.
+Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`NvidiaSTTService` -> `NvidiaLLMService` with function calling) plus local `NvidiaWordTTSService` for Magpie WordTTS (spoken-only context commits; word timestamps when Magpie meta is available). Other examples still use stock `NvidiaTTSService` (`push_text_frames`) and are unaffected. It is a minimal, production-shaped cascaded voice assistant that keeps ASR, LLM, tools, and TTS as separate services.
+
+### Magpie word timestamps (WordTTS)
+
+WordTTS needs Magpie RC3 (local `tts-service` / host `:50151`) **and** a Riva client that understands `meta.words` / `enable_word_time_offsets`. Stock PyPI `nvidia-riva-client` cannot decode those fields — after `uv sync` or image rebuild, reinstall the WordTiming wheel:
+
+```bash
+./scripts/install_wordtiming_riva_client.sh
+```
+
+Confirm catalog TTS points at local Magpie (`tts-service:50051` / `Magpie TTS Multilingual (local RC3)`), not a remote NIM.
 
 ![Architecture Diagram](../../../docs/images/arch.png)
 

@@ -6,7 +6,8 @@
 Uses pipecat's built-in NVIDIA classes directly:
   - NvidiaSTTService  (Nemotron Streaming ASR)
   - NvidiaLLMService  (NIM-compatible LLM)
-  - NvidiaTTSService  (Magpie TTS)
+  - NvidiaWordTTSService  (Magpie WordTTS: spoken commits + meta timestamps when available)
+    Other examples keep NvidiaTTSService (push_text_frames) and are unaffected.
 """
 
 import asyncio
@@ -26,7 +27,7 @@ from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
-from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
+from pipecat.services.nvidia.tts import NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
@@ -42,6 +43,7 @@ from examples.shared.pipeline_utils import (
     register_session_start_handlers,
     with_realtime_observers,
 )
+from nvidia_word_tts import NvidiaWordTTSService, NvidiaWordTTSSettings
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -157,6 +159,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
     tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
+    tts_text_aggregation_mode = (
+        body.get("tts_text_aggregation_mode", "") or default_tts.get("text_aggregation_mode", "") or ""
+    )
     raw_tts_function_id = body.get("tts_function_id")
     tts_function_id = (
         str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
@@ -178,7 +183,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_kwargs: dict = {
         "api_key": os.getenv("NVIDIA_API_KEY"),
         "server": tts_server,
-        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "settings": NvidiaWordTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
         "text_filters": [NemotronSpeechTextFilter()],
         "custom_dictionary": custom_dictionary,
@@ -190,13 +195,18 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
-    tts = NvidiaTTSService(**tts_kwargs)
+    if tts_text_aggregation_mode:
+        tts_kwargs["text_aggregation_mode"] = tts_text_aggregation_mode
+    tts = NvidiaWordTTSService(**tts_kwargs)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
         f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"language={tts_language_code or '(pipecat default)'}, "
+        f"text_aggregation_mode={tts._text_aggregation_mode}, "
+        f"push_text_frames={tts._push_text_frames}, "
+        f"service={type(tts).__name__}, "
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"text_filters=[NemotronSpeechTextFilter]"
     )
