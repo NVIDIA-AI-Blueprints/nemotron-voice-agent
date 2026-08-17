@@ -15,6 +15,7 @@ overrides = [
     { name = "cryptography", specifier = ">=46.0.5" },
     { name = "idna", specifier = ">=3.15" },
     { name = "langchain-core", specifier = ">=1.4.1" },
+    { name = "nvidia-riva-client", specifier = ">=2.27.0" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "protobuf", specifier = ">=6.33.6" },
     { name = "starlette", specifier = ">=1.0.1" },
@@ -1582,7 +1583,7 @@ wheels = [
 
 [[package]]
 name = "nvidia-riva-client"
-version = "2.26.0"
+version = "2.27.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -1591,7 +1592,7 @@ dependencies = [
     { name = "websockets" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/53/0988b79ee818cb2b8792abeda5a75156946b64da7a2ef2719b9d2068a34f/nvidia_riva_client-2.26.0-py3-none-any.whl", hash = "sha256:16ffc98266fa7be7261e0675de6b7028e7f973c2ac3dfd679668148ff497cc0c", size = 57539, upload-time = "2026-05-28T06:11:43.205Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/e2/f8cef2a9d10e2bace3103b7ecd7b4099f4e38358de17556019686739ebfb/nvidia_riva_client-2.27.0-py3-none-any.whl", hash = "sha256:a18b0fa274417455b4fe2db126a340b8e7bfd362de838e05cb64af37c23c7ef3", size = 59286, upload-time = "2026-08-13T16:33:51.822Z" },
 ]
 
 [[package]]

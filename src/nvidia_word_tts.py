@@ -10,8 +10,9 @@ into ``pipecat.services.nvidia.tts`` alongside the parent.
 Child of :class:`NvidiaTTSService` for the same spoken-word context commit path
 used by Cartesia / ElevenLabs / Rime.
 
-* ``push_text_frames=False`` — commits come from ``add_word_timestamps`` (and
-  Pipecat ``force_complete`` when Magpie meta is absent)
+* ``push_text_frames=False`` — commits come from ``add_word_timestamps`` only.
+  Unspoken remainder is never force-completed (interrupt before any timestamps
+  commits nothing).
 * Default ``text_aggregation_mode=TOKEN`` — main differentiator vs parent:
   LLM tokens stream into Magpie as they arrive (no sentence buffering)
 * Default ``synthesis_mode=stitched`` — one ``SynthesizeOnline`` stream for the
@@ -32,12 +33,12 @@ used by Cartesia / ElevenLabs / Rime.
 Stock :class:`NvidiaTTSService` is unchanged (``push_text_frames=True``,
 sentence aggregation by default, no timestamp commits).
 
-Proto contract (riva-speech streaming + word timestamps, e.g. !2703)::
+Proto contract (Magpie 1.10.0 / riva-speech streaming + word timestamps)::
 
     request.enable_word_time_offsets = true
-    # once per LLM response, on an empty final SynthesizeOnline message:
+    request.custom_configuration["max_chunk_threshold"] = "100"
+    # once per LLM response, empty final SynthesizeOnline message:
     request.custom_configuration["riva_end_stream"] = "true"
-    request.custom_configuration["is_last_request"] = "true"
     response.meta.words[].{word, start_time, end_time}  # milliseconds
 """
 
@@ -50,14 +51,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
-
 from pipecat.frames.frames import (
     ErrorFrame,
     Frame,
     TTSAudioRawFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
-    TTSTextFrame,
 )
 from pipecat.services.nvidia.tts import (
     NvidiaTTSService,
@@ -66,7 +65,7 @@ from pipecat.services.nvidia.tts import (
     _SynthesisStreamState,
 )
 from pipecat.services.settings import _NotGiven
-from pipecat.services.tts_service import TTSService, TextAggregationMode
+from pipecat.services.tts_service import TextAggregationMode, TTSService
 from pipecat.utils.context.aggregated_frame_sequencer import AggregatedFrameSequencer
 from pipecat.utils.tracing.service_decorators import traced_tts
 
@@ -77,11 +76,16 @@ except ModuleNotFoundError as e:  # pragma: no cover
 
 _TOKEN_RE = re.compile(r"\S+|\s+")
 _ENABLE_WORD_TIME_OFFSETS_KEY = "enable_word_time_offsets"
-# Magpie/Riva end-of-turn flush (riva-speech !2703). Empty final SynthesizeOnline
-# request with these keys triggers Triton ``is_last_request`` so meta.words can land.
+# Magpie streaming flush: force a chunk (and timestamp segment) when EOS is
+# not seen by this many buffered characters.
+# https://docs.nvidia.com/nim/speech/latest/tts/customization.html#streaming-text-flush-controls
+_MAX_CHUNK_THRESHOLD_KEY = "max_chunk_threshold"
+_MAX_CHUNK_THRESHOLD_VALUE = "100"
+# Empty final SynthesizeOnline message; Riva maps this to the backend last-request flag.
 _RIVA_END_STREAM_KEY = "riva_end_stream"
-_IS_LAST_REQUEST_KEY = "is_last_request"
 _END_OF_TURN = object()
+# Treat a new batch as per-sentence relative if its first start is at/near 0.
+_RELATIVE_RESTART_EPS_S = 0.02
 
 
 class _MagpieWordCommitSequencer(AggregatedFrameSequencer):
@@ -93,13 +97,9 @@ class _MagpieWordCommitSequencer(AggregatedFrameSequencer):
       (``Nem``+``otron`` → ``Nem otron``).
     * Do **not** rewrite commits to LLM token spans — those bypass Magpie PTS
       alignment and can dump unplayed text into context on barge-in.
-    * When Magpie meta was seen, ``force_complete`` does **not** emit unspoken
-      remainder (timed words only). When meta was missing, remainder commit is
-      allowed as a fallback so context/UI are not empty.
+    * ``force_complete`` never emits unspoken remainder. Commits are timed
+      words only; barge-in before any ``meta.words`` commits nothing.
     """
-
-    # Set by NvidiaWordTTSService before force_complete when meta.words never arrived.
-    commit_unspoken_remainder: bool = False
 
     def process_word(
         self,
@@ -109,58 +109,12 @@ class _MagpieWordCommitSequencer(AggregatedFrameSequencer):
         includes_inter_frame_spaces: bool = False,
     ) -> list[Frame]:
         """Commit Magpie ``word`` text with IFS=False (inject spaces)."""
-        _ = includes_inter_frame_spaces
-        self._current_magpie_word = word
         return super().process_word(word, pts, context_id, False)
 
-    def _build_word_frame(
-        self,
-        text: str,
-        pts: int,
-        context_id: str | None,
-        raw_text: str | None = None,
-        suppress_in_context: bool = False,
-        includes_inter_frame_spaces: bool = False,
-    ) -> Frame:
-        """Build commit frame from Magpie surface text; force IFS=False + log."""
-        _ = includes_inter_frame_spaces
-        frame = super()._build_word_frame(
-            text,
-            pts,
-            context_id,
-            raw_text=raw_text,
-            suppress_in_context=suppress_in_context,
-            includes_inter_frame_spaces=False,
-        )
-        if isinstance(frame, TTSTextFrame) and frame.append_to_context:
-            magpie = getattr(self, "_current_magpie_word", None)
-            logger.debug(
-                f"{self._name}: context commit magpie={magpie!r} "
-                f"text={frame.text!r} raw={frame.raw_text!r} "
-                f"ifs={frame.includes_inter_frame_spaces}"
-            )
-        return frame
-
     def force_complete(self, last_word_pts: int) -> list[Frame]:
-        """Finish slots; optionally commit unspoken remainder if meta was missing."""
-        self._current_magpie_word = None
-        if self.commit_unspoken_remainder:
-            logger.debug(
-                f"{self._name}: force-complete with unspoken remainder "
-                f"(Magpie meta missing fallback)"
-            )
-            # Parent emits remaining TTS/LLM text; our _build_word_frame keeps IFS=False.
-            return AggregatedFrameSequencer.force_complete(self, last_word_pts)
-
+        """Finish slots without committing unspoken remainder."""
         for slot in self._slots:
             if slot.spoken and not slot.complete:
-                if slot.tracker:
-                    remaining = slot.tracker.get_remaining_tts_text(strip=False)
-                    if remaining:
-                        logger.debug(
-                            f"{self._name}: skip force-complete remainder "
-                            f"{remaining!r} (Magpie-timed commits only)"
-                        )
                 slot.complete = True
         return self.flush(last_word_pts=last_word_pts)
 
@@ -173,25 +127,31 @@ class NvidiaWordTTSSettings(NvidiaTTSSettings):
     ``SynthesizeOnline`` response path that surfaces ``meta.words``).
     """
 
-    synthesis_mode: NvidiaTTSSynthesisMode | _NotGiven = field(
-        default_factory=lambda: NvidiaTTSSynthesisMode.STITCHED
-    )
+    synthesis_mode: NvidiaTTSSynthesisMode | _NotGiven = field(default_factory=lambda: NvidiaTTSSynthesisMode.STITCHED)
+
+
+@dataclass(frozen=True)
+class TimedWord:
+    """One Magpie-timed token in stream-absolute seconds."""
+
+    word: str
+    start_s: float
+    end_s: float
 
 
 @dataclass
 class _WordTimingState:
     """Per-audio-context bookkeeping for incremental Magpie meta."""
 
-    emitted_tokens: int = 0
+    accepted: list[TimedWord] = field(default_factory=list)
 
 
 class NvidiaWordTTSService(NvidiaTTSService):
     """NVIDIA TTS WordTTS path: spoken commits + Magpie/Riva word timestamps.
 
     Use this instead of :class:`NvidiaTTSService` when you need barge-in-accurate
-    assistant context (heard words only). When Magpie does not yet return meta,
-    Pipecat still force-completes finished spoken aggregation slots on clean
-    context end; incomplete slots are dropped on interruption.
+    assistant context (heard words only). Unspoken remainder is never
+    force-completed: interrupt before any timestamps commits nothing.
     """
 
     Settings = NvidiaWordTTSSettings
@@ -229,9 +189,7 @@ class NvidiaWordTTSService(NvidiaTTSService):
 
         # Parent hardcodes synthesis_mode=PER_SENTENCE when constructing Settings;
         # start from WordTTS stitched defaults, then apply any caller settings delta.
-        word_settings = NvidiaWordTTSSettings(
-            synthesis_mode=NvidiaTTSSynthesisMode.STITCHED
-        )
+        word_settings = NvidiaWordTTSSettings(synthesis_mode=NvidiaTTSSynthesisMode.STITCHED)
         if kwargs.get("settings") is not None:
             word_settings.apply_update(kwargs["settings"])
         kwargs["settings"] = word_settings
@@ -243,18 +201,18 @@ class NvidiaWordTTSService(NvidiaTTSService):
         # that and emit TTSStoppedFrame only when SynthesizeOnline actually ends.
         self._push_stop_frames = False
 
-        # Commit Magpie meta words (no space insert); skip unspoken force-complete.
+        # Magpie meta tokens have no leading spaces; IFS=False inserts them.
         # Stock NvidiaTTSService keeps the default AggregatedFrameSequencer.
         self._aggregated_frame_sequencer = _MagpieWordCommitSequencer(name=str(self))
 
         cfg = dict(custom_configuration or {})
         if enable_word_time_offsets:
             cfg.setdefault(_ENABLE_WORD_TIME_OFFSETS_KEY, "true")
+        cfg.setdefault(_MAX_CHUNK_THRESHOLD_KEY, _MAX_CHUNK_THRESHOLD_VALUE)
         self._enable_word_time_offsets = enable_word_time_offsets
         self._custom_configuration = cfg
         self._word_states: dict[str, _WordTimingState] = {}
         self._meta_seen = False
-        self._turn_meta_seen = False
         self._warned_missing_meta = False
 
         logger.debug(
@@ -292,21 +250,18 @@ class NvidiaWordTTSService(NvidiaTTSService):
         return req
 
     def _set_end_of_turn_flags(self, req: rtts.SynthesizeSpeechRequest, enabled: bool) -> None:
-        """Set or clear once-per-LLM-response Magpie flush flags on ``req``."""
+        """Set or clear the once-per-LLM-response Magpie ``riva_end_stream`` flag."""
         if enabled:
             req.custom_configuration[_RIVA_END_STREAM_KEY] = "true"
-            req.custom_configuration[_IS_LAST_REQUEST_KEY] = "true"
         else:
             req.custom_configuration.pop(_RIVA_END_STREAM_KEY, None)
-            req.custom_configuration.pop(_IS_LAST_REQUEST_KEY, None)
 
     def _synthesis_handler(self, state: _SynthesisStreamState):
         """SynthesizeOnline with an explicit end-of-turn flush before stream close.
 
         Parent closes the client stream with ``None`` only. Magpie word timings are
-        emitted on an empty final request that sets ``is_last_request`` /
-        ``riva_end_stream`` (once per LLM response). Flags are cleared afterward so
-        the next turn starts clean.
+        emitted on an empty final request that sets ``riva_end_stream`` (once per
+        LLM response). The flag is cleared afterward so the next turn starts clean.
         """
         event_loop = self.get_event_loop()
         base_req = self._build_base_request()
@@ -321,7 +276,7 @@ class NvidiaWordTTSService(NvidiaTTSService):
                 if item is _END_OF_TURN:
                     self._set_end_of_turn_flags(base_req, True)
                     base_req.text = ""
-                    logger.debug(f"{self}: Magpie end-of-turn flush (is_last_request)")
+                    logger.debug(f"{self}: Magpie end-of-turn flush (riva_end_stream)")
                     yield base_req
                     self._set_end_of_turn_flags(base_req, False)
                     break
@@ -354,8 +309,8 @@ class NvidiaWordTTSService(NvidiaTTSService):
         """Flush Magpie with end-of-turn flags, then close the synthesis stream.
 
         Called from Pipecat on ``LLMFullResponseEndFrame``. Sends one empty
-        ``SynthesizeOnline`` request with ``is_last_request`` / ``riva_end_stream``
-        so Magpie can return ``meta.words``, then ends the client stream.
+        ``SynthesizeOnline`` request with ``riva_end_stream`` so Magpie can return
+        ``meta.words``, then ends the client stream.
         """
         state = self._stream_state
         if state is not None:
@@ -373,19 +328,11 @@ class NvidiaWordTTSService(NvidiaTTSService):
         if not self._meta_seen and not self._warned_missing_meta:
             self._warned_missing_meta = True
             logger.debug(
-                f"{self}: Magpie gRPC meta empty; spoken slots rely on "
-                f"force_complete ({self._text_aggregation_mode.value}) until "
-                "meta.words is available"
+                f"{self}: Magpie gRPC meta empty this turn; no timed commits "
+                f"(aggregation={self._text_aggregation_mode.value})"
             )
         self._clear_word_state(context_id)
         await super().on_audio_context_completed(context_id)
-
-    async def _apply_force_complete(self):
-        """Force-complete slots; allow remainder only when Magpie meta was missing."""
-        seq = self._aggregated_frame_sequencer
-        if isinstance(seq, _MagpieWordCommitSequencer):
-            seq.commit_unspoken_remainder = not self._turn_meta_seen
-        await super()._apply_force_complete()
 
     def _split_text_into_chunks(self, text: str) -> list[str]:
         """Chunk text without stripping whitespace (TOKEN / stitched pacing)."""
@@ -424,7 +371,6 @@ class NvidiaWordTTSService(NvidiaTTSService):
                 await self.start_ttfb_metrics()
                 yield TTSStartedFrame(context_id=context_id)
                 self._start_synthesis_stream(context_id)
-                self._turn_meta_seen = False
                 logger.trace(f"{self}: Started synthesis stream for context {context_id}")
 
             state = self._stream_state
@@ -482,47 +428,43 @@ class NvidiaWordTTSService(NvidiaTTSService):
             self._stream_state = None
 
     async def _maybe_emit_meta_timestamps(self, response: Any, context_id: str) -> None:
-        """Commit Magpie/Riva word timings into the spoken-slot sequencer."""
+        """Ingest Magpie/Riva word timings and register only new words."""
         if not hasattr(response, "HasField") or not response.HasField("meta"):
+            return
+        if not self.audio_context_available(context_id):
+            logger.debug(f"{self}: dropping late Magpie meta; context {context_id} gone")
             return
 
         meta = response.meta
-        state = self._word_state(context_id)
-        words = list(getattr(meta, "words", []) or [])
-
+        words = getattr(meta, "words", None)
+        incoming: list[TimedWord]
         if words:
-            # Primary contract (riva-speech WordTiming / meta.words).
-            word_times, _next_t, total = word_times_from_meta_words(
-                words,
-                skip_tokens=state.emitted_tokens,
-            )
+            incoming = parse_meta_word_entries(words)
         else:
-            # Legacy / transitional meta: processed_text + predicted_durations.
-            processed = (
-                getattr(meta, "processed_text", "") or getattr(meta, "text", "") or ""
-            ).strip()
+            processed = (getattr(meta, "processed_text", "") or getattr(meta, "text", "") or "").strip()
             durations = list(getattr(meta, "predicted_durations", []) or [])
             if not processed or not durations:
                 return
-            word_times, _next_t, total = word_times_from_magpie_meta(
-                processed,
-                durations,
-                skip_tokens=state.emitted_tokens,
-            )
+            pairs, next_t, _total = word_times_from_magpie_meta(processed, durations)
+            incoming = timed_words_from_pairs(pairs, next_t)
 
-        if not word_times:
+        if not incoming:
+            return
+
+        state = self._word_state(context_id)
+        new_words = new_words_from_meta_batch(incoming, state.accepted)
+        if not new_words:
             return
 
         if not self._meta_seen:
             self._meta_seen = True
             logger.debug(f"{self}: Magpie gRPC meta word timings available")
-        self._turn_meta_seen = True
 
-        state.emitted_tokens = total
-        # Interim: inject spaces between Magpie tokens (meta strips leading spaces).
+        state.accepted.extend(new_words)
+        word_times = [(w.word, w.start_s) for w in new_words]
         sample = [(w, round(t, 3)) for w, t in word_times[:12]]
         logger.debug(
-            f"{self}: Magpie meta words n={len(word_times)} "
+            f"{self}: Magpie meta new={len(word_times)} accepted={len(state.accepted)} "
             f"sample={sample}{'…' if len(word_times) > 12 else ''} "
             f"(commit Magpie words, ifs=False, insert spaces)"
         )
@@ -531,6 +473,84 @@ class NvidiaWordTTSService(NvidiaTTSService):
             context_id,
             includes_inter_frame_spaces=False,
         )
+
+
+def _meta_word_fields(entry: Any) -> tuple[str, float, float]:
+    """Return ``(word, start_ms, end_ms)`` from a proto or mapping ``WordTiming``."""
+    if isinstance(entry, Mapping):
+        token = str(entry.get("word", "") or "")
+        start_ms = float(entry.get("start_time", 0) or 0)
+        end_ms = float(entry.get("end_time", start_ms) or start_ms)
+    else:
+        token = str(getattr(entry, "word", "") or "")
+        start_ms = float(getattr(entry, "start_time", 0) or 0)
+        end_ms = float(getattr(entry, "end_time", start_ms) or start_ms)
+    return token, start_ms, end_ms
+
+
+def parse_meta_word_entries(words: Sequence[Any]) -> list[TimedWord]:
+    """Parse Riva ``meta.words`` entries into stream-local ``TimedWord`` values."""
+    parsed: list[TimedWord] = []
+    for entry in words:
+        token, start_ms, end_ms = _meta_word_fields(entry)
+        if not token:
+            continue
+        start_s = max(0.0, start_ms / 1000.0)
+        parsed.append(TimedWord(token, start_s, max(start_s, end_ms / 1000.0)))
+    return parsed
+
+
+def timed_words_from_pairs(
+    pairs: Sequence[tuple[str, float]],
+    next_t: float,
+) -> list[TimedWord]:
+    """Build ``TimedWord`` rows from ``(word, start_s)`` pairs."""
+    out: list[TimedWord] = []
+    for index, (word, start_s) in enumerate(pairs):
+        if not word:
+            continue
+        end_s = pairs[index + 1][1] if index + 1 < len(pairs) else max(next_t, start_s)
+        out.append(TimedWord(word, start_s, max(start_s, end_s)))
+    return out
+
+
+def new_words_from_meta_batch(
+    incoming: Sequence[TimedWord],
+    already_emitted: Sequence[TimedWord],
+    *,
+    relative_restart_eps: float = _RELATIVE_RESTART_EPS_S,
+) -> list[TimedWord]:
+    """Return only new words from a Magpie timestamp batch.
+
+    Cumulative payloads (full turn so far) yield the unmatched suffix.
+    Incremental sentence payloads yield the whole batch. If an incremental
+    batch restarts ``start_s`` near 0, times are offset by the previous
+    sentence end so PTS stays stream-absolute.
+    """
+    if not incoming:
+        return []
+
+    already_tokens = [item.word for item in already_emitted]
+    incoming_tokens = [item.word for item in incoming]
+    prefix_len = len(already_tokens)
+    is_cumulative = bool(already_tokens and incoming_tokens[:prefix_len] == already_tokens)
+
+    if is_cumulative:
+        return list(incoming[prefix_len:])
+
+    new_words = list(incoming)
+    if already_emitted and new_words and new_words[0].start_s <= relative_restart_eps:
+        offset = already_emitted[-1].end_s
+        new_words = [TimedWord(item.word, item.start_s + offset, item.end_s + offset) for item in new_words]
+    return new_words
+
+
+def played_words_at_pts(
+    words: Sequence[TimedWord],
+    playback_s: float,
+) -> list[TimedWord]:
+    """Words the transport clock would have released by ``playback_s``."""
+    return [item for item in words if item.start_s <= playback_s]
 
 
 def _split_processed_tokens(processed_text: str) -> list[str]:
@@ -637,26 +657,8 @@ def word_times_from_meta_words(
     Each entry is a proto message or mapping with ``word`` and
     ``start_time`` / ``end_time`` in milliseconds.
     """
-    if not words:
+    timed = parse_meta_word_entries(words)
+    if not timed:
         return [], 0.0, 0
-
-    word_times: list[tuple[str, float]] = []
-    next_t = 0.0
-    total = 0
-    for index, entry in enumerate(words):
-        if isinstance(entry, Mapping):
-            token = str(entry.get("word", "") or "")
-            start_ms = float(entry.get("start_time", 0) or 0)
-            end_ms = float(entry.get("end_time", start_ms) or start_ms)
-        else:
-            token = str(getattr(entry, "word", "") or "")
-            start_ms = float(getattr(entry, "start_time", 0) or 0)
-            end_ms = float(getattr(entry, "end_time", start_ms) or start_ms)
-        if not token:
-            continue
-        start_s = max(0.0, start_ms / 1000.0)
-        next_t = max(next_t, end_ms / 1000.0)
-        if index >= skip_tokens:
-            word_times.append((token, start_s))
-        total += 1
-    return word_times, next_t, total
+    word_times = [(item.word, item.start_s) for item in timed[skip_tokens:]]
+    return word_times, timed[-1].end_s, len(timed)

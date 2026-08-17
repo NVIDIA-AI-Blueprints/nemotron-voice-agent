@@ -64,16 +64,7 @@ x-app: &app-base
     dockerfile: docker/Dockerfile
   image: nemotron-voice-agent:latest
   cpuset: ${PIPECAT_CPUSET:-}
-  command:
-    - bash
-    - -lc
-    - |
-      set -euo pipefail
-      WHL=/app/third_party/wheels/nvidia_riva_client-2.26.0+wordtiming-py3-none-any.whl
-      if [[ -f "$$WHL" ]]; then
-        uv pip install --python /app/.venv/bin/python --force-reinstall --no-deps "$$WHL"
-      fi
-      exec uv run --no-sync python src/server.py --host 0.0.0.0
+  command: ["uv", "run", "python", "src/server.py", "--host", "0.0.0.0"]
   ports:
     - "${PIPELINE_APP_PORT:-7860}:7860"
   env_file:
@@ -81,9 +72,6 @@ x-app: &app-base
   volumes:
     - ./src:/app/src:ro
     - ./examples_registry.yaml:/app/examples_registry.yaml:ro
-    - ./third_party/wheels:/app/third_party/wheels:ro
-    # Built UI; mount so WordTTS LLM-transcript UI (and other client edits) survive recreate.
-    - ./client/dist:/app/client/dist:ro
   extra_hosts:
     - "host.docker.internal:host-gateway"
   healthcheck:

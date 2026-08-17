@@ -36,14 +36,11 @@ llm:
 # ── TTS Services (Cascaded pipeline) ──
 tts:
   magpie-multilingual-tts:
-    name: "Magpie TTS Multilingual (local RC3)"
-    # Local Magpie RC3 sidecar (compose service tts-service → host :50151).
-    # Image: nvcr.io/nvstaging/nim/magpie-tts-multilingual:1.10.0-61244606
-    # ASR/LLM stay on NVCF below / above.
-    server: "tts-service:50051"
+    name: "Magpie TTS Multilingual"
+    server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
     model: "magpie-tts-multilingual"
-    function_id: ""
+    function_id: "877104f7-e885-42b9-8de8-f6e4c6303969"
     synthesis_mode: stitched
 
   chatterbox-multilingual-tts:

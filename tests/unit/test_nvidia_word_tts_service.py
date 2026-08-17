@@ -29,8 +29,10 @@ class NvidiaWordTTSServiceConfigTests(unittest.TestCase):
         self.assertIsInstance(svc._settings, NvidiaWordTTSSettings)
         self.assertTrue(svc._enable_word_time_offsets)
         self.assertEqual(svc._custom_configuration.get("enable_word_time_offsets"), "true")
+        self.assertEqual(svc._custom_configuration.get("max_chunk_threshold"), "100")
         req = svc._build_base_request()
         self.assertEqual(req.custom_configuration.get("enable_word_time_offsets"), "true")
+        self.assertEqual(req.custom_configuration.get("max_chunk_threshold"), "100")
         # Current public nvidia-riva-client may lack the first-class field; when
         # present it must be enabled for the riva-speech !2703 contract.
         if hasattr(req, "enable_word_time_offsets"):
@@ -67,17 +69,14 @@ class NvidiaWordTTSServiceConfigTests(unittest.TestCase):
         )
         req = svc._build_base_request()
         self.assertNotIn("riva_end_stream", req.custom_configuration)
-        self.assertNotIn("is_last_request", req.custom_configuration)
 
         svc._set_end_of_turn_flags(req, True)
         self.assertEqual(req.custom_configuration.get("riva_end_stream"), "true")
-        self.assertEqual(req.custom_configuration.get("is_last_request"), "true")
 
         svc._set_end_of_turn_flags(req, False)
         self.assertNotIn("riva_end_stream", req.custom_configuration)
-        self.assertNotIn("is_last_request", req.custom_configuration)
-        # Word-time offsets stay enabled for the turn.
         self.assertEqual(req.custom_configuration.get("enable_word_time_offsets"), "true")
+        self.assertEqual(req.custom_configuration.get("max_chunk_threshold"), "100")
         if hasattr(req, "enable_word_time_offsets"):
             self.assertTrue(req.enable_word_time_offsets)
 
@@ -207,40 +206,58 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
             tracker=WordCompletionTracker(text, llm_text=text, user_facing_text=text),
             append_to_context=True,
         )
-        for f in seq.process_word("Hello", pts=0, context_id=ctx):
+        for _f in seq.process_word("Hello", pts=0, context_id=ctx):
             pass
         leftover = [
-            f.text
-            for f in seq.force_complete(last_word_pts=0)
-            if isinstance(f, TTSTextFrame) and f.append_to_context
+            f.text for f in seq.force_complete(last_word_pts=0) if isinstance(f, TTSTextFrame) and f.append_to_context
         ]
         self.assertEqual(leftover, [])
 
-    def test_force_complete_fallback_commits_remainder_when_meta_missing(self) -> None:
-        from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
-        from pipecat.utils.context.word_completion_tracker import WordCompletionTracker
 
-        from nvidia_word_tts import _MagpieWordCommitSequencer
-
-        text = "Hello world"
-        seq = _MagpieWordCommitSequencer(name="test")
-        seq.commit_unspoken_remainder = True
-        ctx = "ctx-1"
-        frame = AggregatedTextFrame(text, AggregationType.SENTENCE, raw_text=text)
-        seq.register_spoken(
-            frame,
-            ctx,
-            tracker=WordCompletionTracker(text, llm_text=text, user_facing_text=text),
-            append_to_context=True,
+class MagpieServiceIngestTests(unittest.IsolatedAsyncioTestCase):
+    def _service(self) -> NvidiaWordTTSService:
+        return NvidiaWordTTSService(
+            api_key=None,
+            server="localhost:50151",
+            use_ssl=False,
+            model_function_map={"function_id": "", "model_name": "magpie-tts-multilingual"},
         )
-        for f in seq.process_word("Hello", pts=0, context_id=ctx):
-            pass
-        leftover = [
-            f.text
-            for f in seq.force_complete(last_word_pts=0)
-            if isinstance(f, TTSTextFrame) and f.append_to_context
-        ]
-        self.assertTrue(any("world" in t for t in leftover))
+
+    async def test_incremental_batches_register_only_new_words(self) -> None:
+        from types import SimpleNamespace
+
+        svc = self._service()
+        emitted: list[str] = []
+
+        async def _capture(word_times, context_id=None, includes_inter_frame_spaces=None, **_kwargs):
+            emitted.extend(word for word, _ts in word_times)
+
+        svc.add_word_timestamps = _capture  # type: ignore[method-assign]
+        svc.audio_context_available = lambda _ctx: True  # type: ignore[method-assign]
+
+        async def emit(words: list[SimpleNamespace]) -> None:
+            response = SimpleNamespace(meta=SimpleNamespace(words=words))
+            response.HasField = lambda name: name == "meta"  # type: ignore[method-assign]
+            await svc._maybe_emit_meta_timestamps(response, "ctx-1")
+
+        await emit(
+            [
+                SimpleNamespace(word="Hello", start_time=0, end_time=200),
+                SimpleNamespace(word="there.", start_time=200, end_time=500),
+            ]
+        )
+        await emit(
+            [
+                SimpleNamespace(word="How", start_time=500, end_time=700),
+                SimpleNamespace(word="are", start_time=700, end_time=850),
+            ]
+        )
+        await emit([SimpleNamespace(word="you?", start_time=850, end_time=1100)])
+        self.assertEqual(emitted, ["Hello", "there.", "How", "are", "you?"])
+        self.assertEqual(
+            [w.word for w in svc._word_state("ctx-1").accepted],
+            ["Hello", "there.", "How", "are", "you?"],
+        )
 
 
 if __name__ == "__main__":
