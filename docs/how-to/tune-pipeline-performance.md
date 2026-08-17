@@ -76,7 +76,7 @@ When the message count exceeds `CHAT_HISTORY_RECENT_TURNS`:
 
 ## Audio Output Buffering
 
-`AUDIO_OUT_10MS_CHUNKS` sets how many 10 ms audio frames the server batches per outbound send (the output buffer depth). Defaults are `5` (50 ms).
+`AUDIO_OUT_10MS_CHUNKS` sets how many 10 ms audio frames the server batches per outbound send (the output buffer depth). The default is `5` (50 ms) for WebRTC and `10` (100 ms) for WebSocket.
 
 ```bash
 # In .env: override the transport default
