@@ -71,13 +71,6 @@ notes that you create or edit.
 3. When the DORI tools are unavailable, continue with the Writing Style Guide.
    Do not inspect a shell-visible CLI, install software, or configure the host
    during a normal documentation task.
-4. If DORI or the verified Skill Library is unavailable and the user has access
-   to `gitlab-master.nvidia.com`, print a brief recommendation to install DORI
-   and refer to [NVIDIA DORI Setup](DORI_SETUP.md). Continue the documentation
-   task with the Writing Style Guide. Do not pause or block work for
-   installation.
-5. Run NVIDIA DORI Setup only when the user explicitly asks to install or
-   configure DORI.
 
 Capability detection does not approve installation or host configuration.
 DORI unavailability must not block documentation work.
