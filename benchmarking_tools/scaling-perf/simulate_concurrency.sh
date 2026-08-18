@@ -39,6 +39,13 @@ fi
 
 HOST="localhost"
 PORT="7860"
+PROTOCOL=""
+WS_URL="${BASETEN_CHAIN_WSS_URL:-}"
+API_KEY=""
+AUTH_SCHEME=""
+CONNECT_TIMEOUT=""
+TURN_RESPONSE_TIMEOUT=""
+SKIP_BOT_INTRO="0"
 CLIENT_COUNTS="1"
 CLIENT_START_DELAY="1"
 TEST_DURATION="300"
@@ -55,6 +62,13 @@ Usage: $(basename "$0") [options]
 Options:
   --host HOST                          (default: localhost)
   --port PORT                          (default: 7860)
+  --protocol rtvi|realtime             (default: rtvi, or realtime if --ws-url is set)
+  --ws-url URL                         OpenAI Realtime WebSocket URL
+  --api-key KEY                        Realtime API key (or export BASETEN_API_KEY)
+  --auth-scheme SCHEME                 Authorization scheme (default: Api-Key)
+  --connect-timeout SECONDS            WebSocket handshake timeout
+  --turn-response-timeout SECONDS      Wait for first bot audio after user speech
+  --skip-bot-intro                     Do not drain an initial bot utterance
   --clients "N1 N2 ..."                Concurrency levels to run (default: "1")
   --client-start-delay SECONDS         Stagger between client connects (default: 1)
   --test-duration SECONDS              Metric collection window per run  (default: 300)
@@ -72,6 +86,13 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)                         HOST="$2"; shift 2 ;;
     --port)                         PORT="$2"; shift 2 ;;
+    --protocol)                     PROTOCOL="$2"; shift 2 ;;
+    --ws-url)                       WS_URL="$2"; shift 2 ;;
+    --api-key)                      API_KEY="$2"; shift 2 ;;
+    --auth-scheme)                  AUTH_SCHEME="$2"; shift 2 ;;
+    --connect-timeout)              CONNECT_TIMEOUT="$2"; shift 2 ;;
+    --turn-response-timeout)        TURN_RESPONSE_TIMEOUT="$2"; shift 2 ;;
+    --skip-bot-intro)               SKIP_BOT_INTRO="1"; shift ;;
     --clients)                      CLIENT_COUNTS="$2"; shift 2 ;;
     --client-start-delay)           CLIENT_START_DELAY="$2"; shift 2 ;;
     --test-duration)                TEST_DURATION="$2"; shift 2 ;;
@@ -112,6 +133,10 @@ echo "╔═══════════════════════�
 echo "║                 VOICE AGENT PERF BENCHMARK                       ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo "Host:Port     : ${HOST}:${PORT}"
+if [[ -n "$WS_URL" || "$PROTOCOL" == "realtime" ]]; then
+  echo "Protocol      : ${PROTOCOL:-realtime}"
+  echo "Realtime URL  : ${WS_URL}"
+fi
 echo "Dataset       : ${DATASET_DIR}"
 echo "Client counts : ${CLIENT_COUNTS}"
 echo "Test duration : ${TEST_DURATION}s"
@@ -151,6 +176,15 @@ for num_clients in "${CLIENT_COUNTS_ARR[@]}"; do
       audio_args+=(--no-save-audio)
     fi
 
+    extra_args=()
+    if [[ -n "$PROTOCOL" ]]; then extra_args+=(--protocol "$PROTOCOL"); fi
+    if [[ -n "$WS_URL" ]]; then extra_args+=(--ws-url "$WS_URL"); fi
+    if [[ -n "$API_KEY" ]]; then extra_args+=(--api-key "$API_KEY"); fi
+    if [[ -n "$AUTH_SCHEME" ]]; then extra_args+=(--auth-scheme "$AUTH_SCHEME"); fi
+    if [[ -n "$CONNECT_TIMEOUT" ]]; then extra_args+=(--connect-timeout "$CONNECT_TIMEOUT"); fi
+    if [[ -n "$TURN_RESPONSE_TIMEOUT" ]]; then extra_args+=(--turn-response-timeout "$TURN_RESPONSE_TIMEOUT"); fi
+    if [[ "$SKIP_BOT_INTRO" == "1" ]]; then extra_args+=(--skip-bot-intro); fi
+
     "${PY[@]}" "$BENCHMARK_PY" \
       --host "$HOST" --port "$PORT" \
       --dataset-dir "$DATASET_DIR" \
@@ -162,6 +196,7 @@ for num_clients in "${CLIENT_COUNTS_ARR[@]}"; do
       --reverse-barge-in-threshold "$REVERSE_BARGE_IN_THRESHOLD" \
       --result-path "$client_dir/result_${stream_id}.json" \
       --logger-path "$client_dir/benchmark_${stream_id}.log" \
+      "${extra_args[@]}" \
       "${audio_args[@]}" \
       >"$client_dir/process_stdout.log" 2>&1 &
     pids+=("$!")

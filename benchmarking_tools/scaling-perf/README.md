@@ -7,8 +7,8 @@ each turn took. You can run a single client (smoke test) or fan out to N
 parallel clients (concurrency / scaling test) and produce a sweep across
 multiple concurrency levels.
 
-The scaling benchmark connects directly to `WS /api/ws` and does not use the
-server's session-config flow. That keeps it compatible with multi-worker
+The default RTVI benchmark connects directly to `WS /api/ws` and does not use
+the server's session-config flow. That keeps it compatible with multi-worker
 deployments such as `generic-assistant/server-perf`.
 
 **RTVI** (Real-Time Voice/Video Inference) is the Pipecat-standard
@@ -16,11 +16,17 @@ protocol the server uses to push per-turn timing breakdowns (LLM / TTS /
 ASR sub-latencies) to the client over the same WebSocket as the audio.
 The benchmark parses those frames alongside the audio stream.
 
+Use `--protocol realtime` or provide `--ws-url` to run the same client,
+concurrency, pacing, latency, glitch, and aggregation logic against an
+OpenAI Realtime-compatible WebSocket. Realtime audio uses base64 PCM in JSON
+events instead of RTVI protobuf frames.
+
 ## Layout
 
 | File | Job |
 |------|-----|
 | `benchmark.py` | Drives **one** client by default. Also produces summaries when invoked with `--aggregate-run-dir` / `--aggregate-suite-dir`. |
+| `openai_realtime_ws.py` | Handles the Realtime session handshake, JSON events, authorization, and base64 PCM audio. |
 | `simulate_concurrency.sh` | Spawns N parallel `benchmark.py` workers per concurrency level (with synchronized metric windows + cooldowns) and then calls `benchmark.py` in aggregate mode. |
 
 ## Setup
@@ -48,11 +54,41 @@ root `benchmark` dependency group (shared by every tool under
    - **Trim all trailing silence from the end** (for example in Audacity). This is critical for the client-side latency measurement. The benchmark times from the end of the WAV to when the bot's response arrives, so the end of the file must coincide with the end of the spoken query. The scripts insert silence *between* files automatically, so do not pad the files yourself.
    - **Save as 16 kHz, mono, linear PCM (`int16`) WAV.** This matches the pipeline's input format.
 
-   If you do not trim the trailing silence, the client-side end-to-end latency is lower, because the clients keeps waiting through that silence before it start measuring. The client-side E2E numbers are then wrong, but the **RTVI-based, server-reported metrics stay reliable** (`server_e2e`, `asr_ttfb`, `tts_ttfb`, and `llm_processing_time`), because they are measured at the server from the actual end-of-speech and turn events rather than from the end of the file. See [What it measures](#what-it-measures).
+   If you do not trim the trailing silence, the client-side end-to-end latency is lower because the client keeps waiting through that silence before it starts measuring. The client-side E2E numbers are then wrong, but the **RTVI-based, server-reported metrics stay reliable** (`server_e2e`, `asr_ttfb`, `tts_ttfb`, and `llm_processing_time`) because they are measured at the server from the actual end-of-speech and turn events rather than from the end of the file. See [What it measures](#what-it-measures).
 
 `simulate_concurrency.sh` auto-dispatches `benchmark.py` through `uv run`
 when the root `pyproject.toml` is detected, so the commands below work
 straight from a fresh `uv sync --group benchmark`.
+
+### Realtime Endpoint
+
+Set the Realtime WebSocket URL and, when required, its API key:
+
+```bash
+export BASETEN_CHAIN_WSS_URL=wss://example.test/v1/realtime
+export BASETEN_API_KEY=<api-key>
+```
+
+The API key is sent as `Authorization: Api-Key <api-key>`. Use
+`--auth-scheme Bearer` for endpoints that require a bearer token. The client
+omits the `Authorization` header when you do not provide a key.
+
+The client sends a minimal `session.update` containing only the first WAV
+file's input sample rate. It waits up to 60 seconds for `session.created` or
+`session.updated` and preserves the endpoint's voice activity detection (VAD)
+defaults. It uses the output sample rate from that event, or 24 kHz when the
+event does not provide one.
+
+The endpoint must use server-side VAD and create responses automatically. The
+client does not send `input_audio_buffer.commit` or `response.create`. It keeps
+sending PCM silence after each WAV and expects base64 mono PCM in
+`response.output_audio.delta` events. A `response.done` event marks response
+completion. An `error` event or an event type that ends in `.failed` stops the
+client and records the server message as its error. Use WAV files with a
+consistent sample rate across the dataset.
+
+The `release_v2.0.1` server does not expose `/v1/realtime`. Point this mode at
+a deployment that implements the OpenAI Realtime event protocol.
 
 ### Prompt override for perf runs
 
@@ -133,22 +169,40 @@ After the stack is healthy, run the sweep from this directory:
 From this directory:
 
 ```bash
-# Single-client (1 process)
+# Single RTVI client (1 process)
 uv run python3 benchmark.py
 
-# Concurrent run (4 parallel processes, single concurrency level)
+# Concurrent RTVI run (4 parallel processes, single concurrency level)
 ./simulate_concurrency.sh --clients 4
 
-# Scaling sweep (one run per concurrency level, cooldown between levels)
+# RTVI scaling sweep (one run per concurrency level, cooldown between levels)
 ./simulate_concurrency.sh --clients "1 2 4 8 16"
+
+# Single Realtime client
+uv run python3 benchmark.py --protocol realtime --ws-url "$BASETEN_CHAIN_WSS_URL"
+
+# Realtime scaling sweep
+./simulate_concurrency.sh \
+  --protocol realtime \
+  --ws-url "$BASETEN_CHAIN_WSS_URL" \
+  --clients "1 2 4 8 16"
 ```
 
-The shell wrapper accepts `-h`/`--help`. Common flags:
+The shell wrapper accepts `-h`/`--help`. These flags apply to both the shell
+wrapper and `benchmark.py` unless the description states otherwise:
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--clients "N1 N2 …"` | `1` | One run per concurrency level. Quote the list. |
-| `--host` / `--port` | `localhost` / `7860` | Server target. |
+| `--host` / `--port` | `localhost` / `7860` | RTVI server target. |
+| `--protocol` | `rtvi` | Select `realtime` for an OpenAI Realtime WebSocket. Providing `--ws-url` or setting `BASETEN_CHAIN_WSS_URL` also selects Realtime mode when you omit this flag. |
+| `--ws-url` | unset; falls back to `BASETEN_CHAIN_WSS_URL` | Full Realtime WebSocket URL. Required in Realtime mode. |
+| `--api-key` | unset; falls back to `BASETEN_API_KEY` | Optional Realtime API key. Prefer the environment variable to avoid exposing credentials in process arguments. |
+| `--auth-scheme` | `Api-Key` | Authorization scheme for the Realtime API key. |
+| `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. The Realtime session-ready timeout remains 60 seconds. |
+| `--turn-response-timeout` | RTVI: `10`; Realtime: `45` | Seconds to wait for first response audio after the WAV ends. |
+| `--skip-bot-intro` | RTVI: off; Realtime: on | Skip draining an initial assistant utterance. Realtime skips it by default. |
+| `--drain-bot-intro` | RTVI: on; Realtime: off | Wait for and discard an initial assistant utterance. Only direct `benchmark.py` runs accept this flag. If you also pass `--skip-bot-intro`, skipping takes precedence. |
 | `--test-duration` | `300` | Seconds of metric collection per level. |
 | `--client-start-delay` | `1` | Stagger between clients connecting (s). With N clients and delay D, the metric window opens at ``now + (N-1)*D`` so every worker is connected before measurement starts. |
 | `--cooldown` | `10` | Pause between sweep levels (s) — lets the server settle between bursts. |
@@ -214,3 +268,21 @@ weighted-averaged across all turns/clients in a run):
 | `vad_smart_turn` | VAD + smart-turn analyzer time |
 | `llm_processing_time` | LLM end-to-end (request → final token) |
 | `llm_tokens_per_sec` | Completion tokens / `llm_processing_time` |
+
+Baseten's OpenAI Realtime endpoint does not currently emit RTVI timing frames,
+so these server-metric columns are `N/A`. Per-client Realtime result JSON includes
+`realtime_turn_metrics`. Each completed turn records these values in seconds:
+
+- `input_end_to_speech_stopped`: time from the last input WAV frame to the
+  server's `input_audio_buffer.speech_stopped` event.
+- `from_speech_stopped`: `asr_transcription_completed`, `response_created`,
+  `first_output_transcript`, `first_output_audio`, and `response_done`, all
+  measured from that server-confirmed speech-stop event.
+- `stage_deltas`: `response_after_asr`,
+  `first_text_after_response_created`, and `first_audio_after_first_text`.
+- `response_status` and `usage`: values from `response.done`, when provided.
+
+The client records the first matching event of each type after a turn starts.
+If the server does not send a speech-stop event, speech-relative values are
+`null`. These metrics use client-observed event arrival times, not server
+processing timestamps, so they do not replace server-side RTVI metrics.

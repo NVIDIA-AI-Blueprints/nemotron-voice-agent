@@ -70,6 +70,16 @@ from pathlib import Path
 from typing import Any
 
 import websockets
+from openai_realtime_ws import (
+    DEFAULT_AUTH_SCHEME,
+    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_OUTPUT_RATE,
+    EndOfRealtimeResponse,
+    OpenAIRealtimeSocket,
+    resolve_api_key,
+    resolve_protocol,
+    resolve_ws_url,
+)
 from pipecat.frames.protobufs import frames_pb2
 from websockets.exceptions import ConnectionClosed
 
@@ -78,6 +88,7 @@ WS_CONNECT_TIMEOUT = 30
 BOT_INTRO_TIMEOUT = 5
 END_OF_RESPONSE_TIMEOUT = 3.0
 HARD_DEADLINE_BUFFER = 60
+REALTIME_TURN_RESPONSE_TIMEOUT = 45.0
 TURN_RESPONSE_TIMEOUT = 10.0
 SERVER_METRIC_KEYS = (
     "llm_ttft",
@@ -200,6 +211,8 @@ class ClientResult:
             for each ``SERVER_METRIC_KEYS`` entry.
         rtvi_messages: Every RTVI message received during the session,
             preserved for offline post-mortem analysis.
+        realtime_turn_metrics: Client-derived Realtime lifecycle offsets for
+            VAD, ASR, response creation, first transcript/audio, and completion.
         timestamp: ISO-8601 wall-clock time when the result was written.
         error: Human-readable failure reason, or ``None`` on success.
     """
@@ -219,11 +232,36 @@ class ClientResult:
     test_duration: float
     server_metrics: dict
     rtvi_messages: list[dict[str, Any]]
+    realtime_turn_metrics: list[dict[str, Any]]
     timestamp: str
     error: str | None = None
 
 
 type FirstBotFrame = tuple[bytes | None, dt.datetime | None]
+
+
+class RealtimeFrameAdapter:
+    """Translate Realtime JSON audio into the benchmark's protobuf frame API."""
+
+    def __init__(self, realtime: OpenAIRealtimeSocket):
+        self.realtime = realtime
+
+    async def send(self, data: bytes) -> None:
+        frame = frames_pb2.Frame.FromString(data)
+        if frame.WhichOneof("frame") == "audio":
+            await self.realtime.send_pcm(frame.audio.audio)
+
+    async def recv(self) -> bytes:
+        try:
+            pcm = await self.realtime.recv_audio()
+        except EndOfRealtimeResponse as exc:
+            raise TimeoutError from exc
+        audio = frames_pb2.AudioRawFrame(
+            audio=pcm,
+            sample_rate=self.realtime.output_sample_rate,
+            num_channels=1,
+        )
+        return frames_pb2.Frame(audio=audio).SerializeToString()
 
 
 class PerfClient:
@@ -264,10 +302,23 @@ class PerfClient:
         audio_output_path: Path | None,
         logger: RunLogger,
         turn_response_timeout: float = TURN_RESPONSE_TIMEOUT,
+        protocol: str = "rtvi",
+        ws_url: str = "",
+        api_key: str = "",
+        auth_scheme: str = DEFAULT_AUTH_SCHEME,
+        connect_timeout: float = WS_CONNECT_TIMEOUT,
+        drain_bot_intro: bool | None = None,
     ):
         self.stream_id = stream_id
         self.host = host
         self.port = port
+        self.protocol = protocol
+        self.ws_url = ws_url
+        self.api_key = api_key
+        self.auth_scheme = auth_scheme
+        self.connect_timeout = connect_timeout
+        self.drain_bot_intro = drain_bot_intro if drain_bot_intro is not None else protocol != "realtime"
+        self._realtime: OpenAIRealtimeSocket | None = None
         self.audio_files = audio_files
         self.start_delay = start_delay
         self.metrics_start_time = metrics_start_time
@@ -282,10 +333,12 @@ class PerfClient:
         self.valid_latency_values: list[float] = []
         self.failed_turns = 0
         self.timestamps: dict[str, dt.datetime | None] = {"input_audio_file_end": None}
+        self.timestamps_monotonic: dict[str, float | None] = {"input_audio_file_end": None}
         self.glitch_detected = False
         self.total_reverse_barge_ins = 0
         self.server_metric_samples: dict[str, list[float]] = {key: [] for key in SERVER_METRIC_KEYS}
         self.rtvi_messages: list[dict[str, Any]] = []
+        self.realtime_turn_metrics: list[dict[str, Any]] = []
         self.running = True
         self.collecting_metrics = False
         self.silence_running = False
@@ -295,6 +348,8 @@ class PerfClient:
 
     @property
     def uri(self) -> str:
+        if self.protocol == "realtime":
+            return self.ws_url
         return f"wss://{self.host}:{self.port}/api/ws"
 
     async def _process_server_message(self, message: dict) -> None:
@@ -481,6 +536,7 @@ class PerfClient:
                     await asyncio.sleep(CHUNK_DURATION_MS / 1000)
         finally:
             self.timestamps["input_audio_file_end"] = dt.datetime.now()
+            self.timestamps_monotonic["input_audio_file_end"] = time.monotonic()
             await self.logger.log(
                 f"{self.stream_id} input audio finished at "
                 f"{self.timestamps['input_audio_file_end'].strftime('%H:%M:%S.%f')[:-3]}"
@@ -599,6 +655,8 @@ class PerfClient:
         # ``reverse_barge_in_threshold``); only valid latencies (>= threshold)
         # feed the per-client average and p95.
         self.timestamps["input_audio_file_end"] = None
+        self.timestamps_monotonic["input_audio_file_end"] = None
+        realtime_event_start = len(self._realtime.events) if self._realtime is not None else 0
         await self.logger.log(f"{self.stream_id} turn start using {audio_file_path.name}")
         send_task = asyncio.create_task(self._send_audio_file(websocket, audio_file_path))
         recv_task = asyncio.create_task(self._recv_audio_frame(websocket, timeout=None))
@@ -608,6 +666,7 @@ class PerfClient:
 
         wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=True)
         await send_task
+        await self._record_realtime_turn_metrics(audio_file_path, realtime_event_start)
 
         input_end = self.timestamps["input_audio_file_end"]
         latency = (utterance_start - input_end).total_seconds() if input_end is not None else None
@@ -624,6 +683,88 @@ class PerfClient:
                 self.valid_latency_values.append(latency)
                 await self.logger.log(f"{self.stream_id} turn complete latency={latency:.3f}s")
         return wf
+
+    async def _record_realtime_turn_metrics(self, audio_file_path: Path, event_start: int) -> None:
+        if self._realtime is None:
+            return
+        input_end = self.timestamps_monotonic["input_audio_file_end"]
+        if input_end is None:
+            return
+
+        lifecycle_types = (
+            "input_audio_buffer.speech_stopped",
+            "conversation.item.input_audio_transcription.completed",
+            "response.created",
+            "response.output_audio_transcript.delta",
+            "response.output_audio.delta",
+            "response.done",
+        )
+        first_by_type: dict[str, dict[str, Any]] = {}
+        for event in self._realtime.events[event_start:]:
+            kind = str(event.get("type") or "")
+            if kind in lifecycle_types and kind not in first_by_type:
+                first_by_type[kind] = event
+
+        offsets: dict[str, float | None] = {}
+        for kind in lifecycle_types:
+            event = first_by_type.get(kind)
+            received_at = event.get("received_at") if event else None
+            offsets[kind] = float(received_at) - input_end if isinstance(received_at, (int, float)) else None
+
+        def stage_delta(later: str, earlier: str) -> float | None:
+            later_value = offsets.get(later)
+            earlier_value = offsets.get(earlier)
+            if later_value is None or earlier_value is None:
+                return None
+            return later_value - earlier_value
+
+        response_done = first_by_type.get("response.done") or {}
+        metrics = {
+            "audio_file": audio_file_path.name,
+            "input_end_to_speech_stopped": offsets["input_audio_buffer.speech_stopped"],
+            "from_speech_stopped": {
+                "asr_transcription_completed": stage_delta(
+                    "conversation.item.input_audio_transcription.completed",
+                    "input_audio_buffer.speech_stopped",
+                ),
+                "response_created": stage_delta(
+                    "response.created",
+                    "input_audio_buffer.speech_stopped",
+                ),
+                "first_output_transcript": stage_delta(
+                    "response.output_audio_transcript.delta",
+                    "input_audio_buffer.speech_stopped",
+                ),
+                "first_output_audio": stage_delta(
+                    "response.output_audio.delta",
+                    "input_audio_buffer.speech_stopped",
+                ),
+                "response_done": stage_delta(
+                    "response.done",
+                    "input_audio_buffer.speech_stopped",
+                ),
+            },
+            "stage_deltas": {
+                "response_after_asr": stage_delta(
+                    "response.created",
+                    "conversation.item.input_audio_transcription.completed",
+                ),
+                "first_text_after_response_created": stage_delta(
+                    "response.output_audio_transcript.delta",
+                    "response.created",
+                ),
+                "first_audio_after_first_text": stage_delta(
+                    "response.output_audio.delta",
+                    "response.output_audio_transcript.delta",
+                ),
+            },
+            "response_status": response_done.get("status"),
+            "usage": response_done.get("usage"),
+        }
+        self.realtime_turn_metrics.append(metrics)
+        await self.logger.log(
+            f"{self.stream_id} realtime lifecycle {audio_file_path.name}: {json.dumps(metrics, sort_keys=True)}"
+        )
 
     async def _continuous_audio_loop(self, websocket, wf):
         turn_index = 0
@@ -653,6 +794,24 @@ class PerfClient:
             await asyncio.sleep(0.1)
         return wf
 
+    async def _run_connected_session(self, websocket) -> None:
+        wf = None
+        if self.drain_bot_intro:
+            wf = await self._receive_initial_bot_intro(websocket, wf)
+        silence_task = asyncio.create_task(self._silence_sender_loop(websocket))
+        try:
+            wf = await self._continuous_audio_loop(websocket, wf)
+        finally:
+            self.silence_running = False
+            if self.silence_event is not None:
+                self.silence_event.set()
+            silence_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await silence_task
+            self._realtime = None
+        if wf is not None:
+            wf.close()
+
     async def run(self) -> ClientResult:
         await self.logger.log(f"{self.stream_id} starting client uri={self.uri}")
         if self.start_delay > 0:
@@ -674,43 +833,55 @@ class PerfClient:
 
         error = None
         try:
-            ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-            async with websockets.connect(self.uri, open_timeout=WS_CONNECT_TIMEOUT, ssl=ssl_ctx) as websocket:
-                await self.logger.log(f"{self.stream_id} websocket connected")
-                ready_payload = {
-                    "label": "rtvi-ai",
-                    "type": "client-ready",
-                    "id": f"{self.stream_id}-client-ready",
-                    "data": {
-                        "version": "0.1.0",
-                        "about": {
-                            "name": "scaling-perf-benchmark",
-                        },
-                    },
-                }
-                ready_message = frames_pb2.MessageFrame(data=json.dumps(ready_payload))
-                await websocket.send(frames_pb2.Frame(message=ready_message).SerializeToString())
-                await self.logger.log(f"{self.stream_id} sent RTVI client-ready")
-
-                async def _run_session():
-                    wf = await self._receive_initial_bot_intro(websocket, wf=None)
-                    silence_task = asyncio.create_task(self._silence_sender_loop(websocket))
+            if self.protocol == "realtime":
+                input_rate = 16_000
+                with contextlib.suppress(Exception), wave.open(str(self.audio_files[0]), "rb") as wav_file:
+                    input_rate = wav_file.getframerate()
+                async with OpenAIRealtimeSocket(
+                    self.uri,
+                    api_key=self.api_key,
+                    auth_scheme=self.auth_scheme,
+                    connect_timeout=self.connect_timeout,
+                    input_sample_rate=input_rate,
+                    output_sample_rate=DEFAULT_OUTPUT_RATE,
+                ) as realtime:
+                    self._realtime = realtime
+                    ready = await realtime.configure_input(input_rate)
+                    await self.logger.log(
+                        f"{self.stream_id} realtime session ready type={ready.get('type')} "
+                        f"output_rate={realtime.output_sample_rate}"
+                    )
+                    adapter = RealtimeFrameAdapter(realtime)
                     try:
-                        wf = await self._continuous_audio_loop(websocket, wf)
-                    finally:
-                        self.silence_running = False
-                        self.silence_event.set()
-                        silence_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await silence_task
-                    if wf is not None:
-                        wf.close()
-
-                await asyncio.wait_for(_run_session(), timeout=hard_deadline)
+                        await asyncio.wait_for(self._run_connected_session(adapter), timeout=hard_deadline)
+                    except TimeoutError as exc:
+                        raise RuntimeError(f"Hard deadline reached ({hard_deadline:.0f}s)") from exc
+            else:
+                ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode = ssl.CERT_NONE
+                async with websockets.connect(self.uri, open_timeout=self.connect_timeout, ssl=ssl_ctx) as websocket:
+                    await self.logger.log(f"{self.stream_id} websocket connected")
+                    ready_payload = {
+                        "label": "rtvi-ai",
+                        "type": "client-ready",
+                        "id": f"{self.stream_id}-client-ready",
+                        "data": {
+                            "version": "0.1.0",
+                            "about": {
+                                "name": "scaling-perf-benchmark",
+                            },
+                        },
+                    }
+                    ready_message = frames_pb2.MessageFrame(data=json.dumps(ready_payload))
+                    await websocket.send(frames_pb2.Frame(message=ready_message).SerializeToString())
+                    await self.logger.log(f"{self.stream_id} sent RTVI client-ready")
+                    try:
+                        await asyncio.wait_for(self._run_connected_session(websocket), timeout=hard_deadline)
+                    except TimeoutError as exc:
+                        raise RuntimeError(f"Hard deadline reached ({hard_deadline:.0f}s)") from exc
         except TimeoutError:
-            error = f"Hard deadline reached ({hard_deadline:.0f}s)"
+            error = f"WebSocket/session setup timed out ({self.connect_timeout:.0f}s)"
         except ConnectionClosed:
             error = "WebSocket connection closed"
         except Exception as exc:
@@ -744,6 +915,7 @@ class PerfClient:
                 "sample_counts": server_metric_counts,
             },
             rtvi_messages=self.rtvi_messages,
+            realtime_turn_metrics=self.realtime_turn_metrics,
             timestamp=dt.datetime.now().isoformat(),
             error=error,
         )
@@ -790,8 +962,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Single-client voice-agent benchmark. Use simulate_concurrency.sh for parallel runs."
     )
-    parser.add_argument("--host", default="localhost", help="WebSocket host")
-    parser.add_argument("--port", type=int, default=7860, help="WebSocket port")
+    parser.add_argument("--host", default="localhost", help="WebSocket host (RTVI)")
+    parser.add_argument("--port", type=int, default=7860, help="WebSocket port (RTVI)")
+    parser.add_argument(
+        "--protocol",
+        default="",
+        help="rtvi or realtime. Defaults to realtime when --ws-url is set, otherwise rtvi.",
+    )
+    parser.add_argument(
+        "--ws-url",
+        default="",
+        help="OpenAI Realtime WebSocket URL (env BASETEN_CHAIN_WSS_URL). Implies --protocol realtime.",
+    )
+    parser.add_argument(
+        "--api-key",
+        default="",
+        help="Realtime API key (env BASETEN_API_KEY). Sent as Authorization: Api-Key <key>.",
+    )
+    parser.add_argument(
+        "--auth-scheme",
+        default=DEFAULT_AUTH_SCHEME,
+        help="Authorization scheme for --api-key (default: Api-Key). Use Bearer when required.",
+    )
+    parser.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=None,
+        help="WebSocket handshake timeout in seconds (default: 30 RTVI, 60 realtime).",
+    )
+    parser.add_argument(
+        "--drain-bot-intro",
+        action="store_true",
+        help="Wait for and discard an initial bot utterance. Default on for RTVI, off for realtime.",
+    )
+    parser.add_argument(
+        "--skip-bot-intro",
+        action="store_true",
+        help="Do not wait for an initial bot utterance.",
+    )
     parser.add_argument(
         "--dataset-dir",
         type=Path,
@@ -830,11 +1038,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--turn-response-timeout",
         type=float,
-        default=TURN_RESPONSE_TIMEOUT,
+        default=None,
         help=(
             "Per-turn timeout (seconds) waiting for the bot's first audio frame "
-            "after the input audio file finishes sending. On timeout the turn "
-            "is recorded as a failed_turn and the loop moves on to the next turn."
+            "after the input audio file finishes sending. Defaults to 10 for RTVI "
+            "and 45 for realtime. On timeout the turn is recorded as a failed_turn."
         ),
     )
     parser.add_argument("--result-path", type=Path, help="Write client result JSON here")
@@ -890,6 +1098,32 @@ async def async_main(args: argparse.Namespace) -> int:
 
     result_path, logger_path, audio_output_path = _resolve_paths(args)
 
+    ws_url = resolve_ws_url(args.ws_url)
+    try:
+        protocol = resolve_protocol(protocol=args.protocol, ws_url=ws_url)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    api_key = resolve_api_key(args.api_key)
+    if protocol == "realtime" and not ws_url:
+        print("error: --ws-url or BASETEN_CHAIN_WSS_URL is required for realtime", file=sys.stderr)
+        return 2
+    connect_timeout = (
+        float(args.connect_timeout)
+        if args.connect_timeout is not None
+        else (DEFAULT_CONNECT_TIMEOUT if protocol == "realtime" else WS_CONNECT_TIMEOUT)
+    )
+    turn_response_timeout = (
+        float(args.turn_response_timeout)
+        if args.turn_response_timeout is not None
+        else (REALTIME_TURN_RESPONSE_TIMEOUT if protocol == "realtime" else TURN_RESPONSE_TIMEOUT)
+    )
+    drain_bot_intro = protocol != "realtime"
+    if args.drain_bot_intro:
+        drain_bot_intro = True
+    if args.skip_bot_intro:
+        drain_bot_intro = False
+
     logger = RunLogger(logger_path)
     client = PerfClient(
         stream_id=args.stream_id,
@@ -901,9 +1135,15 @@ async def async_main(args: argparse.Namespace) -> int:
         session_end_time=float(args.session_end_time),
         test_duration=float(args.test_duration),
         reverse_barge_in_threshold=float(args.reverse_barge_in_threshold),
-        turn_response_timeout=float(args.turn_response_timeout),
+        turn_response_timeout=turn_response_timeout,
         audio_output_path=audio_output_path,
         logger=logger,
+        protocol=protocol,
+        ws_url=ws_url,
+        api_key=api_key,
+        auth_scheme=args.auth_scheme,
+        connect_timeout=connect_timeout,
+        drain_bot_intro=drain_bot_intro,
     )
     result = await client.run()
     result_path.parent.mkdir(parents=True, exist_ok=True)
