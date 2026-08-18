@@ -125,8 +125,9 @@ def get_lang_codes(
     asr_function_id: str = "",
     tts_server: str = "",
     tts_voice_id: str = "",
+    llm_supported_languages=None,
 ) -> str:
-    """Comma-separated language codes shared by the ASR and TTS services (informational)."""
+    """Comma-separated language codes compatible with the selected services."""
     if asr_server or tts_server:
         languages = build_session_languages(
             asr_server,
@@ -134,8 +135,9 @@ def get_lang_codes(
             asr_function_id,
             tts_server,
             tts_voice_id,
+            llm_supported_languages=llm_supported_languages,
         ).get("languages", [])
-        if languages:
+        if languages or llm_supported_languages is not None:
             return ", ".join(languages)
 
     tts_config = config_store.get("tts", {})

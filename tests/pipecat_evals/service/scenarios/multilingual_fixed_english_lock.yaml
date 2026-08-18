@@ -1,0 +1,17 @@
+name: multilingual_fixed_english_lock
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "Bonjour."
+    expect:
+      - event: response
+        eval: "the reply is in English, greets the user, and does not switch into French"
+        within_ms: 90000

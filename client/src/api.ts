@@ -39,6 +39,16 @@ export interface Tool {
   parameters?: Record<string, unknown>;
 }
 
+export type SubagentReasoning = "on" | "off" | "on_demand";
+
+export interface Subagent {
+  key: string;
+  label: string;
+  capability: string;
+  delegatable: boolean;
+  reasoning: SubagentReasoning;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) {
@@ -95,6 +105,14 @@ export function useDefaultTools(pipelineMode = "") {
   });
 }
 
+export function useSubagents(pipelineMode = "") {
+  const qs = pipelineMode ? `?pipeline_mode=${encodeURIComponent(pipelineMode)}` : "";
+  return useQuery<Subagent[]>({
+    queryKey: ["subagents", pipelineMode],
+    queryFn: () => fetchJson<Subagent[]>(`/api/subagents${qs}`),
+  });
+}
+
 export interface SimpleService {
   id: string;
   name: string;
@@ -102,6 +120,7 @@ export interface SimpleService {
   model?: string;
   voiceId?: string;
   functionId?: string;
+  languageCode?: string;
   builtIn: boolean;
   source?: BuiltInServiceSource;
 }
@@ -130,8 +149,10 @@ export function useDefaultTTS(pipelineMode = "") {
         id: e.id,
         name: e.name,
         server: String(e.server ?? ""),
+        model: e.model ? String(e.model) : undefined,
         voiceId: e.voice_id ? String(e.voice_id) : undefined,
         functionId: e.function_id ? String(e.function_id) : undefined,
+        languageCode: e.language_code ? String(e.language_code) : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
       })),
@@ -243,16 +264,35 @@ export function useVoiceCatalog(
   asrServer?: string,
   asrModel?: string,
   asrFunctionId?: string,
+  functionId?: string,
+  model?: string,
+  pipelineMode?: string,
+  llmId?: string,
 ) {
   return useQuery<TTSConfig>({
-    queryKey: ["tts-config", server || "default", voiceId || "", asrServer || "", asrModel || "", asrFunctionId || ""],
+    queryKey: [
+      "tts-config",
+      server || "default",
+      voiceId || "",
+      functionId || "",
+      model || "",
+      asrServer || "",
+      asrModel || "",
+      asrFunctionId || "",
+      pipelineMode || "",
+      llmId || "",
+    ],
     queryFn: () => {
       const params = new URLSearchParams();
       if (server) params.set("server", server);
       if (voiceId) params.set("voice_id", voiceId);
+      if (functionId) params.set("function_id", functionId);
+      if (model) params.set("model", model);
       if (asrServer) params.set("asr_server", asrServer);
       if (asrModel) params.set("asr_model", asrModel);
       if (asrFunctionId) params.set("asr_function_id", asrFunctionId);
+      if (pipelineMode) params.set("pipeline_mode", pipelineMode);
+      if (llmId) params.set("llm_id", llmId);
       const url = params.size > 0 ? `/api/tts-config?${params.toString()}` : "/api/tts-config";
       return fetchJson<TTSConfig>(url);
     },
@@ -316,6 +356,22 @@ export async function uploadWebcamFrame(sessionId: string, frame: Blob) {
   const form = new FormData();
   form.append("file", frame, "webcam-frame.jpg");
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/webcam/frames`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    const details = body ? `: ${body.slice(0, 200)}` : "";
+    throw new Error(`HTTP ${res.status}${details}`);
+  }
+  return res.json();
+}
+
+export async function uploadWebcamCapture(sessionId: string, frame: Blob, requestId: string) {
+  const form = new FormData();
+  form.append("file", frame, "focused-capture.jpg");
+  form.append("request_id", requestId);
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/webcam/capture`, {
     method: "POST",
     body: form,
   });

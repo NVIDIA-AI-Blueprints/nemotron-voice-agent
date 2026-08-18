@@ -1,0 +1,21 @@
+name: frontend_backend_flight_search
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 90000
+  - user: "Find flights from New York to Los Angeles on May 1, 2026."
+    expect:
+      - event: function_call
+        calls:
+          - name: call_backend
+        within_ms: 90000
+      - event: response
+        eval: "the reply lists multiple flight options from New York or JFK to Los Angeles or LAX on May 1, 2026, includes flight numbers or departure times, and asks which option to book"
+        within_ms: 120000

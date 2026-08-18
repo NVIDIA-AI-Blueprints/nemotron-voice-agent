@@ -9,6 +9,7 @@ llm:
     name: "Nemotron 3 Nano 30B A3B"
     model_id: "nvidia/nemotron-3-nano-30b-a3b"
     base_url: "https://integrate.api.nvidia.com/v1"
+    supported_languages: [en, de, es, fr, it, ja]
     system_prompt: ""
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
 
@@ -16,6 +17,7 @@ llm:
     name: "Nemotron 3 Nano 30B A3B (Reasoning)"
     model_id: "nvidia/nemotron-3-nano-30b-a3b"
     base_url: "https://integrate.api.nvidia.com/v1"
+    supported_languages: [en, de, es, fr, it, ja]
     system_prompt: ""
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"repetition_penalty":1.05}}'
 
@@ -23,6 +25,7 @@ llm:
     name: "Nemotron 3 Super 120B A12B"
     model_id: "nvidia/nemotron-3-super-120b-a12b"
     base_url: "https://integrate.api.nvidia.com/v1"
+    supported_languages: [en, de, es, fr, it, ja, zh]
     system_prompt: ""
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
 
@@ -30,16 +33,27 @@ llm:
     name: "Nemotron 3 Super 120B A12B (Reasoning)"
     model_id: "nvidia/nemotron-3-super-120b-a12b"
     base_url: "https://integrate.api.nvidia.com/v1"
+    supported_languages: [en, de, es, fr, it, ja, zh]
     system_prompt: ""
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"repetition_penalty":1.05}}'
 
 # ── TTS Services (Cascaded pipeline) ──
 tts:
-  magpie-tts:
+  magpie-multilingual-tts:
     name: "Magpie TTS Multilingual"
     server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
-    function_id: ""
+    model: "magpie-tts-multilingual"
+    function_id: "877104f7-e885-42b9-8de8-f6e4c6303969"
+    synthesis_mode: stitched
+
+  chatterbox-multilingual-tts:
+    name: "Chatterbox TTS Multilingual"
+    server: "grpc.nvcf.nvidia.com:443"
+    voice_id: "Chatterbox-Multilingual.en-US.Male"
+    model: "chatterbox-tts-multilingual"
+    function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
+    synthesis_mode: per_sentence
 
 # ── ASR Services (Cascaded pipeline) ──
 asr:

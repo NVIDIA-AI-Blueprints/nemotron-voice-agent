@@ -38,7 +38,7 @@ x-vllm-nano: &vllm-nano
       max-file: "5"
 
 x-nim-llm: &nim-llm
-  image: nvcr.io/nim/nvidia/nemotron-3-nano:2.0.5
+  image: nvcr.io/nim/nvidia/nemotron-3-nano:2.0.9
   user: "0:0"
   ports:
     - "18000:8000"

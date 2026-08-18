@@ -7,10 +7,14 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from loguru import logger
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
+    LLMConfigureOutputFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
     VADUserStartedSpeakingFrame,
@@ -23,6 +27,9 @@ class MediaDispatchHandler(Protocol):
 
     async def start_pending_media_analysis(self) -> None:
         """Start any queued media analysis after the assistant ack turn completes."""
+
+    async def start_pending_thinking(self) -> None:
+        """Start any queued deliberate-reasoning pass after the stall turn completes."""
 
     async def on_user_voice_turn_started(self) -> None:
         """Notify that the user resumed control through speech."""
@@ -49,11 +56,21 @@ class PostAckMediaDispatchProcessor(FrameProcessor):
         self._handler = handler
         self._assistant_speaking = False
         self._assistant_interrupted = False
+        self._skip_tts = False
+        self._dispatched_this_turn = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Pass frames through, then dispatch pending analysis after bot speech stops."""
         await super().process_frame(frame, direction)
         await self.push_frame(frame, direction)
+
+        if direction == FrameDirection.DOWNSTREAM and isinstance(frame, LLMConfigureOutputFrame):
+            self._skip_tts = frame.skip_tts
+            return
+
+        if direction == FrameDirection.DOWNSTREAM and isinstance(frame, LLMFullResponseStartFrame):
+            self._dispatched_this_turn = False
+            return
 
         if isinstance(frame, (UserStartedSpeakingFrame, VADUserStartedSpeakingFrame)):
             if self._assistant_speaking:
@@ -79,4 +96,25 @@ class PostAckMediaDispatchProcessor(FrameProcessor):
             await self._handler.on_assistant_speaking_stopped()
             if was_interrupted:
                 return
+            await self._dispatch_pending_work()
+
+        if (
+            direction == FrameDirection.DOWNSTREAM
+            and isinstance(frame, LLMFullResponseEndFrame)
+            and self._skip_tts
+            and not self._assistant_speaking
+        ):
+            await self._dispatch_pending_work()
+
+    async def _dispatch_pending_work(self) -> None:
+        if self._dispatched_this_turn:
+            return
+        self._dispatched_this_turn = True
+        try:
             await self._handler.start_pending_media_analysis()
+        except Exception as exc:
+            logger.warning(f"Failed to start pending media analysis: {exc}")
+        try:
+            await self._handler.start_pending_thinking()
+        except Exception as exc:
+            logger.warning(f"Failed to start pending thinking: {exc}")

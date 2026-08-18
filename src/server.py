@@ -51,7 +51,7 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, Query, Request, UploadFile, WebSocket
+from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
@@ -65,8 +65,9 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 import config_store
 import examples_registry
-from attachment_store import store_attachment
+from attachment_store import consume_capture_request, store_attachment
 from examples.shared.prewarm import build_session_languages, prewarm_tts, warmup_tts_synthesis
+from examples.shared.subagents import load_subagent_registry
 from utils import (
     PROJECT_ROOT,
     build_services_api_response,
@@ -76,6 +77,7 @@ from utils import (
     is_nvcf,
     load_prompt_catalog,
     load_service_entry,
+    load_service_entry_by_id,
     load_tools_catalog,
     parse_endpoint,
     set_active_slots,
@@ -102,7 +104,12 @@ _SPEECH_READY_ENDPOINTS = {
         50152,
         9001,
     ),
-    "tts": (("tts-service",), 50051, 50151, 9000),
+    "tts": (
+        ("tts-service", "chatterbox-tts-service", "magpie-zeroshot-tts-service"),
+        50051,
+        50151,
+        9000,
+    ),
 }
 _TURN_LISTEN_PORT = 3478
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
@@ -253,11 +260,37 @@ def _resolve_config(session_id: str = "", fallback_example_key: str = "", **quer
     return _sanitize_session_config({k: v for k, v in base.items() if v}, fallback_example_key=fallback_example_key)
 
 
-def _get_default_tts_selection() -> tuple[str, str]:
+def _get_default_tts_selection() -> tuple[str, str, str, str]:
+    """Return default TTS ``(server, voice_id, function_id, model)`` from the catalog."""
     default_tts = load_service_entry("tts", "")
     return (
         default_tts.get("server", "grpc.nvcf.nvidia.com:443"),
-        default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria"),
+        default_tts.get("voice_id", ""),
+        default_tts.get("function_id", ""),
+        default_tts.get("model", ""),
+    )
+
+
+def _resolve_tts_selection(
+    server: str = "",
+    voice_id: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> tuple[str, str, str, str]:
+    """Bind server + metadata as one selection.
+
+    When ``server`` is omitted, fall back to the catalog default for server,
+    voice, function_id, and model together. When ``server`` is explicit, keep
+    empty function_id/model (do not borrow Magpie defaults for another NIM).
+    """
+    default_server, default_voice, default_function_id, default_model = _get_default_tts_selection()
+    if server:
+        return server, voice_id or default_voice, function_id, model
+    return (
+        default_server,
+        voice_id or default_voice,
+        function_id or default_function_id,
+        model or default_model,
     )
 
 
@@ -522,9 +555,12 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
     if _should_skip_tts_prewarm(example):
         return
 
-    default_tts_server, default_tts_voice = _get_default_tts_selection()
-    tts_server = config.get("tts_server", "") or default_tts_server
-    voice_id = config.get("tts_voice_id", "") or default_tts_voice
+    tts_server, voice_id, tts_function_id, tts_model = _resolve_tts_selection(
+        config.get("tts_server", ""),
+        config.get("tts_voice_id", ""),
+        config.get("tts_function_id", ""),
+        config.get("tts_model", ""),
+    )
 
     ready_url = _local_speech_ready_url("TTS", tts_server)
     if ready_url:
@@ -550,6 +586,8 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
             warmup_tts_synthesis,
             tts_server,
             voice_id,
+            tts_function_id,
+            tts_model,
             timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
         )
     except TimeoutError as exc:
@@ -712,6 +750,40 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         )
         return frame.metadata()
 
+    @app.post("/api/sessions/{session_id}/webcam/capture")
+    async def upload_webcam_capture(
+        session_id: str,
+        file: Annotated[UploadFile, File()],
+        request_id: Annotated[str, Form()],
+    ):
+        """Store an agent-requested high-resolution webcam snapshot for focused analysis.
+
+        Unlike a streamed webcam frame, this lands in the attachment store (so the media
+        analyzer can read it via get_attachment) tagged source="capture", so it never
+        becomes the Speaker's default visual source.
+        """
+        if _multi_worker_mode_enabled():
+            return _multi_worker_session_config_response()
+        if (failure := _session_capability_error(session_id, "webcam")) is not None:
+            return failure
+        if not consume_capture_request(session_id, request_id):
+            return JSONResponse(status_code=409, content={"detail": "capture request is missing, stale, or invalid"})
+        try:
+            data = await _read_upload_file_with_limit(file)
+            attachment = store_attachment(
+                session_id=session_id,
+                kind="image",
+                name=file.filename or "focused-capture.jpg",
+                content_type=file.content_type or "image/jpeg",
+                data=data,
+                source="capture",
+            )
+        except ValueError as exc:
+            status_code = 413 if "limit" in str(exc).lower() else 400
+            return JSONResponse(status_code=status_code, content={"detail": str(exc)})
+        logger.debug(f"Stored high-res webcam capture (session_id={session_id[:8]}..., bytes={len(attachment.data)})")
+        return attachment.metadata()
+
     # ---- WebRTC signaling ----
 
     @app.post("/api/offer")
@@ -868,6 +940,13 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             )
         return tools
 
+    @app.get("/api/subagents")
+    async def get_subagents(pipeline_mode: str = Query(default="")):
+        """Subagents the example declares in ``subagents.yaml`` (empty if none)."""
+        _, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
+        registry = load_subagent_registry(Path(module_file).parent / "subagents.yaml")
+        return registry.to_payload()
+
     # ---- Service catalog (services.cloud.yaml or services.local.yaml) ----
 
     @app.get("/api/services")
@@ -879,28 +958,45 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
     @app.get("/api/tts-config")
     async def tts_config(
+        pipeline_mode: str = Query(default=""),
+        llm_id: str = Query(default=""),
         server: str = Query(default=""),
         voice_id: str = Query(default=""),
+        function_id: str = Query(default=""),
+        model: str = Query(default=""),
         asr_server: str = Query(default=""),
         asr_model: str = Query(default=""),
         asr_function_id: str = Query(default=""),
     ):
+        _bind_example_context_by_key(pipeline_mode or fallback_example_key)
         if asr_server or asr_model or asr_function_id:
             default_asr_server, default_asr_model, default_asr_function_id = _get_default_asr_catalog()
-            default_tts_server, default_tts_voice = _get_default_tts_selection()
+            if llm_id.startswith("custom-"):
+                llm_entry = {}
+            elif llm_id:
+                llm_entry = load_service_entry_by_id("llm", llm_id) or load_service_entry("llm", "")
+            else:
+                llm_entry = load_service_entry("llm", "")
+            llm_supported_languages = llm_entry.get("supported_languages") if llm_entry else None
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
             try:
                 return await _run_blocking(
                     build_session_languages,
                     asr_server or default_asr_server,
                     asr_model or default_asr_model,
                     asr_function_id or default_asr_function_id,
-                    server or default_tts_server,
-                    voice_id or default_tts_voice,
+                    tts_server,
+                    tts_voice,
+                    tts_function_id,
+                    tts_model,
+                    llm_supported_languages,
                     timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
                 )
             except TimeoutError:
                 logger.warning(
-                    "tts-config ASR/TTS intersection timed out after {}s",
+                    "tts-config ASR/TTS/LLM intersection timed out after {}s",
                     _CONNECT_PREWARM_TIMEOUT_SECS,
                 )
                 return JSONResponse(
@@ -909,11 +1005,22 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 )
 
         if server:
-            _, default_tts_voice = _get_default_tts_selection()
-            cached = config_store.get(f"tts:{server}")
+            tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+                server, voice_id, function_id, model
+            )
+            cached = config_store.get(f"tts:{tts_server}:{tts_function_id}:{tts_model}")
             if cached:
-                return cached
-            return await _run_blocking(prewarm_tts, server, voice_id or default_tts_voice)
+                result = dict(cached)
+                if tts_voice:
+                    result["defaultVoiceId"] = tts_voice
+                return result
+            return await _run_blocking(
+                prewarm_tts,
+                tts_server,
+                tts_voice,
+                tts_function_id,
+                tts_model,
+            )
         return config_store.get("tts", {"languages": [], "voices": []})
 
     # ---- WebRTC ICE servers (TURN credentials) ----

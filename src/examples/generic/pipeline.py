@@ -60,6 +60,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
         __file__,
         body.get("prompt_content", ""),
@@ -132,19 +133,51 @@ async def bot(runner_args: RunnerArguments) -> None:
     # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
+    )
+    tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
+    tts_language_code = body.get("tts_language_code", "") or default_tts.get("language_code", "")
+    if tts_language_code:
+        tts_language_code = normalize_lang_code(tts_language_code)
     custom_dictionary = load_ipa_dictionary()
 
-    tts = NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=tts_server,
-        settings=NvidiaTTSSettings(voice=tts_voice),
-        use_ssl=tts_ssl,
-        text_filters=[NemotronSpeechTextFilter()],
-        custom_dictionary=custom_dictionary,
-    )
+    tts_settings_kwargs: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
+    if tts_language_code:
+        tts_settings_kwargs["language"] = tts_language_code
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": tts_server,
+        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "use_ssl": tts_ssl,
+        "text_filters": [NemotronSpeechTextFilter()],
+        "custom_dictionary": custom_dictionary,
+    }
+    if tts_function_id or tts_model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": tts_function_id,
+            "model_name": tts_model,
+        }
+    if tts_zero_shot_audio_prompt_file:
+        tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
+    tts = NvidiaTTSService(**tts_kwargs)
 
-    logger.info(f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, text_filters=[NemotronSpeechTextFilter]")
+    logger.info(
+        f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"language={tts_language_code or '(pipecat default)'}, "
+        f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
+        f"text_filters=[NemotronSpeechTextFilter]"
+    )
 
     # --- Context ---
     messages = build_context_messages(base_system_content, system_prompt)
@@ -157,7 +190,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=build_user_aggregator_params(),
+        user_params=build_user_aggregator_params(welcome_enabled),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
@@ -279,6 +312,11 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if activity_check:
+            activity_check.start()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
         context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
         await task.queue_frames([LLMRunFrame()])
 

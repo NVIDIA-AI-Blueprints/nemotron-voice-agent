@@ -102,10 +102,10 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
 5. Start the full stack via Docker Compose. This brings up the LLM (vLLM), Riva speech, and the Pipecat pipeline together. Choose the profile for your example:
 
     ```bash
-    # Generic Cascaded — Riva ASR + TTS + vLLM LLM
+    # Generic Cascaded: Riva ASR + TTS + vLLM LLM
     docker compose --profile generic-assistant/jetson-thor up -d
 
-    # Nemotron Omni — local Omni vLLM + Riva TTS only (Omni does its own ASR; set service_enabled_asr=false in step 3d)
+    # Nemotron Omni: local Omni vLLM + Riva TTS only (Omni does its own ASR. Set service_enabled_asr=false in step 3d)
     docker compose --profile omni-assistant/jetson-thor up -d
     ```
 

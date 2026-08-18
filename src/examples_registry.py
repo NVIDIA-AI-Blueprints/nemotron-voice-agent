@@ -27,6 +27,7 @@ class ExampleEntry(TypedDict):
     agent_prompt_keys: list[str]
     activity_check: ActivityCheckConfig | None
     defaults: dict[str, list[str] | str]
+    welcome_message: bool
     bot: str
 
 
@@ -156,7 +157,9 @@ def _rewrite_entry_for_host_runtime(entry: dict) -> dict:
             )
         else:
             out[field] = (
-                value.replace("tts-service:50051", "localhost:50151")
+                value.replace("magpie-zeroshot-tts-service:50051", "localhost:50151")
+                .replace("chatterbox-tts-service:50051", "localhost:50151")
+                .replace("tts-service:50051", "localhost:50151")
                 .replace("nemotron-asr-streaming-english:50052", "localhost:50152")
                 .replace("nemotron-asr-streaming-multilingual:50052", "localhost:50152")
                 .replace("parakeet-ctc-asr:50052", "localhost:50152")
@@ -330,11 +333,25 @@ def _resolve_prompt_defaults(example: EnrichedExample) -> list[PromptDefault]:
     return [_resolve_prompt_default(example, prompt_key) for prompt_key in example["defaults"].get("prompt", [])]
 
 
-def prompt_default_key(example_key: str = "") -> str | None:
+def prompt_default_key(example_key: str = "", *, ignore_lock: bool = False) -> str | None:
     """Return the configured default prompt key for an example, if any."""
-    example = find(example_key)
+    example = find(example_key, ignore_lock=ignore_lock)
     prompt_keys = example["defaults"].get("prompt", [])
     return prompt_keys[0] if prompt_keys else None
+
+
+def welcome_message_enabled(example_key: str = "") -> bool:
+    """Return whether an example greets the user at session start.
+
+    Resolution order: the ``ENABLE_WELCOME_MESSAGE`` environment variable wins
+    when set (a global override used by the ``generic-assistant/workstation-perf``
+    compose profile), otherwise the per-example ``welcome_message`` registry value
+    applies (default ``True``).
+    """
+    override = os.getenv("ENABLE_WELCOME_MESSAGE", "").strip()
+    if override:
+        return override.lower() == "true"
+    return bool(find(example_key).get("welcome_message", True))
 
 
 def agent_prompt_keys(example_key: str = "") -> frozenset[str]:
@@ -368,6 +385,9 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             raise RuntimeError(f"Example {example_id!r} agent_prompt_keys must be a list of strings")
         if activity_check is not None and not isinstance(activity_check, dict):
             raise RuntimeError(f"Example {example_id!r} activity_check must be a mapping")
+        welcome_message = entry.get("welcome_message", True)
+        if not isinstance(welcome_message, bool):
+            raise RuntimeError(f"Example {example_id!r} welcome_message must be a boolean")
         if not isinstance(defaults, dict):
             raise RuntimeError(f"Example {example_id!r} defaults must be a mapping")
         normalized_defaults: dict[str, list[str] | str] = {}
@@ -395,6 +415,7 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             "agent_prompt_keys": list(agent_prompt_keys),
             "activity_check": normalized_activity_check,
             "defaults": normalized_defaults,
+            "welcome_message": welcome_message,
             "bot": bot_spec,
         }
     return examples
@@ -488,19 +509,22 @@ def _lookup_by_key(key: str) -> EnrichedExample:
     return _enrich(key, EXAMPLES[key])
 
 
-def find(value: str = "") -> EnrichedExample:
+def find(value: str = "", *, ignore_lock: bool = False) -> EnrichedExample:
     """Resolve an example.
 
     Routing rules:
-      * Locked selection always wins, regardless of ``value``.
-      * Otherwise prefer an explicit example-id match within the visible
-        set, then fall back to the default example.
+      * Locked selection wins unless ``ignore_lock`` is set.
+      * When ``ignore_lock`` is set, explicit example-id matches are resolved
+        against every registered example.
+      * Otherwise prefer an explicit example-id match within the visible set.
+      * Fall back to the default example when no explicit match is found.
     """
-    if _SELECTION.locked:
+    if _SELECTION.locked and not ignore_lock:
         return _lookup_by_key(_SELECTION.default_key)
 
     cleaned = (value or "").strip().lower()
-    if cleaned and cleaned in _SELECTION.example_keys:
+    allowed_keys = tuple(EXAMPLES) if ignore_lock else _SELECTION.example_keys
+    if cleaned and cleaned in allowed_keys:
         return _lookup_by_key(cleaned)
     return _lookup_by_key(_SELECTION.default_key)
 

@@ -1,5 +1,5 @@
 x-nemotron-asr: &nemotron-asr
-  image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.2.0
+  image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.0
   user: "0:0"
   ports:
     - "50152:50052"
@@ -38,11 +38,22 @@ services:
     <<: *nemotron-asr
     profiles:
       - generic-assistant/workstation
-      - generic-assistant/workstation-perf
       - frontend-backend-agent/workstation
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=en-US,mode=str
+    networks:
+      default:
+        aliases:
+          - nemotron-asr-streaming-english
+
+  nemotron-asr-streaming-english-perf:
+    <<: *nemotron-asr
+    profiles:
+      - generic-assistant/workstation-perf
+    environment:
+      <<: *nemotron-asr-env
+      NIM_TAGS_SELECTOR: type=en-US,mode=str,batch_size=128
     networks:
       default:
         aliases:

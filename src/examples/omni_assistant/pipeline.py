@@ -4,7 +4,7 @@
 """Nemotron Omni cascaded pipeline using the upstream-style Omni service.
 
 This is the current experimental pipeline for the clean
-``NvidiaOmniMultimodalService`` shape:
+``NvidiaOmniLLMService`` shape:
 
 * ``transport.input`` + VAD/user-turn processing feed audio into Omni.
 * Omni replaces ASR + LLM and emits standard Pipecat frames.
@@ -18,8 +18,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 from loguru import logger
-from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -38,21 +36,23 @@ from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.transports.base_transport import TransportParams
-from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import (
-    MuteUntilFirstBotCompleteUserMuteStrategy,
-)
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
 from examples.omni_assistant.audio_only_smart_turn_strategy import AudioOnlySmartTurnStopStrategy
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
-    NvidiaOmniService,
+    NvidiaOmniLLMService,
     NvidiaOmniSettings,
 )
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.pipeline_utils import (
+    build_smart_turn_analyzer,
+    build_user_mute_strategies,
+)
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -73,11 +73,7 @@ def _build_user_turn_strategies() -> UserTurnStrategies:
     """Build VAD-start + Smart Turn-stop strategies for Omni audio turns."""
     return UserTurnStrategies(
         start=[VADUserTurnStartStrategy()],
-        stop=[
-            AudioOnlySmartTurnStopStrategy(
-                turn_analyzer=LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=0.7))
-            )
-        ],
+        stop=[AudioOnlySmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())],
     )
 
 
@@ -90,6 +86,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Nemotron Omni cascaded pipeline for one session."""
     transport = _create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
     prompt_key, base_system_content = resolve_prompt(
         __file__,
@@ -110,15 +107,16 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # Build the conversation context up-front. With emit_transcriptions enabled,
-    # Omni emits TranscriptionFrame for the user side while the assistant
-    # aggregator commits LLMTextFrame output as usual.
+    # Omni reports the user's speech as a TranscriptionFrame, which the user
+    # aggregator writes here as it would an STT service's transcript, while the
+    # assistant aggregator commits LLMTextFrame output as usual.
     system_content = base_system_content
     if system_prompt_override:
         system_content = f"{base_system_content}\n\n{system_prompt_override}".strip()
     context = LLMContext([{"role": "system", "content": system_content}])
 
     emit_transcriptions = parse_env_bool("OMNI_EMIT_TRANSCRIPTIONS", default=True)
-    omni = NvidiaOmniService(
+    omni = NvidiaOmniLLMService(
         # Name carries "llm" so metrics consumers (UI metric-group, perf
         # benchmark) attribute Omni's TTFB/processing/token-usage metrics to the
         # LLM stage. Omni fuses ASR+LLM, so these are the pipeline's LLM metrics.
@@ -133,7 +131,6 @@ async def bot(runner_args: RunnerArguments) -> None:
             temperature=parse_env_float("OMNI_TEMPERATURE", 0.6, min_value=0.0),
             top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
             input_modalities=("text", "audio"),
-            response_format={"type": "json_object"} if emit_transcriptions else None,
             emit_transcriptions=emit_transcriptions,
             min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
         ),
@@ -141,25 +138,50 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
+    )
+    tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
     custom_dictionary = load_ipa_dictionary()
 
-    tts = NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=tts_server,
-        settings=NvidiaTTSSettings(voice=tts_voice),
-        use_ssl=tts_ssl,
-        text_filters=[NemotronSpeechTextFilter()],
-        custom_dictionary=custom_dictionary,
-        stop_frame_timeout_s=parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 30.0, min_value=5.0),
+    tts_settings_kwargs: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": tts_server,
+        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "use_ssl": tts_ssl,
+        "text_filters": [NemotronSpeechTextFilter()],
+        "custom_dictionary": custom_dictionary,
+        "stop_frame_timeout_s": parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 30.0, min_value=5.0),
+    }
+    if tts_function_id or tts_model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": tts_function_id,
+            "model_name": tts_model,
+        }
+    if tts_zero_shot_audio_prompt_file:
+        tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
+    tts = NvidiaTTSService(**tts_kwargs)
+    logger.info(
+        f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}"
     )
-    logger.info(f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}")
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams()),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
             user_turn_strategies=_build_user_turn_strategies(),
         ),
     )
@@ -322,6 +344,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
         context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
         await task.queue_frames([LLMRunFrame()])
 
@@ -358,8 +383,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
 
 def _create_transport(runner_args: RunnerArguments):
-    """Create a transport from runner arguments (WebRTC or WebSocket)."""
-    from pipecat.runner.types import SmallWebRTCRunnerArguments
+    """Create a transport from runner arguments (WebRTC, WebSocket, or eval)."""
+    from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
 
     if isinstance(runner_args, SmallWebRTCRunnerArguments):
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -371,6 +396,24 @@ def _create_transport(runner_args: RunnerArguments):
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
             ),
             webrtc_connection=runner_args.webrtc_connection,
+        )
+
+    if isinstance(runner_args, EvalRunnerArguments):
+        from pipecat.evals.serializer import RTVIEvalSerializer
+        from pipecat.evals.transport import EvalTransport, EvalTransportParams
+
+        return EvalTransport(
+            params=EvalTransportParams(
+                audio_in_enabled=True,
+                audio_in_sample_rate=16000,
+                audio_out_enabled=True,
+                audio_out_sample_rate=16000,
+                audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
+                add_wav_header=False,
+                serializer=RTVIEvalSerializer(),
+            ),
+            host=runner_args.host,
+            port=runner_args.port,
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer

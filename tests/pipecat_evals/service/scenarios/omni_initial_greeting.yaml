@@ -1,0 +1,15 @@
+name: omni_initial_greeting
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: llm_started
+        within_ms: 45000
+      - event: response
+        eval: "the reply is a brief friendly initial greeting from an NVIDIA voice assistant"
+        within_ms: 90000

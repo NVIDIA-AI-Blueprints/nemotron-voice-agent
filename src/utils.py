@@ -44,7 +44,17 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
         {"thinker_llm_id", "thinker_model_id", "thinker_base_url", "thinker_max_tokens", "thinker_extra_params"}
     ),
     "asr": frozenset({"asr_id", "asr_server", "asr_model", "asr_function_id", "asr_language_code"}),
-    "tts": frozenset({"tts_id", "tts_server", "tts_voice_id", "tts_function_id"}),
+    "tts": frozenset(
+        {
+            "tts_id",
+            "tts_server",
+            "tts_voice_id",
+            "tts_function_id",
+            "tts_model",
+            "tts_synthesis_mode",
+            "tts_language_code",
+        }
+    ),
 }
 _SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content"})
 _active_slots: frozenset[str] | None = None
@@ -213,6 +223,8 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm", 8000): 18000,
     ("nvidia-llm-vllm", 8000): 18000,
     ("tts-service", 50051): 50151,
+    ("chatterbox-tts-service", 50051): 50151,
+    ("magpie-zeroshot-tts-service", 50051): 50151,
     ("nemotron-asr-streaming-english", 50052): 50152,
     ("nemotron-asr-streaming-multilingual", 50052): 50152,
     ("parakeet-ctc-asr", 50052): 50152,
@@ -468,12 +480,15 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "tts_server",
         "tts_voice_id",
         "tts_function_id",
+        "tts_model",
+        "tts_synthesis_mode",
+        "tts_language_code",
     }
 )
 
 # For each category, map YAML field → session-body field. YAML is the source of
-# truth for built-in selections. `tts_voice_id` is intentionally absent — voice
-# is a user-driven runtime choice.
+# truth for built-in selections. Client-overridable fields keep a non-empty
+# user value (voice picker / session language) instead of the catalog default.
 _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
     (
         "llm_id",
@@ -512,12 +527,17 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
         {
             "server": "tts_server",
             "function_id": "tts_function_id",
+            "model": "tts_model",
+            "voice_id": "tts_voice_id",
+            "synthesis_mode": "tts_synthesis_mode",
+            "language_code": "tts_language_code",
+            "zero_shot_audio_prompt_file": "tts_zero_shot_audio_prompt_file",
         },
     ),
 )
 
 # Body fields the client may set explicitly; catalog hydration must not overwrite them.
-_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code"})
+_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_language_code", "tts_voice_id"})
 
 
 def hydrate_config_from_catalog(config: dict) -> None:
@@ -527,7 +547,7 @@ def hydrate_config_from_catalog(config: dict) -> None:
     the client-provided details continue to drive the pipeline.
     """
     for id_field, category, field_map in _CATALOG_HYDRATION:
-        entry = _load_catalog_entry_by_id(category, config.get(id_field, ""))
+        entry = load_service_entry_by_id(category, config.get(id_field, ""))
         if not entry:
             continue
         for yaml_field, body_field in field_map.items():
@@ -550,6 +570,8 @@ def filter_session_config(data: dict) -> dict:
 
     Keeps only keys in ``SESSION_CONFIG_KEYS`` and hydrates built-in catalog
     selections from YAML (see :func:`hydrate_config_from_catalog`).
+    Client-supplied ``tts_zero_shot_audio_prompt_file`` is always dropped;
+    catalog hydration may re-add a trusted path afterward.
     """
     filtered = {k: v for k, v in data.items() if k in SESSION_CONFIG_KEYS and v not in ("", None)}
     active_slots = _effective_active_slots()
@@ -558,11 +580,21 @@ def filter_session_config(data: dict) -> dict:
         for slot in active_slots:
             allowed |= _SLOT_CONFIG_KEYS.get(slot, frozenset())
         filtered = {k: v for k, v in filtered.items() if k in allowed}
+    # Defense in depth: never trust a client path even if it bypasses the allowlists.
+    filtered.pop("tts_zero_shot_audio_prompt_file", None)
+    # Custom (non-catalog) selections skip hydration, so the raw client value would
+    # reach ``normalize_lang_code`` in the pipeline. Keep only usable strings.
+    raw_tts_language_code = filtered.get("tts_language_code")
+    if raw_tts_language_code is not None:
+        if isinstance(raw_tts_language_code, str) and raw_tts_language_code.strip():
+            filtered["tts_language_code"] = raw_tts_language_code.strip()
+        else:
+            filtered.pop("tts_language_code", None)
     hydrate_config_from_catalog(filtered)
     return filtered
 
 
-def _load_catalog_entry_by_id(category: str, entry_id: str) -> dict:
+def load_service_entry_by_id(category: str, entry_id: str) -> dict:
     """Look up a built-in catalog entry by category and API id.
 
     Supports UI ids (``<source>:<key>``) and raw catalog keys for direct

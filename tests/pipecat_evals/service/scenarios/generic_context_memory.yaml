@@ -1,0 +1,21 @@
+name: generic_context_memory
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 60000
+  - user: My name is Alex.
+    expect:
+      - event: response
+        within_ms: 60000
+  - user: What is my name? Reply with only my name.
+    expect:
+      - event: response
+        eval: "the reply is exactly the single name Alex, with no other words, punctuation, or explanation"
+        within_ms: 60000

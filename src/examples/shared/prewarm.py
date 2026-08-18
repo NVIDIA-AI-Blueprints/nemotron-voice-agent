@@ -4,6 +4,7 @@
 """Service pre-warming to avoid blocking the event loop during first connection."""
 
 import os
+from collections.abc import Iterable
 
 from loguru import logger
 from pipecat.services.nvidia.stt import NvidiaSTTService
@@ -14,13 +15,28 @@ import config_store
 from utils import is_nvcf, normalize_lang_code
 
 
-def _create_tts_service(server: str, voice_id: str) -> NvidiaTTSService:
-    return NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=server,
-        settings=NvidiaTTSSettings(voice=voice_id),
-        use_ssl=is_nvcf(server),
-    )
+def _create_tts_service(
+    server: str,
+    voice_id: str,
+    function_id: str = "",
+    model: str = "",
+):
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": server,
+        "settings": NvidiaTTSSettings(voice=voice_id),
+        "use_ssl": is_nvcf(server),
+    }
+    if function_id or model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": function_id,
+            "model_name": model,
+        }
+    return NvidiaTTSService(**tts_kwargs)
+
+
+def _tts_cache_key(server: str, function_id: str = "", model: str = "") -> str:
+    return f"tts:{server}:{function_id}:{model}"
 
 
 def _parse_language_codes_param(raw: str) -> list[str]:
@@ -33,8 +49,14 @@ def _parse_language_codes_param(raw: str) -> list[str]:
 def _parse_tts_config(raw_config, model_prefix: str) -> dict:
     """Parse the TTS synthesis config into a frontend-friendly structure.
 
-    Voice IDs are returned in full form (e.g. "Magpie-Multilingual.EN-US.Aria")
-    so the frontend can use them as-is without any prefix manipulation.
+    Voice IDs are returned in full form so the frontend can use them as-is:
+
+    - Magpie Multilingual ``subvoices`` entries look like ``EN-US.Aria:0`` and
+      become ``{prefix}.EN-US.Aria``.
+    - Magpie Zeroshot ``subvoices`` entries look like ``Female:0`` / ``Male:6``
+      (no language in the token). The same voice IDs are valid across every
+      ``language_code``, so each subvoice is expanded once per language as
+      ``{prefix}.Female`` / ``{prefix}.Male``.
     """
     if not raw_config or not raw_config.model_config:
         return {"languages": [], "voices": []}
@@ -42,24 +64,41 @@ def _parse_tts_config(raw_config, model_prefix: str) -> dict:
     params = dict(raw_config.model_config[0].parameters)
     languages = _parse_language_codes_param(params.get("language_code", ""))
     subvoices_raw = params.get("subvoices", "")
+    prefix = (model_prefix or params.get("voice_name", "") or "").strip()
 
     voices: list[dict] = []
     seen: set[str] = set()
     for entry in subvoices_raw.split(","):
         entry = entry.strip()
-        if ":" not in entry or "." not in entry:
+        if ":" not in entry:
             continue
-        short_id = entry.split(":")[0]
-        parts = short_id.split(".")
-        if len(parts) < 2:
+        short_id = entry.split(":", 1)[0].strip()
+        if not short_id:
             continue
-        if short_id in seen:
+
+        if "." in short_id:
+            # Magpie Multilingual: Language.VoiceName:index
+            parts = short_id.split(".")
+            if len(parts) < 2:
+                continue
+            lang = normalize_lang_code(parts[0])
+            name = ".".join(parts[1:])
+            full_id = f"{prefix}.{short_id}" if prefix else short_id
+            if full_id in seen:
+                continue
+            seen.add(full_id)
+            voices.append({"id": full_id, "name": name, "language": lang})
             continue
-        seen.add(short_id)
-        full_id = f"{model_prefix}.{short_id}" if model_prefix else short_id
-        lang = parts[0]
-        name = ".".join(parts[1:])
-        voices.append({"id": full_id, "name": name, "language": lang})
+
+        # Magpie Zeroshot: VoiceName:index (same voices for every locale)
+        name = short_id
+        full_id = f"{prefix}.{name}" if prefix else name
+        for lang in languages or ["en-US"]:
+            key = f"{full_id}|{lang}"
+            if key in seen:
+                continue
+            seen.add(key)
+            voices.append({"id": full_id, "name": name, "language": lang})
 
     return {
         "languages": languages,
@@ -89,11 +128,55 @@ def _normalize_catalog_code(code: str) -> str:
     return normalize_lang_code(code).lower()
 
 
+def _llm_language_set(supported_languages: Iterable[str] | str) -> set[str]:
+    """Normalize LLM language capabilities to base language codes."""
+    if isinstance(supported_languages, str):
+        supported_languages = supported_languages.split(",")
+    return {
+        _normalize_catalog_code(code.strip()).split("-", 1)[0]
+        for code in supported_languages
+        if isinstance(code, str) and code.strip()
+    }
+
+
+def llm_supports_session_language(
+    language_code: str,
+    supported_languages: Iterable[str] | str | None,
+) -> bool:
+    """Return whether an LLM capability list supports a BCP-47 session locale.
+
+    ``None`` preserves compatibility for custom LLMs whose capabilities are not
+    declared. An explicit empty collection supports no session languages.
+    """
+    if supported_languages is None:
+        return True
+    language_base = _normalize_catalog_code(language_code).split("-", 1)[0]
+    return language_base in _llm_language_set(supported_languages)
+
+
+def validate_llm_session_language(
+    language_code: str,
+    supported_languages: Iterable[str] | str | None,
+) -> None:
+    """Reject a session locale that the selected built-in LLM cannot serve."""
+    if llm_supports_session_language(language_code, supported_languages):
+        return
+    supported = ", ".join(sorted(_llm_language_set(supported_languages or []))) or "none"
+    raise ValueError(
+        f"Session language {normalize_lang_code(language_code)!r} is not supported by the selected LLM "
+        f"(supported languages: {supported})"
+    )
+
+
 _EMPTY_ASR_LANGUAGE_FALLBACK = "es-US"
 
 
-def intersect_session_languages(asr_config: dict, tts_config: dict) -> list[str]:
-    """Languages supported by both ASR and TTS (LLM prompt uses the TTS catalog)."""
+def intersect_session_languages(
+    asr_config: dict,
+    tts_config: dict,
+    llm_supported_languages: Iterable[str] | str | None = None,
+) -> list[str]:
+    """Languages supported by ASR, TTS, and the selected LLM when declared."""
     tts_langs = _tts_language_set(tts_config)
     if not tts_langs:
         return []
@@ -103,6 +186,9 @@ def intersect_session_languages(asr_config: dict, tts_config: dict) -> list[str]
         asr_langs = {_normalize_catalog_code(_EMPTY_ASR_LANGUAGE_FALLBACK)}
 
     result = asr_langs & tts_langs
+    if llm_supported_languages is not None:
+        llm_langs = _llm_language_set(llm_supported_languages)
+        result = {code for code in result if code.split("-", 1)[0] in llm_langs}
 
     return sorted(
         (normalize_lang_code(code) for code in result),
@@ -116,11 +202,19 @@ def build_session_languages(
     asr_function_id: str,
     tts_server: str,
     tts_voice_id: str,
+    tts_function_id: str = "",
+    tts_model: str = "",
+    llm_supported_languages: Iterable[str] | str | None = None,
 ) -> dict:
-    """Return the ASR∩TTS language catalog and TTS voices for session configuration."""
-    tts_config = prewarm_tts(tts_server, tts_voice_id)
+    """Return the compatible session-language catalog and TTS voices."""
+    tts_config = prewarm_tts(
+        tts_server,
+        tts_voice_id,
+        tts_function_id,
+        tts_model,
+    )
     asr_config = prewarm_asr(asr_server, asr_model, asr_function_id)
-    languages = intersect_session_languages(asr_config, tts_config)
+    languages = intersect_session_languages(asr_config, tts_config, llm_supported_languages)
     return {
         "languages": languages,
         "voices": tts_config.get("voices", []),
@@ -128,28 +222,35 @@ def build_session_languages(
     }
 
 
-def _tts_cache_key(server: str) -> str:
-    return f"tts:{server}"
-
-
 def _asr_cache_key(server: str, model: str, function_id: str) -> str:
     return f"asr:{server}:{model}:{function_id}"
 
 
-def prewarm_tts(server: str, voice_id: str) -> dict:
+def prewarm_tts(
+    server: str,
+    voice_id: str,
+    function_id: str = "",
+    model: str = "",
+) -> dict:
     """Pre-warm a TTS server and cache its voice/language config.
 
     Returns the TTS config dict (languages, voices, defaultVoiceId).
-    Results are cached per server in config_store.
+    Results are cached per server + function_id + model in config_store so
+    multiple cloud NIMs on ``grpc.nvcf.nvidia.com`` do not collide.
     """
-    cached = config_store.get(_tts_cache_key(server))
+    cache_key = _tts_cache_key(server, function_id, model)
+    cached = config_store.get(cache_key)
     if cached:
         logger.debug(f"TTS config for {server} already cached")
-        return cached
+        result = dict(cached)
+        if voice_id:
+            result["defaultVoiceId"] = voice_id
+        config_store.set("tts", result)
+        return result
 
     logger.info(f"Pre-warming TTS on {server} (this may take 10-20s on first run)...")
     try:
-        svc = _create_tts_service(server, voice_id)
+        svc = _create_tts_service(server, voice_id, function_id, model)
         svc._initialize_client()
         raw_config = svc._create_synthesis_config()
 
@@ -158,7 +259,7 @@ def prewarm_tts(server: str, voice_id: str) -> dict:
         tts_config["defaultVoiceId"] = voice_id
         tts_config["server"] = server
 
-        config_store.set(_tts_cache_key(server), tts_config)
+        config_store.set(cache_key, tts_config)
         config_store.set("tts", tts_config)
 
         n_langs = len(tts_config["languages"])
@@ -225,11 +326,16 @@ def prewarm_asr(server: str, model: str = "", function_id: str = "") -> dict:
         return {"languages": [], "server": server, "error": str(e)}
 
 
-def warmup_tts_synthesis(server: str, voice_id: str) -> bool:
+def warmup_tts_synthesis(
+    server: str,
+    voice_id: str,
+    function_id: str = "",
+    model: str = "",
+) -> bool:
     """Run a tiny synthesis request to verify the selected TTS is responsive."""
     logger.info(f"Warming up TTS synthesis on {server}...")
     try:
-        svc = _create_tts_service(server, voice_id)
+        svc = _create_tts_service(server, voice_id, function_id, model)
         svc._initialize_client()
 
         responses = svc._service.synthesize_online(
@@ -251,10 +357,21 @@ def warmup_tts_synthesis(server: str, voice_id: str) -> bool:
         return False
 
 
-def load_voice_map() -> dict[str, str]:
+def load_voice_map(
+    server: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> dict[str, str]:
     """``{lower_lang_code: first_voice_id}`` from the prewarm cache."""
-    tts_config = config_store.get("tts", {})
-    voices = tts_config.get("voices", []) if isinstance(tts_config, dict) else []
+    tts_config: dict = {}
+    if server or function_id or model:
+        cached = config_store.get(_tts_cache_key(server, function_id, model), {})
+        if isinstance(cached, dict):
+            tts_config = cached
+    if not tts_config:
+        legacy = config_store.get("tts", {})
+        tts_config = legacy if isinstance(legacy, dict) else {}
+    voices = tts_config.get("voices", [])
     result: dict[str, str] = {}
     for v in voices:
         lang = (v.get("language") or "").strip()
@@ -264,12 +381,27 @@ def load_voice_map() -> dict[str, str]:
     return result
 
 
-def resolve_voice_for_language(language_code: str, preferred_voice_id: str = "") -> str:
+def resolve_voice_for_language(
+    language_code: str,
+    preferred_voice_id: str = "",
+    *,
+    server: str = "",
+    function_id: str = "",
+    model: str = "",
+) -> str:
     """Pick a TTS voice id for ``language_code`` from the prewarmed catalog."""
     normalized = normalize_lang_code(language_code).lower()
-    voice_map = load_voice_map()
+    tts_config: dict = {}
+    if server or function_id or model:
+        cached = config_store.get(_tts_cache_key(server, function_id, model), {})
+        if isinstance(cached, dict):
+            tts_config = cached
+    if not tts_config:
+        legacy = config_store.get("tts", {})
+        tts_config = legacy if isinstance(legacy, dict) else {}
+    voice_map = load_voice_map(server=server, function_id=function_id, model=model)
     if preferred_voice_id:
-        for voice in config_store.get("tts", {}).get("voices", []):
+        for voice in tts_config.get("voices", []):
             if voice.get("id") == preferred_voice_id and voice.get("language", "").lower() == normalized:
                 return preferred_voice_id
     voice_id = voice_map.get(normalized)

@@ -25,14 +25,14 @@ examples:
     label: Generic Assistant
     slots: [llm, asr, tts]
     activity_check:
-      first_warning_s: 600
+      first_warning_s: 480
       second_warning_s: 30
       warning_completion_timeout_s: 45
     defaults:
       prompt: [generic_assistant]
       llm: [nemotron-nano]
       asr: [nemotron-asr-streaming-english]
-      tts: [magpie-tts]
+      tts: [magpie-multilingual-tts]
     bot: examples.generic.pipeline:bot
 
   multilingual-assistant:
@@ -46,7 +46,7 @@ examples:
       prompt: [multilingual_voice_assistant]
       llm: [nemotron-super]
       asr: [nemotron-asr-streaming-multilingual]
-      tts: [magpie-tts]
+      tts: [magpie-multilingual-tts]
     bot: examples.multilingual.pipeline:bot
 
   omni-assistant:
@@ -55,7 +55,7 @@ examples:
     defaults:
       prompt: [generic_omni_assistant]
       llm: [nemotron-omni-nvfp4]
-      tts: [magpie-tts]
+      tts: [magpie-multilingual-tts]
     bot: examples.omni_assistant.pipeline:bot
 
   omni-assistant-subagents:
@@ -65,7 +65,7 @@ examples:
     defaults:
       prompt: [generic_omni_assistant]
       llm: [nemotron-omni-nvfp4]
-      tts: [magpie-tts]
+      tts: [magpie-multilingual-tts]
     bot: examples.omni_assistant_subagents.pipeline:bot
 
   frontend-backend-agent:
@@ -77,5 +77,5 @@ examples:
       thinker-llm: [nemotron-nano]
       booking-server: [default]
       asr: [nemotron-asr-streaming-english]
-      tts: [magpie-tts]
+      tts: [magpie-multilingual-tts]
     bot: examples.frontend_backend_agent.pipeline:bot

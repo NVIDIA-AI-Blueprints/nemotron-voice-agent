@@ -26,17 +26,16 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
-from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-import config_store
+import examples_registry
 from examples.multilingual.multilingual_processor import (
     FIXED_SESSION_GREETING_TRIGGER,
     FIXED_SESSION_LANGUAGE_ADDON_KEY,
@@ -51,15 +50,23 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
+    build_smart_turn_stop_strategies,
+    build_user_mute_strategies,
     create_transport,
 )
-from examples.shared.prewarm import prewarm_asr, prewarm_tts, resolve_voice_for_language
+from examples.shared.prewarm import (
+    prewarm_asr,
+    prewarm_tts,
+    resolve_voice_for_language,
+    validate_llm_session_language,
+)
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
     load_ipa_dictionary,
     load_prompt_catalog,
     load_service_entry,
+    load_service_entry_by_id,
     normalize_lang_code,
     parse_env_bool,
     parse_env_float,
@@ -74,19 +81,28 @@ CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
 DEFAULT_SESSION_LANGUAGE = "de-DE"
 
 
-def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
+def _is_eval_transport(runner_args: RunnerArguments) -> bool:
+    """Return whether the pipeline is running through Pipecat's eval transport."""
+    cli_transport = str(getattr(getattr(runner_args, "cli_args", None), "transport", "") or "").strip().lower()
+    return cli_transport == "eval" or isinstance(runner_args, EvalRunnerArguments)
+
+
+def _build_multilingual_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
     """Use VAD-only turn starts so interim ASR text does not start a user turn."""
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
-            user_turn_strategies=UserTurnStrategies(start=[VADUserTurnStartStrategy()]),
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
+            user_turn_strategies=UserTurnStrategies(
+                start=[VADUserTurnStartStrategy()],
+                stop=build_smart_turn_stop_strategies(),
+            ),
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+        user_mute_strategies=build_user_mute_strategies(welcome_enabled),
         user_turn_strategies=UserTurnStrategies(
             start=[VADUserTurnStartStrategy()],
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
@@ -94,10 +110,60 @@ def _build_multilingual_user_aggregator_params() -> LLMUserAggregatorParams:
     )
 
 
+async def _prepare_session_language_codes(
+    runner_args: RunnerArguments,
+    *,
+    tts_server: str,
+    tts_voice: str,
+    tts_function_id: str,
+    tts_model: str,
+    asr_server: str,
+    asr_model: str,
+    asr_function_id: str,
+    llm_supported_languages=None,
+) -> str:
+    """Prewarm speech services and return UI language codes when startup should probe them."""
+    if _is_eval_transport(runner_args):
+        logger.info("Skipping ASR/TTS service prewarm for eval transport startup")
+        return ""
+
+    prewarm_tasks = [
+        asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id),
+        asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model),
+    ]
+    await asyncio.gather(*prewarm_tasks)
+    language_catalog_kwargs = {
+        "asr_server": asr_server,
+        "asr_model": asr_model,
+        "asr_function_id": asr_function_id,
+        "tts_server": tts_server,
+        "tts_voice_id": tts_voice,
+    }
+    if llm_supported_languages is not None:
+        language_catalog_kwargs["llm_supported_languages"] = llm_supported_languages
+    return get_lang_codes(**language_catalog_kwargs)
+
+
+def _resolve_llm_supported_languages(body: dict, default_llm: dict):
+    """Return selected LLM capabilities, rejecting unknown built-in selections."""
+    selected_llm_id = str(body.get("llm_id", "") or "")
+    custom_llm = selected_llm_id.startswith("custom-") or (not selected_llm_id and bool(body.get("model_id")))
+    if custom_llm:
+        return None
+    if not selected_llm_id:
+        return default_llm.get("supported_languages")
+
+    selected_llm_entry = load_service_entry_by_id("llm", selected_llm_id)
+    if not selected_llm_entry:
+        raise ValueError(f"Unknown built-in LLM selection: {selected_llm_id}")
+    return selected_llm_entry.get("supported_languages")
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the multilingual NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
         __file__,
         body.get("prompt_content", ""),
@@ -107,6 +173,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
+    llm_supported_languages = _resolve_llm_supported_languages(body, default_llm)
 
     # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
@@ -125,6 +192,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if not asr_language_code or asr_language_code.strip().lower() == "auto":
         asr_language_code = DEFAULT_SESSION_LANGUAGE
     fixed_session_language = normalize_lang_code(asr_language_code)
+    validate_llm_session_language(fixed_session_language, llm_supported_languages)
     if asr_function_id or asr_model:
         asr_kwargs["model_function_map"] = {
             "function_id": asr_function_id,
@@ -140,16 +208,22 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
-    if not config_store.get("tts"):
-        await asyncio.to_thread(prewarm_tts, tts_server, tts_voice)
-    await asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id)
-    lang_codes = get_lang_codes(
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
+    )
+    tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    lang_codes = await _prepare_session_language_codes(
+        runner_args,
+        tts_server=tts_server,
+        tts_voice=tts_voice,
+        tts_function_id=tts_function_id,
+        tts_model=tts_model,
         asr_server=asr_server,
         asr_model=asr_model,
         asr_function_id=asr_function_id,
-        tts_server=tts_server,
-        tts_voice_id=tts_voice,
+        llm_supported_languages=llm_supported_languages,
     )
 
     # --- LLM ---
@@ -198,25 +272,48 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- TTS ---
     custom_dictionary = load_ipa_dictionary()
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
     tts_settings_kwargs: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     if fixed_session_language:
         tts_settings_kwargs["language"] = fixed_session_language
-        resolved_voice = resolve_voice_for_language(fixed_session_language, tts_voice)
+        resolved_voice = resolve_voice_for_language(
+            fixed_session_language,
+            tts_voice,
+            server=tts_server,
+            function_id=tts_function_id,
+            model=tts_model,
+        )
         if resolved_voice:
             tts_voice = resolved_voice
             tts_settings_kwargs["voice"] = resolved_voice
 
-    tts = NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=tts_server,
-        settings=NvidiaTTSSettings(**tts_settings_kwargs),
-        use_ssl=tts_ssl,
-        text_filters=[NemotronSpeechTextFilter()],
-        custom_dictionary=custom_dictionary,
-    )
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": tts_server,
+        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "use_ssl": tts_ssl,
+        "text_filters": [NemotronSpeechTextFilter()],
+        "custom_dictionary": custom_dictionary,
+    }
+    if tts_function_id or tts_model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": tts_function_id,
+            "model_name": tts_model,
+        }
+    if tts_zero_shot_audio_prompt_file:
+        tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
+    tts = NvidiaTTSService(**tts_kwargs)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
         f"lang_codes={lang_codes or '(no voices discovered)'}, "
         f"text_filters=[NemotronSpeechTextFilter]"
     )
@@ -236,7 +333,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=_build_multilingual_user_aggregator_params(),
+        user_params=_build_multilingual_user_aggregator_params(welcome_enabled),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
@@ -347,6 +444,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
         context.add_message({"role": "user", "content": FIXED_SESSION_GREETING_TRIGGER})
         await task.queue_frames([LLMRunFrame()])
 

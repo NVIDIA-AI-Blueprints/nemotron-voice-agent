@@ -7,12 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import date, timedelta
+from datetime import timedelta
 
 from dotenv import load_dotenv
 from loguru import logger
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
@@ -20,7 +18,6 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
@@ -28,17 +25,19 @@ from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.transports.base_transport import TransportParams
-from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
 from examples.frontend_backend_agent.airline.backend import HTTPBookingBackend
 from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
 from examples.frontend_backend_agent.airline.tools import TOOLS_SCHEMA
 from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
+from examples.frontend_backend_agent.src.runtime_context import runtime_today
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.pipeline_utils import build_user_aggregator_params
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -64,7 +63,7 @@ THINKER_TOOL_TIMEOUT_SECONDS = parse_env_float("THINKER_TOOL_TIMEOUT_SECONDS", 3
 
 def _build_context_messages(base_prompt: str, system_prompt: str = "") -> list[dict]:
     """Build initial Talker context messages."""
-    today = date.today()
+    today = runtime_today()
     runtime_context = (
         f"\n\nRuntime context:\n"
         f"- Today is {today.isoformat()}.\n"
@@ -101,6 +100,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info("Starting Frontend/Backend Agent cascaded pipeline")
     transport = _create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
     prompt_key, talker_prompt = resolve_prompt(
         __file__,
@@ -162,7 +162,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"extra_params={extra_params or '(none)'}"
     )
 
-    booking_backend_url = default_booking_server.get("server") or _default_booking_backend_url()
+    booking_backend_url = _booking_backend_url(default_booking_server)
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
     thinker_max_tokens = _parse_optional_int(
@@ -216,18 +216,43 @@ async def bot(runner_args: RunnerArguments) -> None:
     # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
-    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
-    custom_dictionary = load_ipa_dictionary()
-    tts = NvidiaTTSService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
-        server=tts_server,
-        settings=NvidiaTTSSettings(voice=tts_voice),
-        use_ssl=tts_ssl,
-        text_filters=[NemotronSpeechTextFilter()],
-        text_transforms=[("*", apply_frontend_backend_agent_pronunciation_for_tts)],
-        custom_dictionary=custom_dictionary,
+    tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    raw_tts_function_id = body.get("tts_function_id")
+    tts_function_id = (
+        str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
     )
-    logger.info(f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}")
+    tts_model = body.get("tts_model", "") or default_tts.get("model", "")
+    tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
+        "zero_shot_audio_prompt_file", ""
+    )
+    custom_dictionary = load_ipa_dictionary()
+    tts_settings_kwargs: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
+    tts_kwargs: dict = {
+        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "server": tts_server,
+        "settings": NvidiaTTSSettings(**tts_settings_kwargs),
+        "use_ssl": tts_ssl,
+        "text_filters": [NemotronSpeechTextFilter()],
+        "text_transforms": [("*", apply_frontend_backend_agent_pronunciation_for_tts)],
+        "custom_dictionary": custom_dictionary,
+    }
+    if tts_function_id or tts_model:
+        tts_kwargs["model_function_map"] = {
+            "function_id": tts_function_id,
+            "model_name": tts_model,
+        }
+    if tts_zero_shot_audio_prompt_file:
+        tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
+    tts = NvidiaTTSService(**tts_kwargs)
+    logger.info(
+        f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}"
+    )
 
     # --- Context + aggregators ---
     messages = _build_context_messages(talker_prompt, system_prompt)
@@ -235,10 +260,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     preserve_prompt_messages = len(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
-        ),
+        user_params=build_user_aggregator_params(welcome_enabled),
     )
     audio_recorder = create_audio_recorder()
 
@@ -303,6 +325,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client connected")
         if audio_recorder:
             await audio_recorder.start_recording()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
         context.add_message({"role": "user", "content": "Please greet the user briefly."})
         await task.queue_frames([LLMRunFrame()])
 
@@ -335,7 +360,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
 def _create_transport(runner_args: RunnerArguments):
     """Create a transport from runner arguments."""
-    from pipecat.runner.types import SmallWebRTCRunnerArguments
+    from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
 
     if isinstance(runner_args, SmallWebRTCRunnerArguments):
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -347,6 +372,24 @@ def _create_transport(runner_args: RunnerArguments):
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
             ),
             webrtc_connection=runner_args.webrtc_connection,
+        )
+
+    if isinstance(runner_args, EvalRunnerArguments):
+        from pipecat.evals.serializer import RTVIEvalSerializer
+        from pipecat.evals.transport import EvalTransport, EvalTransportParams
+
+        return EvalTransport(
+            params=EvalTransportParams(
+                audio_in_enabled=True,
+                audio_in_sample_rate=16000,
+                audio_out_enabled=True,
+                audio_out_sample_rate=16000,
+                audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
+                add_wav_header=False,
+                serializer=RTVIEvalSerializer(),
+            ),
+            host=runner_args.host,
+            port=runner_args.port,
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer
@@ -379,6 +422,19 @@ def _default_booking_backend_url() -> str:
     if os.environ.get("APP_RUNTIME", "").strip().lower() == "container":
         return "http://booking-server:8001"
     return "http://localhost:8001"
+
+
+def _booking_backend_url(default_booking_server: dict) -> str:
+    """Resolve the booking-server URL, preserving explicit user overrides."""
+    explicit_url = os.getenv("BOOKING_BACKEND_URL", "").strip()
+    if explicit_url:
+        return explicit_url
+
+    configured_url = str(default_booking_server.get("server") or "").strip()
+    runtime_default = _default_booking_backend_url()
+    if runtime_default == "http://localhost:8001" and configured_url == "http://booking-server:8001":
+        return runtime_default
+    return configured_url or runtime_default
 
 
 def _parse_optional_int(raw: object, default: int) -> int:

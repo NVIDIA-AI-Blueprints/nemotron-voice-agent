@@ -12,6 +12,7 @@ import {
 } from "@pipecat-ai/client-react";
 import { uploadAttachment } from "../../api";
 import { useApp } from "../../context/useApp";
+import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { isRecord, stringField } from "../../utils";
 import { TranscriptMessage } from "./TranscriptMessage";
 
@@ -432,13 +433,41 @@ export function ConversationPanel() {
       const anchor = userTurnAnchors.get(createdAt);
       return anchor ? Math.min(created, new Date(anchor).getTime()) : created;
     };
-    return [...messageItems, ...taskItems, ...assistantTurnItems, ...attachmentItems].sort((a, b) => {
+    const sorted = [...messageItems, ...taskItems, ...assistantTurnItems, ...attachmentItems].sort((a, b) => {
       const timeDelta = orderTimeMs(a.createdAt) - orderTimeMs(b.createdAt);
       return timeDelta || a.index - b.index;
     });
+
+    // TODO: Remove once @pipecat-ai/client-react stops finalizing each assistant
+    // sentence as its own message. Merge only assistant bubbles that are adjacent
+    // in the display stream, so interleaved tasks/turns/attachments stay between
+    // the sentences they landed in.
+    const items: typeof sorted = [];
+    const mergedChunks: string[][] = [];
+    for (const item of sorted) {
+      const previous = items.at(-1);
+      if (
+        item.type === "message" && item.message.role === "assistant" &&
+        previous?.type === "message" && previous.message.role === "assistant"
+      ) {
+        mergedChunks[items.length - 1].push(item.text);
+        previous.message = { ...previous.message, final: item.message.final };
+        continue;
+      }
+      items.push(item);
+      mergedChunks.push(
+        item.type === "message" && item.message.role === "assistant" ? [item.text] : []
+      );
+    }
+    return items.map((item, idx) =>
+      item.type === "message" && mergedChunks[idx].length > 1
+        ? { ...item, text: mergedChunks[idx].join(" ") }
+        : item
+    );
   }, [agentTasks, assistantTurns, attachments, visibleMessages, userTurnAnchors]);
 
   const showAttachmentControl = Boolean(currentSessionId) && canUploadAttachments && visibleMessages.length > 0;
+  const bottomAnchorRef = useStickToBottom(conversationItems);
 
   return (
     <div className="p-4">
@@ -472,6 +501,7 @@ export function ConversationPanel() {
         })}
         {showAttachmentControl && <AttachMediaButton onClick={() => uploadInputRef.current?.click()} />}
       </ul>
+      <div ref={bottomAnchorRef} className="conversation-bottom-spacer" aria-hidden="true" />
       <input
         ref={uploadInputRef}
         type="file"

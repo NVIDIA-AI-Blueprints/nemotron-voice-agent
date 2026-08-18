@@ -57,7 +57,7 @@ uv run python -c "from src.examples.omni_assistant_subagents import pipeline"
 # Lint (CI parity)
 uv run ruff format --check . && uv run ruff check .
 # Tests
-uv run pytest tests/ -x -q 2>&1 | head -100
+set +e; uv run pytest tests/unit -x -q > /tmp/pytest.log 2>&1; status=$?; head -100 /tmp/pytest.log; exit $status
 # Client (CI parity) — tsc catches RTVI API renames, eslint catches the rest
 cd client && npm ci && npm run lint && npm run build
 ```

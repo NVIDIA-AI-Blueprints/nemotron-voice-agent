@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Protocol
@@ -15,7 +16,7 @@ from loguru import logger
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.services.llm_service import FunctionCallResultProperties
 
-from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent
+from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
@@ -116,21 +117,28 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
                 }
             )
             return
+        if _direct_tool_response_enabled() and is_speakable_payload(payload):
+            await _emit_talker_response(params.llm, str(payload.get("response_text") or ""))
+            await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
+            return
         await params.result_callback(payload)
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
         cancelled = thinker.cancel_active("user_cancelled")
         cleared_pending_booking = thinker.cancel_pending_booking()
         did_cancel = cancelled or cleared_pending_booking
-        await params.result_callback(
-            {
-                "type": "response_hint",
-                "reason": "cancelled" if did_cancel else "nothing_to_cancel",
-                "action": "cancelled" if did_cancel else "nothing_to_cancel",
-                "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
-                "context": "cancel_backend",
-            }
-        )
+        payload = {
+            "type": "response_hint",
+            "reason": "cancelled" if did_cancel else "nothing_to_cancel",
+            "action": "cancelled" if did_cancel else "nothing_to_cancel",
+            "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
+            "context": "cancel_backend",
+        }
+        if _direct_tool_response_enabled():
+            await _emit_talker_response(params.llm, str(payload["response_text"]))
+            await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
+            return
+        await params.result_callback(payload)
 
     return {"call_backend": handle_call_backend, "cancel_backend": handle_cancel_backend}
 
@@ -169,6 +177,10 @@ def _normalize_arguments(arguments: dict) -> dict:
         if isinstance(decoded, dict):
             return decoded
     return arguments
+
+
+def _direct_tool_response_enabled() -> bool:
+    return os.getenv("FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _task_cancellation_requested() -> bool:

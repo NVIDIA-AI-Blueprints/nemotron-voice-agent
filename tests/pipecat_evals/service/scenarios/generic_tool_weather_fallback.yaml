@@ -1,0 +1,24 @@
+name: generic_tool_weather_fallback
+user:
+  modality: text
+judge:
+  modality: text
+  eval:
+    service: ollama
+    model: gemma2:9b
+turns:
+  - expect:
+      - event: response
+        within_ms: 60000
+  - user: Use the get_weather tool with city San Francisco and units celsius.
+    expect:
+      - event: function_call
+        calls:
+          - name: get_weather
+            args:
+              city: San Francisco
+              units: celsius
+        within_ms: 60000
+      - event: response
+        eval: "the reply gives weather information for San Francisco in Celsius"
+        within_ms: 60000
