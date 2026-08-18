@@ -4,22 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.1] - TBD
+## [2.0.1] - 2026-08-18
 
-Patch release with expanded TTS options, improved turn-taking, Omni Assistant Subagents refinements, more languages support in Multilingual assistant, and broader eval coverage.
+Patch release with expanded TTS options, improved turn-taking, Omni Assistant Subagents refinements, multilingual model compatibility checks, and broader evaluation coverage.
 
 ### Added
 
-- **Model updates**: Chatterbox TTS Multilingual with 23 languages, Magpie TTS Multilingual with 12-language support, and Magpie TTS Zeroshot with optional voice cloning.
+- Chatterbox TTS Multilingual with 23 languages and Magpie TTS Zeroshot with optional voice cloning.
 - Omni Assistant webcam steering, thinker reasoning, and subagent handoff improvements.
-- More language support in Multilingual Voice Assistant via Magpie TTS and Chatterbox TTS NIM.
-- Pipecat eval based evaluation setup for coverage across core examples, latency, and tool scenarios.
+- Pipecat evaluation coverage for core examples, latency, and tool scenarios.
 
 ### Changed
 
+- Updated Magpie TTS Multilingual NIM to version 1.9.0 and documented its 12 supported languages.
 - Upgraded Pipecat to **1.5.0** and refreshed NIM, vLLM, and CVE-related dependency pins.
 - Improved Smart Turn defaults and added inactivity checks for the Generic Assistant.
 - Refactored `NvidiaOmniLLMService` on Pipecat's `NvidiaLLMService` base.
+- Grouped sentence-level bot output into turn-level transcript messages across all examples.
+
+### Fixed
+
+- Improved Omni Assistant Subagents media handling.
+- Restricted multilingual sessions to supported ASR, TTS, and LLM combinations.
 
 ## [2.0.0] - 2026-07-09
 
