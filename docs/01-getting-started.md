@@ -21,7 +21,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | Example | Description | Supported profiles |
 |---------|-------------|--------------------|
 | [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/workstation`, `generic-assistant/dgx-spark`, `generic-assistant/jetson-thor` |
-| [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with automatic language/voice switching | `multilingual-assistant`, `multilingual-assistant/workstation`, `multilingual-assistant/dgx-spark` |
+| [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/workstation`, `multilingual-assistant/dgx-spark` |
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/workstation`, `omni-assistant/dgx-spark`, `omni-assistant/jetson-thor` |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/workstation`, `omni-assistant-subagents/dgx-spark` |
 | [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/workstation` |

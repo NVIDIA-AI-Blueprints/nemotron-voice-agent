@@ -1,6 +1,6 @@
 [project]
 name = "nemotron-voice-agent"
-version = "2.0.0"
+version = "2.1.0"
 description = "End-to-end voice agent blueprint powered by NVIDIA Nemotron ASR, LLM, and TTS"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

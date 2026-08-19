@@ -111,11 +111,11 @@ def activity_check_instruction(stage: int) -> str:
 class ActivityCheckProcessor(FrameProcessor):
     """Replace a silent hard timeout with two LLM/TTS activity checks.
 
-    Timers begin when the bot finishes speaking. A VAD ``UserStartedSpeakingFrame``
+    Timers begin when the client is ready. A VAD ``UserStartedSpeakingFrame``
     cancels the current countdown and returns the processor to normal operation.
     The callback is responsible for queueing an LLM run; the next timer is armed
-    only after the resulting TTS audio has finished. The second activity check
-    is the closing statement; the session disconnects when it finishes playing.
+    after the resulting TTS audio has finished. The second activity check is the
+    closing statement; the session disconnects when it finishes playing.
     """
 
     def __init__(
@@ -183,6 +183,15 @@ class ActivityCheckProcessor(FrameProcessor):
         self._retired_warning_stage = None
         self._pending_warning_response_stages.clear()
         self._warning_audio_started_stages.clear()
+
+    def start(self) -> None:
+        """Begin inactivity tracking when the client session becomes ready.
+
+        This is intentionally independent of bot speech so activity checks also
+        work for sessions configured without an initial welcome message.
+        """
+        if self._timer is None:
+            self._arm_timer()
 
     def _handle_tts_started(self) -> None:
         if not self._pending_warning_response_stages:

@@ -87,7 +87,7 @@ For ASR latency and throughput across GPUs and WER for different models, see the
   ```python
   stt = NvidiaSTTService(
       **asr_kwargs,
-      stop_history=400,       # ms trailing silence before finalizing (repo default. ≥560 favors accuracy)
+      stop_history=400,  # ms trailing silence before finalizing (repo default. ≥560 favors accuracy)
   )
   ```
 

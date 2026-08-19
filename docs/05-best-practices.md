@@ -216,7 +216,7 @@ ERROR_MESSAGES = {
     "asr_failure": "I didn't catch that. Could you say that again?",
     "service_unavailable": "I'm having trouble connecting. Let me try again.",
     "timeout": "This is taking longer than expected. Please hold on.",
-    "out_of_scope": "I'm not able to help with that, but I can help you with..."
+    "out_of_scope": "I'm not able to help with that, but I can help you with...",
 }
 ```
 

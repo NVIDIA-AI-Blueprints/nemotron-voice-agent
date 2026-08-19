@@ -42,7 +42,11 @@ if "riva.client.proto.riva_asr_pb2" not in sys.modules:
     sys.modules["riva.client.proto"] = proto
     sys.modules["riva.client.proto.riva_asr_pb2"] = riva_asr_pb2
 
-from examples.shared.prewarm import intersect_session_languages, prewarm_asr
+from examples.shared.prewarm import (
+    intersect_session_languages,
+    prewarm_asr,
+    validate_llm_session_language,
+)
 
 
 class _FakeModelConfig:
@@ -96,6 +100,42 @@ class SessionLanguageCatalogTests(unittest.TestCase):
         )
 
         self.assertEqual(languages, ["fr-FR"])
+
+    def test_llm_capabilities_filter_speech_languages_by_base_code(self) -> None:
+        languages = intersect_session_languages(
+            {"languages": ["de-DE", "el-GR", "en-US", "fr-FR"]},
+            {"languages": ["de-DE", "el-GR", "en-US", "fr-FR"], "voices": []},
+            ["de", "en", "fr"],
+        )
+
+        self.assertEqual(languages, ["de-DE", "en-US", "fr-FR"])
+
+    def test_missing_llm_capabilities_preserve_custom_llm_behavior(self) -> None:
+        languages = intersect_session_languages(
+            {"languages": ["el-GR"]},
+            {"languages": ["el-GR"], "voices": []},
+            None,
+        )
+
+        self.assertEqual(languages, ["el-GR"])
+
+    def test_empty_llm_capabilities_exclude_and_reject_all_languages(self) -> None:
+        languages = intersect_session_languages(
+            {"languages": ["de-DE", "en-US"]},
+            {"languages": ["de-DE", "en-US"], "voices": []},
+            [],
+        )
+
+        self.assertEqual(languages, [])
+        with self.assertRaisesRegex(ValueError, "en-US.*not supported.*none"):
+            validate_llm_session_language("en-US", [])
+
+    def test_runtime_validation_rejects_greek_for_nano(self) -> None:
+        with self.assertRaisesRegex(ValueError, "el-GR.*not supported"):
+            validate_llm_session_language("el-GR", ["en", "de", "es", "fr", "it", "ja"])
+
+    def test_runtime_validation_accepts_locale_for_supported_base_code(self) -> None:
+        validate_llm_session_language("de-DE", ["de"])
 
     def test_asr_prewarm_uses_default_config_request_without_model_name(self) -> None:
         _FakeNvidiaSTTService.last = None

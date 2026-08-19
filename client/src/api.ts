@@ -120,6 +120,7 @@ export interface SimpleService {
   model?: string;
   voiceId?: string;
   functionId?: string;
+  languageCode?: string;
   builtIn: boolean;
   source?: BuiltInServiceSource;
 }
@@ -151,6 +152,7 @@ export function useDefaultTTS(pipelineMode = "") {
         model: e.model ? String(e.model) : undefined,
         voiceId: e.voice_id ? String(e.voice_id) : undefined,
         functionId: e.function_id ? String(e.function_id) : undefined,
+        languageCode: e.language_code ? String(e.language_code) : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
       })),
@@ -264,6 +266,8 @@ export function useVoiceCatalog(
   asrFunctionId?: string,
   functionId?: string,
   model?: string,
+  pipelineMode?: string,
+  llmId?: string,
 ) {
   return useQuery<TTSConfig>({
     queryKey: [
@@ -275,6 +279,8 @@ export function useVoiceCatalog(
       asrServer || "",
       asrModel || "",
       asrFunctionId || "",
+      pipelineMode || "",
+      llmId || "",
     ],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -285,6 +291,8 @@ export function useVoiceCatalog(
       if (asrServer) params.set("asr_server", asrServer);
       if (asrModel) params.set("asr_model", asrModel);
       if (asrFunctionId) params.set("asr_function_id", asrFunctionId);
+      if (pipelineMode) params.set("pipeline_mode", pipelineMode);
+      if (llmId) params.set("llm_id", llmId);
       const url = params.size > 0 ? `/api/tts-config?${params.toString()}` : "/api/tts-config";
       return fetchJson<TTSConfig>(url);
     },

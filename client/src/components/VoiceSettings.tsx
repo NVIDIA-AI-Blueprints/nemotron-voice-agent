@@ -27,6 +27,7 @@ export function VoiceSettings() {
   const { isConnected, isConnecting, isLocked } = useConnectionState();
   const {
     selectedExample,
+    selectedLLM,
     selectedASR,
     selectedTTS,
     selectedSessionLanguage,
@@ -45,6 +46,8 @@ export function VoiceSettings() {
     sessionLanguagesEnabled ? selectedASR?.functionId : undefined,
     selectedTTS?.functionId,
     selectedTTS?.model,
+    sessionLanguagesEnabled ? selectedExample?.key : undefined,
+    sessionLanguagesEnabled ? selectedLLM?.id : undefined,
   );
 
   const [voiceOverride, setVoiceOverride] = useState<VoiceOverrideState>({
@@ -83,18 +86,28 @@ export function VoiceSettings() {
 
   const defaultVoice = useMemo(() => {
     if (!ttsConfig?.voices?.length) return null;
+    // Zero-shot models reuse one voice id across every locale, so an id lookup alone
+    // can land on an arbitrary language. Disambiguate with the catalog language when
+    // the entry declares one; otherwise keep the plain id match.
+    const catalogLang = (selectedTTS?.languageCode || "").toUpperCase();
+    const byId = (voiceId: string) => {
+      const matches = ttsConfig.voices.filter((voice) => voice.id === voiceId);
+      if (matches.length === 0) return null;
+      if (!catalogLang) return matches[0];
+      return matches.find((voice) => voice.language.toUpperCase() === catalogLang) || matches[0];
+    };
     const selectedServiceVoice = selectedTTS?.voiceId || "";
     if (selectedServiceVoice) {
-      const match = ttsConfig.voices.find((voice) => voice.id === selectedServiceVoice);
+      const match = byId(selectedServiceVoice);
       if (match) return match;
     }
     if (ttsConfig.defaultVoiceId) {
-      const match = ttsConfig.voices.find((voice) => voice.id === ttsConfig.defaultVoiceId);
+      const match = byId(ttsConfig.defaultVoiceId);
       if (match) return match;
     }
     const enVoice = ttsConfig.voices.find((voice) => voice.language.toUpperCase() === "EN-US");
     return enVoice || ttsConfig.voices[0];
-  }, [ttsConfig, selectedTTS?.voiceId]);
+  }, [ttsConfig, selectedTTS?.voiceId, selectedTTS?.languageCode]);
 
   const hasActiveOverride = voiceOverride.serviceId === (selectedTTS?.id ?? "");
   const activeLang = (hasActiveOverride ? voiceOverride.language : "") || (defaultVoice?.language.replace("_", "-") ?? "");
@@ -146,7 +159,7 @@ export function VoiceSettings() {
       return (
         <PanelSection label="VOICE SETTINGS">
           <p style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-            No shared ASR/TTS languages found for the selected services
+            No shared ASR/TTS/LLM languages found for the selected services
           </p>
         </PanelSection>
       );

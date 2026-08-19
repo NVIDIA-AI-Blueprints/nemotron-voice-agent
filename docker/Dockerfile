@@ -25,7 +25,7 @@ FROM nvcr.io/nvidia/base/ubuntu:noble-20260610
 # Image metadata
 LABEL maintainer="NVIDIA"
 LABEL description="Nemotron Voice Agent"
-LABEL version="2.0"
+LABEL version="2.1"
 
 ENV PYTHONUNBUFFERED=1
 

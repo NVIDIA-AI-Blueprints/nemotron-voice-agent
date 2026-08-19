@@ -9,16 +9,18 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 | Model | Catalog key | Self-hosted compose service | Modelcard |
 |-------|-------------|-----------------------------|-----------|
 | **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
-| **Magpie TTS Zeroshot**: ZeroShot voice cloning-capable multilingual streaming TTS with built-in Female/Male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
+| **Magpie TTS Zeroshot**: multilingual streaming TTS that supports zero-shot voice cloning and includes built-in female and male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
 | **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
 > Magpie Multilingual is the registry default and the TTS sidecar started by local recipes. Chatterbox and Magpie Zeroshot are opt-in: select their catalog key in the Services tab (or `defaults.tts` in [`examples_registry.yaml`](../../examples_registry.yaml)). For local NIM, also enable the matching Compose profile (see [Hardware requirements](#hardware-requirements-and-deployment-configs)).
 
-Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, `Chatterbox-Multilingual.en-US.Male`). The available voices and emotions depend on the deployed NIM. See [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
+Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, or `Chatterbox-Multilingual.en-US.Male`. The available voices and emotions depend on the deployed NIM. Refer to [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
 ### Supported languages
 
 The client discovers the active TTS service's available voices and language codes at runtime. Treat this table as model-level guidance, because exact availability can vary by endpoint, deployment profile, and selected NIM image.
+
+For the multilingual assistant, this is **TTS-only** coverage, not the final session-language list. Voice Settings shows only the intersection of the selected ASR, TTS, and built-in LLM capabilities. For example, a Chatterbox deployment can advertise Arabic or Greek voices, but those locales are not available with the built-in Nemotron 3 Nano or Nemotron 3 Super LLMs. See [Configure LLM](configure-llm.md#multilingual-session-languages).
 
 | Model | Supported languages |
 | --- | --- |
@@ -61,7 +63,7 @@ TTS runs one of these ways, and the repo wires the right one per profile:
 | Model | Typical VRAM | Notes |
 |-------|--------------|-------|
 | Magpie TTS Multilingual | **~14 GB** | Can share a single ~80 GB GPU with ASR (~15 GB) and the LLM (~30 GB FP8). Split across GPUs with `device_ids` in [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support). |
-| Magpie TTS Zeroshot | **~10.87 GB** GPU / ~9.74 GB CPU at `batch_size=8` | Default `NIM_TAGS_SELECTOR=name=magpie-tts-zeroshot,batch_size=8`. Fits the shared H100 layout when Magpie Multilingual is scaled off. `batch_size=32` needs **~41.3 GB** and should not share a single 80 GB GPU with ASR + LLM. |
+| Magpie TTS Zeroshot | **~13.06 GB** GPU / ~4.00 GB CPU at `batch_size=8` | Default `NIM_TAGS_SELECTOR=name=magpie-tts-zeroshot,batch_size=8` ([Speech NIM support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#magpie-tts-zeroshot)). Fits the shared H100 layout when Magpie Multilingual is scaled off. `batch_size=32` needs **~41.30 GB** GPU / ~7.08 GB CPU and should not share a single 80 GB GPU with ASR + LLM. |
 | Chatterbox TTS | **~52.5 GB** GPU / ~6.4 GB CPU | `NIM_TAGS_SELECTOR=name=chatterbox-tts-multilingual` (GPU `0` by default). Does **not** fit the Magpie single-80-GB shared layout with LLM + ASR on a typical workstation GPU. |
 
 ### Performance & scaling
@@ -72,13 +74,13 @@ TTS runs one of these ways, and the repo wires the right one per profile:
 - Magpie Zeroshot: `batch_size=8` (default) or `batch_size=32` — keep `8` on shared single-GPU recipes
 - Chatterbox: single profile `name=chatterbox-tts-multilingual` (no `batch_size` selector)
 
-For first-chunk / inter-chunk latency and throughput (RTFX) across GPUs, see the **[TTS performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/tts/performance.html)**. For end-to-end pipeline latency (TTS time-to-first-byte) in this blueprint, see [Evaluation and Performance](../04-evaluation-and-performance.md).
+For first-chunk and inter-chunk latency and throughput (RTFX) across GPUs, refer to the **[TTS performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/tts/performance.html)**. For end-to-end pipeline latency (TTS time-to-first-byte) in this blueprint, refer to [Evaluation and Performance](../04-evaluation-and-performance.md).
 
 ## Customization
 
 ### Voices & emotions
 
-The active voice is the `voice_id` in the catalog entry. The client UI also has a voice selector that auto-discovers the connected service's available voices and languages, so you can switch mid-session. Voice IDs follow each model's naming (e.g. `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, `Chatterbox-Multilingual.en-US.Male`). Available voices/emotions depend on the deployed NIM (and can be discovered at runtime over gRPC/HTTP); see [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
+The active voice is the `voice_id` in the catalog entry. The client UI includes a voice selector that discovers the connected service's available voices and languages, so you can switch mid-session. Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, or `Chatterbox-Multilingual.en-US.Male`. Available voices and emotions depend on the deployed NIM and can be discovered at runtime over gRPC or HTTP. Refer to [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
 - **Magpie Multilingual**: multiple voices and emotional styles per locale.
 - **Magpie Zeroshot**: languages listed in [Supported languages](#supported-languages); built-in voices across locales are `Magpie-ZeroShot-Multilingual.Female` (default) and `Magpie-ZeroShot-Multilingual.Male` ([model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard)).
@@ -102,6 +104,7 @@ tts:
     voice_id: "Chatterbox-Multilingual.en-US.Male"
     model: "chatterbox-tts-multilingual"
     function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
+    synthesis_mode: per_sentence
 
   # Local only (services.local.yaml workstation / dgxspark). No cloud function_id.
   magpie-zeroshot-tts:
@@ -111,11 +114,12 @@ tts:
     model: "magpie-tts-zeroshot"
     function_id: ""
     synthesis_mode: stitched
+    language_code: en-US
     # optional voice cloning:
     # zero_shot_audio_prompt_file: "/path/to/prompt.wav"
 ```
 
-Catalog `model` + `function_id` (+ optional `zero_shot_audio_prompt_file`) are hydrated into the session and passed to Pipecat's `NvidiaTTSService`.
+The catalog hydrates the required `model` and `function_id` fields and the optional `zero_shot_audio_prompt_file` field into the session, then passes them to Pipecat's `NvidiaTTSService`.
 
 ### Synthesis mode
 
@@ -123,10 +127,10 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes via the catalog field 
 
 | Value | Behavior |
 |-------|----------|
-| `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Use this for Magpie multilingual / zero-shot ≥ v1.7.0. |
+| `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Requires Pipecat `>=1.5.0`, plus Magpie TTS Multilingual `>=1.7.0` or Magpie TTS Zeroshot `>=1.2.0`. |
 | `per_sentence` | Open a fresh synthesis call per sentence. Safe for models without cross-sentence stitching. |
 
-Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie ships with `stitched`. Omit the field on other models to leave Pipecat's default (`per_sentence`).
+Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode via the registry-default fallback in the pipeline.
 
 ### Pronunciation (IPA)
 
@@ -203,7 +207,15 @@ Magpie TTS Zeroshot clones a voice from a short reference clip via Pipecat's `Nv
    ```
 
    - **Host-native** (`uv run` / local Python): use a host absolute path (for example `/home/you/prompts/clone.wav`).
-   - **Compose / Docker**: mount the file into the app container (for example add a bind mount under the `voice-agent` service), then set `zero_shot_audio_prompt_file` to that **container** absolute path. Relative paths are not resolved from the repo root.
+   - **Compose / Docker**: mount the file into the app service for your Compose profile (for example `generic-assistant` with `--profile generic-assistant`, or `generic-assistant-workstation` with `--profile generic-assistant/workstation`). Use a Compose override, then set `zero_shot_audio_prompt_file` to that **container** absolute path. Relative paths are not resolved from the repo root.
+
+     ```yaml
+     # docker-compose.override.yaml (example for --profile generic-assistant)
+     services:
+       generic-assistant:
+         volumes:
+           - /home/you/prompts/clone.wav:/data/prompts/clone.wav:ro
+     ```
 
    The catalog field is hydrated as `tts_zero_shot_audio_prompt_file` and passed into `NvidiaTTSService`.
 4. Start a session.

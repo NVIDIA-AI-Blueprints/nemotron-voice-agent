@@ -22,6 +22,7 @@ workstation:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+      synthesis_mode: per_sentence
     magpie-zeroshot-tts:
       name: "Magpie TTS Zeroshot"
       server: "magpie-zeroshot-tts-service:50051"
@@ -52,6 +53,7 @@ dgxspark:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+      synthesis_mode: per_sentence
     magpie-zeroshot-tts:
       name: "Magpie TTS Zeroshot"
       server: "magpie-zeroshot-tts-service:50051"

@@ -8,6 +8,7 @@ workstation:
       name: "Nemotron 3 Nano 30B A3B"
       model_id: "nvidia/nemotron-3-nano"
       base_url: "http://nvidia-llm:8000/v1"
+      supported_languages: [en, de, es, fr, it, ja]
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   tts:
@@ -24,6 +25,7 @@ workstation:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+      synthesis_mode: per_sentence
     magpie-zeroshot-tts:
       name: "Magpie TTS Zeroshot"
       server: "magpie-zeroshot-tts-service:50051"
@@ -50,6 +52,7 @@ dgxspark:
       name: "Nemotron 3 Nano NVFP4"
       model_id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
       base_url: "http://nvidia-llm-vllm:8000/v1"
+      supported_languages: [en, de, es, fr, it, ja]
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   tts:
@@ -66,6 +69,7 @@ dgxspark:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+      synthesis_mode: per_sentence
     magpie-zeroshot-tts:
       name: "Magpie TTS Zeroshot"
       server: "magpie-zeroshot-tts-service:50051"

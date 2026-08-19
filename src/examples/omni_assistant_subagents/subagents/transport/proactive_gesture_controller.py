@@ -40,8 +40,12 @@ from examples.omni_assistant_subagents.subagents.gestures import (
 _GESTURE_CONFIDENCE = {
     GESTURE_GREET: 0.85,
     GESTURE_STOP: 0.75,
-    GESTURE_CONTINUE: 0.7,
-    GESTURE_DOWN: 0.7,
+    GESTURE_CONTINUE: 0.9,
+    GESTURE_DOWN: 0.9,
+}
+_GESTURE_CONFIRMATIONS = {
+    GESTURE_CONTINUE: 2,
+    GESTURE_DOWN: 2,
 }
 _COOLDOWN_SECONDS = 5.0
 _RESUME_WINDOW_SECONDS = 30.0
@@ -80,6 +84,8 @@ class ProactiveGestureController:
         self._cooldown_secs = _COOLDOWN_SECONDS
         self._resume_window_secs = _RESUME_WINDOW_SECONDS
         self._last_intent = GESTURE_NONE
+        self._candidate_intent = GESTURE_NONE
+        self._candidate_count = 0
         self._last_action_at = float("-inf")
         self._last_interrupted_at = float("-inf")
 
@@ -91,6 +97,8 @@ class ProactiveGestureController:
 
         if intent == GESTURE_NONE:
             self._last_intent = GESTURE_NONE
+            self._candidate_intent = GESTURE_NONE
+            self._candidate_count = 0
             return
         if intent == self._last_intent:
             return
@@ -99,7 +107,21 @@ class ProactiveGestureController:
             logger.debug(f"Gesture {intent!r} ignored: within cooldown")
             return
         if confidence < self._confidence[intent]:
+            self._candidate_intent = GESTURE_NONE
+            self._candidate_count = 0
             logger.debug(f"Gesture {intent!r} ignored: confidence {confidence:.2f} below threshold")
+            return
+        if intent == self._candidate_intent:
+            self._candidate_count += 1
+        else:
+            self._candidate_intent = intent
+            self._candidate_count = 1
+        confirmations = _GESTURE_CONFIRMATIONS.get(intent, 1)
+        if self._candidate_count < confirmations:
+            logger.debug(
+                f"Gesture {intent!r} awaiting confirmation "
+                f"({self._candidate_count}/{confirmations}, confidence={confidence:.2f})"
+            )
             return
 
         acted = False
@@ -114,6 +136,8 @@ class ProactiveGestureController:
 
         if acted:
             self._last_intent = intent
+        self._candidate_intent = GESTURE_NONE
+        self._candidate_count = 0
 
     async def _on_greet(self, control: dict[str, Any], frame: dict[str, Any], now: float) -> bool:
         """Greet back — but only when idle, never over the user's or our own turn.

@@ -23,3 +23,4 @@ tts:
     voice_id: "Chatterbox-Multilingual.en-US.Male"
     model: "chatterbox-tts-multilingual"
     function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
+    synthesis_mode: per_sentence

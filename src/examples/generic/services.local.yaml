@@ -42,6 +42,7 @@ workstation:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+      synthesis_mode: per_sentence
     magpie-zeroshot-tts:
       name: "Magpie TTS Zeroshot"
       server: "magpie-zeroshot-tts-service:50051"
@@ -49,6 +50,7 @@ workstation:
       model: "magpie-tts-zeroshot"
       function_id: ""
       synthesis_mode: stitched
+      language_code: en-US
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -94,6 +96,7 @@ dgxspark:
       voice_id: "Chatterbox-Multilingual.en-US.Male"
       model: "chatterbox-tts-multilingual"
       function_id: ""
+      synthesis_mode: per_sentence
     magpie-zeroshot-tts:
       name: "Magpie TTS Zeroshot"
       server: "magpie-zeroshot-tts-service:50051"
@@ -101,6 +104,7 @@ dgxspark:
       model: "magpie-tts-zeroshot"
       function_id: ""
       synthesis_mode: stitched
+      language_code: en-US
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"

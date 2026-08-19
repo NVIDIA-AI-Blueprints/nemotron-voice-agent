@@ -31,11 +31,13 @@ The shipped examples already create and wire the shared recorder, so the `.env` 
     ```python
     audio_recorder = create_audio_recorder()
 
-    pipeline = Pipeline([
-        transport.input(),
-        # ... ASR, LLM, TTS, transport.output() ...
-        *([audio_recorder] if audio_recorder else []),
-    ])
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            # ... ASR, LLM, TTS, transport.output() ...
+            *([audio_recorder] if audio_recorder else []),
+        ]
+    )
     ```
 
 3. Start it once the client connects (for example, in your `on_client_connected` handler):
