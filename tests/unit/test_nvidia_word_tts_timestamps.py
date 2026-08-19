@@ -10,9 +10,7 @@ from nvidia_word_tts import (
     new_words_from_meta_batch,
     normalize_durations_to_seconds,
     parse_meta_word_entries,
-    played_words_at_pts,
     word_times_from_magpie_meta,
-    word_times_from_meta_words,
 )
 
 
@@ -48,29 +46,8 @@ class MagpieMetaTimestampHelperTests(unittest.TestCase):
         seconds = normalize_durations_to_seconds([80.0, 160.0], frame_rate_hz=80.0)
         self.assertEqual(seconds, [1.0, 2.0])
 
-    def test_meta_words_ms(self) -> None:
-        words = [
-            {"word": "Hello", "start_time": 0, "end_time": 200},
-            {"word": "world", "start_time": 200, "end_time": 450},
-        ]
-        word_times, next_t, total = word_times_from_meta_words(words)
-        self.assertEqual(total, 2)
-        self.assertEqual(word_times, [("Hello", 0.0), ("world", 0.2)])
-        self.assertAlmostEqual(next_t, 0.45)
-
-    def test_meta_words_skip(self) -> None:
-        words = [
-            {"word": "a", "start_time": 0, "end_time": 50},
-            {"word": "b", "start_time": 50, "end_time": 100},
-        ]
-        word_times, next_t, total = word_times_from_meta_words(words, skip_tokens=1)
-        self.assertEqual(total, 2)
-        self.assertEqual(word_times, [("b", 0.05)])
-        self.assertAlmostEqual(next_t, 0.1)
-
     def test_empty_inputs(self) -> None:
         self.assertEqual(word_times_from_magpie_meta("", [0.1]), ([], 0.0, 0))
-        self.assertEqual(word_times_from_meta_words([]), ([], 0.0, 0))
 
 
 def _ms(word: str, start_ms: int, end_ms: int) -> dict[str, object]:
@@ -116,63 +93,26 @@ class MagpieBatchIngestTests(unittest.TestCase):
         self.assertAlmostEqual(added[1].start_s, 0.7)
         self.assertGreater(added[0].start_s, accepted[-1].end_s - 1e-9)
 
-    def test_played_partial_first_sentence_of_three(self) -> None:
-        accepted = parse_meta_word_entries(
-            [
-                _ms("Hello", 0, 200),
-                _ms("world", 200, 400),
-                _ms("today", 400, 600),
-                _ms("folks.", 600, 900),
-                _ms("How", 900, 1100),
-                _ms("Fine", 1100, 1400),
-            ]
-        )
-        played = played_words_at_pts(accepted, 0.2)
-        self.assertEqual([w.word for w in played], ["Hello", "world"])
+    def test_repeated_first_word_after_single_accepted_word_is_incremental(self) -> None:
+        accepted = parse_meta_word_entries([_ms("Hello", 0, 200)])
+        repeated_relative = parse_meta_word_entries([_ms("Hello", 0, 200), _ms("again", 200, 500)])
 
-    def test_played_s1_only_while_s1_and_s2_timestamps_present(self) -> None:
-        accepted = parse_meta_word_entries(
-            [
-                _ms("Hello", 0, 200),
-                _ms("there.", 200, 500),
-                _ms("How", 500, 700),
-                _ms("are", 700, 850),
-            ]
-        )
-        played = played_words_at_pts(accepted, 0.25)
-        self.assertEqual([w.word for w in played], ["Hello", "there."])
+        added = new_words_from_meta_batch(repeated_relative, accepted)
 
-    def test_played_two_sentences_plus_one_word_of_third(self) -> None:
-        accepted = parse_meta_word_entries(
-            [
-                _ms("Hello", 0, 200),
-                _ms("there.", 200, 500),
-                _ms("How", 500, 700),
-                _ms("are", 700, 850),
-                _ms("you?", 850, 1100),
-                _ms("Fine", 1100, 1400),
-                _ms("thanks.", 1400, 1700),
-            ]
-        )
-        played = played_words_at_pts(accepted, 1.1)
-        self.assertEqual(
-            [w.word for w in played],
-            ["Hello", "there.", "How", "are", "you?", "Fine"],
+        self.assertEqual([word.word for word in added], ["Hello", "again"])
+        self.assertAlmostEqual(added[0].start_s, 0.2)
+        self.assertAlmostEqual(added[1].start_s, 0.4)
+
+    def test_matching_words_with_timestamp_mismatch_are_incremental(self) -> None:
+        accepted = parse_meta_word_entries([_ms("Hello", 0, 200), _ms("there", 200, 500)])
+        mismatched_relative = parse_meta_word_entries(
+            [_ms("Hello", 0, 250), _ms("there", 250, 500), _ms("again", 500, 800)]
         )
 
-    def test_full_play_releases_all_words(self) -> None:
-        accepted = parse_meta_word_entries(
-            [
-                _ms("Hello", 0, 200),
-                _ms("there.", 200, 500),
-                _ms("Fine", 500, 800),
-            ]
-        )
-        played = played_words_at_pts(accepted, accepted[-1].start_s)
-        self.assertEqual(played, list(accepted))
+        added = new_words_from_meta_batch(mismatched_relative, accepted)
 
-    def test_interrupt_before_any_timestamps_plays_nothing(self) -> None:
-        self.assertEqual(played_words_at_pts([], 1.0), [])
+        self.assertEqual([word.word for word in added], ["Hello", "there", "again"])
+        self.assertAlmostEqual(added[0].start_s, 0.5)
 
 
 class LateMetaDropTests(unittest.IsolatedAsyncioTestCase):

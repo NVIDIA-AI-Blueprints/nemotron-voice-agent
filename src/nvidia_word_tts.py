@@ -321,7 +321,7 @@ class NvidiaWordTTSService(NvidiaTTSService):
         ``meta.words``, then ends the client stream.
         """
         state = self._stream_state
-        if state is not None:
+        if state is not None and (context_id is None or state.context_id == context_id):
             state.text_queue.put(_END_OF_TURN)
         # Skip parent NvidiaTTSService.flush_audio (it only queues ``None``).
         await TTSService.flush_audio(self, context_id)
@@ -403,38 +403,43 @@ class NvidiaWordTTSService(NvidiaTTSService):
         ends (after turn flush), so bot-stopped happens after the full LLM turn
         has been synthesized — not on mid-turn audio-queue idle timeouts.
         """
-        while True:
-            item = await state.response_queue.get()
-            if item is None:
+        try:
+            while True:
+                item = await state.response_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    if self._stream_state is state and not state.stop_event.is_set():
+                        await self.push_error(f"{self} synthesis error: {item}")
+                    break
+                if self._stream_state is not state:
+                    continue
+
+                await self.stop_ttfb_metrics()
+                audio = getattr(item, "audio", b"") or b""
+                if audio:
+                    frame = TTSAudioRawFrame(
+                        audio=audio,
+                        sample_rate=self.sample_rate,
+                        num_channels=1,
+                        context_id=state.context_id,
+                    )
+                    await self.append_to_audio_context(state.context_id, frame)
+
+                await self._maybe_emit_meta_timestamps(item, state.context_id)
+        finally:
+            # A superseded response task must not stop/remove the newer stream's
+            # context or clear its state.
+            if self._stream_state is state and not state.stop_event.is_set():
                 if self.audio_context_available(state.context_id):
                     await self.append_to_audio_context(
                         state.context_id,
                         TTSStoppedFrame(context_id=state.context_id),
                     )
-                    await self.remove_audio_context(state.context_id)
-                break
-            if isinstance(item, Exception):
-                if self._stream_state is state and not state.stop_event.is_set():
-                    await self.push_error(f"{self} synthesis error: {item}")
-                break
-            if self._stream_state is not state:
-                continue
-
-            await self.stop_ttfb_metrics()
-            audio = getattr(item, "audio", b"") or b""
-            if audio:
-                frame = TTSAudioRawFrame(
-                    audio=audio,
-                    sample_rate=self.sample_rate,
-                    num_channels=1,
-                    context_id=state.context_id,
-                )
-                await self.append_to_audio_context(state.context_id, frame)
-
-            await self._maybe_emit_meta_timestamps(item, state.context_id)
-
-        if self._stream_state is state and not state.stop_event.is_set():
-            self._stream_state = None
+                    if self._stream_state is state:
+                        await self.remove_audio_context(state.context_id)
+                if self._stream_state is state:
+                    self._stream_state = None
 
     async def _maybe_emit_meta_timestamps(self, response: Any, context_id: str) -> None:
         """Ingest Magpie/Riva word timings and register only new words."""
@@ -531,7 +536,10 @@ def new_words_from_meta_batch(
 ) -> list[TimedWord]:
     """Return only new words from a Magpie timestamp batch.
 
-    Cumulative payloads (full turn so far) yield the unmatched suffix.
+    Cumulative payloads (full turn so far) yield the unmatched suffix. Because
+    a single repeated token is indistinguishable from a one-token cumulative
+    prefix, cumulative classification requires an exact prefix of at least two
+    previously accepted ``TimedWord`` entries (word and timestamps).
     Incremental sentence payloads yield the whole batch. If an incremental
     batch restarts ``start_s`` near 0, times are offset by the previous
     sentence end so PTS stays stream-absolute.
@@ -539,10 +547,8 @@ def new_words_from_meta_batch(
     if not incoming:
         return []
 
-    already_tokens = [item.word for item in already_emitted]
-    incoming_tokens = [item.word for item in incoming]
-    prefix_len = len(already_tokens)
-    is_cumulative = bool(already_tokens and incoming_tokens[:prefix_len] == already_tokens)
+    prefix_len = len(already_emitted)
+    is_cumulative = prefix_len >= 2 and list(incoming[:prefix_len]) == list(already_emitted)
 
     if is_cumulative:
         return list(incoming[prefix_len:])
@@ -552,14 +558,6 @@ def new_words_from_meta_batch(
         offset = already_emitted[-1].end_s
         new_words = [TimedWord(item.word, item.start_s + offset, item.end_s + offset) for item in new_words]
     return new_words
-
-
-def played_words_at_pts(
-    words: Sequence[TimedWord],
-    playback_s: float,
-) -> list[TimedWord]:
-    """Words the transport clock would have released by ``playback_s``."""
-    return [item for item in words if item.start_s <= playback_s]
 
 
 def _split_processed_tokens(processed_text: str) -> list[str]:
@@ -654,20 +652,3 @@ def _word_times_from_char_durations(
         token_index += 1
 
     return word_times, t, token_index
-
-
-def word_times_from_meta_words(
-    words: Sequence[Any],
-    *,
-    skip_tokens: int = 0,
-) -> tuple[list[tuple[str, float]], float, int]:
-    """Build Pipecat word times from Riva ``meta.words`` (``WordTiming``).
-
-    Each entry is a proto message or mapping with ``word`` and
-    ``start_time`` / ``end_time`` in milliseconds.
-    """
-    timed = parse_meta_word_entries(words)
-    if not timed:
-        return [], 0.0, 0
-    word_times = [(item.word, item.start_s) for item in timed[skip_tokens:]]
-    return word_times, timed[-1].end_s, len(timed)

@@ -3,17 +3,33 @@
 
 # ruff: noqa: D100, D101, D102
 
+import asyncio
 import unittest
+from queue import Queue
+from threading import Event
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
+from pipecat.frames.frames import TTSStoppedFrame
 from pipecat.processors.aggregators.llm_response_universal import TextPartForConcatenation
-from pipecat.services.tts_service import TextAggregationMode
+from pipecat.services.nvidia.tts import _SynthesisStreamState
+from pipecat.services.tts_service import TextAggregationMode, TTSService
 from pipecat.utils.string import concatenate_aggregated_text
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
-from nvidia_word_tts import NvidiaWordTTSService, NvidiaWordTTSSettings
+from nvidia_word_tts import _END_OF_TURN, NvidiaWordTTSService, NvidiaWordTTSSettings
 
 
-class NvidiaWordTTSServiceConfigTests(unittest.TestCase):
+def _stream_state(context_id: str) -> _SynthesisStreamState:
+    return _SynthesisStreamState(
+        context_id=context_id,
+        text_queue=Queue(),
+        response_queue=asyncio.Queue(),
+        stop_event=Event(),
+    )
+
+
+class NvidiaWordTTSServiceConfigTests(unittest.IsolatedAsyncioTestCase):
     def test_defaults_to_token_aggregation_and_word_timestamp_path(self) -> None:
         svc = NvidiaWordTTSService(
             api_key=None,
@@ -89,24 +105,26 @@ class NvidiaWordTTSServiceConfigTests(unittest.TestCase):
         self.assertEqual(svc._split_text_into_chunks(" "), [" "])
         self.assertEqual(svc._split_text_into_chunks(""), [])
 
-    def test_run_tts_queues_space_and_punct_tokens_verbatim(self) -> None:
+    async def test_run_tts_queues_space_and_punct_tokens_verbatim(self) -> None:
         """RC3 accepts space/punct-only tokens; WordTTS must not drop or coalesce them."""
-        from queue import Queue
-
         svc = NvidiaWordTTSService(
             api_key=None,
             server="localhost:50151",
             use_ssl=False,
             model_function_map={"function_id": "", "model_name": "magpie-tts-multilingual"},
         )
-        # Exercise the same enqueue policy used by run_tts (no parent strip).
-        q: Queue = Queue()
-        for chunk in [",", " ", "created", " hello", "."]:
-            for piece in svc._split_text_into_chunks(chunk):
-                if piece != "":
-                    q.put(piece)
+        state = _stream_state("ctx-1")
+        svc._service = object()
+        svc._stream_state = state
+        svc.audio_context_available = lambda _context_id: True  # type: ignore[method-assign]
+        svc.start_tts_usage_metrics = AsyncMock()  # type: ignore[method-assign]
+
+        for token in [",", " ", "created", " hello", "."]:
+            async for _frame in svc.run_tts(token, "ctx-1"):
+                pass
+
         self.assertEqual(
-            [q.get_nowait() for _ in range(5)],
+            [state.text_queue.get_nowait() for _ in range(5)],
             [",", " ", "created", " hello", "."],
         )
 
@@ -203,12 +221,124 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
             tracker=WordCompletionTracker(text, llm_text=text, user_facing_text=text),
             append_to_context=True,
         )
+        # Pipecat 1.5.0 private contract used by force_complete.
+        self.assertEqual(len(seq._slots), 1)
+        self.assertTrue(seq._slots[0].spoken)
+        self.assertFalse(seq._slots[0].complete)
         for _f in seq.process_word("Hello", pts=0, context_id=ctx):
             pass
         leftover = [
             f.text for f in seq.force_complete(last_word_pts=0) if isinstance(f, TTSTextFrame) and f.append_to_context
         ]
         self.assertEqual(leftover, [])
+        self.assertEqual(seq._slots, [])
+
+
+class StreamLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def _service(self) -> NvidiaWordTTSService:
+        return NvidiaWordTTSService(
+            api_key=None,
+            server="localhost:50151",
+            use_ssl=False,
+            model_function_map={"function_id": "", "model_name": "magpie-tts-multilingual"},
+        )
+
+    async def test_flush_audio_only_flushes_matching_context(self) -> None:
+        svc = self._service()
+        state = _stream_state("active")
+        svc._stream_state = state
+
+        with patch.object(TTSService, "flush_audio", new=AsyncMock()) as parent_flush:
+            await svc.flush_audio("other")
+            self.assertTrue(state.text_queue.empty())
+
+            await svc.flush_audio("active")
+            self.assertIs(state.text_queue.get_nowait(), _END_OF_TURN)
+
+            await svc.flush_audio()
+            self.assertIs(state.text_queue.get_nowait(), _END_OF_TURN)
+
+        self.assertEqual(parent_flush.await_count, 3)
+
+    async def test_process_responses_normal_end_stops_and_removes_context(self) -> None:
+        svc = self._service()
+        state = _stream_state("ctx-1")
+        state.response_queue.put_nowait(None)
+        svc._stream_state = state
+        svc.audio_context_available = lambda _context_id: True  # type: ignore[method-assign]
+        svc.append_to_audio_context = AsyncMock()  # type: ignore[method-assign]
+        svc.remove_audio_context = AsyncMock()  # type: ignore[method-assign]
+
+        await svc._process_responses(state)
+
+        frame = svc.append_to_audio_context.await_args.args[1]
+        self.assertIsInstance(frame, TTSStoppedFrame)
+        svc.remove_audio_context.assert_awaited_once_with("ctx-1")
+        self.assertIsNone(svc._stream_state)
+
+    async def test_process_responses_error_stops_and_removes_context(self) -> None:
+        svc = self._service()
+        state = _stream_state("ctx-1")
+        state.response_queue.put_nowait(RuntimeError("broken stream"))
+        svc._stream_state = state
+        svc.audio_context_available = lambda _context_id: True  # type: ignore[method-assign]
+        svc.push_error = AsyncMock()  # type: ignore[method-assign]
+        svc.append_to_audio_context = AsyncMock()  # type: ignore[method-assign]
+        svc.remove_audio_context = AsyncMock()  # type: ignore[method-assign]
+
+        await svc._process_responses(state)
+
+        svc.push_error.assert_awaited_once()
+        frame = svc.append_to_audio_context.await_args.args[1]
+        self.assertIsInstance(frame, TTSStoppedFrame)
+        svc.remove_audio_context.assert_awaited_once_with("ctx-1")
+        self.assertIsNone(svc._stream_state)
+
+    async def test_stale_response_task_does_not_clean_up_newer_stream(self) -> None:
+        svc = self._service()
+        stale = _stream_state("old")
+        newer = _stream_state("new")
+        stale.response_queue.put_nowait(None)
+        svc._stream_state = newer
+        svc.audio_context_available = Mock(return_value=True)  # type: ignore[method-assign]
+        svc.append_to_audio_context = AsyncMock()  # type: ignore[method-assign]
+        svc.remove_audio_context = AsyncMock()  # type: ignore[method-assign]
+
+        await svc._process_responses(stale)
+
+        self.assertIs(svc._stream_state, newer)
+        svc.audio_context_available.assert_not_called()
+        svc.append_to_audio_context.assert_not_awaited()
+        svc.remove_audio_context.assert_not_awaited()
+
+    async def test_end_of_turn_generator_yields_one_empty_flagged_request(self) -> None:
+        svc = self._service()
+        state = _stream_state("ctx-1")
+        state.text_queue.put(_END_OF_TURN)
+        requests: list[tuple[str, dict[str, str]]] = []
+        request_refs = []
+
+        class Stub:
+            def SynthesizeOnline(self, generator, metadata):
+                del metadata
+                for request in generator:
+                    request_refs.append(request)
+                    requests.append((request.text, dict(request.custom_configuration)))
+                return []
+
+        svc._service = SimpleNamespace(
+            stub=Stub(),
+            auth=SimpleNamespace(get_auth_metadata=lambda: ()),
+        )
+
+        with patch.object(svc, "get_event_loop", return_value=asyncio.get_running_loop()):
+            svc._synthesis_handler(state)
+        await asyncio.sleep(0)
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0][0], "")
+        self.assertEqual(requests[0][1].get("riva_end_stream"), "true")
+        self.assertNotIn("riva_end_stream", request_refs[0].custom_configuration)
 
 
 class MagpieServiceIngestTests(unittest.IsolatedAsyncioTestCase):
