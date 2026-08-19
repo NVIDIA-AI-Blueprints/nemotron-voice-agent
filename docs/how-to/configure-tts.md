@@ -8,7 +8,7 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 
 | Model | Catalog key | Self-hosted compose service | Modelcard |
 |-------|-------------|-----------------------------|-----------|
-| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [NGC container](https://catalog.ngc.nvidia.com/orgs/nim/nvidia/containers/magpie-tts-multilingual/1.10.0) · [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
+| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
 | **Magpie TTS Zeroshot**: multilingual streaming TTS that supports zero-shot voice cloning and includes built-in female and male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
 | **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
@@ -33,15 +33,13 @@ For NVIDIA's current model and deployment support details, see the [TTS support 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
 >
 > **Streaming only.** The real-time pipeline needs a **streaming** TTS model. The streaming-capable TTS NIMs are **Magpie TTS Multilingual**, **Magpie TTS Zeroshot**, and **Chatterbox TTS Multilingual**. Check the [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) for supported request fields and model-specific options.
->
-> **Word-level streaming limitation.** `NvidiaWordTTSService` word-level input streaming and word timestamps are not available with Magpie TTS Multilingual 1.10.0 or newer. This limitation applies even with `nvidia-riva-client` 2.27.0. Do not use this integration for word-accurate spoken-context commits or interruption boundaries.
 
 ## Hardware requirements and deployment configs
 
 TTS runs one of these ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU. Magpie Multilingual and Chatterbox appear in the Services tab (no Compose change). Magpie Zeroshot has no cloud function.
-- **Magpie TTS Multilingual 1.10.0 (default local)**: started by `*/workstation` and `*/dgx-spark` recipes as `tts-service` from the public [NGC container](https://catalog.ngc.nvidia.com/orgs/nim/nvidia/containers/magpie-tts-multilingual/1.10.0) ([`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)).
+- **Magpie TTS Multilingual (default local)**: started by `*/workstation` and `*/dgx-spark` recipes as `tts-service` ([`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)).
 - **Opt-in local TTS (Chatterbox or Magpie Zeroshot)**: both are listed in Compose but do **not** start with the default recipe. They share Magpie Multilingual's host ports (`50151` / `9000`), so only one of Magpie Multilingual, Chatterbox, or Zeroshot can run at a time. Enable the opt-in profile and scale Magpie off:
 
   | Alternate | Compose profile | Catalog key | Compose file |
@@ -133,6 +131,33 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes via the catalog field 
 | `per_sentence` | Open a fresh synthesis call per sentence. Safe for models without cross-sentence stitching. |
 
 Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode via the registry-default fallback in the pipeline.
+
+### Word-level input streaming and timestamps
+
+All examples use Pipecat's `NvidiaTTSService` by default, which keeps Magpie Multilingual, Magpie Zeroshot, and Chatterbox switchable through the service catalog. For Magpie TTS Multilingual 1.10.0 or newer, [`NvidiaWordTTSService`](../../src/nvidia_word_tts.py) is an optional drop-in subclass that adds word-level input streaming and timestamp-based LLM context commits. It requires `nvidia-riva-client` 2.27.0 or newer.
+
+To opt in for a custom example, change only the service import and constructor:
+
+```python
+# Default
+from pipecat.services.nvidia.tts import NvidiaTTSService
+
+tts = NvidiaTTSService(**tts_kwargs)
+
+# Opt in to Magpie 1.10.0+ word streaming and timestamp commits
+from nvidia_word_tts import NvidiaWordTTSService
+
+tts = NvidiaWordTTSService(**tts_kwargs)
+```
+
+`NvidiaWordTTSService` internally selects token aggregation, disables parent text-frame commits, uses stitched synthesis, and requests word timestamps. Do not set `text_aggregation_mode` or `push_text_frames` in the example. It also sets Magpie's `max_chunk_threshold` to 100 characters so a long input can be flushed before end of stream.
+
+The UI renders assistant bubbles from LLM response events, independently of the selected TTS service. Word timestamps control when spoken text is committed to LLM context; they do not drive the displayed assistant response.
+
+#### Known Magpie limitations
+
+- **Word timestamps are delayed until a flush.** Magpie emits timing metadata only after end of stream or after the configured 100-character chunk threshold is reached, not progressively with each audio chunk. If the user interrupts before Magpie returns timestamps for the current batch, the client cannot determine how much of that batch was played and therefore cannot commit any words from that interval to the LLM context. The same delay prevents progressive word-level highlighting (for example, karaoke-style highlighting) while audio is streaming.
+- **`meta.words` does not preserve spacing.** `response.meta.words` removes leading and trailing spaces and omits space-only tokens. Because a token may also be a subword or punctuation, clients cannot reliably reconstruct the original spoken text: inserting spaces can produce false gaps such as `"I'm Nem otron ,"`, while concatenating tokens can produce text such as `"IamNemotron,createdbyNVIDIA."`. `NvidiaWordTTSService` currently inserts spaces between timed tokens for readable context, so these false gaps are an expected limitation.
 
 ### Pronunciation (IPA)
 
