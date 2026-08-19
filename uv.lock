@@ -1471,7 +1471,7 @@ benchmark = [
     { name = "grpcio", specifier = ">=1.67.0" },
     { name = "huggingface-hub", specifier = ">=0.23.0" },
     { name = "numpy", specifier = ">=2.0.0" },
-    { name = "nvidia-riva-client", specifier = ">=2.21.0" },
+    { name = "nvidia-riva-client", specifier = ">=2.27.0" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "resampy", specifier = ">=0.4.3" },
     { name = "soundfile", specifier = ">=0.13.0" },

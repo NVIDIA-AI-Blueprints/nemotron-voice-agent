@@ -1,5 +1,5 @@
 x-tts-service: &tts-service-base
-    image: nvcr.io/nim/nvidia/magpie-tts-multilingual:1.9.0
+    image: nvcr.io/nim/nvidia/magpie-tts-multilingual:1.10.0
     user: "0:0"
     ports:
       - "50151:50051"

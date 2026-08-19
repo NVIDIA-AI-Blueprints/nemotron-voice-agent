@@ -3,6 +3,11 @@
 
 """NVIDIA Magpie WordTTS service.
 
+Compatibility:
+    Magpie TTS Multilingual NIM 1.10.0 and newer do not expose word-level
+    input streaming or word timestamps. Use this service's WordTTS path only
+    with a compatible development Magpie deployment.
+
 Local draft of a Pipecat child class: does **not** modify upstream
 :class:`~pipecat.services.nvidia.tts.NvidiaTTSService`. Later, move this module
 into ``pipecat.services.nvidia.tts`` alongside the parent.
@@ -33,7 +38,7 @@ used by Cartesia / ElevenLabs / Rime.
 Stock :class:`NvidiaTTSService` is unchanged (``push_text_frames=True``,
 sentence aggregation by default, no timestamp commits).
 
-Proto contract (Magpie 1.10.0 / riva-speech streaming + word timestamps)::
+Proto contract (compatible development Magpie / riva-speech build)::
 
     request.enable_word_time_offsets = true
     request.custom_configuration["max_chunk_threshold"] = "100"
@@ -148,6 +153,11 @@ class _WordTimingState:
 
 class NvidiaWordTTSService(NvidiaTTSService):
     """NVIDIA TTS WordTTS path: spoken commits + Magpie/Riva word timestamps.
+
+    .. warning::
+       Magpie TTS Multilingual NIM 1.10.0 and newer do not support word-level
+       input streaming or word timestamps, so this WordTTS behavior is not
+       available with those releases.
 
     Use this instead of :class:`NvidiaTTSService` when you need barge-in-accurate
     assistant context (heard words only). Unspoken remainder is never
@@ -349,8 +359,10 @@ class NvidiaWordTTSService(NvidiaTTSService):
 
         Parent ``NvidiaTTSService`` strips text and drops whitespace/punct-only
         chunks — appropriate for sentence aggregation on older Magpie builds.
-        WordTTS targets Magpie RC3 with TOKEN streaming: every LLM piece must
-        go through unchanged (spaces and punctuation-only tokens included).
+        Compatible development Magpie builds use TOKEN streaming: every LLM
+        piece must go through unchanged (spaces and punctuation-only tokens
+        included). Magpie TTS Multilingual NIM 1.10.0+ does not support this
+        word-level input streaming path.
         """
         if text == "":
             return

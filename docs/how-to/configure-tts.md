@@ -8,7 +8,7 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 
 | Model | Catalog key | Self-hosted compose service | Modelcard |
 |-------|-------------|-----------------------------|-----------|
-| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
+| **Magpie TTS Multilingual**: default, streaming multilingual TTS with per-language voices | `magpie-multilingual-tts` | [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml) | [NGC container](https://catalog.ngc.nvidia.com/orgs/nim/nvidia/containers/magpie-tts-multilingual/1.10.0) · [model card](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) |
 | **Magpie TTS Zeroshot**: multilingual streaming TTS that supports zero-shot voice cloning and includes built-in female and male voices | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) | [model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) |
 | **Chatterbox TTS Multilingual**: alternate streaming multilingual TTS | `chatterbox-multilingual-tts` | [`docker-compose.chatterbox-tts.yaml`](../../docker/docker-compose.chatterbox-tts.yaml) | [model card](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) |
 
@@ -33,13 +33,15 @@ For NVIDIA's current model and deployment support details, see the [TTS support 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
 >
 > **Streaming only.** The real-time pipeline needs a **streaming** TTS model. The streaming-capable TTS NIMs are **Magpie TTS Multilingual**, **Magpie TTS Zeroshot**, and **Chatterbox TTS Multilingual**. Check the [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) for supported request fields and model-specific options.
+>
+> **Word-level streaming limitation.** `NvidiaWordTTSService` word-level input streaming and word timestamps are not available with Magpie TTS Multilingual 1.10.0 or newer. This limitation applies even with `nvidia-riva-client` 2.27.0. Do not use this integration for word-accurate spoken-context commits or interruption boundaries.
 
 ## Hardware requirements and deployment configs
 
 TTS runs one of these ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU. Magpie Multilingual and Chatterbox appear in the Services tab (no Compose change). Magpie Zeroshot has no cloud function.
-- **Magpie TTS Multilingual (default local)**: started by `*/workstation` and `*/dgx-spark` recipes as `tts-service` ([`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)).
+- **Magpie TTS Multilingual 1.10.0 (default local)**: started by `*/workstation` and `*/dgx-spark` recipes as `tts-service` from the public [NGC container](https://catalog.ngc.nvidia.com/orgs/nim/nvidia/containers/magpie-tts-multilingual/1.10.0) ([`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)).
 - **Opt-in local TTS (Chatterbox or Magpie Zeroshot)**: both are listed in Compose but do **not** start with the default recipe. They share Magpie Multilingual's host ports (`50151` / `9000`), so only one of Magpie Multilingual, Chatterbox, or Zeroshot can run at a time. Enable the opt-in profile and scale Magpie off:
 
   | Alternate | Compose profile | Catalog key | Compose file |

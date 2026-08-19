@@ -2,6 +2,12 @@
 
 Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`NvidiaSTTService` -> `NvidiaLLMService` with function calling) plus `NvidiaWordTTSService` for Magpie WordTTS (spoken-only context commits; word timestamps when Magpie meta is available). Other examples still use stock `NvidiaTTSService` (`push_text_frames`) and are unaffected. It is a minimal, production-shaped cascaded voice assistant that keeps ASR, LLM, tools, and TTS as separate services.
 
+### Magpie Multilingual compatibility
+
+Local workstation and DGX Spark profiles use the public [Magpie TTS Multilingual 1.10.0 NIM container](https://catalog.ngc.nvidia.com/orgs/nim/nvidia/containers/magpie-tts-multilingual/1.10.0) from NGC. The Python environment uses the public `nvidia-riva-client` 2.27.0 package from PyPI.
+
+> **Word-level streaming limitation:** `NvidiaWordTTSService` word-level input streaming and word timestamps are not available with Magpie TTS Multilingual 1.10.0 or newer. Do not rely on this service for word-accurate spoken-context commits or interruption boundaries. Refer to [Configure TTS](../../../docs/how-to/configure-tts.md) for the supported Magpie configuration.
+
 ![Architecture Diagram](../../../docs/images/arch.png)
 
 ## Running the example

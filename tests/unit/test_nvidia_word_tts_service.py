@@ -33,10 +33,8 @@ class NvidiaWordTTSServiceConfigTests(unittest.TestCase):
         req = svc._build_base_request()
         self.assertEqual(req.custom_configuration.get("enable_word_time_offsets"), "true")
         self.assertEqual(req.custom_configuration.get("max_chunk_threshold"), "100")
-        # Current public nvidia-riva-client may lack the first-class field; when
-        # present it must be enabled for the riva-speech !2703 contract.
-        if hasattr(req, "enable_word_time_offsets"):
-            self.assertTrue(req.enable_word_time_offsets)
+        # Public nvidia-riva-client 2.27.0 exposes the first-class field.
+        self.assertTrue(req.enable_word_time_offsets)
 
     def test_can_override_aggregation_to_sentence(self) -> None:
         svc = NvidiaWordTTSService(
@@ -77,8 +75,7 @@ class NvidiaWordTTSServiceConfigTests(unittest.TestCase):
         self.assertNotIn("riva_end_stream", req.custom_configuration)
         self.assertEqual(req.custom_configuration.get("enable_word_time_offsets"), "true")
         self.assertEqual(req.custom_configuration.get("max_chunk_threshold"), "100")
-        if hasattr(req, "enable_word_time_offsets"):
-            self.assertTrue(req.enable_word_time_offsets)
+        self.assertTrue(req.enable_word_time_offsets)
 
     def test_split_preserves_leading_and_trailing_spaces(self) -> None:
         svc = NvidiaWordTTSService(
