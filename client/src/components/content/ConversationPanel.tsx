@@ -133,6 +133,9 @@ const findLatestUnanchoredUser = (
 
 const normalizeTranscript = (text?: string | null) => (text ?? "").trim().replace(/\s+/g, " ");
 
+const validTimestampOrNow = (timestamp: string) =>
+  Number.isNaN(Date.parse(timestamp)) ? new Date().toISOString() : timestamp;
+
 const findUserMessageByTranscript = (
   messages: ConversationMessage[],
   transcript: string | null | undefined,
@@ -374,7 +377,10 @@ export function ConversationPanel() {
 
       if (type !== "user-turn-finalized") return;
       setCurrentUserTurnActive(false);
-      const anchorISO = new Date().toISOString();
+      // Omni's transcript arrives after its response begins. Use the turn's
+      // server-side boundary timestamp so the eventual user bubble is ordered
+      // before that response, rather than at the time the transcript arrives.
+      const anchorISO = validTimestampOrNow(stringField(message, "timestamp"));
       const anchors = userTurnAnchorsRef.current;
       const target =
         findUserMessageByTranscript(visibleMessagesRef.current, stringField(message, "transcript"), anchors) ??
