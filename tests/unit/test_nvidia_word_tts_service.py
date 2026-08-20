@@ -172,7 +172,7 @@ class SpacingFlagTests(unittest.TestCase):
         self.assertEqual(spaced, "The sky turned blue")
 
 
-class MagpieWordCommitSequencerTests(unittest.TestCase):
+class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
     """WordTTS commits Magpie meta words with space injection (interim)."""
 
     def test_uses_magpie_word_sequencer(self) -> None:
@@ -186,9 +186,8 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         )
         self.assertIsInstance(svc._aggregated_frame_sequencer, _MagpieWordCommitSequencer)
 
-    def test_space_insert_between_magpie_tokens(self) -> None:
+    async def test_space_insert_between_magpie_tokens(self) -> None:
         from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
-        from pipecat.utils.context.word_completion_tracker import WordCompletionTracker
 
         from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
@@ -197,10 +196,10 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         seq = _MagpieWordCommitSequencer(name="test")
         ctx = "ctx-1"
         frame = AggregatedTextFrame(sentence, AggregationType.SENTENCE, raw_text=sentence)
-        seq.register_spoken(
+        await seq.register_spoken(
             frame,
             ctx,
-            tracker=WordCompletionTracker(sentence, llm_text=sentence, user_facing_text=sentence),
+            sentence,
             append_to_context=True,
         )
 
@@ -213,7 +212,7 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
                     committed.append(f.text)
 
         # No remainder dump on force_complete.
-        for f in seq.force_complete(last_word_pts=0):
+        for f in seq.force_complete(ctx, last_word_pts=0):
             if isinstance(f, TTSTextFrame) and f.append_to_context:
                 committed.append(f.text)
 
@@ -222,9 +221,8 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         )
         self.assertEqual(spaced, "I am Nemotron, created by NVIDIA")
 
-    def test_force_complete_skips_unspoken_remainder(self) -> None:
+    async def test_force_complete_skips_unspoken_remainder(self) -> None:
         from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
-        from pipecat.utils.context.word_completion_tracker import WordCompletionTracker
 
         from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
@@ -232,10 +230,10 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         seq = _MagpieWordCommitSequencer(name="test")
         ctx = "ctx-1"
         frame = AggregatedTextFrame(text, AggregationType.SENTENCE, raw_text=text)
-        seq.register_spoken(
+        await seq.register_spoken(
             frame,
             ctx,
-            tracker=WordCompletionTracker(text, llm_text=text, user_facing_text=text),
+            text,
             append_to_context=True,
         )
         # Pipecat 1.5.0 private contract used by force_complete.
@@ -245,10 +243,41 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         for _f in seq.process_word("Hello", pts=0, context_id=ctx):
             pass
         leftover = [
-            f.text for f in seq.force_complete(last_word_pts=0) if isinstance(f, TTSTextFrame) and f.append_to_context
+            f.text
+            for f in seq.force_complete(ctx, last_word_pts=0)
+            if isinstance(f, TTSTextFrame) and f.append_to_context
         ]
         self.assertEqual(leftover, [])
         self.assertEqual(seq._slots, [])
+
+    async def test_force_complete_leaves_other_context_active(self) -> None:
+        from pipecat.frames.frames import AggregatedTextFrame, AggregationType
+
+        from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
+
+        seq = _MagpieWordCommitSequencer(name="test")
+        first_context = "ctx-1"
+        second_context = "ctx-2"
+        await seq.register_spoken(
+            AggregatedTextFrame("First", AggregationType.SENTENCE, raw_text="First"),
+            first_context,
+            "First",
+            append_to_context=True,
+        )
+        await seq.register_spoken(
+            AggregatedTextFrame("Second", AggregationType.SENTENCE, raw_text="Second"),
+            second_context,
+            "Second",
+            append_to_context=True,
+        )
+
+        seq.force_complete(first_context, last_word_pts=0)
+
+        self.assertNotIn(first_context, seq._context_append_to_context)
+        self.assertIn(second_context, seq._context_append_to_context)
+        self.assertEqual(len(seq._slots), 1)
+        self.assertEqual(seq._slots[0].context_id, second_context)
+        self.assertFalse(seq._slots[0].complete)
 
 
 class StreamLifecycleTests(unittest.IsolatedAsyncioTestCase):

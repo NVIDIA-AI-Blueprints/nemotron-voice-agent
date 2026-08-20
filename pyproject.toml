@@ -5,7 +5,7 @@ description = "End-to-end voice agent blueprint powered by NVIDIA Nemotron ASR, 
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.5.0",
+    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.7.0",
     "python-dotenv>=1.2.2",
     "loguru>=0.7.3",
     "pyyaml>=6.0.3",
@@ -35,7 +35,7 @@ dev = [
     "pytest>=9.1.1",
 ]
 eval = [
-    "pipecat-ai[evals]==1.5.0",
+    "pipecat-ai[evals]==1.7.0",
 ]
 # Dependencies for everything under `benchmarking_tools/`. Install with:
 #   uv sync --group benchmark
