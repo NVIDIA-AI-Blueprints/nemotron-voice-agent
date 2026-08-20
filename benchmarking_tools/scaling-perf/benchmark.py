@@ -77,6 +77,7 @@ from openai_realtime_ws import (
     EndOfRealtimeResponse,
     OpenAIRealtimeSocket,
     resolve_api_key,
+    resolve_auth_scheme,
     resolve_protocol,
     resolve_ws_url,
 )
@@ -308,6 +309,7 @@ class PerfClient:
         auth_scheme: str = DEFAULT_AUTH_SCHEME,
         connect_timeout: float = WS_CONNECT_TIMEOUT,
         drain_bot_intro: bool | None = None,
+        verify_tls: bool = True,
     ):
         self.stream_id = stream_id
         self.host = host
@@ -318,6 +320,7 @@ class PerfClient:
         self.auth_scheme = auth_scheme
         self.connect_timeout = connect_timeout
         self.drain_bot_intro = drain_bot_intro if drain_bot_intro is not None else protocol != "realtime"
+        self.verify_tls = verify_tls
         self._realtime: OpenAIRealtimeSocket | None = None
         self.audio_files = audio_files
         self.start_delay = start_delay
@@ -844,6 +847,7 @@ class PerfClient:
                     connect_timeout=self.connect_timeout,
                     input_sample_rate=input_rate,
                     output_sample_rate=DEFAULT_OUTPUT_RATE,
+                    verify_tls=self.verify_tls,
                 ) as realtime:
                     self._realtime = realtime
                     ready = await realtime.configure_input(input_rate)
@@ -972,23 +976,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ws-url",
         default="",
-        help="OpenAI Realtime WebSocket URL (env BASETEN_CHAIN_WSS_URL). Implies --protocol realtime.",
+        help="OpenAI Realtime WebSocket URL (env OPENAI_REALTIME_WS_URL). Implies --protocol realtime.",
     )
     parser.add_argument(
         "--api-key",
         default="",
-        help="Realtime API key (env BASETEN_API_KEY). Sent as Authorization: Api-Key <key>.",
+        help="Realtime API key (env OPENAI_REALTIME_API_KEY).",
     )
     parser.add_argument(
         "--auth-scheme",
-        default=DEFAULT_AUTH_SCHEME,
-        help="Authorization scheme for --api-key (default: Api-Key). Use Bearer when required.",
+        default="",
+        help="Authorization scheme for --api-key (env OPENAI_REALTIME_AUTH_SCHEME; default: Bearer).",
     )
     parser.add_argument(
         "--connect-timeout",
         type=float,
         default=None,
         help="WebSocket handshake timeout in seconds (default: 30 RTVI, 60 realtime).",
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification for a Realtime wss:// endpoint.",
     )
     parser.add_argument(
         "--drain-bot-intro",
@@ -1105,8 +1114,9 @@ async def async_main(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     api_key = resolve_api_key(args.api_key)
+    auth_scheme = resolve_auth_scheme(args.auth_scheme)
     if protocol == "realtime" and not ws_url:
-        print("error: --ws-url or BASETEN_CHAIN_WSS_URL is required for realtime", file=sys.stderr)
+        print("error: --ws-url or OPENAI_REALTIME_WS_URL is required for realtime", file=sys.stderr)
         return 2
     connect_timeout = (
         float(args.connect_timeout)
@@ -1141,9 +1151,10 @@ async def async_main(args: argparse.Namespace) -> int:
         protocol=protocol,
         ws_url=ws_url,
         api_key=api_key,
-        auth_scheme=args.auth_scheme,
+        auth_scheme=auth_scheme,
         connect_timeout=connect_timeout,
         drain_bot_intro=drain_bot_intro,
+        verify_tls=not args.insecure,
     )
     result = await client.run()
     result_path.parent.mkdir(parents=True, exist_ok=True)

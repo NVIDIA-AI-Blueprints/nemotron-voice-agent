@@ -62,16 +62,29 @@ straight from a fresh `uv sync --group benchmark`.
 
 ### Realtime Endpoint
 
-Set the Realtime WebSocket URL and, when required, its API key:
+Set the OpenAI Realtime-compatible WebSocket URL and, when required, its API
+key:
 
 ```bash
-export BASETEN_CHAIN_WSS_URL=wss://example.test/v1/realtime
-export BASETEN_API_KEY=<api-key>
+export OPENAI_REALTIME_WS_URL=wss://realtime.example.com/v1/realtime
+export OPENAI_REALTIME_API_KEY=<api-key>
 ```
 
-The API key is sent as `Authorization: Api-Key <api-key>`. Use
-`--auth-scheme Bearer` for endpoints that require a bearer token. The client
-omits the `Authorization` header when you do not provide a key.
+The API key is sent as `Authorization: Bearer <api-key>`. Set
+`OPENAI_REALTIME_AUTH_SCHEME` or use `--auth-scheme` for a different scheme,
+such as `Api-Key`. The client omits the header when no key is provided.
+
+The repository's gateway is available at
+`wss://localhost:7860/v1/realtime`. It uses the development TLS certificate,
+so local runs need `--insecure`:
+
+```bash
+./simulate_concurrency.sh \
+  --protocol realtime \
+  --ws-url wss://localhost:7860/v1/realtime \
+  --insecure \
+  --clients 1
+```
 
 The client sends a minimal `session.update` containing only the first WAV
 file's input sample rate. It waits up to 60 seconds for `session.created` or
@@ -86,9 +99,6 @@ sending PCM silence after each WAV and expects base64 mono PCM in
 completion. An `error` event or an event type that ends in `.failed` stops the
 client and records the server message as its error. Use WAV files with a
 consistent sample rate across the dataset.
-
-The `release_v2.0.1` server does not expose `/v1/realtime`. Point this mode at
-a deployment that implements the OpenAI Realtime event protocol.
 
 ### Prompt override for perf runs
 
@@ -179,12 +189,12 @@ uv run python3 benchmark.py
 ./simulate_concurrency.sh --clients "1 2 4 8 16"
 
 # Single Realtime client
-uv run python3 benchmark.py --protocol realtime --ws-url "$BASETEN_CHAIN_WSS_URL"
+uv run python3 benchmark.py --protocol realtime --ws-url "$OPENAI_REALTIME_WS_URL"
 
 # Realtime scaling sweep
 ./simulate_concurrency.sh \
   --protocol realtime \
-  --ws-url "$BASETEN_CHAIN_WSS_URL" \
+  --ws-url "$OPENAI_REALTIME_WS_URL" \
   --clients "1 2 4 8 16"
 ```
 
@@ -195,12 +205,13 @@ wrapper and `benchmark.py` unless the description states otherwise:
 |------|---------|-------------|
 | `--clients "N1 N2 …"` | `1` | One run per concurrency level. Quote the list. |
 | `--host` / `--port` | `localhost` / `7860` | RTVI server target. |
-| `--protocol` | `rtvi` | Select `realtime` for an OpenAI Realtime WebSocket. Providing `--ws-url` or setting `BASETEN_CHAIN_WSS_URL` also selects Realtime mode when you omit this flag. |
-| `--ws-url` | unset; falls back to `BASETEN_CHAIN_WSS_URL` | Full Realtime WebSocket URL. Required in Realtime mode. |
-| `--api-key` | unset; falls back to `BASETEN_API_KEY` | Optional Realtime API key. Prefer the environment variable to avoid exposing credentials in process arguments. |
-| `--auth-scheme` | `Api-Key` | Authorization scheme for the Realtime API key. |
+| `--protocol` | `rtvi` | Select `realtime` for an OpenAI Realtime WebSocket. Providing `--ws-url` or setting `OPENAI_REALTIME_WS_URL` also selects Realtime mode when you omit this flag. |
+| `--ws-url` | unset; falls back to `OPENAI_REALTIME_WS_URL` | Full Realtime WebSocket URL. Required in Realtime mode. |
+| `--api-key` | unset; falls back to `OPENAI_REALTIME_API_KEY` | Optional Realtime API key. Prefer the environment variable to avoid exposing credentials in process arguments. |
+| `--auth-scheme` | `Bearer`; falls back to `OPENAI_REALTIME_AUTH_SCHEME` | Authorization scheme for the Realtime API key. |
 | `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. The Realtime session-ready timeout remains 60 seconds. |
 | `--turn-response-timeout` | RTVI: `10`; Realtime: `45` | Seconds to wait for first response audio after the WAV ends. |
+| `--insecure` | off | Disable TLS certificate verification for Realtime. Intended for local development certificates. |
 | `--skip-bot-intro` | RTVI: off; Realtime: on | Skip draining an initial assistant utterance. Realtime skips it by default. |
 | `--drain-bot-intro` | RTVI: on; Realtime: off | Wait for and discard an initial assistant utterance. Only direct `benchmark.py` runs accept this flag. If you also pass `--skip-bot-intro`, skipping takes precedence. |
 | `--test-duration` | `300` | Seconds of metric collection per level. |
@@ -269,9 +280,10 @@ weighted-averaged across all turns/clients in a run):
 | `llm_processing_time` | LLM end-to-end (request → final token) |
 | `llm_tokens_per_sec` | Completion tokens / `llm_processing_time` |
 
-Baseten's OpenAI Realtime endpoint does not currently emit RTVI timing frames,
-so these server-metric columns are `N/A`. Per-client Realtime result JSON includes
-`realtime_turn_metrics`. Each completed turn records these values in seconds:
+The OpenAI Realtime protocol does not carry RTVI timing frames, so RTVI
+server-metric columns are `N/A` for Realtime endpoints. Per-client Realtime
+result JSON instead includes `realtime_turn_metrics`. Each completed turn
+records these values in seconds:
 
 - `input_end_to_speech_stopped`: time from the last input WAV frame to the
   server's `input_audio_buffer.speech_stopped` event.

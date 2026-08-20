@@ -18,6 +18,7 @@ import base64
 import contextlib
 import json
 import os
+import ssl
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -26,11 +27,12 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 DEFAULT_OUTPUT_RATE = 24_000
-DEFAULT_AUTH_SCHEME = "Api-Key"
+DEFAULT_AUTH_SCHEME = "Bearer"
 DEFAULT_CONNECT_TIMEOUT = 60.0
 DEFAULT_READY_TIMEOUT = 60.0
-API_KEY_ENV = "BASETEN_API_KEY"
-WS_URL_ENV = "BASETEN_CHAIN_WSS_URL"
+API_KEY_ENV = "OPENAI_REALTIME_API_KEY"
+AUTH_SCHEME_ENV = "OPENAI_REALTIME_AUTH_SCHEME"
+WS_URL_ENV = "OPENAI_REALTIME_WS_URL"
 
 SESSION_READY_TYPES = frozenset({"session.created", "session.updated"})
 
@@ -61,6 +63,11 @@ def resolve_api_key(explicit: str | None = None) -> str:
 def resolve_ws_url(explicit: str | None = None) -> str:
     """Resolve an explicit or environment-provided Realtime WebSocket URL."""
     return (explicit or os.environ.get(WS_URL_ENV) or "").strip()
+
+
+def resolve_auth_scheme(explicit: str | None = None) -> str:
+    """Resolve the authorization scheme for a Realtime API key."""
+    return (explicit or os.environ.get(AUTH_SCHEME_ENV) or DEFAULT_AUTH_SCHEME).strip()
 
 
 def auth_headers(api_key: str, *, auth_scheme: str = DEFAULT_AUTH_SCHEME) -> dict[str, str]:
@@ -153,6 +160,7 @@ class OpenAIRealtimeSocket:
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         input_sample_rate: int = 16_000,
         output_sample_rate: int = DEFAULT_OUTPUT_RATE,
+        verify_tls: bool = True,
     ):
         self.url = url
         self.api_key = api_key
@@ -160,6 +168,7 @@ class OpenAIRealtimeSocket:
         self.connect_timeout = connect_timeout
         self.input_sample_rate = int(input_sample_rate)
         self.output_sample_rate = int(output_sample_rate)
+        self.verify_tls = verify_tls
         self.ws: Any = None
         self.events: list[dict[str, Any]] = []
         self._send_lock = asyncio.Lock()
@@ -177,6 +186,11 @@ class OpenAIRealtimeSocket:
         kwargs: dict[str, Any] = {"max_size": None, "open_timeout": self.connect_timeout}
         if headers:
             kwargs["additional_headers"] = headers
+        if self.url.startswith("wss://") and not self.verify_tls:
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            kwargs["ssl"] = ssl_context
         self.ws = await websockets.connect(self.url, **kwargs)
 
     async def close(self) -> None:
