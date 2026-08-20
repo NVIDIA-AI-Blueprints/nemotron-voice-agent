@@ -26,7 +26,9 @@ docker compose --profile <recipe> down
 
 ## Verify
 
-- App logs: `docker compose logs --tail 200 frontend-backend-agent`.
+- Cloud app logs: `docker compose logs --tail 200 frontend-backend-agent`.
+- Server app logs: `docker compose logs --tail 200 frontend-backend-agent-server`.
+- Single-GPU app logs: `docker compose logs --tail 200 frontend-backend-agent-single-gpu`.
 - Booking server logs: `docker compose logs --tail 200 booking-server`.
 - Server local service logs: `docker compose logs --tail 200 nvidia-llm nemotron-asr-streaming-english tts-service`.
 

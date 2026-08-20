@@ -4,13 +4,13 @@ Use this reference from the `deploy` skill when deploying the examples/omni_assi
 
 ## When to use
 
-Pinning a Docker Compose deployment to the Omni Assistant Subagents example. Recipe profile names are `<example>` for cloud-only and `<example>/<hardware>` for on-prem. The companion `omni-assistant` example is a separate recipe (see its deploy reference). Selector modes (`all`, or a single `<example>`) are host-native only — they are not exposed as compose profiles.
+Pinning a Docker Compose deployment to the Omni Assistant Subagents example. Use `omni-assistant-subagents` for cloud, `omni-assistant-subagents/server` for Omni NIM and NIM TTS, or `omni-assistant-subagents/single-gpu` for Omni vLLM and NeMo-Speech.cpp TTS. The companion `omni-assistant` example is a separate recipe. Selector modes are host-native only and are not exposed as Compose profiles.
 
 This example declares `capabilities: [attachments, webcam]` in `examples_registry.yaml`. The browser UI gates the attachment upload control and the webcam panel on these capabilities, and the backend exposes `POST /api/sessions/{id}/attachments`, `POST /api/sessions/{id}/webcam/frames`, and `GET /api/webcam-config` for them.
 
 Per-example catalogs at `src/examples/omni_assistant_subagents/services.{cloud,local}.yaml` are auto-selected on container startup because the registry resolves the example for the active recipe.
 
-Hardware support: cloud-only, `server`, and universal `single-gpu`, matching `omni-assistant`.
+Hardware support: cloud-only, `server`, and `single-gpu` on workstations and DGX Spark.
 
 ## Compose deploy
 
@@ -18,17 +18,17 @@ Hardware support: cloud-only, `server`, and universal `single-gpu`, matching `om
 # Cloud (NVCF)
 docker compose --profile omni-assistant-subagents up -d
 
-# Server (local Omni vLLM + NIM TTS, recommended for scaling)
+# Server (Omni NIM + NIM TTS, recommended for scaling)
 docker compose --profile omni-assistant-subagents/server up -d
 
-# One GPU, including DGX Spark and Jetson Thor
+# One GPU on a workstation or DGX Spark
 docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```
 
 | Recipe profile | App service | Sidecars from `docker/` |
 | --- | --- | --- |
 | `omni-assistant-subagents` | `omni-assistant-subagents` | none (cloud NVCF) |
-| `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-vllm-omni`, `tts-service` |
+| `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `tts-service` |
 | `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
 Tear down with the same recipe used at `up` time.
@@ -36,7 +36,10 @@ Tear down with the same recipe used at `up` time.
 ## Verify
 
 - UI at `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`. The sidebar shows a webcam panel and the conversation panel shows an attachment upload control.
-- App logs: `docker compose logs --tail 200 omni-assistant-subagents`. Look for `Starting Nemotron Omni Assistant Subagents pipeline ... agents=transport,speaker,media,webcam,thinker`.
+- Cloud app logs: `docker compose logs --tail 200 omni-assistant-subagents`.
+- Server app logs: `docker compose logs --tail 200 omni-assistant-subagents-server`.
+- Single-GPU app logs: `docker compose logs --tail 200 omni-assistant-subagents-single-gpu`.
+- In the active app logs, look for `Starting Nemotron Omni Assistant Subagents pipeline ... agents=transport,speaker,media,webcam,thinker`.
 - Attachment upload check: `curl -F file=@image.jpg "https://<host>:7860/api/sessions/<session_id>/attachments?kind=image"` (use a session id from a live session).
 - Webcam config check: `curl -fk https://<host>:7860/api/webcam-config`.
 

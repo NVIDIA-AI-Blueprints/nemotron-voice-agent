@@ -144,7 +144,7 @@ export function VoiceSettings() {
       return ttsConfig.defaultVoiceId;
     }
     return sessionVoices[0]?.id ?? "";
-  }, [sessionVoices, selectedVoiceId, selectedTTS?.voiceId, ttsConfig?.defaultVoiceId]);
+  }, [sessionVoices, selectedVoiceId, selectedTTS, ttsConfig]);
 
   // Persist the per-language default so the connect request sends the voice the
   // panel is showing instead of a catalog voice from another language.

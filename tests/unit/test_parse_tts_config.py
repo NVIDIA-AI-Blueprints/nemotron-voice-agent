@@ -84,6 +84,56 @@ class ParseTtsConfigTests(unittest.TestCase):
         self.assertEqual({v["language"] for v in john}, {"en-US", "es-ES"})
         self.assertEqual({v["name"] for v in parsed["voices"]}, {"John", "Sofia", "Aria", "Jason", "Leo"})
 
+    def test_parses_voice_metadata_from_each_model_config_without_cross_locale_expansion(self) -> None:
+        raw = SimpleNamespace(
+            model_config=[
+                SimpleNamespace(
+                    parameters={
+                        "language_code": "en-US",
+                        "voice_name": "Magpie-ZeroShot-Multilingual",
+                        "subvoices": "Male:6",
+                    }
+                ),
+                SimpleNamespace(
+                    parameters={
+                        "language_code": "es-ES",
+                        "voice_name": "Magpie-ZeroShot-Multilingual",
+                        "subvoices": "Female:0",
+                    }
+                ),
+            ]
+        )
+
+        parsed = _parse_tts_config(raw, "Magpie-ZeroShot-Multilingual")
+
+        self.assertEqual(parsed["languages"], ["en-US", "es-ES"])
+        self.assertEqual(
+            parsed["voices"],
+            [
+                {"id": "Magpie-ZeroShot-Multilingual.Male", "name": "Male", "language": "en-US"},
+                {"id": "Magpie-ZeroShot-Multilingual.Female", "name": "Female", "language": "es-ES"},
+            ],
+        )
+
+    def test_uses_first_declared_language_as_default_across_model_configs(self) -> None:
+        raw = SimpleNamespace(
+            model_config=[
+                SimpleNamespace(parameters={"voice_name": "Magpie-Multilingual"}),
+                SimpleNamespace(
+                    parameters={
+                        "language_code": "es-ES",
+                        "voice_name": "Magpie-Multilingual",
+                        "subvoices": "ES-ES.Isabela:1",
+                    }
+                ),
+            ]
+        )
+
+        parsed = _parse_tts_config(raw, "Magpie-Multilingual")
+
+        self.assertEqual(parsed["languages"], ["es-ES"])
+        self.assertEqual(parsed["defaultLanguage"], "es-ES")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@ The pattern uses dedicated ASR, LLM, and TTS services with a plain-text response
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor; refer to the [Jetson Thor guide](../../../docs/03-jetson-thor.md) when applicable. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../docs/03-jetson-thor.md) when applicable. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
 1. Create your `.env` from the template and set your NVIDIA API key:
 

@@ -104,76 +104,92 @@ def _parse_tts_config(raw_config, model_prefix: str) -> dict:
         return {"languages": [], "voices": []}
 
     all_params = [dict(mc.parameters) for mc in raw_config.model_config]
-    params = all_params[0]
-    prefix = (model_prefix or params.get("voice_name", "") or "").strip()
-    first_languages = _parse_language_codes_param(params.get("language_code", ""))
-    default_language = first_languages[0] if first_languages else "en-US"
 
     languages: list[str] = []
     seen_langs: set[str] = set()
-    for entry_params in all_params:
-        for code in _parse_language_codes_param(entry_params.get("language_code", "")):
-            key = code.lower()
-            if key in seen_langs:
-                continue
+
+    def add_language(code: str) -> str:
+        normalized = normalize_lang_code(code)
+        key = normalized.lower()
+        if key not in seen_langs:
             seen_langs.add(key)
-            languages.append(code)
+            languages.append(normalized)
+        return normalized
+
+    for params in all_params:
+        for code in _parse_language_codes_param(params.get("language_code", "")):
+            add_language(code)
+
+    default_language = languages[0] if languages else "en-US"
 
     voices: list[dict] = []
     seen: set[str] = set()
 
-    # Nemo-speech.cpp: rich per-locale catalog when present.
-    voices_by_language_raw = params.get("voices_by_language", "")
-    if voices_by_language_raw:
-        try:
-            catalog = json.loads(voices_by_language_raw)
-        except (TypeError, json.JSONDecodeError):
-            catalog = None
-        if isinstance(catalog, dict):
-            for lang_code, payload in catalog.items():
-                lang = normalize_lang_code(str(lang_code))
-                if lang.lower() not in seen_langs:
-                    seen_langs.add(lang.lower())
-                    languages.append(lang)
-                voice_list = payload.get("voices", []) if isinstance(payload, dict) else []
-                for raw_id in voice_list:
-                    voice_id, name = _voice_display_id(str(raw_id), prefix)
-                    _add_voice(voices, seen, voice_id=voice_id, name=name, language=lang)
+    def add_config_language(code: str, config_languages: list[str], config_seen_langs: set[str]) -> str:
+        normalized = add_language(code)
+        key = normalized.lower()
+        if key not in config_seen_langs:
+            config_seen_langs.add(key)
+            config_languages.append(normalized)
+        return normalized
 
-    subvoices_raw = params.get("subvoices", "") or params.get("voices", "")
-    for entry in subvoices_raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
+    for params in all_params:
+        prefix = (model_prefix or params.get("voice_name", "") or "").strip()
+        config_languages: list[str] = []
+        config_seen_langs: set[str] = set()
 
-        # Riva Magpie: Name:index (index is optional for nemo-speech plain names).
-        short_id = entry.split(":", 1)[0].strip() if ":" in entry else entry
-        if not short_id:
-            continue
+        for code in _parse_language_codes_param(params.get("language_code", "")):
+            add_config_language(code, config_languages, config_seen_langs)
 
-        if ":" in entry and "." in short_id:
-            # Magpie Multilingual: Language.VoiceName:index
-            parts = short_id.split(".")
-            if len(parts) < 2:
+        # Nemo-speech.cpp: rich per-locale catalog when present.
+        voices_by_language_raw = params.get("voices_by_language", "")
+        if voices_by_language_raw:
+            try:
+                catalog = json.loads(voices_by_language_raw)
+            except (TypeError, json.JSONDecodeError):
+                catalog = None
+            if isinstance(catalog, dict):
+                for lang_code, payload in catalog.items():
+                    lang = add_config_language(str(lang_code), config_languages, config_seen_langs)
+                    voice_list = payload.get("voices", []) if isinstance(payload, dict) else []
+                    for raw_id in voice_list:
+                        voice_id, name = _voice_display_id(str(raw_id), prefix)
+                        _add_voice(voices, seen, voice_id=voice_id, name=name, language=lang)
+
+        subvoices_raw = params.get("subvoices", "") or params.get("voices", "")
+        for entry in subvoices_raw.split(","):
+            entry = entry.strip()
+            if not entry:
                 continue
-            lang = normalize_lang_code(parts[0])
-            name = ".".join(parts[1:])
-            full_id = f"{prefix}.{short_id}" if prefix else short_id
-            _add_voice(voices, seen, voice_id=full_id, name=name, language=lang)
-            continue
 
-        if ":" in entry:
-            # Magpie Zeroshot: VoiceName:index (same voices for every locale)
-            name = short_id
-            full_id = f"{prefix}.{name}" if prefix else name
-            for lang in languages or ["en-US"]:
+            # Riva Magpie: Name:index (index is optional for nemo-speech plain names).
+            short_id = entry.split(":", 1)[0].strip() if ":" in entry else entry
+            if not short_id:
+                continue
+
+            if ":" in entry and "." in short_id:
+                # Magpie Multilingual: Language.VoiceName:index
+                parts = short_id.split(".")
+                if len(parts) < 2:
+                    continue
+                lang = add_config_language(parts[0], config_languages, config_seen_langs)
+                name = ".".join(parts[1:])
+                full_id = f"{prefix}.{short_id}" if prefix else short_id
                 _add_voice(voices, seen, voice_id=full_id, name=name, language=lang)
-            continue
+                continue
 
-        # Nemo-speech.cpp: plain speaker names shared across locales (John,Sofia,...)
-        voice_id, name = _voice_display_id(short_id, prefix)
-        for lang in languages or ["en-US"]:
-            _add_voice(voices, seen, voice_id=voice_id, name=name, language=lang)
+            if ":" in entry:
+                # Magpie Zeroshot: VoiceName:index (same voices for every locale)
+                name = short_id
+                full_id = f"{prefix}.{name}" if prefix else name
+                for lang in config_languages or ["en-US"]:
+                    _add_voice(voices, seen, voice_id=full_id, name=name, language=lang)
+                continue
+
+            # Nemo-speech.cpp: plain speaker names shared across locales (John,Sofia,...)
+            voice_id, name = _voice_display_id(short_id, prefix)
+            for lang in config_languages or ["en-US"]:
+                _add_voice(voices, seen, voice_id=voice_id, name=name, language=lang)
 
     return {
         "languages": languages,

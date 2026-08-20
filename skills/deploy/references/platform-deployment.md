@@ -6,22 +6,23 @@ Use from repository root after `deploy` picks a recipe profile.
 
 ```bash
 test -f .env || cp .env.example .env
-export NGC_API_KEY="$NVIDIA_API_KEY"
-echo "$NGC_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+export NVIDIA_API_KEY="<your-nvidia-api-key>"
+printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
 ```
 
 Required `.env` keys:
-- All recipes: `NVIDIA_API_KEY`
-- Any recipe ending in `/single-gpu`, plus `omni-assistant/server` and `omni-assistant-subagents/server` (local vLLM downloads the model from HF on first run): `HF_TOKEN`
+- Cloud and server recipes: `NVIDIA_API_KEY`
+- Any recipe ending in `/single-gpu` (local vLLM downloads the model from HF on first run): `HF_TOKEN`
 
 ## Server (NIM, recommended for scaling)
 
-Recipes: `generic-assistant/server`, `multilingual-assistant/server`, `omni-assistant/server`, `frontend-backend-agent/server`.
+Recipes: `generic-assistant/server`, `multilingual-assistant/server`, `omni-assistant/server`, `omni-assistant-subagents/server`, `frontend-backend-agent/server`.
 
 Services depend on the recipe:
 - `generic-assistant/server`: `generic-assistant-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service`
-- `multilingual-assistant/server`: `multilingual-assistant-server`, `nvidia-llm`, `parakeet-rnnt-asr`, `tts-service`
-- `omni-assistant/server`: `omni-assistant-server`, `nvidia-llm-vllm-omni`, `tts-service`
+- `multilingual-assistant/server`: `multilingual-assistant-server`, `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `tts-service`
+- `omni-assistant/server`: `omni-assistant-server`, `nvidia-llm-omni`, `tts-service`
+- `omni-assistant-subagents/server`: `omni-assistant-subagents-server`, `nvidia-llm-omni`, `tts-service`
 - `frontend-backend-agent/server`: `frontend-backend-agent-server`, `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service`
 
 Requires enough GPU VRAM for the selected local NIM services. Single-GPU hosts are valid when capacity is sufficient. Multi-GPU hosts may split speech sidecars and LLM across devices. For the user-facing VRAM, memory-knob, and device-placement matrix, see [VRAM & hardware support](../../../docs/how-to/configure-llm.md#vram--hardware-support).
@@ -31,17 +32,18 @@ nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader
 docker compose --profile generic-assistant/server up -d
 # or: docker compose --profile multilingual-assistant/server up -d
 # or: docker compose --profile omni-assistant/server up -d
+# or: docker compose --profile omni-assistant-subagents/server up -d
 # or: docker compose --profile frontend-backend-agent/server up -d
 ```
 
-## Single GPU (workstations, DGX Spark, and Jetson Thor)
+## Single GPU
 
-All five examples provide a universal `/single-gpu` recipe. These run the NeMo-Speech.cpp speech stack next to vLLM on one GPU. The LLM service detects DGX Spark and Jetson Thor automatically.
+All five examples provide a `/single-gpu` recipe. Generic, Multilingual, Omni, and Frontend/Backend support compatible workstations, DGX Spark, and Jetson Thor. Omni Assistant Subagents is documented for workstations and DGX Spark. These recipes run NeMo-Speech.cpp next to vLLM on one GPU.
 
 Services depend on the recipe:
 - `generic-assistant/single-gpu`: `generic-assistant-single-gpu`, `nvidia-llm-vllm-lightning`, `nemo-speech` (ASR + TTS).
 - `multilingual-assistant/single-gpu`: `multilingual-assistant-single-gpu`, `nvidia-llm-vllm-lightning`, `nemo-speech-multilingual` (multilingual ASR + TTS).
-- `omni-assistant/single-gpu`: `omni-assistant-single-gpu`, `nvidia-llm-vllm-omni`, `nemo-speech-tts` (TTS only; Omni does its own ASR).
+- `omni-assistant/single-gpu`: `omni-assistant-single-gpu`, `nvidia-llm-vllm-omni`, `nemo-speech-tts` (TTS only, Omni does its own ASR).
 - `omni-assistant-subagents/single-gpu`: `omni-assistant-subagents-single-gpu`, `nvidia-llm-vllm-omni`, `nemo-speech-tts`.
 - `frontend-backend-agent/single-gpu`: `frontend-backend-agent-single-gpu`, `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech`.
 
@@ -58,18 +60,20 @@ Complete the mandatory memory-fit procedure in `../SKILL.md` before deploying, t
 ```bash
 docker compose --profile generic-assistant/single-gpu up -d
 # or: docker compose --profile multilingual-assistant/single-gpu up -d
-# Omni Assistant (local Omni vLLM + NeMo-Speech.cpp TTS; requires HF_TOKEN):
+# Omni Assistant (local Omni vLLM + NeMo-Speech.cpp TTS, requires HF_TOKEN):
 # docker compose --profile omni-assistant/single-gpu up -d
 # docker compose --profile omni-assistant-subagents/single-gpu up -d
 # docker compose --profile frontend-backend-agent/single-gpu up -d
 ```
 
-The same Lightning service detects DGX Spark and enables its DSpark draft model,
-detects a Blackwell workstation and enables DFlash, or detects Jetson Thor and
-selects CUTLASS without a draft model. Other hosts use the compute-capability
-matrix described above.
+The cascaded Lightning service enables DSpark on DGX Spark and DFlash on a
+Blackwell workstation. It selects the Jetson Thor NVFP4 recipe without a draft
+model. Omni examples use the hardware selection in
+`docker/docker-compose.nemotron3-omni.yaml`.
 
-If a service fails to start on low memory (e.g. `nvidia-llm-vllm` logs `Engine core initialization failed`), reclaim cached memory and retry:
+If a service fails to start on low memory, check
+`nvidia-llm-vllm-lightning` or `nvidia-llm-vllm-omni` logs for
+`Engine core initialization failed`. Reclaim cached memory and retry:
 
 ```bash
 free -h

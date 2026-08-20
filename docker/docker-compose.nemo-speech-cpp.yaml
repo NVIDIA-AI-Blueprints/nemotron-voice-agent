@@ -2,9 +2,6 @@ x-nemo-speech: &nemo-speech
   image: nvcr.io/nvidia/nemo-speech.cpp:0.1.0
   ipc: host
   volumes:
-    # Host path must exist before the first `compose up`, otherwise Docker
-    # creates it as root and `download-nemo-speech-models.sh` cannot write.
-    # `models/nemo-speech/.gitkeep` keeps the default path in the repo.
     - ${NEMO_SPEECH_MODEL_LOC:-../models/nemo-speech}:/models:ro
   ports:
     - "50051:50051"

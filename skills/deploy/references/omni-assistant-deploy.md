@@ -4,11 +4,11 @@ Use this reference from the `deploy` skill when deploying the examples/omni_assi
 
 ## When to use
 
-Pinning a Docker Compose deployment to the Omni Assistant example. Recipe profile names are `<example>` for cloud-only and `<example>/<hardware>` for on-prem. The companion `omni-assistant-subagents` example is a separate recipe (see its deploy reference). Selector modes (`all`, or a single `<example>`) are host-native only — they are not exposed as compose profiles.
+Pinning a Docker Compose deployment to the Omni Assistant example. Use `omni-assistant` for cloud, `omni-assistant/server` for Omni NIM and NIM TTS, or `omni-assistant/single-gpu` for Omni vLLM and NeMo-Speech.cpp TTS. The companion `omni-assistant-subagents` example is a separate recipe. Selector modes are host-native only and are not exposed as Compose profiles.
 
 Per-example catalogs at `src/examples/omni_assistant/services.{cloud,local}.yaml` are auto-selected on container startup because the registry resolves the example for the active recipe.
 
-Hardware support: cloud-only, `server` (NIM TTS, recommended for scaling), and universal `single-gpu`. The single-GPU recipe covers workstations, DGX Spark, and Jetson Thor; it reuses the same Omni vLLM sidecar with TTS served by NeMo-Speech.cpp instead of the Magpie NIM. Orin-class Jetson hardware is still unsupported because the model does not fit.
+Hardware support: cloud-only, `server` (Omni NIM and NIM TTS, recommended for scaling), and universal `single-gpu`. The single-GPU recipe covers workstations, DGX Spark, and Jetson Thor. It uses Omni vLLM with TTS served by NeMo-Speech.cpp instead of the NIM sidecars. Orin-class Jetson hardware is still unsupported because the model does not fit.
 
 ## Compose deploy
 
@@ -16,9 +16,8 @@ Hardware support: cloud-only, `server` (NIM TTS, recommended for scaling), and u
 # Cloud (NVCF)
 docker compose --profile omni-assistant up -d
 
-# Server (local Omni vLLM + NIM TTS, recommended for scaling)
+# Server (Omni NIM + NIM TTS, recommended for scaling)
 docker compose --profile omni-assistant/server up -d
-docker compose --profile omni-assistant/single-gpu up -d
 
 # Single GPU, including Jetson Thor (local Omni vLLM + on-device NeMo-Speech.cpp TTS)
 docker compose --profile omni-assistant/single-gpu up -d
@@ -27,7 +26,7 @@ docker compose --profile omni-assistant/single-gpu up -d
 | Recipe profile | App service | Sidecars from `docker/` |
 | --- | --- | --- |
 | `omni-assistant` | `omni-assistant` | none (cloud NVCF) |
-| `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-vllm-omni`, `tts-service` |
+| `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `tts-service` |
 | `omni-assistant/single-gpu` | `omni-assistant-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
 Tear down with the same recipe used at `up` time.
@@ -35,13 +34,15 @@ Tear down with the same recipe used at `up` time.
 ## Verify
 
 - UI at `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`.
-- App logs: `docker compose logs --tail 200 omni-assistant-server`.
-- Omni vLLM logs (local recipes only): `docker compose logs --tail 200 nvidia-llm-vllm-omni`.
-- Omni vLLM health: `curl -f http://localhost:8002/health` from the host or `curl -f http://nvidia-llm-vllm-omni:8002/health` from inside the compose network.
+- Cloud app logs: `docker compose logs --tail 200 omni-assistant`.
+- Server app and NIM logs: `docker compose logs --tail 200 omni-assistant-server nvidia-llm-omni tts-service`.
+- Single-GPU app and sidecar logs: `docker compose logs --tail 200 omni-assistant-single-gpu nvidia-llm-vllm-omni nemo-speech-tts`.
+- Server NIM health: `curl -f http://localhost:18002/v1/health/ready`.
+- Single-GPU vLLM health: `curl -f http://localhost:8002/health`.
 
 ## GPU memory & device placement
 
-Omni runs the LLM in `nvidia-llm-vllm-omni`; ASR is handled inside the Omni model, so there is no separate ASR NIM. The `server` recipe uses `tts-service` for TTS, while the universal single-GPU recipe uses `nemo-speech-tts`.
+Omni handles ASR inside the model, so there is no separate ASR NIM. The `server` recipe uses `nvidia-llm-omni` and `tts-service`. The single-GPU recipe uses `nvidia-llm-vllm-omni` and `nemo-speech-tts`.
 
 For the VRAM, `--gpu-memory-utilization`, and device-placement matrix, see [VRAM & hardware support](../../../docs/how-to/configure-llm.md#vram--hardware-support).
 

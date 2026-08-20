@@ -4,7 +4,7 @@ Use this reference from the `deploy` skill when deploying the generic voice pipe
 
 ## When to use
 
-Pinning a Docker Compose deployment to the Generic Cascaded example. Recipe profile names are `<example>` for cloud-only and `<example>/<hardware>` for on-prem. Selector modes (`all`, or a single `<example>`) are host-native only — they are not exposed as compose profiles.
+Pinning a Docker Compose deployment to the Generic Cascaded example. Use `generic-assistant` for cloud, `generic-assistant/server` for the NIM stack, or `generic-assistant/single-gpu` for vLLM and NeMo-Speech.cpp. Selector modes are host-native only and are not exposed as Compose profiles.
 
 Per-example catalogs at `src/examples/generic/services.{cloud,local}.yaml` are auto-selected on container startup because the registry resolves the example for the active recipe.
 
@@ -31,7 +31,10 @@ docker compose --profile <recipe> down
 ## Verify
 
 - UI at `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`.
-- `docker compose ps` and `docker compose logs --tail 200 generic-assistant`.
+- Container status: `docker compose ps`.
+- Cloud app logs: `docker compose logs --tail 200 generic-assistant`.
+- Server app logs: `docker compose logs --tail 200 generic-assistant-server`.
+- Single-GPU app logs: `docker compose logs --tail 200 generic-assistant-single-gpu`.
 
 ## Local LLM NIM profiles
 

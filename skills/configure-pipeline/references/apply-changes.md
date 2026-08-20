@@ -29,30 +29,31 @@ Cloud catalog entries use NVCF endpoints (`grpc.nvcf.nvidia.com:443`, `https://i
 
 ## Apply Commands
 
-Pick a single recipe profile (`<example>` for cloud or `<example>/<hardware>` for on-prem). Each recipe is a complete deployment — never combine two recipes.
+Pick one recipe profile. Use `<example>` for cloud, `<example>/server` for NIM deployments, or `<example>/single-gpu` for one-GPU deployments. Each recipe is a complete deployment. Never combine two recipes.
 
 ```bash
 # Cloud-only (NVCF)
 docker compose --profile generic-assistant up -d
 docker compose --profile multilingual-assistant up -d
 docker compose --profile omni-assistant up -d
+docker compose --profile omni-assistant-subagents up -d
 docker compose --profile frontend-backend-agent up -d
 
 # Server (local NIM ASR/TTS/LLM, recommended for scaling)
 docker compose --profile generic-assistant/server up -d
 docker compose --profile multilingual-assistant/server up -d
 docker compose --profile omni-assistant/server up -d
+docker compose --profile omni-assistant-subagents/server up -d
 docker compose --profile frontend-backend-agent/server up -d
 
 # Universal one-GPU path (workstation, DGX Spark, or Jetson Thor)
 docker compose --profile generic-assistant/single-gpu up -d
 docker compose --profile multilingual-assistant/single-gpu up -d
 docker compose --profile omni-assistant/single-gpu up -d
+docker compose --profile frontend-backend-agent/single-gpu up -d
 
-# Single GPU, including Jetson Thor (NeMo-Speech.cpp + vLLM on one GPU)
-docker compose --profile generic-assistant/single-gpu up -d
-docker compose --profile multilingual-assistant/single-gpu up -d
-docker compose --profile omni-assistant/single-gpu up -d
+# Resource-heavy single-GPU path (workstation or DGX Spark)
+docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```
 
 For YAML-only edits that don't change env or sidecar membership, `docker compose restart <service>` is enough (e.g. `docker compose restart generic-assistant`).

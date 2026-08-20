@@ -1,6 +1,6 @@
 # Nemotron 3.5 Lightning served as a NIM for cascaded */server recipes.
 x-nim-llm: &nim-llm
-  image: nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:latest
+  image: nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.0.9-variant
   user: "0:0"
   ports:
     - "18000:8000"
