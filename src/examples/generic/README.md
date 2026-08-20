@@ -1,6 +1,6 @@
 # Generic - cascaded pipeline example
 
-Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`NvidiaSTTService` -> `NvidiaLLMService` with function calling -> `NvidiaTTSService`). It is a minimal, production-shaped cascaded voice assistant that keeps ASR, LLM, tools, and TTS as separate services, and it works as the baseline cascaded reference or the starting point for your own use case.
+Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`NvidiaSTTService` -> `NvidiaLLMService` with function calling -> `NvidiaTTSService`). It is a minimal, production-shaped cascaded voice assistant that keeps ASR, LLM, tools, and TTS as separate services. To opt into Magpie word-level input streaming and timestamp-based LLM context commits, see [Configure TTS](../../../docs/how-to/configure-tts.md#word-level-input-streaming-and-timestamps).
 
 ![Architecture Diagram](../../../docs/images/arch.png)
 

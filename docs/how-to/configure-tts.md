@@ -132,6 +132,33 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes via the catalog field 
 
 Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode via the registry-default fallback in the pipeline.
 
+### Word-level input streaming and timestamps
+
+All examples use Pipecat's `NvidiaTTSService` by default, which keeps Magpie Multilingual, Magpie Zeroshot, and Chatterbox switchable through the service catalog. For Magpie TTS Multilingual 1.10.0 or newer, [`NvidiaWordTTSService`](../../src/examples/shared/nvidia_word_tts.py) is an optional drop-in subclass that adds word-level input streaming and timestamp-based LLM context commits. It requires `nvidia-riva-client>=2.27.0,<3`.
+
+To opt in for a custom example, change only the service import and constructor:
+
+```python
+# Default
+from pipecat.services.nvidia.tts import NvidiaTTSService
+
+tts = NvidiaTTSService(**tts_kwargs)
+
+# Opt in to Magpie 1.10.0+ word streaming and timestamp commits
+from examples.shared.nvidia_word_tts import NvidiaWordTTSService
+
+tts = NvidiaWordTTSService(**tts_kwargs)
+```
+
+`NvidiaWordTTSService` internally selects token aggregation, disables parent text-frame commits, uses stitched synthesis, and requests word timestamps. Do not set `text_aggregation_mode` or `push_text_frames` in the example. It also sets Magpie's `max_chunk_threshold` to 100 characters so a long input can be flushed before end of stream.
+
+The UI renders assistant bubbles from LLM response events, independently of the selected TTS service. Word timestamps control when spoken text is committed to LLM context; they do not drive the displayed assistant response.
+
+#### Known Magpie limitations
+
+- **Word timestamps are delayed until a flush.** Magpie emits timing metadata only after end of stream or after the configured 100-character chunk threshold is reached, not progressively with each audio chunk. If the user interrupts before Magpie returns timestamps for the current batch, the client cannot determine how much of that batch was played and therefore cannot commit any words from that interval to the LLM context. The same delay prevents progressive word-level highlighting (for example, karaoke-style highlighting) while audio is streaming.
+- **`meta.words` does not preserve spacing.** `response.meta.words` removes leading and trailing spaces and omits space-only tokens. Because a token may also be a subword or punctuation, clients cannot reliably reconstruct the original spoken text: inserting spaces can produce false gaps such as `"I'm Nem otron ,"`, while concatenating tokens can produce text such as `"IamNemotron,createdbyNVIDIA."`. `NvidiaWordTTSService` currently inserts spaces between timed tokens for readable context, so these false gaps are an expected limitation.
+
 ### Pronunciation (IPA)
 
 Override Magpie's default pronunciation for specific words with an International Phonetic Alphabet (IPA) dictionary. Create a JSON or YAML dictionary file, then set `TTS_IPA_FILE_PATH` in `.env` to that path. Relative paths resolve from the repo root:

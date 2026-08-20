@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { RTVIEvent } from "@pipecat-ai/client-js";
+import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ChangeEvent } from "react";
+import { RTVIEvent, type BotLLMTextData } from "@pipecat-ai/client-js";
 import {
   usePipecatConversation,
   useRTVIClientEvent,
@@ -50,6 +50,46 @@ type AssistantTurn = {
   createdAt: string;
 };
 
+type LlmTurn = {
+  id: string;
+  text: string;
+  createdAt: string;
+};
+
+type LlmTurnState = {
+  active: LlmTurn | null;
+  completed: LlmTurn[];
+};
+
+type LlmTurnAction =
+  | { type: "start"; turn: LlmTurn }
+  | { type: "append"; text: string; fallbackTurn: LlmTurn }
+  | { type: "finish" }
+  | { type: "reset" };
+
+const finishActiveLlmTurn = (state: LlmTurnState): LlmTurnState => {
+  const active = state.active;
+  if (!active) return state;
+  const text = active.text.trim();
+  return {
+    active: null,
+    completed: text
+      ? [...state.completed, { ...active, text }].slice(-40)
+      : state.completed,
+  };
+};
+
+const llmTurnReducer = (state: LlmTurnState, action: LlmTurnAction): LlmTurnState => {
+  if (action.type === "reset") return { active: null, completed: [] };
+  if (action.type === "finish") return finishActiveLlmTurn(state);
+  if (action.type === "start") {
+    const finished = finishActiveLlmTurn(state);
+    return { ...finished, active: action.turn };
+  }
+  const active = state.active ?? action.fallbackTurn;
+  return { ...state, active: { ...active, text: `${active.text}${action.text}` } };
+};
+
 const renderPartText = (part: ConversationMessagePart): string => {
   const { text } = part;
   if (text === null || text === undefined) return "";
@@ -69,11 +109,6 @@ const renderPartText = (part: ConversationMessagePart): string => {
 
 const renderMessageText = (message: ConversationMessage): string =>
   message.parts.map(renderPartText).join("");
-
-const stripAssistantTurnText = (text: string, assistantTurns: AssistantTurn[]) =>
-  assistantTurns
-    .reduce((current, turn) => current.replace(turn.text, ""), text)
-    .trim();
 
 const isUserOrAssistant = (m: ConversationMessage) =>
   m.role === "user" || m.role === "assistant";
@@ -199,13 +234,20 @@ export function ConversationPanel() {
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const attachmentsRef = useRef<LocalAttachment[]>([]);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
-  // Workaround for the lack of an explicit assistant-turn boundary in
-  // @pipecat-ai/client-react: assistant bubbles are finalized ~2.5s after
-  // BotStoppedSpeaking, so analyzer follow-ups are surfaced as standalone
-  // turns recorded here. Server side mirrors this with
-  // ``_ANALYZER_FOLLOWUP_TURN_DELAY_SECS`` in
-  // ``examples.omni_assistant_subagents.subagents.transport``.
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
+  const [llmTurnState, dispatchLlmTurn] = useReducer(llmTurnReducer, {
+    active: null,
+    completed: [],
+  });
+  const llmTurnSequenceRef = useRef(0);
+  const createLlmTurn = useCallback((): LlmTurn => {
+    llmTurnSequenceRef.current += 1;
+    return {
+      id: `llm-turn-${llmTurnSequenceRef.current}`,
+      text: "",
+      createdAt: new Date().toISOString(),
+    };
+  }, []);
   const canUploadAttachments = selectedExample?.capabilities?.includes("attachments") ?? false;
   const [currentUserTurnActive, setCurrentUserTurnActive] = useState(false);
   const [userTurnAnchors, setUserTurnAnchors] =
@@ -241,6 +283,8 @@ export function ConversationPanel() {
     });
     setAgentTasks([]);
     setAssistantTurns([]);
+    dispatchLlmTurn({ type: "reset" });
+    llmTurnSequenceRef.current = 0;
   }, []);
 
   const visibleMessages = useMemo(
@@ -252,6 +296,32 @@ export function ConversationPanel() {
   useEffect(() => {
     visibleMessagesRef.current = visibleMessages;
   }, [visibleMessages]);
+
+  useRTVIClientEvent(
+    RTVIEvent.BotLlmStarted,
+    useCallback(() => {
+      dispatchLlmTurn({ type: "start", turn: createLlmTurn() });
+    }, [createLlmTurn])
+  );
+
+  useRTVIClientEvent(
+    RTVIEvent.BotLlmText,
+    useCallback((data: BotLLMTextData) => {
+      if (!data.text) return;
+      dispatchLlmTurn({
+        type: "append",
+        text: data.text,
+        fallbackTurn: createLlmTurn(),
+      });
+    }, [createLlmTurn])
+  );
+
+  useRTVIClientEvent(
+    RTVIEvent.BotLlmStopped,
+    useCallback(() => {
+      dispatchLlmTurn({ type: "finish" });
+    }, [])
+  );
 
   useRTVIClientEvent(
     RTVIEvent.UserStartedSpeaking,
@@ -393,10 +463,9 @@ export function ConversationPanel() {
 
   const conversationItems = useMemo(() => {
     const messageItems = visibleMessages.flatMap((message, idx) => {
-      const text =
-        message.role === "assistant"
-          ? stripAssistantTurnText(renderMessageText(message), assistantTurns)
-          : renderMessageText(message);
+      // Assistant bubbles come from RTVI LLM events, not TTS transcript frames.
+      if (message.role === "assistant") return [];
+      const text = renderMessageText(message);
       if (!text) return [];
       return [{
         type: "message" as const,
@@ -407,6 +476,25 @@ export function ConversationPanel() {
         index: idx,
       }];
     });
+    const allLlmTurns = llmTurnState.active
+      ? [...llmTurnState.completed, llmTurnState.active]
+      : llmTurnState.completed;
+    const llmItems = allLlmTurns.flatMap((turn) => {
+      const text = turn.text.trim();
+      if (!text) return [];
+      return [{
+        type: "llm-turn" as const,
+        id: turn.id,
+        createdAt: turn.createdAt,
+        turn,
+        text,
+        streaming: turn.id === llmTurnState.active?.id,
+        index: 100,
+      }];
+    });
+    const llmTurnTexts = new Set(
+      allLlmTurns.map((turn) => normalizeTranscript(turn.text)).filter(Boolean)
+    );
     const taskItems = agentTasks.map((task) => ({
       type: "task" as const,
       id: task.id,
@@ -414,13 +502,17 @@ export function ConversationPanel() {
       task,
       index: 101,
     }));
-    const assistantTurnItems = assistantTurns.map((turn) => ({
-      type: "assistant-turn" as const,
-      id: turn.id,
-      createdAt: turn.createdAt,
-      turn,
-      index: 102,
-    }));
+    // Analyzer follow-ups can bypass normal LLM lifecycle events. Keep their
+    // explicit spoken response, unless the same complete LLM turn is present.
+    const assistantTurnItems = assistantTurns
+      .filter((turn) => !llmTurnTexts.has(normalizeTranscript(turn.text)))
+      .map((turn) => ({
+        type: "assistant-turn" as const,
+        id: turn.id,
+        createdAt: turn.createdAt,
+        turn,
+        index: 102,
+      }));
     const attachmentItems = attachments.map((attachment) => ({
       type: "attachment" as const,
       id: attachment.id,
@@ -433,38 +525,11 @@ export function ConversationPanel() {
       const anchor = userTurnAnchors.get(createdAt);
       return anchor ? Math.min(created, new Date(anchor).getTime()) : created;
     };
-    const sorted = [...messageItems, ...taskItems, ...assistantTurnItems, ...attachmentItems].sort((a, b) => {
+    return [...messageItems, ...llmItems, ...taskItems, ...assistantTurnItems, ...attachmentItems].sort((a, b) => {
       const timeDelta = orderTimeMs(a.createdAt) - orderTimeMs(b.createdAt);
       return timeDelta || a.index - b.index;
     });
-
-    // TODO: Remove once @pipecat-ai/client-react stops finalizing each assistant
-    // sentence as its own message. Merge only assistant bubbles that are adjacent
-    // in the display stream, so interleaved tasks/turns/attachments stay between
-    // the sentences they landed in.
-    const items: typeof sorted = [];
-    const mergedChunks: string[][] = [];
-    for (const item of sorted) {
-      const previous = items.at(-1);
-      if (
-        item.type === "message" && item.message.role === "assistant" &&
-        previous?.type === "message" && previous.message.role === "assistant"
-      ) {
-        mergedChunks[items.length - 1].push(item.text);
-        previous.message = { ...previous.message, final: item.message.final };
-        continue;
-      }
-      items.push(item);
-      mergedChunks.push(
-        item.type === "message" && item.message.role === "assistant" ? [item.text] : []
-      );
-    }
-    return items.map((item, idx) =>
-      item.type === "message" && mergedChunks[idx].length > 1
-        ? { ...item, text: mergedChunks[idx].join(" ") }
-        : item
-    );
-  }, [agentTasks, assistantTurns, attachments, visibleMessages, userTurnAnchors]);
+  }, [agentTasks, assistantTurns, attachments, llmTurnState, visibleMessages, userTurnAnchors]);
 
   const showAttachmentControl = Boolean(currentSessionId) && canUploadAttachments && visibleMessages.length > 0;
   const bottomAnchorRef = useStickToBottom(conversationItems);
@@ -475,6 +540,17 @@ export function ConversationPanel() {
         {conversationItems.map((item) => {
           if (item.type === "task") return <AgentTaskCard key={item.id} task={item.task} />;
           if (item.type === "attachment") return <AttachmentPreview key={item.id} attachment={item.attachment} />;
+          if (item.type === "llm-turn") {
+            return (
+              <TranscriptMessage
+                key={item.id}
+                role="bot"
+                text={item.text}
+                timestamp={item.createdAt}
+                streaming={item.streaming}
+              />
+            );
+          }
           if (item.type === "assistant-turn") {
             return (
               <TranscriptMessage

@@ -25,6 +25,7 @@ override-dependencies = [
     "langchain-core>=1.4.1",
     "uuid-utils>=0.16.0",
     "pillow>=12.3.0",
+    "nvidia-riva-client>=2.27.0,<3",
 ]
 
 [dependency-groups]
@@ -46,7 +47,7 @@ benchmark = [
     "aiohttp>=3.11.0",
     "requests>=2.32.0",
     "grpcio>=1.67.0",
-    "nvidia-riva-client>=2.21.0",
+    "nvidia-riva-client>=2.27.0",
     "datasets>=2.19.0",
     "huggingface-hub>=0.23.0",
 ]
