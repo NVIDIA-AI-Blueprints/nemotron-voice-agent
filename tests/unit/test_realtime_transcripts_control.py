@@ -653,6 +653,9 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.assistant_transcript, "")  # reset after done
         done = next(e for e in emitted if e["type"] == "response.done")
         self.assertEqual(done["response"]["output"][0]["content"][0]["transcript"], "Hello there.")
+        self.assertEqual(done["response"]["output"][0]["content"][0]["type"], "output_audio")
+        output_done = next(e for e in emitted if e["type"] == "response.output_item.done")
+        self.assertEqual(output_done["item"]["content"][0]["type"], "output_audio")
         self.assertEqual(
             [e["type"] for e in emitted].count("response.output_audio_transcript.delta"),
             1,

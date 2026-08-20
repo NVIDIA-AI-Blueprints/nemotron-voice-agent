@@ -45,9 +45,12 @@ def create_realtime_transport(
 
     async def _emit(event: dict[str, Any]) -> None:
         # ``emit_with_aliases`` calls us with canonical then beta payloads.
-        # Beta console clients only understand the aliases; dropping the
-        # canonical duplicate halves audio traffic and UI event processing.
-        if beta_event_names and event.get("type") in BETA_EVENT_ALIASES:
+        # Select exactly one dialect so GA clients never receive legacy events
+        # and beta clients never receive duplicate audio.
+        event_type = event.get("type")
+        if beta_event_names and event_type in BETA_EVENT_ALIASES:
+            return
+        if not beta_event_names and event_type in BETA_EVENT_ALIASES.values():
             return
         try:
             async with emit_lock:

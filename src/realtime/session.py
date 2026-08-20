@@ -217,11 +217,14 @@ def validate_server_vad(session_patch: dict[str, Any]) -> None:
 
     for param, value in candidates:
         if value is None:
-            raise ValueError(f"{param} cannot be null; push-to-talk is not supported")
+            raise ValueError(
+                f"{param}: manual mode (push-to-talk) is not supported. "
+                'Switch the client to VAD mode with {"type":"server_vad"}'
+            )
         if not isinstance(value, dict):
-            raise ValueError(f"{param} must be an object with type 'server_vad'")
+            raise ValueError(f'{param} must be an object. Switch the client to VAD mode with {{"type":"server_vad"}}')
         if value.get("type") != "server_vad":
-            raise ValueError(f"{param}.type must be 'server_vad'")
+            raise ValueError(f"{param}.type must be 'server_vad'; switch the client to VAD mode")
         unsupported = sorted(set(value) - {"type"})
         if unsupported:
             raise ValueError(

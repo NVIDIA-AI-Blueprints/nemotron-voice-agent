@@ -20,7 +20,7 @@ from realtime.session import (
     map_session_update_to_flat_config,
     unsupported_live_session_fields,
 )
-from realtime.transport import _prefers_beta_event_names
+from realtime.transport import _prefers_beta_event_names, create_realtime_transport
 
 
 class MapSessionUpdateTests(unittest.TestCase):
@@ -282,6 +282,26 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         ga = SimpleNamespace(headers={"sec-websocket-protocol": "realtime"})
         self.assertTrue(_prefers_beta_event_names(beta))  # type: ignore[arg-type]
         self.assertFalse(_prefers_beta_event_names(ga))  # type: ignore[arg-type]
+
+    async def test_transport_emits_only_requested_event_dialect(self) -> None:
+        canonical = {"type": "response.output_audio.delta", "delta": "AA=="}
+        beta_alias = {"type": "response.audio.delta", "delta": "AA=="}
+
+        ga_ws = FakeWebSocket([])
+        ga_ws.headers["sec-websocket-protocol"] = "realtime"
+        ga_transport = create_realtime_transport(ga_ws)  # type: ignore[arg-type]
+        ga_emit = ga_transport._realtime_serializer.emit  # type: ignore[attr-defined]
+        await ga_emit(canonical)
+        await ga_emit(beta_alias)
+        self.assertEqual([event["type"] for event in ga_ws.sent], ["response.output_audio.delta"])
+
+        beta_ws = FakeWebSocket([])
+        beta_ws.headers["sec-websocket-protocol"] = "openai-beta.realtime-v1"
+        beta_transport = create_realtime_transport(beta_ws)  # type: ignore[arg-type]
+        beta_emit = beta_transport._realtime_serializer.emit  # type: ignore[attr-defined]
+        await beta_emit(canonical)
+        await beta_emit(beta_alias)
+        self.assertEqual([event["type"] for event in beta_ws.sent], ["response.audio.delta"])
 
     async def test_session_created_then_updated(self) -> None:
         ws = FakeWebSocket(

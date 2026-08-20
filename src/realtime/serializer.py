@@ -292,8 +292,16 @@ class RealtimeFrameSerializer(FrameSerializer):
             )
             return None
 
-        # Live: voice/turn_detection/audio format only. Unchanged agent fields
-        # (full-session client echoes) are ignored; real agent changes are rejected.
+        try:
+            validate_session_audio_config(session_patch)
+            validate_input_transcription(session_patch)
+            validate_server_vad(session_patch)
+        except ValueError as exc:
+            await self._emit_event(error_event(str(exc), code="invalid_session", event_id=echo_id, param="session"))
+            return None
+
+        # Unchanged agent fields in full-session client echoes are ignored;
+        # real agent or turn-mode changes are rejected after validation.
         unsupported = unsupported_live_session_fields(session_patch, self._session_view)
         if unsupported:
             fields = ", ".join(unsupported)
@@ -301,20 +309,13 @@ class RealtimeFrameSerializer(FrameSerializer):
                 error_event(
                     f"Post-handoff session.update cannot apply [{fields}]; "
                     "reconnect to change instructions/tools/temperature/nvidia. "
-                    "Live: voice, turn_detection, audio format/rate only",
+                    "Live: voice, audio format/rate, and transcription selector only; "
+                    "turn detection is immutable",
                     code="unsupported_live_session_update",
                     event_id=echo_id,
                     param="session",
                 )
             )
-            return None
-
-        try:
-            validate_session_audio_config(session_patch)
-            validate_input_transcription(session_patch)
-            validate_server_vad(session_patch)
-        except ValueError as exc:
-            await self._emit_event(error_event(str(exc), code="invalid_session", event_id=echo_id, param="session"))
             return None
 
         patch = live_session_patch(session_patch)

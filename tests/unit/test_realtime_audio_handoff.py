@@ -479,7 +479,9 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(frame)
         self.assertEqual(emitted[-1]["type"], "error")
-        self.assertEqual(emitted[-1]["error"]["code"], "unsupported_live_session_update")
+        self.assertEqual(emitted[-1]["error"]["code"], "invalid_session")
+        self.assertIn("manual mode (push-to-talk) is not supported", emitted[-1]["error"]["message"])
+        self.assertIn("Switch the client to VAD mode", emitted[-1]["error"]["message"])
         self.assertEqual(ser._session_view["turn_detection"], {"type": "server_vad"})
         self.assertNotIn("temperature", ser._session_view)
 

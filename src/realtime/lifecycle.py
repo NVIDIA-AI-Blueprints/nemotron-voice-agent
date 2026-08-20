@@ -155,7 +155,7 @@ async def emit_finish_from_snapshot(
                 "type": "message",
                 "role": "assistant",
                 "status": item_status,
-                "content": [{"type": "audio", "transcript": transcript}],
+                "content": [{"type": "output_audio", "transcript": transcript}],
             },
         ),
     )
@@ -172,7 +172,7 @@ async def emit_finish_from_snapshot(
                         "type": "message",
                         "role": "assistant",
                         "status": item_status,
-                        "content": [{"type": "audio", "transcript": transcript}],
+                        "content": [{"type": "output_audio", "transcript": transcript}],
                     }
                 ],
             },
