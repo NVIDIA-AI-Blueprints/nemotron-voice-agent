@@ -62,26 +62,42 @@ TTS runs one of these ways, and the repo wires the right one per profile:
 
 | Model | Typical VRAM | Notes |
 |-------|--------------|-------|
-| Magpie TTS Multilingual | **~14 GB** | Can share a single ~80 GB GPU with ASR (~15 GB) and the LLM (~30 GB FP8). Split across GPUs with `device_ids` in [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support). |
-| Magpie TTS Zeroshot | **~13.06 GB** GPU / ~4.00 GB CPU at `batch_size=8` | Default `NIM_TAGS_SELECTOR=name=magpie-tts-zeroshot,batch_size=8` ([Speech NIM support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#magpie-tts-zeroshot)). Fits the shared H100 layout when Magpie Multilingual is scaled off. `batch_size=32` needs **~41.30 GB** GPU / ~7.08 GB CPU and should not share a single 80 GB GPU with ASR + LLM. |
+| Magpie TTS Multilingual | **12.58 GiB** GPU / 5.182 GiB host memory at `batch_size=8` | Can share a single ~80 GB GPU with ASR (~15 GB) and the LLM (~30 GB FP8). Split across GPUs with `device_ids` in [`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support). |
+| Magpie TTS Zeroshot | **13.06 GB** GPU / 4.00 GB CPU memory at `batch_size=8` | The default Compose selector is `name=magpie-tts-zeroshot,batch_size=8`. This profile fits the shared H100 layout when Magpie Multilingual is scaled off. |
 | Chatterbox TTS | **44.61 GiB** GPU / 4.86 GiB host memory at `batch_size=8` | The default Compose selector is `name=chatterbox-tts-multilingual,batch_size=8` on GPU `0`. This profile supports A100, H100, L40S, and DGX Spark. It does **not** fit the Magpie single-80-GB shared layout with LLM + ASR. |
 
 ### Performance & scaling
 
 `batch_size` is the main TTS throughput knob (`NIM_TAGS_SELECTOR`):
 
-- Magpie Multilingual: `name=magpie-tts-multilingual,batch_size=8`
-- Magpie Zeroshot: `batch_size=8` (default) or `batch_size=32` — keep `8` on shared single-GPU recipes
+#### Magpie TTS Multilingual 1.10.0
 
-Chatterbox TTS Multilingual 1.1.0 provides these model profiles:
+| `batch_size` | GPU memory | Host memory |
+| --- | --- | --- |
+| `8` (default) | 12.58 GiB | 5.182 GiB |
+| `32` | 41.46 GiB | 5.208 GiB |
+| `64` | 74.74 GiB | 5.258 GiB |
 
-| `batch_size` | GPU memory | Host memory | Supported hardware |
-| --- | --- | --- | --- |
-| `8` (default) | 44.61 GiB | 4.86 GiB | A100, H100, L40S, and DGX Spark |
-| `32` | 46.84 GiB | 5.40 GiB | A100, H100, and L40S |
-| `64` | 49.72 GiB | 5.54 GiB | A100, H100, and L40S |
+The standard Compose service selects `batch_size=8`. The `generic-assistant/workstation-perf` profile selects `batch_size=64` on a dedicated GPU.
 
-The Compose service selects `batch_size=8`. DGX Spark supports only this profile.
+#### Magpie TTS Zeroshot 1.2.0
+
+| `batch_size` | GPU memory | CPU memory |
+| --- | --- | --- |
+| `8` (default) | 13.06 GB | 4.00 GB |
+| `32` | 41.30 GB | 7.08 GB |
+
+The Compose service selects `batch_size=8`. Use `batch_size=32` only on a dedicated GPU because it does not fit the shared H100 layout.
+
+#### Chatterbox TTS Multilingual 1.1.0
+
+| `batch_size` | GPU memory | Host memory |
+| --- | --- | --- |
+| `8` (default) | 44.61 GiB | 4.86 GiB |
+| `32` | 46.84 GiB | 5.40 GiB |
+| `64` | 49.72 GiB | 5.54 GiB |
+
+The Compose service selects `batch_size=8`. A100, H100, and L40S support all three profiles. DGX Spark supports only `batch_size=8`.
 
 For first-chunk and inter-chunk latency and throughput (RTFX) across GPUs, refer to the **[TTS performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/tts/performance.html)**. For end-to-end pipeline latency (TTS time-to-first-byte) in this blueprint, refer to [Evaluation and Performance](../04-evaluation-and-performance.md).
 
