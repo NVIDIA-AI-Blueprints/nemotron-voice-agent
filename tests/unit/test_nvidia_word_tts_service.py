@@ -172,7 +172,7 @@ class SpacingFlagTests(unittest.TestCase):
         self.assertEqual(spaced, "The sky turned blue")
 
 
-class MagpieWordCommitSequencerTests(unittest.TestCase):
+class MagpieWordCommitSequencerTests(unittest.IsolatedAsyncioTestCase):
     """WordTTS commits Magpie meta words with space injection (interim)."""
 
     def test_uses_magpie_word_sequencer(self) -> None:
@@ -186,9 +186,8 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         )
         self.assertIsInstance(svc._aggregated_frame_sequencer, _MagpieWordCommitSequencer)
 
-    def test_space_insert_between_magpie_tokens(self) -> None:
+    async def test_space_insert_between_magpie_tokens(self) -> None:
         from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
-        from pipecat.utils.context.word_completion_tracker import WordCompletionTracker
 
         from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
@@ -197,10 +196,10 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         seq = _MagpieWordCommitSequencer(name="test")
         ctx = "ctx-1"
         frame = AggregatedTextFrame(sentence, AggregationType.SENTENCE, raw_text=sentence)
-        seq.register_spoken(
+        await seq.register_spoken(
             frame,
             ctx,
-            tracker=WordCompletionTracker(sentence, llm_text=sentence, user_facing_text=sentence),
+            sentence,
             append_to_context=True,
         )
 
@@ -222,9 +221,8 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         )
         self.assertEqual(spaced, "I am Nemotron, created by NVIDIA")
 
-    def test_force_complete_skips_unspoken_remainder(self) -> None:
+    async def test_force_complete_skips_unspoken_remainder(self) -> None:
         from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
-        from pipecat.utils.context.word_completion_tracker import WordCompletionTracker
 
         from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
@@ -232,10 +230,10 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         seq = _MagpieWordCommitSequencer(name="test")
         ctx = "ctx-1"
         frame = AggregatedTextFrame(text, AggregationType.SENTENCE, raw_text=text)
-        seq.register_spoken(
+        await seq.register_spoken(
             frame,
             ctx,
-            tracker=WordCompletionTracker(text, llm_text=text, user_facing_text=text),
+            text,
             append_to_context=True,
         )
         # Pipecat 1.5.0 private contract used by force_complete.

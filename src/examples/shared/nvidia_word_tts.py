@@ -211,7 +211,10 @@ class NvidiaWordTTSService(NvidiaTTSService):
 
         # Magpie meta tokens have no leading spaces; IFS=False inserts them.
         # Stock NvidiaTTSService keeps the default AggregatedFrameSequencer.
-        self._aggregated_frame_sequencer = _MagpieWordCommitSequencer(name=str(self))
+        self._aggregated_frame_sequencer = _MagpieWordCommitSequencer(
+            name=str(self),
+            streaming=self._text_aggregation_mode == TextAggregationMode.TOKEN,
+        )
 
         cfg = dict(custom_configuration or {})
         if enable_word_time_offsets:
