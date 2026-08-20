@@ -5,7 +5,7 @@
 
 import unittest
 
-from nvidia_word_tts import (
+from examples.shared.nvidia_word_tts import (
     TimedWord,
     new_words_from_meta_batch,
     normalize_durations_to_seconds,
@@ -119,7 +119,7 @@ class LateMetaDropTests(unittest.IsolatedAsyncioTestCase):
     async def test_late_meta_after_context_clear_is_dropped(self) -> None:
         from types import SimpleNamespace
 
-        from nvidia_word_tts import NvidiaWordTTSService
+        from examples.shared.nvidia_word_tts import NvidiaWordTTSService
 
         svc = NvidiaWordTTSService(
             api_key=None,

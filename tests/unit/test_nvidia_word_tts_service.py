@@ -17,7 +17,7 @@ from pipecat.services.tts_service import TextAggregationMode, TTSService
 from pipecat.utils.string import concatenate_aggregated_text
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
-from nvidia_word_tts import _END_OF_TURN, NvidiaWordTTSService, NvidiaWordTTSSettings
+from examples.shared.nvidia_word_tts import _END_OF_TURN, NvidiaWordTTSService, NvidiaWordTTSSettings
 
 
 def _stream_state(context_id: str) -> _SynthesisStreamState:
@@ -159,7 +159,7 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
     """WordTTS commits Magpie meta words with space injection (interim)."""
 
     def test_uses_magpie_word_sequencer(self) -> None:
-        from nvidia_word_tts import _MagpieWordCommitSequencer
+        from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
         svc = NvidiaWordTTSService(
             api_key=None,
@@ -173,7 +173,7 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
         from pipecat.utils.context.word_completion_tracker import WordCompletionTracker
 
-        from nvidia_word_tts import _MagpieWordCommitSequencer
+        from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
         # Spoken slots = full sentence (simulates tracker matching Magpie words).
         sentence = "I am Nemotron, created by NVIDIA"
@@ -209,7 +209,7 @@ class MagpieWordCommitSequencerTests(unittest.TestCase):
         from pipecat.frames.frames import AggregatedTextFrame, AggregationType, TTSTextFrame
         from pipecat.utils.context.word_completion_tracker import WordCompletionTracker
 
-        from nvidia_word_tts import _MagpieWordCommitSequencer
+        from examples.shared.nvidia_word_tts import _MagpieWordCommitSequencer
 
         text = "Hello world today"
         seq = _MagpieWordCommitSequencer(name="test")
