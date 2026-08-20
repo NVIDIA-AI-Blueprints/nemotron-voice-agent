@@ -11,7 +11,7 @@
 
 services:
   chatterbox-tts-service:
-    image: nvcr.io/nim/nvidia/chatterbox-tts-multilingual:1.0.0
+    image: nvcr.io/nim/nvidia/chatterbox-tts-multilingual:1.1.0
     user: "0:0"
     profiles:
       - chatterbox-tts
@@ -19,8 +19,8 @@ services:
       NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
       NIM_HTTP_API_PORT: "9000"
       NIM_GRPC_API_PORT: "50051"
-      # Single profile (~52.5 GB GPU / ~6.4 GB CPU). No batch_size selector.
-      NIM_TAGS_SELECTOR: name=chatterbox-tts-multilingual
+      # Default 1.1.0 profile (~44.61 GiB GPU / ~4.86 GiB host memory).
+      NIM_TAGS_SELECTOR: name=chatterbox-tts-multilingual,batch_size=8
     ports:
       - "50151:50051"
       - "9000:9000"
@@ -39,7 +39,7 @@ services:
       resources:
         reservations:
           devices:
-            # ~52.5 GB VRAM. Edit device_ids if you want a second workstation GPU.
+            # Requires A100, H100, L40S, or DGX Spark. Edit device_ids to select the target GPU.
             - driver: nvidia
               device_ids: ['0']
               capabilities: [gpu]
