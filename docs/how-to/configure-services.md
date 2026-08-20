@@ -33,7 +33,7 @@ To configure a specific local model, check its Docker Compose file under [`docke
 ```yaml
 services:
   nemotron-asr-streaming-english:
-    image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.0
+    image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.1
     profiles:
       - generic-assistant/server
       - frontend-backend-agent/server
