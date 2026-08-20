@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
-import { useCallback, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useState, type ComponentProps } from "react";
 import { PipecatClient } from "@pipecat-ai/client-js";
 import { PipecatClientProvider, PipecatClientAudio } from "@pipecat-ai/client-react";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
@@ -36,7 +36,7 @@ function ClientSession({
   selectedTransport,
 }: Readonly<ClientSessionProps>) {
   const { currentSessionId } = useApp();
-  const client = useMemo(() => {
+  const [client] = useState(() => {
     if (selectedTransport === "websocket") {
       return new PipecatClient({
         transport: new WebSocketTransport({
@@ -53,7 +53,7 @@ function ClientSession({
       transport: new SmallWebRTCTransport({ iceServers }),
       enableMic: true,
     });
-  }, [iceServers, playerSampleRate, recorderSampleRate, selectedTransport]);
+  });
 
   return (
     <PipecatClientProvider client={client as unknown as ProviderClient}>
