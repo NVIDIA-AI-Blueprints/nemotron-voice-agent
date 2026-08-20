@@ -18,7 +18,7 @@ PIPELINE_PCM_RATE = 16000
 DEFAULT_CLIENT_PCM_RATE = 24000
 SUPPORTED_PCM_RATES = frozenset({8000, 16000, 24000, 48000})
 SUPPORTED_PCM_FORMAT_TYPES = frozenset({"audio/pcm", "pcm16"})
-# Manual (push-to-talk) buffer: 60s of 16-bit mono at pipeline rate.
+# Per-append cap: 60s of 16-bit mono at pipeline rate.
 MAX_PENDING_INPUT_BYTES = PIPELINE_PCM_RATE * 2 * 60
 
 
@@ -27,9 +27,12 @@ def decode_base64_audio(audio_b64: str) -> bytes:
     if not isinstance(audio_b64, str) or not audio_b64:
         raise ValueError("audio must be a non-empty base64 string")
     try:
-        return base64.b64decode(audio_b64, validate=False)
+        pcm = base64.b64decode(audio_b64, validate=True)
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"invalid base64 audio: {exc}") from exc
+    if len(pcm) % 2:
+        raise ValueError("PCM16 audio must contain an even number of bytes")
+    return pcm
 
 
 def encode_base64_audio(pcm: bytes) -> str:
@@ -87,10 +90,14 @@ def validate_session_audio_config(session_patch: dict[str, Any]) -> None:
         if key in session_patch and session_patch.get(key) is not None:
             _validate_format_object(session_patch.get(key), param=f"session.{key}")
 
+    if "audio" not in session_patch or session_patch.get("audio") is None:
+        return
     audio = session_patch.get("audio")
     if not isinstance(audio, dict):
-        return
+        raise ValueError("session.audio must be an object")
     for side in ("input", "output"):
+        if side in audio and audio.get(side) is not None and not isinstance(audio.get(side), dict):
+            raise ValueError(f"session.audio.{side} must be an object")
         block = audio.get(side)
         if not isinstance(block, dict) or "format" not in block:
             continue

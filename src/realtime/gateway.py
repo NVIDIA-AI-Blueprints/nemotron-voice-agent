@@ -27,6 +27,7 @@ from utils import parse_env_int
 SanitizeFn = Callable[..., dict[str, Any]]
 EnsureReadyFn = Callable[[dict[str, Any]], Awaitable[None]]
 StartBotFn = Callable[[WebSocket, dict[str, Any], dict[str, Any]], Awaitable[None]]
+ServerToolsFn = Callable[[dict[str, Any]], list[str]]
 
 # Pre-handoff: disconnect idle / abusive clients before session.update succeeds.
 _DEFAULT_SESSION_UPDATE_TIMEOUT_SECS = 60
@@ -61,6 +62,7 @@ async def handle_realtime_websocket(
     sanitize_session_config: SanitizeFn,
     ensure_services_ready: EnsureReadyFn | None = None,
     start_bot: StartBotFn | None = None,
+    resolve_server_tools: ServerToolsFn | None = None,
     fallback_example_key: str = "",
     default_pipeline_mode: str = DEFAULT_PIPELINE_MODE,
 ) -> None:
@@ -165,6 +167,7 @@ async def handle_realtime_websocket(
                     sanitize_session_config=sanitize_session_config,
                     ensure_services_ready=ensure_services_ready,
                     start_bot=start_bot,
+                    resolve_server_tools=resolve_server_tools,
                     fallback_example_key=fallback_example_key,
                     default_pipeline_mode=default_pipeline_mode,
                 )
@@ -198,6 +201,7 @@ async def _handle_session_update(
     start_bot: StartBotFn | None,
     fallback_example_key: str,
     default_pipeline_mode: str,
+    resolve_server_tools: ServerToolsFn | None = None,
 ) -> bool:
     """Validate then apply session.update. Return True if the pipeline was started."""
     client_event_id = message.get("event_id")
@@ -229,6 +233,8 @@ async def _handle_session_update(
             sanitized["temperature"] = flat["temperature"]
         if "max_tokens" in flat:
             sanitized["max_tokens"] = flat["max_tokens"]
+        if resolve_server_tools is not None:
+            sanitized["server_tools"] = resolve_server_tools(sanitized)
 
         # Soft-resolve voice against the TTS catalog (same list path as RTVI UI).
         # Unknown voices warn and fall back to the catalog default — no reject.

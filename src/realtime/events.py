@@ -48,6 +48,8 @@ SERVER_OUTPUT_TEXT_DELTA = "response.output_text.delta"
 SERVER_OUTPUT_TEXT_DONE = "response.output_text.done"
 SERVER_FUNCTION_CALL_ARGUMENTS_DELTA = "response.function_call_arguments.delta"
 SERVER_FUNCTION_CALL_ARGUMENTS_DONE = "response.function_call_arguments.done"
+SERVER_NVIDIA_TOOL_STARTED = "nvidia.tool.started"
+SERVER_NVIDIA_TOOL_COMPLETED = "nvidia.tool.completed"
 
 # GA names are canonical; dual-emit pre-GA aliases for older SDKs.
 BETA_EVENT_ALIASES: dict[str, str] = {

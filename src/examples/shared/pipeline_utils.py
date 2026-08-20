@@ -320,6 +320,7 @@ def create_transport(runner_args: RunnerArguments):
             session_view=body.get("realtime_session_view")
             if isinstance(body.get("realtime_session_view"), dict)
             else None,
+            runtime_config=body,
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer

@@ -14,7 +14,6 @@ from realtime.events import (
     SERVER_OUTPUT_AUDIO_TRANSCRIPT_DONE,
     SERVER_OUTPUT_ITEM_ADDED,
     SERVER_OUTPUT_ITEM_DONE,
-    SERVER_OUTPUT_TEXT_DONE,
     SERVER_RESPONSE_CREATED,
     SERVER_RESPONSE_DONE,
     EmitFn,
@@ -83,7 +82,6 @@ async def finish_response(
     emit: EmitFn,
     *,
     status: str,
-    output_text: str = "",
 ) -> bool:
     """Complete the in-flight response, emit the done sequence, then reset the slot.
 
@@ -96,7 +94,7 @@ async def finish_response(
     snap = conversation.complete_response(status)
     if snap is None:
         return False
-    await emit_finish_from_snapshot(snap, emit, output_text=output_text)
+    await emit_finish_from_snapshot(snap, emit)
     conversation.reset_response_slot(generation=snap.generation)
     return True
 
@@ -104,16 +102,13 @@ async def finish_response(
 async def emit_finish_from_snapshot(
     snap: ResponseSnapshot,
     emit: EmitFn,
-    *,
-    output_text: str = "",
 ) -> None:
-    """Emit audio/text/item/response done events for a completed snapshot."""
+    """Emit audio/item/response done events for a completed snapshot."""
     response_id = snap.response_id
     item_id = snap.item_id
     transcript = snap.transcript
     # Item statuses are in_progress|completed|incomplete; cancelled is response-only.
     item_status = "completed" if snap.status == "completed" else "incomplete"
-    text_done = output_text or transcript
 
     if not snap.audio_done_emitted:
         await emit_with_aliases(
@@ -136,18 +131,6 @@ async def emit_finish_from_snapshot(
                 output_index=0,
                 content_index=0,
                 transcript=transcript,
-            ),
-        )
-    if snap.output_text_emitted:
-        await emit_with_aliases(
-            emit,
-            server_event(
-                SERVER_OUTPUT_TEXT_DONE,
-                response_id=response_id,
-                item_id=item_id,
-                output_index=0,
-                content_index=0,
-                text=text_done,
             ),
         )
     await emit_with_aliases(

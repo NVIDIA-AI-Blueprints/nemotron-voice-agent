@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from collections.abc import Callable
 from typing import Any
@@ -14,7 +13,6 @@ from typing import Any
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
-    FunctionCallResultFrame,
     InputAudioRawFrame,
     InterruptionFrame,
     LLMMessagesAppendFrame,
@@ -48,7 +46,6 @@ from realtime.events import (
     CLIENT_RESPONSE_CREATE,
     CLIENT_SESSION_UPDATE,
     SERVER_AUDIO_CLEARED,
-    SERVER_AUDIO_COMMITTED,
     SERVER_ITEM_CREATED,
     SERVER_OUTPUT_AUDIO_DELTA,
     SERVER_SESSION_UPDATED,
@@ -56,7 +53,6 @@ from realtime.events import (
     emit_with_aliases,
     error_event,
     server_event,
-    with_beta_aliases,
 )
 from realtime.lifecycle import announce_response, finish_response
 from realtime.session import (
@@ -64,6 +60,8 @@ from realtime.session import (
     merge_session_patch,
     nvidia_public_view,
     unsupported_live_session_fields,
+    validate_input_transcription,
+    validate_server_vad,
 )
 from realtime.voice import resolve_realtime_tts_voice
 
@@ -85,12 +83,14 @@ class RealtimeFrameSerializer(FrameSerializer):
         self,
         *,
         session_view: dict[str, Any] | None = None,
+        runtime_config: dict[str, Any] | None = None,
         conversation: ConversationState | None = None,
         params: FrameSerializer.InputParams | None = None,
     ) -> None:
         """Create a serializer bound to the current Realtime session view."""
         super().__init__(params or FrameSerializer.InputParams())
         self._session_view: dict[str, Any] = dict(session_view or {})
+        self._runtime_config: dict[str, Any] = dict(runtime_config or {})
         self._conversation = conversation or ConversationState()
         self._resampler = AudioResampler()
         self._pipeline_rate = PIPELINE_PCM_RATE
@@ -98,8 +98,6 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._client_out_rate = extract_client_output_pcm_rate(self._session_view)
         self._emit: EmitFn | None = None
         self._on_response_cancel: CancelHook | None = None
-        # When turn_detection is null (push-to-talk), buffer PCM until commit.
-        self._pending_input_pcm = bytearray()
         self._bytes_since_commit = 0
 
     @property
@@ -186,6 +184,11 @@ class RealtimeFrameSerializer(FrameSerializer):
         event_type = message.get("type")
         client_event_id = message.get("event_id")
         echo_id = client_event_id if isinstance(client_event_id, str) else None
+        if not isinstance(event_type, str) or not event_type:
+            await self._emit_event(
+                error_event("Missing event type", code="missing_type", event_id=echo_id, param="type")
+            )
+            return None
 
         if event_type == CLIENT_AUDIO_APPEND:
             return await self._deserialize_append(message, echo_id)
@@ -194,7 +197,6 @@ class RealtimeFrameSerializer(FrameSerializer):
             return await self._deserialize_commit(echo_id)
 
         if event_type == CLIENT_AUDIO_CLEAR:
-            self._pending_input_pcm.clear()
             self._bytes_since_commit = 0
             await self._emit_event(server_event(SERVER_AUDIO_CLEARED))
             return None
@@ -228,6 +230,18 @@ class RealtimeFrameSerializer(FrameSerializer):
                     )
                 )
                 return None
+            if not self._conversation.request_response():
+                await self._emit_event(
+                    error_event(
+                        "A response is already in progress",
+                        code="conversation_already_has_active_response",
+                        event_id=echo_id,
+                        param="type",
+                    )
+                )
+                return None
+            if self._emit is not None:
+                await announce_response(self._conversation, self._emit)
             return LLMRunFrame()
 
         if event_type == CLIENT_RESPONSE_CANCEL:
@@ -265,17 +279,6 @@ class RealtimeFrameSerializer(FrameSerializer):
         )
         return None
 
-    def _manual_turn_detection(self) -> bool:
-        """True when the client disabled server VAD (push-to-talk / commit-driven)."""
-        audio = self._session_view.get("audio")
-        if isinstance(audio, dict):
-            inp = audio.get("input")
-            if isinstance(inp, dict) and "turn_detection" in inp:
-                return inp.get("turn_detection") is None
-        if "turn_detection" in self._session_view:
-            return self._session_view.get("turn_detection") is None
-        return False
-
     async def _deserialize_session_update(self, message: dict[str, Any], echo_id: str | None) -> Frame | None:
         session_patch = message.get("session")
         if not isinstance(session_patch, dict):
@@ -308,11 +311,24 @@ class RealtimeFrameSerializer(FrameSerializer):
 
         try:
             validate_session_audio_config(session_patch)
+            validate_input_transcription(session_patch)
+            validate_server_vad(session_patch)
         except ValueError as exc:
             await self._emit_event(error_event(str(exc), code="invalid_session", event_id=echo_id, param="session"))
             return None
 
         patch = live_session_patch(session_patch)
+        if "input_audio_format" in patch or "output_audio_format" in patch:
+            audio_patch = dict(patch.get("audio") or {})
+            if "input_audio_format" in patch:
+                input_patch = dict(audio_patch.get("input") or {})
+                input_patch["format"] = patch["input_audio_format"]
+                audio_patch["input"] = input_patch
+            if "output_audio_format" in patch:
+                output_patch = dict(audio_patch.get("output") or {})
+                output_patch["format"] = patch["output_audio_format"]
+                audio_patch["output"] = output_patch
+            patch["audio"] = audio_patch
 
         voice = ""
         if isinstance(patch.get("voice"), str):
@@ -324,7 +340,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                 voice = output["voice"].strip()
         if voice:
             # Soft catalog check (same list path as RTVI UI); unknown → default.
-            nvidia = self._session_view.get("nvidia") if isinstance(self._session_view.get("nvidia"), dict) else {}
+            nvidia = self._runtime_config
             voice_config = {
                 "tts_voice_id": voice,
                 "tts_server": nvidia.get("tts_server", ""),
@@ -333,6 +349,7 @@ class RealtimeFrameSerializer(FrameSerializer):
             }
             resolved = await asyncio.to_thread(resolve_realtime_tts_voice, voice_config, voice_was_set=True) or voice
             voice = resolved
+            self._runtime_config["tts_voice_id"] = voice
             if isinstance(patch.get("voice"), str):
                 patch["voice"] = voice
             audio_patch = patch.get("audio")
@@ -403,7 +420,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         return InterruptionFrame()
 
     async def _deserialize_commit(self, echo_id: str | None) -> Frame | None:
-        if self._bytes_since_commit <= 0 and not self._pending_input_pcm:
+        if self._bytes_since_commit <= 0:
             await self._emit_event(
                 error_event(
                     "input_audio_buffer is empty; append audio before commit",
@@ -413,25 +430,8 @@ class RealtimeFrameSerializer(FrameSerializer):
             )
             return None
 
-        item_id = self._conversation.begin_user_item()
-        await self._emit_event(
-            server_event(
-                SERVER_AUDIO_COMMITTED,
-                item_id=item_id,
-                previous_item_id=None,
-            )
-        )
         self._bytes_since_commit = 0
-        if not self._manual_turn_detection():
-            # Server VAD path: audio already streamed; commit is an ack only.
-            return None
-        pcm = bytes(self._pending_input_pcm)
-        self._pending_input_pcm.clear()
-        return InputAudioRawFrame(
-            audio=pcm,
-            sample_rate=self._pipeline_rate,
-            num_channels=1,
-        )
+        return None
 
     async def _deserialize_append(self, message: dict[str, Any], echo_id: str | None) -> Frame | None:
         fmt = extract_client_input_format_type(self._session_view)
@@ -487,22 +487,8 @@ class RealtimeFrameSerializer(FrameSerializer):
             )
             return None
 
-        if self._manual_turn_detection():
-            if len(self._pending_input_pcm) + len(pcm) > MAX_PENDING_INPUT_BYTES:
-                await self._emit_event(
-                    error_event(
-                        "input_audio_buffer exceeded max pending size; commit or clear before appending more",
-                        code="input_buffer_overflow",
-                        event_id=echo_id,
-                        param="audio",
-                    )
-                )
-                return None
-            self._pending_input_pcm.extend(pcm)
-            self._bytes_since_commit += len(pcm)
-            return None
-
         self._bytes_since_commit += len(pcm)
+        self._conversation.add_input_audio(len(pcm), self._pipeline_rate)
         return InputAudioRawFrame(
             audio=pcm,
             sample_rate=self._pipeline_rate,
@@ -524,13 +510,21 @@ class RealtimeFrameSerializer(FrameSerializer):
 
         item_type = item.get("type") or "message"
         if item_type == "function_call_output":
-            return await self._deserialize_function_call_output(item, echo_id)
+            await self._emit_event(
+                error_event(
+                    "Client function_call_output is not supported; server catalog tools run internally",
+                    code="unsupported_item",
+                    event_id=echo_id,
+                    param="item.type",
+                )
+            )
+            return None
 
         role = item.get("role") or "user"
         if item_type != "message" or role != "user":
             await self._emit_event(
                 error_event(
-                    "v1 only supports conversation.item.create for user text messages or function_call_output",
+                    "v1 only supports conversation.item.create for user text messages",
                     code="unsupported_item",
                     event_id=echo_id,
                     param="item",
@@ -583,75 +577,10 @@ class RealtimeFrameSerializer(FrameSerializer):
             run_llm=False,
         )
 
-    async def _deserialize_function_call_output(self, item: dict[str, Any], echo_id: str | None) -> Frame | None:
-        call_id = item.get("call_id")
-        output = item.get("output")
-        if not isinstance(call_id, str) or not call_id.strip():
-            await self._emit_event(
-                error_event(
-                    "function_call_output requires call_id",
-                    code="invalid_item",
-                    event_id=echo_id,
-                    param="item.call_id",
-                )
-            )
-            return None
-        if output is None:
-            await self._emit_event(
-                error_event(
-                    "function_call_output requires output",
-                    code="invalid_item",
-                    event_id=echo_id,
-                    param="item.output",
-                )
-            )
-            return None
-
-        meta = self._conversation.pop_function_call(call_id)
-        if meta is None:
-            await self._emit_event(
-                error_event(
-                    f"unknown call_id for function_call_output: {call_id}",
-                    code="invalid_item",
-                    event_id=echo_id,
-                    param="item.call_id",
-                )
-            )
-            return None
-
-        name = str(meta.get("name") or "")
-        arguments = meta.get("arguments") if "arguments" in meta else {}
-        result: Any = output
-        if isinstance(output, str):
-            with contextlib.suppress(json.JSONDecodeError, TypeError):
-                result = json.loads(output)
-
-        item_id = item.get("id") if isinstance(item.get("id"), str) else new_item_id()
-        await self._emit_event(
-            server_event(
-                SERVER_ITEM_CREATED,
-                previous_item_id=None,
-                item={
-                    "id": item_id,
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": output if isinstance(output, str) else json.dumps(output),
-                },
-            )
-        )
-        # Do not auto-run LLM — client follows with response.create (OpenAI semantics).
-        return FunctionCallResultFrame(
-            function_name=name or "unknown",
-            tool_call_id=call_id,
-            arguments=arguments,
-            result=result,
-            run_llm=False,
-        )
-
-    async def _serialize_output_audio(self, frame: OutputAudioRawFrame) -> str | None:
+    async def _serialize_output_audio(self, frame: OutputAudioRawFrame) -> None:
         pcm = frame.audio or b""
         if not pcm:
-            return None
+            return
 
         try:
             client_pcm = await self._resampler.from_pipeline(
@@ -661,24 +590,18 @@ class RealtimeFrameSerializer(FrameSerializer):
             )
         except ValueError as exc:
             logger.warning(f"Realtime output resample failed: {exc}")
-            return None
+            return
 
         if self._emit is None:
             logger.warning("Realtime emit not configured; dropping output audio")
-            return None
+            return
 
-        # Prefer an in-progress response. Early PCM may arrive before the observer
-        # announces — allow opening. After response.done, stream trailing PCM on the
-        # closed item only (do not create an empty assistant row).
-        if self._conversation.response_status == "in_progress":
-            response_id, _created = await announce_response(self._conversation, self._emit)
-            item_id = self._conversation.assistant_item_id
-        elif self._conversation.closed_response_id and self._conversation.closed_item_id:
-            response_id = self._conversation.closed_response_id
-            item_id = self._conversation.closed_item_id
-        else:
-            response_id, _created = await announce_response(self._conversation, self._emit)
-            item_id = self._conversation.assistant_item_id
+        if self._conversation.response_status != "in_progress":
+            logger.warning("Realtime dropping output audio without an active response")
+            return
+
+        response_id, _created = await announce_response(self._conversation, self._emit)
+        item_id = self._conversation.assistant_item_id
 
         event = server_event(
             SERVER_OUTPUT_AUDIO_DELTA,
@@ -688,21 +611,19 @@ class RealtimeFrameSerializer(FrameSerializer):
             content_index=0,
             delta=encode_base64_audio(client_pcm),
         )
-        # serialize() returns one WS frame; emit any pre-GA alias separately.
-        for payload in with_beta_aliases(event)[1:]:
-            await self._emit(payload)
-        return json.dumps(event)
+        await self._emit_event(event)
 
     async def _emit_cancelled_response(self, *, status_if_active: str = "cancelled") -> None:
         if self._emit is None:
             return
         # Drain observer LLM text before finish so late TTSStopped cannot revive the turn.
         buffered = self._on_response_cancel() if self._on_response_cancel is not None else ""
+        if buffered and not self._conversation.assistant_transcript:
+            self._conversation.append_assistant_transcript(buffered)
         await finish_response(
             self._conversation,
             self._emit,
             status=status_if_active,
-            output_text=buffered or self._conversation.assistant_transcript,
         )
 
 

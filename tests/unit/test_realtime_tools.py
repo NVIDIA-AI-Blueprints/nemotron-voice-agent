@@ -71,8 +71,13 @@ class GatewayToolsIgnoredTests(unittest.IsolatedAsyncioTestCase):
                 ws,
                 sanitize_session_config=lambda data, **_: dict(data),
                 start_bot=start_bot,
+                resolve_server_tools=lambda _config: ["get_weather", "set_memory"],
             )
 
         self.assertIn("config", captured)
         self.assertNotIn("client_tools", captured["config"])
         self.assertEqual(captured["session"].get("tools"), [])
+        self.assertEqual(
+            captured["session"]["nvidia"]["server_tools"],
+            ["get_weather", "set_memory"],
+        )

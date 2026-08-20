@@ -10,9 +10,12 @@ import base64
 import json
 import unittest
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame
+from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, TTSStoppedFrame
+from pipecat.observers.base_observer import FramePushed
+from pipecat.processors.frame_processor import FrameDirection
+from pipecat.transports.base_output import BaseOutputTransport
 from realtime_helpers import FakeWebSocket
 
 from realtime.audio import (
@@ -23,6 +26,7 @@ from realtime.audio import (
 )
 from realtime.events import SERVER_ERROR, SERVER_SESSION_CREATED, SERVER_SESSION_UPDATED
 from realtime.gateway import handle_realtime_websocket
+from realtime.observer import RealtimeLifecycleObserver
 from realtime.serializer import RealtimeFrameSerializer
 
 
@@ -98,14 +102,14 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         emitted.clear()
         pcm = b"\x00\x00" * 160
         payload = await ser.serialize(OutputAudioRawFrame(audio=pcm, sample_rate=16000, num_channels=1))
-        self.assertIsInstance(payload, str)
-        delta = json.loads(payload)
+        self.assertIsNone(payload)
+        delta = next(e for e in emitted if e["type"] == "response.output_audio.delta")
         self.assertEqual(delta["type"], "response.output_audio.delta")
         types = [e["type"] for e in emitted]
         self.assertNotIn("response.created", types)
         self.assertIn("response.audio.delta", types)
 
-    async def test_output_audio_can_open_response_when_observer_has_not_announced(self) -> None:
+    async def test_output_audio_without_announced_response_is_dropped(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -117,12 +121,10 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         ser.set_emit(emit)
         pcm = b"\x00\x00" * 160
         payload = await ser.serialize(OutputAudioRawFrame(audio=pcm, sample_rate=16000, num_channels=1))
-        self.assertIsInstance(payload, str)
-        types = [e["type"] for e in emitted]
-        self.assertIn("response.created", types)
-        self.assertIn("conversation.item.created", types)
+        self.assertIsNone(payload)
+        self.assertEqual(emitted, [])
 
-    async def test_trailing_output_audio_reuses_closed_item_without_new_response(self) -> None:
+    async def test_trailing_output_audio_after_done_is_dropped(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -135,21 +137,59 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         from realtime.lifecycle import announce_response, finish_response
 
         await announce_response(ser.conversation, emit)
-        item_id = ser.conversation.assistant_item_id
-        response_id = ser.conversation.response_id
-        await finish_response(ser.conversation, emit, status="completed", output_text="hi")
+        await finish_response(ser.conversation, emit, status="completed")
         emitted.clear()
 
         pcm = b"\x00\x00" * 160
         payload = await ser.serialize(OutputAudioRawFrame(audio=pcm, sample_rate=16000, num_channels=1))
-        self.assertIsInstance(payload, str)
-        delta = json.loads(payload)
-        self.assertEqual(delta["type"], "response.output_audio.delta")
-        self.assertEqual(delta["item_id"], item_id)
-        self.assertEqual(delta["response_id"], response_id)
-        self.assertNotIn("response.created", [e["type"] for e in emitted])
-        self.assertNotIn("conversation.item.created", [e["type"] for e in emitted])
+        self.assertIsNone(payload)
+        self.assertEqual(emitted, [])
         self.assertIsNone(ser.conversation.response_id)
+
+    async def test_audio_delta_precedes_transport_drained_done_sequence(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        ser = RealtimeFrameSerializer(
+            session_view={"audio": {"output": {"format": {"type": "audio/pcm", "rate": 16000}}}}
+        )
+        ser.set_emit(emit)
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=ser.conversation)
+        from realtime.lifecycle import announce_response
+
+        await announce_response(ser.conversation, emit)
+        await ser.serialize(
+            OutputAudioRawFrame(
+                audio=b"\x00\x00" * 160,
+                sample_rate=16000,
+                num_channels=1,
+            )
+        )
+        stopped = TTSStoppedFrame()
+        for source in (MagicMock(), MagicMock(spec=BaseOutputTransport)):
+            await observer.on_push_frame(
+                FramePushed(
+                    source=source,
+                    destination=MagicMock(),
+                    frame=stopped,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=0,
+                )
+            )
+
+        types = [event["type"] for event in emitted]
+        self.assertLess(
+            types.index("response.output_audio.delta"),
+            types.index("response.output_audio.done"),
+        )
+        self.assertLess(
+            types.index("response.output_audio.done"),
+            types.index("response.done"),
+        )
+        self.assertNotIn("response.output_text.delta", types)
+        self.assertNotIn("response.output_text.done", types)
 
     async def test_commit_empty_errors(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -164,28 +204,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted[0]["type"], "error")
         self.assertEqual(emitted[0]["error"]["code"], "input_audio_buffer_commit_empty")
 
-    async def test_commit_after_append_emits_committed(self) -> None:
-        emitted: list[dict[str, Any]] = []
-
-        async def emit(event: dict[str, Any]) -> None:
-            emitted.append(event)
-
-        ser = RealtimeFrameSerializer(
-            session_view={
-                "turn_detection": None,
-                "audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}, "turn_detection": None}},
-            }
-        )
-        ser.set_emit(emit)
-        pcm = b"\x00\x00" * 320
-        await ser.deserialize(
-            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode("ascii")})
-        )
-        frame = await ser.deserialize(json.dumps({"type": "input_audio_buffer.commit"}))
-        self.assertIsInstance(frame, InputAudioRawFrame)
-        self.assertEqual(emitted[-1]["type"], "input_audio_buffer.committed")
-
-    async def test_manual_vad_buffers_until_commit(self) -> None:
+    async def test_commit_after_append_does_not_duplicate_vad_commit(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -195,7 +214,33 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
             session_view={
                 "audio": {
                     "input": {
-                        "turn_detection": None,
+                        "format": {"type": "audio/pcm", "rate": 16000},
+                        "turn_detection": {"type": "server_vad"},
+                    }
+                },
+            }
+        )
+        ser.set_emit(emit)
+        pcm = b"\x00\x00" * 320
+        appended = await ser.deserialize(
+            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode("ascii")})
+        )
+        frame = await ser.deserialize(json.dumps({"type": "input_audio_buffer.commit"}))
+        self.assertIsInstance(appended, InputAudioRawFrame)
+        self.assertIsNone(frame)
+        self.assertNotIn("input_audio_buffer.committed", [e["type"] for e in emitted])
+
+    async def test_append_always_streams_in_server_vad_mode(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        ser = RealtimeFrameSerializer(
+            session_view={
+                "audio": {
+                    "input": {
+                        "turn_detection": {"type": "server_vad"},
                         "format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE},
                     }
                 }
@@ -211,14 +256,9 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
-        self.assertIsNone(frame)
-        self.assertGreater(len(ser._pending_input_pcm), 0)
-        flushed = await ser.deserialize(json.dumps({"type": "input_audio_buffer.commit"}))
-        self.assertIsInstance(flushed, InputAudioRawFrame)
-        self.assertEqual(len(ser._pending_input_pcm), 0)
-        self.assertEqual(emitted[-1]["type"], "input_audio_buffer.committed")
+        self.assertIsInstance(frame, InputAudioRawFrame)
 
-    async def test_clear_drops_pending_buffer(self) -> None:
+    async def test_clear_resets_uncommitted_byte_count(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -226,13 +266,15 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
 
         ser = RealtimeFrameSerializer(
             session_view={
-                "turn_detection": None,
-                "audio": {"input": {"format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE}}},
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE},
+                        "turn_detection": {"type": "server_vad"},
+                    }
+                },
             }
         )
         ser.set_emit(emit)
-        # Force manual mode via top-level turn_detection; keep 16 kHz to skip resample.
-        ser._session_view["turn_detection"] = None
         pcm = b"\x01\x00" * 40
         await ser.deserialize(
             json.dumps(
@@ -242,10 +284,10 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
-        self.assertGreater(len(ser._pending_input_pcm), 0)
+        self.assertGreater(ser._bytes_since_commit, 0)
         frame = await ser.deserialize(json.dumps({"type": "input_audio_buffer.clear"}))
         self.assertIsNone(frame)
-        self.assertEqual(len(ser._pending_input_pcm), 0)
+        self.assertEqual(ser._bytes_since_commit, 0)
         self.assertEqual(emitted[-1]["type"], "input_audio_buffer.cleared")
 
     async def test_mid_session_partial_audio_update_deep_merges(self) -> None:
@@ -259,7 +301,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
                 "audio": {
                     "input": {
                         "format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE},
-                        "turn_detection": None,
+                        "turn_detection": {"type": "server_vad"},
                     },
                     "output": {
                         "format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE},
@@ -282,7 +324,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(frame, TTSUpdateSettingsFrame)
         audio = ser._session_view["audio"]
-        self.assertEqual(audio["input"]["turn_detection"], None)
+        self.assertEqual(audio["input"]["turn_detection"], {"type": "server_vad"})
         self.assertEqual(audio["input"]["format"]["rate"], PIPELINE_PCM_RATE)
         self.assertEqual(audio["output"]["voice"], "Magpie-Multilingual.EN-US.Aria")
         self.assertEqual(emitted[-1]["type"], "session.updated")
@@ -322,6 +364,31 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(ser._resampler._uplink, uplink_before)
         self.assertEqual(emitted[-1]["type"], "session.updated")
 
+    async def test_mid_session_transcription_selector_is_accepted_noop(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        ser = RealtimeFrameSerializer()
+        ser.set_emit(emit)
+        frame = await ser.deserialize(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "input_audio_transcription": {"model": "whisper-1"},
+                    },
+                }
+            )
+        )
+        self.assertIsNone(frame)
+        self.assertEqual(emitted[-1]["type"], "session.updated")
+        self.assertEqual(
+            emitted[-1]["session"]["input_audio_transcription"],
+            {"model": "whisper-1"},
+        )
+
     async def test_mid_session_unknown_voice_falls_back(self) -> None:
         emitted: list[dict[str, Any]] = []
 
@@ -334,11 +401,18 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
                     "input": {"format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE}},
                     "output": {"format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE}, "voice": ""},
                 }
-            }
+            },
+            runtime_config={
+                "tts_server": "tts.internal:443",
+                "tts_function_id": "tts-fn",
+                "tts_model": "magpie",
+            },
         )
         ser.set_emit(emit)
+        seen: dict[str, Any] = {}
 
         def _resolve(config, *, voice_was_set=False, tts_routing_changed=False):  # noqa: ARG001
+            seen.update(config)
             config["tts_voice_id"] = "Magpie-Multilingual.EN-US.Aria"
             return "Magpie-Multilingual.EN-US.Aria"
 
@@ -350,6 +424,8 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted[-1]["type"], "session.updated")
         self.assertEqual(ser._session_view["audio"]["output"]["voice"], "Magpie-Multilingual.EN-US.Aria")
         self.assertEqual(ser._session_view.get("voice"), "Magpie-Multilingual.EN-US.Aria")
+        self.assertEqual(seen["tts_server"], "tts.internal:443")
+        self.assertEqual(seen["tts_function_id"], "tts-fn")
 
     async def test_mid_session_rejects_unapplied_agent_config(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -372,7 +448,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted[-1]["error"]["code"], "unsupported_live_session_update")
         self.assertEqual(ser._session_view.get("instructions"), "old")
 
-    async def test_mid_session_full_echo_allows_turn_detection_change(self) -> None:
+    async def test_mid_session_rejects_turn_detection_change(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -382,7 +458,8 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
             session_view={
                 "instructions": "Be brief.",
                 "tools": [{"type": "function", "name": "get_weather"}],
-                "turn_detection": None,
+                "turn_detection": {"type": "server_vad"},
+                "audio": {"input": {"turn_detection": {"type": "server_vad"}}},
                 "nvidia": {"pipeline_mode": "generic-assistant"},
             }
         )
@@ -394,14 +471,15 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
                     "session": {
                         "instructions": "Be brief.",
                         "tools": [{"type": "function", "name": "get_weather"}],
-                        "turn_detection": {"type": "server_vad"},
+                        "turn_detection": None,
                         "nvidia": {"pipeline_mode": "generic-assistant"},
                     },
                 }
             )
         )
         self.assertIsNone(frame)
-        self.assertEqual(emitted[-1]["type"], "session.updated")
+        self.assertEqual(emitted[-1]["type"], "error")
+        self.assertEqual(emitted[-1]["error"]["code"], "unsupported_live_session_update")
         self.assertEqual(ser._session_view["turn_detection"], {"type": "server_vad"})
         self.assertNotIn("temperature", ser._session_view)
 
@@ -426,7 +504,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted[-1]["type"], "error")
         self.assertEqual(emitted[-1]["error"]["code"], "unsupported_response_override")
 
-    async def test_manual_buffer_rejects_overflow(self) -> None:
+    async def test_append_rejects_oversized_payload(self) -> None:
         from realtime.audio import MAX_PENDING_INPUT_BYTES
 
         emitted: list[dict[str, Any]] = []
@@ -438,25 +516,46 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
             session_view={
                 "audio": {
                     "input": {
-                        "turn_detection": None,
+                        "turn_detection": {"type": "server_vad"},
                         "format": {"type": "audio/pcm", "rate": PIPELINE_PCM_RATE},
                     }
                 }
             }
         )
         ser.set_emit(emit)
-        ser._pending_input_pcm = bytearray(b"\x00" * MAX_PENDING_INPUT_BYTES)
         frame = await ser.deserialize(
             json.dumps(
                 {
                     "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(b"\x01\x00" * 8).decode("ascii"),
+                    "audio": base64.b64encode(b"\x01\x00" * (MAX_PENDING_INPUT_BYTES // 2 + 1)).decode("ascii"),
                 }
             )
         )
         self.assertIsNone(frame)
         self.assertEqual(emitted[-1]["type"], "error")
         self.assertEqual(emitted[-1]["error"]["code"], "input_buffer_overflow")
+
+    async def test_append_rejects_invalid_base64_and_odd_pcm16(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        ser = RealtimeFrameSerializer()
+        ser.set_emit(emit)
+        self.assertIsNone(await ser.deserialize(json.dumps({"type": "input_audio_buffer.append", "audio": "!!!!"})))
+        self.assertEqual(emitted[-1]["error"]["code"], "invalid_audio")
+        self.assertIsNone(
+            await ser.deserialize(
+                json.dumps(
+                    {
+                        "type": "input_audio_buffer.append",
+                        "audio": base64.b64encode(b"\x00").decode("ascii"),
+                    }
+                )
+            )
+        )
+        self.assertEqual(emitted[-1]["error"]["code"], "invalid_audio")
 
 
 class GatewayHandoffTests(unittest.IsolatedAsyncioTestCase):
