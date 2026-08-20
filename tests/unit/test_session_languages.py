@@ -43,6 +43,7 @@ if "riva.client.proto.riva_asr_pb2" not in sys.modules:
     sys.modules["riva.client.proto.riva_asr_pb2"] = riva_asr_pb2
 
 from examples.shared.prewarm import (
+    _parse_asr_config,
     intersect_session_languages,
     prewarm_asr,
     validate_llm_session_language,
@@ -130,12 +131,25 @@ class SessionLanguageCatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "en-US.*not supported.*none"):
             validate_llm_session_language("en-US", [])
 
-    def test_runtime_validation_rejects_greek_for_nano(self) -> None:
+    def test_runtime_validation_rejects_unsupported_locale(self) -> None:
         with self.assertRaisesRegex(ValueError, "el-GR.*not supported"):
             validate_llm_session_language("el-GR", ["en", "de", "es", "fr", "it", "ja"])
 
     def test_runtime_validation_accepts_locale_for_supported_base_code(self) -> None:
         validate_llm_session_language("de-DE", ["de"])
+
+    def test_asr_catalog_collects_languages_from_all_model_configs(self) -> None:
+        raw_config = types.SimpleNamespace(
+            model_config=[
+                _FakeModelConfig("en-US,fr-FR"),
+                _FakeModelConfig("de-DE,en-US"),
+            ]
+        )
+
+        self.assertEqual(
+            _parse_asr_config(raw_config),
+            {"languages": ["en-US", "fr-FR", "de-DE"]},
+        )
 
     def test_asr_prewarm_uses_default_config_request_without_model_name(self) -> None:
         _FakeNvidiaSTTService.last = None

@@ -4,6 +4,7 @@
 """Service pre-warming to avoid blocking the event loop during first connection."""
 
 import concurrent.futures
+import json
 import os
 from collections.abc import Iterable
 
@@ -13,7 +14,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from riva.client.proto import riva_asr_pb2
 
 import config_store
-from utils import is_nvcf, normalize_lang_code, parse_env_float
+from utils import is_nvcf, normalize_lang_code, nvidia_api_key, parse_env_float
 
 
 def _create_tts_service(
@@ -23,7 +24,7 @@ def _create_tts_service(
     model: str = "",
 ):
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": server,
         "settings": NvidiaTTSSettings(voice=voice_id),
         "use_ssl": is_nvcf(server),
@@ -47,6 +48,44 @@ def _parse_language_codes_param(raw: str) -> list[str]:
     return [normalize_lang_code(part.strip()) for part in raw.split(",") if part.strip()]
 
 
+def _voice_display_id(raw_id: str, prefix: str = "") -> tuple[str, str]:
+    """Return (voice_id, display_name) for a catalog voice token.
+
+    Nemo-speech.cpp lists ``magpietts.John`` while the app/catalog use ``John``.
+    Riva Magpie keeps language-scoped ids like ``Magpie-Multilingual.EN-US.Aria``.
+    """
+    token = (raw_id or "").strip()
+    if not token:
+        return "", ""
+    if prefix and token.lower().startswith(f"{prefix.lower()}."):
+        name = token[len(prefix) + 1 :]
+        # Bare speaker names (John) — keep short id. Language-scoped keep full id.
+        if "." not in name:
+            return name, name
+        return token, name.split(".")[-1]
+    if "." in token and token.split(".", 1)[0].lower() in {"magpietts", "magpie"}:
+        name = token.rsplit(".", 1)[-1]
+        return name, name
+    name = token.rsplit(".", 1)[-1]
+    return token, name
+
+
+def _add_voice(
+    voices: list[dict],
+    seen: set[str],
+    *,
+    voice_id: str,
+    name: str,
+    language: str,
+) -> None:
+    lang = normalize_lang_code(language)
+    key = f"{voice_id}|{lang}"
+    if not voice_id or key in seen:
+        return
+    seen.add(key)
+    voices.append({"id": voice_id, "name": name, "language": lang})
+
+
 def _parse_tts_config(raw_config, model_prefix: str) -> dict:
     """Parse the TTS synthesis config into a frontend-friendly structure.
 
@@ -58,52 +97,104 @@ def _parse_tts_config(raw_config, model_prefix: str) -> dict:
       (no language in the token). The same voice IDs are valid across every
       ``language_code``, so each subvoice is expanded once per language as
       ``{prefix}.Female`` / ``{prefix}.Male``.
+    - Nemo-speech.cpp Magpie lists plain names (``John,Sofia,...``) and/or a
+      ``voices_by_language`` JSON map; those become short ids like ``John``.
     """
     if not raw_config or not raw_config.model_config:
         return {"languages": [], "voices": []}
 
-    params = dict(raw_config.model_config[0].parameters)
-    languages = _parse_language_codes_param(params.get("language_code", ""))
-    subvoices_raw = params.get("subvoices", "")
-    prefix = (model_prefix or params.get("voice_name", "") or "").strip()
+    all_params = [dict(mc.parameters) for mc in raw_config.model_config]
+
+    languages: list[str] = []
+    seen_langs: set[str] = set()
+
+    def add_language(code: str) -> str:
+        normalized = normalize_lang_code(code)
+        key = normalized.lower()
+        if key not in seen_langs:
+            seen_langs.add(key)
+            languages.append(normalized)
+        return normalized
+
+    for params in all_params:
+        for code in _parse_language_codes_param(params.get("language_code", "")):
+            add_language(code)
+
+    default_language = languages[0] if languages else "en-US"
 
     voices: list[dict] = []
     seen: set[str] = set()
-    for entry in subvoices_raw.split(","):
-        entry = entry.strip()
-        if ":" not in entry:
-            continue
-        short_id = entry.split(":", 1)[0].strip()
-        if not short_id:
-            continue
 
-        if "." in short_id:
-            # Magpie Multilingual: Language.VoiceName:index
-            parts = short_id.split(".")
-            if len(parts) < 2:
-                continue
-            lang = normalize_lang_code(parts[0])
-            name = ".".join(parts[1:])
-            full_id = f"{prefix}.{short_id}" if prefix else short_id
-            if full_id in seen:
-                continue
-            seen.add(full_id)
-            voices.append({"id": full_id, "name": name, "language": lang})
-            continue
+    def add_config_language(code: str, config_languages: list[str], config_seen_langs: set[str]) -> str:
+        normalized = add_language(code)
+        key = normalized.lower()
+        if key not in config_seen_langs:
+            config_seen_langs.add(key)
+            config_languages.append(normalized)
+        return normalized
 
-        # Magpie Zeroshot: VoiceName:index (same voices for every locale)
-        name = short_id
-        full_id = f"{prefix}.{name}" if prefix else name
-        for lang in languages or ["en-US"]:
-            key = f"{full_id}|{lang}"
-            if key in seen:
+    for params in all_params:
+        prefix = (model_prefix or params.get("voice_name", "") or "").strip()
+        config_languages: list[str] = []
+        config_seen_langs: set[str] = set()
+
+        for code in _parse_language_codes_param(params.get("language_code", "")):
+            add_config_language(code, config_languages, config_seen_langs)
+
+        # Nemo-speech.cpp: rich per-locale catalog when present.
+        voices_by_language_raw = params.get("voices_by_language", "")
+        if voices_by_language_raw:
+            try:
+                catalog = json.loads(voices_by_language_raw)
+            except (TypeError, json.JSONDecodeError):
+                catalog = None
+            if isinstance(catalog, dict):
+                for lang_code, payload in catalog.items():
+                    lang = add_config_language(str(lang_code), config_languages, config_seen_langs)
+                    voice_list = payload.get("voices", []) if isinstance(payload, dict) else []
+                    for raw_id in voice_list:
+                        voice_id, name = _voice_display_id(str(raw_id), prefix)
+                        _add_voice(voices, seen, voice_id=voice_id, name=name, language=lang)
+
+        subvoices_raw = params.get("subvoices", "") or params.get("voices", "")
+        for entry in subvoices_raw.split(","):
+            entry = entry.strip()
+            if not entry:
                 continue
-            seen.add(key)
-            voices.append({"id": full_id, "name": name, "language": lang})
+
+            # Riva Magpie: Name:index (index is optional for nemo-speech plain names).
+            short_id = entry.split(":", 1)[0].strip() if ":" in entry else entry
+            if not short_id:
+                continue
+
+            if ":" in entry and "." in short_id:
+                # Magpie Multilingual: Language.VoiceName:index
+                parts = short_id.split(".")
+                if len(parts) < 2:
+                    continue
+                lang = add_config_language(parts[0], config_languages, config_seen_langs)
+                name = ".".join(parts[1:])
+                full_id = f"{prefix}.{short_id}" if prefix else short_id
+                _add_voice(voices, seen, voice_id=full_id, name=name, language=lang)
+                continue
+
+            if ":" in entry:
+                # Magpie Zeroshot: VoiceName:index (same voices for every locale)
+                name = short_id
+                full_id = f"{prefix}.{name}" if prefix else name
+                for lang in config_languages or ["en-US"]:
+                    _add_voice(voices, seen, voice_id=full_id, name=name, language=lang)
+                continue
+
+            # Nemo-speech.cpp: plain speaker names shared across locales (John,Sofia,...)
+            voice_id, name = _voice_display_id(short_id, prefix)
+            for lang in config_languages or ["en-US"]:
+                _add_voice(voices, seen, voice_id=voice_id, name=name, language=lang)
 
     return {
         "languages": languages,
         "voices": sorted(voices, key=lambda v: (v["language"], v["name"])),
+        "defaultLanguage": default_language,
     }
 
 
@@ -112,8 +203,16 @@ def _parse_asr_config(raw_config) -> dict:
     if not raw_config or not raw_config.model_config:
         return {"languages": []}
 
-    params = dict(raw_config.model_config[0].parameters)
-    return {"languages": _parse_language_codes_param(params.get("language_code", ""))}
+    languages: list[str] = []
+    seen: set[str] = set()
+    for model_config in raw_config.model_config:
+        params = dict(model_config.parameters)
+        for language in _parse_language_codes_param(params.get("language_code", "")):
+            key = language.lower()
+            if key not in seen:
+                seen.add(key)
+                languages.append(language)
+    return {"languages": languages}
 
 
 def _tts_language_set(tts_config: dict) -> set[str]:
@@ -364,7 +463,7 @@ def prewarm_asr(server: str, model: str = "", function_id: str = "") -> dict:
     logger.info(f"Pre-warming ASR on {server}...")
     try:
         asr_kwargs: dict = {
-            "api_key": os.getenv("NVIDIA_API_KEY"),
+            "api_key": nvidia_api_key(),
             "server": server,
             "use_ssl": is_nvcf(server),
         }

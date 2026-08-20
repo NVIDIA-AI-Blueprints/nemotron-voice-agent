@@ -7,7 +7,6 @@ import { usePipecatClient, useRTVIClientEvent } from "@pipecat-ai/client-react";
 import { useVoiceCatalog } from "../api";
 import { useConnectionState } from "../hooks/useConnectionState";
 import { useApp } from "../context/useApp";
-import { DEFAULT_SESSION_LANGUAGE } from "../context/AppContext";
 import { PanelSection } from "./PanelSection";
 
 type LanguageSwitchedMessage = {
@@ -31,6 +30,7 @@ export function VoiceSettings() {
     selectedASR,
     selectedTTS,
     selectedSessionLanguage,
+    selectedVoiceId,
     setSelectedSessionLanguage,
     setSelectedVoiceId,
   } = useApp();
@@ -80,9 +80,18 @@ export function VoiceSettings() {
     const languages = ttsConfig?.languages ?? [];
     if (languages.length === 0) return;
     if (!selectedSessionLanguage || !languages.includes(selectedSessionLanguage)) {
-      setSelectedSessionLanguage(languages.includes(DEFAULT_SESSION_LANGUAGE) ? DEFAULT_SESSION_LANGUAGE : languages[0]);
+      const backendDefaultLanguage = selectedExample?.default_session_language ?? "";
+      setSelectedSessionLanguage(
+        languages.includes(backendDefaultLanguage) ? backendDefaultLanguage : languages[0],
+      );
     }
-  }, [sessionLanguagesEnabled, selectedSessionLanguage, ttsConfig, setSelectedSessionLanguage]);
+  }, [
+    sessionLanguagesEnabled,
+    selectedExample?.default_session_language,
+    selectedSessionLanguage,
+    ttsConfig,
+    setSelectedSessionLanguage,
+  ]);
 
   const defaultVoice = useMemo(() => {
     if (!ttsConfig?.voices?.length) return null;
@@ -121,6 +130,32 @@ export function VoiceSettings() {
     return ttsConfig.voices.filter((v) => v.language.toUpperCase() === langUpper);
   }, [ttsConfig, activeLang]);
 
+  const sessionVoices = useMemo(() => {
+    if (!ttsConfig || !selectedSessionLanguage) return [];
+    const langUpper = selectedSessionLanguage.toUpperCase();
+    return ttsConfig.voices.filter((voice) => voice.language.toUpperCase() === langUpper);
+  }, [ttsConfig, selectedSessionLanguage]);
+
+  const selectedSessionVoiceId = useMemo(() => {
+    const availableVoiceIds = new Set(sessionVoices.map((voice) => voice.id));
+    if (selectedVoiceId && availableVoiceIds.has(selectedVoiceId)) return selectedVoiceId;
+    if (selectedTTS?.voiceId && availableVoiceIds.has(selectedTTS.voiceId)) return selectedTTS.voiceId;
+    if (ttsConfig?.defaultVoiceId && availableVoiceIds.has(ttsConfig.defaultVoiceId)) {
+      return ttsConfig.defaultVoiceId;
+    }
+    return sessionVoices[0]?.id ?? "";
+  }, [sessionVoices, selectedVoiceId, selectedTTS, ttsConfig]);
+
+  // Persist the per-language default so the connect request sends the voice the
+  // panel is showing instead of a catalog voice from another language.
+  useEffect(() => {
+    if (!sessionLanguagesEnabled) return;
+    if (!selectedSessionVoiceId) return;
+    if (selectedSessionVoiceId !== selectedVoiceId) {
+      setSelectedVoiceId(selectedSessionVoiceId);
+    }
+  }, [sessionLanguagesEnabled, selectedSessionVoiceId, selectedVoiceId, setSelectedVoiceId]);
+
   const handleLangChange = (lang: string) => {
     setVoiceOverride({
       serviceId: selectedTTS?.id ?? "",
@@ -128,6 +163,20 @@ export function VoiceSettings() {
       voiceId: "",
     });
     setSelectedVoiceId("");
+  };
+
+  const handleSessionVoiceChange = (voiceId: string) => {
+    setSelectedVoiceId(voiceId);
+    if (isConnected && client?.state === "ready" && voiceId) {
+      try {
+        client.sendClientMessage("set-voice", {
+          voice_id: voiceId,
+          language: selectedSessionLanguage,
+        });
+      } catch (err) {
+        console.warn("Could not send voice update:", err);
+      }
+    }
   };
 
   const handleVoiceChange = (voiceId: string) => {
@@ -168,6 +217,9 @@ export function VoiceSettings() {
     const languageSelectTitle = isConnected
       ? "Disconnect, change language, then Connect again to apply"
       : "Fixes ASR, TTS voice, and LLM language for the next connection";
+    const voiceSelectTitle = isConnected
+      ? `Switches the voice immediately for ${selectedSessionLanguage}`
+      : `Voices available for ${selectedSessionLanguage}`;
 
     return (
       <PanelSection label="VOICE SETTINGS">
@@ -175,13 +227,30 @@ export function VoiceSettings() {
           <span className="settings-label">Language</span>
           <select
             className="select-dark"
-            value={selectedSessionLanguage || DEFAULT_SESSION_LANGUAGE}
-            onChange={(e) => setSelectedSessionLanguage(e.target.value)}
+            value={selectedSessionLanguage || selectedExample?.default_session_language || availableLanguages[0]}
+            onChange={(e) => {
+              setSelectedSessionLanguage(e.target.value);
+              setSelectedVoiceId("");
+            }}
             disabled={isConnecting || isLocked}
             title={languageSelectTitle}
           >
             {availableLanguages.map((lang) => (
               <option key={lang} value={lang}>{lang}</option>
+            ))}
+          </select>
+        </div>
+        <div className="settings-row">
+          <span className="settings-label">Voice</span>
+          <select
+            className="select-dark"
+            value={selectedSessionVoiceId}
+            onChange={(e) => handleSessionVoiceChange(e.target.value)}
+            disabled={isConnecting || sessionVoices.length === 0}
+            title={voiceSelectTitle}
+          >
+            {sessionVoices.map((voice) => (
+              <option key={`${voice.language}:${voice.id}`} value={voice.id}>{voice.name}</option>
             ))}
           </select>
         </div>

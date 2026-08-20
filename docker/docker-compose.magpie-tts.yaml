@@ -30,7 +30,7 @@ x-tts-service: &tts-service-base
         max-file: "5"
 
 x-tts-service-env: &tts-service-env
-  NGC_API_KEY: ${NVIDIA_API_KEY}
+  NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
   NIM_HTTP_API_PORT: "9000"
   NIM_GRPC_API_PORT: "50051"
 
@@ -38,15 +38,11 @@ services:
   tts-service:
     <<: *tts-service-base
     profiles:
-      - generic-assistant/workstation
-      - generic-assistant/dgx-spark
-      - multilingual-assistant/workstation
-      - multilingual-assistant/dgx-spark
-      - omni-assistant/workstation
-      - omni-assistant-subagents/workstation
-      - omni-assistant/dgx-spark
-      - omni-assistant-subagents/dgx-spark
-      - frontend-backend-agent/workstation
+      - generic-assistant/server
+      - multilingual-assistant/server
+      - omni-assistant/server
+      - omni-assistant-subagents/server
+      - frontend-backend-agent/server
     environment:
       <<: *tts-service-env
       NIM_TAGS_SELECTOR: name=magpie-tts-multilingual,batch_size=8
@@ -61,7 +57,7 @@ services:
   tts-service-perf:
     <<: *tts-service-base
     profiles:
-      - generic-assistant/workstation-perf
+      - generic-assistant/server-perf
     environment:
       <<: *tts-service-env
       NIM_TAGS_SELECTOR: name=magpie-tts-multilingual,batch_size=64

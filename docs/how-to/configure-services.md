@@ -9,7 +9,7 @@ This guide covers the **mechanics**: how catalogs are loaded, switched, and exte
 - Each example owns its catalog at `<example-package>/services.cloud.yaml` (remote / NVCF) and optional `<example-package>/services.local.yaml` (Compose-managed sidecars).
 - The cloud catalog is always loaded.
 - The local catalog is merged on top, but only entries whose endpoint is reachable on TCP are exposed in the UI and used by the pipeline.
-- `services.local.yaml` is split into per-platform sections (`workstation`, `dgxspark`, `jetson`), and the `PLATFORM` env var selects which one is merged. Docker Compose recipe profiles set `PLATFORM` automatically, so the matching local services load with no extra steps. For host-native on-prem runs, set it in `.env` to `cloud`, `workstation`, `dgxspark`, or `jetsonthor`.
+- `services.local.yaml` is grouped into recipe sections (`server` for NIM sidecars, `singlegpu` for vLLM + NeMo-Speech.cpp). The backend merges all sections and exposes only endpoints that are reachable on TCP. Host-native runs work the same way: start the sidecars, then start the app.
 - The same `--profile` works whether you run cloud-only or with local sidecars. Nothing else needs to be set.
 
 ## Switching services in the UI
@@ -26,7 +26,7 @@ When the same default key exists in both `services.cloud.yaml` and `services.loc
 
 ## On-prem catalog
 
-`services.local.yaml` groups entries under platform sections (`workstation`, `dgxspark`, `jetson`).
+`services.local.yaml` groups entries under recipe sections (`server`, `singlegpu`).
 
 To configure a specific local model, check its Docker Compose file under [`docker/`](../../docker/) for the **service name**, **port**, and the **profile** that launches it, then point a catalog entry at that endpoint. For example, Nemotron ASR Streaming (English) is defined in [`docker/docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml):
 
@@ -35,8 +35,8 @@ services:
   nemotron-asr-streaming-english:
     image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.0
     profiles:
-      - generic-assistant/workstation
-      - frontend-backend-agent/workstation
+      - generic-assistant/server
+      - frontend-backend-agent/server
     ports:
       - "50152:50052"   # host:container (gRPC)
     environment:
@@ -46,7 +46,7 @@ services:
 The matching `asr` entry in the example's `services.local.yaml` points at that Compose service name and **container** port (`50052`):
 
 ```yaml
-workstation:
+server:
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -57,7 +57,7 @@ workstation:
 
 Use the Compose service name and container port in `server`. For host-native runs (outside Docker), the backend rewrites it to the published host port automatically. Here `nemotron-asr-streaming-english:50052` becomes `localhost:50152`.
 
-Each ASR, LLM, and TTS model sidecar is defined in a `docker/docker-compose.*.yaml` file and gated by Compose `profiles`. Check those files for the service that serves a given model. To run models locally for a **new example**, add your example's profile (e.g. `my-example/workstation`) to the relevant service(s) there, and add the matching entries to that example's `services.local.yaml` (as shown above). The catalog then picks up the sidecars automatically once they are reachable. See [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
+Each ASR, LLM, and TTS model sidecar is defined in a `docker/docker-compose.*.yaml` file and gated by Compose `profiles`. Check those files for the service that serves a given model. To run models locally for a **new example**, add your example's profile (e.g. `my-example/server`) to the relevant service(s) there, and add the matching entries to that example's `services.local.yaml` (as shown above). The catalog then picks up the sidecars automatically once they are reachable. See [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
 
 ## Adding built-in cloud services
 

@@ -2,14 +2,18 @@
 
 This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker Compose.
 
+Thor deploys with the `*/single-gpu` recipes. They run the NeMo-Speech.cpp speech
+stack (ASR and TTS from local GGUF weights) next to vLLM on the same GPU, which is
+the supported configuration on Thor.
+
 ---
 
 ## Prerequisites
 
 - **Jetson Thor** flashed with **JetPack 7.0** using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) (with CUDA, CUDA-X, TensorRT, and NVIDIA Container Runtime components installed). Orin-class Jetsons are not supported.
-- [NGC CLI](https://org.ngc.nvidia.com/setup/installers/cli) installed and configured
 - [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and [Docker Compose](https://docs.docker.com/compose/install/linux/)
 - [HuggingFace API token](https://huggingface.co/docs/hub/en/security-tokens) for downloading LLM models
+- The [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/en/guides/cli) (`hf`) for downloading the speech GGUFs
 
 ---
 
@@ -38,75 +42,47 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
     printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
     ```
 
-3. Build the Nemotron Speech (Riva) model repository. **One-time per machine.**
-
-    a. Ensure you meet the [prerequisites](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide.html#prerequisites) before proceeding.
-
-    b. Configure NGC CLI with your API key:
+3. Download the NeMo-Speech.cpp model weights. **One-time per machine.** The script
+   fetches the ASR, Magpie TTS, and NanoCodec GGUFs into `models/nemo-speech`:
 
     ```bash
-    ngc config set
+    bash scripts/download-nemo-speech-models.sh
     ```
 
-    c. Download the Riva Speech Skills v2.26.0 Quick Start bundle for L4T (JetPack 7.0) **next to the repo** (not inside it), so the ~30–50 GB model repo survives re-clones and worktrees:
+    Run as your user, not `sudo`. The script reads `HF_TOKEN` from `.env`.
+
+    > To keep the weights outside the repo so they survive re-clones and worktrees, set
+    > `NEMO_SPEECH_MODEL_LOC` in `.env` to an absolute path, or pass that path as
+    > the script's first argument.
+
+4. Check available memory before starting. GPU, OS, containers, and page cache
+   all share Thor's unified memory, so treat `MemAvailable` as the ceiling:
 
     ```bash
-    cd ..
-    ngc registry resource download-version "nvidia/riva/riva_quickstart_arm64:2.26.0"
-    cd riva_quickstart_arm64_v2.26.0
+    nvidia-smi --query-gpu=memory.total,memory.free --format=csv,noheader
+    awk '/MemTotal|MemAvailable/ {print}' /proc/meminfo
     ```
 
-    d. **Configure the Riva deployment.** Edit `config.sh` in the quickstart directory to choose which services and models `riva_init.sh` builds into `model_repository/`:
+    The Lightning service recognizes Jetson Thor from the platform product name
+    and selects the Jetson Thor NVFP4 recipe automatically. No vLLM setting is
+    required in `.env`.
 
-    | Setting | Parameter in `config.sh` | Default |
-    |---|---|---|
-    | Enable ASR service | `service_enabled_asr` | `true` |
-    | Enable TTS service | `service_enabled_tts` | `true` |
-    | ASR acoustic model to fetch from NGC | `asr_acoustic_model` | English Parakeet (default) |
-    | ASR language | `asr_language_code` | `en-US` |
-    | TTS language | `tts_language_code` | `en-US` |
-
-    - **Omni examples** (`omni-assistant/jetson-thor`): set `service_enabled_asr=false`. Omni LLM doesn't need ASR separately, so Riva only needs to serve TTS.
-    - **Multilingual deployments**: multilingual Jetson profiles are not included in this blueprint. If you build a custom profile, switch `asr_acoustic_model` to the multilingual ASR model and set `asr_language_code` (and `tts_language_code`) to your target locales.
-
-    > Exact model identifiers and the full option list live in the downloaded `config.sh`.
-
-    e. Run only `riva_init.sh`. It downloads the configured ASR/TTS models and compiles the TRT engines into `model_repository/`. **Do not run `riva_start.sh`**: the `nemotron-speech` compose service in step 5 will serve the models itself.
+5. Start the full stack via Docker Compose. This brings up the LLM (vLLM), the
+   NeMo-Speech.cpp sidecar, and the Pipecat pipeline together. Choose the profile for
+   your example:
 
     ```bash
-    bash riva_init.sh
-    cd ../nemotron-voice-agent
-    ```
+    # Generic Cascaded: NeMo-Speech.cpp ASR + TTS + Nemotron 3.5 Lightning vLLM
+    docker compose --profile generic-assistant/single-gpu up -d
 
-    > **Note:** Initialization may take 30–60 minutes on first run.
-    >
-    > If your repository clone uses a different directory name, return to that clone directory instead of `../nemotron-voice-agent`.
+    # Multilingual Cascaded: multilingual ASR + Magpie TTS + Nemotron 3.5 Lightning vLLM
+    docker compose --profile multilingual-assistant/single-gpu up -d
 
-    > If the quickstart lives somewhere other than the repo's sibling directory, set `RIVA_MODEL_LOC` in `.env` to the absolute path of `model_repository/`.
+    # Nemotron Omni: local Omni vLLM + NeMo-Speech.cpp TTS only (Omni does its own ASR)
+    docker compose --profile omni-assistant/single-gpu up -d
 
-4. **(Optional) Production tuning: CUDA MPS + CPU pinning.** On Thor, vLLM and Riva share a single GPU and the memory bus. Left unmanaged they contend for GPU SMs and CPU cores, which shows up as audible glitches in the bot's speech. CUDA MPS partitions the GPU's compute between the two services, and CPU pinning gives each its own cores. Both are recommended on Thor. Set the split in `.env`, then start the MPS daemon **before** bringing up the stack (step 5):
-
-    ```bash
-    # .env
-    VLLM_MPS_THREAD_PCT=50
-    RIVA_MPS_THREAD_PCT=50
-    VLLM_CPUSET=0-3
-    RIVA_CPUSET=4-7
-    PIPECAT_CPUSET=8-11
-    ```
-
-    ```bash
-    sudo bash scripts/start-mps.sh
-    ```
-
-5. Start the full stack via Docker Compose. This brings up the LLM (vLLM), Riva speech, and the Pipecat pipeline together. Choose the profile for your example:
-
-    ```bash
-    # Generic Cascaded: Riva ASR + TTS + vLLM LLM
-    docker compose --profile generic-assistant/jetson-thor up -d
-
-    # Nemotron Omni: local Omni vLLM + Riva TTS only (Omni does its own ASR. Set service_enabled_asr=false in step 3d)
-    docker compose --profile omni-assistant/jetson-thor up -d
+    # Frontend/Backend Agent: NeMo-Speech.cpp + Lightning vLLM + booking-server
+    docker compose --profile frontend-backend-agent/single-gpu up -d
     ```
 
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
@@ -117,20 +93,17 @@ This guide covers deploying the Nemotron Voice Agent on Jetson Thor using Docker
 
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
 
-7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant` or `omni-assistant`). If you enabled CUDA MPS in step 4, stop the daemon when tearing down.
+7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, `omni-assistant`, or `frontend-backend-agent`).
 
     ```bash
     # View logs for the whole profile
-    docker compose --profile <example>/jetson-thor logs -f
+    docker compose --profile <example>/single-gpu logs -f
 
     # Rebuild after code changes
-    docker compose --profile <example>/jetson-thor up --build -d
+    docker compose --profile <example>/single-gpu up --build -d
 
     # Stop all services
-    docker compose --profile <example>/jetson-thor down
-
-    # Stop CUDA MPS (only if you ran scripts/start-mps.sh)
-    sudo bash scripts/stop-mps.sh
+    docker compose --profile <example>/single-gpu down
     ```
 
-    If hitting startup or runtime issues, see [Troubleshooting](06-troubleshooting.md#jetson-thor), which covers Jetson low-memory and vLLM engine-core failures, and more.
+    If hitting startup or runtime issues, see [Troubleshooting](06-troubleshooting.md#single-gpu), which covers low-memory and vLLM engine-core failures, and more.

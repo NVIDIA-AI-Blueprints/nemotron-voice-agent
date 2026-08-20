@@ -20,7 +20,7 @@ Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-U
 
 The client discovers the active TTS service's available voices and language codes at runtime. Treat this table as model-level guidance, because exact availability can vary by endpoint, deployment profile, and selected NIM image.
 
-For the multilingual assistant, this is **TTS-only** coverage, not the final session-language list. Voice Settings shows only the intersection of the selected ASR, TTS, and built-in LLM capabilities. For example, a Chatterbox deployment can advertise Arabic or Greek voices, but those locales are not available with the built-in Nemotron 3 Nano or Nemotron 3 Super LLMs. See [Configure LLM](configure-llm.md#multilingual-session-languages).
+For the multilingual assistant, this is **TTS-only** coverage, not the final session-language list. Voice Settings shows only the intersection of the selected ASR, TTS, and built-in LLM capabilities. For example, a Chatterbox deployment can advertise Arabic or Greek voices, but those locales are not available with the built-in Nemotron 3.5 Lightning or Nemotron 3 Super LLMs. See [Configure LLM](configure-llm.md#multilingual-session-languages).
 
 | Model | Supported languages |
 | --- | --- |
@@ -39,7 +39,7 @@ For NVIDIA's current model and deployment support details, see the [TTS support 
 TTS runs one of these ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU. Magpie Multilingual and Chatterbox appear in the Services tab (no Compose change). Magpie Zeroshot has no cloud function.
-- **Magpie TTS Multilingual (default local)**: started by `*/workstation` and `*/dgx-spark` recipes as `tts-service` ([`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)).
+- **Magpie TTS Multilingual (default server recipe)**: started by `*/server` recipes as `tts-service` ([`docker-compose.magpie-tts.yaml`](../../docker/docker-compose.magpie-tts.yaml)). Universal `*/single-gpu` recipes use NeMo-Speech.cpp.
 - **Opt-in local TTS (Chatterbox or Magpie Zeroshot)**: both are listed in Compose but do **not** start with the default recipe. They share Magpie Multilingual's host ports (`50151` / `9000`), so only one of Magpie Multilingual, Chatterbox, or Zeroshot can run at a time. Enable the opt-in profile and scale Magpie off:
 
   | Alternate | Compose profile | Catalog key | Compose file |
@@ -48,15 +48,15 @@ TTS runs one of these ways, and the repo wires the right one per profile:
   | Magpie Zeroshot | `magpie-zeroshot-tts` | `magpie-zeroshot-tts` | [`docker-compose.magpie-zeroshot-tts.yaml`](../../docker/docker-compose.magpie-zeroshot-tts.yaml) |
 
   ```bash
-  # Example: Magpie Zeroshot on workstation (same pattern for Chatterbox / dgx-spark)
-  docker compose --profile generic-assistant/workstation --profile magpie-zeroshot-tts \
+  # Example: Magpie Zeroshot on the server recipe (same pattern for Chatterbox)
+  docker compose --profile generic-assistant/server --profile magpie-zeroshot-tts \
     up -d --scale tts-service=0
   ```
 
   Then select the matching catalog key in the Services tab (or `defaults.tts`). Omitting the opt-in profile leaves that sidecar running and holding the ports—stop it before Magpie Multilingual can bind again (`docker compose --profile <profile> stop <service>`, then recipe `up -d`).
 
   Magpie Zeroshot NGC access is restricted — apply at the [Magpie TTS Zeroshot NGC page](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/magpie-tts-zeroshot). For audio-prompt cloning, see [Voice cloning / zero-shot](#voice-cloning--zero-shot).
-- **Riva embedded (Jetson Thor)**: on `*/jetson-thor`, on-device Riva serves TTS: `nemotron-speech` (ASR + TTS together) or `nemotron-speech-tts` (TTS only). See [Jetson Thor](../03-jetson-thor.md).
+- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, an on-device sidecar serves Magpie TTS from local GGUF weights: `nemo-speech` / `nemo-speech-multilingual` (ASR + TTS together) or `nemo-speech-tts` (TTS only, for Omni). See [Jetson Thor](../03-jetson-thor.md).
 
 ### VRAM & hardware support
 
@@ -86,7 +86,7 @@ The active voice is the `voice_id` in the catalog entry. The client UI includes 
 - **Magpie Zeroshot**: languages listed in [Supported languages](#supported-languages); built-in voices across locales are `Magpie-ZeroShot-Multilingual.Female` (default) and `Magpie-ZeroShot-Multilingual.Male` ([model card](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard)).
 - **Chatterbox**: **one default speaker per locale**.
 
-To change the **default**, edit `voice_id` in the example's `services.cloud.yaml` / `services.local.yaml`. For a local Magpie NIM, point the entry at the sidecar (`tts-service:50051` or `magpie-zeroshot-tts-service:50051`) under the active platform block. See [Configure Services](configure-services.md).
+To change the **default**, edit `voice_id` in the example's `services.cloud.yaml` / `services.local.yaml`. For a local Magpie NIM, point the entry at the sidecar (`tts-service:50051` or `magpie-zeroshot-tts-service:50051`) under the active recipe section. See [Configure Services](configure-services.md).
 
 ```yaml
 tts:
@@ -106,7 +106,7 @@ tts:
     function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
     synthesis_mode: per_sentence
 
-  # Local only (services.local.yaml workstation / dgxspark). No cloud function_id.
+  # Local only. No cloud function_id.
   magpie-zeroshot-tts:
     name: "Magpie TTS Zeroshot"
     server: "magpie-zeroshot-tts-service:50051"
@@ -225,7 +225,7 @@ Magpie TTS Zeroshot clones a voice from a short reference clip via Pipecat's `Nv
 
 1. Enable the Zeroshot sidecar and select `magpie-zeroshot-tts` (see [Hardware requirements](#hardware-requirements-and-deployment-configs)).
 2. Prepare a 16-bit mono WAV (sample rate ≥ 22.05 kHz, about 3–10 seconds).
-3. In the example's `services.local.yaml` (`workstation` or `dgxspark`), keep or set `voice_id` to a built-in such as `Magpie-ZeroShot-Multilingual.Female`, and add an **absolute path visible to the voice-agent process**:
+3. In the example's `services.local.yaml` (`server`), keep or set `voice_id` to a built-in such as `Magpie-ZeroShot-Multilingual.Female`, and add an **absolute path visible to the voice-agent process**:
 
    ```yaml
    magpie-zeroshot-tts:
@@ -234,7 +234,7 @@ Magpie TTS Zeroshot clones a voice from a short reference clip via Pipecat's `Nv
    ```
 
    - **Host-native** (`uv run` / local Python): use a host absolute path (for example `/home/you/prompts/clone.wav`).
-   - **Compose / Docker**: mount the file into the app service for your Compose profile (for example `generic-assistant` with `--profile generic-assistant`, or `generic-assistant-workstation` with `--profile generic-assistant/workstation`). Use a Compose override, then set `zero_shot_audio_prompt_file` to that **container** absolute path. Relative paths are not resolved from the repo root.
+   - **Compose / Docker**: mount the file into the app service for your Compose profile (for example `generic-assistant` with `--profile generic-assistant`, or `generic-assistant-server` with `--profile generic-assistant/server`). Use a Compose override, then set `zero_shot_audio_prompt_file` to that **container** absolute path. Relative paths are not resolved from the repo root.
 
      ```yaml
      # docker-compose.override.yaml (example for --profile generic-assistant)

@@ -318,6 +318,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     if (!selectedExampleKey || defaultSessionLanguageExampleKey.current === selectedExampleKey) return;
     defaultSessionLanguageExampleKey.current = selectedExampleKey;
     setSelectedSessionLanguage(selectedExampleDefaultSessionLanguage || DEFAULT_SESSION_LANGUAGE);
+    setSelectedVoiceId("");
   }, [selectedExample?.key, selectedExampleDefaultSessionLanguage]);
 
   // --- TTS state ---

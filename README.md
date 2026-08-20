@@ -33,7 +33,7 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 | **TTS** | [Magpie TTS Multilingual](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard) | Any NIM TTS |
 | | [Magpie TTS Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) | |
 | | [Chatterbox TTS Multilingual](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) | |
-| **LLM** | [Nemotron 3 Nano 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) | Any OpenAI-compatible |
+| **LLM** | [Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) | Any OpenAI-compatible |
 | | [Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) | |
 | | [Nemotron 3 Nano Omni 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) | |
 | **Orchestration** | [Pipecat](https://github.com/pipecat-ai/pipecat) | [LiveKit Agents with NVIDIA plugin](https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-nvidia) |
@@ -46,13 +46,13 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 
 | Example | Description | When to use | Supported Deployment Profiles |
 |---------|-------------|-------------|--------------------|
-| [Generic Assistant](src/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron ASR, Nemotron LLM, and Magpie TTS. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Workstation, DGX Spark, Jetson Thor |
-| [Multilingual Assistant](src/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. | Use for non-English and multi-language voice agents. | Cloud, Workstation, DGX Spark |
-| [Nemotron Omni Assistant](src/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Workstation, DGX Spark, Jetson Thor |
-| [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Workstation, DGX Spark |
-| [Frontend/Backend Agent](src/examples/frontend_backend_agent/README.md) | A fast frontend LLM handles the conversation while a specialized backend agent does the work. This is the pattern for giving an **existing text / agentic backend** a real-time conversational experience (the flight-booking agent as the reference backend). | Add voice to an existing text agent / agentic backend with minimal changes. | Cloud, Workstation |
+| [Generic Assistant](src/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron ASR, Nemotron LLM, and Magpie TTS. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server, Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Multilingual Assistant](src/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. | Use for non-English and multi-language voice agents. | Cloud, Server, Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Nemotron Omni Assistant](src/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Server, Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server, Single GPU (workstation, DGX Spark) |
+| [Frontend/Backend Agent](src/examples/frontend_backend_agent/README.md) | A fast frontend LLM handles the conversation while a specialized backend agent does the work. This is the pattern for giving an **existing text / agentic backend** a real-time conversational experience (the flight-booking agent as the reference backend). | Add voice to an existing text agent / agentic backend with minimal changes. | Cloud, Server, Single GPU (workstation, DGX Spark, Jetson Thor) |
 
-> **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. The example can be extended to other profiles (different hardware or models). Those just aren't included out of the box.
+> **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. The examples can be extended with other hardware configurations or models. Those just aren't included out of the box.
 
 ---
 
@@ -65,9 +65,8 @@ These are the minimum requirements, and support varies by example and deployment
 | Deployment Profile | Hardware | Notes |
 |------|----------|-------|
 | Cloud | CPU only (no GPU) | Model endpoints from NVIDIA cloud APIs (NVCF). |
-| Workstation | Single GPU ≥ 72 GB, or 2 GPUs ≥ 40 GB each | Assuming FP8/NVFP4 weights for LLM models. On A100/Ampere or older, switch to the BF16 profile and will need more VRAM. |
-| DGX Spark | 1 GPU, 128 GB unified memory (Blackwell) | Using NVFP4 LLM models |
-| Jetson Thor | 1 GPU, 128 GB unified memory (Blackwell) | Edge deployment. Follow the [Jetson Thor guide](docs/03-jetson-thor.md) for deployment. |
+| Server | NVIDIA GPU server. GPU count and memory depend on the selected models and scale | Scaling-oriented NIM deployment. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
+| Single GPU | 1 workstation GPU, DGX Spark (128 GB unified memory), or Jetson Thor (128 GB unified memory) | Uses the universal `*/single-gpu` recipes. Required memory varies by model and precision. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
 
 ### Software Requirements
 
@@ -79,7 +78,7 @@ These are the minimum requirements, and support varies by example and deployment
 
 ## Quick Start
 
-Deploy with the bundled **agent skills** (recommended), or follow the manual steps below. In below steps, we deploy the **Generic Assistant on a workstation GPU**. For other examples or deployment profiles, see the [Examples](#examples) table and each example's README. For a Jetson quickstart, follow the [Jetson Thor guide](docs/03-jetson-thor.md).
+Deploy with the bundled **agent skills** (recommended), or follow the manual steps below. In below steps, we deploy the **Generic Assistant on a workstation GPU**. For other examples or deployment profiles, see the [Examples](#examples) table and each example's README. For a Jetson Thor quickstart on the `*/single-gpu` recipes, follow the [Jetson Thor guide](docs/03-jetson-thor.md).
 
 ### With the agent skills
 
@@ -111,13 +110,13 @@ npx skills add .
     printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
     ```
 
-4. Deploy the Generic Assistant on a local workstation GPU (minimum 72 GB VRAM):
+4. Deploy the Generic Assistant on a local workstation GPU (about 80 GB VRAM for the default all-on-one-GPU NIM layout):
 
     ```bash
-    docker compose --profile generic-assistant/workstation up -d
+    docker compose --profile generic-assistant/server up -d
     ```
 
-    > **Note:** Deployment may take 30-60 minutes on first run. This runs the Generic Cascaded pipeline with local NIM ASR, LLM, and TTS sidecars. On local recipes, the **first voice interaction** may have higher latency while GPU sidecars warm up. Later turns are much faster. If no local GPU or not enough VRAM available, run the cloud profile `--profile generic-assistant` instead.
+    > **Note:** Deployment may take 30-60 minutes on first run. This runs the Generic Cascaded pipeline with local NIM ASR, LLM, and TTS sidecars. On local recipes, the **first voice interaction** may have higher latency while GPU sidecars warm up. Later turns are much faster. If you have one supported GPU but not enough memory for the NIM server layout, use `--profile generic-assistant/single-gpu` and follow the [single-GPU setup](docs/01-getting-started.md#docker-based-deployment). If you have no local GPU, run the cloud profile `--profile generic-assistant`.
 
 5. Access the application at `https://<machine-ip>:7860`. Keep TLS enabled when testing the browser UI.
 
@@ -149,7 +148,7 @@ npx skills add .
 | Tutorial | [Getting Started](docs/01-getting-started.md) | Full deployment: quick start, local GPU, DGX Spark, and the recipe matrix |
 | How-to | [Configuration Guide](docs/02-configuration-guide.md) | Index of all configuration and customization guides |
 | Reference | [LLM](docs/how-to/configure-llm.md) · [ASR](docs/how-to/configure-asr.md) · [TTS](docs/how-to/configure-tts.md) Models | NVIDIA model catalogs, VRAM usage and model configs |
-| How-to | [Jetson Thor](docs/03-jetson-thor.md) | Edge deployment guide |
+| How-to | [Jetson Thor](docs/03-jetson-thor.md) | Edge deployment guide for the `*/single-gpu` recipes |
 | Reference | [Evaluation & Performance](docs/04-evaluation-and-performance.md) | Accuracy and latency/scaling benchmarks |
 | Explanation | [Best Practices](docs/05-best-practices.md) | Production latency, UX, and scaling guidance |
 | How-to | [Troubleshooting](docs/06-troubleshooting.md) | Startup & deployment known issues |

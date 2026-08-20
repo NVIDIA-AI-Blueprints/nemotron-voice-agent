@@ -10,7 +10,7 @@ A Coturn service ships in `docker-compose.yml` behind an opt-in `turn` profile. 
 
 ```bash
 docker compose --profile generic-assistant --profile turn up -d              # cloud-only + TURN
-docker compose --profile generic-assistant/workstation --profile turn up -d  # local NIM + TURN
+docker compose --profile generic-assistant/server --profile turn up -d  # local models + TURN
 ```
 
 - Coturn binds host ports UDP `3478` and UDP `49160-49200`. These must be reachable from clients (open them on your cloud firewall / security group).

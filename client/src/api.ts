@@ -169,6 +169,7 @@ export interface TTSConfig {
   languages: string[];
   voices: TTSVoice[];
   defaultVoiceId: string;
+  defaultLanguage?: string;
 }
 
 export interface ServiceEntry {
@@ -204,6 +205,10 @@ export interface DeploymentResponse {
   selectable: boolean;
   options: DeploymentOption[];
   transports: TransportOption[];
+  audio?: {
+    input_sample_rate: number;
+    output_sample_rate: number;
+  };
 }
 
 export interface IceServersResponse {

@@ -1,0 +1,64 @@
+x-nemo-speech: &nemo-speech
+  image: nvcr.io/nvidia/nemo-speech.cpp:0.1.0
+  ipc: host
+  volumes:
+    - ${NEMO_SPEECH_MODEL_LOC:-../models/nemo-speech}:/models:ro
+  ports:
+    - "50051:50051"
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0"]
+            capabilities: [gpu]
+  restart: unless-stopped
+
+services:
+  nemo-speech:
+    <<: *nemo-speech
+    profiles:
+      - generic-assistant/single-gpu
+      - frontend-backend-agent/single-gpu
+    command:
+      - --asr.model.path=/models/nemotron-speech-streaming-en-0.6b.q8_0.gguf
+      - --asr.backend.gpu=0
+      - --asr.endpointing.enable=${NEMO_SPEECH_ASR_ENDPOINTING:-true}
+      - --asr.endpointing.stop_history_eou_ms=${NEMO_SPEECH_ASR_STOP_HISTORY_EOU_MS:-400}
+      - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2602.f16.gguf
+      - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
+      - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
+      - --tts.language-code=en-US
+      - --tts.voice-name=John
+      - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
+      - --bind=0.0.0.0:50051
+
+  nemo-speech-multilingual:
+    <<: *nemo-speech
+    profiles: [multilingual-assistant/single-gpu]
+    command:
+      - --asr.model.path=/models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
+      - --asr.backend.gpu=0
+      - --asr.endpointing.enable=${NEMO_SPEECH_ASR_ENDPOINTING:-true}
+      - --asr.endpointing.stop_history_eou_ms=${NEMO_SPEECH_ASR_STOP_HISTORY_EOU_MS:-400}
+      - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2602.f16.gguf
+      - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
+      - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
+      - --tts.language-code=en-US
+      - --tts.voice-name=John
+      - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
+      - --bind=0.0.0.0:50051
+
+  nemo-speech-tts:
+    <<: *nemo-speech
+    profiles:
+      - omni-assistant/single-gpu
+      - omni-assistant-subagents/single-gpu
+    command:
+      - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2602.f16.gguf
+      - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
+      - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
+      - --tts.language-code=en-US
+      - --tts.voice-name=John
+      - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
+      - --bind=0.0.0.0:50051

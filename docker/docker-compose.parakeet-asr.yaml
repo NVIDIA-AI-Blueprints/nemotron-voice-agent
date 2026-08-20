@@ -1,7 +1,7 @@
 # Parakeet ASR CTC and RNNT multilingual services
 
 x-parakeet-asr-env: &parakeet-asr-env
-  NGC_API_KEY: ${NVIDIA_API_KEY}
+  NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
   NIM_HTTP_API_PORT: "9001"
   NIM_GRPC_API_PORT: "50052"
 

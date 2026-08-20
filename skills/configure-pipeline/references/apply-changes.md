@@ -21,34 +21,39 @@ The catalog stores Compose DNS endpoints. The backend rewrites them to `localhos
 | `nemotron-asr-streaming-multilingual:50052` | `localhost:50152` |
 | `parakeet-ctc-asr:50052` | `localhost:50152` |
 | `parakeet-rnnt-asr:50052` | `localhost:50152` |
-| `nemotron-speech:50051` | `localhost:50051` |
+| `nemo-speech:50051` | `localhost:50051` |
+| `nemo-speech-multilingual:50051` | `localhost:50051` |
+| `nemo-speech-tts:50051` | `localhost:50051` |
 
 Cloud catalog entries use NVCF endpoints (`grpc.nvcf.nvidia.com:443`, `https://integrate.api.nvidia.com/v1`, `wss://grpc.nvcf.nvidia.com/v1/realtime`) and are not rewritten.
 
 ## Apply Commands
 
-Pick a single recipe profile (`<example>` for cloud or `<example>/<hardware>` for on-prem). Each recipe is a complete deployment — never combine two recipes.
+Pick one recipe profile. Use `<example>` for cloud, `<example>/server` for NIM deployments, or `<example>/single-gpu` for one-GPU deployments. Each recipe is a complete deployment. Never combine two recipes.
 
 ```bash
 # Cloud-only (NVCF)
 docker compose --profile generic-assistant up -d
 docker compose --profile multilingual-assistant up -d
 docker compose --profile omni-assistant up -d
+docker compose --profile omni-assistant-subagents up -d
 docker compose --profile frontend-backend-agent up -d
 
-# Workstation (local NIM ASR/TTS/LLM)
-docker compose --profile generic-assistant/workstation up -d
-docker compose --profile multilingual-assistant/workstation up -d
-docker compose --profile omni-assistant/workstation up -d
-docker compose --profile frontend-backend-agent/workstation up -d
+# Server (local NIM ASR/TTS/LLM, recommended for scaling)
+docker compose --profile generic-assistant/server up -d
+docker compose --profile multilingual-assistant/server up -d
+docker compose --profile omni-assistant/server up -d
+docker compose --profile omni-assistant-subagents/server up -d
+docker compose --profile frontend-backend-agent/server up -d
 
-# DGX Spark
-docker compose --profile generic-assistant/dgx-spark up -d
-docker compose --profile multilingual-assistant/dgx-spark up -d
-docker compose --profile omni-assistant/dgx-spark up -d
+# Universal one-GPU path (workstation, DGX Spark, or Jetson Thor)
+docker compose --profile generic-assistant/single-gpu up -d
+docker compose --profile multilingual-assistant/single-gpu up -d
+docker compose --profile omni-assistant/single-gpu up -d
+docker compose --profile frontend-backend-agent/single-gpu up -d
 
-# Jetson (Generic Cascaded only. Omni does not fit on Orin today)
-docker compose --profile generic-assistant/jetson-thor up -d
+# Resource-heavy single-GPU path (workstation or DGX Spark)
+docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```
 
 For YAML-only edits that don't change env or sidecar membership, `docker compose restart <service>` is enough (e.g. `docker compose restart generic-assistant`).
@@ -69,8 +74,8 @@ Add when clients connect from outside the host's network. Set `TURN_USERNAME` an
 
 ```bash
 docker compose --profile generic-assistant --profile tracing up -d
-docker compose --profile generic-assistant/workstation --profile turn up -d
-docker compose --profile generic-assistant/dgx-spark --profile tracing --profile turn up -d
+docker compose --profile generic-assistant/server --profile turn up -d
+docker compose --profile generic-assistant/single-gpu --profile tracing --profile turn up -d
 ```
 
 ## Validation Checklist

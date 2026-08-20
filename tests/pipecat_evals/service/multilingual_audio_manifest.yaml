@@ -8,7 +8,7 @@ concurrency: 1
 base_port: 8060
 runs_dir: ../../../eval-runs
 record: true
-spawn: "env PLATFORM=workstation {python} {bot} -t eval --port {port}"
+spawn: "env {python} {bot} -t eval --port {port}"
 
 suite:
   - bot: eval_bot.py

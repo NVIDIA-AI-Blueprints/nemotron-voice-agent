@@ -16,8 +16,6 @@ from urllib.parse import urlparse, urlunparse
 import yaml
 from loguru import logger
 
-from runtime_platform import select_runtime_platform_catalog
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_FILENAME = "prompts.yaml"
 TOOLS_FILENAME = "tools.yaml"
@@ -226,6 +224,7 @@ def _is_container_runtime() -> bool:
 
 _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm", 8000): 18000,
+    ("nvidia-llm-omni", 8000): 18002,
     ("nvidia-llm-vllm", 8000): 18000,
     ("tts-service", 50051): 50151,
     ("chatterbox-tts-service", 50051): 50151,
@@ -387,16 +386,13 @@ def _load_cloud_services_catalog() -> dict:
 
 
 def _load_local_services_catalog() -> dict:
-    """Load local service entries for the configured platform."""
+    """Load local service entries, merging recipe sections by reachability."""
     local_path = _services_local_path()
     if not local_path.is_file():
         return _normalize_services_catalog({})
     data = load_yaml_file(local_path)
     if not isinstance(data, dict):
         return _normalize_services_catalog({})
-    platform_data = select_runtime_platform_catalog(data)
-    if platform_data is not None:
-        return _rewrite_local_runtime_endpoints(_normalize_services_catalog(platform_data))
 
     variants: dict[str, dict[str, list[tuple[str, dict]]]] = {}
     for platform_name, platform_data in data.items():
@@ -418,14 +414,11 @@ def _load_local_services_catalog() -> dict:
             if all(entry == first_entry for _, entry in entries):
                 target[key] = first_entry
                 continue
-            active = _first_reachable_variant(entries)
-            if active is not None:
-                active_platform, active_entry = active
-                target[key] = active_entry
-                emitted = [active_entry]
-            else:
-                active_platform = ""
-                emitted = []
+            # Keep the plain key present even when nothing is reachable, so
+            # callers resolving a catalog key by name still find an entry.
+            active_platform, active_entry = _first_reachable_variant(entries) or entries[0]
+            target[key] = active_entry
+            emitted = [active_entry]
             for platform_name, entry in entries:
                 if platform_name == active_platform:
                     continue
@@ -721,6 +714,15 @@ def parse_json_dict(raw: object, label: str = "JSON") -> dict:
     except json.JSONDecodeError:
         logger.warning(f"Invalid {label}, ignoring: {raw!r}")
     return {}
+
+
+def nvidia_api_key(default: str = "not-needed") -> str:
+    """Return NVIDIA_API_KEY, defaulting for local OpenAI-compatible endpoints.
+
+    Empty or unset values become ``default`` so the OpenAI SDK can construct a
+    client against local vLLM/NIM without a real cloud key.
+    """
+    return os.getenv("NVIDIA_API_KEY") or default
 
 
 def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:
