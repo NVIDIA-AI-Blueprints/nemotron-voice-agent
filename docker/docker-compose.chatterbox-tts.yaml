@@ -39,7 +39,7 @@ services:
       resources:
         reservations:
           devices:
-            # Requires A100, H100, L40S, or DGX Spark. Edit device_ids to select the target GPU.
+            # Requires A100 80 GB, H100, L40S, or DGX Spark. Edit device_ids to select the target GPU.
             - driver: nvidia
               device_ids: ['0']
               capabilities: [gpu]
