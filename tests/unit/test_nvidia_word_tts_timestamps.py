@@ -46,6 +46,10 @@ class MagpieMetaTimestampHelperTests(unittest.TestCase):
         seconds = normalize_durations_to_seconds([80.0, 160.0], frame_rate_hz=80.0)
         self.assertEqual(seconds, [1.0, 2.0])
 
+    def test_normalize_frame_count_durations_uses_custom_frame_rate(self) -> None:
+        seconds = normalize_durations_to_seconds([20.0, 20.0], frame_rate_hz=20.0)
+        self.assertEqual(seconds, [1.0, 1.0])
+
     def test_empty_inputs(self) -> None:
         self.assertEqual(word_times_from_magpie_meta("", [0.1]), ([], 0.0, 0))
 

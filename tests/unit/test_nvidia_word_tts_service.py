@@ -10,7 +10,7 @@ from threading import Event
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from pipecat.frames.frames import TTSStoppedFrame
+from pipecat.frames.frames import ErrorFrame, TTSStoppedFrame
 from pipecat.processors.aggregators.llm_response_universal import TextPartForConcatenation
 from pipecat.services.nvidia.tts import _SynthesisStreamState
 from pipecat.services.tts_service import TextAggregationMode, TTSService
@@ -127,6 +127,23 @@ class NvidiaWordTTSServiceConfigTests(unittest.IsolatedAsyncioTestCase):
             [state.text_queue.get_nowait() for _ in range(5)],
             [",", " ", "created", " hello", "."],
         )
+
+    async def test_run_tts_rejects_mismatched_stream_context(self) -> None:
+        svc = NvidiaWordTTSService(
+            api_key=None,
+            server="localhost:50151",
+            use_ssl=False,
+            model_function_map={"function_id": "", "model_name": "magpie-tts-multilingual"},
+        )
+        active_state = _stream_state("active")
+        svc._service = object()
+        svc._stream_state = active_state
+        svc.audio_context_available = lambda _context_id: True  # type: ignore[method-assign]
+
+        frames = [frame async for frame in svc.run_tts("stale token", "stale")]
+
+        self.assertTrue(active_state.text_queue.empty())
+        self.assertTrue(any(isinstance(frame, ErrorFrame) for frame in frames))
 
 
 class SpacingFlagTests(unittest.TestCase):

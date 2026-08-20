@@ -385,6 +385,10 @@ class NvidiaWordTTSService(NvidiaTTSService):
             state = self._stream_state
             if state is None:
                 raise RuntimeError("Synthesis stream not started")
+            if state.context_id != context_id:
+                raise RuntimeError(
+                    f"Synthesis stream context mismatch: active={state.context_id}, requested={context_id}"
+                )
 
             for chunk in self._split_text_into_chunks(text):
                 if chunk != "":
@@ -581,7 +585,7 @@ def normalize_durations_to_seconds(
 ) -> list[float]:
     """Convert Magpie predicted durations to seconds when they look like frame counts."""
     values = [float(d) for d in durations]
-    if _looks_like_frame_durations(values):
+    if _looks_like_frame_durations(values, sample_hint_hz=frame_rate_hz):
         return [d / frame_rate_hz for d in values]
     return values
 
