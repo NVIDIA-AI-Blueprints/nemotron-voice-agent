@@ -230,6 +230,9 @@ class RealtimeFrameSerializer(FrameSerializer):
                     )
                 )
                 return None
+            if self._emit is None:
+                logger.warning("Realtime emit not configured; rejecting response.create")
+                return None
             if not self._conversation.request_response():
                 await self._emit_event(
                     error_event(
@@ -240,8 +243,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                     )
                 )
                 return None
-            if self._emit is not None:
-                await announce_response(self._conversation, self._emit)
+            await announce_response(self._conversation, self._emit)
             return LLMRunFrame()
 
         if event_type == CLIENT_RESPONSE_CANCEL:
@@ -323,11 +325,11 @@ class RealtimeFrameSerializer(FrameSerializer):
             audio_patch = dict(patch.get("audio") or {})
             if "input_audio_format" in patch:
                 input_patch = dict(audio_patch.get("input") or {})
-                input_patch["format"] = patch["input_audio_format"]
+                input_patch["format"] = patch.pop("input_audio_format")
                 audio_patch["input"] = input_patch
             if "output_audio_format" in patch:
                 output_patch = dict(audio_patch.get("output") or {})
-                output_patch["format"] = patch["output_audio_format"]
+                output_patch["format"] = patch.pop("output_audio_format")
                 audio_patch["output"] = output_patch
             patch["audio"] = audio_patch
 
@@ -598,7 +600,7 @@ class RealtimeFrameSerializer(FrameSerializer):
             return
 
         if self._conversation.response_status != "in_progress":
-            logger.warning("Realtime dropping output audio without an active response")
+            logger.debug("Realtime dropping output audio without an active response")
             return
 
         response_id, _created = await announce_response(self._conversation, self._emit)

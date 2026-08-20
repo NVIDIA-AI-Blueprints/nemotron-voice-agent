@@ -124,6 +124,23 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         completed = next(e for e in emitted if e["type"] == "conversation.item.input_audio_transcription.completed")
         self.assertEqual(completed["transcript"], "hello")
 
+    async def test_late_interim_transcript_is_ignored_outside_active_turn(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+        interim = InterimTranscriptionFrame(text="late", user_id="", timestamp="")
+
+        await observer._handle_frame(interim)
+        state.begin_user_turn()
+        state.stop_user_turn()
+        await observer._handle_frame(interim)
+
+        self.assertEqual(emitted, [])
+
     async def test_vad_events_share_item_id_and_sample_clock(self) -> None:
         from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 
@@ -819,6 +836,16 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         ser.conversation.open_client_text()
         frame = await ser.deserialize(json.dumps({"type": "response.create"}))
         self.assertIsInstance(frame, LLMRunFrame)
+
+    async def test_response_create_without_emitter_does_not_reserve_response(self) -> None:
+        ser = RealtimeFrameSerializer()
+        ser.conversation.open_client_text()
+
+        frame = await ser.deserialize(json.dumps({"type": "response.create"}))
+
+        self.assertIsNone(frame)
+        self.assertFalse(ser.conversation.response_requested)
+        self.assertIsNone(ser.conversation.response_status)
 
     async def test_response_create_empty_response_object_accepted(self) -> None:
         emitted: list[dict[str, Any]] = []

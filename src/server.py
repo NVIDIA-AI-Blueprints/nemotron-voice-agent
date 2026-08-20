@@ -894,7 +894,10 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
             if not isinstance(prompt, dict):
                 return []
-            return [name for name in (prompt.get("tools_available") or []) if isinstance(name, str) and name]
+            raw_tools = prompt.get("tools_available")
+            if not isinstance(raw_tools, list):
+                return []
+            return [name for name in raw_tools if isinstance(name, str) and name]
 
         async def _start_bot(ws: WebSocket, config: dict, session_view: dict) -> None:
             selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))

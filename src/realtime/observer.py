@@ -252,6 +252,8 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, InterimTranscriptionFrame):
+            if self._conversation.user_turn_start_sample is None or self._conversation.user_turn_stopped:
+                return
             item_id = self._conversation.begin_user_item()
             await self._emit_event(
                 server_event(

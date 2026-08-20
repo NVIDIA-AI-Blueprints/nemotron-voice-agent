@@ -228,7 +228,7 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         frame = await ser.deserialize(json.dumps({"type": "input_audio_buffer.commit"}))
         self.assertIsInstance(appended, InputAudioRawFrame)
         self.assertIsNone(frame)
-        self.assertNotIn("input_audio_buffer.committed", [e["type"] for e in emitted])
+        self.assertEqual(emitted, [])
 
     async def test_append_always_streams_in_server_vad_mode(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -327,6 +327,41 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audio["input"]["turn_detection"], {"type": "server_vad"})
         self.assertEqual(audio["input"]["format"]["rate"], PIPELINE_PCM_RATE)
         self.assertEqual(audio["output"]["voice"], "Magpie-Multilingual.EN-US.Aria")
+        self.assertEqual(emitted[-1]["type"], "session.updated")
+
+    async def test_mid_session_legacy_audio_formats_are_canonicalized(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        ser = RealtimeFrameSerializer(
+            session_view={
+                "audio": {
+                    "input": {"format": {"type": "audio/pcm", "rate": 24000}},
+                    "output": {"format": {"type": "audio/pcm", "rate": 24000}},
+                }
+            }
+        )
+        ser.set_emit(emit)
+
+        frame = await ser.deserialize(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "input_audio_format": {"type": "audio/pcm", "rate": 16000},
+                        "output_audio_format": {"type": "audio/pcm", "rate": 48000},
+                    },
+                }
+            )
+        )
+
+        self.assertIsNone(frame)
+        self.assertNotIn("input_audio_format", ser._session_view)
+        self.assertNotIn("output_audio_format", ser._session_view)
+        self.assertEqual(ser._session_view["audio"]["input"]["format"]["rate"], 16000)
+        self.assertEqual(ser._session_view["audio"]["output"]["format"]["rate"], 48000)
         self.assertEqual(emitted[-1]["type"], "session.updated")
 
     async def test_mid_session_rate_change_resets_resampler(self) -> None:
