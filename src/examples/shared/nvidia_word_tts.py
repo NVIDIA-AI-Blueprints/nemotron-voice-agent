@@ -115,12 +115,15 @@ class _MagpieWordCommitSequencer(AggregatedFrameSequencer):
         """Commit Magpie ``word`` text with IFS=False (inject spaces)."""
         return super().process_word(word, pts, context_id, False)
 
-    def force_complete(self, last_word_pts: int) -> list[Frame]:
-        """Finish slots without committing unspoken remainder."""
+    def force_complete(self, context_id: str, last_word_pts: int) -> list[Frame]:
+        """Finish a context's slots without committing unspoken remainder."""
         for slot in self._slots:
-            if slot.spoken and not slot.complete:
+            if slot.spoken and not slot.complete and slot.context_id == context_id:
                 slot.complete = True
-        return self.flush(last_word_pts=last_word_pts)
+        frames = self.flush(last_word_pts=last_word_pts)
+        self._context_append_to_context.pop(context_id, None)
+        self._streaming_contexts.pop(context_id, None)
+        return frames
 
 
 @dataclass
