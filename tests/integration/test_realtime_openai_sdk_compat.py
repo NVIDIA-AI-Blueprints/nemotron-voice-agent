@@ -11,8 +11,8 @@ Covers:
 * Mapped fields: Magpie ``voice``, ``instructions``, ``temperature``,
   ``max_output_tokens``, Nemotron welcome gate, audio + transcript events
 * Ignores client ``session.tools``; catalog tools follow ``prompt.id`` / ``prompt_key``
-* Soft voice fallback for unknown ids (e.g. ``alloy``); rejects Whisper transcription
-  and text-only modalities
+* Soft voice fallback for unknown ids (e.g. ``alloy``); accepts transcription
+  selectors as no-ops and rejects text-only modalities
 
 Run::
 
@@ -78,6 +78,7 @@ FEATURE_SESSION: dict[str, Any] = {
     "tool_choice": "auto",
     "temperature": 0.8,
     "max_output_tokens": 4096,
+    "input_audio_transcription": {"model": "whisper-1"},
     "audio": {
         "input": {
             "format": {"type": "audio/pcm", "rate": 24000},
@@ -648,16 +649,7 @@ def test_realtime_mapped_fields_and_tools() -> None:
 
 
 def test_realtime_rejects_incompatible_session_fields() -> None:
-    """Reject Whisper transcription config and text-only modalities."""
-    asyncio.run(
-        _assert_session_reject(
-            {
-                "voice": NEMOTRON_VOICE,
-                "input_audio_transcription": {"model": "whisper-1"},
-            },
-            expect_substring="transcription",
-        )
-    )
+    """Reject text-only modalities."""
     asyncio.run(
         _assert_session_reject(
             {"modalities": ["text"], "voice": NEMOTRON_VOICE},

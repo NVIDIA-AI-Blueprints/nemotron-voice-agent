@@ -57,8 +57,8 @@ def _nvidia_keys_from_slot_config() -> frozenset[str]:
 # function ids are not accepted from the client (SSRF); sanitize/hydrate fills
 # them from the selected catalog entries.
 _NVIDIA_SESSION_KEYS = _nvidia_keys_from_slot_config() - _NVIDIA_INTERNAL_KEYS
-# Echoed on session.created/updated (same surface; internals never accepted).
-_NVIDIA_PUBLIC_KEYS = _NVIDIA_SESSION_KEYS
+# Echoed on session.created/updated. ``server_tools`` is server-generated only.
+_NVIDIA_PUBLIC_KEYS = _NVIDIA_SESSION_KEYS | {"server_tools"}
 
 _DEFAULT_AUDIO = {
     "input": {
@@ -184,8 +184,8 @@ def _validate_modalities_field(raw: Any, *, field: str) -> None:
         raise ValueError(f"{param} must include 'audio' for Nemotron Voice Agent v1")
 
 
-def _validate_input_transcription(session_patch: dict[str, Any]) -> None:
-    """Reject OpenAI transcription model config; cascaded ASR still emits transcript events."""
+def validate_input_transcription(session_patch: dict[str, Any]) -> None:
+    """Accept OpenAI transcription selectors as compatibility no-ops."""
     audio = session_patch.get("audio")
     transcription = None
     if isinstance(audio, dict):
@@ -196,12 +196,41 @@ def _validate_input_transcription(session_patch: dict[str, Any]) -> None:
         transcription = session_patch.get("input_audio_transcription")
     if transcription is None:
         return
-    raise ValueError(
-        "session.audio.input.transcription / input_audio_transcription selects a "
-        "separate OpenAI transcription model (e.g. whisper-1) and is not supported; "
-        "omit it. Cascaded ASR still emits conversation.item.input_audio_transcription.* "
-        "events from the pipeline ASR"
-    )
+    if not isinstance(transcription, dict):
+        raise ValueError("session input audio transcription selector must be an object or null")
+    model = transcription.get("model")
+    if model is not None and not isinstance(model, str):
+        raise ValueError("session input audio transcription model must be a string")
+    logger.info("Ignoring input transcription selector; pipeline ASR provides transcript events")
+
+
+def validate_server_vad(session_patch: dict[str, Any]) -> None:
+    """Require the only implemented turn mode: unconfigured ``server_vad``."""
+    candidates: list[tuple[str, Any]] = []
+    if "turn_detection" in session_patch:
+        candidates.append(("session.turn_detection", session_patch.get("turn_detection")))
+    audio = session_patch.get("audio")
+    if isinstance(audio, dict):
+        inp = audio.get("input")
+        if isinstance(inp, dict) and "turn_detection" in inp:
+            candidates.append(("session.audio.input.turn_detection", inp.get("turn_detection")))
+
+    for param, value in candidates:
+        if value is None:
+            raise ValueError(
+                f"{param}: manual mode (push-to-talk) is not supported. "
+                'Switch the client to VAD mode with {"type":"server_vad"}'
+            )
+        if not isinstance(value, dict):
+            raise ValueError(f'{param} must be an object. Switch the client to VAD mode with {{"type":"server_vad"}}')
+        if value.get("type") != "server_vad":
+            raise ValueError(f"{param}.type must be 'server_vad'; switch the client to VAD mode")
+        unsupported = sorted(set(value) - {"type"})
+        if unsupported:
+            raise ValueError(
+                f'{param} tuning is not supported; only {{"type":"server_vad"}} is accepted '
+                f"(got {', '.join(unsupported)})"
+            )
 
 
 def map_session_update_to_flat_config(
@@ -232,7 +261,8 @@ def map_session_update_to_flat_config(
 
     _validate_modalities_field(session_patch.get("output_modalities"), field="output_modalities")
     _validate_modalities_field(session_patch.get("modalities"), field="modalities")
-    _validate_input_transcription(session_patch)
+    validate_input_transcription(session_patch)
+    validate_server_vad(session_patch)
     validate_session_audio_config(session_patch)
 
     flat: dict[str, Any] = {}
@@ -343,6 +373,29 @@ class RealtimeSession:
 
         patch_without_nvidia = {k: v for k, v in session_patch.items() if k != "nvidia"}
         self.view = merge_session_patch(self.view, patch_without_nvidia)
+        if any(
+            key in session_patch
+            for key in (
+                "turn_detection",
+                "input_audio_format",
+                "output_audio_format",
+                "input_audio_transcription",
+            )
+        ):
+            audio = dict(self.view.get("audio") or {})
+            inp = dict(audio.get("input") or {})
+            output = dict(audio.get("output") or {})
+            if "turn_detection" in session_patch:
+                inp["turn_detection"] = copy.deepcopy(session_patch["turn_detection"])
+            if "input_audio_format" in session_patch:
+                inp["format"] = copy.deepcopy(session_patch["input_audio_format"])
+            if "output_audio_format" in session_patch:
+                output["format"] = copy.deepcopy(session_patch["output_audio_format"])
+            if "input_audio_transcription" in session_patch:
+                inp["transcription"] = copy.deepcopy(session_patch["input_audio_transcription"])
+            audio["input"] = inp
+            audio["output"] = output
+            self.view["audio"] = audio
         self.view["id"] = self.id
         self.view["object"] = "realtime.session"
         self.view["type"] = "realtime"
@@ -354,6 +407,8 @@ class RealtimeSession:
         for key in _NVIDIA_SESSION_KEYS:
             if key in sanitized_flat and sanitized_flat[key] not in ("", None):
                 nvidia[key] = sanitized_flat[key]
+        if isinstance(sanitized_flat.get("server_tools"), list):
+            nvidia["server_tools"] = copy.deepcopy(sanitized_flat["server_tools"])
 
         nvidia = nvidia_public_view(nvidia)
         if not nvidia.get("pipeline_mode"):
@@ -389,6 +444,7 @@ _LIVE_SESSION_KEYS = frozenset(
         "model",  # ignored no-op (same as connect)
         "voice",
         "turn_detection",
+        "input_audio_transcription",
         "audio",
         "input_audio_format",
         "output_audio_format",
@@ -411,7 +467,7 @@ def live_session_patch(session_patch: dict[str, Any]) -> dict[str, Any]:
     """Return only the subset of a session patch that can take effect live."""
     out: dict[str, Any] = {}
     for key in session_patch:
-        if key in _LIVE_SESSION_KEYS and key != "audio":
+        if key in _LIVE_SESSION_KEYS and key not in {"audio", "turn_detection"}:
             out[key] = copy.deepcopy(session_patch[key])
 
     audio = session_patch.get("audio")
@@ -424,7 +480,7 @@ def live_session_patch(session_patch: dict[str, Any]) -> dict[str, Any]:
         inp_out = {
             key: copy.deepcopy(value)
             for key, value in inp.items()
-            if key in _LIVE_AUDIO_INPUT_KEYS and (key != "transcription" or value is None)
+            if key in _LIVE_AUDIO_INPUT_KEYS and key != "turn_detection"
         }
         if inp_out:
             audio_out["input"] = inp_out
@@ -450,6 +506,21 @@ def unsupported_live_session_fields(
     """
     bad: list[str] = []
     current = current or {}
+
+    def _turn_detection(view: dict[str, Any]) -> Any:
+        audio = view.get("audio")
+        if isinstance(audio, dict):
+            inp = audio.get("input")
+            if isinstance(inp, dict) and "turn_detection" in inp:
+                return inp.get("turn_detection")
+        return view.get("turn_detection")
+
+    current_turn_detection = _turn_detection(current)
+    if "turn_detection" in session_patch and not _jsonish_equal(
+        session_patch.get("turn_detection"),
+        current_turn_detection,
+    ):
+        bad.append("turn_detection")
 
     for key, value in session_patch.items():
         if key in _LIVE_SESSION_KEYS:
@@ -482,8 +553,11 @@ def unsupported_live_session_fields(
             for key in inp:
                 if key not in _LIVE_AUDIO_INPUT_KEYS:
                     bad.append(f"audio.input.{key}")
-            if inp.get("transcription") is not None:
-                bad.append("audio.input.transcription")
+            if "turn_detection" in inp and not _jsonish_equal(
+                inp.get("turn_detection"),
+                current_turn_detection,
+            ):
+                bad.append("audio.input.turn_detection")
         out = audio.get("output")
         if isinstance(out, dict):
             for key in out:

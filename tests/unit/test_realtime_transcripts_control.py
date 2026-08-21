@@ -26,6 +26,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.utils.text.base_text_aggregator import AggregationType
 
 from realtime.conversation import ConversationState
@@ -64,6 +65,8 @@ class ConversationStateTests(unittest.TestCase):
 
 class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
     async def test_user_interim_and_final_transcripts(self) -> None:
+        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -74,6 +77,15 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         source = MagicMock()
         dest = MagicMock()
 
+        await observer.on_push_frame(
+            FramePushed(
+                source=source,
+                destination=dest,
+                frame=UserStartedSpeakingFrame(),
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=0,
+            )
+        )
         interim = InterimTranscriptionFrame(text="hel", user_id="", timestamp="")
         await observer.on_push_frame(
             FramePushed(
@@ -94,6 +106,16 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
                 timestamp=1,
             )
         )
+        self.assertNotIn("conversation.item.created", [e["type"] for e in emitted])
+        await observer.on_push_frame(
+            FramePushed(
+                source=source,
+                destination=dest,
+                frame=UserStoppedSpeakingFrame(),
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=2,
+            )
+        )
 
         types = [e["type"] for e in emitted]
         self.assertIn("conversation.item.input_audio_transcription.delta", types)
@@ -101,6 +123,145 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("conversation.item.created", types)
         completed = next(e for e in emitted if e["type"] == "conversation.item.input_audio_transcription.completed")
         self.assertEqual(completed["transcript"], "hello")
+
+    async def test_late_interim_transcript_is_ignored_outside_active_turn(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+        interim = InterimTranscriptionFrame(text="late", user_id="", timestamp="")
+
+        await observer._handle_frame(interim)
+        state.begin_user_turn()
+        state.stop_user_turn()
+        await observer._handle_frame(interim)
+
+        self.assertEqual(emitted, [])
+
+    async def test_vad_events_share_item_id_and_sample_clock(self) -> None:
+        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        state.add_input_audio(32000, 16000)
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+        source = MagicMock()
+        dest = MagicMock()
+
+        for frame in (UserStartedSpeakingFrame(),):
+            await observer.on_push_frame(
+                FramePushed(
+                    source=source,
+                    destination=dest,
+                    frame=frame,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=0,
+                )
+            )
+        state.add_input_audio(16000, 16000)
+        await observer.on_push_frame(
+            FramePushed(
+                source=source,
+                destination=dest,
+                frame=UserStoppedSpeakingFrame(),
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=1,
+            )
+        )
+
+        started = next(e for e in emitted if e["type"] == "input_audio_buffer.speech_started")
+        stopped = next(e for e in emitted if e["type"] == "input_audio_buffer.speech_stopped")
+        committed = next(e for e in emitted if e["type"] == "input_audio_buffer.committed")
+        self.assertEqual(started["item_id"], stopped["item_id"])
+        self.assertEqual(stopped["item_id"], committed["item_id"])
+        self.assertEqual(started["audio_start_ms"], 1000)
+        self.assertEqual(stopped["audio_end_ms"], 1500)
+
+    async def test_final_transcript_before_vad_stop_keeps_same_item_id(self) -> None:
+        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+        source = MagicMock()
+        destination = MagicMock()
+        for frame in (
+            UserStartedSpeakingFrame(),
+            TranscriptionFrame(text="hello", user_id="", timestamp=""),
+            UserStoppedSpeakingFrame(),
+        ):
+            await observer.on_push_frame(
+                FramePushed(
+                    source=source,
+                    destination=destination,
+                    frame=frame,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=0,
+                )
+            )
+
+        started = next(e for e in emitted if e["type"] == "input_audio_buffer.speech_started")
+        stopped = next(e for e in emitted if e["type"] == "input_audio_buffer.speech_stopped")
+        created = next(e for e in emitted if e["type"] == "conversation.item.created")
+        self.assertEqual(started["item_id"], stopped["item_id"])
+        self.assertEqual(stopped["item_id"], created["item"]["id"])
+        types = [e["type"] for e in emitted]
+        self.assertLess(
+            types.index("input_audio_buffer.speech_stopped"),
+            types.index("input_audio_buffer.committed"),
+        )
+        self.assertLess(
+            types.index("input_audio_buffer.committed"),
+            types.index("conversation.item.created"),
+        )
+
+    async def test_vad_stop_before_final_transcript_preserves_protocol_order(self) -> None:
+        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        observer = RealtimeLifecycleObserver(
+            emit=emit,
+            conversation=ConversationState(),
+        )
+        for frame in (
+            UserStartedSpeakingFrame(),
+            UserStoppedSpeakingFrame(),
+            TranscriptionFrame(text="hello", user_id="", timestamp=""),
+        ):
+            await observer.on_push_frame(
+                FramePushed(
+                    source=MagicMock(),
+                    destination=MagicMock(),
+                    frame=frame,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=0,
+                )
+            )
+
+        types = [e["type"] for e in emitted]
+        self.assertLess(
+            types.index("input_audio_buffer.speech_stopped"),
+            types.index("conversation.item.created"),
+        )
+        self.assertLess(
+            types.index("conversation.item.created"),
+            types.index("conversation.item.input_audio_transcription.completed"),
+        )
 
     async def test_interruption_cancels_in_progress_response_upstream(self) -> None:
         """Pipeline barge-in must finish the response when TTSStopped never arrives."""
@@ -175,7 +336,83 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("response.done", [e["type"] for e in emitted])
 
-    async def test_function_call_emits_item_lifecycle_and_response_done(self) -> None:
+    async def test_nonfatal_pipeline_error_preserves_active_response(self) -> None:
+        from pipecat.frames.frames import ErrorFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        state.begin_response()
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+        await observer.on_push_frame(
+            FramePushed(
+                source=MagicMock(),
+                destination=MagicMock(),
+                frame=ErrorFrame(error="TTS unavailable"),
+                direction=FrameDirection.UPSTREAM,
+                timestamp=0,
+            )
+        )
+
+        self.assertEqual([event["type"] for event in emitted], ["error"])
+        self.assertEqual(state.response_status, "in_progress")
+
+        await observer._handle_frame(TTSStoppedFrame())
+        done = next(e for e in emitted if e["type"] == "response.done")
+        self.assertEqual(done["response"]["status"], "completed")
+
+    async def test_nonfatal_pipeline_error_releases_unannounced_response_request(self) -> None:
+        from pipecat.frames.frames import ErrorFrame
+
+        async def emit(_event: dict[str, Any]) -> None:
+            pass
+
+        state = ConversationState()
+        self.assertTrue(state.request_response())
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+
+        await observer.on_push_frame(
+            FramePushed(
+                source=MagicMock(),
+                destination=MagicMock(),
+                frame=ErrorFrame(error="LLM unavailable"),
+                direction=FrameDirection.UPSTREAM,
+                timestamp=0,
+            )
+        )
+
+        self.assertFalse(state.response_requested)
+        self.assertTrue(state.request_response())
+
+    async def test_fatal_pipeline_error_finishes_active_response_as_failed(self) -> None:
+        from pipecat.frames.frames import FatalErrorFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        state.begin_response()
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+        await observer.on_push_frame(
+            FramePushed(
+                source=MagicMock(),
+                destination=MagicMock(),
+                frame=FatalErrorFrame(error="Pipeline unavailable"),
+                direction=FrameDirection.UPSTREAM,
+                timestamp=0,
+            )
+        )
+
+        self.assertEqual(emitted[0]["type"], "error")
+        done = next(event for event in emitted if event["type"] == "response.done")
+        self.assertEqual(done["response"]["status"], "failed")
+
+    async def test_function_call_emits_nvidia_observation_only(self) -> None:
         from pipecat.frames.frames import FunctionCallInProgressFrame
 
         emitted: list[dict[str, Any]] = []
@@ -204,27 +441,40 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         )
 
         types = [e["type"] for e in emitted]
-        self.assertIn("response.created", types)
-        self.assertIn("conversation.item.created", types)
-        self.assertIn("response.output_item.added", types)
-        self.assertIn("response.function_call_arguments.delta", types)
-        self.assertIn("response.function_call_arguments.done", types)
-        self.assertIn("response.output_item.done", types)
-        self.assertIn("response.done", types)
-        self.assertTrue(state.assistant_has_responded)
-        self.assertIn("call_abc", state.pending_function_calls)
+        self.assertEqual(types, ["nvidia.tool.started"])
+        started = emitted[0]
+        self.assertEqual(started["tool_call_id"], "call_abc")
+        self.assertEqual(started["name"], "set_memory")
+        self.assertEqual(started["arguments"], {"key": "intro", "value": "hi"})
+        self.assertIsNone(state.response_id)
 
-        created = next(e for e in emitted if e["type"] == "conversation.item.created")
-        self.assertEqual(created["item"]["type"], "function_call")
-        self.assertEqual(created["item"]["name"], "set_memory")
-        self.assertEqual(created["item"]["call_id"], "call_abc")
+    async def test_function_call_result_emits_nvidia_completion(self) -> None:
+        from pipecat.frames.frames import FunctionCallResultFrame
 
-        done_item = next(e for e in emitted if e["type"] == "response.output_item.done")
-        self.assertEqual(done_item["item"]["status"], "completed")
-        self.assertEqual(done_item["item"]["type"], "function_call")
+        emitted: list[dict[str, Any]] = []
 
-        response_done = next(e for e in emitted if e["type"] == "response.done")
-        self.assertEqual(response_done["response"]["output"][0]["type"], "function_call")
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=ConversationState())
+        frame = FunctionCallResultFrame(
+            function_name="get_weather",
+            tool_call_id="call_abc",
+            arguments={"city": "SF"},
+            result={"temp": 72},
+            run_llm=True,
+        )
+        await observer.on_push_frame(
+            FramePushed(
+                source=MagicMock(),
+                destination=MagicMock(),
+                frame=frame,
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=0,
+            )
+        )
+        self.assertEqual(emitted[0]["type"], "nvidia.tool.completed")
+        self.assertEqual(emitted[0]["result"], {"temp": 72})
 
     async def test_bot_transcript_and_response_done(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -248,6 +498,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         stopped = TTSStoppedFrame()
+        transport_source = MagicMock(spec=BaseOutputTransport)
         await observer.on_push_frame(
             FramePushed(
                 source=source,
@@ -257,7 +508,16 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
                 timestamp=1,
             )
         )
-        # TTSStopped finishes immediately (no debounce).
+        self.assertNotIn("response.done", [e["type"] for e in emitted])
+        await observer.on_push_frame(
+            FramePushed(
+                source=transport_source,
+                destination=dest,
+                frame=stopped,
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=2,
+            )
+        )
         await asyncio.sleep(0)
 
         types = [e["type"] for e in emitted]
@@ -286,9 +546,10 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         dest = MagicMock()
 
         async def push(frame) -> None:
+            frame_source = MagicMock(spec=BaseOutputTransport) if isinstance(frame, TTSStoppedFrame) else source
             await observer.on_push_frame(
                 FramePushed(
-                    source=source,
+                    source=frame_source,
                     destination=dest,
                     frame=frame,
                     direction=FrameDirection.DOWNSTREAM,
@@ -326,9 +587,10 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         dest = MagicMock()
 
         async def push(frame) -> None:
+            frame_source = MagicMock(spec=BaseOutputTransport) if isinstance(frame, TTSStoppedFrame) else source
             await observer.on_push_frame(
                 FramePushed(
-                    source=source,
+                    source=frame_source,
                     destination=dest,
                     frame=frame,
                     direction=FrameDirection.DOWNSTREAM,
@@ -344,8 +606,48 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertIn("response.done", [e["type"] for e in emitted])
 
-    async def test_function_call_batch_single_response(self) -> None:
-        """FunctionCallsStartedFrame with two calls shares one response.done."""
+    async def test_skip_tts_llm_end_completes_no_audio_response(self) -> None:
+        from pipecat.frames.frames import LLMFullResponseEndFrame, LLMTextFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        observer = RealtimeLifecycleObserver(
+            emit=emit,
+            conversation=ConversationState(),
+        )
+        source = MagicMock()
+        destination = MagicMock()
+        await observer.on_push_frame(
+            FramePushed(
+                source=source,
+                destination=destination,
+                frame=LLMTextFrame(text="No speech."),
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=0,
+            )
+        )
+        end = LLMFullResponseEndFrame()
+        end.skip_tts = True
+        await observer.on_push_frame(
+            FramePushed(
+                source=source,
+                destination=destination,
+                frame=end,
+                direction=FrameDirection.DOWNSTREAM,
+                timestamp=1,
+            )
+        )
+        done = next(e for e in emitted if e["type"] == "response.done")
+        self.assertEqual(done["response"]["status"], "completed")
+        self.assertEqual(
+            done["response"]["output"][0]["content"][0]["transcript"],
+            "No speech.",
+        )
+
+    async def test_function_call_batch_emits_two_nvidia_started_events(self) -> None:
         from types import SimpleNamespace
 
         from pipecat.frames.frames import FunctionCallsStartedFrame
@@ -376,12 +678,9 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.sleep(0)
         types = [e["type"] for e in emitted]
-        self.assertEqual(types.count("response.created"), 1)
-        self.assertEqual(types.count("response.done"), 1)
-        indexes = sorted(e["output_index"] for e in emitted if e["type"] == "response.function_call_arguments.done")
-        self.assertEqual(indexes, [0, 1])
-        done = next(e for e in emitted if e["type"] == "response.done")
-        self.assertEqual(len(done["response"]["output"]), 2)
+        self.assertEqual(types, ["nvidia.tool.started", "nvidia.tool.started"])
+        self.assertEqual([event["tool_call_id"] for event in emitted], ["c1", "c2"])
+        self.assertIsNone(state.response_id)
         observer.shutdown()
 
     async def test_llm_text_does_not_duplicate_tts_transcript(self) -> None:
@@ -399,9 +698,10 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         dest = MagicMock()
 
         async def push(frame) -> None:
+            frame_source = MagicMock(spec=BaseOutputTransport) if isinstance(frame, TTSStoppedFrame) else source
             await observer.on_push_frame(
                 FramePushed(
-                    source=source,
+                    source=frame_source,
                     destination=dest,
                     frame=frame,
                     direction=FrameDirection.DOWNSTREAM,
@@ -418,11 +718,13 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(transcript_deltas), 1)
         self.assertEqual(transcript_deltas[0]["delta"], "Hello there.")
         text_deltas = [e for e in emitted if e["type"] == "response.output_text.delta"]
-        self.assertEqual(len(text_deltas), 1)
-        self.assertEqual(text_deltas[0]["delta"], "Hello there.")
+        self.assertEqual(text_deltas, [])
         self.assertEqual(state.assistant_transcript, "")  # reset after done
         done = next(e for e in emitted if e["type"] == "response.done")
         self.assertEqual(done["response"]["output"][0]["content"][0]["transcript"], "Hello there.")
+        self.assertEqual(done["response"]["output"][0]["content"][0]["type"], "output_audio")
+        output_done = next(e for e in emitted if e["type"] == "response.output_item.done")
+        self.assertEqual(output_done["item"]["content"][0]["type"], "output_audio")
         self.assertEqual(
             [e["type"] for e in emitted].count("response.output_audio_transcript.delta"),
             1,
@@ -484,7 +786,6 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
             )
 
         await push(LLMTextFrame(text="Once upon a time"))
-        self.assertTrue(ser.conversation.output_text_emitted)
         self.assertEqual(observer._llm_text_buffer, "Once upon a time")
 
         frame = await ser.deserialize(json.dumps({"type": "response.cancel"}))
@@ -492,8 +793,9 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observer._llm_text_buffer, "")
         self.assertIsNone(ser.conversation.response_id)
 
-        text_done = next(e for e in emitted if e["type"] == "response.output_text.done")
-        self.assertEqual(text_done["text"], "Once upon a time")
+        self.assertNotIn("response.output_text.done", [e["type"] for e in emitted])
+        transcript_done = next(e for e in emitted if e["type"] == "response.output_audio_transcript.done")
+        self.assertEqual(transcript_done["transcript"], "Once upon a time")
         done = next(e for e in emitted if e["type"] == "response.done")
         self.assertEqual(done["response"]["status"], "cancelled")
         cancelled_id = done["response"]["id"]
@@ -587,6 +889,16 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         frame = await ser.deserialize(json.dumps({"type": "response.create"}))
         self.assertIsInstance(frame, LLMRunFrame)
 
+    async def test_response_create_without_emitter_does_not_reserve_response(self) -> None:
+        ser = RealtimeFrameSerializer()
+        ser.conversation.open_client_text()
+
+        frame = await ser.deserialize(json.dumps({"type": "response.create"}))
+
+        self.assertIsNone(frame)
+        self.assertFalse(ser.conversation.response_requested)
+        self.assertIsNone(ser.conversation.response_status)
+
     async def test_response_create_empty_response_object_accepted(self) -> None:
         emitted: list[dict[str, Any]] = []
 
@@ -598,7 +910,25 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         ser.conversation.open_client_text()
         frame = await ser.deserialize(json.dumps({"type": "response.create", "response": {}}))
         self.assertIsInstance(frame, LLMRunFrame)
-        self.assertEqual(emitted, [])
+        self.assertEqual(emitted[0]["type"], "response.created")
+
+    async def test_response_create_rejects_duplicate_active_response(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        ser = RealtimeFrameSerializer()
+        ser.set_emit(emit)
+        ser.conversation.open_client_text()
+        first = await ser.deserialize(json.dumps({"type": "response.create"}))
+        self.assertIsInstance(first, LLMRunFrame)
+        frame = await ser.deserialize(json.dumps({"type": "response.create"}))
+        self.assertIsNone(frame)
+        self.assertEqual(
+            emitted[-1]["error"]["code"],
+            "conversation_already_has_active_response",
+        )
 
     async def test_response_create_nonempty_override_rejected(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -762,9 +1092,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(frame, InputAudioRawFrame)
 
-    async def test_function_call_output_returns_result_frame(self) -> None:
-        from pipecat.frames.frames import FunctionCallResultFrame
-
+    async def test_function_call_output_is_rejected(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -772,7 +1100,6 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
 
         ser = RealtimeFrameSerializer()
         ser.set_emit(emit)
-        ser.conversation.remember_function_call("call_abc", name="get_weather", arguments={"city": "SF"})
         frame = await ser.deserialize(
             json.dumps(
                 {
@@ -785,15 +1112,9 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
-        self.assertIsInstance(frame, FunctionCallResultFrame)
-        assert isinstance(frame, FunctionCallResultFrame)
-        self.assertEqual(frame.tool_call_id, "call_abc")
-        self.assertEqual(frame.function_name, "get_weather")
-        self.assertEqual(frame.result, {"temp": 72})
-        self.assertFalse(frame.run_llm)
-        self.assertEqual(emitted[0]["type"], "conversation.item.created")
-        self.assertEqual(emitted[0]["item"]["type"], "function_call_output")
-        self.assertNotIn("call_abc", ser.conversation.pending_function_calls)
+        self.assertIsNone(frame)
+        self.assertEqual(emitted[0]["type"], "error")
+        self.assertEqual(emitted[0]["error"]["code"], "unsupported_item")
 
     async def test_function_call_output_rejects_unknown_call_id(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -817,7 +1138,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(frame)
         self.assertEqual(emitted[0]["type"], "error")
-        self.assertEqual(emitted[0]["error"]["code"], "invalid_item")
+        self.assertEqual(emitted[0]["error"]["code"], "unsupported_item")
 
     async def test_truncate_rejects_unknown_item(self) -> None:
         emitted: list[dict[str, Any]] = []

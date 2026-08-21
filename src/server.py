@@ -898,6 +898,16 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         async def _ensure_ready(config: dict) -> None:
             await _ensure_services_ready_for_connection(config, _resolve_example(config))
 
+        def _resolve_server_tools(config: dict) -> list[str]:
+            _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
+            prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
+            if not isinstance(prompt, dict):
+                return []
+            raw_tools = prompt.get("tools_available")
+            if not isinstance(raw_tools, list):
+                return []
+            return [name for name in raw_tools if isinstance(name, str) and name]
+
         async def _start_bot(ws: WebSocket, config: dict, session_view: dict) -> None:
             selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
             bot_fn = examples_registry.resolve_bot(selected)
@@ -931,6 +941,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             sanitize_session_config=_sanitize_session_config,
             ensure_services_ready=_ensure_ready,
             start_bot=_start_bot,
+            resolve_server_tools=_resolve_server_tools,
             fallback_example_key=fallback_example_key,
             default_pipeline_mode=DEFAULT_PIPELINE_MODE,
         )

@@ -18,12 +18,13 @@ It is a **protocol gateway**, not a drop-in clone of OpenAI’s hosted Realtime 
 | URL | OpenAI Realtime WebSocket | `WS /v1/realtime` on this server |
 | Voices | OpenAI voice names (`alloy`, …) | Magpie / catalog voice ids (unknown ids warn and fall back to catalog default) |
 | `session.model` | Selects a Realtime model | Ignored (logged only) |
-| Tools | Client-registered schemas + model-native calling | **Ignored** for client schemas; catalog tools follow `prompt.id` / `prompt_key` / `prompts.yaml` |
+| Tools | Client-registered schemas + model-native calling | Client schemas are ignored; server catalog tools run internally |
 | Welcome | Client-driven | Optional Nemotron welcome gate (RTVI parity): client text / `response.create` rejected until first assistant `response.done` |
-| Live `session.update` | Broad session mutation | Only voice, turn detection, and audio format/rate after handoff |
-| Transport | WebSocket (and OpenAI WebRTC) | WebSocket only; WebRTC out of scope |
+| Turn detection | Several modes and tunable VAD | Server VAD only; no push-to-talk or VAD tuning |
+| Live `session.update` | Broad session mutation | Voice and PCM updates only; turn mode is immutable |
+| Transport | WebSocket, WebRTC, PCM16, and G.711 | WebSocket PCM16 only |
 
-Invalid session config that would break audio (bad PCM format/rate, text-only modalities) returns a Realtime `error` and **keeps the socket open** for retry. Fields that do not translate to the cascade (including `session.tools`) are ignored.
+Invalid session config that would break audio (bad PCM format/rate, unsupported turn detection, or text-only output) returns a Realtime `error` and **keeps the socket open** for retry. Fields that do not translate to the cascade (including `session.tools`) are ignored.
 
 | Path | Protocol |
 |------|----------|
@@ -39,7 +40,7 @@ from openai import AsyncOpenAI
 
 async def main():
     client = AsyncOpenAI(
-        api_key="unused",  # gateway does not require OpenAI auth
+        api_key="unused",  # suitable only for an unsecured local deployment
         websocket_base_url="ws://127.0.0.1:7860/v1",
     )
     async with client.realtime.connect() as conn:
@@ -53,6 +54,8 @@ asyncio.run(main())
 
 Use `ws://` when `PIPELINE_TLS=false`; otherwise `wss://`.
 
+Authentication, authorization, quotas, and rate limits are deployment-layer responsibilities; the gateway does not provide them.
+
 ### Optional session overrides
 
 ```json
@@ -64,7 +67,11 @@ Use `ws://` when `PIPELINE_TLS=false`; otherwise `wss://`.
     "voice": "Magpie-Multilingual.EN-US.Aria",
     "temperature": 0.8,
     "audio": {
-      "input": { "format": { "type": "audio/pcm", "rate": 24000 } },
+      "input": {
+        "format": { "type": "audio/pcm", "rate": 24000 },
+        "turn_detection": { "type": "server_vad" },
+        "transcription": { "model": "client-selector-is-ignored" }
+      },
       "output": { "format": { "type": "audio/pcm", "rate": 24000 } }
     },
     "nvidia": { "pipeline_mode": "generic-assistant" }
@@ -72,7 +79,7 @@ Use `ws://` when `PIPELINE_TLS=false`; otherwise `wss://`.
 }
 ```
 
-Catalog tools (when enabled for the selected prompt) still emit Realtime function-call events; return results with `conversation.item.create` / `function_call_output` if the client must supply tool output. Client-defined `session.tools` schemas are not registered.
+Client tools and `function_call_output` items are not supported. Catalog tools run inside the server and appear through `session.nvidia.server_tools` and the observational `nvidia.tool.started` / `nvidia.tool.completed` events.
 
 ## Field map
 
@@ -89,15 +96,17 @@ OpenAI top-level fields map onto the cascade when they have a Nemotron equivalen
 | `prompt.id` | `prompt_key` |
 | `model` | ignored |
 | `audio.*.format` / rate | transport resample |
-| `audio.input.turn_detection` | transport commit policy |
-| `audio.input.transcription` | rejected if set (separate OpenAI transcription model; cascaded ASR still emits `input_audio_transcription.*`) |
-| `output_modalities` / `modalities` | must include `audio` when set |
+| `audio.input.turn_detection` | must be `{ "type": "server_vad" }`; `null` and other modes are rejected |
+| `audio.input.transcription` | selector accepted; requested model ignored because pipeline ASR supplies transcription events |
+| `output_modalities` / `modalities` | must include audio; a requested text modality is a compatibility no-op and does not enable multimodal output |
 
 Defaults when omitted: `pipeline_mode=generic-assistant`, `prompt_key=generic_assistant_without_tools`.
 
 ### `session.nvidia` (no OpenAI equivalent)
 
 Nemotron-only catalog / routing keys: `pipeline_mode`, `llm_id`, `asr_id`, `tts_id`, `asr_language_code`, `model_id`, `extra_params`, ASR/TTS `*_model`, `tts_synthesis_mode`.
+
+The public session object also exposes the selected prompt's catalog tools as read-only `nvidia.server_tools`.
 
 Prefer OpenAI fields for prompt and generation settings: use `prompt.id`, `instructions`, `temperature`, and `max_output_tokens`. Do not put `tts_voice_id`, `system_prompt`, `max_tokens`, or `temperature` under `nvidia`.
 
@@ -115,12 +124,14 @@ Changing `tts_id` / `tts_model` at connect time re-lists voices for that TTS sel
 |-------|--------|
 | `session.update` | Configure session; required before pipeline handoff. Invalid audio/modality config → `error`, socket stays open. |
 | `input_audio_buffer.append` | Base64 PCM chunk |
-| `input_audio_buffer.commit` | Commit buffered audio as a user turn |
-| `input_audio_buffer.clear` | Drop uncommitted audio |
-| `conversation.item.create` | User text / function_call_output items |
+| `input_audio_buffer.commit` | Accepted as a compatibility no-op in server-VAD mode; automatic commit follows `speech_stopped` |
+| `input_audio_buffer.clear` | Reset client buffer accounting and emit `input_audio_buffer.cleared`; audio already streamed to VAD cannot be withdrawn |
+| `conversation.item.create` | User text items; `function_call_output` is rejected |
 | `conversation.item.truncate` | Barge-in while a response is in progress. Idle truncate is ignored. Does not emit `conversation.item.truncated`. |
 | `response.create` | Start a model turn. Empty `response: {}` is accepted; non-empty per-response overrides are rejected. |
 | `response.cancel` | Cancel the in-progress response. Idle cancel is a no-op. |
+
+Conversation item delete/retrieve operations are not supported. There are no response-level instruction, tool, modality, audio, or generation overrides.
 
 ### Server → client
 
@@ -128,22 +139,27 @@ Changing `tts_id` / `tts_model` at connect time re-lists voices for that TTS sel
 |-------|--------|
 | `session.created` / `session.updated` | Session object (OpenAI-shaped + optional `nvidia`) |
 | `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `item_rejected_pre_intro`, `response_create_rejected_pre_intro`, `invalid_item`, `invalid_truncate` |
-| `input_audio_buffer.*` | Speech / commit / clear acks |
+| `input_audio_buffer.*` | Server-VAD speech / commit / clear events |
 | `conversation.item.*` | Item created; cascaded ASR input transcription. `conversation.item.truncated` is not emitted. |
-| `response.*` | Lifecycle, audio, transcript, text, function-call events |
+| `response.*` | Response lifecycle, audio, and audio-transcript events |
+| `nvidia.tool.started` / `nvidia.tool.completed` | Observation of internally executed catalog tools |
 
-**Dual emit:** GA names are canonical (`response.output_audio.*`, `response.output_audio_transcript.*`, `response.output_text.*`). Matching pre-GA aliases (`response.audio.*`, `response.audio_transcript.*`, `response.text.*`) are also emitted so older SDKs work.
+GA clients receive `response.output_audio.*` and `response.output_audio_transcript.*`. Clients that negotiate the beta dialect receive the corresponding `response.audio.*` and `response.audio_transcript.*` names. Audio content parts do not emit `response.output_text.*`.
 
 ### Audio
 
-- PCM only (`audio/pcm` / `pcm16`); rates: 8 / 16 / 24 / 48 kHz. Unsupported format/rate is rejected at `session.update`.
+- WebSocket PCM16 only (`audio/pcm` / `pcm16`); rates: 8 / 16 / 24 / 48 kHz. WebRTC and G.711 are not supported.
+- Server VAD is required. `turn_detection: null` (push-to-talk) and non-`server_vad` modes are rejected; VAD threshold, silence duration, prefix padding, and similar tuning are not implemented.
 - Default client rate is 24 kHz; resampled to/from pipeline 16 kHz.
 
 ### Session lifecycle notes
 
 - Welcome enabled (RTVI parity): client text and `response.create` are rejected until the first assistant `response.done`. Audio append is unaffected.
-- Spoken turns complete when TTS finishes (`response.done`).
-- Post-handoff `session.update`: only `voice`, `turn_detection`, and audio format/rate may change; other changes return `unsupported_live_session_update`. Live PCM rate changes recreate the stream resampler so audio keeps flowing.
+- Spoken turns complete after the output transport drains all queued TTS audio; only then does the gateway emit `response.done`.
+- Post-handoff `session.update` is narrow: voice and audio-format/rate updates apply live. Input-transcription selector updates are compatibility no-ops. The server-VAD turn mode is immutable; other changes return `unsupported_live_session_update`.
+- Pipeline ASR emits `conversation.item.input_audio_transcription.*` regardless of the accepted transcription selector; its requested model is ignored.
+- `response.output_audio.delta` events precede `response.output_audio.done`, `response.output_audio_transcript.done`, `response.content_part.done`, `response.output_item.done`, and finally `response.done`.
+- Each server-VAD turn uses one item id and sample-based timestamps. The wire order is `speech_started`, `speech_stopped`, `committed`, `conversation.item.created`, and transcription completion.
 - Pipeline barge-in (`InterruptionFrame`) cancels the active Realtime response even when `TTSStopped` never arrives.
 - Non-empty `response.create.response` overrides return `unsupported_response_override`; omit the field or send `{}`.
 

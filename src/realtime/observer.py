@@ -5,18 +5,20 @@
 
 from __future__ import annotations
 
-import json
 from collections import deque
 from typing import Any
 
 from loguru import logger
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
+    ErrorFrame,
     Frame,
     FunctionCallInProgressFrame,
+    FunctionCallResultFrame,
     FunctionCallsStartedFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
+    LLMFullResponseEndFrame,
     LLMTextFrame,
     TranscriptionFrame,
     TTSStoppedFrame,
@@ -26,25 +28,22 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.transports.base_output import BaseOutputTransport
 
-from realtime.conversation import ConversationState, new_item_id
+from realtime.conversation import ConversationState
 from realtime.events import (
-    SERVER_FUNCTION_CALL_ARGUMENTS_DELTA,
-    SERVER_FUNCTION_CALL_ARGUMENTS_DONE,
+    SERVER_AUDIO_COMMITTED,
     SERVER_INPUT_TRANSCRIPT_COMPLETED,
     SERVER_INPUT_TRANSCRIPT_DELTA,
     SERVER_ITEM_CREATED,
+    SERVER_NVIDIA_TOOL_COMPLETED,
+    SERVER_NVIDIA_TOOL_STARTED,
     SERVER_OUTPUT_AUDIO_TRANSCRIPT_DELTA,
-    SERVER_OUTPUT_ITEM_ADDED,
-    SERVER_OUTPUT_ITEM_DONE,
-    SERVER_OUTPUT_TEXT_DELTA,
-    SERVER_RESPONSE_CREATED,
-    SERVER_RESPONSE_DONE,
     SERVER_SPEECH_STARTED,
     SERVER_SPEECH_STOPPED,
     EmitFn,
     emit_with_aliases,
-    response_created_body,
+    error_event,
     server_event,
 )
 from realtime.lifecycle import announce_response, finish_response
@@ -60,7 +59,10 @@ _OBSERVED_FRAME_TYPES = (
     LLMTextFrame,
     FunctionCallsStartedFrame,
     FunctionCallInProgressFrame,
+    FunctionCallResultFrame,
+    LLMFullResponseEndFrame,
     TTSStoppedFrame,
+    ErrorFrame,
     InterruptionFrame,
 )
 
@@ -68,9 +70,9 @@ _OBSERVED_FRAME_TYPES = (
 class RealtimeLifecycleObserver(BaseObserver):
     """Emit OpenAI Realtime–shaped events from Pipecat frame traffic.
 
-    Spoken turns finish on ``TTSStoppedFrame``. Pipeline barge-in finishes on
-    ``InterruptionFrame`` (``response.cancel`` / truncate already finish in the
-    serializer before pushing the interrupt).
+    Spoken turns finish on the output transport's re-pushed ``TTSStoppedFrame``
+    after queued audio has been serialized. Pipeline barge-in finishes on
+    ``InterruptionFrame``.
     """
 
     def __init__(
@@ -91,7 +93,6 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._emitted_function_calls: set[str] = set()
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
-        self._pending_fc_output_items: list[dict[str, Any]] = []
 
     def _clear_frame_dedupe(self) -> None:
         self._processed_frames.clear()
@@ -122,9 +123,43 @@ class RealtimeLifecycleObserver(BaseObserver):
             )
         )
 
+    async def _emit_user_item_if_needed(self, item_id: str) -> None:
+        """Create the committed user audio item exactly once."""
+        if not self._conversation.announce_user_item():
+            return
+        transcript = self._conversation.pending_user_transcript or ""
+        await self._emit_event(
+            server_event(
+                SERVER_ITEM_CREATED,
+                previous_item_id=None,
+                item={
+                    "id": item_id,
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_audio", "transcript": transcript}],
+                },
+            )
+        )
+
+    async def _emit_user_transcript_if_ready(self) -> None:
+        """Complete transcription after stop/commit and item creation."""
+        ready = self._conversation.ready_user_transcript()
+        if ready is None:
+            return
+        item_id, transcript = ready
+        await self._emit_user_item_if_needed(item_id)
+        await self._emit_event(
+            server_event(
+                SERVER_INPUT_TRANSCRIPT_COMPLETED,
+                item_id=item_id,
+                content_index=0,
+                transcript=transcript,
+            )
+        )
+        self._conversation.clear_user_item()
+
     def on_response_cancelled(self) -> str:
         """Invalidate buffered LLM text for a cancelled turn; return drained text."""
-        self._pending_fc_output_items.clear()
         text = self._llm_text_buffer
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
@@ -134,7 +169,6 @@ class RealtimeLifecycleObserver(BaseObserver):
 
     def shutdown(self) -> None:
         """Clear buffers on transport / session teardown."""
-        self._pending_fc_output_items.clear()
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
         self._clear_frame_dedupe()
@@ -146,6 +180,21 @@ class RealtimeLifecycleObserver(BaseObserver):
         travels upstream). Other lifecycle frames are downstream-only.
         """
         frame = data.frame
+        if isinstance(frame, ErrorFrame):
+            if not self._remember_frame(frame.id):
+                return
+            try:
+                await self._emit_event(error_event(frame.error, code="pipeline_error"))
+                if frame.fatal:
+                    if self._conversation.response_requested:
+                        await self._ensure_response_announced()
+                    await self._finish_response(status="failed")
+                else:
+                    self._conversation.release_response_request()
+            except Exception:
+                logger.exception("RealtimeLifecycleObserver failed while handling pipeline error")
+            return
+
         if isinstance(frame, InterruptionFrame):
             if not self._remember_frame(frame.id):
                 return
@@ -153,6 +202,12 @@ class RealtimeLifecycleObserver(BaseObserver):
                 await self._finish_response(status="cancelled")
             except Exception:
                 logger.exception("RealtimeLifecycleObserver failed while handling interruption")
+            return
+
+        # Pipecat pushes the same TTSStoppedFrame twice: first from TTS into the
+        # output transport, then from BaseOutputTransport after its FIFO audio
+        # queue has drained. Ignore the first edge without consuming the frame id.
+        if isinstance(frame, TTSStoppedFrame) and not isinstance(data.source, BaseOutputTransport):
             return
 
         if data.direction != FrameDirection.DOWNSTREAM:
@@ -169,14 +224,39 @@ class RealtimeLifecycleObserver(BaseObserver):
 
     async def _handle_frame(self, frame: Frame) -> None:
         if isinstance(frame, UserStartedSpeakingFrame):
-            await self._emit_event(server_event(SERVER_SPEECH_STARTED))
+            item_id, audio_start_ms = self._conversation.begin_user_turn()
+            await self._emit_event(
+                server_event(
+                    SERVER_SPEECH_STARTED,
+                    item_id=item_id,
+                    audio_start_ms=audio_start_ms,
+                )
+            )
             return
 
         if isinstance(frame, UserStoppedSpeakingFrame):
-            await self._emit_event(server_event(SERVER_SPEECH_STOPPED))
+            item_id, audio_end_ms = self._conversation.stop_user_turn()
+            await self._emit_event(
+                server_event(
+                    SERVER_SPEECH_STOPPED,
+                    item_id=item_id,
+                    audio_end_ms=audio_end_ms,
+                )
+            )
+            await self._emit_event(
+                server_event(
+                    SERVER_AUDIO_COMMITTED,
+                    item_id=item_id,
+                    previous_item_id=None,
+                )
+            )
+            await self._emit_user_item_if_needed(item_id)
+            await self._emit_user_transcript_if_ready()
             return
 
         if isinstance(frame, InterimTranscriptionFrame):
+            if self._conversation.user_turn_start_sample is None or self._conversation.user_turn_stopped:
+                return
             item_id = self._conversation.begin_user_item()
             await self._emit_event(
                 server_event(
@@ -189,29 +269,9 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, TranscriptionFrame):
-            item_id = self._conversation.begin_user_item()
             transcript = frame.text or ""
-            await self._emit_event(
-                server_event(
-                    SERVER_ITEM_CREATED,
-                    previous_item_id=None,
-                    item={
-                        "id": item_id,
-                        "type": "message",
-                        "role": "user",
-                        "content": [{"type": "input_audio", "transcript": transcript}],
-                    },
-                )
-            )
-            await self._emit_event(
-                server_event(
-                    SERVER_INPUT_TRANSCRIPT_COMPLETED,
-                    item_id=item_id,
-                    content_index=0,
-                    transcript=transcript,
-                )
-            )
-            self._conversation.clear_user_item()
+            self._conversation.set_user_transcript(transcript)
+            await self._emit_user_transcript_if_ready()
             return
 
         if isinstance(frame, BotStartedSpeakingFrame):
@@ -246,39 +306,42 @@ class RealtimeLifecycleObserver(BaseObserver):
             await self._ensure_response_announced()
             self._llm_text_buffer += text
             self._llm_text_generation = self._conversation.response_generation
-            self._conversation.output_text_emitted = True
-            await self._emit_event(
-                server_event(
-                    SERVER_OUTPUT_TEXT_DELTA,
-                    response_id=self._conversation.response_id,
-                    item_id=self._conversation.assistant_item_id,
-                    output_index=0,
-                    content_index=0,
-                    delta=text,
-                )
-            )
+            return
+
+        if isinstance(frame, LLMFullResponseEndFrame):
+            if frame.skip_tts is True:
+                await self._finish_response(status="completed")
             return
 
         if isinstance(frame, FunctionCallsStartedFrame):
-            calls = list(frame.function_calls or [])
-            for index, call in enumerate(calls):
-                await self._emit_function_call(
+            for call in frame.function_calls or []:
+                await self._emit_server_tool_started(
                     tool_call_id=getattr(call, "tool_call_id", "") or "",
                     function_name=getattr(call, "function_name", "") or "",
                     arguments=getattr(call, "arguments", None),
-                    output_index=index,
-                    finish_response=(index == len(calls) - 1),
                 )
             return
 
         if isinstance(frame, FunctionCallInProgressFrame):
-            await self._emit_function_call(
+            await self._emit_server_tool_started(
                 tool_call_id=frame.tool_call_id or "",
                 function_name=frame.function_name or "",
                 arguments=frame.arguments,
-                output_index=0,
-                finish_response=True,
             )
+            return
+
+        if isinstance(frame, FunctionCallResultFrame):
+            await self._emit_event(
+                server_event(
+                    SERVER_NVIDIA_TOOL_COMPLETED,
+                    tool_call_id=frame.tool_call_id or "",
+                    name=frame.function_name or "",
+                    arguments=frame.arguments,
+                    result=frame.result,
+                )
+            )
+            if frame.tool_call_id:
+                self._emitted_function_calls.discard(frame.tool_call_id)
             return
 
         if isinstance(frame, TTSStoppedFrame):
@@ -288,128 +351,26 @@ class RealtimeLifecycleObserver(BaseObserver):
     async def _ensure_response_announced(self) -> tuple[str, bool]:
         return await announce_response(self._conversation, self._emit_fn)
 
-    async def _emit_function_call(
+    async def _emit_server_tool_started(
         self,
         *,
         tool_call_id: str,
         function_name: str,
         arguments: Any,
-        output_index: int = 0,
-        finish_response: bool = True,
     ) -> None:
         call_id = tool_call_id or ""
         if call_id and call_id in self._emitted_function_calls:
             return
         if call_id:
             self._emitted_function_calls.add(call_id)
-
-        response_id, created = self._conversation.begin_response()
-        if created:
-            await self._emit_event(
-                server_event(
-                    SERVER_RESPONSE_CREATED,
-                    response=response_created_body(response_id),
-                )
-            )
-        else:
-            response_id = self._conversation.response_id or response_id
-
-        if isinstance(arguments, str):
-            args_json = arguments
-            args_for_store: Any = arguments
-        else:
-            try:
-                args_json = json.dumps(arguments if arguments is not None else {})
-            except TypeError:
-                args_json = "{}"
-            args_for_store = arguments if arguments is not None else {}
-
-        name = str(function_name or "")
-        if call_id:
-            self._conversation.remember_function_call(
-                call_id,
-                name=name,
-                arguments=args_for_store,
-            )
-
-        fc_item_id = new_item_id()
-        fc_item: dict[str, Any] = {
-            "id": fc_item_id,
-            "object": "realtime.item",
-            "type": "function_call",
-            "status": "in_progress",
-            "name": name,
-            "call_id": call_id,
-            "arguments": "",
-        }
-        await self._emit_event(server_event(SERVER_ITEM_CREATED, previous_item_id=None, item=fc_item))
         await self._emit_event(
             server_event(
-                SERVER_OUTPUT_ITEM_ADDED,
-                response_id=response_id,
-                output_index=output_index,
-                item=fc_item,
+                SERVER_NVIDIA_TOOL_STARTED,
+                tool_call_id=call_id,
+                name=str(function_name or ""),
+                arguments=arguments if arguments is not None else {},
             )
         )
-        await self._emit_event(
-            server_event(
-                SERVER_FUNCTION_CALL_ARGUMENTS_DELTA,
-                response_id=response_id,
-                item_id=fc_item_id,
-                output_index=output_index,
-                call_id=call_id,
-                delta=args_json,
-            )
-        )
-        await self._emit_event(
-            server_event(
-                SERVER_FUNCTION_CALL_ARGUMENTS_DONE,
-                response_id=response_id,
-                item_id=fc_item_id,
-                output_index=output_index,
-                call_id=call_id,
-                name=name,
-                arguments=args_json,
-            )
-        )
-        done_item = {
-            **fc_item,
-            "status": "completed",
-            "arguments": args_json,
-        }
-        await self._emit_event(
-            server_event(
-                SERVER_OUTPUT_ITEM_DONE,
-                response_id=response_id,
-                output_index=output_index,
-                item=done_item,
-            )
-        )
-        self._pending_fc_output_items.append(done_item)
-
-        if not finish_response:
-            return
-
-        snap = self._conversation.complete_response("completed")
-        if snap is None:
-            self._pending_fc_output_items.clear()
-            return
-        await self._emit_event(
-            server_event(
-                SERVER_RESPONSE_DONE,
-                response={
-                    "id": snap.response_id,
-                    "status": "completed",
-                    "output": list(self._pending_fc_output_items),
-                },
-            )
-        )
-        self._pending_fc_output_items.clear()
-        self._conversation.reset_response_slot(generation=snap.generation)
-        self._llm_text_buffer = ""
-        self._llm_text_generation = 0
-        self._bot_transcript_from_tts = False
-        self._clear_frame_dedupe()
 
     async def _finish_response(self, *, status: str) -> None:
         if self._conversation.response_status != "in_progress":
@@ -426,12 +387,10 @@ class RealtimeLifecycleObserver(BaseObserver):
             self._conversation.append_assistant_transcript(buffer)
             await self._emit_transcript_delta(buffer)
 
-        output_text = buffer or self._conversation.assistant_transcript
         await finish_response(
             self._conversation,
             self._emit_fn,
             status=status,
-            output_text=output_text,
         )
         self._bot_transcript_from_tts = False
         self._llm_text_buffer = ""

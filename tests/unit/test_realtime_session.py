@@ -20,6 +20,7 @@ from realtime.session import (
     map_session_update_to_flat_config,
     unsupported_live_session_fields,
 )
+from realtime.transport import _prefers_beta_event_names, create_realtime_transport
 
 
 class MapSessionUpdateTests(unittest.TestCase):
@@ -100,16 +101,22 @@ class MapSessionUpdateTests(unittest.TestCase):
         self.assertEqual(empty["prompt_key"], DEFAULT_PROMPT_KEY)
         self.assertEqual(populated["prompt_key"], DEFAULT_PROMPT_KEY)
 
-    def test_rejects_whisper_transcription(self) -> None:
-        with self.assertRaises(ValueError) as ctx:
-            map_session_update_to_flat_config({"audio": {"input": {"transcription": {"model": "whisper-1"}}}})
-        message = str(ctx.exception)
-        self.assertIn("separate OpenAI transcription model", message)
-        self.assertIn("input_audio_transcription.*", message)
+    def test_accepts_transcription_selector_as_noop(self) -> None:
+        flat = map_session_update_to_flat_config({"audio": {"input": {"transcription": {"model": "whisper-1"}}}})
+        self.assertNotIn("input_audio_transcription", flat)
 
     def test_null_input_audio_transcription_ok(self) -> None:
         flat = map_session_update_to_flat_config({"input_audio_transcription": None})
         self.assertEqual(flat["pipeline_mode"], DEFAULT_PIPELINE_MODE)
+
+    def test_server_vad_is_the_only_turn_mode(self) -> None:
+        map_session_update_to_flat_config({"turn_detection": {"type": "server_vad"}})
+        with self.assertRaisesRegex(ValueError, "push-to-talk"):
+            map_session_update_to_flat_config({"turn_detection": None})
+        with self.assertRaisesRegex(ValueError, "server_vad"):
+            map_session_update_to_flat_config({"turn_detection": {"type": "semantic_vad"}})
+        with self.assertRaisesRegex(ValueError, "tuning is not supported"):
+            map_session_update_to_flat_config({"turn_detection": {"type": "server_vad", "threshold": 0.5}})
 
     def test_temperature_maps_to_llm_temperature(self) -> None:
         flat = map_session_update_to_flat_config({"temperature": 0.8})
@@ -210,6 +217,44 @@ class RealtimeSessionApplyTests(unittest.TestCase):
         for key in ("base_url", "asr_server", "tts_server", "asr_function_id", "tts_function_id"):
             self.assertNotIn(key, nvidia)
 
+    def test_public_nvidia_includes_server_tool_metadata(self) -> None:
+        session = RealtimeSession()
+        public = session.apply_update(
+            {},
+            sanitized_flat={
+                "pipeline_mode": "generic-assistant",
+                "prompt_key": DEFAULT_PROMPT_KEY,
+                "server_tools": ["get_weather", "set_memory"],
+            },
+        )
+        self.assertEqual(public["tools"], [])
+        self.assertEqual(public["nvidia"]["server_tools"], ["get_weather", "set_memory"])
+
+    def test_apply_update_canonicalizes_legacy_audio_fields(self) -> None:
+        session = RealtimeSession()
+        public = session.apply_update(
+            {
+                "input_audio_format": {"type": "audio/pcm", "rate": 16000},
+                "output_audio_format": {"type": "audio/pcm", "rate": 48000},
+                "input_audio_transcription": {"model": "whisper-1"},
+                "turn_detection": {"type": "server_vad"},
+            },
+            sanitized_flat={
+                "pipeline_mode": "generic-assistant",
+                "prompt_key": DEFAULT_PROMPT_KEY,
+            },
+        )
+        self.assertEqual(public["audio"]["input"]["format"]["rate"], 16000)
+        self.assertEqual(public["audio"]["output"]["format"]["rate"], 48000)
+        self.assertEqual(
+            public["audio"]["input"]["transcription"],
+            {"model": "whisper-1"},
+        )
+        self.assertEqual(
+            public["audio"]["input"]["turn_detection"],
+            {"type": "server_vad"},
+        )
+
     def test_rejects_bool_and_truncated_max_output_tokens(self) -> None:
         with self.assertRaises(ValueError):
             map_session_update_to_flat_config({"max_output_tokens": True})
@@ -227,6 +272,36 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(_select_realtime_subprotocol(ws))  # type: ignore[arg-type]
         ws2 = SimpleNamespace(headers={"sec-websocket-protocol": "openai-insecure-api-key.sk-secret,realtime"})
         self.assertEqual(_select_realtime_subprotocol(ws2), "realtime")  # type: ignore[arg-type]
+
+    def test_beta_event_dialect_is_detected_from_browser_subprotocols(self) -> None:
+        from types import SimpleNamespace
+
+        beta = SimpleNamespace(
+            headers={"sec-websocket-protocol": ("realtime,openai-insecure-api-key.null,openai-beta.realtime-v1")}
+        )
+        ga = SimpleNamespace(headers={"sec-websocket-protocol": "realtime"})
+        self.assertTrue(_prefers_beta_event_names(beta))  # type: ignore[arg-type]
+        self.assertFalse(_prefers_beta_event_names(ga))  # type: ignore[arg-type]
+
+    async def test_transport_emits_only_requested_event_dialect(self) -> None:
+        canonical = {"type": "response.output_audio.delta", "delta": "AA=="}
+        beta_alias = {"type": "response.audio.delta", "delta": "AA=="}
+
+        ga_ws = FakeWebSocket([])
+        ga_ws.headers["sec-websocket-protocol"] = "realtime"
+        ga_transport = create_realtime_transport(ga_ws)  # type: ignore[arg-type]
+        ga_emit = ga_transport._realtime_serializer.emit  # type: ignore[attr-defined]
+        await ga_emit(canonical)
+        await ga_emit(beta_alias)
+        self.assertEqual([event["type"] for event in ga_ws.sent], ["response.output_audio.delta"])
+
+        beta_ws = FakeWebSocket([])
+        beta_ws.headers["sec-websocket-protocol"] = "openai-beta.realtime-v1"
+        beta_transport = create_realtime_transport(beta_ws)  # type: ignore[arg-type]
+        beta_emit = beta_transport._realtime_serializer.emit  # type: ignore[attr-defined]
+        await beta_emit(canonical)
+        await beta_emit(beta_alias)
+        self.assertEqual([event["type"] for event in beta_ws.sent], ["response.audio.delta"])
 
     async def test_session_created_then_updated(self) -> None:
         ws = FakeWebSocket(
@@ -296,21 +371,36 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveSessionUpdateFieldTests(unittest.TestCase):
-    def test_voice_and_turn_detection_are_live(self) -> None:
+    def test_voice_is_live_and_turn_detection_is_immutable(self) -> None:
+        current = {
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "turn_detection": {"type": "server_vad"},
+                }
+            }
+        }
         self.assertEqual(
             unsupported_live_session_fields(
                 {
                     "voice": "Magpie-Multilingual.EN-US.Aria",
-                    "turn_detection": None,
                     "audio": {
-                        "input": {"format": {"type": "audio/pcm", "rate": 24000}, "turn_detection": None},
+                        "input": {
+                            "format": {"type": "audio/pcm", "rate": 24000},
+                            "turn_detection": {"type": "server_vad"},
+                        },
                         "output": {"voice": "Magpie-Multilingual.EN-US.Aria"},
                     },
                 },
-                current={},
+                current=current,
             ),
             [],
         )
+        bad = unsupported_live_session_fields(
+            {"turn_detection": None},
+            current=current,
+        )
+        self.assertIn("turn_detection", bad)
 
     def test_echoed_agent_fields_allowed_when_unchanged(self) -> None:
         current = {
@@ -318,6 +408,7 @@ class LiveSessionUpdateFieldTests(unittest.TestCase):
             "tools": [{"type": "function", "name": "get_weather"}],
             "temperature": 0.8,
             "nvidia": {"pipeline_mode": "generic-assistant"},
+            "audio": {"input": {"turn_detection": {"type": "server_vad"}}},
         }
         self.assertEqual(
             unsupported_live_session_fields(
@@ -356,12 +447,12 @@ class LiveSessionUpdateFieldTests(unittest.TestCase):
         )
         self.assertEqual(set(bad), {"instructions", "tools", "nvidia.pipeline_mode"})
 
-    def test_non_null_transcription_not_live(self) -> None:
+    def test_non_null_transcription_is_accepted_noop(self) -> None:
         bad = unsupported_live_session_fields(
             {"audio": {"input": {"transcription": {"model": "whisper-1"}}}},
             current={},
         )
-        self.assertIn("audio.input.transcription", bad)
+        self.assertEqual(bad, [])
 
     def test_null_transcription_allowed(self) -> None:
         self.assertEqual(
