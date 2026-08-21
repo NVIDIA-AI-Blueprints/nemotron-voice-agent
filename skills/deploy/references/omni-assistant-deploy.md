@@ -26,7 +26,7 @@ docker compose --profile omni-assistant/single-gpu up -d
 | Recipe profile | App service | Sidecars from `docker/` |
 | --- | --- | --- |
 | `omni-assistant` | `omni-assistant` | none (cloud NVCF) |
-| `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `tts-service` |
+| `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
 | `omni-assistant/single-gpu` | `omni-assistant-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
 Tear down with the same recipe used at `up` time.
@@ -35,14 +35,14 @@ Tear down with the same recipe used at `up` time.
 
 - UI at `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`.
 - Cloud app logs: `docker compose logs --tail 200 omni-assistant`.
-- Server app and NIM logs: `docker compose logs --tail 200 omni-assistant-server nvidia-llm-omni tts-service`.
+- Server app and NIM logs: `docker compose logs --tail 200 omni-assistant-server nvidia-llm-omni magpie-multilingual-tts-service`.
 - Single-GPU app and sidecar logs: `docker compose logs --tail 200 omni-assistant-single-gpu nvidia-llm-vllm-omni nemo-speech-tts`.
 - Server NIM health: `curl -f http://localhost:18002/v1/health/ready`.
 - Single-GPU vLLM health: `curl -f http://localhost:8002/health`.
 
 ## GPU memory & device placement
 
-Omni handles ASR inside the model, so there is no separate ASR NIM. The `server` recipe uses `nvidia-llm-omni` and `tts-service`. The single-GPU recipe uses `nvidia-llm-vllm-omni` and `nemo-speech-tts`.
+Omni handles ASR inside the model, so there is no separate ASR NIM. The `server` recipe uses `nvidia-llm-omni` and `magpie-multilingual-tts-service`. The single-GPU recipe uses `nvidia-llm-vllm-omni` and `nemo-speech-tts`.
 
 For the VRAM, `--gpu-memory-utilization`, and device-placement matrix, see [VRAM & hardware support](../../../docs/how-to/configure-llm.md#vram--hardware-support).
 
@@ -51,5 +51,5 @@ For the VRAM, `--gpu-memory-utilization`, and device-placement matrix, see [VRAM
 - **`pull access denied` / `unauthorized`** -> NGC login was not done or expired. See the root `deploy` skill.
 - **Omni vLLM stuck on first-run model download** -> initial download of `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` from Hugging Face requires `HF_TOKEN` in `.env`. Allow up to 30 minutes on first start.
 - **`No available memory for the cache blocks` on startup** -> `--gpu-memory-utilization` is too **low** for this GPU, leaving no room for the KV cache after the weights. Raise it and give the LLM a dedicated GPU. Do not lower it.
-- **True out-of-memory (CUDA OOM) during model load** -> the fraction collides with another process on the same GPU. Lower `--gpu-memory-utilization` or `--max-model-len`, or move `tts-service` to a separate GPU.
+- **True out-of-memory (CUDA OOM) during model load** -> the fraction collides with another process on the same GPU. Lower `--gpu-memory-utilization` or `--max-model-len`, or move `magpie-multilingual-tts-service` to a separate GPU.
 - **Tear-down leaves orphan services after a service rename** -> rerun `up` or `down` with `--remove-orphans`.

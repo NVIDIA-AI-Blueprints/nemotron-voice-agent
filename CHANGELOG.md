@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated Nemotron ASR Streaming NIM to version 1.3.1.
 - Updated Parakeet CTC 1.1B ASR NIM to version 1.5.3.
 - Updated Magpie TTS Multilingual NIM to version 1.10.0 and `nvidia-riva-client` to version 2.27.0.
+- Renamed the Magpie Multilingual Compose services to `magpie-multilingual-tts-service` and `magpie-multilingual-tts-service-perf`.
 - Updated Chatterbox TTS Multilingual NIM to version 1.1.0 and documented its available model profiles.
 - Standardized the self-hosted Nemotron 3.5 Lightning served model ID with NVIDIA Cloud across NIM and single-GPU vLLM deployments.
 - Consolidated on-prem deployment recipes under `<example>/server` for scaling-oriented stacks and universal `<example>/single-gpu` for supported one-GPU deployments on workstations, DGX Spark, and Jetson Thor. Renamed `generic-assistant/workstation-perf` to `generic-assistant/server-perf`.

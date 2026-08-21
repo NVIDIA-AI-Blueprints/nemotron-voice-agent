@@ -39,7 +39,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    | Recipe profile | App service | Sidecars |
    | --- | --- | --- |
    | `multilingual-assistant` | `multilingual-assistant` | none (cloud NVCF) |
-   | `multilingual-assistant/server` | `multilingual-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `tts-service` |
+   | `multilingual-assistant/server` | `multilingual-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
    | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-multilingual` |
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).

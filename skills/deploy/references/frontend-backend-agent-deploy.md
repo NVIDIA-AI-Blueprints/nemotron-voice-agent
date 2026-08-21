@@ -15,7 +15,7 @@ docker compose --profile frontend-backend-agent/single-gpu up -d
 | Recipe profile | App service | Sidecars |
 | --- | --- | --- |
 | `frontend-backend-agent` | `frontend-backend-agent` | `booking-server` |
-| `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service` |
+| `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech` |
 
 Tear down with the same recipe used at `up` time.
@@ -30,7 +30,7 @@ docker compose --profile <recipe> down
 - Server app logs: `docker compose logs --tail 200 frontend-backend-agent-server`.
 - Single-GPU app logs: `docker compose logs --tail 200 frontend-backend-agent-single-gpu`.
 - Booking server logs: `docker compose logs --tail 200 booking-server`.
-- Server local service logs: `docker compose logs --tail 200 nvidia-llm nemotron-asr-streaming-english tts-service`.
+- Server local service logs: `docker compose logs --tail 200 nvidia-llm nemotron-asr-streaming-english magpie-multilingual-tts-service`.
 
 ## Limits
 

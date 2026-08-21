@@ -88,8 +88,9 @@ scaling configuration:
 - `nemotron-asr-streaming-english`:
   `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
   `nemotron-asr-streaming-english`
-- `tts-service`: `NIM_TAGS_SELECTOR=name=magpie-tts-multilingual,batch_size=64`,
-  GPU `1`, alias `tts-service`
+- `magpie-multilingual-tts-service-perf`:
+  `NIM_TAGS_SELECTOR=name=magpie-tts-multilingual,batch_size=64`, GPU `1`, alias
+  `magpie-multilingual-tts-service`
 - app env: `UVICORN_WORKERS=200`,
   `USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`,
   `AUDIO_OUT_10MS_CHUNKS=40`

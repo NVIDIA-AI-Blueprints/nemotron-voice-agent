@@ -160,7 +160,7 @@ def _rewrite_entry_for_host_runtime(entry: dict) -> dict:
             out[field] = (
                 value.replace("magpie-zeroshot-tts-service:50051", "localhost:50151")
                 .replace("chatterbox-tts-service:50051", "localhost:50151")
-                .replace("tts-service:50051", "localhost:50151")
+                .replace("magpie-multilingual-tts-service:50051", "localhost:50151")
                 .replace("nemotron-asr-streaming-english:50052", "localhost:50152")
                 .replace("nemotron-asr-streaming-multilingual:50052", "localhost:50152")
                 .replace("parakeet-ctc-asr:50052", "localhost:50152")

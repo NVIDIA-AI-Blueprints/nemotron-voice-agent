@@ -4,7 +4,7 @@ Use this reference from the `deploy` skill when deploying the generic voice pipe
 
 ## When to use
 
-Pinning a Docker Compose deployment to the Generic Cascaded example. Use `generic-assistant` for cloud, `generic-assistant/server` for the NIM stack, or `generic-assistant/single-gpu` for vLLM and NeMo-Speech.cpp. Selector modes are host-native only and are not exposed as Compose profiles.
+Pinning a Docker Compose deployment to the Generic Cascaded example. Use `generic-assistant` for cloud, `generic-assistant/server` for the NIM stack, `generic-assistant/server-perf` for the multi-GPU benchmark stack, or `generic-assistant/single-gpu` for vLLM and NeMo-Speech.cpp. Selector modes are host-native only and are not exposed as Compose profiles.
 
 Per-example catalogs at `src/examples/generic/services.{cloud,local}.yaml` are auto-selected on container startup because the registry resolves the example for the active recipe.
 
@@ -19,7 +19,8 @@ docker compose --profile <recipe> up -d
 | Recipe profile | App service | Sidecars from `docker/` |
 | --- | --- | --- |
 | `generic-assistant` | `generic-assistant` | none (cloud NVCF) |
-| `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service` |
+| `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
+| `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
 | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
 
 Tear down with the same recipe used at `up` time:
@@ -34,6 +35,7 @@ docker compose --profile <recipe> down
 - Container status: `docker compose ps`.
 - Cloud app logs: `docker compose logs --tail 200 generic-assistant`.
 - Server app logs: `docker compose logs --tail 200 generic-assistant-server`.
+- Performance server app logs: `docker compose logs --tail 200 generic-assistant-server-perf`.
 - Single-GPU app logs: `docker compose logs --tail 200 generic-assistant-single-gpu`.
 
 ## Local LLM NIM profiles

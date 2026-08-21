@@ -19,11 +19,11 @@ Required `.env` keys:
 Recipes: `generic-assistant/server`, `multilingual-assistant/server`, `omni-assistant/server`, `omni-assistant-subagents/server`, `frontend-backend-agent/server`.
 
 Services depend on the recipe:
-- `generic-assistant/server`: `generic-assistant-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service`
-- `multilingual-assistant/server`: `multilingual-assistant-server`, `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `tts-service`
-- `omni-assistant/server`: `omni-assistant-server`, `nvidia-llm-omni`, `tts-service`
-- `omni-assistant-subagents/server`: `omni-assistant-subagents-server`, `nvidia-llm-omni`, `tts-service`
-- `frontend-backend-agent/server`: `frontend-backend-agent-server`, `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service`
+- `generic-assistant/server`: `generic-assistant-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service`
+- `multilingual-assistant/server`: `multilingual-assistant-server`, `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service`
+- `omni-assistant/server`: `omni-assistant-server`, `nvidia-llm-omni`, `magpie-multilingual-tts-service`
+- `omni-assistant-subagents/server`: `omni-assistant-subagents-server`, `nvidia-llm-omni`, `magpie-multilingual-tts-service`
+- `frontend-backend-agent/server`: `frontend-backend-agent-server`, `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service`
 
 Requires enough GPU VRAM for the selected local NIM services. Single-GPU hosts are valid when capacity is sufficient. Multi-GPU hosts may split speech sidecars and LLM across devices. For the user-facing VRAM, memory-knob, and device-placement matrix, see [VRAM & hardware support](../../../docs/how-to/configure-llm.md#vram--hardware-support).
 

@@ -39,7 +39,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    | Recipe profile | App service | Shared sidecars pulled from `docker/` |
    | --- | --- | --- |
    | `omni-assistant-subagents` | `omni-assistant-subagents` | none (cloud NVCF) |
-   | `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `tts-service` |
+   | `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
    | `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).

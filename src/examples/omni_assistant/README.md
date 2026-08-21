@@ -39,7 +39,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    | Recipe profile | App service | Shared sidecars pulled from `docker/` |
    | --- | --- | --- |
    | `omni-assistant` | `omni-assistant` | none (cloud NVCF) |
-   | `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `tts-service` |
+   | `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
    | `omni-assistant/single-gpu` | `omni-assistant-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
    > The single-GPU recipe uses the Omni vLLM sidecar and takes TTS from the on-device NeMo-Speech.cpp `nemo-speech-tts` service instead of the NIM sidecars. Jetson Thor (128 GB unified memory) fits the 30B Omni NVFP4 model. Follow the [Jetson Thor guide](../../../docs/03-jetson-thor.md). Orin-class Jetson hardware is not supported because the models do not fit.
