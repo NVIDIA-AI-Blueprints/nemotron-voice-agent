@@ -613,28 +613,18 @@ class PerfClient:
         if not failure.terminal:
             await self._cancel_active_realtime_response()
 
-    def _has_active_realtime_response(self, event_start: int) -> bool:
-        if self._realtime is None:
-            return False
-        active = False
-        for event in self._realtime.events[event_start:]:
-            kind = str(event.get("type") or "")
-            if kind == "response.created":
-                active = True
-            elif kind == "response.done":
-                active = False
-        return active
-
     async def _receive_initial_bot_intro(self, websocket, wf):
-        realtime_event_start = len(self._realtime.events) if self._realtime is not None else 0
         try:
             data = await self._recv_audio_frame(websocket, timeout=BOT_INTRO_TIMEOUT)
         except FailedBotUtterance as exc:
             await self._synchronize_failed_realtime_response(exc)
             await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
             return wf
-        except (EndOfBotUtterance, TimeoutError):
-            if self._has_active_realtime_response(realtime_event_start):
+        except EndOfBotUtterance:
+            await self.logger.log(f"{self.stream_id} initial bot intro completed without audio")
+            return wf
+        except TimeoutError:
+            if self._realtime is not None:
                 await self._cancel_active_realtime_response()
             await self.logger.log(f"{self.stream_id} no initial bot intro within {BOT_INTRO_TIMEOUT}s")
             return wf

@@ -168,6 +168,14 @@ def error_message(event: Mapping[str, Any]) -> str:
     return json.dumps(dict(event), default=str)[:400]
 
 
+def error_code(event: Mapping[str, Any]) -> str:
+    """Return a Realtime error code when one is present."""
+    err = event.get("error")
+    if not isinstance(err, Mapping):
+        return ""
+    return str(err.get("code") or "")
+
+
 class OpenAIRealtimeSocket:
     """One OpenAI Realtime WebSocket session."""
 
@@ -296,6 +304,8 @@ class OpenAIRealtimeSocket:
             if remaining <= 0:
                 raise TimeoutError("timed out waiting for cancelled response.done")
             event = await self.recv_event(timeout=remaining)
+            if str(event.get("type") or "") == "error" and error_code(event) == "response_cancel_not_active":
+                return event
             self._raise_if_error(event)
             self._apply_session_event(event)
             if is_response_done(event):

@@ -205,19 +205,19 @@ wrapper and `benchmark.py` unless the description states otherwise:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--clients "N1 N2 …"` | `1` | One run per concurrency level. Quote the list. |
+| `--clients "N1 N2 …"` | `1` | Shell wrapper only. One run per concurrency level. Quote the list. |
 | `--host` / `--port` | `localhost` / `7860` | RTVI server target. |
 | `--protocol` | `rtvi` | Select `realtime` for an OpenAI Realtime WebSocket. Providing `--ws-url` or setting `OPENAI_REALTIME_WS_URL` also selects Realtime mode when you omit this flag. |
 | `--ws-url` | unset; falls back to `OPENAI_REALTIME_WS_URL` | Full Realtime WebSocket URL. Required in Realtime mode. |
 | `--auth-scheme` | `Bearer`; falls back to `OPENAI_REALTIME_AUTH_SCHEME` | Authorization scheme for the Realtime API key. |
-| `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. The Realtime session-ready timeout remains 60 seconds. |
+| `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. In Realtime mode, the same value bounds the `session.updated` readiness wait. |
 | `--turn-response-timeout` | RTVI: `10`; Realtime: `45` | Seconds to wait for first response audio after the WAV ends. |
 | `--insecure` | off | Disable TLS certificate verification for Realtime. Intended for local development certificates. |
 | `--skip-bot-intro` | RTVI: off; Realtime: on | Skip draining an initial assistant utterance. Realtime skips it by default. |
-| `--drain-bot-intro` | RTVI: on; Realtime: off | Wait for and discard an initial assistant utterance. Only direct `benchmark.py` runs accept this flag. If you also pass `--skip-bot-intro`, skipping takes precedence. |
+| `--drain-bot-intro` | RTVI: on; Realtime: off | Wait for and discard an initial assistant utterance. Only direct `benchmark.py` runs accept this flag. It is mutually exclusive with `--skip-bot-intro`; passing both is a CLI error. |
 | `--test-duration` | `300` | Seconds of metric collection per level. |
-| `--client-start-delay` | `1` | Stagger between clients connecting (s). With N clients and delay D, the metric window opens at ``now + (N-1)*D`` so every worker is connected before measurement starts. |
-| `--cooldown` | `10` | Pause between sweep levels (s) — lets the server settle between bursts. |
+| `--client-start-delay` | `1` | Shell wrapper only. Stagger between clients connecting (s). With N clients and delay D, the metric window opens at ``now + (N-1)*D`` so every worker is connected before measurement starts. |
+| `--cooldown` | `10` | Shell wrapper only. Pause between sweep levels (s) — lets the server settle between bursts. |
 | `--reverse-barge-in-threshold` | `0.4` | Bot audio arriving within this many seconds of the user finishing speaking is discarded as a *reverse* barge-in (the server racing the end of the user's utterance) instead of being timed as the real response. Used internally. Not surfaced in summaries. |
 | `--no-save-audio` | (audio saved) | Skip writing per-client output WAVs. |
 | `--dataset-dir DIR` | `./dataset` | Override input WAV directory. |
@@ -283,8 +283,8 @@ weighted-averaged across all turns/clients in a run):
 
 The OpenAI Realtime protocol does not carry RTVI timing frames, so RTVI
 server-metric columns are `N/A` for Realtime endpoints. Per-client Realtime
-result JSON instead includes `realtime_turn_metrics`. Each completed turn
-records these values in seconds:
+result JSON instead includes `realtime_turn_metrics`. Each Realtime turn,
+including failed turns, records these values in seconds:
 
 - `input_end_to_speech_stopped`: time from the last input WAV frame to the
   server's `input_audio_buffer.speech_stopped` event.
@@ -294,8 +294,10 @@ records these values in seconds:
 - `stage_deltas`: `response_after_asr`,
   `first_text_after_response_created`, and `first_audio_after_first_text`.
 - `response_status` and `usage`: values from `response.done`, when provided.
+- `error`: a timeout, no-audio, or failed-response description when applicable.
 
 The client records the first matching event of each type after a turn starts.
 If the server does not send a speech-stop event, speech-relative values are
-`null`. These metrics use client-observed event arrival times, not server
-processing timestamps, so they do not replace server-side RTVI metrics.
+`null`. Failed records can also contain other `null` lifecycle fields. These
+metrics use client-observed event arrival times, not server processing
+timestamps, so they do not replace server-side RTVI metrics.
