@@ -241,6 +241,10 @@ class ClientResult:
 type FirstBotFrame = tuple[bytes | None, dt.datetime | None]
 
 
+class EndOfBotUtterance(Exception):
+    """A Realtime response completed before producing more audio."""
+
+
 class RealtimeFrameAdapter:
     """Translate Realtime JSON audio into the benchmark's protobuf frame API."""
 
@@ -256,7 +260,7 @@ class RealtimeFrameAdapter:
         try:
             pcm = await self.realtime.recv_audio()
         except EndOfRealtimeResponse as exc:
-            raise TimeoutError from exc
+            raise EndOfBotUtterance from exc
         audio = frames_pb2.AudioRawFrame(
             audio=pcm,
             sample_rate=self.realtime.output_sample_rate,
@@ -570,7 +574,7 @@ class PerfClient:
     async def _receive_initial_bot_intro(self, websocket, wf):
         try:
             data = await self._recv_audio_frame(websocket, timeout=BOT_INTRO_TIMEOUT)
-        except TimeoutError:
+        except (EndOfBotUtterance, TimeoutError):
             await self.logger.log(f"{self.stream_id} no initial bot intro within {BOT_INTRO_TIMEOUT}s")
             return wf
         await self.logger.log(f"{self.stream_id} received initial bot intro")
@@ -613,7 +617,7 @@ class PerfClient:
 
             try:
                 data = await self._recv_audio_frame(websocket, timeout=drain_timeout)
-            except TimeoutError:
+            except (EndOfBotUtterance, TimeoutError):
                 return wf, chunk_count
 
     async def _await_first_bot_frame(self, send_task: asyncio.Task, recv_task: asyncio.Task) -> FirstBotFrame:
@@ -663,8 +667,17 @@ class PerfClient:
         await self.logger.log(f"{self.stream_id} turn start using {audio_file_path.name}")
         send_task = asyncio.create_task(self._send_audio_file(websocket, audio_file_path))
         recv_task = asyncio.create_task(self._recv_audio_frame(websocket, timeout=None))
-        data, utterance_start = await self._await_first_bot_frame(send_task, recv_task)
+        try:
+            data, utterance_start = await self._await_first_bot_frame(send_task, recv_task)
+        except EndOfBotUtterance:
+            await send_task
+            if self.collecting_metrics:
+                self.failed_turns += 1
+                await self.logger.log(f"{self.stream_id} turn completed without bot audio")
+            await self._record_realtime_turn_metrics(audio_file_path, realtime_event_start)
+            return wf
         if data is None or utterance_start is None:
+            await self._record_realtime_turn_metrics(audio_file_path, realtime_event_start)
             return wf
 
         wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=True)
@@ -816,7 +829,8 @@ class PerfClient:
             wf.close()
 
     async def run(self) -> ClientResult:
-        await self.logger.log(f"{self.stream_id} starting client uri={self.uri}")
+        log_uri = self.uri.partition("?")[0]
+        await self.logger.log(f"{self.stream_id} starting client uri={log_uri}")
         if self.start_delay > 0:
             await self.logger.log(f"{self.stream_id} waiting start_delay={self.start_delay:.2f}s")
             await asyncio.sleep(self.start_delay)
@@ -837,9 +851,13 @@ class PerfClient:
         error = None
         try:
             if self.protocol == "realtime":
-                input_rate = 16_000
-                with contextlib.suppress(Exception), wave.open(str(self.audio_files[0]), "rb") as wav_file:
-                    input_rate = wav_file.getframerate()
+                input_rates: set[int] = set()
+                for audio_file in self.audio_files:
+                    with wave.open(str(audio_file), "rb") as wav_file:
+                        input_rates.add(wav_file.getframerate())
+                if len(input_rates) != 1:
+                    raise ValueError(f"Realtime requires one input sample rate; dataset contains {sorted(input_rates)}")
+                input_rate = input_rates.pop()
                 async with OpenAIRealtimeSocket(
                     self.uri,
                     api_key=self.api_key,
@@ -850,7 +868,7 @@ class PerfClient:
                     verify_tls=self.verify_tls,
                 ) as realtime:
                     self._realtime = realtime
-                    ready = await realtime.configure_input(input_rate)
+                    ready = await realtime.configure_input(input_rate, timeout=self.connect_timeout)
                     await self.logger.log(
                         f"{self.stream_id} realtime session ready type={ready.get('type')} "
                         f"output_rate={realtime.output_sample_rate}"
@@ -979,14 +997,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="OpenAI Realtime WebSocket URL (env OPENAI_REALTIME_WS_URL). Implies --protocol realtime.",
     )
     parser.add_argument(
-        "--api-key",
-        default="",
-        help="Realtime API key (env OPENAI_REALTIME_API_KEY).",
-    )
-    parser.add_argument(
         "--auth-scheme",
         default="",
-        help="Authorization scheme for --api-key (env OPENAI_REALTIME_AUTH_SCHEME; default: Bearer).",
+        help="Authorization scheme for OPENAI_REALTIME_API_KEY (env OPENAI_REALTIME_AUTH_SCHEME; default: Bearer).",
     )
     parser.add_argument(
         "--connect-timeout",
@@ -999,14 +1012,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable TLS certificate verification for a Realtime wss:// endpoint.",
     )
-    parser.add_argument(
+    intro_group = parser.add_mutually_exclusive_group()
+    intro_group.add_argument(
         "--drain-bot-intro",
+        dest="drain_bot_intro",
         action="store_true",
+        default=None,
         help="Wait for and discard an initial bot utterance. Default on for RTVI, off for realtime.",
     )
-    parser.add_argument(
+    intro_group.add_argument(
         "--skip-bot-intro",
-        action="store_true",
+        dest="drain_bot_intro",
+        action="store_false",
         help="Do not wait for an initial bot utterance.",
     )
     parser.add_argument(
@@ -1113,7 +1130,7 @@ async def async_main(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    api_key = resolve_api_key(args.api_key)
+    api_key = resolve_api_key()
     auth_scheme = resolve_auth_scheme(args.auth_scheme)
     if protocol == "realtime" and not ws_url:
         print("error: --ws-url or OPENAI_REALTIME_WS_URL is required for realtime", file=sys.stderr)
@@ -1128,12 +1145,6 @@ async def async_main(args: argparse.Namespace) -> int:
         if args.turn_response_timeout is not None
         else (REALTIME_TURN_RESPONSE_TIMEOUT if protocol == "realtime" else TURN_RESPONSE_TIMEOUT)
     )
-    drain_bot_intro = protocol != "realtime"
-    if args.drain_bot_intro:
-        drain_bot_intro = True
-    if args.skip_bot_intro:
-        drain_bot_intro = False
-
     logger = RunLogger(logger_path)
     client = PerfClient(
         stream_id=args.stream_id,
@@ -1153,7 +1164,7 @@ async def async_main(args: argparse.Namespace) -> int:
         api_key=api_key,
         auth_scheme=auth_scheme,
         connect_timeout=connect_timeout,
-        drain_bot_intro=drain_bot_intro,
+        drain_bot_intro=args.drain_bot_intro,
         verify_tls=not args.insecure,
     )
     result = await client.run()

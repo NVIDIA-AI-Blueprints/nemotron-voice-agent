@@ -41,7 +41,6 @@ HOST="localhost"
 PORT="7860"
 PROTOCOL=""
 WS_URL="${OPENAI_REALTIME_WS_URL:-}"
-API_KEY=""
 AUTH_SCHEME=""
 CONNECT_TIMEOUT=""
 TURN_RESPONSE_TIMEOUT=""
@@ -63,9 +62,8 @@ Usage: $(basename "$0") [options]
 Options:
   --host HOST                          (default: localhost)
   --port PORT                          (default: 7860)
-  --protocol rtvi|realtime             (default: rtvi, or realtime if --ws-url is set)
+  --protocol rtvi|realtime             (default: rtvi, or realtime if --ws-url or OPENAI_REALTIME_WS_URL is set)
   --ws-url URL                         OpenAI Realtime WebSocket URL
-  --api-key KEY                        Realtime API key (or export OPENAI_REALTIME_API_KEY)
   --auth-scheme SCHEME                 Authorization scheme (default: Bearer)
   --connect-timeout SECONDS            WebSocket handshake timeout
   --turn-response-timeout SECONDS      Wait for first bot audio after user speech
@@ -90,7 +88,6 @@ while [[ $# -gt 0 ]]; do
     --port)                         PORT="$2"; shift 2 ;;
     --protocol)                     PROTOCOL="$2"; shift 2 ;;
     --ws-url)                       WS_URL="$2"; shift 2 ;;
-    --api-key)                      API_KEY="$2"; shift 2 ;;
     --auth-scheme)                  AUTH_SCHEME="$2"; shift 2 ;;
     --connect-timeout)              CONNECT_TIMEOUT="$2"; shift 2 ;;
     --turn-response-timeout)        TURN_RESPONSE_TIMEOUT="$2"; shift 2 ;;
@@ -182,7 +179,6 @@ for num_clients in "${CLIENT_COUNTS_ARR[@]}"; do
     extra_args=()
     if [[ -n "$PROTOCOL" ]]; then extra_args+=(--protocol "$PROTOCOL"); fi
     if [[ -n "$WS_URL" ]]; then extra_args+=(--ws-url "$WS_URL"); fi
-    if [[ -n "$API_KEY" ]]; then extra_args+=(--api-key "$API_KEY"); fi
     if [[ -n "$AUTH_SCHEME" ]]; then extra_args+=(--auth-scheme "$AUTH_SCHEME"); fi
     if [[ -n "$CONNECT_TIMEOUT" ]]; then extra_args+=(--connect-timeout "$CONNECT_TIMEOUT"); fi
     if [[ -n "$TURN_RESPONSE_TIMEOUT" ]]; then extra_args+=(--turn-response-timeout "$TURN_RESPONSE_TIMEOUT"); fi

@@ -96,9 +96,9 @@ The endpoint must use server-side VAD and create responses automatically. The
 client does not send `input_audio_buffer.commit` or `response.create`. It keeps
 sending PCM silence after each WAV and expects base64 mono PCM in
 `response.output_audio.delta` events. A `response.done` event marks response
-completion. An `error` event or an event type that ends in `.failed` stops the
-client and records the server message as its error. Use WAV files with a
-consistent sample rate across the dataset.
+completion. A session-level `error` or `session.*.failed` event stops the
+client; item-level failures remain in the event log while the response
+continues. Use WAV files with a consistent sample rate across the dataset.
 
 ### Prompt override for perf runs
 
@@ -207,7 +207,6 @@ wrapper and `benchmark.py` unless the description states otherwise:
 | `--host` / `--port` | `localhost` / `7860` | RTVI server target. |
 | `--protocol` | `rtvi` | Select `realtime` for an OpenAI Realtime WebSocket. Providing `--ws-url` or setting `OPENAI_REALTIME_WS_URL` also selects Realtime mode when you omit this flag. |
 | `--ws-url` | unset; falls back to `OPENAI_REALTIME_WS_URL` | Full Realtime WebSocket URL. Required in Realtime mode. |
-| `--api-key` | unset; falls back to `OPENAI_REALTIME_API_KEY` | Optional Realtime API key. Prefer the environment variable to avoid exposing credentials in process arguments. |
 | `--auth-scheme` | `Bearer`; falls back to `OPENAI_REALTIME_AUTH_SCHEME` | Authorization scheme for the Realtime API key. |
 | `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. The Realtime session-ready timeout remains 60 seconds. |
 | `--turn-response-timeout` | RTVI: `10`; Realtime: `45` | Seconds to wait for first response audio after the WAV ends. |

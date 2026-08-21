@@ -111,7 +111,7 @@ def is_response_done(event: Mapping[str, Any]) -> bool:
 
 def is_error_event(event: Mapping[str, Any]) -> bool:
     kind = str(event.get("type") or "")
-    return kind == "error" or kind.endswith(".failed")
+    return kind == "error" or (kind.startswith("session.") and kind.endswith(".failed"))
 
 
 def parse_output_audio(event: Mapping[str, Any]) -> bytes:
@@ -217,7 +217,10 @@ class OpenAIRealtimeSocket:
         if isinstance(raw, (bytes, bytearray)):
             event = {"type": "_binary", "data": bytes(raw)}
         else:
-            event = json.loads(raw)
+            decoded = json.loads(raw)
+            if not isinstance(decoded, dict):
+                raise RealtimeProtocolError(f"expected a JSON object event, got {type(decoded).__name__}")
+            event = decoded
 
         kind = str(event.get("type") or "")
         summary: dict[str, Any] = {"type": kind, "received_at": time.monotonic()}
