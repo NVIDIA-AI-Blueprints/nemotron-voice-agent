@@ -289,10 +289,9 @@ def _resolve_service_default(example: EnrichedExample, category: str, service_id
         cloud_entry = cloud_section.get(service_id)
         if isinstance(cloud_entry, dict):
             return _service_entry_payload("cloud-nim", service_id, cloud_entry)
-        if isinstance(local_entry, dict):
-            for fallback_key, fallback_entry in cloud_section.items():
-                if isinstance(fallback_entry, dict):
-                    return _service_entry_payload("cloud-nim", fallback_key, fallback_entry)
+        for fallback_key, fallback_entry in cloud_section.items():
+            if isinstance(fallback_entry, dict):
+                return _service_entry_payload("cloud-nim", fallback_key, fallback_entry)
 
     if isinstance(local_entry, dict):
         return _service_entry_payload("self-hosted", service_id, local_entry)

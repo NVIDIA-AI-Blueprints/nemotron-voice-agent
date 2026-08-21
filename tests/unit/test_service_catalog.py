@@ -294,6 +294,14 @@ llm:
 
         self.assertEqual(defaults["asr"][0]["id"], "cloud-nim:parakeet-rnnt")
 
+    def test_registry_defaults_use_cloud_multilingual_without_a_local_catalog(self) -> None:
+        example = examples_registry._lookup_by_key("multilingual-assistant")
+
+        with patch.dict(os.environ, {"PLATFORM": "cloud"}):
+            defaults = examples_registry.metadata(example)["defaults"]
+
+        self.assertEqual(defaults["asr"][0]["id"], "cloud-nim:parakeet-rnnt")
+
     def test_cloud_nemotron_asr_uses_current_english_model_name(self) -> None:
         generic_catalog = utils.load_yaml_file(Path("src/examples/generic/services.cloud.yaml"))
         frontend_backend_catalog = utils.load_yaml_file(Path("src/examples/frontend_backend_agent/services.cloud.yaml"))
