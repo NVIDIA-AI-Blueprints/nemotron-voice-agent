@@ -10,11 +10,12 @@ Models are declared per example in `services.cloud.yaml` (remote / NVCF) and `se
 
 ## Models
 
-Three unique Nemotron models back the examples. Each is served by the self-hosted Compose service(s) below, or from the cloud catalog with no sidecar.
+Four unique Nemotron models back the examples. Self-hosted models use the Compose service shown below. Cloud-only models need no sidecar.
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Nemotron 3 Nano 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron3-nano.yaml`](../../docker/docker-compose.nemotron3-nano.yaml) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) |
+| **Nemotron 3.5 Lightning 30B A3B**: default cloud text LLM | Cloud only | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
 | **Nemotron 3 Super 120B A12B**: recommended for cloud deployments, higher capability for complex tasks | [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
 | **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 
@@ -22,9 +23,12 @@ Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` /
 
 | Model | Catalog keys |
 |-------|--------------|
-| Nemotron 3 Nano | `nemotron-nano`, `nemotron-nano-reasoning` |
+| Nemotron 3 Nano (self-hosted) | `nemotron-nano`, `nemotron-nano-reasoning` |
+| Nemotron 3.5 Lightning (cloud) | `nemotron-lightning`, `nemotron-lightning-reasoning` |
 | Nemotron 3 Super | `nemotron-super`, `nemotron-super-reasoning` |
 | Nemotron 3 Nano Omni | `nemotron-omni-nvfp4` |
+
+The cascaded Nemotron 3 Nano cloud endpoint is deprecated. Cascaded NVIDIA Cloud catalogs now use Nemotron 3.5 Lightning.
 
 The `*-reasoning` keys are the **same weights** with thinking enabled (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) under `defaults`.
 
@@ -35,9 +39,10 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 | Built-in LLM | Supported language bases |
 | --- | --- |
 | Nemotron 3 Nano (`nemotron-nano`, `nemotron-nano-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
+| Nemotron 3.5 Lightning (`nemotron-lightning`, `nemotron-lightning-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 | Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
 
-The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3 Nano model card](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) and [Nemotron 3 Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
+The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3 Nano model card](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard), [Nemotron 3.5 Lightning model card](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard), and [Nemotron 3 Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
 
 ## Hardware requirements and deployment configs
 
@@ -101,13 +106,13 @@ Nemotron LLMs support a chain-of-thought "thinking" mode, controlled per catalog
 ```yaml
 llm:
   # Reasoning OFF: lowest latency (recommended default for spoken pipelines)
-  nemotron-nano:
-    model_id: "nvidia/nemotron-3-nano-30b-a3b"
+  nemotron-lightning:
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
 
   # Reasoning ON: better on complex tasks, higher time-to-first-response
-  nemotron-nano-reasoning:
-    model_id: "nvidia/nemotron-3-nano-30b-a3b"
+  nemotron-lightning-reasoning:
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true}}}'
 ```
 
@@ -131,9 +136,9 @@ LLM request parameters are set per catalog entry via `extra_params`, a JSON stri
 
 ```yaml
 llm:
-  nemotron-nano:
-    name: "Nemotron 3 Nano 30B A3B"
-    model_id: "nvidia/nemotron-3-nano-30b-a3b"
+  nemotron-lightning:
+    name: "Nemotron 3.5 Lightning 30B A3B"
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
     base_url: "https://integrate.api.nvidia.com/v1"
     extra_params: '{"temperature":0.6,"top_p":0.95,"max_tokens":1024,"extra_body":{"repetition_penalty":1.05,"chat_template_kwargs":{"enable_thinking":false}}}'
 ```

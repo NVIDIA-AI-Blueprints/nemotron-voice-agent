@@ -1,7 +1,7 @@
 {
   "pipeline_mode": "generic-assistant",
   "prompt_key": "generic_assistant",
-  "llm_id": "cloud-nim:nemotron-nano",
+  "llm_id": "cloud-nim:nemotron-lightning",
   "asr_id": "cloud-nim:nemotron-asr-streaming-english",
   "tts_server": "localhost:50151",
   "tts_voice_id": "Magpie-Multilingual.EN-US.Aria",

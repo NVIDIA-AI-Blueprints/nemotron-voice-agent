@@ -310,27 +310,27 @@ llm:
         cloud = utils.load_yaml_file(Path("src/examples/multilingual/services.cloud.yaml"))["llm"]
         local = utils.load_yaml_file(Path("src/examples/multilingual/services.local.yaml"))
 
-        nano_languages = ["en", "de", "es", "fr", "it", "ja"]
-        super_languages = [*nano_languages, "zh"]
-        self.assertEqual(cloud["nemotron-nano"]["supported_languages"], nano_languages)
-        self.assertEqual(cloud["nemotron-nano-reasoning"]["supported_languages"], nano_languages)
+        common_languages = ["en", "de", "es", "fr", "it", "ja"]
+        super_languages = [*common_languages, "zh"]
+        self.assertEqual(cloud["nemotron-lightning"]["supported_languages"], common_languages)
+        self.assertEqual(cloud["nemotron-lightning-reasoning"]["supported_languages"], common_languages)
         self.assertEqual(cloud["nemotron-super"]["supported_languages"], super_languages)
         self.assertEqual(cloud["nemotron-super-reasoning"]["supported_languages"], super_languages)
         self.assertEqual(
             local["workstation"]["llm"]["nemotron-nano"]["supported_languages"],
-            nano_languages,
+            common_languages,
         )
         self.assertEqual(
             local["dgxspark"]["llm"]["nemotron-nano"]["supported_languages"],
-            nano_languages,
+            common_languages,
         )
 
         token = utils._service_context.set((Path("src/examples/multilingual"), ("llm", "asr", "tts")))
         try:
-            selected_nano = load_service_entry_by_id("llm", "cloud-nim:nemotron-nano")
+            selected_lightning = load_service_entry_by_id("llm", "cloud-nim:nemotron-lightning")
         finally:
             utils._service_context.reset(token)
-        self.assertEqual(selected_nano["supported_languages"], nano_languages)
+        self.assertEqual(selected_lightning["supported_languages"], common_languages)
 
     def test_multilingual_agent_prompt_keys_are_registry_declared(self) -> None:
         unlocked = examples_registry.Selection(
