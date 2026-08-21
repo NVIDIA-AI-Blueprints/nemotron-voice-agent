@@ -251,6 +251,10 @@ class EndOfBotUtterance(Exception):
 class FailedBotUtterance(Exception):
     """A Realtime response failed without ending the session."""
 
+    def __init__(self, message: str, *, terminal: bool):
+        super().__init__(message)
+        self.terminal = terminal
+
 
 def resample_pcm16(pcm: bytes, source_rate: int, target_rate: int) -> bytes:
     """Resample mono little-endian PCM16 while preserving chunk duration."""
@@ -286,7 +290,7 @@ class RealtimeFrameAdapter:
         except EndOfRealtimeResponse as exc:
             raise EndOfBotUtterance from exc
         except RealtimeTurnError as exc:
-            raise FailedBotUtterance(str(exc)) from exc
+            raise FailedBotUtterance(str(exc), terminal=exc.terminal) from exc
         audio = frames_pb2.AudioRawFrame(
             audio=pcm,
             sample_rate=self.realtime.output_sample_rate,
@@ -597,10 +601,23 @@ class PerfClient:
         except ConnectionClosed:
             return
 
+    async def _cancel_active_realtime_response(self) -> None:
+        if self._realtime is None:
+            return
+        try:
+            await self._realtime.cancel_response(timeout=self.turn_response_timeout)
+        except Exception as exc:
+            raise RuntimeError("Realtime response cancellation barrier failed") from exc
+
+    async def _synchronize_failed_realtime_response(self, failure: FailedBotUtterance) -> None:
+        if not failure.terminal:
+            await self._cancel_active_realtime_response()
+
     async def _receive_initial_bot_intro(self, websocket, wf):
         try:
             data = await self._recv_audio_frame(websocket, timeout=BOT_INTRO_TIMEOUT)
         except FailedBotUtterance as exc:
+            await self._synchronize_failed_realtime_response(exc)
             await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
             return wf
         except (EndOfBotUtterance, TimeoutError):
@@ -610,6 +627,7 @@ class PerfClient:
         try:
             wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=False)
         except FailedBotUtterance as exc:
+            await self._synchronize_failed_realtime_response(exc)
             await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
         return wf
 
@@ -703,6 +721,7 @@ class PerfClient:
             data, utterance_start = await self._await_first_bot_frame(send_task, recv_task)
         except FailedBotUtterance as exc:
             await send_task
+            await self._synchronize_failed_realtime_response(exc)
             await self._record_failed_realtime_turn(audio_file_path, realtime_event_start, str(exc))
             return wf
         except EndOfBotUtterance:
@@ -716,14 +735,14 @@ class PerfClient:
         if data is None or utterance_start is None:
             if self._realtime is not None:
                 try:
-                    await self._realtime.cancel_response(timeout=self.turn_response_timeout)
+                    await self._cancel_active_realtime_response()
                 except Exception as exc:
                     await self._record_realtime_turn_metrics(
                         audio_file_path,
                         realtime_event_start,
                         error=f"unable to synchronize timed-out response: {exc}",
                     )
-                    raise RuntimeError("Realtime response cancellation barrier failed") from exc
+                    raise
             await self._record_realtime_turn_metrics(
                 audio_file_path,
                 realtime_event_start,
@@ -735,6 +754,7 @@ class PerfClient:
             wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=True)
         except FailedBotUtterance as exc:
             await send_task
+            await self._synchronize_failed_realtime_response(exc)
             await self._record_failed_realtime_turn(audio_file_path, realtime_event_start, str(exc))
             return wf
         await send_task

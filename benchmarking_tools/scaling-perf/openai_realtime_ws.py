@@ -48,6 +48,10 @@ class EndOfRealtimeResponse(Exception):
 class RealtimeTurnError(RealtimeProtocolError):
     """The current Realtime response failed without ending the session."""
 
+    def __init__(self, message: str, *, terminal: bool = False):
+        super().__init__(message)
+        self.terminal = terminal
+
 
 def resolve_protocol(*, protocol: str = "", ws_url: str = "") -> str:
     """Resolve the selected wire protocol."""
@@ -315,7 +319,7 @@ class OpenAIRealtimeSocket:
             if is_response_done(event):
                 response = event.get("response")
                 if isinstance(response, Mapping) and response.get("status") == "failed":
-                    raise RealtimeTurnError(error_message(event))
+                    raise RealtimeTurnError(error_message(event), terminal=True)
                 raise EndOfRealtimeResponse
             pcm = parse_output_audio(event)
             if pcm:
