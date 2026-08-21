@@ -44,7 +44,7 @@ services:
       NIM_TAGS_SELECTOR: mode=str,vad=silero
     profiles:
       - parakeet-ctc-asr
-    image: nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.5.0
+    image: nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.5.3
 
   parakeet-rnnt-asr:
     <<: *parakeet-asr-base

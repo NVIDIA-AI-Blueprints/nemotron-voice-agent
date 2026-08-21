@@ -27,7 +27,7 @@ x-nim-llm-env: &nim-llm-env
   NIM_HTTP_API_PORT: "8000"
   NIM_KVCACHE_PERCENT: ${NIM_KVCACHE_PERCENT:-0.6}
   NIM_MAX_MODEL_LEN: "32768"
-  NIM_PASSTHROUGH_ARGS: --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 --max-num-seqs ${LLM_MAX_NUM_SEQS:-256}
+  NIM_PASSTHROUGH_ARGS: --served-model-name nvidia/nemotron-3.5-lightning-30b-a3b --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 --max-num-seqs ${LLM_MAX_NUM_SEQS:-256}
 
 services:
   nvidia-llm:
