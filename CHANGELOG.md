@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Platform-specific **`*/workstation`, `*/dgx-spark`, and `*/jetson-thor` recipes** and the Jetson Riva sidecars (`nemotron-speech`, `nemotron-speech-tts`), along with the CUDA MPS helper scripts, CPU-pinning knobs, and `RIVA_*` environment knobs. Use `*/server`, `generic-assistant/server-perf`, or `*/single-gpu` instead.
 - **Nemotron 3 Nano** cascaded LLM catalog entries and its NIM compose file. Use Nemotron 3.5 Lightning instead.
 
+## [2.1.1] - 2026-08-21
+
+Patch release replacing the deprecated Nemotron 3 Nano cloud endpoint in cascaded pipelines.
+
+### Changed
+
+- Replaced the deprecated Nemotron 3 Nano cloud endpoint with Nemotron 3.5 Lightning across cascaded NVIDIA Cloud service catalogs and defaults.
+
 ## [2.1.0] - 2026-08-18
 
 Minor release with expanded TTS options, improved turn-taking, Omni Assistant Subagents refinements, multilingual model compatibility checks, and broader evaluation coverage.
