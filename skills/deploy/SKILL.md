@@ -16,7 +16,7 @@ metadata:
 - Preserve existing `.env`. Create it only if missing.
 - Use `configure-pipeline` for `.env`, catalog, or prompt changes.
 - Every deployment specifies **exactly one recipe profile** (plus optional observability profiles). `docker compose up` with no profile is a no-op.
-- Recipe profile names are `<example>` for cloud-only deployments, `<example>/server` for NIM deployments, and `<example>/single-gpu` for the NeMo-Speech.cpp and vLLM stack. `generic-assistant/server-perf` is the scaling benchmark profile. Each profile is a complete, self-contained recipe. Never combine two recipes.
+- Recipe profile names are `<example>` for cloud-only deployments, `<example>/server` for NIM deployments, and `<example>/single-gpu` for the NeMo-Speech.cpp and vLLM stack. `generic-assistant/server-perf` is a benchmark-only scaling profile, not a normal UI deployment. Each profile is a complete, self-contained recipe. Never combine two recipes.
 - Generic, Multilingual, Omni, and Frontend/Backend single-GPU recipes support compatible workstations, DGX Spark, and Jetson Thor. Omni Assistant Subagents is documented for workstations and DGX Spark only. Do not infer that a recipe fits from the platform name. Complete the memory-fit procedure below first.
 - Selector modes (`all`, or a single `<example>` such as `generic-assistant`) remain host-native only (`uv run`) and have no compose profile.
 - Observability profiles (`tracing`, `turn`) compose orthogonally with any recipe.
@@ -142,7 +142,7 @@ Apply only what step 1 indicates. Never silently change values. See `docs/how-to
 | Omni Assistant Subagents, single GPU (workstation, DGX Spark) | `omni-assistant-subagents/single-gpu` |
 | Frontend/Backend Agent, single GPU (workstation, DGX Spark, Jetson Thor) | `frontend-backend-agent/single-gpu` |
 | Generic Cascaded NIM stack | `generic-assistant/server` |
-| Generic Cascaded NIM performance benchmark (recommended for scaling) | `generic-assistant/server-perf` |
+| Generic Cascaded NIM performance benchmark (benchmark-only) | `generic-assistant/server-perf` |
 | Multilingual Cascaded NIM stack (recommended for scaling) | `multilingual-assistant/server` |
 | Omni Assistant NIM stack (recommended for scaling) | `omni-assistant/server` |
 | Omni Assistant Subagents NIM stack (recommended for scaling) | `omni-assistant-subagents/server` |

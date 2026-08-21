@@ -37,6 +37,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 3. Validate:
    - Multilingual prompts must use multilingual-capable ASR and TTS from the active catalog (e.g. `parakeet-rnnt`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts`, `magpie-zeroshot-tts`, `chatterbox-multilingual-tts`). Verify the keys exist before referencing them.
+   - Every TTS catalog entry must set `synthesis_mode` explicitly. Use `stitched` for Magpie Multilingual and Magpie Zeroshot, and `per_sentence` for Chatterbox.
    - Local catalog endpoints must use Compose service names (`nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `parakeet-ctc-asr:50052`, `parakeet-rnnt-asr:50052`, `magpie-multilingual-tts-service:50051`, `magpie-zeroshot-tts-service:50051`, `chatterbox-tts-service:50051`, `nvidia-llm:8000`, `nvidia-llm-vllm:8000`, `nvidia-llm-vllm-omni:8002`, `nemo-speech:50051`, `nemo-speech-multilingual:50051`, `nemo-speech-tts:50051`, `booking-server:8001`). Host-run backends auto-rewrite to the matching `localhost` ports.
    - Alternate local ASR/TTS use Compose profiles (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`, `magpie-zeroshot-tts`) and share ports with the default. Scale the default off (e.g. `--scale magpie-multilingual-tts-service=0` or `--scale nemotron-asr-streaming-multilingual=0`). Stop `chatterbox-tts-service` or `magpie-zeroshot-tts-service` before returning to Magpie Multilingual.
    - A `*/server` recipe that colocates the default ASR, LLM, and TTS on one GPU needs about 80 GB of VRAM. This does not apply to `*/single-gpu` recipes, which use the memory-fit procedure in the `deploy` skill.
@@ -68,7 +69,8 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 ## Limitations
 
 - Does not deploy the stack or change profiles. Use `deploy` (and its per-example references) for that.
-- Source code or `Dockerfile` changes require an image rebuild (`--build`). Out of scope here.
+- `NvidiaWordTTSService` is a source-level opt-in, not an `.env` or service-catalog setting. When word-level input streaming and timestamp-based context commits are requested, change only the service import and constructor in the example's `pipeline.py` as documented in `docs/how-to/configure-tts.md#word-level-input-streaming-and-timestamps`, then restart the example service.
+- Other source customization is out of scope. Dependency or `Dockerfile` changes require an image rebuild (`--build`).
 - UI-only ad-hoc service / prompt overrides (saved in `localStorage`) are intentionally not persisted. This skill writes only to repo files.
 
 ## Troubleshooting

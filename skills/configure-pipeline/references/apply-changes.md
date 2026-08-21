@@ -49,7 +49,7 @@ docker compose --profile omni-assistant/server up -d
 docker compose --profile omni-assistant-subagents/server up -d
 docker compose --profile frontend-backend-agent/server up -d
 
-# Multi-GPU performance benchmark (recommended for scaling)
+# Multi-GPU performance benchmark only
 docker compose --profile generic-assistant/server-perf up -d
 
 # Universal one-GPU path (workstation, DGX Spark, or Jetson Thor)

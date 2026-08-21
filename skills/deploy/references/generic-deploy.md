@@ -4,7 +4,7 @@ Use this reference from the `deploy` skill when deploying the generic voice pipe
 
 ## When to use
 
-Pinning a Docker Compose deployment to the Generic Cascaded example. Use `generic-assistant` for cloud, `generic-assistant/server` for the NIM stack, `generic-assistant/server-perf` for the multi-GPU benchmark stack, or `generic-assistant/single-gpu` for vLLM and NeMo-Speech.cpp. Selector modes are host-native only and are not exposed as Compose profiles.
+Pinning a Docker Compose deployment to the Generic Cascaded example. Use `generic-assistant` for cloud, `generic-assistant/server` for the NIM stack, `generic-assistant/server-perf` only for the multi-GPU scaling benchmark, or `generic-assistant/single-gpu` for vLLM and NeMo-Speech.cpp. Selector modes are host-native only and are not exposed as Compose profiles.
 
 Per-example catalogs at `src/examples/generic/services.{cloud,local}.yaml` are auto-selected on container startup because the registry resolves the example for the active recipe.
 
@@ -22,6 +22,8 @@ docker compose --profile <recipe> up -d
 | `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
 | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
+
+`generic-assistant/server-perf` requires the documented four-GPU layout and runs 200 Uvicorn workers for load testing. Do not use it for normal browser UI sessions. Follow `benchmarking_tools/scaling-perf/README.md`.
 
 Tear down with the same recipe used at `up` time:
 
