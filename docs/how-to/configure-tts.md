@@ -78,7 +78,7 @@ TTS runs one of these ways, and the repo wires the right one per profile:
 | `32` | 41.46 GiB | 5.208 GiB |
 | `64` | 74.74 GiB | 5.258 GiB |
 
-The standard Compose service selects `batch_size=8`. The `generic-assistant/workstation-perf` profile selects `batch_size=64` on a dedicated GPU.
+The standard Compose service selects `batch_size=8`. The `generic-assistant/server-perf` profile selects `batch_size=64` on a dedicated GPU.
 
 #### Magpie TTS Zeroshot 1.2.0
 
