@@ -377,9 +377,6 @@ export function ConversationPanel() {
 
       if (type !== "user-turn-finalized") return;
       setCurrentUserTurnActive(false);
-      // Omni's transcript arrives after its response begins. Use the turn's
-      // server-side boundary timestamp so the eventual user bubble is ordered
-      // before that response, rather than at the time the transcript arrives.
       const anchorISO = validTimestampOrNow(stringField(message, "timestamp"));
       const anchors = userTurnAnchorsRef.current;
       const target =
