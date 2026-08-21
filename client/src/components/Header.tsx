@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { usePipecatClient } from "@pipecat-ai/client-react";
 import { useConnectionState } from "../hooks/useConnectionState";
 import { useApp } from "../context/useApp";
@@ -33,6 +33,10 @@ type SessionConfigOptions = {
   selectedPrompt?: Prompt;
   selectedPromptKey: string;
   selectedSessionLanguage?: string;
+};
+
+type HeaderProps = {
+  onClientReset: () => void;
 };
 
 function getConnectionErrorMessage(err: unknown): string {
@@ -156,9 +160,10 @@ function sessionIdFromWebRTCUrl(url: string): string {
   return new URLSearchParams(query).get("session_id") ?? "";
 }
 
-export function Header() {
+export function Header({ onClientReset }: Readonly<HeaderProps>) {
   const client = usePipecatClient() as StartBotClient | undefined;
   const { isConnected, isConnecting } = useConnectionState();
+  const mountedRef = useRef(true);
   const {
     selectedExample,
     selectedTransport,
@@ -173,6 +178,13 @@ export function Header() {
   } = useApp();
   const [connectionError, setConnectionError] = useState("");
 
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const handleClick = async () => {
     setConnectionError("");
 
@@ -185,8 +197,12 @@ export function Header() {
       }
 
       if (isConnected) {
-        await client.disconnect();
-        setCurrentSessionId("");
+        try {
+          await client.disconnect();
+        } finally {
+          setCurrentSessionId("");
+          onClientReset();
+        }
       } else {
         const config = buildSessionConfig({
           selectedExample,
@@ -201,13 +217,16 @@ export function Header() {
 
         if (selectedTransport === "websocket") {
           const sessionId = await createSessionConfig(config);
+          if (!mountedRef.current) return;
           const qs = `session_id=${sessionId}`;
           const wsProto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
           setCurrentSessionId(sessionId);
           await client.connect({ wsUrl: `${wsProto}//${globalThis.location.host}/api/ws?${qs}` });
         } else {
           await client.initDevices();
+          if (!mountedRef.current) return;
           const webrtcUrl = await createWebRTCSession(config);
+          if (!mountedRef.current) return;
           const sessionId = sessionIdFromWebRTCUrl(webrtcUrl);
           if (!sessionId) {
             throw new Error("WebRTC session URL did not include session_id.");
@@ -217,9 +236,11 @@ export function Header() {
         }
       }
     } catch (err) {
+      if (!mountedRef.current) return;
       setCurrentSessionId("");
       if (isWebRTCTimeoutError(err)) {
         await client?.disconnect().catch(() => undefined);
+        onClientReset();
         setConnectionError(getWebRTCTimeoutMessage());
       } else {
         setConnectionError(getConnectionErrorMessage(err));
