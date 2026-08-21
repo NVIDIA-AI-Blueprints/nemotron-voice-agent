@@ -312,7 +312,7 @@ def _get_default_llm_selection() -> tuple[str, str]:
     default_llm = load_service_entry("llm", "")
     return (
         default_llm.get("base_url", "https://integrate.api.nvidia.com/v1"),
-        default_llm.get("model_id", "nvidia/nemotron-3-nano-30b-a3b"),
+        default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b"),
     )
 
 

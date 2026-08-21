@@ -70,6 +70,6 @@ To change models, voices, prompts, or tool wiring, see [Configure Services](../.
 ## Tips & best practices
 
 - **Start from this baseline.** The generic example is intentionally minimal. Add domain logic, custom tools, and deployment-specific service choices on top of it rather than starting from scratch.
-- **Pick the model for the deployment.** Nemotron 3 Nano suits latency-sensitive local profiles, and Nemotron 3 Super is the higher-capability cloud default. See [Configure LLM](../../../docs/how-to/configure-llm.md) for sizing and precision.
+- **Pick the model for the deployment.** Nemotron 3 Nano suits latency-sensitive local profiles. Nemotron 3.5 Lightning is the default cloud model, while Nemotron 3 Super offers higher capability for complex tasks. See [Configure LLM](../../../docs/how-to/configure-llm.md) for sizing and precision.
 - **Tune turn-taking and latency** with the shared pipeline knobs in [Tune Pipeline Performance](../../../docs/how-to/tune-pipeline-performance.md).
 - For deployment, ASR/LLM/TTS, and general failure modes, see the [Troubleshooting guide](../../../docs/06-troubleshooting.md).

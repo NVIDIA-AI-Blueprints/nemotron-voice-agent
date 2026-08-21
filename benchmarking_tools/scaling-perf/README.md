@@ -81,8 +81,8 @@ This setup is available as the dedicated Compose recipe
 `generic-assistant/workstation-perf`. It automatically applies the published
 scaling configuration:
 
-- Generic Assistant inherits the existing `nemotron-nano` default from
-  [`examples_registry.yaml`](../../examples_registry.yaml)
+- Generic Assistant selects the reachable self-hosted `nemotron-nano` entry
+  from its local service catalog
 - `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=fp8,tp=2`, GPUs `2,3`, alias
   `nvidia-llm`
 - `nemotron-asr-streaming-english`:

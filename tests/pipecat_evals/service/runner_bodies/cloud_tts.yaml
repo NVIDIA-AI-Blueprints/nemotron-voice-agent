@@ -1,5 +1,5 @@
 defaults:
-  llm_id: cloud-nim:nemotron-nano
+  llm_id: cloud-nim:nemotron-lightning
   asr_id: cloud-nim:nemotron-asr-streaming-english
   tts_server: grpc.nvcf.nvidia.com:443
   tts_voice_id: Magpie-Multilingual.EN-US.Aria
@@ -49,7 +49,7 @@ bodies:
   frontend_backend_default:
     pipeline_mode: frontend-backend-agent
     prompt_key: talker
-    thinker_llm_id: cloud-nim:nemotron-nano
+    thinker_llm_id: cloud-nim:nemotron-lightning
     session_id: eval-frontend-backend-cloud-tts-default
 
   omni_default:
