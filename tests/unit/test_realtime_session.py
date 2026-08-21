@@ -80,7 +80,7 @@ class MapSessionUpdateTests(unittest.TestCase):
         self.assertEqual(flat["prompt_key"], "generic_assistant")
         self.assertNotIn("tts_voice_id", flat)
 
-    def test_tools_are_ignored(self) -> None:
+    def test_client_tools_are_mapped(self) -> None:
         omitted = map_session_update_to_flat_config({})
         empty = map_session_update_to_flat_config({"tools": []})
         populated = map_session_update_to_flat_config(
@@ -96,8 +96,8 @@ class MapSessionUpdateTests(unittest.TestCase):
             }
         )
         self.assertNotIn("client_tools", omitted)
-        self.assertNotIn("client_tools", empty)
-        self.assertNotIn("client_tools", populated)
+        self.assertEqual(empty["client_tools"], [])
+        self.assertEqual(populated["client_tools"][0]["name"], "get_weather")
         self.assertEqual(empty["prompt_key"], DEFAULT_PROMPT_KEY)
         self.assertEqual(populated["prompt_key"], DEFAULT_PROMPT_KEY)
 
@@ -445,7 +445,7 @@ class LiveSessionUpdateFieldTests(unittest.TestCase):
             },
             current=current,
         )
-        self.assertEqual(set(bad), {"instructions", "tools", "nvidia.pipeline_mode"})
+        self.assertEqual(set(bad), {"instructions", "nvidia.pipeline_mode"})
 
     def test_non_null_transcription_is_accepted_noop(self) -> None:
         bad = unsupported_live_session_fields(

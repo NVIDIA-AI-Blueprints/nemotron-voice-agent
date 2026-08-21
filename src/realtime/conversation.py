@@ -199,6 +199,14 @@ class ConversationState:
         self.open_client_text()
         return snap
 
+    def complete_non_audio_response(self, status: str = "completed") -> tuple[int, str] | None:
+        """Complete a function-call response without creating audio done events."""
+        if not self.response_id or self.response_status != "in_progress":
+            return None
+        self.response_status = status
+        self.open_client_text()
+        return self.response_generation, self.response_id
+
     def reset_response_slot(self, *, generation: int | None = None) -> None:
         """Clear response slot so the next bot turn allocates fresh ids.
 

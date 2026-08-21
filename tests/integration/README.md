@@ -8,9 +8,11 @@ CI (`pytest tests/unit`).
 [`test_realtime_openai_sdk_compat.py`](test_realtime_openai_sdk_compat.py) against `WS /v1/realtime`:
 
 1. OpenAI Python SDK multi-turn (GA-shaped session fields)
-2. Mapped fields — instructions, Magpie voice, temperature, ignored client tools,
+2. Mapped fields — instructions, Magpie voice, temperature,
    Nemotron welcome gate, soft unknown-voice fallback, post-handoff / `response.create` rejects
-3. Rejects — Whisper transcription, text-only modalities
+3. Client-owned tool round trip — completed function-call response, stock-SDK
+   `function_call_output`, explicit `response.create`, and spoken result
+4. Rejects — text-only modalities
 
 ```bash
 # Plain HTTP (recommended for local integration):
@@ -28,3 +30,6 @@ OPENAI_REALTIME_WS_BASE=ws://127.0.0.1:7860/v1 RUN_REALTIME_COMPAT=1 \
 RUN_REALTIME_COMPAT=1 OPENAI_REALTIME_WS_BASE=wss://127.0.0.1:7860/v1 \
   uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v -s
 ```
+
+Set `REALTIME_COMPAT_WAIT_INTRO=0` only when the test server has
+`ENABLE_WELCOME_MESSAGE=false`.

@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
 
+from realtime.client_tools import validate_tool_choice_names, validate_tool_ownership
 from realtime.events import (
     CLIENT_SESSION_UPDATE,
     SERVER_SESSION_CREATED,
@@ -233,8 +234,22 @@ async def _handle_session_update(
             sanitized["temperature"] = flat["temperature"]
         if "max_tokens" in flat:
             sanitized["max_tokens"] = flat["max_tokens"]
+        if "client_tools" in flat:
+            sanitized["client_tools"] = flat["client_tools"]
         if resolve_server_tools is not None:
             sanitized["server_tools"] = resolve_server_tools(sanitized)
+        validate_tool_ownership(
+            sanitized.get("client_tools", []),
+            sanitized.get("server_tools", []),
+            pipeline_mode=str(sanitized.get("pipeline_mode") or default_pipeline_mode),
+        )
+        validate_tool_choice_names(
+            sanitized.get("tool_choice"),
+            {
+                *[str(tool.get("name") or "") for tool in sanitized.get("client_tools", [])],
+                *[str(name) for name in sanitized.get("server_tools", [])],
+            },
+        )
 
         # Soft-resolve voice against the TTS catalog (same list path as RTVI UI).
         # Unknown voices warn and fall back to the catalog default — no reject.

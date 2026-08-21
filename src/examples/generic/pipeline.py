@@ -13,7 +13,7 @@ import asyncio
 
 from dotenv import load_dotenv
 from loguru import logger
-from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
+from pipecat.frames.frames import LLMRunFrame, LLMSetToolChoiceFrame, LLMSetToolsFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
@@ -42,6 +42,8 @@ from examples.shared.pipeline_utils import (
     register_session_start_handlers,
     with_realtime_observers,
 )
+from realtime.client_tools import RealtimeToolCoordinator
+from realtime.transport import realtime_client_tool_broker
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -144,7 +146,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     registered_tools: list[str] = []
     tool_choice = body.get("tool_choice", "auto") or "auto"
     tools_available = resolve_tools_available(__file__, prompt_key)
-    tools_schema, registered_tools = build_tools_schema(__file__, tools_available)
+    client_tool_broker = realtime_client_tool_broker(transport)
+    client_tools = client_tool_broker.client_tools if client_tool_broker is not None else []
+    tools_schema, registered_tools = build_tools_schema(__file__, tools_available, client_tools=client_tools)
     tools_enabled = tools_schema is not None
     if tools_enabled:
         for name in registered_tools:
@@ -152,6 +156,12 @@ async def bot(runner_args: RunnerArguments) -> None:
             logger.info(f"Registered tool handler: {name}")
     else:
         logger.info(f"Tool calling disabled for prompt_key={prompt_key!r} (no tools_available in prompts.yaml)")
+    registered_client_tools = {str(tool.get("name") or "") for tool in client_tools}
+    if client_tool_broker is not None:
+        for name in registered_client_tools:
+            llm.register_function(name, client_tool_broker.client_handler, cancel_on_interruption=True)
+            logger.info(f"Registered client-owned Realtime tool: {name}")
+    tool_coordinator = RealtimeToolCoordinator(client_tool_broker) if client_tool_broker is not None else None
 
     # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
@@ -239,6 +249,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             stt,
             user_aggregator,
             llm,
+            *([tool_coordinator] if tool_coordinator else []),
             tts,
             transport.output(),
             *([activity_check] if activity_check else []),
@@ -316,6 +327,27 @@ async def bot(runner_args: RunnerArguments) -> None:
         observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
     )
+    if client_tool_broker is not None:
+
+        async def _queue_client_tool_continuation() -> None:
+            await task.queue_frame(LLMRunFrame())
+
+        async def _apply_client_tools(updated_tools: list[dict], updated_tool_choice) -> None:
+            nonlocal registered_client_tools
+            updated_names = {str(tool.get("name") or "") for tool in updated_tools}
+            for name in registered_client_tools - updated_names:
+                llm.unregister_function(name)
+            for name in updated_names - registered_client_tools:
+                llm.register_function(name, client_tool_broker.client_handler, cancel_on_interruption=True)
+            registered_client_tools = updated_names
+            updated_schema, _ = build_tools_schema(__file__, tools_available, client_tools=updated_tools)
+            context.set_tools(updated_schema or [])
+            context.set_tool_choice(updated_tool_choice)
+            await task.queue_frame(LLMSetToolsFrame(tools=updated_schema or []))
+            await task.queue_frame(LLMSetToolChoiceFrame(tool_choice=updated_tool_choice))
+
+        client_tool_broker.set_queue_run(_queue_client_tool_continuation)
+        client_tool_broker.set_tools_update(_apply_client_tools)
 
     @user_aggregator.event_handler("on_user_turn_stopped")
     async def on_user_turn_stopped(aggregator, strategy, message):

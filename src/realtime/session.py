@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from realtime.audio import validate_session_audio_config
+from realtime.client_tools import validate_client_tools
 from utils import _SLOT_AGNOSTIC_KEYS, _SLOT_CONFIG_KEYS, SESSION_CONFIG_KEYS
 
 DEFAULT_PIPELINE_MODE = "generic-assistant"
@@ -140,7 +141,7 @@ def _map_temperature(raw: Any) -> float | None:
     return value
 
 
-def _map_tool_choice(raw: Any) -> Any:
+def map_tool_choice(raw: Any) -> Any:
     """Map Realtime ``tool_choice`` to Chat Completions shape for ``LLMContext``.
 
     Accepts ``auto`` / ``none`` / ``required``, Chat Completions
@@ -242,8 +243,8 @@ def map_session_update_to_flat_config(
 
     OpenAI top-level fields (``instructions``, ``voice``, ``temperature``, …) map onto
     the cascaded pipeline. ``session.nvidia`` holds catalog fields with no OpenAI
-    equivalent. OpenAI ``model`` and ``tools`` (client-registered schemas) are
-    ignored — catalog tools follow ``prompt.id`` / ``prompt_key`` only.
+    equivalent. Client ``tools`` are kept separate from catalog-owned server
+    tools so the pipeline can route execution by ownership.
     """
     if not isinstance(session_patch, dict):
         raise ValueError("session must be a JSON object")
@@ -253,12 +254,6 @@ def map_session_update_to_flat_config(
             f"Ignoring session.model={session_patch.get('model')!r}; using Nemotron Voice Agent cascaded pipeline"
         )
 
-    if "tools" in session_patch:
-        logger.info(
-            "Ignoring session.tools; client-registered tool schemas are not supported as of now. "
-            "Catalog tools follow prompt.id / prompt_key / prompts.yaml tools_available"
-        )
-
     _validate_modalities_field(session_patch.get("output_modalities"), field="output_modalities")
     _validate_modalities_field(session_patch.get("modalities"), field="modalities")
     validate_input_transcription(session_patch)
@@ -266,6 +261,8 @@ def map_session_update_to_flat_config(
     validate_session_audio_config(session_patch)
 
     flat: dict[str, Any] = {}
+    if "tools" in session_patch:
+        flat["client_tools"] = validate_client_tools(session_patch.get("tools"))
 
     nvidia = session_patch.get("nvidia")
     if isinstance(nvidia, dict):
@@ -311,7 +308,7 @@ def map_session_update_to_flat_config(
             flat["temperature"] = temperature
 
     if "tool_choice" in session_patch and session_patch.get("tool_choice") is not None:
-        flat["tool_choice"] = _map_tool_choice(session_patch.get("tool_choice"))
+        flat["tool_choice"] = map_tool_choice(session_patch.get("tool_choice"))
 
     if not flat.get("pipeline_mode"):
         flat["pipeline_mode"] = default_pipeline_mode
@@ -421,9 +418,8 @@ class RealtimeSession:
         if session_patch.get("instructions") is not None:
             self.view["instructions"] = session_patch.get("instructions") or ""
 
-        # Client-registered tools are ignored; public session always reports no client tools.
         if "tools" in session_patch:
-            self.view["tools"] = []
+            self.view["tools"] = copy.deepcopy(sanitized_flat.get("client_tools", []))
 
         if sanitized_flat.get("tts_voice_id"):
             audio = dict(self.view.get("audio") or {})
@@ -445,6 +441,8 @@ _LIVE_SESSION_KEYS = frozenset(
         "voice",
         "turn_detection",
         "input_audio_transcription",
+        "tools",
+        "tool_choice",
         "audio",
         "input_audio_format",
         "output_audio_format",

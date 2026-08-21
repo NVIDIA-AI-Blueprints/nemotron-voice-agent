@@ -30,6 +30,7 @@ from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_output import BaseOutputTransport
 
+from realtime.client_tools import ClientToolBroker
 from realtime.conversation import ConversationState
 from realtime.events import (
     SERVER_AUDIO_COMMITTED,
@@ -46,7 +47,7 @@ from realtime.events import (
     error_event,
     server_event,
 )
-from realtime.lifecycle import announce_response, finish_response
+from realtime.lifecycle import announce_response, emit_client_tool_response, finish_response
 
 # Frames this observer maps to Realtime events (ignore the rest for dedupe).
 _OBSERVED_FRAME_TYPES = (
@@ -80,6 +81,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         *,
         emit: EmitFn,
         conversation: ConversationState,
+        client_tool_broker: ClientToolBroker | None = None,
         max_frames: int = 4096,
         **kwargs: Any,
     ) -> None:
@@ -87,6 +89,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         super().__init__(**kwargs)
         self._emit_fn = emit
         self._conversation = conversation
+        self._client_tool_broker = client_tool_broker
         self._processed_frames: set[int] = set()
         self._frame_history: deque[int] = deque(maxlen=max_frames)
         self._bot_transcript_from_tts = False
@@ -314,15 +317,28 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, FunctionCallsStartedFrame):
+            if self._client_tool_broker is not None:
+                self._client_tool_broker.register_batch(frame.function_calls or [])
+            client_calls = []
             for call in frame.function_calls or []:
+                name = getattr(call, "function_name", "") or ""
+                if self._client_tool_broker is not None and self._client_tool_broker.is_client_name(name):
+                    client_calls.append(call)
+                    continue
                 await self._emit_server_tool_started(
                     tool_call_id=getattr(call, "tool_call_id", "") or "",
-                    function_name=getattr(call, "function_name", "") or "",
+                    function_name=name,
                     arguments=getattr(call, "arguments", None),
                 )
+            if client_calls:
+                await emit_client_tool_response(self._conversation, self._emit_fn, client_calls)
             return
 
         if isinstance(frame, FunctionCallInProgressFrame):
+            if self._client_tool_broker is not None and self._client_tool_broker.is_client_call(
+                frame.tool_call_id or ""
+            ):
+                return
             await self._emit_server_tool_started(
                 tool_call_id=frame.tool_call_id or "",
                 function_name=frame.function_name or "",
@@ -331,6 +347,10 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, FunctionCallResultFrame):
+            if self._client_tool_broker is not None and self._client_tool_broker.is_client_call(
+                frame.tool_call_id or ""
+            ):
+                return
             await self._emit_event(
                 server_event(
                     SERVER_NVIDIA_TOOL_COMPLETED,

@@ -72,8 +72,7 @@ FEATURE_SESSION: dict[str, Any] = {
         "- When asked for a secret code word, reply with exactly: NEMO-SMOKE-OK\n"
     ),
     "voice": NEMOTRON_VOICE,
-    # Client-registered tools are ignored by the gateway; include a sample so we
-    # assert the public session does not activate them.
+    # Include a client-owned function and verify it is echoed in public state.
     "tools": SAMPLE_TOOLS,
     "tool_choice": "auto",
     "temperature": 0.8,
@@ -357,21 +356,24 @@ async def run_openai_sdk_compat(
         created = await asyncio.wait_for(_recv_event(connection), timeout=30.0)
         assert _event_type(created) == "session.created", _event_as_dict(created)
 
+        session_config: dict[str, Any] = {
+            "type": "realtime",
+            "instructions": instructions,
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "turn_detection": {"type": "server_vad"},
+                },
+                "output": {"format": {"type": "audio/pcm", "rate": 24000}},
+            },
+        }
+        if llm_id := os.getenv("REALTIME_COMPAT_LLM_ID"):
+            session_config["nvidia"] = {"llm_id": llm_id}
         await connection.send(
             {
                 "type": "session.update",
-                "session": {
-                    "type": "realtime",
-                    "instructions": instructions,
-                    "output_modalities": ["audio"],
-                    "audio": {
-                        "input": {
-                            "format": {"type": "audio/pcm", "rate": 24000},
-                            "turn_detection": {"type": "server_vad"},
-                        },
-                        "output": {"format": {"type": "audio/pcm", "rate": 24000}},
-                    },
-                },
+                "session": session_config,
             }
         )
 
@@ -471,7 +473,10 @@ async def _run_feature_checks(
         created = await _ws_recv_json(ws)
         assert created.get("type") == "session.created", created
 
-        await ws.send(json.dumps({"type": "session.update", "session": FEATURE_SESSION}))
+        feature_session = dict(FEATURE_SESSION)
+        if llm_id := os.getenv("REALTIME_COMPAT_LLM_ID"):
+            feature_session["nvidia"] = {"llm_id": llm_id}
+        await ws.send(json.dumps({"type": "session.update", "session": feature_session}))
 
         session_obj: dict[str, Any] | None = None
         updated = TurnResult(label="session.update")
@@ -494,7 +499,7 @@ async def _run_feature_checks(
         assert voice_ok, session_obj
         assert session_obj.get("temperature") == 0.8, session_obj
         assert session_obj.get("max_output_tokens") == 4096, session_obj
-        assert session_obj.get("tools") == [], session_obj.get("tools")
+        assert session_obj.get("tools") == SAMPLE_TOOLS, session_obj.get("tools")
         summary["session"] = {
             "voice": session_obj.get("voice"),
             "temperature": session_obj.get("temperature"),
@@ -615,6 +620,129 @@ async def _run_feature_checks(
     return summary
 
 
+async def run_openai_sdk_client_tool_compat(
+    *,
+    ws_base: str = DEFAULT_WS_BASE,
+    wait_intro: bool = True,
+) -> dict[str, Any]:
+    """Execute a client-owned function and request an explicit spoken continuation."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=os.getenv("OPENAI_REALTIME_API_KEY") or "sk-realtime-compat",
+        websocket_base_url=ws_base.rstrip("/"),
+        base_url=ws_base.rstrip("/").replace("ws://", "http://").replace("wss://", "https://"),
+    )
+    tool = {
+        "type": "function",
+        "name": "client_lookup",
+        "description": "Look up a value by key.",
+        "parameters": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    }
+    async with client.realtime.connect() as connection:
+        assert _event_type(await asyncio.wait_for(_recv_event(connection), 30)) == "session.created"
+        await connection.send(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "realtime",
+                    "instructions": "Use tools when required, then state their result in one short sentence.",
+                    "output_modalities": ["audio"],
+                    "tools": [tool],
+                    "tool_choice": "auto",
+                    "nvidia": {"llm_id": "cloud-nim:nemotron-super"},
+                },
+            }
+        )
+        updated = await _wait_until(
+            connection,
+            predicate=lambda _turn, event: _event_type(event) == "session.updated",
+            timeout_s=120,
+            label="client-tool-session",
+        )
+        assert updated.matched
+        if wait_intro:
+            intro = await _wait_until(
+                connection,
+                predicate=lambda turn, _event: turn.saw_done,
+                timeout_s=120,
+                label="client-tool-intro",
+            )
+            assert intro.saw_done
+
+        await connection.send(
+            {
+                "type": "session.update",
+                "session": {"tool_choice": {"type": "function", "name": "client_lookup"}},
+            }
+        )
+        forced = await _wait_until(
+            connection,
+            predicate=lambda _turn, event: _event_type(event) == "session.updated",
+            timeout_s=30,
+            label="force-client-tool",
+        )
+        assert forced.matched
+        await connection.conversation.item.create(
+            item={
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Look up the key compatibility."}],
+            }
+        )
+        await connection.response.create()
+        call_turn = await _wait_until(
+            connection,
+            predicate=lambda turn, _event: turn.saw_done,
+            timeout_s=120,
+            label="client-tool-call",
+        )
+        _raise_if_error(call_turn)
+        assert call_turn.status == "completed"
+        assert call_turn.audio_deltas == 0
+        assert len(call_turn.function_calls) == 1
+        call = call_turn.function_calls[0]
+        assert call["name"] == "client_lookup"
+
+        await connection.conversation.item.create(
+            item={
+                "type": "function_call_output",
+                "call_id": call["call_id"],
+                "output": json.dumps({"value": "CLIENT-TOOL-OK"}),
+            }
+        )
+        await connection.send({"type": "session.update", "session": {"tool_choice": "none"}})
+        unforced = await _wait_until(
+            connection,
+            predicate=lambda _turn, event: _event_type(event) == "session.updated",
+            timeout_s=30,
+            label="unforce-client-tool",
+        )
+        assert unforced.matched
+        await connection.response.create()
+        spoken = await _wait_until(
+            connection,
+            predicate=lambda turn, _event: turn.saw_done,
+            timeout_s=120,
+            label="client-tool-continuation",
+        )
+        _raise_if_error(spoken)
+        assert spoken.status == "completed"
+        assert spoken.audio_deltas > 0
+        assert spoken.transcript
+        assert "CLIENT-TOOL-OK" in spoken.transcript
+        return {
+            "call": call,
+            "call_events": call_turn.event_types,
+            "spoken_transcript": spoken.transcript,
+            "spoken_audio_deltas": spoken.audio_deltas,
+        }
+
+
 def test_openai_realtime_sdk_three_turn_conversation() -> None:
     """Generic OpenAI SDK client against default server pipeline (no Magpie/tools)."""
     pairs = asyncio.run(run_openai_sdk_compat())
@@ -645,7 +773,7 @@ def test_realtime_mapped_fields_and_tools() -> None:
     assert summary.get("post_handoff_instructions_rejected") is True
     assert summary.get("response_override_rejected") is True
     assert summary.get("unknown_voice_soft_fallback") is True
-    assert summary.get("session", {}).get("tools") == []
+    assert summary.get("session", {}).get("tools") == SAMPLE_TOOLS
 
 
 def test_realtime_rejects_incompatible_session_fields() -> None:
@@ -656,6 +784,14 @@ def test_realtime_rejects_incompatible_session_fields() -> None:
             expect_substring="audio",
         )
     )
+
+
+def test_openai_realtime_sdk_client_tool_round_trip() -> None:
+    """A stock SDK executes a client tool between two completed responses."""
+    wait_intro = os.getenv("REALTIME_COMPAT_WAIT_INTRO", "1").strip().lower() not in {"0", "false", "no"}
+    summary = asyncio.run(run_openai_sdk_client_tool_compat(wait_intro=wait_intro))
+    print("\n=== Realtime SDK client tool ===")
+    print(json.dumps(summary, indent=2))
 
 
 def main() -> int:

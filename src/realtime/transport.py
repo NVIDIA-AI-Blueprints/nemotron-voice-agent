@@ -17,6 +17,7 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+from realtime.client_tools import ClientToolBroker
 from realtime.events import BETA_EVENT_ALIASES
 from realtime.observer import RealtimeLifecycleObserver
 from realtime.serializer import RealtimeFrameSerializer
@@ -36,9 +37,15 @@ def create_realtime_transport(
     runtime_config: dict[str, Any] | None = None,
 ) -> FastAPIWebsocketTransport:
     """Build a FastAPI WebSocket transport that speaks Realtime JSON."""
+    config = runtime_config or {}
+    broker = ClientToolBroker(
+        client_tools=config.get("client_tools") if isinstance(config.get("client_tools"), list) else [],
+        server_tools=config.get("server_tools") if isinstance(config.get("server_tools"), list) else [],
+    )
     serializer = RealtimeFrameSerializer(
         session_view=session_view,
         runtime_config=runtime_config,
+        client_tool_broker=broker,
     )
     emit_lock = asyncio.Lock()
     beta_event_names = _prefers_beta_event_names(websocket)
@@ -73,9 +80,12 @@ def create_realtime_transport(
         ),
     )
     transport._realtime_serializer = serializer  # type: ignore[attr-defined]
+    transport._realtime_client_tool_broker = broker  # type: ignore[attr-defined]
+    broker.set_emit(_emit)
 
     @transport.event_handler("on_client_disconnected")
     async def _shutdown_realtime_on_disconnect(_transport, _client) -> None:  # noqa: ARG001
+        await broker.close()
         shutdown_realtime_transport(transport)
 
     return transport
@@ -92,10 +102,17 @@ def realtime_lifecycle_observer(transport: Any) -> BaseObserver | None:
     observer = RealtimeLifecycleObserver(
         emit=serializer.emit,
         conversation=serializer.conversation,
+        client_tool_broker=realtime_client_tool_broker(transport),
     )
     serializer.set_on_response_cancel(observer.on_response_cancelled)
     transport._realtime_observer = observer  # type: ignore[attr-defined]
     return observer
+
+
+def realtime_client_tool_broker(transport: Any) -> ClientToolBroker | None:
+    """Return the Realtime client-tool broker attached to a transport."""
+    broker = getattr(transport, "_realtime_client_tool_broker", None)
+    return broker if isinstance(broker, ClientToolBroker) else None
 
 
 def shutdown_realtime_transport(transport: Any) -> None:

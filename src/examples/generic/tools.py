@@ -12,8 +12,13 @@ from examples.generic.tool_handlers import TOOL_HANDLERS as TOOL_HANDLERS  # noq
 from utils import load_tools_catalog
 
 
-def build_tools_schema(module_file: str | Path, tool_names: list[str]) -> tuple[ToolsSchema | None, list[str]]:
-    """Build a ToolsSchema for ``tool_names`` from the example's ``tools.yaml``.
+def build_tools_schema(
+    module_file: str | Path,
+    tool_names: list[str],
+    *,
+    client_tools: list[dict] | None = None,
+) -> tuple[ToolsSchema | None, list[str]]:
+    """Build one schema containing server-catalog and client-owned tools.
 
     A tool is included only when (a) the YAML entry exists, (b) the entry's
     ``function.name`` equals the catalog key, and (c) a handler is registered
@@ -24,15 +29,21 @@ def build_tools_schema(module_file: str | Path, tool_names: list[str]) -> tuple[
     Returns ``(schema, registered_names)`` so callers can register handlers
     for exactly the tools that made it into the schema.
     """
-    if not tool_names:
-        return None, []
-
-    catalog = load_tools_catalog(module_file)
-    if not catalog:
+    catalog = load_tools_catalog(module_file) if tool_names else {}
+    if tool_names and not catalog:
         logger.warning("Tools catalog not found beside example module; tool calling disabled")
-        return None, []
 
-    tools: list[dict] = []
+    tools: list[dict] = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+            },
+        }
+        for tool in (client_tools or [])
+    ]
     registered: list[str] = []
     for name in tool_names:
         entry = catalog.get(name)

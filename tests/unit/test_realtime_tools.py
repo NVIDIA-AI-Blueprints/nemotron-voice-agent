@@ -15,8 +15,8 @@ from realtime.gateway import handle_realtime_websocket
 from realtime.session import map_session_update_to_flat_config
 
 
-class ToolsIgnoredTests(unittest.TestCase):
-    def test_session_tools_do_not_map_to_client_tools(self) -> None:
+class ClientToolsTests(unittest.TestCase):
+    def test_session_tools_map_to_client_tools(self) -> None:
         flat = map_session_update_to_flat_config(
             {
                 "tools": [
@@ -29,15 +29,26 @@ class ToolsIgnoredTests(unittest.TestCase):
                 ]
             }
         )
-        self.assertNotIn("client_tools", flat)
+        self.assertEqual(flat["client_tools"][0]["name"], "get_weather")
 
-    def test_empty_tools_also_ignored(self) -> None:
+    def test_empty_tools_clear_client_tools(self) -> None:
         flat = map_session_update_to_flat_config({"tools": []})
-        self.assertNotIn("client_tools", flat)
+        self.assertEqual(flat["client_tools"], [])
+
+    def test_invalid_and_duplicate_tools_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "function tool"):
+            map_session_update_to_flat_config({"tools": [{"type": "mcp", "name": "bad"}]})
+        tool = {
+            "type": "function",
+            "name": "same",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            map_session_update_to_flat_config({"tools": [tool, tool]})
 
 
-class GatewayToolsIgnoredTests(unittest.IsolatedAsyncioTestCase):
-    async def test_client_tools_not_passed_to_pipeline(self) -> None:
+class GatewayClientToolsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_client_tools_are_passed_to_pipeline(self) -> None:
         captured: dict = {}
 
         async def start_bot(ws, config, session):  # noqa: ARG001
@@ -75,9 +86,45 @@ class GatewayToolsIgnoredTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIn("config", captured)
-        self.assertNotIn("client_tools", captured["config"])
-        self.assertEqual(captured["session"].get("tools"), [])
+        self.assertEqual(captured["config"]["client_tools"][0]["name"], "totally_fake_tool")
+        self.assertEqual(captured["session"]["tools"][0]["name"], "totally_fake_tool")
         self.assertEqual(
             captured["session"]["nvidia"]["server_tools"],
             ["get_weather", "set_memory"],
         )
+
+    async def test_client_server_name_conflict_is_rejected(self) -> None:
+        started = False
+
+        async def start_bot(ws, config, session):  # noqa: ARG001
+            nonlocal started
+            started = True
+
+        ws = FakeWebSocket(
+            [
+                json.dumps(
+                    {
+                        "type": "session.update",
+                        "session": {
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "get_weather",
+                                    "parameters": {"type": "object", "properties": {}},
+                                }
+                            ]
+                        },
+                    }
+                )
+            ]
+        )
+        with patch("realtime.gateway.resolve_realtime_tts_voice", return_value=None):
+            await handle_realtime_websocket(
+                ws,
+                sanitize_session_config=lambda data, **_: dict(data),
+                start_bot=start_bot,
+                resolve_server_tools=lambda _config: ["get_weather"],
+            )
+        self.assertFalse(started)
+        self.assertEqual(ws.sent[-1]["type"], "error")
+        self.assertEqual(ws.sent[-1]["error"]["code"], "invalid_session")

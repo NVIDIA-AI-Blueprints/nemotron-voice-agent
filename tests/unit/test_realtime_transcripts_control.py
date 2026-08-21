@@ -1092,7 +1092,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(frame, InputAudioRawFrame)
 
-    async def test_function_call_output_is_rejected(self) -> None:
+    async def test_function_call_output_without_broker_is_unknown(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -1114,7 +1114,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(frame)
         self.assertEqual(emitted[0]["type"], "error")
-        self.assertEqual(emitted[0]["error"]["code"], "unsupported_item")
+        self.assertEqual(emitted[0]["error"]["code"], "unknown_call_id")
 
     async def test_function_call_output_rejects_unknown_call_id(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -1138,7 +1138,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(frame)
         self.assertEqual(emitted[0]["type"], "error")
-        self.assertEqual(emitted[0]["error"]["code"], "unsupported_item")
+        self.assertEqual(emitted[0]["error"]["code"], "unknown_call_id")
 
     async def test_truncate_rejects_unknown_item(self) -> None:
         emitted: list[dict[str, Any]] = []

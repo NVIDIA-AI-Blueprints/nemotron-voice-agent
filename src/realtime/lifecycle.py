@@ -5,10 +5,16 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+from typing import Any
+
 from realtime.conversation import ConversationState, ResponseSnapshot
 from realtime.events import (
     SERVER_CONTENT_PART_ADDED,
     SERVER_CONTENT_PART_DONE,
+    SERVER_FUNCTION_CALL_ARGUMENTS_DELTA,
+    SERVER_FUNCTION_CALL_ARGUMENTS_DONE,
     SERVER_ITEM_CREATED,
     SERVER_OUTPUT_AUDIO_DONE,
     SERVER_OUTPUT_AUDIO_TRANSCRIPT_DONE,
@@ -23,11 +29,8 @@ from realtime.events import (
 )
 
 
-async def announce_response(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
-    """Ensure ``response.created`` + assistant item / content_part are on the wire.
-
-    Returns ``(response_id, newly_created)``.
-    """
+async def announce_response_created(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
+    """Ensure only ``response.created`` is emitted before output type is known."""
     response_id, created = conversation.begin_response()
     if created:
         await emit_with_aliases(
@@ -37,6 +40,15 @@ async def announce_response(conversation: ConversationState, emit: EmitFn) -> tu
                 response=response_created_body(response_id),
             ),
         )
+    return response_id, created
+
+
+async def announce_response(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
+    """Ensure ``response.created`` + assistant item / content_part are on the wire.
+
+    Returns ``(response_id, newly_created)``.
+    """
+    response_id, created = await announce_response_created(conversation, emit)
     if not conversation.output_item_announced:
         conversation.output_item_announced = True
         item_id = conversation.assistant_item_id
@@ -75,6 +87,104 @@ async def announce_response(conversation: ConversationState, emit: EmitFn) -> tu
             ),
         )
     return response_id, created
+
+
+async def emit_client_tool_response(
+    conversation: ConversationState,
+    emit: EmitFn,
+    function_calls: Sequence[Any],
+) -> bool:
+    """Emit one completed Realtime response containing client function calls."""
+    calls = [call for call in function_calls if getattr(call, "tool_call_id", None)]
+    if not calls:
+        return False
+    response_id, _ = await announce_response_created(conversation, emit)
+    output: list[dict[str, Any]] = []
+    for output_index, call in enumerate(calls):
+        call_id = str(getattr(call, "tool_call_id", "") or "")
+        name = str(getattr(call, "function_name", "") or "")
+        arguments_value = getattr(call, "arguments", None)
+        arguments = (
+            arguments_value
+            if isinstance(arguments_value, str)
+            else json.dumps(arguments_value if arguments_value is not None else {}, separators=(",", ":"), default=str)
+        )
+        item_id = f"item_{call_id}" if call_id else None
+        completed_item = {
+            "id": item_id,
+            "object": "realtime.item",
+            "type": "function_call",
+            "status": "completed",
+            "name": name,
+            "call_id": call_id,
+            "arguments": arguments,
+        }
+        await emit_with_aliases(
+            emit,
+            server_event(SERVER_ITEM_CREATED, previous_item_id=None, item=completed_item),
+        )
+        await emit_with_aliases(
+            emit,
+            server_event(
+                SERVER_OUTPUT_ITEM_ADDED,
+                response_id=response_id,
+                output_index=output_index,
+                item={**completed_item, "status": "in_progress", "arguments": ""},
+            ),
+        )
+        if arguments:
+            await emit_with_aliases(
+                emit,
+                server_event(
+                    SERVER_FUNCTION_CALL_ARGUMENTS_DELTA,
+                    response_id=response_id,
+                    item_id=item_id,
+                    output_index=output_index,
+                    call_id=call_id,
+                    delta=arguments,
+                ),
+            )
+        await emit_with_aliases(
+            emit,
+            server_event(
+                SERVER_FUNCTION_CALL_ARGUMENTS_DONE,
+                response_id=response_id,
+                item_id=item_id,
+                output_index=output_index,
+                call_id=call_id,
+                name=name,
+                arguments=arguments,
+            ),
+        )
+        await emit_with_aliases(
+            emit,
+            server_event(
+                SERVER_OUTPUT_ITEM_DONE,
+                response_id=response_id,
+                output_index=output_index,
+                item=completed_item,
+            ),
+        )
+        output.append(completed_item)
+
+    completed = conversation.complete_non_audio_response("completed")
+    if completed is None:
+        return False
+    generation, _ = completed
+    await emit_with_aliases(
+        emit,
+        server_event(
+            SERVER_RESPONSE_DONE,
+            response={
+                "id": response_id,
+                "object": "realtime.response",
+                "status": "completed",
+                "output": output,
+            },
+        ),
+    )
+    conversation.reset_response_slot(generation=generation)
+    return True
 
 
 async def finish_response(

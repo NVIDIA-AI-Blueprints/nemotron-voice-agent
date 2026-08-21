@@ -35,6 +35,12 @@ from realtime.audio import (
     extract_client_pcm_rate,
     validate_session_audio_config,
 )
+from realtime.client_tools import (
+    ClientToolBroker,
+    validate_client_tools,
+    validate_tool_choice_names,
+    validate_tool_ownership,
+)
 from realtime.conversation import ConversationState, new_item_id
 from realtime.events import (
     CLIENT_AUDIO_APPEND,
@@ -54,9 +60,10 @@ from realtime.events import (
     error_event,
     server_event,
 )
-from realtime.lifecycle import announce_response, finish_response
+from realtime.lifecycle import announce_response, announce_response_created, finish_response
 from realtime.session import (
     live_session_patch,
+    map_tool_choice,
     merge_session_patch,
     nvidia_public_view,
     unsupported_live_session_fields,
@@ -85,6 +92,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         session_view: dict[str, Any] | None = None,
         runtime_config: dict[str, Any] | None = None,
         conversation: ConversationState | None = None,
+        client_tool_broker: ClientToolBroker | None = None,
         params: FrameSerializer.InputParams | None = None,
     ) -> None:
         """Create a serializer bound to the current Realtime session view."""
@@ -92,6 +100,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._session_view: dict[str, Any] = dict(session_view or {})
         self._runtime_config: dict[str, Any] = dict(runtime_config or {})
         self._conversation = conversation or ConversationState()
+        self._client_tool_broker = client_tool_broker
         self._resampler = AudioResampler()
         self._pipeline_rate = PIPELINE_PCM_RATE
         self._client_in_rate = extract_client_pcm_rate(self._session_view)
@@ -233,6 +242,31 @@ class RealtimeFrameSerializer(FrameSerializer):
             if self._emit is None:
                 logger.warning("Realtime emit not configured; rejecting response.create")
                 return None
+            continuation = (
+                await self._client_tool_broker.prepare_continuation()
+                if self._client_tool_broker is not None
+                else "none"
+            )
+            if continuation == "missing_output":
+                await self._emit_event(
+                    error_event(
+                        "Submit function_call_output for every pending client tool before response.create",
+                        code="tool_output_pending",
+                        event_id=echo_id,
+                        param="type",
+                    )
+                )
+                return None
+            if continuation == "terminal":
+                await self._emit_event(
+                    error_event(
+                        "The pending client tool call expired or was cancelled",
+                        code="client_tool_unavailable",
+                        event_id=echo_id,
+                        param="type",
+                    )
+                )
+                return None
             if not self._conversation.request_response():
                 await self._emit_event(
                     error_event(
@@ -243,7 +277,9 @@ class RealtimeFrameSerializer(FrameSerializer):
                     )
                 )
                 return None
-            await announce_response(self._conversation, self._emit)
+            await announce_response_created(self._conversation, self._emit)
+            if continuation == "queued":
+                return None
             return LLMRunFrame()
 
         if event_type == CLIENT_RESPONSE_CANCEL:
@@ -298,6 +334,32 @@ class RealtimeFrameSerializer(FrameSerializer):
             validate_session_audio_config(session_patch)
             validate_input_transcription(session_patch)
             validate_server_vad(session_patch)
+            tools = (
+                validate_client_tools(session_patch.get("tools"))
+                if "tools" in session_patch
+                else (
+                    self._client_tool_broker.client_tools
+                    if self._client_tool_broker is not None
+                    else list(self._session_view.get("tools") or [])
+                )
+            )
+            validate_tool_ownership(
+                tools,
+                self._runtime_config.get("server_tools", []),
+                pipeline_mode=str(self._runtime_config.get("pipeline_mode") or "generic-assistant"),
+            )
+            mapped_tool_choice = (
+                map_tool_choice(session_patch.get("tool_choice"))
+                if "tool_choice" in session_patch
+                else self._runtime_config.get("tool_choice", "auto")
+            )
+            validate_tool_choice_names(
+                mapped_tool_choice,
+                {
+                    *[str(tool.get("name") or "") for tool in tools],
+                    *[str(name) for name in self._runtime_config.get("server_tools", [])],
+                },
+            )
         except ValueError as exc:
             await self._emit_event(error_event(str(exc), code="invalid_session", event_id=echo_id, param="session"))
             return None
@@ -310,8 +372,8 @@ class RealtimeFrameSerializer(FrameSerializer):
             await self._emit_event(
                 error_event(
                     f"Post-handoff session.update cannot apply [{fields}]; "
-                    "reconnect to change instructions/tools/temperature/nvidia. "
-                    "Live: voice, audio format/rate, and transcription selector only; "
+                    "reconnect to change instructions/temperature/nvidia. "
+                    "Live: voice, tools, tool_choice, audio format/rate, and transcription selector; "
                     "turn detection is immutable",
                     code="unsupported_live_session_update",
                     event_id=echo_id,
@@ -321,6 +383,13 @@ class RealtimeFrameSerializer(FrameSerializer):
             return None
 
         patch = live_session_patch(session_patch)
+        if "tools" in session_patch:
+            patch["tools"] = tools
+            self._runtime_config["client_tools"] = tools
+        if "tool_choice" in session_patch:
+            self._runtime_config["tool_choice"] = mapped_tool_choice
+        if self._client_tool_broker is not None and ("tools" in session_patch or "tool_choice" in session_patch):
+            await self._client_tool_broker.update_tools(tools, mapped_tool_choice)
         if "input_audio_format" in patch or "output_audio_format" in patch:
             audio_patch = dict(patch.get("audio") or {})
             if "input_audio_format" in patch:
@@ -513,14 +582,7 @@ class RealtimeFrameSerializer(FrameSerializer):
 
         item_type = item.get("type") or "message"
         if item_type == "function_call_output":
-            await self._emit_event(
-                error_event(
-                    "Client function_call_output is not supported; server catalog tools run internally",
-                    code="unsupported_item",
-                    event_id=echo_id,
-                    param="item.type",
-                )
-            )
+            await self._deserialize_function_call_output(item, echo_id)
             return None
 
         role = item.get("role") or "user"
@@ -578,6 +640,75 @@ class RealtimeFrameSerializer(FrameSerializer):
         return LLMMessagesAppendFrame(
             messages=[{"role": "user", "content": text}],
             run_llm=False,
+        )
+
+    async def _deserialize_function_call_output(self, item: dict[str, Any], echo_id: str | None) -> None:
+        """Resolve one pending client-owned function call without auto-running."""
+        call_id = item.get("call_id")
+        output = item.get("output")
+        if not isinstance(call_id, str) or not call_id:
+            await self._emit_event(
+                error_event(
+                    "function_call_output requires call_id",
+                    code="invalid_item",
+                    event_id=echo_id,
+                    param="item.call_id",
+                )
+            )
+            return
+        if not isinstance(output, str):
+            await self._emit_event(
+                error_event(
+                    "function_call_output.output must be a string",
+                    code="invalid_item",
+                    event_id=echo_id,
+                    param="item.output",
+                )
+            )
+            return
+        if self._client_tool_broker is None:
+            await self._emit_event(
+                error_event(
+                    "No client tool call is pending",
+                    code="unknown_call_id",
+                    event_id=echo_id,
+                    param="item.call_id",
+                )
+            )
+            return
+        try:
+            await self._client_tool_broker.submit_output(call_id, output)
+        except ValueError as exc:
+            code = str(exc)
+            messages = {
+                "unknown_call_id": "call_id does not identify a pending client tool",
+                "stale_call_id": "call_id is expired or cancelled",
+                "duplicate_call_output": "function_call_output was already submitted for call_id",
+                "tool_output_too_large": "function_call_output exceeds the maximum size",
+            }
+            await self._emit_event(
+                error_event(
+                    messages.get(code, "Invalid function_call_output"),
+                    code=code,
+                    event_id=echo_id,
+                    param="item.call_id",
+                )
+            )
+            return
+        item_id = item.get("id") if isinstance(item.get("id"), str) and item.get("id") else new_item_id()
+        await self._emit_event(
+            server_event(
+                SERVER_ITEM_CREATED,
+                previous_item_id=None,
+                item={
+                    "id": item_id,
+                    "object": "realtime.item",
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "call_id": call_id,
+                    "output": output,
+                },
+            )
         )
 
     async def _serialize_output_audio(self, frame: OutputAudioRawFrame) -> None:

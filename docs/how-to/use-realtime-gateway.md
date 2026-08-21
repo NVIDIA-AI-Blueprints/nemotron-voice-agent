@@ -18,13 +18,13 @@ It is a **protocol gateway**, not a drop-in clone of OpenAI’s hosted Realtime 
 | URL | OpenAI Realtime WebSocket | `WS /v1/realtime` on this server |
 | Voices | OpenAI voice names (`alloy`, …) | Magpie / catalog voice ids (unknown ids warn and fall back to catalog default) |
 | `session.model` | Selects a Realtime model | Ignored (logged only) |
-| Tools | Client-registered schemas + model-native calling | Client schemas are ignored; server catalog tools run internally |
+| Tools | Client-registered schemas + model-native calling | Client-owned functions plus internally executed server catalog tools |
 | Welcome | Client-driven | Optional Nemotron welcome gate (RTVI parity): client text / `response.create` rejected until first assistant `response.done` |
 | Turn detection | Several modes and tunable VAD | Server VAD only; no push-to-talk or VAD tuning |
-| Live `session.update` | Broad session mutation | Voice and PCM updates only; turn mode is immutable |
+| Live `session.update` | Broad session mutation | Voice, PCM, client tools, and `tool_choice`; turn mode is immutable |
 | Transport | WebSocket, WebRTC, PCM16, and G.711 | WebSocket PCM16 only |
 
-Invalid session config that would break audio (bad PCM format/rate, unsupported turn detection, or text-only output) returns a Realtime `error` and **keeps the socket open** for retry. Fields that do not translate to the cascade (including `session.tools`) are ignored.
+Invalid session config that would break audio (bad PCM format/rate, unsupported turn detection, or text-only output) returns a Realtime `error` and **keeps the socket open** for retry.
 
 | Path | Protocol |
 |------|----------|
@@ -79,7 +79,19 @@ Authentication, authorization, quotas, and rate limits are deployment-layer resp
 }
 ```
 
-Client tools and `function_call_output` items are not supported. Catalog tools run inside the server and appear through `session.nvidia.server_tools` and the observational `nvidia.tool.started` / `nvidia.tool.completed` events.
+### Client-owned tools
+
+`session.tools` registers functions executed by the client. They are supported by the default `generic-assistant` pipeline and may be updated live with `tool_choice`.
+
+1. The model call completes its own response: `response.created` → function-call item and argument events → `response.output_item.done` → `response.done`.
+2. The client executes the function and sends `conversation.item.create` with `type: function_call_output`, the matching `call_id`, and a string `output`.
+3. The client sends a later `response.create` to request the spoken continuation. Sending the output alone never runs the LLM.
+
+Client and server tools may coexist, but names must not overlap. Ownership is fixed when a call starts, including across live schema updates. Mixed parallel batches wait for every result and never auto-continue; the client-owned batch still requires explicit `response.create`.
+
+Client limits: 32 functions, 64 KiB total schema JSON, 64-character function names, 4,096-character descriptions, and 1 MiB outputs. Deferred calls time out after `REALTIME_CLIENT_TOOL_TIMEOUT_SECS` (default 60); late or duplicate outputs are rejected. A client-reported tool failure should be represented as a normal string or JSON-string `output`.
+
+Catalog tools remain server-owned. They are listed in read-only `session.nvidia.server_tools`, execute internally, and emit only `nvidia.tool.started` / `nvidia.tool.completed`.
 
 ## Field map
 
@@ -89,8 +101,8 @@ OpenAI top-level fields map onto the cascade when they have a Nemotron equivalen
 |--------------|---------|
 | `instructions` | `prompt_content` (system / prompt text for the cascade) |
 | `voice` / `audio.output.voice` | `tts_voice_id` (soft-validated against TTS catalog; unknown → default) |
-| `tools` | ignored (catalog tools via `prompt.id` / `prompt_key` only) |
-| `tool_choice` | `tool_choice` (applies when catalog tools are enabled) |
+| `tools` | client-owned function schemas in `generic-assistant` |
+| `tool_choice` | applies to the merged client and server tool set |
 | `max_output_tokens` | `max_tokens` |
 | `temperature` | LLM `temperature` |
 | `prompt.id` | `prompt_key` |
@@ -126,9 +138,9 @@ Changing `tts_id` / `tts_model` at connect time re-lists voices for that TTS sel
 | `input_audio_buffer.append` | Base64 PCM chunk |
 | `input_audio_buffer.commit` | Accepted as a compatibility no-op in server-VAD mode; automatic commit follows `speech_stopped` |
 | `input_audio_buffer.clear` | Reset client buffer accounting and emit `input_audio_buffer.cleared`; audio already streamed to VAD cannot be withdrawn |
-| `conversation.item.create` | User text items; `function_call_output` is rejected |
+| `conversation.item.create` | User text or client-owned `function_call_output`; neither auto-runs the LLM |
 | `conversation.item.truncate` | Barge-in while a response is in progress. Idle truncate is ignored. Does not emit `conversation.item.truncated`. |
-| `response.create` | Start a model turn. Empty `response: {}` is accepted; non-empty per-response overrides are rejected. |
+| `response.create` | Start a model turn or explicitly continue after client tool output. Empty `response: {}` is accepted; non-empty per-response overrides are rejected. |
 | `response.cancel` | Cancel the in-progress response. Idle cancel is a no-op. |
 
 Conversation item delete/retrieve operations are not supported. There are no response-level instruction, tool, modality, audio, or generation overrides.
@@ -138,10 +150,10 @@ Conversation item delete/retrieve operations are not supported. There are no res
 | Event | Notes |
 |-------|--------|
 | `session.created` / `session.updated` | Session object (OpenAI-shaped + optional `nvidia`) |
-| `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `item_rejected_pre_intro`, `response_create_rejected_pre_intro`, `invalid_item`, `invalid_truncate` |
+| `error` | Realtime-shaped error; client-tool codes include `unknown_call_id`, `duplicate_call_output`, `stale_call_id`, `tool_output_too_large`, `client_tool_timeout`, and `tool_output_pending` |
 | `input_audio_buffer.*` | Server-VAD speech / commit / clear events |
 | `conversation.item.*` | Item created; cascaded ASR input transcription. `conversation.item.truncated` is not emitted. |
-| `response.*` | Response lifecycle, audio, and audio-transcript events |
+| `response.*` | Response lifecycle, function-call arguments, audio, and audio-transcript events |
 | `nvidia.tool.started` / `nvidia.tool.completed` | Observation of internally executed catalog tools |
 
 GA clients receive `response.output_audio.*` and `response.output_audio_transcript.*`. Clients that negotiate the beta dialect receive the corresponding `response.audio.*` and `response.audio_transcript.*` names. Audio content parts do not emit `response.output_text.*`.
@@ -156,11 +168,12 @@ GA clients receive `response.output_audio.*` and `response.output_audio_transcri
 
 - Welcome enabled (RTVI parity): client text and `response.create` are rejected until the first assistant `response.done`. Audio append is unaffected.
 - Spoken turns complete after the output transport drains all queued TTS audio; only then does the gateway emit `response.done`.
-- Post-handoff `session.update` is narrow: voice and audio-format/rate updates apply live. Input-transcription selector updates are compatibility no-ops. The server-VAD turn mode is immutable; other changes return `unsupported_live_session_update`.
+- Post-handoff `session.update` applies voice, audio-format/rate, client `tools`, and `tool_choice`. Input-transcription selector updates are compatibility no-ops. The server-VAD turn mode is immutable; other changes return `unsupported_live_session_update`.
 - Pipeline ASR emits `conversation.item.input_audio_transcription.*` regardless of the accepted transcription selector; its requested model is ignored.
 - `response.output_audio.delta` events precede `response.output_audio.done`, `response.output_audio_transcript.done`, `response.content_part.done`, `response.output_item.done`, and finally `response.done`.
 - Each server-VAD turn uses one item id and sample-based timestamps. The wire order is `speech_started`, `speech_stopped`, `committed`, `conversation.item.created`, and transcription completion.
 - Pipeline barge-in (`InterruptionFrame`) cancels the active Realtime response even when `TTSStopped` never arrives.
 - Non-empty `response.create.response` overrides return `unsupported_response_override`; omit the field or send `{}`.
+- Function-call responses contain no audio content part and finish before client execution. A later explicit `response.create` owns the spoken continuation.
 
 Live check: `RUN_REALTIME_COMPAT=1 uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v` — see [`tests/integration/README.md`](../../tests/integration/README.md).
