@@ -162,6 +162,11 @@ class ConversationState:
         self.response_requested = True
         return True
 
+    def release_response_request(self) -> None:
+        """Release an unannounced client response reservation."""
+        if self.response_status != "in_progress":
+            self.response_requested = False
+
     def append_assistant_transcript(self, text: str) -> None:
         """Accumulate bot speech transcript for the active response."""
         if not text:

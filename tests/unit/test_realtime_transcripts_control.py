@@ -336,7 +336,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("response.done", [e["type"] for e in emitted])
 
-    async def test_pipeline_error_finishes_active_response_as_failed(self) -> None:
+    async def test_nonfatal_pipeline_error_preserves_active_response(self) -> None:
         from pipecat.frames.frames import ErrorFrame
 
         emitted: list[dict[str, Any]] = []
@@ -356,8 +356,60 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
                 timestamp=0,
             )
         )
-        self.assertEqual(emitted[0]["type"], "error")
+
+        self.assertEqual([event["type"] for event in emitted], ["error"])
+        self.assertEqual(state.response_status, "in_progress")
+
+        await observer._handle_frame(TTSStoppedFrame())
         done = next(e for e in emitted if e["type"] == "response.done")
+        self.assertEqual(done["response"]["status"], "completed")
+
+    async def test_nonfatal_pipeline_error_releases_unannounced_response_request(self) -> None:
+        from pipecat.frames.frames import ErrorFrame
+
+        async def emit(_event: dict[str, Any]) -> None:
+            pass
+
+        state = ConversationState()
+        self.assertTrue(state.request_response())
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+
+        await observer.on_push_frame(
+            FramePushed(
+                source=MagicMock(),
+                destination=MagicMock(),
+                frame=ErrorFrame(error="LLM unavailable"),
+                direction=FrameDirection.UPSTREAM,
+                timestamp=0,
+            )
+        )
+
+        self.assertFalse(state.response_requested)
+        self.assertTrue(state.request_response())
+
+    async def test_fatal_pipeline_error_finishes_active_response_as_failed(self) -> None:
+        from pipecat.frames.frames import FatalErrorFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        state.begin_response()
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+        await observer.on_push_frame(
+            FramePushed(
+                source=MagicMock(),
+                destination=MagicMock(),
+                frame=FatalErrorFrame(error="Pipeline unavailable"),
+                direction=FrameDirection.UPSTREAM,
+                timestamp=0,
+            )
+        )
+
+        self.assertEqual(emitted[0]["type"], "error")
+        done = next(event for event in emitted if event["type"] == "response.done")
         self.assertEqual(done["response"]["status"], "failed")
 
     async def test_function_call_emits_nvidia_observation_only(self) -> None:

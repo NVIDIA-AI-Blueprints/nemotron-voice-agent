@@ -184,10 +184,13 @@ class RealtimeLifecycleObserver(BaseObserver):
             if not self._remember_frame(frame.id):
                 return
             try:
-                if self._conversation.response_requested:
-                    await self._ensure_response_announced()
                 await self._emit_event(error_event(frame.error, code="pipeline_error"))
-                await self._finish_response(status="failed")
+                if frame.fatal:
+                    if self._conversation.response_requested:
+                        await self._ensure_response_announced()
+                    await self._finish_response(status="failed")
+                else:
+                    self._conversation.release_response_request()
             except Exception:
                 logger.exception("RealtimeLifecycleObserver failed while handling pipeline error")
             return
