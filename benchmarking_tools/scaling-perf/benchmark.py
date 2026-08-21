@@ -607,7 +607,10 @@ class PerfClient:
             await self.logger.log(f"{self.stream_id} no initial bot intro within {BOT_INTRO_TIMEOUT}s")
             return wf
         await self.logger.log(f"{self.stream_id} received initial bot intro")
-        wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=False)
+        try:
+            wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=False)
+        except FailedBotUtterance as exc:
+            await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
         return wf
 
     async def _drain_utterance(self, websocket, first_data: bytes, wf, *, detect_glitches: bool, drain_timeout=None):
@@ -711,6 +714,16 @@ class PerfClient:
             )
             return wf
         if data is None or utterance_start is None:
+            if self._realtime is not None:
+                try:
+                    await self._realtime.cancel_response(timeout=self.turn_response_timeout)
+                except Exception as exc:
+                    await self._record_realtime_turn_metrics(
+                        audio_file_path,
+                        realtime_event_start,
+                        error=f"unable to synchronize timed-out response: {exc}",
+                    )
+                    raise RuntimeError("Realtime response cancellation barrier failed") from exc
             await self._record_realtime_turn_metrics(
                 audio_file_path,
                 realtime_event_start,
@@ -835,6 +848,7 @@ class PerfClient:
             "error": error or (first_by_type.get("error") or {}).get("error") or response_done.get("error"),
         }
         self.realtime_turn_metrics.append(metrics)
+        self._realtime.events.clear()
         await self.logger.log(
             f"{self.stream_id} realtime lifecycle {audio_file_path.name}: {json.dumps(metrics, sort_keys=True)}"
         )

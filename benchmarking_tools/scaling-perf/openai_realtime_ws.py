@@ -283,6 +283,20 @@ class OpenAIRealtimeSocket:
             if str(event.get("type") or "") == "session.updated":
                 return event
 
+    async def cancel_response(self, timeout: float) -> dict[str, Any]:
+        """Cancel an active response and wait for its terminal event."""
+        await self.send_event({"type": "response.cancel"})
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("timed out waiting for cancelled response.done")
+            event = await self.recv_event(timeout=remaining)
+            self._raise_if_error(event)
+            self._apply_session_event(event)
+            if is_response_done(event):
+                return event
+
     async def recv_audio(self, timeout: float | None = None) -> bytes:
         """Return the next output PCM chunk or signal response completion."""
         deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
