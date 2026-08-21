@@ -2,7 +2,7 @@
 #
 # Opt-in alternate to Magpie (shared ports 50151/9000. Only one TTS can run):
 #   docker compose --profile <recipe>/server --profile chatterbox-tts \
-#     up -d --scale tts-service=0
+#     up -d --scale magpie-multilingual-tts-service=0
 # Omitting --profile chatterbox-tts leaves Chatterbox running and holding the
 # ports. Stop it before Magpie can bind again:
 #   docker compose --profile chatterbox-tts stop chatterbox-tts-service

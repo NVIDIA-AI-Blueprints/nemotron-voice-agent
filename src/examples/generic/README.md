@@ -6,7 +6,7 @@ Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`Nvidi
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
+This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance Server** (NIM), and universal **Single GPU** profiles. The performance profile uses the dedicated four-GPU layout documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup). It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
 
 1. Create your `.env` from the template and set your NVIDIA API key:
 
@@ -26,8 +26,9 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
 3. Deploy the profile that matches your hardware:
 
    ```bash
-   docker compose --profile generic-assistant up -d              # Cloud (no local GPU)
-   docker compose --profile generic-assistant/server up -d  # Server (NIM, recommended for scaling)
+   docker compose --profile generic-assistant up -d             # Cloud (no local GPU)
+   docker compose --profile generic-assistant/server up -d      # Server (NIM)
+   docker compose --profile generic-assistant/server-perf up -d # Four-GPU benchmark only
 
    # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
@@ -37,7 +38,8 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    | Recipe profile | App service | Sidecars |
    | --- | --- | --- |
    | `generic-assistant` | `generic-assistant` | none (cloud NVCF) |
-   | `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `tts-service` |
+   | `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
+   | `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
    | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
 
    > Lightning selects its platform and precision recipe automatically.
@@ -47,9 +49,10 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
 5. Clean up when you are done by tearing down with the same profile you started with:
 
    ```bash
-   docker compose --profile generic-assistant down              # Cloud (no local GPU)
-   docker compose --profile generic-assistant/server down  # Server
-   docker compose --profile generic-assistant/single-gpu down   # One GPU (incl. DGX Spark and Jetson Thor)
+   docker compose --profile generic-assistant down             # Cloud (no local GPU)
+   docker compose --profile generic-assistant/server down      # Server
+   docker compose --profile generic-assistant/server-perf down # Four-GPU benchmark only
+   docker compose --profile generic-assistant/single-gpu down  # One GPU (incl. DGX Spark and Jetson Thor)
    ```
 
 To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.

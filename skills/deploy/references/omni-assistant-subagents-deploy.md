@@ -28,7 +28,7 @@ docker compose --profile omni-assistant-subagents/single-gpu up -d
 | Recipe profile | App service | Sidecars from `docker/` |
 | --- | --- | --- |
 | `omni-assistant-subagents` | `omni-assistant-subagents` | none (cloud NVCF) |
-| `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `tts-service` |
+| `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
 | `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
 Tear down with the same recipe used at `up` time.

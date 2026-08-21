@@ -3,7 +3,7 @@
 #
 # Opt-in alternate (shared ports 50151/9000. Only one TTS can run):
 #   docker compose --profile <recipe>/server --profile magpie-zeroshot-tts \
-#     up -d --scale tts-service=0
+#     up -d --scale magpie-multilingual-tts-service=0
 # Omitting --profile magpie-zeroshot-tts leaves Zeroshot running and holding the
 # ports. Stop it before Magpie can bind again:
 #   docker compose --profile magpie-zeroshot-tts stop magpie-zeroshot-tts-service

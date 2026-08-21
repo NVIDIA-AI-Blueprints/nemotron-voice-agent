@@ -24,7 +24,7 @@ server:
   tts:
     magpie-multilingual-tts:
       name: "Magpie TTS"
-      server: "tts-service:50051"
+      server: "magpie-multilingual-tts-service:50051"
       voice_id: "Magpie-Multilingual.EN-US.Aria"
       model: "magpie-tts-multilingual"
       function_id: ""

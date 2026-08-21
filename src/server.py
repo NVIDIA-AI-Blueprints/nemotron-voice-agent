@@ -107,7 +107,11 @@ _SPEECH_READY_ENDPOINTS = {
         9001,
     ),
     "tts": (
-        ("tts-service", "chatterbox-tts-service", "magpie-zeroshot-tts-service"),
+        (
+            "magpie-multilingual-tts-service",
+            "chatterbox-tts-service",
+            "magpie-zeroshot-tts-service",
+        ),
         50051,
         50151,
         9000,

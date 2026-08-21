@@ -1,4 +1,4 @@
-x-tts-service: &tts-service-base
+x-magpie-multilingual-tts-service: &magpie-multilingual-tts-service-base
     image: nvcr.io/nim/nvidia/magpie-tts-multilingual:1.10.0
     user: "0:0"
     ports:
@@ -29,14 +29,14 @@ x-tts-service: &tts-service-base
         max-size: "50m"
         max-file: "5"
 
-x-tts-service-env: &tts-service-env
+x-magpie-multilingual-tts-service-env: &magpie-multilingual-tts-service-env
   NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
   NIM_HTTP_API_PORT: "9000"
   NIM_GRPC_API_PORT: "50051"
 
 services:
-  tts-service:
-    <<: *tts-service-base
+  magpie-multilingual-tts-service:
+    <<: *magpie-multilingual-tts-service-base
     profiles:
       - generic-assistant/server
       - multilingual-assistant/server
@@ -44,7 +44,7 @@ services:
       - omni-assistant-subagents/server
       - frontend-backend-agent/server
     environment:
-      <<: *tts-service-env
+      <<: *magpie-multilingual-tts-service-env
       NIM_TAGS_SELECTOR: name=magpie-tts-multilingual,batch_size=8
     deploy:
       resources:
@@ -54,12 +54,12 @@ services:
               device_ids: ['0']
               capabilities: [gpu]
 
-  tts-service-perf:
-    <<: *tts-service-base
+  magpie-multilingual-tts-service-perf:
+    <<: *magpie-multilingual-tts-service-base
     profiles:
       - generic-assistant/server-perf
     environment:
-      <<: *tts-service-env
+      <<: *magpie-multilingual-tts-service-env
       NIM_TAGS_SELECTOR: name=magpie-tts-multilingual,batch_size=64
     deploy:
       resources:
@@ -71,7 +71,7 @@ services:
     networks:
       default:
         aliases:
-          - tts-service
+          - magpie-multilingual-tts-service
 
 volumes:
   tts_cache:

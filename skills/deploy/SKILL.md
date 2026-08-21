@@ -16,7 +16,7 @@ metadata:
 - Preserve existing `.env`. Create it only if missing.
 - Use `configure-pipeline` for `.env`, catalog, or prompt changes.
 - Every deployment specifies **exactly one recipe profile** (plus optional observability profiles). `docker compose up` with no profile is a no-op.
-- Recipe profile names are `<example>` for cloud-only deployments, `<example>/server` for NIM deployments, and `<example>/single-gpu` for the NeMo-Speech.cpp and vLLM stack. `generic-assistant/server-perf` is the scaling benchmark profile. Each profile is a complete, self-contained recipe. Never combine two recipes.
+- Recipe profile names are `<example>` for cloud-only deployments, `<example>/server` for NIM deployments, and `<example>/single-gpu` for the NeMo-Speech.cpp and vLLM stack. `generic-assistant/server-perf` is a benchmark-only scaling profile, not a normal UI deployment. Each profile is a complete, self-contained recipe. Never combine two recipes.
 - Generic, Multilingual, Omni, and Frontend/Backend single-GPU recipes support compatible workstations, DGX Spark, and Jetson Thor. Omni Assistant Subagents is documented for workstations and DGX Spark only. Do not infer that a recipe fits from the platform name. Complete the memory-fit procedure below first.
 - Selector modes (`all`, or a single `<example>` such as `generic-assistant`) remain host-native only (`uv run`) and have no compose profile.
 - Observability profiles (`tracing`, `turn`) compose orthogonally with any recipe.
@@ -123,7 +123,7 @@ The cascaded Lightning support matrix is fixed in its compose file:
 - Ada/Hopper workstation: BF16 checkpoint with online FP8 quantization.
 - Older compute capabilities are unsupported. Use cloud services.
 
-Device placement (which GPU each sidecar uses) is **not** an `.env` knob. `device_ids` are hardcoded to `['0']`. To move a service to GPU `N`, edit `device_ids: ['N']` under `deploy.resources.reservations.devices` in the service's Compose file. Server files include `docker/docker-compose.nemotron-asr.yaml`, `docker/docker-compose.magpie-tts.yaml`, `docker/docker-compose.nemotron35-lightning-nim.yaml`, and `docker/docker-compose.nemotron3-omni-nim.yaml`. Single-GPU files include `docker/docker-compose.nemo-speech-cpp.yaml`, `docker/docker-compose.nemotron35-lightning.yaml`, and `docker/docker-compose.nemotron3-omni.yaml`. A tensor-parallel LLM (`tp=N`) needs `N` GPUs. List every index it uses and keep those GPUs free of ASR and TTS. Each target index must appear in the step 1 readout. With only one GPU you cannot split. Keep everything on GPU 0, or run the cloud-only profile so ASR, TTS, and LLM use NVCF instead.
+Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. The four-GPU `generic-assistant/server-perf` recipe places ASR on GPU `0`, TTS on GPU `1`, and the tensor-parallel LLM on GPUs `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file. Server files include `docker/docker-compose.nemotron-asr.yaml`, `docker/docker-compose.magpie-tts.yaml`, `docker/docker-compose.magpie-zeroshot-tts.yaml`, `docker/docker-compose.chatterbox-tts.yaml`, `docker/docker-compose.nemotron35-lightning-nim.yaml`, and `docker/docker-compose.nemotron3-omni-nim.yaml`. Single-GPU files include `docker/docker-compose.nemo-speech-cpp.yaml`, `docker/docker-compose.nemotron35-lightning.yaml`, and `docker/docker-compose.nemotron3-omni.yaml`. A tensor-parallel LLM (`tp=N`) needs `N` GPUs. List every index it uses and keep those GPUs free of ASR and TTS. Each target index must appear in the step 1 readout. With only one GPU you cannot split. Keep everything on GPU 0, or run the cloud-only profile so ASR, TTS, and LLM use NVCF instead.
 
 Apply only what step 1 indicates. Never silently change values. See `docs/how-to/configure-llm.md` (VRAM & hardware support) for the full reasoning.
 
@@ -141,7 +141,8 @@ Apply only what step 1 indicates. Never silently change values. See `docs/how-to
 | Omni Assistant, single GPU (workstation, DGX Spark, Jetson Thor) | `omni-assistant/single-gpu` |
 | Omni Assistant Subagents, single GPU (workstation, DGX Spark) | `omni-assistant-subagents/single-gpu` |
 | Frontend/Backend Agent, single GPU (workstation, DGX Spark, Jetson Thor) | `frontend-backend-agent/single-gpu` |
-| Generic Cascaded NIM stack (recommended for scaling) | `generic-assistant/server` |
+| Generic Cascaded NIM stack | `generic-assistant/server` |
+| Generic Cascaded NIM performance benchmark (benchmark-only) | `generic-assistant/server-perf` |
 | Multilingual Cascaded NIM stack (recommended for scaling) | `multilingual-assistant/server` |
 | Omni Assistant NIM stack (recommended for scaling) | `omni-assistant/server` |
 | Omni Assistant Subagents NIM stack (recommended for scaling) | `omni-assistant-subagents/server` |
@@ -175,7 +176,7 @@ curl -k https://localhost:${PIPELINE_APP_PORT:-7860}/api/ice-servers \
   || curl http://localhost:${PIPELINE_APP_PORT:-7860}/api/ice-servers
 ```
 
-App service names follow the active example. Server recipes use `generic-assistant-server`, `multilingual-assistant-server`, `omni-assistant-server`, `omni-assistant-subagents-server`, and `frontend-backend-agent-server`. Single-GPU recipes use `generic-assistant-single-gpu`, `multilingual-assistant-single-gpu`, `omni-assistant-single-gpu`, `omni-assistant-subagents-single-gpu`, and `frontend-backend-agent-single-gpu`. Their speech sidecars are `nemo-speech`, `nemo-speech-multilingual`, and `nemo-speech-tts`.
+App service names follow the active example. Server recipes use `generic-assistant-server`, `generic-assistant-server-perf`, `multilingual-assistant-server`, `omni-assistant-server`, `omni-assistant-subagents-server`, and `frontend-backend-agent-server`. Single-GPU recipes use `generic-assistant-single-gpu`, `multilingual-assistant-single-gpu`, `omni-assistant-single-gpu`, `omni-assistant-subagents-single-gpu`, and `frontend-backend-agent-single-gpu`. Their speech sidecars are `nemo-speech`, `nemo-speech-multilingual`, and `nemo-speech-tts`.
 
 ## References
 

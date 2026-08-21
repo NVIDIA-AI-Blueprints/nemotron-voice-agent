@@ -36,10 +36,11 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
    - `<example-package>/prompts.yaml`: built-in prompt presets and prompt content for the active example.
 
 3. Validate:
-   - Multilingual prompts must use multilingual-capable ASR and TTS from the active catalog (e.g. `parakeet-rnnt`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts`, `chatterbox-multilingual-tts`). Verify the keys exist before referencing them.
-   - Local catalog endpoints must use Compose service names (`nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `parakeet-ctc-asr:50052`, `parakeet-rnnt-asr:50052`, `tts-service:50051`, `chatterbox-tts-service:50051`, `nvidia-llm:8000`, `nvidia-llm-vllm:8000`, `nvidia-llm-vllm-omni:8002`, `nemo-speech:50051`, `nemo-speech-multilingual:50051`, `nemo-speech-tts:50051`, `booking-server:8001`). Host-run backends auto-rewrite to the matching `localhost` ports.
-   - Alternate local ASR/TTS use Compose profiles (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`) and share ports with the default. Scale the default off (e.g. `--scale tts-service=0` or `--scale nemotron-asr-streaming-multilingual=0`). Stop an opt-in alternate before returning to the default if it still holds the shared ports.
-   - Server local Compose runs ASR/TTS and NIM LLM on GPU `0` by default. Single-GPU deployments are supported only when at least 80 GB of VRAM is available.
+   - Multilingual prompts must use multilingual-capable ASR and TTS from the active catalog (e.g. `parakeet-rnnt`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts`, `magpie-zeroshot-tts`, `chatterbox-multilingual-tts`). Verify the keys exist before referencing them.
+   - Every TTS catalog entry must set `synthesis_mode` explicitly. Use `stitched` for Magpie Multilingual and Magpie Zeroshot, and `per_sentence` for Chatterbox.
+   - Local catalog endpoints must use Compose service names (`nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `parakeet-ctc-asr:50052`, `parakeet-rnnt-asr:50052`, `magpie-multilingual-tts-service:50051`, `magpie-zeroshot-tts-service:50051`, `chatterbox-tts-service:50051`, `nvidia-llm:8000`, `nvidia-llm-vllm:8000`, `nvidia-llm-vllm-omni:8002`, `nemo-speech:50051`, `nemo-speech-multilingual:50051`, `nemo-speech-tts:50051`, `booking-server:8001`). Host-run backends auto-rewrite to the matching `localhost` ports.
+   - Alternate local ASR/TTS use Compose profiles (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`, `magpie-zeroshot-tts`) and share ports with the default. Scale the default off (e.g. `--scale magpie-multilingual-tts-service=0` or `--scale nemotron-asr-streaming-multilingual=0`). Stop `chatterbox-tts-service` or `magpie-zeroshot-tts-service` before returning to Magpie Multilingual.
+   - A `*/server` recipe that colocates the default ASR, LLM, and TTS on one GPU needs about 80 GB of VRAM. This does not apply to `*/single-gpu` recipes, which use the memory-fit procedure in the `deploy` skill.
 
 4. Apply and verify using `references/apply-changes.md`.
 
@@ -48,7 +49,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 - `.env` changes: compose re-apply.
 - YAML catalog changes (`prompts.yaml`, `services.*.yaml`, `examples_registry.yaml`): compose restart of the example service. `./src` and `./examples_registry.yaml` are bind-mounted, so no rebuild needed.
 - Preserve unrelated keys, comments, and entries while editing.
-- Alternate local ASR/TTS use Compose profiles where needed (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`). Magpie TTS uses `tts-service`.
+- Alternate local ASR/TTS use Compose profiles where needed (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`, `magpie-zeroshot-tts`). Magpie Multilingual uses `magpie-multilingual-tts-service`. Magpie Zeroshot uses `magpie-zeroshot-tts-service`.
 - Per-example slot defaults live in `examples_registry.yaml` `defaults`. The catalog file ordering only affects UI listings. The actual default is whatever `defaults` declares.
 
 ## Examples
@@ -62,13 +63,14 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 1. Add the prompt to the active example's `prompts.yaml`.
 2. To make it the per-example default, update `examples_registry.yaml` `defaults.prompt` for that example to the new prompt key.
-3. Ensure the active example's catalog has multilingual-capable ASR (`parakeet-rnnt` or `nemotron-asr-streaming-multilingual`) and TTS (`magpie-multilingual-tts` or `chatterbox-multilingual-tts`).
+3. Ensure the active example's catalog has multilingual-capable ASR (`parakeet-rnnt` or `nemotron-asr-streaming-multilingual`) and TTS (`magpie-multilingual-tts`, `magpie-zeroshot-tts`, or `chatterbox-multilingual-tts`).
 4. Compose restart of the example service and refresh browser.
 
 ## Limitations
 
 - Does not deploy the stack or change profiles. Use `deploy` (and its per-example references) for that.
-- Source code or `Dockerfile` changes require an image rebuild (`--build`). Out of scope here.
+- `NvidiaWordTTSService` is a source-level opt-in, not an `.env` or service-catalog setting. When word-level input streaming and timestamp-based context commits are requested, change only the service import and constructor in the example's `pipeline.py` as documented in `docs/how-to/configure-tts.md#word-level-input-streaming-and-timestamps`, then restart the example service.
+- Other source customization is out of scope. Dependency or `Dockerfile` changes require an image rebuild (`--build`).
 - UI-only ad-hoc service / prompt overrides (saved in `localStorage`) are intentionally not persisted. This skill writes only to repo files.
 
 ## Troubleshooting

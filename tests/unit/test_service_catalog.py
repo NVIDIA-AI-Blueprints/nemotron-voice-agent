@@ -407,7 +407,7 @@ llm:
         try:
 
             def reachable(endpoint: str) -> bool:
-                return endpoint in {"tts-service:50051", "localhost:50151"}
+                return endpoint in {"magpie-multilingual-tts-service:50051", "localhost:50151"}
 
             with patch("utils.is_endpoint_reachable", side_effect=reachable):
                 tts = build_services_api_response()["tts"]
@@ -487,6 +487,14 @@ llm:
 
         self.assertEqual(rewritten["llm"]["omni"]["base_url"], "http://localhost:18002/v1")
 
+    def test_host_runtime_rewrites_magpie_multilingual_tts_endpoint(self) -> None:
+        entry = {"server": "magpie-multilingual-tts-service:50051"}
+
+        with patch.dict(os.environ, {"APP_RUNTIME": ""}):
+            rewritten = utils._rewrite_local_runtime_endpoints({"tts": {"magpie": entry}})
+
+        self.assertEqual(rewritten["tts"]["magpie"]["server"], "localhost:50151")
+
     def test_registry_host_runtime_rewrites_omni_endpoints(self) -> None:
         with patch.dict(os.environ, {"APP_RUNTIME": ""}):
             nim = examples_registry._rewrite_entry_for_host_runtime({"base_url": "http://nvidia-llm-omni:8000/v1"})
@@ -496,6 +504,14 @@ llm:
 
         self.assertEqual(nim["base_url"], "http://localhost:18002/v1")
         self.assertEqual(vllm["base_url"], "http://localhost:8002/v1")
+
+    def test_registry_host_runtime_rewrites_magpie_multilingual_tts_endpoint(self) -> None:
+        with patch.dict(os.environ, {"APP_RUNTIME": ""}):
+            rewritten = examples_registry._rewrite_entry_for_host_runtime(
+                {"server": "magpie-multilingual-tts-service:50051"}
+            )
+
+        self.assertEqual(rewritten["server"], "localhost:50151")
 
 
 if __name__ == "__main__":

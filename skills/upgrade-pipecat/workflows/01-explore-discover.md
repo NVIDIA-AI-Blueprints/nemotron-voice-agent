@@ -137,6 +137,9 @@ Server: `src/examples/shared/` plumbing (`pipeline_utils.py`, `prewarm.py`, `aud
 `src/server.py` (runner/transport/serializer); each `src/examples/*/pipeline.py`; `pyproject.toml`/`uv.lock`
 pins+extras; every `from pipecat*` import; custom subclasses of
 `FrameProcessor`/`BaseUserMuteStrategy`/`BaseTextFilter`/`PipelineWorker`/`BaseWorker`.
+Always inspect custom service subclasses against their new parent implementations, especially
+`src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and
+`src/examples/omni_assistant/nvidia_omni_multimodal_service.py`.
 Client: `client/package.json` `@pipecat-ai/*` deps; every `@pipecat-ai/*` import in `client/src/**` and where
 RTVI is used (client init/transport setup, RTVI event/message handlers, providers/hooks). Note files for the
 change matrix.

@@ -65,6 +65,10 @@ signatures, trust the actual installed/new source; use the MCP for intent and mi
 - **Examples are the unit of work**: 5 examples (`generic`, `multilingual`, `omni_assistant`,
   `omni_assistant_subagents`, `frontend_backend_agent`), each with its own `pipeline.py`. One agent per example + one
   cross-cutting agent for `src/examples/shared/` and `src/server.py`.
+- **Custom service subclasses require parent-API review**: explicitly inspect
+  `src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and
+  `src/examples/omni_assistant/nvidia_omni_multimodal_service.py`. Diff their upstream parent services before
+  validating overrides, lifecycle methods, settings, frames, and private compatibility contracts.
 - **Server + client move together (RTVI contract)**: the RTVI wire protocol couples the Python server to the
   `@pipecat-ai/*` client packages, so they must be upgraded in lockstep. Bump `client/package.json` to versions
   compatible with the target `pipecat-ai`, migrate `client/src/` RTVI usage (renamed events/messages), and gate
