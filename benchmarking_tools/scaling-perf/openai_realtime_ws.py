@@ -318,8 +318,10 @@ class OpenAIRealtimeSocket:
             self._apply_session_event(event)
             if is_response_done(event):
                 response = event.get("response")
-                if isinstance(response, Mapping) and response.get("status") == "failed":
-                    raise RealtimeTurnError(error_message(event), terminal=True)
+                if isinstance(response, Mapping):
+                    status = response.get("status")
+                    if status and status != "completed":
+                        raise RealtimeTurnError(error_message(event), terminal=True)
                 raise EndOfRealtimeResponse
             pcm = parse_output_audio(event)
             if pcm:

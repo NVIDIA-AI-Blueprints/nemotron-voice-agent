@@ -97,10 +97,10 @@ The endpoint must use server-side VAD and create responses automatically. The
 client does not send `input_audio_buffer.commit` or `response.create`. It keeps
 sending PCM silence after each WAV and expects base64 mono PCM in
 `response.output_audio.delta` events. A `response.done` event marks response
-completion; `response.done` with `response.status="failed"` records a failed
-turn and the next turn continues. In-turn `error` events are handled the same
-way, while errors during session configuration remain fatal. Item-level
-failures remain in the event log while the response continues.
+completion; any explicit status other than `completed` records a failed turn
+and the next turn continues. In-turn `error` events are handled the same way,
+while errors during session configuration remain fatal. Item-level failures
+remain in the event log while the response continues.
 
 ### Prompt override for perf runs
 
