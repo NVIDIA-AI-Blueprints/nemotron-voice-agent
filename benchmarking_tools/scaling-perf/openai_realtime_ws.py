@@ -45,6 +45,10 @@ class EndOfRealtimeResponse(Exception):
     """The current assistant response completed without more audio."""
 
 
+class RealtimeTurnError(RealtimeProtocolError):
+    """The current Realtime response failed without ending the session."""
+
+
 def resolve_protocol(*, protocol: str = "", ws_url: str = "") -> str:
     """Resolve the selected wire protocol."""
     value = (protocol or "").strip().lower()
@@ -145,6 +149,18 @@ def error_message(event: Mapping[str, Any]) -> str:
         message = err.get("message") or err.get("code")
         if message:
             return str(message)
+    response = event.get("response")
+    if isinstance(response, Mapping):
+        status_details = response.get("status_details")
+        if isinstance(status_details, Mapping):
+            response_error = status_details.get("error")
+            if isinstance(response_error, Mapping):
+                message = response_error.get("message") or response_error.get("code")
+                if message:
+                    return str(message)
+        status = response.get("status")
+        if status:
+            return f"response status: {status}"
     return json.dumps(dict(event), default=str)[:400]
 
 
@@ -234,6 +250,8 @@ class OpenAIRealtimeSocket:
                 summary["status"] = response.get("status")
                 if response.get("usage") is not None:
                     summary["usage"] = response["usage"]
+        if kind == "error" or (kind == "response.done" and summary.get("status") == "failed"):
+            summary["error"] = error_message(event)
         self.events.append(summary)
         return event
 
@@ -258,11 +276,11 @@ class OpenAIRealtimeSocket:
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise TimeoutError("timed out waiting for session.created / session.updated")
+                raise TimeoutError("timed out waiting for session.updated")
             event = await self.recv_event(timeout=remaining)
             self._raise_if_error(event)
             self._apply_session_event(event)
-            if is_session_ready(event):
+            if str(event.get("type") or "") == "session.updated":
                 return event
 
     async def recv_audio(self, timeout: float | None = None) -> bytes:
@@ -276,9 +294,14 @@ class OpenAIRealtimeSocket:
                 event = await self.recv_event(timeout=wait)
             except ConnectionClosed as exc:
                 raise EndOfRealtimeResponse from exc
+            if str(event.get("type") or "") == "error":
+                raise RealtimeTurnError(error_message(event))
             self._raise_if_error(event)
             self._apply_session_event(event)
             if is_response_done(event):
+                response = event.get("response")
+                if isinstance(response, Mapping) and response.get("status") == "failed":
+                    raise RealtimeTurnError(error_message(event))
                 raise EndOfRealtimeResponse
             pcm = parse_output_audio(event)
             if pcm:

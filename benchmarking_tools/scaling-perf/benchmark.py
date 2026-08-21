@@ -69,6 +69,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import websockets
 from openai_realtime_ws import (
     DEFAULT_AUTH_SCHEME,
@@ -76,6 +77,7 @@ from openai_realtime_ws import (
     DEFAULT_OUTPUT_RATE,
     EndOfRealtimeResponse,
     OpenAIRealtimeSocket,
+    RealtimeTurnError,
     resolve_api_key,
     resolve_auth_scheme,
     resolve_protocol,
@@ -90,6 +92,7 @@ BOT_INTRO_TIMEOUT = 5
 END_OF_RESPONSE_TIMEOUT = 3.0
 HARD_DEADLINE_BUFFER = 60
 REALTIME_TURN_RESPONSE_TIMEOUT = 45.0
+REALTIME_INPUT_RATE = 24_000
 TURN_RESPONSE_TIMEOUT = 10.0
 SERVER_METRIC_KEYS = (
     "llm_ttft",
@@ -245,22 +248,45 @@ class EndOfBotUtterance(Exception):
     """A Realtime response completed before producing more audio."""
 
 
+class FailedBotUtterance(Exception):
+    """A Realtime response failed without ending the session."""
+
+
+def resample_pcm16(pcm: bytes, source_rate: int, target_rate: int) -> bytes:
+    """Resample mono little-endian PCM16 while preserving chunk duration."""
+    if source_rate == target_rate or not pcm:
+        return pcm
+    if source_rate <= 0 or target_rate <= 0 or len(pcm) % 2:
+        raise ValueError("invalid PCM16 audio frame")
+    samples = np.frombuffer(pcm, dtype="<i2")
+    output_count = round(len(samples) * target_rate / source_rate)
+    source_positions = np.arange(output_count, dtype=np.float64) * source_rate / target_rate
+    output = np.interp(source_positions, np.arange(len(samples)), samples)
+    return np.rint(output).clip(-32768, 32767).astype("<i2").tobytes()
+
+
 class RealtimeFrameAdapter:
     """Translate Realtime JSON audio into the benchmark's protobuf frame API."""
 
-    def __init__(self, realtime: OpenAIRealtimeSocket):
+    def __init__(self, realtime: OpenAIRealtimeSocket, input_sample_rate: int = REALTIME_INPUT_RATE):
         self.realtime = realtime
+        self.input_sample_rate = input_sample_rate
 
     async def send(self, data: bytes) -> None:
         frame = frames_pb2.Frame.FromString(data)
         if frame.WhichOneof("frame") == "audio":
-            await self.realtime.send_pcm(frame.audio.audio)
+            if frame.audio.num_channels != 1:
+                raise ValueError("Realtime input must be mono")
+            pcm = resample_pcm16(frame.audio.audio, frame.audio.sample_rate, self.input_sample_rate)
+            await self.realtime.send_pcm(pcm)
 
     async def recv(self) -> bytes:
         try:
             pcm = await self.realtime.recv_audio()
         except EndOfRealtimeResponse as exc:
             raise EndOfBotUtterance from exc
+        except RealtimeTurnError as exc:
+            raise FailedBotUtterance(str(exc)) from exc
         audio = frames_pb2.AudioRawFrame(
             audio=pcm,
             sample_rate=self.realtime.output_sample_rate,
@@ -574,6 +600,9 @@ class PerfClient:
     async def _receive_initial_bot_intro(self, websocket, wf):
         try:
             data = await self._recv_audio_frame(websocket, timeout=BOT_INTRO_TIMEOUT)
+        except FailedBotUtterance as exc:
+            await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
+            return wf
         except (EndOfBotUtterance, TimeoutError):
             await self.logger.log(f"{self.stream_id} no initial bot intro within {BOT_INTRO_TIMEOUT}s")
             return wf
@@ -669,18 +698,32 @@ class PerfClient:
         recv_task = asyncio.create_task(self._recv_audio_frame(websocket, timeout=None))
         try:
             data, utterance_start = await self._await_first_bot_frame(send_task, recv_task)
+        except FailedBotUtterance as exc:
+            await send_task
+            await self._record_failed_realtime_turn(audio_file_path, realtime_event_start, str(exc))
+            return wf
         except EndOfBotUtterance:
             await send_task
-            if self.collecting_metrics:
-                self.failed_turns += 1
-                await self.logger.log(f"{self.stream_id} turn completed without bot audio")
-            await self._record_realtime_turn_metrics(audio_file_path, realtime_event_start)
+            await self._record_failed_realtime_turn(
+                audio_file_path,
+                realtime_event_start,
+                "response completed without bot audio",
+            )
             return wf
         if data is None or utterance_start is None:
-            await self._record_realtime_turn_metrics(audio_file_path, realtime_event_start)
+            await self._record_realtime_turn_metrics(
+                audio_file_path,
+                realtime_event_start,
+                error=f"no bot response within {self.turn_response_timeout:.1f}s",
+            )
             return wf
 
-        wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=True)
+        try:
+            wf, _ = await self._drain_utterance(websocket, data, wf, detect_glitches=True)
+        except FailedBotUtterance as exc:
+            await send_task
+            await self._record_failed_realtime_turn(audio_file_path, realtime_event_start, str(exc))
+            return wf
         await send_task
         await self._record_realtime_turn_metrics(audio_file_path, realtime_event_start)
 
@@ -700,7 +743,19 @@ class PerfClient:
                 await self.logger.log(f"{self.stream_id} turn complete latency={latency:.3f}s")
         return wf
 
-    async def _record_realtime_turn_metrics(self, audio_file_path: Path, event_start: int) -> None:
+    async def _record_failed_realtime_turn(self, audio_file_path: Path, event_start: int, error: str) -> None:
+        if self.collecting_metrics:
+            self.failed_turns += 1
+        await self.logger.log(f"{self.stream_id} turn failed: {error}")
+        await self._record_realtime_turn_metrics(audio_file_path, event_start, error=error)
+
+    async def _record_realtime_turn_metrics(
+        self,
+        audio_file_path: Path,
+        event_start: int,
+        *,
+        error: str | None = None,
+    ) -> None:
         if self._realtime is None:
             return
         input_end = self.timestamps_monotonic["input_audio_file_end"]
@@ -714,6 +769,7 @@ class PerfClient:
             "response.output_audio_transcript.delta",
             "response.output_audio.delta",
             "response.done",
+            "error",
         )
         first_by_type: dict[str, dict[str, Any]] = {}
         for event in self._realtime.events[event_start:]:
@@ -776,6 +832,7 @@ class PerfClient:
             },
             "response_status": response_done.get("status"),
             "usage": response_done.get("usage"),
+            "error": error or (first_by_type.get("error") or {}).get("error") or response_done.get("error"),
         }
         self.realtime_turn_metrics.append(metrics)
         await self.logger.log(
@@ -854,26 +911,31 @@ class PerfClient:
                 input_rates: set[int] = set()
                 for audio_file in self.audio_files:
                     with wave.open(str(audio_file), "rb") as wav_file:
+                        if wav_file.getnchannels() != 1:
+                            raise ValueError(f"Realtime requires mono WAV input: {audio_file}")
+                        if wav_file.getsampwidth() != 2 or wav_file.getcomptype() != "NONE":
+                            raise ValueError(f"Realtime requires uncompressed PCM16 WAV input: {audio_file}")
                         input_rates.add(wav_file.getframerate())
                 if len(input_rates) != 1:
                     raise ValueError(f"Realtime requires one input sample rate; dataset contains {sorted(input_rates)}")
-                input_rate = input_rates.pop()
+                source_input_rate = input_rates.pop()
                 async with OpenAIRealtimeSocket(
                     self.uri,
                     api_key=self.api_key,
                     auth_scheme=self.auth_scheme,
                     connect_timeout=self.connect_timeout,
-                    input_sample_rate=input_rate,
+                    input_sample_rate=REALTIME_INPUT_RATE,
                     output_sample_rate=DEFAULT_OUTPUT_RATE,
                     verify_tls=self.verify_tls,
                 ) as realtime:
                     self._realtime = realtime
-                    ready = await realtime.configure_input(input_rate, timeout=self.connect_timeout)
+                    ready = await realtime.configure_input(REALTIME_INPUT_RATE, timeout=self.connect_timeout)
                     await self.logger.log(
                         f"{self.stream_id} realtime session ready type={ready.get('type')} "
+                        f"input_rate={source_input_rate}->{REALTIME_INPUT_RATE} "
                         f"output_rate={realtime.output_sample_rate}"
                     )
-                    adapter = RealtimeFrameAdapter(realtime)
+                    adapter = RealtimeFrameAdapter(realtime, input_sample_rate=REALTIME_INPUT_RATE)
                     try:
                         await asyncio.wait_for(self._run_connected_session(adapter), timeout=hard_deadline)
                     except TimeoutError as exc:

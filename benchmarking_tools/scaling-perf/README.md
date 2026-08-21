@@ -86,19 +86,21 @@ so local runs need `--insecure`:
   --clients 1
 ```
 
-The client sends a minimal `session.update` containing only the first WAV
-file's input sample rate. It waits up to 60 seconds for `session.created` or
-`session.updated` and preserves the endpoint's voice activity detection (VAD)
-defaults. It uses the output sample rate from that event, or 24 kHz when the
-event does not provide one.
+The client validates that every WAV is mono, uncompressed PCM16 with one common
+sample rate, resamples input chunks to the OpenAI Realtime 24 kHz PCM format,
+and sends a minimal `session.update`. It waits up to 60 seconds for the
+corresponding `session.updated`, preserving the endpoint's voice activity
+detection (VAD) defaults. It uses the output sample rate from that event, or
+24 kHz when the event does not provide one.
 
 The endpoint must use server-side VAD and create responses automatically. The
 client does not send `input_audio_buffer.commit` or `response.create`. It keeps
 sending PCM silence after each WAV and expects base64 mono PCM in
 `response.output_audio.delta` events. A `response.done` event marks response
-completion. A session-level `error` or `session.*.failed` event stops the
-client; item-level failures remain in the event log while the response
-continues. Use WAV files with a consistent sample rate across the dataset.
+completion; `response.done` with `response.status="failed"` records a failed
+turn and the next turn continues. In-turn `error` events are handled the same
+way, while errors during session configuration remain fatal. Item-level
+failures remain in the event log while the response continues.
 
 ### Prompt override for perf runs
 
