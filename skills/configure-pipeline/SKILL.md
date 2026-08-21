@@ -55,7 +55,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 **Switch the default LLM to a different cloud model:**
 
-1. Open `examples_registry.yaml` and update the relevant `defaults` entry for the active example (e.g. change `llm: [nemotron-nano]` to `llm: [nemotron-super]`). The catalog key must exist in the active example's `services.cloud.yaml` / `services.local.yaml`.
+1. Open `examples_registry.yaml` and update the relevant `defaults` entry for the active example (e.g. change `llm: [nemotron-lightning]` to `llm: [nemotron-super]`). The catalog key must exist in the active example's `services.cloud.yaml` / `services.local.yaml`.
 2. Compose restart of the example service and refresh browser.
 
 **Add a multilingual persona prompt:**

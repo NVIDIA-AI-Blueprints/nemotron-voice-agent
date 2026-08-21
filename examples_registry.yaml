@@ -30,7 +30,7 @@ examples:
       warning_completion_timeout_s: 45
     defaults:
       prompt: [generic_assistant]
-      llm: [nemotron-nano]
+      llm: [nemotron-lightning]
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
     bot: examples.generic.pipeline:bot
@@ -73,8 +73,8 @@ examples:
     slots: [llm, thinker-llm, booking-server, asr, tts]
     defaults:
       prompt: [talker]
-      llm: [nemotron-nano]
-      thinker-llm: [nemotron-nano]
+      llm: [nemotron-lightning]
+      thinker-llm: [nemotron-lightning]
       booking-server: [default]
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
