@@ -133,6 +133,9 @@ const findLatestUnanchoredUser = (
 
 const normalizeTranscript = (text?: string | null) => (text ?? "").trim().replace(/\s+/g, " ");
 
+const validTimestampOrNow = (timestamp: string) =>
+  Number.isNaN(Date.parse(timestamp)) ? new Date().toISOString() : timestamp;
+
 const findUserMessageByTranscript = (
   messages: ConversationMessage[],
   transcript: string | null | undefined,
@@ -374,7 +377,7 @@ export function ConversationPanel() {
 
       if (type !== "user-turn-finalized") return;
       setCurrentUserTurnActive(false);
-      const anchorISO = new Date().toISOString();
+      const anchorISO = validTimestampOrNow(stringField(message, "timestamp"));
       const anchors = userTurnAnchorsRef.current;
       const target =
         findUserMessageByTranscript(visibleMessagesRef.current, stringField(message, "transcript"), anchors) ??
