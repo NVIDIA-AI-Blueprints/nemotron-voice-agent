@@ -38,6 +38,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import (
     MuteUntilFirstBotCompleteUserMuteStrategy,
 )
+from pipecat.utils.time import time_now_iso8601
 
 import examples_registry
 from attachment_store import (
@@ -129,6 +130,7 @@ class OmniTransportAgent(PipelineWorker):
         self._capture_task: asyncio.Task[None] | None = None
         self._assistant_speaking = False
         self._user_speaking = False
+        self._user_turn_started_at: str | None = None
 
         tts_settings_kwargs: dict[str, Any] = {"voice": tts_voice}
         if tts_synthesis_mode:
@@ -209,12 +211,13 @@ class OmniTransportAgent(PipelineWorker):
     def _build_pipeline(self, *, bus: WorkerBus, worker_name: str) -> Pipeline:
         """Build the transport pipeline with a bus bridge in the LLM slot."""
         assistant_aggregator = LLMAssistantAggregator(self._context)
+        self._user_turn_processor = _build_user_turn_processor()
         return Pipeline(
             [
                 self._transport.input(),
                 UserMuteProcessor(strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()]),
                 VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams())),
-                _build_user_turn_processor(),
+                self._user_turn_processor,
                 BusBridgeProcessor(
                     bus=bus,
                     worker_name=worker_name,
@@ -374,6 +377,19 @@ class OmniTransportAgent(PipelineWorker):
             clear_session_webcam_frames(self._session_id)
             await self.send_bus_message(BusCancelMessage(source=self.name, reason="client disconnected"))
 
+        @self._user_turn_processor.event_handler("on_user_turn_stopped")
+        async def on_user_turn_stopped(processor, strategy):  # noqa: ARG001
+            await self.queue_frame(
+                RTVIServerMessageFrame(
+                    data={
+                        "type": "user-turn-finalized",
+                        "timestamp": self._user_turn_started_at or time_now_iso8601(),
+                        "transcript": None,
+                        "user_id": "user",
+                    }
+                )
+            )
+
         @self.rtvi.event_handler("on_client_message")
         async def on_client_message(rtvi, message):
             payload = message.data if isinstance(message.data, dict) else {}
@@ -504,6 +520,7 @@ class OmniTransportAgent(PipelineWorker):
     async def on_user_voice_turn_started(self) -> None:
         """Track whether the user is currently speaking."""
         self._user_speaking = True
+        self._user_turn_started_at = time_now_iso8601()
 
     async def on_user_voice_turn_stopped(self) -> None:
         """Track when the user turn reaches EOU."""

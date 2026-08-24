@@ -27,20 +27,14 @@ the supported configuration on Thor.
     cp .env.example .env
     ```
 
-2. Set your API keys in the `.env` file:
+2. Set `HF_TOKEN` in `.env` for Hugging Face model downloads. Thor uses `*/single-gpu` only. Do not set `NVIDIA_API_KEY` or run `docker login nvcr.io` for this path.
 
     ```bash
-    # Required
-    NVIDIA_API_KEY=<your-nvidia-api-key>
+    # Required for */single-gpu
     HF_TOKEN=<your-huggingface-token>
     ```
 
-    Export the NVIDIA API key in your shell and log in to the NVIDIA NGC Docker Registry before pulling the NGC images:
-
-    ```bash
-    export NVIDIA_API_KEY=<your-nvidia-api-key>
-    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-    ```
+    `omni-assistant-subagents/single-gpu` is **not supported** on Jetson Thor. Use cloud `omni-assistant-subagents` for that example, which runs on NVIDIA cloud endpoints and needs `NVIDIA_API_KEY` (not `HF_TOKEN`). The no-`NVIDIA_API_KEY` rule above applies only to the `*/single-gpu` path.
 
 3. Download the NeMo-Speech.cpp model weights. **One-time per machine.** The script
    fetches the ASR, Magpie TTS, and NanoCodec GGUFs into `models/nemo-speech`:

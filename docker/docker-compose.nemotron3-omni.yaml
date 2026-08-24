@@ -97,6 +97,14 @@ services:
 
         total="$$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
         free="$$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
+        if ! [[ "$${total}" =~ ^[0-9]+$$ ]]; then
+          total="$$(awk '/MemTotal/ {printf "%d", $$2/1024}' /proc/meminfo)"
+          echo "nvidia-smi total unavailable; using MemTotal $${total}MiB"
+        fi
+        if ! [[ "$${free}" =~ ^[0-9]+$$ ]]; then
+          free="$$(awk '/MemAvailable/ {printf "%d", $$2/1024}' /proc/meminfo)"
+          echo "nvidia-smi free unavailable; using MemAvailable $${free}MiB"
+        fi
         if (( unified )); then
           avail_kib="$$(awk '/MemAvailable/ {print $$2}' /proc/meminfo)"
           avail_mib=$$((avail_kib / 1024))
