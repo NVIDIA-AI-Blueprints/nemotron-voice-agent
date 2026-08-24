@@ -95,15 +95,13 @@ export function VoiceSettings() {
 
   const defaultVoice = useMemo(() => {
     if (!ttsConfig?.voices?.length) return null;
-    // Zero-shot models reuse one voice id across every locale, so an id lookup alone
-    // can land on an arbitrary language. Disambiguate with the catalog language when
-    // the entry declares one; otherwise keep the plain id match.
-    const catalogLang = (selectedTTS?.languageCode || "").toUpperCase();
+    const catalogLang = (selectedTTS?.languageCode || ttsConfig.defaultLanguage || "en-US")
+      .replace("_", "-")
+      .toUpperCase();
     const byId = (voiceId: string) => {
       const matches = ttsConfig.voices.filter((voice) => voice.id === voiceId);
       if (matches.length === 0) return null;
-      if (!catalogLang) return matches[0];
-      return matches.find((voice) => voice.language.toUpperCase() === catalogLang) || matches[0];
+      return matches.find((voice) => voice.language.replace("_", "-").toUpperCase() === catalogLang) || matches[0];
     };
     const selectedServiceVoice = selectedTTS?.voiceId || "";
     if (selectedServiceVoice) {

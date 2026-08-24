@@ -8,23 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Optional `NvidiaWordTTSService` for Magpie word streaming and timestamp-based context commits.
-- **`*/single-gpu` recipes** running the NeMo-Speech.cpp speech stack next to vLLM on one GPU across all examples.
 - **Nemotron 3.5 Lightning** NIM and vLLM sidecars. Single-GPU recipes automatically select NVFP4 or FP8 on supported GPUs, with DSpark speculative decoding on DGX Spark and DFlash on Blackwell workstations.
 - **Nemotron 3 Nano Omni NIM** for the Omni `*/server` recipes.
+- **`*/single-gpu` recipes** running the NeMo-Speech.cpp speech stack next to vLLM on one GPU across all examples.
 - **`scripts/download-nemo-speech-models.sh`** for one-time NeMo-Speech.cpp GGUF setup on single-GPU hosts.
+- **OpenAI Realtime–compatible WebSocket gateway** (`WS /v1/realtime`) that drives the existing cascaded ASR → LLM → TTS pipelines for OpenAI Realtime–shaped clients, with NVIDIA-only knobs under `session.nvidia`.
+- **`create-voice-agent` agent skill** for scaffolding and refining NVIDIA voice agents (cascaded or Omni) across Pipecat, LiveKit, and custom frameworks.
+- Optional `NvidiaWordTTSService` for Magpie word streaming and timestamp-based context commits.
 
 ### Changed
 
+- Upgraded Pipecat to version 1.7.0.
+- Set **Nemotron 3.5 Lightning** as the default LLM across cascaded examples. Nemotron 3 Super remains available in the service catalogs.
+- Standardized the self-hosted Nemotron 3.5 Lightning served model ID with NVIDIA Cloud across NIM and single-GPU vLLM deployments.
+- Consolidated on-prem deployment recipes under `<example>/server` for scaling-oriented stacks and universal `<example>/single-gpu` for supported one-GPU deployments on workstations, DGX Spark, and Jetson Thor. Renamed `generic-assistant/workstation-perf` to `generic-assistant/server-perf`.
+- Replaced `PLATFORM`-based local service selection with endpoint reachability.
 - Updated Nemotron ASR Streaming NIM to version 1.3.1.
 - Updated Parakeet CTC 1.1B ASR NIM to version 1.5.3.
 - Updated Magpie TTS Multilingual NIM to version 1.10.0 and `nvidia-riva-client` to version 2.27.0.
 - Renamed the Magpie Multilingual Compose services to `magpie-multilingual-tts-service` and `magpie-multilingual-tts-service-perf`.
 - Updated Chatterbox TTS Multilingual NIM to version 1.1.0 and documented its available model profiles.
-- Standardized the self-hosted Nemotron 3.5 Lightning served model ID with NVIDIA Cloud across NIM and single-GPU vLLM deployments.
-- Consolidated on-prem deployment recipes under `<example>/server` for scaling-oriented stacks and universal `<example>/single-gpu` for supported one-GPU deployments on workstations, DGX Spark, and Jetson Thor. Renamed `generic-assistant/workstation-perf` to `generic-assistant/server-perf`.
-- Replaced `PLATFORM`-based local service selection with endpoint reachability.
-- Set **Nemotron 3.5 Lightning** as the default LLM across cascaded examples. Nemotron 3 Super remains available in the service catalogs.
+
+### Fixed
+
+- Cap Omni NIM KV cache (`NIM_KVCACHE_PERCENT` default `0.6`, `NIM_MAX_MODEL_LEN` `32768`) so Magpie TTS can share GPU 0.
+- Emit `user-turn-finalized` from Omni Assistant Subagents and keep the earlier user-turn timestamp in the client so transcripts stay in speaking order.
+- Resolve shared TTS voice ids (`John`) against the catalog default language so the disabled language dropdown shows `en-US` instead of the alphabetically first locale.
 
 ### Removed
 

@@ -6,7 +6,7 @@ Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`Nvidi
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance Server** (NIM), and universal **Single GPU** profiles. The performance profile uses the dedicated four-GPU layout documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup). It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
+This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance Server** (NIM), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The performance profile uses the dedicated four-GPU layout documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup). It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
 
 1. Create your `.env` from the template and set your NVIDIA API key:
 
@@ -15,9 +15,9 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance
    export NVIDIA_API_KEY=<your-nvidia-api-key>
    ```
 
-   > **Single-GPU profile:** also set `HF_TOKEN` in `.env`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server profile uses a NIM from NGC and does not need it.
+   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server and Performance Server profiles use NIMs from NGC (`NVIDIA_API_KEY`) and do not use `HF_TOKEN`.
 
-2. Log in to the NVIDIA NGC container registry:
+2. Log in to the NVIDIA NGC container registry (Server and Performance Server only. Skip for Cloud and Single GPU):
 
    ```bash
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin

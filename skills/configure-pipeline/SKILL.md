@@ -1,7 +1,7 @@
 ---
 name: configure-pipeline
 description: Configure Nemotron Voice Agent runtime via `.env`, example-local `services.{cloud,local}.yaml`, and example-local `prompts.yaml`. Use when changing prompts, tracing, audio knobs, exposed pipelines or transports, or local NIM image overrides.
-version: "2.0.0"
+version: "2.1.1"
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [configuration, pipeline, voice-agent, nemotron]
@@ -15,7 +15,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 ## Prerequisites
 
-- An existing deployment created by `deploy` (root compose or one of its per-example references).
+- An existing deployment created by `deploy`.
 
 ## Scope
 
@@ -68,7 +68,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 ## Limitations
 
-- Does not deploy the stack or change profiles. Use `deploy` (and its per-example references) for that.
+- Does not deploy the stack or change profiles. Use `deploy` for that.
 - `NvidiaWordTTSService` is a source-level opt-in, not an `.env` or service-catalog setting. When word-level input streaming and timestamp-based context commits are requested, change only the service import and constructor in the example's `pipeline.py` as documented in `docs/how-to/configure-tts.md#word-level-input-streaming-and-timestamps`, then restart the example service.
 - Other source customization is out of scope. Dependency or `Dockerfile` changes require an image rebuild (`--build`).
 - UI-only ad-hoc service / prompt overrides (saved in `localStorage`) are intentionally not persisted. This skill writes only to repo files.
@@ -80,6 +80,6 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 - **Local LLM/ASR/TTS missing from the Services tab** -> the corresponding sidecar is not deployed or is unreachable. The catalog filters local entries by TCP reachability.
 - **Local cascaded single-GPU LLM won't start or OOMs** -> inspect the capability-selected Lightning recipe in `docker/docker-compose.nemotron35-lightning.yaml` and verify the host meets its memory requirement. Keep vLLM tuning out of `.env`. Use cloud services when the supported recipe does not fit.
 - **Multilingual responses do not use the right ASR/TTS** -> reorder catalog so a multilingual ASR/TTS sits first, or pick the entry from the UI Services tab.
-- **ASR/TTS sidecar image fails to pull** -> log in to `nvcr.io` with a `NVIDIA_API_KEY` that has access to the image. The active image is set in `docker/docker-compose.<variant>.yaml`.
+- **ASR/TTS sidecar image fails to pull** on a `*/server` recipe -> log in to `nvcr.io` with a `NVIDIA_API_KEY` that has access to the image. Single-GPU recipes do not use `NVIDIA_API_KEY` or `nvcr.io` login. The active image is set in `docker/docker-compose.<variant>.yaml`.
 - **Local LLM 400 (`auto tool choice requires ...`), or reasoning spoken / `<think>` leaks** -> self-hosted Nemotron-3 2.x needs the parsers set (already in `docker/docker-compose.nemotron3-*.yaml`): NIM `NIM_PASSTHROUGH_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3`, or the same flags on `vllm serve`. See `docs/06-troubleshooting.md`.
 - **Raw vLLM `nemotron_v3` not found / Super (`MIXED_PRECISION`) won't load** -> image's vLLM too old; use NGC `vllm:26.07-py3` (vLLM ≥ 0.20), not `vllm:25.12.post1-py3` (0.12.0).

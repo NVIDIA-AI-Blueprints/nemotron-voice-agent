@@ -1,7 +1,7 @@
 ---
 name: create-voice-agent
 description: Create or refine an NVIDIA voice agent with Pipecat or LiveKit. Covers cascaded and omni pipelines, domain speech customization, NVIDIA cloud, GPU workstations, DGX Spark, and Jetson Thor. Use when asked to build, scaffold, start, or modify a voice agent, voice bot, speech assistant, real-time audio pipeline, ASR word boosting, or TTS pronunciation.
-version: "2.1.0"
+version: "2.1.1"
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [voice-agent, nvidia, nemotron, magpie, pipecat, livekit, nim, omni]

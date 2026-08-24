@@ -136,6 +136,15 @@ const normalizeTranscript = (text?: string | null) => (text ?? "").trim().replac
 const validTimestampOrNow = (timestamp: string) =>
   Number.isNaN(Date.parse(timestamp)) ? new Date().toISOString() : timestamp;
 
+const earlierISO = (left: string | null, right: string) => {
+  if (!left) return right;
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (Number.isNaN(leftMs)) return right;
+  if (Number.isNaN(rightMs)) return left;
+  return leftMs <= rightMs ? left : right;
+};
+
 const findUserMessageByTranscript = (
   messages: ConversationMessage[],
   transcript: string | null | undefined,
@@ -330,7 +339,6 @@ export function ConversationPanel() {
     RTVIEvent.UserStartedSpeaking,
     useCallback(() => {
       setCurrentUserTurnActive(true);
-      pendingUserAnchorRef.current = null;
     }, [])
   );
 
@@ -377,7 +385,10 @@ export function ConversationPanel() {
 
       if (type !== "user-turn-finalized") return;
       setCurrentUserTurnActive(false);
-      const anchorISO = validTimestampOrNow(stringField(message, "timestamp"));
+      const anchorISO = earlierISO(
+        pendingUserAnchorRef.current,
+        validTimestampOrNow(stringField(message, "timestamp"))
+      );
       const anchors = userTurnAnchorsRef.current;
       const target =
         findUserMessageByTranscript(visibleMessagesRef.current, stringField(message, "transcript"), anchors) ??
@@ -572,7 +583,7 @@ export function ConversationPanel() {
               <TranscriptMessage
                 role={msg.role === "assistant" ? "bot" : "user"}
                 text={item.text}
-                timestamp={msg.createdAt}
+                timestamp={userTurnAnchors.get(msg.createdAt) ?? msg.createdAt}
                 streaming={computeStreaming(msg)}
               />
             </Fragment>

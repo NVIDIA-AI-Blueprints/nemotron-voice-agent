@@ -12,7 +12,7 @@ The diagram shows the full runtime path. User audio enters through the WebRTC/We
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
 1. Create your `.env` from the template and set your NVIDIA API key:
 
@@ -21,9 +21,9 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    export NVIDIA_API_KEY=<your-nvidia-api-key>
    ```
 
-   > **Single-GPU profile:** also set `HF_TOKEN` in `.env`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server profile uses a NIM from NGC and does not need it.
+   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server profile uses a NIM from NGC and does not need `HF_TOKEN`.
 
-2. Log in to the NVIDIA NGC container registry:
+2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
 
    ```bash
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
