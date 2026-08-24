@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.0] - TBD
+
+Minor release adding Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support, universal `*/single-gpu` recipes with the NeMo-Speech.cpp stack, an OpenAI Realtime-compatible WebSocket gateway, and the `create-voice-agent` skill. Consolidates on-prem deployment under `*/server` and `*/single-gpu`, upgrades Pipecat to 1.7.0, and removes the platform-specific recipes and Nemotron 3 Nano cascaded LLM.
 
 ### Added
 
