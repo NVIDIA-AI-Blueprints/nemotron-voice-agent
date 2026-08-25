@@ -19,16 +19,14 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
-from pipecat.turns.user_stop import (
-    SpeechTimeoutUserTurnStopStrategy,
-    TurnAnalyzerUserTurnStopStrategy,
-)
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.context.llm_context_summarization import (
     DEFAULT_SUMMARIZATION_PROMPT,
     LLMContextSummarizationUtil,
 )
 
+from examples.shared.force_eou_smart_turn_strategy import ForceEouSmartTurnStopStrategy
 from utils import parse_env_bool, parse_env_float, parse_env_int
 
 # Smart Turn silence fallback default (seconds); override via SMART_TURN_STOP_SECS.
@@ -54,9 +52,13 @@ def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
     return LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=stop_secs))
 
 
-def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]:
-    """Return the default Smart Turn stop strategy used by cascaded pipelines."""
-    return [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())]
+def build_smart_turn_stop_strategies() -> list[ForceEouSmartTurnStopStrategy]:
+    """Return the Smart Turn stop strategy used by cascaded pipelines.
+
+    Flushes NVIDIA ASR with ``force_eou`` when the audio analyzer reports
+    COMPLETE, then waits for the finalized transcript (parent behavior).
+    """
+    return [ForceEouSmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())]
 
 
 def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:

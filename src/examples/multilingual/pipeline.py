@@ -28,7 +28,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
@@ -47,6 +47,7 @@ from examples.multilingual.multilingual_processor import (
 )
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nvidia_force_eou_stt import build_nvidia_stt_service
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -205,7 +206,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if fixed_session_language:
         asr_kwargs["settings"] = NvidiaSTTSettings(language=fixed_session_language)
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
+    stt = build_nvidia_stt_service(asr_kwargs=asr_kwargs, asr_model=asr_model)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={fixed_session_language}"

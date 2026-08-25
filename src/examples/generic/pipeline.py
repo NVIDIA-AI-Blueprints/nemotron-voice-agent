@@ -3,8 +3,9 @@
 
 """Generic cascaded pipeline: NVIDIA STT -> Nemotron LLM -> NVIDIA TTS with function calling.
 
-Uses pipecat's built-in NVIDIA classes directly:
-  - NvidiaSTTService  (Nemotron Streaming ASR)
+Uses pipecat's built-in NVIDIA classes, with a local NvidiaSTTService subclass
+that flushes ASR via ``force_eou`` when Smart Turn reports COMPLETE:
+  - NvidiaForceEouSTTService  (Nemotron Streaming ASR)
   - NvidiaLLMService  (NIM-compatible LLM)
   - NvidiaTTSService  (Magpie TTS)
 """
@@ -24,7 +25,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
@@ -33,6 +34,7 @@ from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nvidia_force_eou_stt import build_nvidia_stt_service
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -92,7 +94,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if asr_language_code:
         asr_kwargs["settings"] = NvidiaSTTSettings(language=asr_language_code)
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
+    stt = build_nvidia_stt_service(asr_kwargs=asr_kwargs, asr_model=asr_model)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}"
