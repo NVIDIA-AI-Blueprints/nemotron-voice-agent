@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import TranscriptionUserTurnStartStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
-from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
 
 from examples.multilingual.pipeline import (
     _build_multilingual_user_aggregator_params,
@@ -20,6 +19,7 @@ from examples.multilingual.pipeline import (
     _prepare_session_language_codes,
     _resolve_llm_supported_languages,
 )
+from examples.shared.force_eou_smart_turn_strategy import ForceEouSmartTurnStopStrategy
 from examples.shared.pipeline_utils import SMART_TURN_FALLBACK_SECS
 
 
@@ -100,7 +100,7 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
         _assert_vad_only_start(self, params.user_turn_strategies)
         assert params.user_turn_strategies is not None
         self.assertEqual(len(params.user_turn_strategies.stop), 1)
-        self.assertIsInstance(params.user_turn_strategies.stop[0], TurnAnalyzerUserTurnStopStrategy)
+        self.assertIsInstance(params.user_turn_strategies.stop[0], ForceEouSmartTurnStopStrategy)
         analyzer = params.user_turn_strategies.stop[0]._turn_analyzer
         self.assertIsInstance(analyzer, _FakeTurnAnalyzer)
         self.assertEqual(analyzer.params.stop_secs, SMART_TURN_FALLBACK_SECS)
