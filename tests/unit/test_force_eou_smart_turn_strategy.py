@@ -67,9 +67,7 @@ class ForceEouSmartTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
         await strategy._maybe_trigger_user_turn_stopped()
         strategy.trigger_user_turn_stopped.reset_mock()
 
-        await strategy._handle_transcription(
-            TranscriptionFrame(text="hello", user_id="", timestamp="", finalized=True)
-        )
+        await strategy._handle_transcription(TranscriptionFrame(text="hello", user_id="", timestamp="", finalized=True))
 
         strategy.trigger_user_turn_stopped.assert_awaited_once()
 

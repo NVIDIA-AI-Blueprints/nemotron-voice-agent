@@ -97,7 +97,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     stt = build_nvidia_stt_service(asr_kwargs=asr_kwargs, asr_model=asr_model)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
-        f"language={asr_language_code or '(default)'}"
+        f"language={asr_language_code or '(default)'}, stop_history={stt._stop_history}ms, "
+        f"model={asr_model or '(default)'}"
     )
 
     # --- LLM ---
