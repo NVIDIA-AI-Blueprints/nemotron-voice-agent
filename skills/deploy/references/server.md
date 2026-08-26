@@ -19,7 +19,7 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
   <nim_llm_image> list-model-profiles
 ```
 
-2. Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. `tp=1` uses one GPU; `tp=N` needs N visible GPUs.
+1. Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. `tp=1` uses one GPU; `tp=N` needs N visible GPUs.
 
 | GPU compute capability | Preferred compatible precision |
 | --- | --- |
@@ -28,7 +28,7 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 | Ampere (CC 8.0–8.6) | `bf16` or `int4` when listed |
 | Below CC 8.0 | unsupported → cloud |
 
-3. For standard `*/server`, keep `NIM_TAGS_SELECTOR` unset and let NIM choose from the compatible manifest profiles. Use `NIM_MODEL_PROFILE` when an exact LLM profile must be pinned.
+1. For standard `*/server`, keep `NIM_TAGS_SELECTOR` unset and let NIM choose from the compatible manifest profiles. Use `NIM_MODEL_PROFILE` when an exact LLM profile must be pinned.
 
 `generic-assistant/server-perf` is the exception: its Compose service (`nvidia-llm-perf`) pins `precision=nvfp4,tp=2` and exposes GPUs `2` and `3` to the LLM. It targets a four-GPU Blackwell host. On older non-Blackwell hardware, run `list-model-profiles` and edit that literal to a compatible TP2 profile, such as BF16 when listed and when both GPUs have enough VRAM.
 

@@ -102,7 +102,7 @@ AUDIO_OUT_10MS_CHUNKS=10
 UVICORN_WORKERS=<workers>
 ```
 
-Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the benchmarked best-scaling deployment shape and its companion tuning values, see [Reproducing the best scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup).
+Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the recommended scaling deployment shape and its companion tuning values, see [Reproducing the recommended scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
 
 When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows are disabled** because that state is process-local. For multi-worker deployments, use one of these patterns:
 

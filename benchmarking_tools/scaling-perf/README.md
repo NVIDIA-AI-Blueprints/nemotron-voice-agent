@@ -72,9 +72,9 @@ docker compose --profile generic-assistant/server-perf up -d
 This catalog defaults to `prompt_1000_tokens`. Available prompt entries are
 `prompt_200_tokens`, `prompt_1000_tokens`, and `prompt_5000_tokens`.
 
-## Reproducing the best scaling setup
+## Reproducing the recommended scaling setup
 
-For the best scaling numbers, use a four-GPU Blackwell setup with `1 GPU` for ASR,
+The recommended scaling setup uses four Blackwell GPUs with `1 GPU` for ASR,
 `1 GPU` for TTS, and `2 GPUs` for the `Nemotron 3.5 Lightning 30B` LLM.
 
 This setup is available as the dedicated Compose recipe
