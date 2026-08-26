@@ -32,6 +32,15 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 
 `generic-assistant/server-perf` is the exception: its Compose service (`nvidia-llm-perf`) pins `precision=nvfp4,tp=2` and exposes GPUs `2` and `3` to the LLM. It targets a four-GPU Blackwell host. On older non-Blackwell hardware, run `list-model-profiles` and edit that literal to a compatible TP2 profile, such as BF16 when listed and when both GPUs have enough VRAM.
 
+Run server-perf discovery against the actual LLM GPU assignment, not GPU `0`:
+
+```bash
+docker run --rm --gpus '"device=2,3"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
+  <nim_llm_image> list-model-profiles
+```
+
+Confirm GPUs `2` and `3` are the same supported GPU type and that the manifest lists the exact TP2 profile before changing the selector.
+
 Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 
 - Server: `docker/docker-compose.nemotron-asr.yaml`, `docker/docker-compose.magpie-tts.yaml`, `docker/docker-compose.magpie-zeroshot-tts.yaml`, `docker/docker-compose.chatterbox-tts.yaml`, `docker/docker-compose.nemotron35-lightning-nim.yaml`, `docker/docker-compose.nemotron3-omni-nim.yaml`

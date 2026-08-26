@@ -172,16 +172,19 @@ TP, model, or cloud. Do not guess a close SKU.
 
 Before proposal, use the support matrix to select a candidate profile and mark shared-GPU
 fit provisional. After the user approves self-hosting and container readiness passes, run
-`list-model-profiles` on that NIM for the probed GPU. Pin the exact result before
-generating Compose. This is mandatory on every workstation / DGX Spark NIM LLM
-deployment. Buckets:
+`list-model-profiles` on that NIM for the probed GPU. Standard `*/server` deployments use
+the result to verify manifest auto-selection. Explicitly pinned self-hosted deployments use
+the exact result in generated Compose. Profile verification is mandatory on every
+workstation / DGX Spark NIM LLM deployment. Buckets:
 
 ```bash
-docker run --rm --gpus=all <nim_llm_image> list-model-profiles
+docker run --rm --gpus '"device=0"' <nim_llm_image> list-model-profiles
 ```
 
-Replace `all` with the exact planned GPU assignment when the LLM is pinned. Copy
-`<nim_llm_image>` from the current self-hosted build page. Do not infer the image or tag.
+Use the exact GPU assignment that the LLM service will see. GPU `0` is the standard
+`*/server` assignment; `generic-assistant/server-perf` uses `device=2,3`. Copy
+`<nim_llm_image>` from the checked-in Compose service or current self-hosted build page.
+Do not infer the image or tag.
 
 | Bucket | Action |
 | --- | --- |
@@ -193,23 +196,28 @@ Prefer the smallest Compatible precision that fits (nvfp4 > mxfp4 > w4a16 > fp8 
 unless the user asked for a heavier one. On a local GPU under ~90 GB, prefer Compatible
 nvfp4 when listed. Do not default to a heavier precision if a lighter one is Compatible.
 
-Set `NIM_MODEL_PROFILE` in the launch environment to one of:
+For an explicitly pinned self-hosted LLM deployment, set `NIM_MODEL_PROFILE` in the launch
+environment to one of:
 
 - a description such as `vllm-nvfp4-tp1-pp1` (pattern:
   `<backend>-<precision>-tp<N>-pp1`, backend `vllm` | `sglang` | `trtllm`)
 - the 64-char profile id from the listing
-- leave unset / `default` only when you intentionally want manifest auto-pick
 
-Never use `NIM_TAGS_SELECTOR` on an LLM generated for a new deployment; use
-`NIM_MODEL_PROFILE`. The repository's fixed `generic-assistant/server-perf` benchmark is
-an explicit exception because its Compose service pins an NVFP4 TP2 selector. Cloud LLM
-skips this section. For same-image OOM or latency, re-run `list-model-profiles`, pin a
-lighter profile or shorter max length, update the launch command, then health-check. A
-different model id requires discovery again.
+For a standard `*/server` deployment, leave both LLM profile selectors unset so the
+manifest can auto-pick.
 
-On a shared GPU, never leave profile selection at `default`. Pin the exact Compatible
-profile and verify startup logs report the expected backend and precision. A profile being
-Compatible means the LLM can run on that GPU. It does not mean LLM + ASR + TTS fit
+For a pinned LLM, use `NIM_MODEL_PROFILE` instead of `NIM_TAGS_SELECTOR`. Standard
+`*/server` LLMs leave both unset for automatic hardware-compatible selection. The
+repository's fixed `generic-assistant/server-perf` benchmark is the LLM exception because
+its Compose service pins an NVFP4 TP2 selector. ASR and TTS continue to use their required
+`NIM_TAGS_SELECTOR` values. Cloud LLM skips this section. For same-image OOM or latency,
+re-run `list-model-profiles`, select a lighter profile or shorter max length, update the
+launch command, then health-check. A different model id requires discovery again.
+
+For an explicitly pinned shared-GPU deployment, use the exact Compatible profile and
+verify startup logs report the expected backend and precision. For standard `*/server`
+auto-selection, verify the selected profile and remaining memory after startup. A profile
+being Compatible means the LLM can run on that GPU. It does not mean LLM + ASR + TTS fit
 together.
 
 Docs:
