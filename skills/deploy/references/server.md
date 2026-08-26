@@ -10,7 +10,7 @@ Needs enough workstation GPU VRAM for the selected NIM services. One GPU is vali
 
 ## Precision
 
-Standard `*/server` services leave `NIM_TAGS_SELECTOR` unset so NIM can select a hardware-compatible profile for the single visible LLM GPU. Confirm the selected profile in the startup logs; automatic selection does not guarantee that the remaining VRAM is enough to colocate ASR and TTS.
+The standard `*/server` LLM service leaves `NIM_TAGS_SELECTOR` unset so NIM can select a hardware-compatible profile for its single visible GPU. ASR and TTS keep their required selectors. Confirm the selected LLM profile in the startup logs. Automatic selection does not guarantee that the remaining VRAM is enough to colocate ASR and TTS.
 
 1. List profiles on GPU 0. Read the image tag from the recipe compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
 

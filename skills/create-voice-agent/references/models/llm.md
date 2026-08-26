@@ -282,7 +282,8 @@ Before first start:
    `NIM_MAX_MODEL_LEN` on NIM or `--max-model-len` on raw vLLM
 5. cap runtime memory so the server cannot exceed `LLM budget`, which as a fraction is no
    higher than `LLM budget / total GPU memory`:
-   - NIM: pin the exact `NIM_MODEL_PROFILE`, then take exactly one control from the
+   - NIM: leave profile selection unset for standard `*/server`. For an explicitly pinned
+     deployment, pin the exact `NIM_MODEL_PROFILE`. Then take exactly one control from the
      selected image's current docs, either `--gpu-memory-utilization` passed through
      `NIM_PASSTHROUGH_ARGS` or `NIM_KVCACHE_PERCENT` when that image documents it
    - raw vLLM: pass `--gpu-memory-utilization` directly, or an absolute KV cache size

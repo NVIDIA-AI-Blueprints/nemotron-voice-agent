@@ -96,7 +96,7 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4 or FP8 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 
-**Pick a NIM model profile.** Standard `*/server` leaves the LLM selector unset, and NIM chooses a compatible profile from the detected GPU and manifest. Use `NIM_MODEL_PROFILE` only for an explicitly pinned custom deployment. The `server-perf` recipe is an exception that pins NVFP4 TP2. Replace that selector with BF16 or another listed TP2 profile on non-Blackwell hardware. Profile discovery must use the same image tag and GPU assignment as the deployed service.
+**Pick a NIM model profile.** Standard `*/server` leaves the LLM selector unset, and NIM chooses a compatible profile from the detected GPU and manifest. Use `NIM_MODEL_PROFILE` only for an explicitly pinned custom deployment. The `server-perf` recipe is an exception that pins NVFP4 TP2. On non-Blackwell hardware, replace that selector with an available TP2 profile listed by the deployed image, such as BF16 when listed. Profile discovery must use the same image tag and GPU assignment as the deployed service.
 
 For standard `*/server`, inspect the image on its visible LLM GPU:
 
@@ -113,6 +113,15 @@ For `server-perf`, inspect the same image with its TP2 GPU assignment:
 docker run --rm --gpus '"device=2,3"' \
   -e NGC_API_KEY="$NVIDIA_API_KEY" \
   nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.0.9-variant \
+  list-model-profiles
+```
+
+For an Omni `*/server` deployment, use its checked-in image and visible GPU:
+
+```bash
+docker run --rm --gpus '"device=0"' \
+  -e NGC_API_KEY="$NVIDIA_API_KEY" \
+  nvcr.io/nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:2.0.4-variant \
   list-model-profiles
 ```
 
