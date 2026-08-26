@@ -4,8 +4,9 @@
 # ruff: noqa: D100, D101, D102
 
 import asyncio
+import os
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.stt import AudioChunkIterator
@@ -24,31 +25,45 @@ from examples.shared.stt_finalize_frame import STTFinalizeFrame
 
 class StopHistoryForAsrModelTests(unittest.TestCase):
     def test_nemotron_and_default_raise_stop_history(self) -> None:
-        self.assertEqual(stop_history_for_asr_model(""), NEMOTRON_FORCE_EOU_STOP_HISTORY_MS)
-        self.assertEqual(
-            stop_history_for_asr_model("nemotron-asr-streaming"),
-            NEMOTRON_FORCE_EOU_STOP_HISTORY_MS,
-        )
+        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
+            self.assertEqual(stop_history_for_asr_model(""), NEMOTRON_FORCE_EOU_STOP_HISTORY_MS)
+            self.assertEqual(
+                stop_history_for_asr_model("nemotron-asr-streaming"),
+                NEMOTRON_FORCE_EOU_STOP_HISTORY_MS,
+            )
 
     def test_parakeet_keeps_short_stop_history(self) -> None:
-        self.assertEqual(stop_history_for_asr_model("parakeet-ctc"), DEFAULT_STOP_HISTORY_MS)
-        self.assertEqual(
-            stop_history_for_asr_model("parakeet-1.1b-rnnt-multilingual"),
-            DEFAULT_STOP_HISTORY_MS,
-        )
+        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
+            self.assertEqual(stop_history_for_asr_model("parakeet-ctc"), DEFAULT_STOP_HISTORY_MS)
+            self.assertEqual(
+                stop_history_for_asr_model("parakeet-1.1b-rnnt-multilingual"),
+                DEFAULT_STOP_HISTORY_MS,
+            )
 
     def test_local_nemotron_nim_name_is_not_treated_as_parakeet(self) -> None:
-        self.assertEqual(
-            stop_history_for_asr_model("cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"),
-            NEMOTRON_FORCE_EOU_STOP_HISTORY_MS,
-        )
+        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
+            self.assertEqual(
+                stop_history_for_asr_model("cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"),
+                NEMOTRON_FORCE_EOU_STOP_HISTORY_MS,
+            )
+
+    def test_silero_vad_turn_detection_keeps_short_stop_history(self) -> None:
+        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "true"}):
+            self.assertEqual(stop_history_for_asr_model("nemotron-asr-streaming"), DEFAULT_STOP_HISTORY_MS)
+            self.assertEqual(
+                stop_history_for_asr_model("cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"),
+                DEFAULT_STOP_HISTORY_MS,
+            )
+            vad = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
+            self.assertEqual(vad._stop_history, DEFAULT_STOP_HISTORY_MS)
 
     def test_builder_applies_model_specific_stop_history(self) -> None:
-        nemotron = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
-        parakeet = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="parakeet-ctc")
-        self.assertIsInstance(nemotron, NvidiaForceEouSTTService)
-        self.assertEqual(nemotron._stop_history, NEMOTRON_FORCE_EOU_STOP_HISTORY_MS)
-        self.assertEqual(parakeet._stop_history, DEFAULT_STOP_HISTORY_MS)
+        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
+            nemotron = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
+            parakeet = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="parakeet-ctc")
+            self.assertIsInstance(nemotron, NvidiaForceEouSTTService)
+            self.assertEqual(nemotron._stop_history, NEMOTRON_FORCE_EOU_STOP_HISTORY_MS)
+            self.assertEqual(parakeet._stop_history, DEFAULT_STOP_HISTORY_MS)
 
 
 class ForceEouStreamingRequestTests(unittest.TestCase):

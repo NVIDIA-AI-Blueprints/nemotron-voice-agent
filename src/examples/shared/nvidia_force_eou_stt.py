@@ -15,6 +15,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.stt import AudioChunkIterator, NvidiaSTTService
 
 from examples.shared.stt_finalize_frame import STTFinalizeFrame
+from utils import parse_env_bool
 
 try:
     import riva.client.proto.riva_asr_pb2 as rasr
@@ -32,12 +33,16 @@ DEFAULT_STOP_HISTORY_MS = 400
 def stop_history_for_asr_model(asr_model: str | None = "") -> int:
     """Return ASR ``stop_history`` (ms) for the active model.
 
-    Nemotron ASR Streaming honors ``force_eou``, so server-side silence
-    endpointing is raised to 4500 ms and Smart Turn becomes the EOU driver.
-    Cloud Parakeet CTC/RNNT ignore ``force_eou`` and keep 400 ms. The local
-    Nemotron NIM reports as ``cache-aware-parakeet-rnnt-*`` and still honors
-    ``force_eou``, so it must not match the short Parakeet window.
+    Smart Turn sends ``force_eou`` on COMPLETE, so Nemotron silence
+    endpointing is raised to 4500 ms. Pure Silero VAD turn detection
+    (``USE_SILERO_VAD_TURN_DETECTION=true``, including
+    ``generic-assistant/server-perf``) never sends ``force_eou``, so it
+    keeps the 400 ms window. Cloud Parakeet CTC/RNNT ignore ``force_eou``
+    and also keep 400 ms. The local Nemotron NIM reports as
+    ``cache-aware-parakeet-rnnt-*`` and still honors ``force_eou``.
     """
+    if parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
+        return DEFAULT_STOP_HISTORY_MS
     model = (asr_model or "").lower()
     if "parakeet" in model and "cache-aware" not in model:
         return DEFAULT_STOP_HISTORY_MS
@@ -47,7 +52,8 @@ def stop_history_for_asr_model(asr_model: str | None = "") -> int:
 def build_nvidia_stt_service(*, asr_kwargs: dict, asr_model: str = "") -> NvidiaForceEouSTTService:
     """Construct the cascaded-pipeline STT service with force-EOU support."""
     stop_history = stop_history_for_asr_model(asr_model)
-    logger.info(f"ASR stop_history={stop_history}ms (model={asr_model or 'default'})")
+    vad_turns = parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False)
+    logger.info(f"ASR stop_history={stop_history}ms (model={asr_model or 'default'}, silero_vad_turns={vad_turns})")
     return NvidiaForceEouSTTService(
         **asr_kwargs,
         stop_history=stop_history,
