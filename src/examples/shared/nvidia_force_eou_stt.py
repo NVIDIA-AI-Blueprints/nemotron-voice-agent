@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Iterable
 
 from loguru import logger
@@ -63,13 +64,14 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
 
     ``STTService.request_finalize()`` only marks TTFB metrics; NVIDIA already
     sets ``TranscriptionFrame.finalized`` from ``is_final``. This subclass
-    only needs to attach ``runtime_config.force_eou`` to the next gRPC chunk.
+    queues trailing silence and attaches ``runtime_config.force_eou`` to that
+    chunk so already-buffered speech is sent first.
     """
 
     def __init__(self, *args, **kwargs):
-        """Initialize with a one-shot force-EOU flag."""
+        """Initialize the silence-chunk force-EOU queue."""
         super().__init__(*args, **kwargs)
-        self._force_eou_pending = False
+        self._force_eou_silences: deque[bytes] = deque()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Consume ``STTFinalizeFrame``; otherwise use the parent STT path."""
@@ -78,17 +80,22 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
             return
         await super().process_frame(frame, direction)
 
+    def _force_eou_silence(self) -> bytes:
+        """Return an 80 ms PCM silence chunk for the current sample rate."""
+        sample_rate = self.sample_rate or 16000
+        num_samples = max(1, int(sample_rate * FORCE_EOU_SILENCE_SECS))
+        return b"\x00" * (num_samples * 2)
+
     async def request_force_eou(self) -> None:
-        """Queue a short silence chunk tagged with ``force_eou`` on the next send."""
+        """Append silence and tag that same chunk with ``force_eou`` when sent."""
         iterator = self._audio_iterator
         if iterator is None or iterator.closed:
             logger.debug(f"{self} force_eou skipped: no active stream")
             return
 
-        self._force_eou_pending = True
-        sample_rate = self.sample_rate or 16000
-        num_samples = max(1, int(sample_rate * FORCE_EOU_SILENCE_SECS))
-        await self._send_keepalive(b"\x00" * (num_samples * 2))
+        silence = self._force_eou_silence()
+        self._force_eou_silences.append(silence)
+        await self._send_keepalive(silence)
         self._last_audio_time = time.monotonic()
         logger.debug(f"{self} queued force_eou")
 
@@ -97,12 +104,12 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
         audio_chunks: Iterable[bytes],
         streaming_config: rasr.StreamingRecognitionConfig,
     ):
-        """Yield gRPC requests, attaching ``force_eou`` to at most one chunk."""
+        """Yield gRPC requests, attaching ``force_eou`` only to tagged silence."""
         yield rasr.StreamingRecognizeRequest(streaming_config=streaming_config)
         for chunk in audio_chunks:
             runtime_config = {}
-            if self._force_eou_pending:
-                self._force_eou_pending = False
+            if self._force_eou_silences and chunk is self._force_eou_silences[0]:
+                self._force_eou_silences.popleft()
                 runtime_config = {"force_eou": "true"}
                 logger.info(f"{self} sending force_eou on {len(chunk)}-byte chunk")
             yield rasr.StreamingRecognizeRequest(
