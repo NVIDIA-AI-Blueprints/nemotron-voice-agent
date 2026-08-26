@@ -46,4 +46,4 @@ Do not treat these as extra preflights.
   - Media analyzer never runs after upload → speaker did not set `selected_input_source=uploaded_attachment`. Look for `Speaker Omni queued media analysis trigger`. If absent, `src/examples/omni_assistant_subagents/prompts.yaml` was overridden.
   - `ModuleNotFoundError: pipecat_subagents` → rebuild: `docker compose --profile omni-assistant-subagents build`.
 - **Frontend/Backend:** every recipe includes `booking-server`. Also check `docker compose logs --tail 200 booking-server`.
-- **`generic-assistant/server-perf`:** four-GPU layout, 200 Uvicorn workers, not a browser UI session. See `benchmarking_tools/scaling-perf/README.md`.
+- **`generic-assistant/server-perf`:** four-GPU Blackwell layout, pinned NVFP4 TP2 LLM profile, 200 Uvicorn workers, not a browser UI session. On older hardware, select a compatible TP2 profile first. See `benchmarking_tools/scaling-perf/README.md`.

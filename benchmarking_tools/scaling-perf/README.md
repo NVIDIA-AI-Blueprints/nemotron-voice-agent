@@ -74,7 +74,7 @@ This catalog defaults to `prompt_1000_tokens`. Available prompt entries are
 
 ## Reproducing the best scaling setup
 
-For the best scaling numbers, use a `4xH100` setup with `1 GPU` for ASR,
+For the best scaling numbers, use a four-GPU Blackwell setup with `1 GPU` for ASR,
 `1 GPU` for TTS, and `2 GPUs` for the `Nemotron 3.5 Lightning 30B` LLM.
 
 This setup is available as the dedicated Compose recipe
@@ -83,7 +83,7 @@ scaling configuration:
 
 - Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
-- `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=bf16,tp=2`, GPUs `2,3`, alias
+- `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=nvfp4,tp=2`, GPUs `2,3`, alias
   `nvidia-llm`
 - `nemotron-asr-streaming-english`:
   `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
@@ -94,6 +94,12 @@ scaling configuration:
 - app env: `UVICORN_WORKERS=200`,
   `USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`,
   `AUDIO_OUT_10MS_CHUNKS=40`
+
+The pinned NVFP4 profile requires Blackwell GPUs. On older non-Blackwell
+hardware, list the profiles packaged with the NIM image and change the literal
+LLM selector in `docker/docker-compose.nemotron35-lightning-nim.yaml` to a
+compatible TP2 profile, such as BF16 when the manifest and available VRAM
+support it.
 
 Deploy it with:
 

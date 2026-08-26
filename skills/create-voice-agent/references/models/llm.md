@@ -200,10 +200,12 @@ Set `NIM_MODEL_PROFILE` in the launch environment to one of:
 - the 64-char profile id from the listing
 - leave unset / `default` only when you intentionally want manifest auto-pick
 
-Never use `NIM_TAGS_SELECTOR` on the LLM. Cloud LLM skips this section. For same-image
-OOM or latency, re-run `list-model-profiles`, pin a lighter profile or shorter max length,
-update the launch command, then health-check. A different model id requires discovery
-again.
+Never use `NIM_TAGS_SELECTOR` on an LLM generated for a new deployment; use
+`NIM_MODEL_PROFILE`. The repository's fixed `generic-assistant/server-perf` benchmark is
+an explicit exception because its Compose service pins an NVFP4 TP2 selector. Cloud LLM
+skips this section. For same-image OOM or latency, re-run `list-model-profiles`, pin a
+lighter profile or shorter max length, update the launch command, then health-check. A
+different model id requires discovery again.
 
 On a shared GPU, never leave profile selection at `default`. Pin the exact Compatible
 profile and verify startup logs report the expected backend and precision. A profile being
@@ -310,6 +312,6 @@ Do not choose a knob from the pipeline name. Choose it from the actual server pa
 - Reasoning on locally without the reasoning parser and plugin file the card requires.
 - Cascaded slot → omni model. Model ids in `.env`.
 - Propose from memory / Verified GPUs list alone. Click matrix UI or use `.html.md` for fit.
-- Override a failed matrix / `list-model-profiles` check. Guess a SKU. `NIM_TAGS_SELECTOR` on LLM.
+- Override a failed matrix / `list-model-profiles` check. Guess a SKU. `NIM_TAGS_SELECTOR` on a generated LLM deployment (the fixed `server-perf` benchmark is the exception).
 - Treat quantized weight size as total LLM VRAM or leave vLLM at its default memory budget
   while co-locating speech.

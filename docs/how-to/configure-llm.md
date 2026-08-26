@@ -68,7 +68,7 @@ The `*/single-gpu` vLLM services select the model checkpoint and precision from 
 
 These values are startup checks used by the planner, not guarantees that every workload will fit. Model weights, KV cache, speech services, context length, and concurrency must all fit within the selected budget.
 
-Server recipes use model-specific NIM profiles and scaling controls instead of the single-GPU VRAM planner.
+Server recipes use model-specific NIM profiles and scaling controls instead of the single-GPU VRAM planner. Standard `*/server` services leave the LLM selector unset so NIM automatically chooses a compatible profile for the visible GPU. The dedicated `generic-assistant/server-perf` benchmark instead pins an NVFP4 TP2 profile for two Blackwell LLM GPUs.
 
 | Server layout | Typical memory | Memory control | Device IDs |
 | --- | --- | --- | --- |
@@ -81,22 +81,22 @@ Update each service's `device_ids` under `deploy.resources.reservations.devices`
 
 ### Deployment tuning parameters
 
-Single-GPU Compose services select precision and VRAM utilization automatically. Use `.env` only for the optional headroom or utilization override. NIM settings remain explicit for Server deployments.
+Single-GPU Compose services select precision and VRAM utilization automatically. Use `.env` only for the optional headroom or utilization override. Standard NIM Server deployments also use hardware-aware automatic profile selection; only specialized recipes such as `server-perf` pin a selector.
 
 | Controls | NIM (`.env`) | Single-GPU vLLM | Notes |
 |----------|--------------|--------------------------|-------|
 | **VRAM fit** | `NIM_KVCACHE_PERCENT` (default `0.6`) | `VLLM_VRAM_HEADROOM_MIB` (default `4096`) and optional `VLLM_GPU_MEMORY_UTILIZATION` override | vLLM calculates the utilization from free memory by default. |
-| **Precision** | `NIM_TAGS_SELECTOR=precision=fp8,...` | Selected automatically from GPU compute capability | FP8 needs compute capability ≥ 8.9. NVFP4 needs Blackwell or later. |
-| **Hardware / scaling (TP)** | `NIM_TAGS_SELECTOR=...,tp=N` | `--tensor-parallel-size N` | Shard the model across `N` GPUs and give it `N` `device_ids`. |
+| **Precision** | Automatic for standard `*/server`; `server-perf` pins `NIM_TAGS_SELECTOR=precision=nvfp4,tp=2` | Selected automatically from GPU compute capability | NVFP4 needs Blackwell or later. On older hardware, choose a compatible profile listed by the NIM image. |
+| **Hardware / scaling (TP)** | Automatic from the visible GPUs for standard `*/server`; pinned to TP2 for `server-perf` | `--tensor-parallel-size N` | A pinned TP=N profile needs N visible `device_ids`. Merely exposing N GPUs does not guarantee automatic selection will use all of them. |
 | **Context length** | `NIM_MAX_MODEL_LEN` (default `32768`) | `--max-model-len` | Larger context costs more KV-cache VRAM. |
 | **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` | Max concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this (e.g. `64`–`128`). |
 | **Explicit profile** | `NIM_MODEL_PROFILE=<id>` | n/a | Pin a specific NIM profile instead of auto-selection. |
 
-**Cascaded NIM sizing (`nvidia-llm`).** FP8 Lightning weights are ~30 GB, so `NIM_KVCACHE_PERCENT × (GPU VRAM)` must stay above ~40 GB (weights + a usable KV cache). The default `0.6` suits one ~80 GB GPU shared with ASR (~15 GB) and TTS (~14 GB). On a smaller supported GPU, move ASR/TTS to a second card (their `device_ids`) and raise `NIM_KVCACHE_PERCENT` (e.g. `0.9` on a 48 GB L40).
+**Cascaded NIM sizing (`nvidia-llm`).** Weight memory depends on the profile NIM selects. Confirm the selected precision and memory footprint in the startup logs and support matrix. The default `NIM_KVCACHE_PERCENT=0.6` targets one ~80 GB GPU shared with ASR (~15 GB) and TTS (~14 GB). On a smaller supported GPU, move ASR/TTS to a second card (their `device_ids`) and raise `NIM_KVCACHE_PERCENT` only after verifying that the selected LLM profile still fits.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4 or FP8 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 
-**Pick a NIM model profile.** NIM auto-selects a profile from your GPU, precision, and TP size. List what's compatible, then optionally pin one with `NIM_MODEL_PROFILE`:
+**Pick a NIM model profile.** Standard `*/server` leaves the selector unset, and NIM chooses a compatible profile from the detected GPU and manifest. List what's compatible, then optionally pin one with `NIM_MODEL_PROFILE`. The `server-perf` recipe is an explicit exception that pins NVFP4 TP2; replace that selector with BF16 or another listed TP2 profile on non-Blackwell hardware:
 
 ```bash
 docker run --rm --gpus all \

@@ -38,7 +38,6 @@ services:
       - frontend-backend-agent/server
     environment:
       <<: *nim-llm-env
-      NIM_TAGS_SELECTOR: ${NIM_TAGS_SELECTOR:-precision=bf16,tp=1}
     deploy:
       resources:
         reservations:
@@ -53,7 +52,7 @@ services:
       - generic-assistant/server-perf
     environment:
       <<: *nim-llm-env
-      NIM_TAGS_SELECTOR: "precision=bf16,tp=2"
+      NIM_TAGS_SELECTOR: "precision=nvfp4,tp=2"
     deploy:
       resources:
         reservations:

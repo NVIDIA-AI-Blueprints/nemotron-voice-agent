@@ -11,6 +11,8 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x H100 GPU** setup (one GPU for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM). Most tested concurrency levels are below one second E2E latency, and the 64-stream run reaches 1.00 second. All latencies are in seconds.
 
 > **Note:** This benchmark uses a 4-GPU setup to measure scalability. Deployment options include cloud-only with no local GPUs, about 80 GB VRAM for the default all-on-one-GPU `*/server` NIM layout, or a supported one-GPU host for `*/single-gpu`. See [Configure LLM](how-to/configure-llm.md#vram--hardware-support) for the automatic VRAM plan.
+
+> The current `generic-assistant/server-perf` Compose recipe targets four Blackwell GPUs and pins NVFP4 TP2 for Nemotron 3.5 Lightning. The H100 results above are historical reference measurements; reproducing the recipe on H100 or other non-Blackwell hardware requires selecting a compatible TP2 profile such as BF16 when supported.
 >
 > **Note:** These reference results were collected with the previous Nemotron 3 Nano configuration. Nemotron 3.5 Lightning is the current default cascaded LLM.
 

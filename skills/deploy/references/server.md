@@ -10,7 +10,7 @@ Needs enough workstation GPU VRAM for the selected NIM services. One GPU is vali
 
 ## Precision
 
-`NIM_TAGS_SELECTOR` defaults to `precision=bf16,tp=1`. That default is not universal. The NIM restart-loops with `Could not match a profile in manifest` when the GPU has no profile at that precision or insufficient memory.
+Standard `*/server` services leave `NIM_TAGS_SELECTOR` unset so NIM can select a hardware-compatible profile for the single visible LLM GPU. Confirm the selected profile in the startup logs; automatic selection does not guarantee that the remaining VRAM is enough to colocate ASR and TTS.
 
 1. List profiles on GPU 0. Read the image tag from the recipe compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
 
@@ -19,18 +19,18 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
   <nim_llm_image> list-model-profiles
 ```
 
-2. Pick the lightest **Compatible** precision. Prefer readable tags over a profile hash. `tp=1` on one GPU, `tp=N` on N GPUs.
+2. Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. `tp=1` uses one GPU; `tp=N` needs N visible GPUs.
 
-| GPU compute capability | `NIM_TAGS_SELECTOR` precision |
+| GPU compute capability | Preferred compatible precision |
 | --- | --- |
 | Blackwell (CC 10.0+) | `nvfp4` (no `fp8` profile) |
-| Hopper or Ada (CC 8.9–9.0) | `fp8`, or `nvfp4` when listed |
-| Ampere (CC 8.0–8.6) | `int4` or `bf16` |
+| Hopper or Ada (CC 8.9–9.0) | `bf16` or another compatible quantized profile listed by the image |
+| Ampere (CC 8.0–8.6) | `bf16` or `int4` when listed |
 | Below CC 8.0 | unsupported → cloud |
 
-3. Set in `.env`, preserving other keys: `NIM_TAGS_SELECTOR=precision=<compatible-precision>,tp=1`.
+3. For standard `*/server`, keep `NIM_TAGS_SELECTOR` unset and let NIM choose from the compatible manifest profiles. Use `NIM_MODEL_PROFILE` when an exact LLM profile must be pinned.
 
-This applies to `*/server` only. `generic-assistant/server-perf` pins `precision=bf16,tp=2` as a literal in its Compose service (`nvidia-llm-perf`) and ignores the `.env` `NIM_TAGS_SELECTOR`. It targets a Hopper-class four-GPU host. On Blackwell, prefer a compatible `nvfp4` profile. To retune it, edit the literal in the compose file, not `.env`.
+`generic-assistant/server-perf` is the exception: its Compose service (`nvidia-llm-perf`) pins `precision=nvfp4,tp=2` and exposes GPUs `2` and `3` to the LLM. It targets a four-GPU Blackwell host. On older non-Blackwell hardware, run `list-model-profiles` and edit that literal to a compatible TP2 profile, such as BF16 when listed and when both GPUs have enough VRAM.
 
 Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 
@@ -46,5 +46,5 @@ Cascaded Lightning NIM health: `curl -f http://localhost:18000/v1/health/ready`.
 ## Failures
 
 - **`pull access denied` / `unauthorized`** → NGC login missing or expired. Single-GPU does not use `nvcr.io`.
-- **`Could not match a profile in manifest`** → default `fp8` has no profile on this GPU. Run `list-model-profiles`, set a Compatible `NIM_TAGS_SELECTOR`, recreate the LLM service.
+- **`Could not match a profile in manifest`** → no profile matches the detected hardware or the pinned selector. Run `list-model-profiles`; for standard `*/server`, leave automatic selection enabled or pin a compatible `NIM_MODEL_PROFILE`. For `server-perf`, update its literal TP2 selector to a compatible precision, then recreate the LLM service.
 - **`No available memory for the cache blocks`** → `NIM_KVCACHE_PERCENT` is too **low**. Raise it. CUDA OOM during load is the opposite: lower it, or move TTS off that GPU. `LLM_MAX_NUM_SEQS` can be lowered if CUDA-graph capture fails.

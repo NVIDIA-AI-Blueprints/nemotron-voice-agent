@@ -6,7 +6,7 @@ Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`Nvidi
 
 ## Running the example
 
-This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance Server** (NIM), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The performance profile uses the dedicated four-GPU layout documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup). It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
+This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance Server** (NIM), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The performance profile uses the dedicated four-GPU Blackwell layout and pinned NVFP4 TP2 LLM profile documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup); older hardware requires a compatible TP2 selector. It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
 
 1. Create your `.env` from the template and set your NVIDIA API key:
 
@@ -42,7 +42,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance
    | `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
    | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
 
-   > Lightning selects its platform and precision recipe automatically.
+   > Standard Lightning `server` and `single-gpu` deployments select a compatible precision automatically. The four-GPU `server-perf` benchmark pins NVFP4 TP2 for Blackwell; on older hardware, change it to a compatible TP2 profile as described in [Configure LLM](../../../docs/how-to/configure-llm.md).
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
