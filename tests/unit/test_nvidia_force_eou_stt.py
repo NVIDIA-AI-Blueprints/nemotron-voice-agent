@@ -52,20 +52,39 @@ class StopHistoryForAsrModelTests(unittest.TestCase):
 
 
 class ForceEouStreamingRequestTests(unittest.TestCase):
-    def test_attaches_runtime_config_only_on_the_pending_chunk(self) -> None:
+    def test_attaches_force_eou_to_injected_silence_not_buffered_speech(self) -> None:
         stt = NvidiaForceEouSTTService(use_ssl=False)
-        stt._force_eou_pending = True
+        stt._sample_rate = 16000
         config = rasr.StreamingRecognitionConfig()
+        speech = b"speech"
+        silence = stt._force_eou_silence()
+        later = b"after"
+        stt._force_eou_silences.append(silence)
 
-        requests = list(stt._iter_streaming_requests([b"first", b"second"], config))
+        requests = list(stt._iter_streaming_requests([speech, silence, later], config))
 
-        self.assertEqual(len(requests), 3)
+        self.assertEqual(len(requests), 4)
         self.assertTrue(requests[0].HasField("streaming_config"))
-        self.assertEqual(requests[1].audio_content, b"first")
-        self.assertEqual(dict(requests[1].runtime_config), {"force_eou": "true"})
-        self.assertEqual(requests[2].audio_content, b"second")
-        self.assertEqual(dict(requests[2].runtime_config), {})
-        self.assertFalse(stt._force_eou_pending)
+        self.assertEqual(requests[1].audio_content, speech)
+        self.assertEqual(dict(requests[1].runtime_config), {})
+        self.assertEqual(requests[2].audio_content, silence)
+        self.assertEqual(dict(requests[2].runtime_config), {"force_eou": "true"})
+        self.assertEqual(requests[3].audio_content, later)
+        self.assertEqual(dict(requests[3].runtime_config), {})
+        self.assertFalse(stt._force_eou_silences)
+
+    def test_equal_keepalive_silence_does_not_steal_force_eou(self) -> None:
+        stt = NvidiaForceEouSTTService(use_ssl=False)
+        stt._sample_rate = 16000
+        config = rasr.StreamingRecognitionConfig()
+        tagged = stt._force_eou_silence()
+        keepalive = stt._force_eou_silence()
+        stt._force_eou_silences.append(tagged)
+
+        requests = list(stt._iter_streaming_requests([keepalive, tagged], config))
+
+        self.assertEqual(dict(requests[1].runtime_config), {})
+        self.assertEqual(dict(requests[2].runtime_config), {"force_eou": "true"})
 
 
 class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -80,10 +99,26 @@ class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
 
         await stt.request_force_eou()
 
-        self.assertTrue(stt._force_eou_pending)
         silence = iterator._queue.get_nowait()
         self.assertEqual(silence, b"\x00" * (int(16000 * FORCE_EOU_SILENCE_SECS) * 2))
+        self.assertEqual(len(stt._force_eou_silences), 1)
+        self.assertIs(stt._force_eou_silences[0], silence)
         self.assertTrue(iterator._queue.empty())
+
+    async def test_request_force_eou_tags_silence_after_buffered_speech(self) -> None:
+        stt = self._service()
+        stt._sample_rate = 16000
+        iterator = AudioChunkIterator(asyncio.get_running_loop())
+        stt._audio_iterator = iterator
+        await iterator.put(b"speech")
+
+        await stt.request_force_eou()
+
+        speech = iterator._queue.get_nowait()
+        silence = iterator._queue.get_nowait()
+        requests = list(stt._iter_streaming_requests([speech, silence], rasr.StreamingRecognitionConfig()))
+        self.assertEqual(dict(requests[1].runtime_config), {})
+        self.assertEqual(dict(requests[2].runtime_config), {"force_eou": "true"})
 
     async def test_finalize_frame_requests_force_eou_and_does_not_forward(self) -> None:
         stt = self._service()
@@ -99,4 +134,4 @@ class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
         stt = self._service()
         stt._audio_iterator = None
         await stt.request_force_eou()
-        self.assertFalse(stt._force_eou_pending)
+        self.assertFalse(stt._force_eou_silences)

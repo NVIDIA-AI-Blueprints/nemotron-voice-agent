@@ -193,10 +193,12 @@ def main() -> int:
         time.sleep(CHUNK_MS / 1000)
         if any(t > force_at for t, _ in finals):
             break
+    # Snapshot before closing the stream. End-of-stream can emit a FINAL that
+    # is not evidence force_eou worked.
+    finals_after_force = [(t, text) for t, text in finals if t > force_at]
     audio_q.put(None)
     reader.join(timeout=3)
 
-    finals_after_force = [(t, text) for t, text in finals if t > force_at]
     if not finals_after_force:
         print("FAIL: no FINAL after force_eou. The flag was ignored or the stream failed.")
         return 3
