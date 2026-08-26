@@ -30,7 +30,7 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 
 3. Set in `.env`, preserving other keys: `NIM_TAGS_SELECTOR=precision=<compatible-precision>,tp=1`.
 
-This applies to `*/server` only. `generic-assistant/server-perf` pins `precision=fp8,tp=2` as a literal in its Compose service (`nvidia-llm-perf`) and ignores the `.env` `NIM_TAGS_SELECTOR`. It targets a Hopper-class four-GPU host and does not fit a Blackwell workstation (no `fp8` profile). To retune it, edit the literal in the compose file, not `.env`.
+This applies to `*/server` only. `generic-assistant/server-perf` pins `precision=bf16,tp=2` as a literal in its Compose service (`nvidia-llm-perf`) and ignores the `.env` `NIM_TAGS_SELECTOR`. It targets a Hopper-class four-GPU host. On Blackwell, prefer a compatible `nvfp4` profile. To retune it, edit the literal in the compose file, not `.env`.
 
 Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 

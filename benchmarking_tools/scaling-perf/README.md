@@ -83,7 +83,7 @@ scaling configuration:
 
 - Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
-- `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=fp8,tp=2`, GPUs `2,3`, alias
+- `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=bf16,tp=2`, GPUs `2,3`, alias
   `nvidia-llm`
 - `nemotron-asr-streaming-english`:
   `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
