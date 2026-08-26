@@ -24,20 +24,11 @@ except ModuleNotFoundError as e:
 
 # 80 ms of silence matches Nemotron ASR's endpointing frame size.
 FORCE_EOU_SILENCE_SECS = 0.08
-# Same 400 ms window as the rest of the repo. Smart Turn may flush earlier via
-# force_eou; other stop strategies still finalize from this silence window.
 DEFAULT_STOP_HISTORY_MS = 400
 
 
-def build_nvidia_stt_service(*, asr_kwargs: dict, asr_model: str = "") -> NvidiaForceEouSTTService:
-    """Construct the cascaded-pipeline STT service with optional force-EOU support.
-
-    ``stop_history`` stays at 400 ms so Silero VAD / ``server-perf`` (and any
-    stop strategy that does not push :class:`STTFinalizeFrame`) still get a
-    normal ASR final. Our Smart Turn strategy can additionally send
-    ``force_eou`` to flush sooner than that window.
-    """
-    logger.info(f"ASR stop_history={DEFAULT_STOP_HISTORY_MS}ms (model={asr_model or 'default'})")
+def build_nvidia_stt_service(*, asr_kwargs: dict) -> NvidiaForceEouSTTService:
+    """Construct cascaded-pipeline STT with optional ``force_eou`` support."""
     return NvidiaForceEouSTTService(
         **asr_kwargs,
         stop_history=DEFAULT_STOP_HISTORY_MS,
@@ -54,9 +45,8 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
 
     ``STTService.request_finalize()`` only marks TTFB metrics; NVIDIA already
     sets ``TranscriptionFrame.finalized`` from ``is_final``. This subclass
-    only reacts to :class:`STTFinalizeFrame` from
-    :class:`ForceEouSmartTurnStopStrategy`. Other stop strategies never push
-    that frame, so ASR keeps working from the default 400 ms ``stop_history``.
+    reacts only to :class:`STTFinalizeFrame`. Other stop strategies never
+    push that frame, so ASR still finalizes from 400 ms ``stop_history``.
     """
 
     def __init__(self, *args, **kwargs):
