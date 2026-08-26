@@ -10,7 +10,7 @@ Needs enough workstation GPU VRAM for the selected NIM services. One GPU is vali
 
 ## Precision
 
-`NIM_TAGS_SELECTOR` defaults to `precision=fp8,tp=1`. That default is not universal. The NIM restart-loops with `Could not match a profile in manifest` when the GPU has no profile at that precision. Blackwell (for example RTX PRO 5000, `compute_cap` 12.0) has **no** `fp8` profile.
+`NIM_TAGS_SELECTOR` defaults to `precision=bf16,tp=1`. That default is not universal. The NIM restart-loops with `Could not match a profile in manifest` when the GPU has no profile at that precision or insufficient memory.
 
 1. List profiles on GPU 0. Read the image tag from the recipe compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
 

@@ -38,7 +38,7 @@ services:
       - frontend-backend-agent/server
     environment:
       <<: *nim-llm-env
-      NIM_TAGS_SELECTOR: ${NIM_TAGS_SELECTOR:-precision=fp8,tp=1}
+      NIM_TAGS_SELECTOR: ${NIM_TAGS_SELECTOR:-precision=bf16,tp=1}
     deploy:
       resources:
         reservations:
