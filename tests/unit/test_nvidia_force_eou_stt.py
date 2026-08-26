@@ -4,7 +4,6 @@
 # ruff: noqa: D100, D101, D102
 
 import asyncio
-import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -22,21 +21,9 @@ from examples.shared.stt_finalize_frame import STTFinalizeFrame
 
 
 class StopHistoryTests(unittest.TestCase):
-    def test_builder_always_uses_default_stop_history(self) -> None:
-        nemotron = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
-        parakeet = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="parakeet-ctc")
-        cache_aware = build_nvidia_stt_service(
-            asr_kwargs={"use_ssl": False},
-            asr_model="cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer",
-        )
-        self.assertIsInstance(nemotron, NvidiaForceEouSTTService)
-        self.assertEqual(nemotron._stop_history, DEFAULT_STOP_HISTORY_MS)
-        self.assertEqual(parakeet._stop_history, DEFAULT_STOP_HISTORY_MS)
-        self.assertEqual(cache_aware._stop_history, DEFAULT_STOP_HISTORY_MS)
-
-    def test_silero_vad_turn_detection_still_uses_default_stop_history(self) -> None:
-        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "true"}):
-            stt = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
+    def test_builder_uses_default_stop_history(self) -> None:
+        stt = build_nvidia_stt_service(asr_kwargs={"use_ssl": False})
+        self.assertIsInstance(stt, NvidiaForceEouSTTService)
         self.assertEqual(stt._stop_history, DEFAULT_STOP_HISTORY_MS)
 
 

@@ -206,7 +206,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if fixed_session_language:
         asr_kwargs["settings"] = NvidiaSTTSettings(language=fixed_session_language)
-    stt = build_nvidia_stt_service(asr_kwargs=asr_kwargs, asr_model=asr_model)
+    stt = build_nvidia_stt_service(asr_kwargs=asr_kwargs)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={fixed_session_language}"
