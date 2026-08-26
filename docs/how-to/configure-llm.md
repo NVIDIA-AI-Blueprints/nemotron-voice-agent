@@ -81,13 +81,13 @@ Update each service's `device_ids` under `deploy.resources.reservations.devices`
 
 ### Deployment tuning parameters
 
-Single-GPU Compose services select precision and VRAM utilization automatically. Use `.env` only for the optional headroom or utilization override. Standard NIM Server deployments also use hardware-aware automatic profile selection; only specialized recipes such as `server-perf` pin a selector.
+Single-GPU Compose services select precision and VRAM utilization automatically. Use `.env` only for the optional headroom or utilization override. Standard NIM Server deployments also use hardware-aware automatic profile selection. Only specialized recipes such as `server-perf` pin a selector.
 
 | Controls | NIM (`.env`) | Single-GPU vLLM | Notes |
 |----------|--------------|--------------------------|-------|
 | **VRAM fit** | `NIM_KVCACHE_PERCENT` (default `0.6`) | `VLLM_VRAM_HEADROOM_MIB` (default `4096`) and optional `VLLM_GPU_MEMORY_UTILIZATION` override | vLLM calculates the utilization from free memory by default. |
-| **Precision** | Automatic for standard `*/server`; `server-perf` pins `NIM_TAGS_SELECTOR=precision=nvfp4,tp=2` | Selected automatically from GPU compute capability | NVFP4 needs Blackwell or later. On older hardware, choose a compatible profile listed by the NIM image. |
-| **Hardware / scaling (TP)** | Automatic from the visible GPUs for standard `*/server`; pinned to TP2 for `server-perf` | `--tensor-parallel-size N` | A pinned TP=N profile needs N visible `device_ids`. Merely exposing N GPUs does not guarantee automatic selection will use all of them. |
+| **Precision** | Automatic for standard `*/server`. `server-perf` pins `NIM_TAGS_SELECTOR=precision=nvfp4,tp=2` | Selected automatically from GPU compute capability | NVFP4 needs Blackwell or later. On older hardware, choose a compatible profile listed by the NIM image. |
+| **Hardware / scaling (TP)** | Automatic from the visible GPUs for standard `*/server`. Pinned to TP2 for `server-perf` | `--tensor-parallel-size N` | A pinned TP=N profile needs N visible `device_ids`. Merely exposing N GPUs does not guarantee automatic selection will use all of them. |
 | **Context length** | `NIM_MAX_MODEL_LEN` (default `32768`) | `--max-model-len` | Larger context costs more KV-cache VRAM. |
 | **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` | Max concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this (e.g. `64`–`128`). |
 | **Explicit profile** | `NIM_MODEL_PROFILE=<id>` | n/a | Pin a specific NIM profile instead of auto-selection. |
@@ -96,7 +96,7 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4 or FP8 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 
-**Pick a NIM model profile.** Standard `*/server` leaves the selector unset, and NIM chooses a compatible profile from the detected GPU and manifest. List what's compatible, then optionally pin one with `NIM_MODEL_PROFILE`. The `server-perf` recipe is an explicit exception that pins NVFP4 TP2; replace that selector with BF16 or another listed TP2 profile on non-Blackwell hardware:
+**Pick a NIM model profile.** Standard `*/server` leaves the selector unset, and NIM chooses a compatible profile from the detected GPU and manifest. List what's compatible, then optionally pin one with `NIM_MODEL_PROFILE`. The `server-perf` recipe is an explicit exception that pins NVFP4 TP2. Replace that selector with BF16 or another listed TP2 profile on non-Blackwell hardware:
 
 ```bash
 docker run --rm --gpus all \
