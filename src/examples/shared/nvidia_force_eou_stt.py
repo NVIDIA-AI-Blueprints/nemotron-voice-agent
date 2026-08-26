@@ -15,7 +15,6 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.stt import AudioChunkIterator, NvidiaSTTService
 
 from examples.shared.stt_finalize_frame import STTFinalizeFrame
-from utils import parse_env_bool
 
 try:
     import riva.client.proto.riva_asr_pb2 as rasr
@@ -25,38 +24,23 @@ except ModuleNotFoundError as e:
 
 # 80 ms of silence matches Nemotron ASR's endpointing frame size.
 FORCE_EOU_SILENCE_SECS = 0.08
-# NVIDIA recommends a high stop_history when the client drives EOU.
-NEMOTRON_FORCE_EOU_STOP_HISTORY_MS = 4500
+# Same 400 ms window as the rest of the repo. Smart Turn may flush earlier via
+# force_eou; other stop strategies still finalize from this silence window.
 DEFAULT_STOP_HISTORY_MS = 400
 
 
-def stop_history_for_asr_model(asr_model: str | None = "") -> int:
-    """Return ASR ``stop_history`` (ms) for the active model.
-
-    Smart Turn sends ``force_eou`` on COMPLETE, so Nemotron silence
-    endpointing is raised to 4500 ms. Pure Silero VAD turn detection
-    (``USE_SILERO_VAD_TURN_DETECTION=true``, including
-    ``generic-assistant/server-perf``) never sends ``force_eou``, so it
-    keeps the 400 ms window. Cloud Parakeet CTC/RNNT ignore ``force_eou``
-    and also keep 400 ms. The local Nemotron NIM reports as
-    ``cache-aware-parakeet-rnnt-*`` and still honors ``force_eou``.
-    """
-    if parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
-        return DEFAULT_STOP_HISTORY_MS
-    model = (asr_model or "").lower()
-    if "parakeet" in model and "cache-aware" not in model:
-        return DEFAULT_STOP_HISTORY_MS
-    return NEMOTRON_FORCE_EOU_STOP_HISTORY_MS
-
-
 def build_nvidia_stt_service(*, asr_kwargs: dict, asr_model: str = "") -> NvidiaForceEouSTTService:
-    """Construct the cascaded-pipeline STT service with force-EOU support."""
-    stop_history = stop_history_for_asr_model(asr_model)
-    vad_turns = parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False)
-    logger.info(f"ASR stop_history={stop_history}ms (model={asr_model or 'default'}, silero_vad_turns={vad_turns})")
+    """Construct the cascaded-pipeline STT service with optional force-EOU support.
+
+    ``stop_history`` stays at 400 ms so Silero VAD / ``server-perf`` (and any
+    stop strategy that does not push :class:`STTFinalizeFrame`) still get a
+    normal ASR final. Our Smart Turn strategy can additionally send
+    ``force_eou`` to flush sooner than that window.
+    """
+    logger.info(f"ASR stop_history={DEFAULT_STOP_HISTORY_MS}ms (model={asr_model or 'default'})")
     return NvidiaForceEouSTTService(
         **asr_kwargs,
-        stop_history=stop_history,
+        stop_history=DEFAULT_STOP_HISTORY_MS,
     )
 
 
@@ -70,8 +54,9 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
 
     ``STTService.request_finalize()`` only marks TTFB metrics; NVIDIA already
     sets ``TranscriptionFrame.finalized`` from ``is_final``. This subclass
-    queues trailing silence and attaches ``runtime_config.force_eou`` to that
-    chunk so already-buffered speech is sent first.
+    only reacts to :class:`STTFinalizeFrame` from
+    :class:`ForceEouSmartTurnStopStrategy`. Other stop strategies never push
+    that frame, so ASR keeps working from the default 400 ms ``stop_history``.
     """
 
     def __init__(self, *args, **kwargs):

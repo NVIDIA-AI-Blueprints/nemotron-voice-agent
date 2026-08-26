@@ -15,55 +15,29 @@ from riva.client.proto import riva_asr_pb2 as rasr
 from examples.shared.nvidia_force_eou_stt import (
     DEFAULT_STOP_HISTORY_MS,
     FORCE_EOU_SILENCE_SECS,
-    NEMOTRON_FORCE_EOU_STOP_HISTORY_MS,
     NvidiaForceEouSTTService,
     build_nvidia_stt_service,
-    stop_history_for_asr_model,
 )
 from examples.shared.stt_finalize_frame import STTFinalizeFrame
 
 
-class StopHistoryForAsrModelTests(unittest.TestCase):
-    def test_nemotron_and_default_raise_stop_history(self) -> None:
-        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
-            self.assertEqual(stop_history_for_asr_model(""), NEMOTRON_FORCE_EOU_STOP_HISTORY_MS)
-            self.assertEqual(
-                stop_history_for_asr_model("nemotron-asr-streaming"),
-                NEMOTRON_FORCE_EOU_STOP_HISTORY_MS,
-            )
+class StopHistoryTests(unittest.TestCase):
+    def test_builder_always_uses_default_stop_history(self) -> None:
+        nemotron = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
+        parakeet = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="parakeet-ctc")
+        cache_aware = build_nvidia_stt_service(
+            asr_kwargs={"use_ssl": False},
+            asr_model="cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer",
+        )
+        self.assertIsInstance(nemotron, NvidiaForceEouSTTService)
+        self.assertEqual(nemotron._stop_history, DEFAULT_STOP_HISTORY_MS)
+        self.assertEqual(parakeet._stop_history, DEFAULT_STOP_HISTORY_MS)
+        self.assertEqual(cache_aware._stop_history, DEFAULT_STOP_HISTORY_MS)
 
-    def test_parakeet_keeps_short_stop_history(self) -> None:
-        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
-            self.assertEqual(stop_history_for_asr_model("parakeet-ctc"), DEFAULT_STOP_HISTORY_MS)
-            self.assertEqual(
-                stop_history_for_asr_model("parakeet-1.1b-rnnt-multilingual"),
-                DEFAULT_STOP_HISTORY_MS,
-            )
-
-    def test_local_nemotron_nim_name_is_not_treated_as_parakeet(self) -> None:
-        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
-            self.assertEqual(
-                stop_history_for_asr_model("cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"),
-                NEMOTRON_FORCE_EOU_STOP_HISTORY_MS,
-            )
-
-    def test_silero_vad_turn_detection_keeps_short_stop_history(self) -> None:
+    def test_silero_vad_turn_detection_still_uses_default_stop_history(self) -> None:
         with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "true"}):
-            self.assertEqual(stop_history_for_asr_model("nemotron-asr-streaming"), DEFAULT_STOP_HISTORY_MS)
-            self.assertEqual(
-                stop_history_for_asr_model("cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"),
-                DEFAULT_STOP_HISTORY_MS,
-            )
-            vad = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
-            self.assertEqual(vad._stop_history, DEFAULT_STOP_HISTORY_MS)
-
-    def test_builder_applies_model_specific_stop_history(self) -> None:
-        with patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "false"}):
-            nemotron = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
-            parakeet = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="parakeet-ctc")
-            self.assertIsInstance(nemotron, NvidiaForceEouSTTService)
-            self.assertEqual(nemotron._stop_history, NEMOTRON_FORCE_EOU_STOP_HISTORY_MS)
-            self.assertEqual(parakeet._stop_history, DEFAULT_STOP_HISTORY_MS)
+            stt = build_nvidia_stt_service(asr_kwargs={"use_ssl": False}, asr_model="nemotron-asr-streaming")
+        self.assertEqual(stt._stop_history, DEFAULT_STOP_HISTORY_MS)
 
 
 class ForceEouStreamingRequestTests(unittest.TestCase):
@@ -144,6 +118,17 @@ class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
 
         stt.request_force_eou.assert_awaited_once()
         stt.push_frame.assert_not_awaited()
+
+    async def test_non_finalize_frames_do_not_request_force_eou(self) -> None:
+        stt = self._service()
+        stt.request_force_eou = AsyncMock()
+        parent = AsyncMock()
+
+        with patch("examples.shared.nvidia_force_eou_stt.NvidiaSTTService.process_frame", parent):
+            await stt.process_frame(object(), FrameDirection.DOWNSTREAM)
+
+        stt.request_force_eou.assert_not_awaited()
+        parent.assert_awaited_once()
 
     async def test_request_force_eou_is_a_no_op_without_an_active_stream(self) -> None:
         stt = self._service()
