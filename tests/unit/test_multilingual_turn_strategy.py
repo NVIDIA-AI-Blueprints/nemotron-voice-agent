@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import TranscriptionUserTurnStartStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
 
 from examples.multilingual.pipeline import (
     _build_multilingual_user_aggregator_params,
@@ -136,6 +137,12 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
 
         self.assertIsInstance(params.vad_analyzer, _FakeVADAnalyzer)
         _assert_vad_only_start(self, params.user_turn_strategies)
+        assert params.user_turn_strategies is not None
+        self.assertEqual(len(params.user_turn_strategies.stop), 1)
+        self.assertIsInstance(params.user_turn_strategies.stop[0], SpeechTimeoutUserTurnStopStrategy)
+        self.assertFalse(
+            any(isinstance(strategy, ForceEouSmartTurnStopStrategy) for strategy in params.user_turn_strategies.stop)
+        )
 
     def test_eval_transport_skips_language_prewarm(self) -> None:
         to_thread = AsyncMock()
