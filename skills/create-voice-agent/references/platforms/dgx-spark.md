@@ -4,7 +4,7 @@ Read when `preflight.md` classifies the target as `dgx_spark`. DGX Spark uses th
 self-hosted NIM workflow in `platforms/deployment.md`, subject to the support matrix for
 the locked model and profile.
 
-## Before proposing
+## Before Proposing
 
 1. Confirm the machine is DGX Spark / GB10 from DMI and `nvidia-smi`.
 2. Use unified memory reported as available by the probe, not the advertised 128 GB.
@@ -45,7 +45,7 @@ or move a speech slot to cloud.
 - `scripts/smoke.sh` passes before the agent starts.
 - A full spoken exchange succeeds before handover (`operations/run.md`).
 
-## Anti-patterns
+## Anti-Patterns
 
 - Assuming every NIM supports GB10 because another model does.
 - Reusing a workstation image or profile without matrix verification.

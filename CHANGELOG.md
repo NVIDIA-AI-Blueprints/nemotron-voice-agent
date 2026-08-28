@@ -6,11 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.0] - TBD
 
-Minor release adding Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support, universal `*/single-gpu` recipes with the NeMo-Speech.cpp stack, an OpenAI Realtime-compatible WebSocket gateway, and the `create-voice-agent` skill. Consolidates on-prem deployment under `*/server` and `*/single-gpu`, upgrades Pipecat to 1.7.0, and removes the platform-specific recipes and Nemotron 3 Nano cascaded LLM.
+This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support, universal `*/single-gpu` recipes with the NeMo-Speech.cpp stack, an OpenAI Realtime-compatible WebSocket gateway, and the `create-voice-agent` skill. It consolidates on-prem deployment under `*/server` and `*/single-gpu`, upgrades Pipecat to 1.7.0, and removes the platform-specific recipes and Nemotron 3 Nano cascaded LLM.
 
 ### Added
 
-- **Nemotron 3.5 Lightning** NIM and vLLM sidecars. Single-GPU recipes automatically select NVFP4 or FP8 on supported GPUs, with DSpark speculative decoding on DGX Spark and DFlash on Blackwell workstations.
+- **Nemotron 3.5 Lightning** NIM and vLLM sidecars. Single-GPU recipes automatically select NVFP4, FP8, or BF16 on supported GPUs, with DSpark speculative decoding on DGX Spark and DFlash on Blackwell workstations.
 - **Nemotron 3 Nano Omni NIM** for the Omni `*/server` recipes.
 - **`*/single-gpu` recipes** running the NeMo-Speech.cpp speech stack next to vLLM on one GPU across all examples.
 - **`scripts/download-nemo-speech-models.sh`** for one-time NeMo-Speech.cpp GGUF setup on single-GPU hosts.
@@ -100,7 +100,7 @@ Re-architecture by upstreaming `nvidia-pipecat` changes to [Pipecat](https://git
 
 - Pipecat is used directly and upgraded **0.0.98 → 1.3.0**.
 - Enabled Pipecat smart turn detection model as default turn taking solution replacing Silero VAD based silence EOU.
-- **Recipe-style Compose profiles**: `<example>` (cloud-only) and `<example>/<hardware>` (on-prem, e.g. `generic-assistant/dgx-spark`, `omni-assistant/jetson-thor`). Each is a complete, self-contained stack. `tracing` (Phoenix OTel) and `turn` (Coturn) remain optional overlays.
+- **Recipe-style Compose profiles**: `<example>` (cloud-only) and `<example>/<hardware>` (on-prem, for example `generic-assistant/dgx-spark`, `omni-assistant/jetson-thor`). Each is a complete, self-contained stack. `tracing` (Phoenix OTel) and `turn` (Coturn) remain optional overlays.
 
 ### Removed
 
@@ -121,12 +121,12 @@ Initial release of Nemotron Voice Agent — an end-to-end voice agent blueprint 
   - [Parakeet CTC 1.1B](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) (English ASR)
   - [Parakeet 1.1B RNNT](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) (Multilingual ASR)
   - [Magpie TTS Multilingual](https://build.nvidia.com/nvidia/magpie-tts-multilingual/modelcard)
-- NVIDIA Nemotron LLMs via NVIDIA NIM:
+- NVIDIA Nemotron LLMs using NVIDIA NIM:
   - [Nemotron 3 Nano 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard)
   - [Llama 3.3 Nemotron Super 49B v1.5](https://build.nvidia.com/nvidia/llama-3_3-nemotron-super-49b-v1_5/modelcard)
 - WebRTC transport for real-time, low-latency voice communication with a custom frontend UI
 - Docker Compose deployment with optional TURN server support for remote access
-- Multilingual support with automatic language detection and seamless mid-conversation language switching
+- Multilingual support with automatic language detection and mid-conversation language switching
 - Jetson Thor edge deployment support
 - Pipeline customizations using environment variables and config files
   - ASR, LLM, TTS model change

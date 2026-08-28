@@ -27,7 +27,7 @@ Every card lists the languages the model supports, and that list is usually shor
 speech coverage around it. Check the approved response language against it through
 `models/language-routing.md` §LLM before locking this slot.
 
-### Resolve three names
+### Resolve Three Names
 
 The catalog slug, the container image, and the served model id are three different
 strings. Treating them as one causes `Access Denied` on pull and a wrong model id at
@@ -49,7 +49,7 @@ Query the NIM port for self-hosted, or `https://integrate.api.nvidia.com/v1/mode
 cloud. Drop `embed`, `guard`, and `vlm` entries. If nothing is up yet, use the cloud
 listing and re-check after start.
 
-## Reasoning (voice default: off)
+## Reasoning (Voice Default: Off)
 
 Model default is **on** (`enable_thinking: true` when omitted). That burns turn latency
 and can leak into TTS (`<think>`, silence, `redacted_thinking`).
@@ -59,12 +59,12 @@ and can leak into TTS (`<think>`, silence, `redacted_thinking`).
 | off (propose this) | normal voice agent |
 | on, budget 8192 | user asked hard multi-step / specialized. Warn if budget > 16384 |
 
-Verify on the locked model’s API ref, e.g.
+Verify on the locked model's API reference, for example:
 [Lightning](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-5-lightning-30b-a3b) ·
 [NIM reasoning](https://docs.nvidia.com/nim/large-language-models/latest/reasoning-model.html).
 
 The model's own build.nvidia.com page is the fastest check. Its prototype panel shows a
-runnable request for that exact model, including where the reasoning fields sit, e.g.
+runnable request for that exact model, including where the reasoning fields sit. For example, use
 [Lightning](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b). Read that example and the
 API reference before generating the request, because field names and nesting move between
 model generations.
@@ -99,24 +99,22 @@ card commonly gives separate values for reasoning, for reasoning off, and for to
 so take the set that matches the approved row rather than reusing one. Toggle = edit
 constants + restart, not mid-session, unless the framework docs say otherwise.
 
-### Reasoning parser
+### Reasoning Parser
 
-A card's serve command is written for a reasoning-enabled endpoint, and its reasoning-off
-example changes only the request. The parser is a serve-time flag whose documented job is to
-move thinking out of `content` into a separate `reasoning_content` field. TTS reads
-`content`, so a parser left enabled with thinking off can deliver empty `delta.content`
-while the server reports success, and the agent goes mute with no error in any log.
+A model card's serve command can enable the reasoning parser independently of each request's
+thinking mode. Keep the parser enabled for both modes. It separates thinking from `content`
+when reasoning is on and applies the model's reasoning-off contract when
+`enable_thinking:false`. TTS must read only `content`.
 
-| Reasoning row | Serve flags |
-| --- | --- |
-| off (voice default) | omit the parser and its plugin file |
-| on | enable the parser the locked card names, and keep `reasoning_content` away from TTS |
+| Reasoning Mode | Serve Flags | Request Setting |
+| --- | --- | --- |
+| Off (voice default) | Enable the parser required by the locked model card | Set `extra_body.chat_template_kwargs.enable_thinking` to `false` |
+| On | Enable the parser required by the locked model card | Set `extra_body.chat_template_kwargs.enable_thinking` to `true`, and keep `reasoning_content` away from TTS |
 
-Dropping the parser is the one sanctioned removal from a card's launch command (§Serve
-flags). Parser names and plugin requirements are not shared across this family, so read the
-row for the exact model and server you actually run:
+Parser names and plugin requirements are not shared across this family. Read the row for the
+exact model and server you run:
 
-| Locked model and server | Currently documented |
+| Locked Model and Server | Current Parser Flag |
 | --- | --- |
 | Cascaded Lightning on vLLM | `--reasoning-parser nemotron_v3` (built-in, no plugin file) |
 | Omni NVFP4 on vLLM | `--reasoning-parser nemotron_v3` |
@@ -126,11 +124,11 @@ separate parser-plugin file, it must be downloaded and present before the server
 Confirm the parser and any plugin from the model card for the server you run, and never
 adapt a vLLM row for a different server such as SGLang.
 
-Prove the result on the streaming endpoint. `scripts/smoke.sh` asserts non-empty
-`delta.content` and empty or absent `delta.reasoning_content` (`output-contract.md`
-§Smoke before client). One non-streaming answer does not prove it.
+Prove the result on the streaming endpoint in both modes. `scripts/smoke.sh` asserts
+non-empty `delta.content` and empty or absent `delta.reasoning_content` when reasoning is
+off (`output-contract.md` §Smoke Before Client). One non-streaming answer does not prove it.
 
-## Serve flags
+## Serve Flags
 
 Every serve-time flag must trace to one of three sources: the locked model card, the memory
 controls in §Tight fit, or a fatal log line that names the flag. Nothing else belongs on the
@@ -144,18 +142,18 @@ speculative flag then has to be reverted, and a revert is indistinguishable from
 When a flag looks necessary, name the log line that requires it, change that one thing, and
 rerun `scripts/smoke.sh` before touching anything else.
 
-## Platform fit (self-hosted)
+## Platform Fit (Self-Hosted)
 
 Hardware first from `preflight.md`. Never propose model / precision / TP until verified
 for the probed GPU.
 
-### 1. Support matrix HTML
+### 1. Support Matrix HTML
 
 Fetch HTML only (not UI dropdowns, not `.html.md`):
 
 `https://docs.nvidia.com/nim/large-language-models/latest/reference/support-matrix.html`
 
-Match rows via `data-model`, `data-precision`, `data-tp`, `data-gpus`. Normalize the
+Match rows using `data-model`, `data-precision`, `data-tp`, and `data-gpus`. Normalize the
 probed name (`NVIDIA H100 80GB HBM3` → `NVIDIA-H100-80GB-HBM3`). Keep a row only when
 short name, precision, and SKU all match. No row → unsupported. Pick another precision,
 TP, model, or cloud. Do not guess a close SKU.
@@ -168,7 +166,7 @@ TP, model, or cloud. Do not guess a close SKU.
 
 “Verified GPUs” under a section is overall. It does not replace per-row `data-gpus`.
 
-### 2. `list-model-profiles` and `NIM_MODEL_PROFILE`
+### 2. Select a NIM Model Profile
 
 Before proposal, use the support matrix to select a candidate profile and mark shared-GPU
 fit provisional. After the user approves self-hosting and container readiness passes, run
@@ -213,7 +211,7 @@ together.
 Docs:
 [model profiles and selection](https://docs.nvidia.com/nim/large-language-models/latest/deployment/model-profiles-and-selection.html).
 
-### 3. Precision + weights (planning only)
+### 3. Precision and Weights for Planning
 
 Matrix / container win over these hints.
 
@@ -223,7 +221,7 @@ Matrix / container win over these hints.
 | Ada / Hopper (CC ≥ 8.9) | NVFP4 when Compatible, else the lightest Compatible profile (W4A16 for Lightning, FP8 for Super / Ultra) |
 | Ampere and older | W4A16 for Lightning, otherwise BF16 (large, often needs its own GPU) |
 
-Precision is a tag inside `NIM_MODEL_PROFILE` (e.g. `vllm-bf16-tp1-pp1`), not a separate
+Precision is a tag inside `NIM_MODEL_PROFILE`, for example `vllm-bf16-tp1-pp1`, not a separate
 env. The Compatible profile listing wins over this planning table. Lightning NVFP4 requires
 Blackwell (SM 10.0+), so Ampere and Hopper hosts use W4A16 rather than FP8. Read the row
 rather than assuming a precision exists.
@@ -239,7 +237,7 @@ The support matrix lists exact min VRAM per GPU per precision and TP; use it ove
 estimates. Super / Ultra: on one workstation GPU, say they will not fit. Offer Lightning
 local or that model in the cloud. Do not silently substitute.
 
-### 4. Tight fit
+### 4. Tight Fit
 
 Apply this section to every shared single-GPU layout, not only after an OOM.
 
@@ -300,7 +298,7 @@ Sources:
 
 Do not choose a knob from the pipeline name. Choose it from the actual server path.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Voice agent with reasoning left at model default (on).
 - Reasoning parser or plugin left enabled while the reasoning row is off.

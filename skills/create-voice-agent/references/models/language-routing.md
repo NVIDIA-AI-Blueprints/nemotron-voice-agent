@@ -4,7 +4,7 @@ Read for every build before locking input speech, the LLM, and TTS. This file ma
 user's spoken language to supported model locales. Domain vocabulary remains in
 `domain/speech-customization.md`.
 
-## Lock the route
+## Lock the Route
 
 Record:
 
@@ -27,7 +27,7 @@ ASR matrix.
 For example, Hindi may resolve to `hi-IN` only when both selected speech paths list that
 exact locale. Do not invent a regional code from the language name.
 
-## Fixed or automatic
+## Fixed or Automatic
 
 Use a fixed locale when the user names one language. It is the predictable, low-latency
 default.
@@ -91,7 +91,7 @@ model, locale, or response language.
 For multilingual conversations, choose the matching approved voice per response locale.
 Do not send text in one language to a voice exposed only for another.
 
-## Generated project
+## Generated Project
 
 Keep supported locales, routing rules, and voice ids in code or checked-in configuration,
 not `.env`. The README must list the supported input and output languages and whether

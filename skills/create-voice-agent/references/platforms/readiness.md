@@ -38,7 +38,7 @@ does not pass this check.
 If the command fails, stop before NIM, vLLM, or Riva pulls. Point to NVIDIA Container
 Toolkit installation or Docker runtime configuration based on the actual error.
 
-## 3. Storage and cache paths
+## 3. Storage and Cache Paths
 
 Get Docker's storage root with:
 
@@ -61,7 +61,7 @@ For each host-mounted cache:
 Do not replace an existing cache, change ownership recursively, or delete files to make
 space. Report the required path and available space when the check fails.
 
-## 4. Credentials and registry
+## 4. Credentials and Registry
 
 Reconfirm the required keys from `preflight.md` without printing them. Use the current
 build.nvidia.com login instructions for NGC. A registry authentication failure is a hard
@@ -79,7 +79,7 @@ When the routed platform is Jetson Thor, also require:
 The repository itself is produced later by the one-time `riva_init.sh` step. Require it to
 exist before starting the generated `riva` service, not before generating the project.
 
-## Pass condition
+## Pass Condition
 
 Proceed to exact local profile discovery, `output-contract.md`, and the routed deployment
 guide only when:

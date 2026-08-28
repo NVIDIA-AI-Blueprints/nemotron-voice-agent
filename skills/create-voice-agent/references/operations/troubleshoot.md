@@ -10,10 +10,10 @@ broken stage. Do not change multiple layers at once.
 2. Confirm every required local service is ready.
 3. Trace one turn in order:
 
-```text
-cascaded: client → transport → turn detection → ASR → LLM → TTS → transport → client
-omni:      client → transport → turn detection → Omni → TTS → transport → client
-```
+   ```text
+   cascaded: client → transport → turn detection → ASR → LLM → TTS → transport → client
+   omni:      client → transport → turn detection → Omni → TTS → transport → client
+   ```
 
 4. Query the selected framework's documentation MCP before changing framework APIs.
 5. Make one minimal fix, restart the affected process, and repeat `operations/run.md`.
@@ -22,7 +22,7 @@ Do not add a serve flag the model card does not list unless a fatal log names it
 (`models/llm.md` §Serve flags). A speculative flag has to be reverted later, and the revert
 looks exactly like a fix.
 
-## Quick index
+## Quick Index
 
 | Symptom | Check first |
 | --- | --- |
@@ -31,7 +31,7 @@ looks exactly like a fix.
 | Speech service stuck starting on first boot | download and engine-build logs, cache mount |
 | LLM is healthy but TTS / ASR OOM | LLM profile, context, runtime memory cap, TTS batch |
 | Smoke fails constructing a service | API-key argument, `extra_body` shape, framework file |
-| Agent runs and stays mute with no error | reasoning parser enabled while reasoning is off |
+| Agent runs and stays mute with no error | reasoning parser, request mode, and streamed `content` |
 | Browser does not connect | framework client path, microphone permission, transport |
 | User speech is not detected | input audio frames, VAD, end-of-turn |
 | No transcript (cascaded) | streaming ASR endpoint and language |
@@ -43,7 +43,7 @@ looks exactly like a fix.
 | Slow response | stage timings, reasoning, ASR mode, model fit |
 | Cannot interrupt | VAD, user-turn strategy, interruption frames |
 
-## Startup and services
+## Startup and Services
 
 - Docker, Compose, in-container GPU, or cache-path failure: rerun
   `platforms/readiness.md` before changing model configuration.
@@ -85,12 +85,12 @@ looks exactly like a fix.
 - Riva on Thor cannot read its models: assert where `riva_init.sh` actually wrote the
   repository and whether it is root-owned, then check that the Enterprise variables are all
   set or all unset. See `platforms/jetson-thor.md` §Model path and credentials.
-- Reply text never reaches TTS and no log shows an error: the reasoning parser is splitting
-  output into `reasoning_content` while thinking is off. Omit the parser and its plugin,
-  then reassert streaming `delta.content` through `scripts/smoke.sh`. See `models/llm.md`
-  §Reasoning parser.
+- Reply text never reaches TTS and no log shows an error: confirm that the serve command
+  keeps the reasoning parser required by the locked model card and that the request sets
+  `enable_thinking:false`. Reassert non-empty streaming `delta.content` through
+  `scripts/smoke.sh`. See `models/llm.md` §Reasoning Parser.
 
-## Input and transport
+## Input and Transport
 
 First confirm the client has microphone permission and the agent receives audio frames.
 Then confirm VAD sees speech and emits a completed user turn.
@@ -102,7 +102,7 @@ Then confirm VAD sees speech and emits a completed user turn.
 - Pipecat ICE, TURN, NAT, browser, or one-way-audio issue: follow
   `networking/remote-webrtc.md` before changing network configuration.
 
-## Cascaded pipeline
+## Cascaded Pipeline
 
 If VAD sees speech but no transcript appears:
 
@@ -128,7 +128,7 @@ phrase, approved score, locked model support, and framework wiring before changi
 - Works in one language only: verify every advertised language exists on both input and
   TTS paths. Multilingual ASR or Omni does not imply multilingual TTS.
 
-## Omni pipeline
+## Omni Pipeline
 
 Confirm the project copied the current upstream
 `nvidia_omni_multimodal_service.py` and instantiates `NvidiaOmniMultimodalService`.
@@ -145,7 +145,7 @@ If TTS receives JSON or transcript metadata, verify structured-response and
 field. If it receives reasoning, keep reasoning off through `models/llm.md`. Return to
 `frameworks/omni.md` before changing the pipeline.
 
-## TTS and return audio
+## TTS and Return Audio
 
 If reply text exists:
 
@@ -158,7 +158,7 @@ Do not debug ASR when reply text already exists. The failure is downstream.
 For a wrong domain pronunciation, verify the approved IPA and current TTS customization
 format before changing the voice.
 
-## Latency and interruption
+## Latency and Interruption
 
 Measure each stage before tuning. Check ASR finalization, LLM/Omni time to first token,
 TTS time to first audio, and transport delay separately.
@@ -167,7 +167,7 @@ Keep reasoning off unless approved. Never switch streaming ASR to offline to fix
 accuracy. For VAD, end-of-turn, or interruption changes, query the framework docs MCP and
 change one setting at a time.
 
-## Stop when
+## Stop When
 
 - The required documentation MCP is unavailable and the fix needs framework API changes.
 - The locked model/profile is unsupported on the probed hardware.

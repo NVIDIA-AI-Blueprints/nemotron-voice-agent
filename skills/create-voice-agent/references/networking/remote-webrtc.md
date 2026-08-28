@@ -3,7 +3,7 @@
 Read when the browser and Pipecat agent are on different machines or networks. Localhost
 testing does not prove remote media will work.
 
-## Choose the path
+## Choose the Path
 
 | Situation | Path |
 | --- | --- |
@@ -16,7 +16,7 @@ testing does not prove remote media will work.
 An SSH tunnel can carry HTTPS or WebSocket signaling. It does not make the remote GPU
 host's UDP media reachable. WebRTC still needs a direct ICE path or TURN.
 
-## Source of truth
+## Source of Truth
 
 Read the current Pipecat
 [Small WebRTC ICE configuration](https://docs.pipecat.ai/api-reference/server/services/transport/small-webrtc)
@@ -28,7 +28,7 @@ custom TURN server from `bot.py`. For coturn, generate a signaling server that c
 `SmallWebRTCConnection` with the documented `ice_servers` configuration. Do not patch a
 TURN URL into the default runner and assume it is used.
 
-## coturn
+## Coturn
 
 Run coturn on a host reachable from both browser and agent. Follow the current coturn and
 network-provider documentation for installation and hardening. Configure:
@@ -47,7 +47,7 @@ Use `turn:` for UDP/TCP relay candidates and `turns:` for TLS according to the c
 deployment. Prefer direct or UDP relay candidates. TCP/TLS relay is a compatibility
 fallback and adds latency.
 
-## Generated project
+## Generated Project
 
 When custom TURN is selected, `output-contract.md` must produce:
 
@@ -75,13 +75,13 @@ Generate a coturn Compose service only when this project owns the TURN deploymen
 derive it from current coturn deployment documentation. Otherwise document the external
 TURN endpoint. Do not duplicate infrastructure the user already has.
 
-## Browser security
+## Browser Security
 
 Remote microphone access requires a secure browser context. Serve the client and signaling
 endpoint over HTTPS with a valid certificate. `localhost` is the development exception.
 Do not tell the user to bypass browser security warnings for production.
 
-## WebSocket fallback
+## WebSocket Fallback
 
 Keep WebSocket available when intake selected both transports. It is a useful fallback
 when corporate networks block UDP, but it is not a TURN replacement for WebRTC.
@@ -99,7 +99,7 @@ WebSocket transport. Do not claim that an HTTP tunnel makes WebRTC media remote-
 6. Return to normal ICE policy after the relay-only test.
 7. Complete the spoken exchange in `operations/run.md`.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Exposing only the signaling port and assuming media uses it.
 - Putting coturn credentials in source code.

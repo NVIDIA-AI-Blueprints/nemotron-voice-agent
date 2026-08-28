@@ -3,7 +3,7 @@
 Read after the user approves the table and the framework row says Pipecat. Covers both
 pipeline shapes. Omni has extra requirements on top, in `frameworks/omni.md`.
 
-## Code comes from the MCP
+## Code Comes from the MCP
 
 This skill ships no `bot.py`, no skeleton, and no template. Pipeline code is generated from
 the Pipecat docs MCP. Discover it by capability first. The server is commonly exposed as
@@ -20,7 +20,7 @@ Never write a Pipecat import, class name, or API call from memory. If a query fa
 comes back empty, say so and stop. Do not fill the gap with a guess, because a plausible
 wrong import costs the user more time than a missing file.
 
-### When the MCP is not available
+### When the MCP Is Not Available
 
 Ask the user to add `https://daily-docs.mcp.kapa.ai` to their coding agent's MCP
 configuration as a remote server named `pipecat-docs`, enable it, and reload the agent
@@ -29,12 +29,12 @@ session. Wait for the user to continue, then discover the server by capability.
 If the user cannot enable it, ask them to explicitly approve the less reliable
 `docs.pipecat.ai/llms.txt` fallback. Never fall back silently.
 
-## What gets written
+## What Gets Written
 
 Write one `bot.py`. Follow `output-contract.md` for the rest of the project and any
 generated Compose services.
 
-## Local LLM wiring
+## Local LLM Wiring
 
 Cascaded only, and it covers any local endpoint, whether that is a NIM or raw vLLM on
 Jetson Thor. Omni follows `frameworks/omni.md`. Two failures here cost a full connect
@@ -57,7 +57,7 @@ MCP, then verify the shape in the smoke test rather than at the browser.
 The model string is the runtime model id from `GET /v1/models`, not the catalog slug
 (`models/llm.md` §Resolve three names).
 
-## Transport wiring
+## Transport Wiring
 
 The transport row is already settled by `intake.md`. It controls transport parameters,
 package extras, and the runner `-t` flag. The runner flag is the usual failure.
@@ -83,7 +83,7 @@ fall back to WebSocket without rebuilding the project.
 For remote browsers, NAT traversal, coturn, or a separate GPU host, follow
 `networking/remote-webrtc.md`.
 
-## Verify before handover
+## Verify Before Handover
 
 `scripts/smoke.sh` must pass before the runner starts.
 
@@ -93,13 +93,13 @@ transports, and for the both case that list must include `webrtc` and `websocket
 
 Full startup and connection steps are in `operations/run.md`.
 
-## After it runs
+## After It Runs
 
 Re-query the MCP before changing any Pipecat API. Workstation / DGX NIM profile changes
-return to the `list-model-profiles` and `NIM_MODEL_PROFILE` section in `models/llm.md`.
+return to **Select a NIM Model Profile** in `models/llm.md`.
 Jetson Thor returns to its model card and platform guide.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Passing `-t webrtc` when the user chose both transports.
 - Generating a separate bot file per transport.

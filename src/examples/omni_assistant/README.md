@@ -10,11 +10,10 @@ The pattern replaces the separate ASR and text LLM stages with one audio-input L
 
 This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
-1. Create your `.env` from the template and set your NVIDIA API key:
+1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile:
 
    ```bash
-   cp .env.example .env
-   export NVIDIA_API_KEY=<your-nvidia-api-key>
+   test -f .env || cp .env.example .env
    ```
 
    > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
@@ -22,6 +21,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
 2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
 
    ```bash
+   set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 

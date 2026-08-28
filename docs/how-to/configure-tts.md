@@ -16,7 +16,7 @@ TTS services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 
 Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, or `Chatterbox-Multilingual.en-US.Male`. The available voices and emotions depend on the deployed NIM. Refer to [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
-### Supported languages
+### Supported Languages
 
 The client discovers the active TTS service's available voices and language codes at runtime. Treat this table as model-level guidance, because exact availability can vary by endpoint, deployment profile, and selected NIM image.
 
@@ -24,8 +24,8 @@ For the multilingual assistant, this is **TTS-only** coverage, not the final ses
 
 | Model | Supported languages |
 | --- | --- |
-| [Magpie TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#magpie-tts-multilingual) | English (`en-US`) · Spanish (`es-US`) · French (`fr-FR`) · German (`de-DE`) · Italian (`it-IT`) · Vietnamese (`vi-VN`) · Mandarin (`zh-CN`) · Hindi (`hi-IN`) · Japanese (`ja-JP`) · Modern Standard Arabic (`ar-AR`) · Korean (`ko-KR`) · Brazilian Portuguese (`pt-BR`) |
-| [Magpie TTS Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) | English (`en-US`) · Spanish (`es-US`) · French (`fr-FR`) · German (`de-DE`) · Mandarin (`zh-CN`) · Vietnamese (`vi-VN`) · Italian (`it-IT`) · Hindi (`hi-IN`) · Japanese (`ja-JP`) · Modern Standard Arabic (`ar-AR`) · Brazilian Portuguese (`pt-BR`) · Korean (`ko-KR`) |
+| [Magpie TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#magpie-tts-multilingual) | English (`en-US`) · Spanish (`es-US`) · French (`fr-FR`) · German (`de-DE`) · Italian (`it-IT`) · Vietnamese (`vi-VN`) · Mandarin (`zh-CN`) · Hindi (`hi-IN`) · Japanese (`ja-JP`) · Modern Standard Arabic (`ar-XA`) · Korean (`ko-KR`) · Brazilian Portuguese (`pt-BR`) |
+| [Magpie TTS Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) | English (`en-US`) · Spanish (`es-US`) · French (`fr-FR`) · German (`de-DE`) · Mandarin (`zh-CN`) · Vietnamese (`vi-VN`) · Italian (`it-IT`) · Hindi (`hi-IN`) · Japanese (`ja-JP`) · Modern Standard Arabic (`ar-XA`) · Brazilian Portuguese (`pt-BR`) · Korean (`ko-KR`) |
 | [Chatterbox TTS Multilingual](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html#chatterbox-tts-multilingual) | Arabic (`ar-SA`) · Danish (`da-DK`) · German (`de-DE`) · Greek (`el-GR`) · English (`en-US`) · Spanish (`es-ES`) · Finnish (`fi-FI`) · French (`fr-FR`) · Hebrew (`he-IL`) · Hindi (`hi-IN`) · Italian (`it-IT`) · Japanese (`ja-JP`) · Korean (`ko-KR`) · Malay (`ms-MY`) · Dutch (`nl-NL`) · Norwegian (`nb-NO`) · Polish (`pl-PL`) · Brazilian Portuguese (`pt-BR`) · Russian (`ru-RU`) · Swedish (`sv-SE`) · Swahili (`sw-KE`) · Turkish (`tr-TR`) · Mandarin (`zh-CN`) |
 
 For NVIDIA's current model and deployment support details, see the [TTS support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/tts.html).
@@ -34,7 +34,7 @@ For NVIDIA's current model and deployment support details, see the [TTS support 
 >
 > **Streaming only.** The real-time pipeline needs a **streaming** TTS model. The streaming-capable TTS NIMs are **Magpie TTS Multilingual**, **Magpie TTS Zeroshot**, and **Chatterbox TTS Multilingual**. Check the [Pipecat NVIDIA TTS service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/tts.py) for supported request fields and model-specific options.
 
-## Hardware requirements and deployment configs
+## Hardware Requirements and Deployment Configs
 
 TTS runs one of these ways, and the repo wires the right one per profile:
 
@@ -58,7 +58,7 @@ TTS runs one of these ways, and the repo wires the right one per profile:
   Magpie Zeroshot NGC access is restricted — apply at the [Magpie TTS Zeroshot NGC page](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/magpie-tts-zeroshot). For audio-prompt cloning, see [Voice cloning / zero-shot](#voice-cloning--zero-shot).
 - **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, an on-device sidecar serves Magpie TTS from local GGUF weights: `nemo-speech` / `nemo-speech-multilingual` (ASR + TTS together) or `nemo-speech-tts` (TTS only, for Omni). See [Jetson Thor](../03-jetson-thor.md).
 
-### VRAM & hardware support
+### VRAM & Hardware Support
 
 | Model | Typical VRAM | Notes |
 |-------|--------------|-------|
@@ -66,7 +66,7 @@ TTS runs one of these ways, and the repo wires the right one per profile:
 | Magpie TTS Zeroshot | **13.06 GB** GPU / 4.00 GB CPU memory at `batch_size=8` | The default Compose selector is `name=magpie-tts-zeroshot,batch_size=8`. This profile fits the shared H100 layout when Magpie Multilingual is scaled off. |
 | Chatterbox TTS | **44.61 GiB** GPU / 4.86 GiB host memory at `batch_size=8` | The default Compose selector is `name=chatterbox-tts-multilingual,batch_size=8` on GPU `0`. This profile supports A100 80 GB, H100, L40S, and DGX Spark. The A100 40 GB variant does not have enough memory. Chatterbox does **not** fit the Magpie single-80-GB shared layout with LLM + ASR. |
 
-### Performance & scaling
+### Performance & Scaling
 
 `batch_size` is the main TTS throughput knob (`NIM_TAGS_SELECTOR`):
 
@@ -103,7 +103,7 @@ For first-chunk and inter-chunk latency and throughput (RTFX) across GPUs, refer
 
 ## Customization
 
-### Voices & emotions
+### Voices & Emotions
 
 The active voice is the `voice_id` in the catalog entry. The client UI includes a voice selector that discovers the connected service's available voices and languages, so you can switch mid-session. Voice IDs follow each model's naming. For example, use `Magpie-Multilingual.EN-US.Aria`, `Magpie-ZeroShot-Multilingual.Female`, or `Chatterbox-Multilingual.en-US.Male`. Available voices and emotions depend on the deployed NIM and can be discovered at runtime over gRPC or HTTP. Refer to [available voices and emotions](https://docs.nvidia.com/nim/speech/latest/tts/voices.html).
 
@@ -146,18 +146,18 @@ tts:
 
 The catalog hydrates the required `model` and `function_id` fields and the optional `zero_shot_audio_prompt_file` field into the session, then passes them to Pipecat's `NvidiaTTSService`.
 
-### Synthesis mode
+### Synthesis Mode
 
-Pipecat's `NvidiaTTSService` supports two synthesis modes via the catalog field `synthesis_mode`:
+Pipecat's `NvidiaTTSService` supports two synthesis modes through the catalog field `synthesis_mode`:
 
 | Value | Behavior |
 |-------|----------|
 | `stitched` | Reuse one Magpie `SynthesizeOnline` stream across sentences in a reply (smoother multi-sentence audio). Requires Pipecat `>=1.5.0`, plus Magpie TTS Multilingual `>=1.7.0` or Magpie TTS Zeroshot `>=1.2.0`. |
 | `per_sentence` | Open a fresh synthesis call per sentence. Safe for models without cross-sentence stitching. |
 
-Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode via the registry-default fallback in the pipeline.
+Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode through the registry-default fallback in the pipeline.
 
-### Word-level input streaming and timestamps
+### Word-Level Input Streaming and Timestamps
 
 All examples use Pipecat's `NvidiaTTSService` by default, which keeps Magpie Multilingual, Magpie Zeroshot, and Chatterbox switchable through the service catalog. For Magpie TTS Multilingual 1.10.0 or newer, [`NvidiaWordTTSService`](../../src/examples/shared/nvidia_word_tts.py) is an optional drop-in subclass that adds word-level input streaming and timestamp-based LLM context commits. It requires `nvidia-riva-client>=2.27.0,<3`.
 
@@ -179,9 +179,9 @@ tts = NvidiaWordTTSService(**tts_kwargs)
 
 The UI renders assistant bubbles from LLM response events, independently of the selected TTS service. Word timestamps control when spoken text is committed to LLM context; they do not drive the displayed assistant response.
 
-#### Known Magpie limitations
+#### Known Magpie Limitations
 
-- **Word timestamps are delayed until a flush.** Magpie emits timing metadata only after end of stream or after the configured 100-character chunk threshold is reached, not progressively with each audio chunk. If the user interrupts before Magpie returns timestamps for the current batch, the client cannot determine how much of that batch was played and therefore cannot commit any words from that interval to the LLM context. The same delay prevents progressive word-level highlighting (for example, karaoke-style highlighting) while audio is streaming.
+- **Word timestamps are delayed until a flush.** Magpie returns timing metadata only after the end of the stream or the configured 100-character threshold. Before that flush, interruption handling cannot calculate the words already played or support progressive highlighting.
 - **`meta.words` does not preserve spacing.** `response.meta.words` removes leading and trailing spaces and omits space-only tokens. Because a token may also be a subword or punctuation, clients cannot reliably reconstruct the original spoken text: inserting spaces can produce false gaps such as `"I'm Nem otron ,"`, while concatenating tokens can produce text such as `"IamNemotron,createdbyNVIDIA."`. `NvidiaWordTTSService` currently inserts spaces between timed tokens for readable context, so these false gaps are an expected limitation.
 
 ### Pronunciation (IPA)
@@ -206,7 +206,7 @@ The dictionary loads at session start and applies to every TTS request. Restart 
 
 > **Check the wiring.** `TTS_IPA_FILE_PATH` only takes effect if the pipeline loads the dictionary and passes it to the `NvidiaTTSService`. The shipped examples do this with `custom_dictionary=load_ipa_dictionary()` where they construct the service (see the `NvidiaTTSService(...)` call in [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py)). If you build a custom pipeline, confirm your `NvidiaTTSService(...)` is created with `custom_dictionary=load_ipa_dictionary()`, or the env var has no effect.
 
-### TTS text filter
+### TTS Text Filter
 
 LLM output frequently contains Markdown emphasis and characters the Magpie preprocessor reserves for its own markup. Unfiltered, these are spoken literally, make synthesis fail, or produce odd audio. A text filter sits between the LLM and TTS and strips them before synthesis. The default filter removes:
 
@@ -244,9 +244,9 @@ tts = NvidiaTTSService(
 )
 ```
 
-### Voice cloning / zero-shot
+### Voice Cloning / Zero-Shot
 
-Magpie TTS Zeroshot clones a voice from a short reference clip via Pipecat's `NvidiaTTSService(zero_shot_audio_prompt_file=...)`. Set the path only in catalog YAML (`services.local.yaml`); it is not accepted from the client session body. See also [voice cloning](https://docs.nvidia.com/nim/speech/latest/tts/voice-cloning.html).
+Magpie TTS Zeroshot clones a voice from a short reference clip using Pipecat's `NvidiaTTSService(zero_shot_audio_prompt_file=...)`. Set the path only in catalog YAML (`services.local.yaml`); it is not accepted from the client session body. Refer to [voice cloning](https://docs.nvidia.com/nim/speech/latest/tts/voice-cloning.html) for details.
 
 1. Enable the Zeroshot sidecar and select `magpie-zeroshot-tts` (see [Hardware requirements](#hardware-requirements-and-deployment-configs)).
 2. Prepare a 16-bit mono WAV (sample rate ≥ 22.05 kHz, about 3–10 seconds).

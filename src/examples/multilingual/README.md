@@ -10,11 +10,10 @@ The pattern uses dedicated ASR, LLM, and TTS services with a plain-text response
 
 This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../docs/03-jetson-thor.md) when applicable. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
-1. Create your `.env` from the template and set your NVIDIA API key:
+1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile:
 
    ```bash
-   cp .env.example .env
-   export NVIDIA_API_KEY=<your-nvidia-api-key>
+   test -f .env || cp .env.example .env
    ```
 
    > **Single GPU:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This recipe serves the LLM with vLLM, which downloads model weights from Hugging Face.
@@ -22,6 +21,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
 2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
 
    ```bash
+   set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
@@ -58,7 +58,7 @@ After deploying, validate the session language with the steps in [Testing](#test
 
 ## Customization
 
-The server recipe defaults to **Nemotron ASR Streaming Multilingual** (`nemotron-asr-streaming-multilingual`) via `examples_registry.yaml` and `services.local.yaml`. The universal single-GPU recipe uses NeMo-Speech.cpp. There is no NVCF endpoint for Nemotron ASR Streaming Multilingual, so the cloud recipe falls back to **Parakeet 1.1B RNNT Multilingual** (`parakeet-rnnt`), the only multilingual ASR available on NVCF.
+The server recipe defaults to **Nemotron ASR Streaming Multilingual** (`nemotron-asr-streaming-multilingual`) through `examples_registry.yaml` and `services.local.yaml`. The universal single-GPU recipe uses NeMo-Speech.cpp. There is no NVCF endpoint for Nemotron ASR Streaming Multilingual, so the cloud recipe falls back to **Parakeet 1.1B RNNT Multilingual** (`parakeet-rnnt`), the only multilingual ASR available on NVCF.
 
 TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service. The UI language selector contains only locales supported by the selected ASR, TTS, and built-in LLM. Changing the LLM refreshes that compatible set. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
 
@@ -122,7 +122,7 @@ Multilingual behavior depends on the ASR model, the LLM, and the selected TTS vo
 | Bot slips in foreign words | Quantized small-model sampling artifacts | Lower the LLM `temperature` in `services.*.yaml`, or use a larger LLM |
 | Session language is unavailable or startup is rejected | The selected locale is not supported by the active ASR, TTS, or built-in LLM | Select a locale shown in Voice Settings. For built-in LLM support, see [Configure LLM](../../../docs/how-to/configure-llm.md#multilingual-session-languages). |
 | TTS uses the wrong voice or language | Selected session language is not supported by the active TTS service | Check the configured TTS service exposes that language code, or pick a supported language |
-| No voices discovered at startup | TTS prewarm failed | Check TTS sidecar health (`docker compose ps`) and `NVIDIA_API_KEY` |
+| No voices discovered at startup | TTS prewarm failed | For Cloud, confirm `NVIDIA_API_KEY` in `.env`. For Server, also confirm NGC login and TTS sidecar health with `docker compose ps`. For Single-GPU, confirm that the NeMo-Speech.cpp sidecar is healthy and `models/nemo-speech` contains the downloaded weights. |
 | Bot does not respond to a turn (no transcript) | Nemotron ASR Multilingual can drop a turn in noisy environments | Speak again, reduce background noise, and use a good microphone. See [Configure ASR](../../../docs/how-to/configure-asr.md#choosing-a-multilingual-asr-model) |
 | Weak or awkward replies in some languages (for example Hindi) | Nemotron 3.5 Lightning has weaker conversation quality in a few languages | Use Nemotron 3 Super for better multilingual quality. See [Configure LLM](../../../docs/how-to/configure-llm.md) |
 | Port conflict on the ASR sidecar | Parakeet and Nemotron streaming both bind `50152` | Run only one local ASR. When opting into Parakeet, scale the Nemotron sidecar off (`--scale nemotron-asr-streaming-multilingual=0`) |

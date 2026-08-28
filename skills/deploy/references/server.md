@@ -1,4 +1,4 @@
-# Server NIM preflight
+# Server NIM Preflight
 
 Use only for `*/server` and `generic-assistant/server-perf` on a **workstation**. Skip for cloud and `*/single-gpu`.
 
@@ -12,14 +12,18 @@ Needs enough workstation GPU VRAM for the selected NIM services. One GPU is vali
 
 `NIM_TAGS_SELECTOR` defaults to `precision=fp8,tp=1`. That default is not universal. The NIM restart-loops with `Could not match a profile in manifest` when the GPU has no profile at that precision. Blackwell (for example RTX PRO 5000, `compute_cap` 12.0) has **no** `fp8` profile.
 
-1. List profiles on GPU 0. Read the image tag from the recipe compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
+### 1. List Compatible Profiles
+
+List profiles on GPU 0. Read the image tag from the recipe Compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
 
 ```bash
 docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
   <nim_llm_image> list-model-profiles
 ```
 
-2. Pick the lightest **Compatible** precision. Prefer readable tags over a profile hash. `tp=1` on one GPU, `tp=N` on N GPUs.
+### 2. Select a Precision
+
+Pick the lightest **Compatible** precision. Prefer readable tags over a profile hash. Use `tp=1` on one GPU and `tp=N` on N GPUs.
 
 | GPU compute capability | `NIM_TAGS_SELECTOR` precision |
 | --- | --- |
@@ -28,7 +32,9 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 | Ampere (CC 8.0–8.6) | `int4` or `bf16` |
 | Below CC 8.0 | unsupported → cloud |
 
-3. Set in `.env`, preserving other keys: `NIM_TAGS_SELECTOR=precision=<compatible-precision>,tp=1`.
+### 3. Configure the Profile
+
+Set `NIM_TAGS_SELECTOR=precision=<compatible-precision>,tp=1` in `.env` while preserving other keys.
 
 This applies to `*/server` only. `generic-assistant/server-perf` pins `precision=fp8,tp=2` as a literal in its Compose service (`nvidia-llm-perf`) and ignores the `.env` `NIM_TAGS_SELECTOR`. It targets a Hopper-class four-GPU host and does not fit a Blackwell workstation (no `fp8` profile). To retune it, edit the literal in the compose file, not `.env`.
 

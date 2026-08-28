@@ -10,7 +10,9 @@
 
 It is a **protocol gateway**, not a drop-in clone of OpenAI’s hosted Realtime endpoint.
 
-## How this differs from OpenAI Realtime
+## How This Differs from OpenAI Realtime
+
+The following table compares the hosted OpenAI Realtime service with this protocol gateway.
 
 | | OpenAI Realtime | This gateway |
 |--|-----------------|--------------|
@@ -24,7 +26,9 @@ It is a **protocol gateway**, not a drop-in clone of OpenAI’s hosted Realtime 
 | Live `session.update` | Broad session mutation | Voice and PCM updates only; turn mode is immutable |
 | Transport | WebSocket, WebRTC, PCM16, and G.711 | WebSocket PCM16 only |
 
-Invalid session config that would break audio (bad PCM format/rate, unsupported turn detection, or text-only output) returns a Realtime `error` and **keeps the socket open** for retry. Fields that do not translate to the cascade (including `session.tools`) are ignored.
+Invalid session configuration that would break audio (bad PCM format or rate, unsupported turn detection, or text-only output) returns a Realtime `error` and **keeps the socket open** for retry. Fields that do not translate to the cascade (including `session.tools`) are ignored.
+
+The server exposes the following WebSocket endpoints.
 
 | Path | Protocol |
 |------|----------|
@@ -32,6 +36,8 @@ Invalid session config that would break audio (bad PCM format/rate, unsupported 
 | `WS /v1/realtime` | OpenAI Realtime–shaped WebSocket |
 
 ## Connect with the OpenAI Python SDK
+
+Use the following example to connect to a local server that has TLS disabled.
 
 ```python
 import asyncio
@@ -56,7 +62,9 @@ Use `ws://` when `PIPELINE_TLS=false`; otherwise `wss://`.
 
 Authentication, authorization, quotas, and rate limits are deployment-layer responsibilities; the gateway does not provide them.
 
-### Optional session overrides
+### Optional Session Overrides
+
+Send a `session.update` event to override supported session settings.
 
 ```json
 {
@@ -79,9 +87,9 @@ Authentication, authorization, quotas, and rate limits are deployment-layer resp
 }
 ```
 
-Client tools and `function_call_output` items are not supported. Catalog tools run inside the server and appear through `session.nvidia.server_tools` and the observational `nvidia.tool.started` / `nvidia.tool.completed` events.
+Client tools and `function_call_output` items are not supported. Catalog tools run inside the server and appear through `session.nvidia.server_tools` and the observational `nvidia.tool.started` and `nvidia.tool.completed` events.
 
-## Field map
+## Field Map
 
 OpenAI top-level fields map onto the cascade when they have a Nemotron equivalent.
 
@@ -89,7 +97,7 @@ OpenAI top-level fields map onto the cascade when they have a Nemotron equivalen
 |--------------|---------|
 | `instructions` | `prompt_content` (system / prompt text for the cascade) |
 | `voice` / `audio.output.voice` | `tts_voice_id` (soft-validated against TTS catalog; unknown → default) |
-| `tools` | ignored (catalog tools via `prompt.id` / `prompt_key` only) |
+| `tools` | ignored (catalog tools selected through `prompt.id` or `prompt_key` only) |
 | `tool_choice` | `tool_choice` (applies when catalog tools are enabled) |
 | `max_output_tokens` | `max_tokens` |
 | `temperature` | LLM `temperature` |
@@ -102,23 +110,25 @@ OpenAI top-level fields map onto the cascade when they have a Nemotron equivalen
 
 Defaults when omitted: `pipeline_mode=generic-assistant`, `prompt_key=generic_assistant_without_tools`.
 
-### `session.nvidia` (no OpenAI equivalent)
+### NVIDIA-Specific Session Fields
 
-Nemotron-only catalog / routing keys: `pipeline_mode`, `llm_id`, `asr_id`, `tts_id`, `asr_language_code`, `model_id`, `extra_params`, ASR/TTS `*_model`, `tts_synthesis_mode`.
+Use `session.nvidia` for the following Nemotron-only catalog and routing keys: `pipeline_mode`, `llm_id`, `asr_id`, `tts_id`, `asr_language_code`, `model_id`, `extra_params`, ASR/TTS `*_model`, and `tts_synthesis_mode`.
 
 The public session object also exposes the selected prompt's catalog tools as read-only `nvidia.server_tools`.
 
 Prefer OpenAI fields for prompt and generation settings: use `prompt.id`, `instructions`, `temperature`, and `max_output_tokens`. Do not put `tts_voice_id`, `system_prompt`, `max_tokens`, or `temperature` under `nvidia`.
 
-Do **not** send `base_url`, `asr_server`, `tts_server`, or `*_function_id` under `nvidia` — those are ignored. Endpoints resolve from the selected catalog service ids only (prevents client-controlled SSRF).
+Do **not** send `base_url`, `asr_server`, `tts_server`, or `*_function_id` under `nvidia` — those are ignored. Endpoints resolve from the selected catalog service IDs only to prevent client-controlled SSRF.
 
-Public `session.updated` echoes catalog ids only (no internal ASR/TTS endpoints or function ids).
+Public `session.updated` echoes catalog IDs only, without internal ASR/TTS endpoints or function IDs.
 
 Changing `tts_id` / `tts_model` at connect time re-lists voices for that TTS selection only when that routing key is not already cached (same catalog path as RTVI `GET /api/tts-config`), then re-resolves `voice` against the cached list.
 
-## Realtime API reference (v1)
+## Realtime API Reference (v1)
 
-### Client → server
+### Client → Server
+
+Clients can send the following events.
 
 | Event | Notes |
 |-------|--------|
@@ -133,7 +143,9 @@ Changing `tts_id` / `tts_model` at connect time re-lists voices for that TTS sel
 
 Conversation item delete/retrieve operations are not supported. There are no response-level instruction, tool, modality, audio, or generation overrides.
 
-### Server → client
+### Server → Client
+
+The gateway can emit the following events.
 
 | Event | Notes |
 |-------|--------|
@@ -152,7 +164,7 @@ GA clients receive `response.output_audio.*` and `response.output_audio_transcri
 - Server VAD is required. `turn_detection: null` (push-to-talk) and non-`server_vad` modes are rejected; VAD threshold, silence duration, prefix padding, and similar tuning are not implemented.
 - Default client rate is 24 kHz; resampled to/from pipeline 16 kHz.
 
-### Session lifecycle notes
+### Session Lifecycle Notes
 
 - Welcome enabled (RTVI parity): client text and `response.create` are rejected until the first assistant `response.done`. Audio append is unaffected.
 - Spoken turns complete after the output transport drains all queued TTS audio; only then does the gateway emit `response.done`.
@@ -163,4 +175,4 @@ GA clients receive `response.output_audio.*` and `response.output_audio_transcri
 - Pipeline barge-in (`InterruptionFrame`) cancels the active Realtime response even when `TTSStopped` never arrives.
 - Non-empty `response.create.response` overrides return `unsupported_response_override`; omit the field or send `{}`.
 
-Live check: `RUN_REALTIME_COMPAT=1 uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v` — see [`tests/integration/README.md`](../../tests/integration/README.md).
+Run `RUN_REALTIME_COMPAT=1 uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v` for a live check. Refer to [`tests/integration/README.md`](../../tests/integration/README.md) for setup.

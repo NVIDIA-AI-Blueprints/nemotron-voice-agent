@@ -8,7 +8,7 @@ LiveKit owns the session transport. Do not apply Pipecat transport rows, `-t` fl
 `:7860` client wiring here. The connect path is the LiveKit Agents console (or the path
 the LiveKit docs MCP currently documents), not a Pipecat browser client.
 
-## Code comes from the MCP
+## Code Comes from the MCP
 
 This skill ships no `agent.py`, no skeleton, and no template. Agent code is generated from
 the LiveKit docs MCP. Discover it by capability first. Endpoint to add if missing:
@@ -28,20 +28,20 @@ Query for the pieces you need. For a cascaded NVIDIA stack that means:
 Never write a LiveKit import, class name, or API call from memory. If a query fails or
 comes back empty, say so and stop. Do not fill the gap with a guess.
 
-### When the MCP is not available
+### When the MCP Is Not Available
 
 Stop and ask the user to enable the LiveKit docs MCP, or explicitly approve the less
 reliable `docs.livekit.io/llms.txt` fallback. On fallback, fetch one current example from
 LiveKit docs or `livekit-examples`. Never invent structure.
 
-## What gets written
+## What Gets Written
 
 Write one `agent.py`. Do not mix Pipecat (`bot.py`) into the project. Follow
 `output-contract.md` for the remaining files and any generated Compose services. Model
 ids are constants in code, not `.env` values. `.env` holds secrets only:
 `NVIDIA_API_KEY`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`.
 
-## LiveKit server
+## LiveKit Server
 
 Default is **LiveKit Cloud** (`wss://<project>.livekit.cloud`), not `localhost:7880`.
 
@@ -52,7 +52,7 @@ keys). Manual path starts at https://cloud.livekit.io/.
 Self-hosted LiveKit server is an override only when the user asks for it by name. Still
 require all three `LIVEKIT_*` variables.
 
-## NVIDIA models
+## NVIDIA Models
 
 Resolve exact ASR, LLM, and TTS ids through `models/catalog.md` → slot files before
 writing constants. Streaming ASR first (`models/asr.md`).
@@ -78,7 +78,7 @@ shared Riva gRPC endpoint, leave function ids empty, and point the OpenAI-compat
 client at vLLM. Resolve the current `server`, SSL, language, and voice arguments from the
 LiveKit docs MCP.
 
-## Run shape
+## Run Shape
 
 The LiveKit CLI (`lk`) runs the worker. Before handover, confirm it is installed; if not,
 give the current install steps from the LiveKit docs MCP and wait. The worker start command
@@ -92,7 +92,7 @@ Do not tell the user to open a Pipecat WebRTC client or hit `:7860`, and never p
 worker’s local HTTP or health port as a client URL. LiveKit’s Agents Console (or the current
 documented client) is the path.
 
-## Connect and verify
+## Connect and Verify
 
 `scripts/smoke.sh` must pass before the worker joins a room.
 
@@ -106,13 +106,13 @@ Confirm the worker connects without auth errors and STT → LLM → TTS each pro
 the handover by pointing the user to that LiveKit URL to try the agent. Full handover steps
 are in `operations/run.md`.
 
-## After it runs
+## After It Runs
 
 Re-query the MCP before changing any LiveKit API. For workstation / DGX NIM LLM profile
-changes, return to the `list-model-profiles` and `NIM_MODEL_PROFILE` section in
-`models/llm.md`. Jetson Thor returns to its model card and platform guide.
+changes, return to **Select a NIM Model Profile** in `models/llm.md`. Jetson Thor returns
+to its model card and platform guide.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Generating Omni on LiveKit, or generating `bot.py` for a LiveKit row.
 - Pointing the user at Pipecat `:7860` / transport `-t` flags.
