@@ -9,14 +9,20 @@ metadata:
 
 # Create Voice Agent
 
-Builds a working NVIDIA voice agent in an empty project:
+Creates a working NVIDIA voice agent or updates an existing project:
 
 - **Cascaded**: ASR transcribes, a text LLM answers, TTS speaks.
 - **Omni**: one audio-in LLM replaces ASR and the text LLM. TTS still speaks.
 
 ## Workflow
 
-Follow these phases in order:
+Classify the starting state before following the phases:
+
+- For an empty project, follow all phases in order.
+- For a working existing project, read `references/operations/iterate.md` first, and then route only the references needed for the requested change.
+- For a broken existing project, read `references/operations/troubleshoot.md` first. After restoring the baseline, continue with `references/operations/iterate.md`.
+
+For an empty project, follow these phases in order:
 
 | Phase | Read |
 | --- | --- |

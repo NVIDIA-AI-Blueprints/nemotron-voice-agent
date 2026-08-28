@@ -3,13 +3,13 @@
 Apply to every generated project. Logs must show where one spoken turn failed and where
 latency was spent without exposing secrets or private audio.
 
-## Use documented hooks
+## Use Documented Hooks
 
 Query the selected framework documentation MCP for its current logging, observer, metrics,
 and error hooks. Use those APIs rather than intercepting internal frames or inventing
 framework methods.
 
-## Structured events
+## Structured Events
 
 Emit machine-readable key-value or JSON logs to stdout. Every event should include:
 
@@ -40,7 +40,7 @@ Keep Compose service logs on stdout/stderr. Put
 `docker compose logs --timestamps <service>` and the generated service names in the
 README.
 
-## Turn timings
+## Turn Timings
 
 Capture monotonic timestamps and emit durations for:
 

@@ -29,7 +29,7 @@ Local catalogs merge by TCP reachability: NIM sidecars (`*/server`) and NeMo-Spe
 
 UI is `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`.
 
-## Example deltas
+## Example Deltas
 
 Do not treat these as extra preflights.
 
@@ -39,7 +39,7 @@ Do not treat these as extra preflights.
   - Single-GPU vLLM health: `curl -f http://localhost:8002/health`
 - **Omni Subagents:** same Omni sidecars. Five Pipecat workers (transport, speaker, media analyzer, webcam, thinker) share a `WorkerBus`. Declares `capabilities: [attachments, webcam]` in `examples_registry.yaml`. Backend: `POST /api/sessions/{id}/attachments`, `POST /api/sessions/{id}/webcam/frames`, `GET /api/webcam-config`. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor use cloud (`omni-assistant-subagents`).
   - App logs should show `Starting Nemotron Omni Assistant Subagents pipeline ... agents=transport,speaker,media,webcam,thinker`.
-  - Attachment check: `curl -F file=@image.jpg "https://<host>:7860/api/sessions/<session_id>/attachments?kind=image"`
+  - Attachment check with the default self-signed certificate: `curl -fk -F file=@image.jpg "https://<host>:7860/api/sessions/<session_id>/attachments?kind=image"`
   - Webcam config: `curl -fk https://<host>:7860/api/webcam-config`
   - Missing webcam/attachment UI → `EXAMPLE_SELECTION` is not `omni-assistant-subagents`, or the registry lost those capabilities.
   - Webcam uploads fail silently → page is not HTTPS (`PIPELINE_TLS=true`) and not `http://localhost`.

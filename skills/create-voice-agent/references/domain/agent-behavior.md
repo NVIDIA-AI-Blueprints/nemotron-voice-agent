@@ -3,7 +3,7 @@
 Read for every build. Convert the approved use case into a voice-safe system instruction
 before generating framework code.
 
-## Derive the behavior
+## Derive the Behavior
 
 Use the user's description to define:
 
@@ -18,7 +18,7 @@ Do not invent business policies, private data, tool access, or unsupported capab
 Ask one focused follow-up only when a missing boundary would make the agent unsafe or
 materially change its behavior.
 
-## Voice-safe output
+## Voice-Safe Output
 
 The system instruction must require:
 
@@ -35,7 +35,7 @@ application state or logs, never in TTS text.
 Use the framework's current documented text filter when one exists. Do not invent a
 filter API. Prompt constraints remain required because filtering is only a fallback.
 
-## Persona and boundaries
+## Persona and Boundaries
 
 Give the agent a clear tone without role-playing beyond the approved use case. It must not
 claim actions succeeded until the corresponding tool or service confirms them.
@@ -60,7 +60,7 @@ For every tool:
 Do not generate fake business data or placeholder tool results unless the user explicitly
 asks for a demo. Label demo data clearly.
 
-## Domain vocabulary
+## Domain Vocabulary
 
 This file owns meaning and response behavior. `domain/speech-customization.md` separately
 owns how specialized terms are recognized and pronounced.
@@ -68,7 +68,7 @@ owns how specialized terms are recognized and pronounced.
 Add approved domain terms to the system instruction when they affect meaning, but do not
 treat prompt vocabulary as ASR word boosting.
 
-## Generated project
+## Generated Project
 
 Store the system instruction in agent code or a checked-in prompt file. Do not put it in
 `.env`. Document where to edit behavior in `README.md`.

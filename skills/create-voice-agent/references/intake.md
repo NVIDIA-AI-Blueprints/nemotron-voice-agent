@@ -20,7 +20,7 @@ Do not ask anything this file does not define. Do not ask what the table can dec
 Before speaking. Missing credentials: say which key, how to get it, wait. Everything else
 becomes a table row.
 
-## 1. Ask priority questions
+## 1. Ask Priority Questions
 
 Resolve **Pipeline** and **Framework** explicitly. Skip a choice only when the user
 already made it or compatibility forces it. Use structured choices when available and
@@ -63,7 +63,7 @@ persona wizard. One follow-up for missing use-case context is allowed. Never two
 ## 2. Propose
 
 One message. One table. Every row filled with a decision and a short reason. Exact model
-ids from `models/llm.md`, `models/asr.md`, `models/tts.md` (via `models/catalog.md`), not
+IDs from `models/llm.md`, `models/asr.md`, and `models/tts.md` using `models/catalog.md`, not
 family names. These are catalog ids that record the choice, and two values stay open until
 the services answer: the LLM's served model id and the exact TTS voice (`models/llm.md`
 §Resolve three names). Lock the TTS locale now and present neither of those as final here.
@@ -91,7 +91,7 @@ Memory       runtime budget planned  context, LLM cap, speech reserves, startup 
 Reply "go" to build, or name a row to change.
 ```
 
-### Shape changes
+### Shape Changes
 
 - Omni: drop ASR, add the Omni model, and recalculate deployment fit
   (`frameworks/omni.md`).
@@ -115,7 +115,7 @@ Reply "go" to build, or name a row to change.
 | Transport | both | user named one, or LiveKit (omit this row) |
 | Language | fixed locale from `models/language-routing.md` | user requested several languages |
 | LLM | Nemotron 3.5 Lightning | user named Super, Ultra, or another id |
-| ASR | from language via `models/asr.md` | user named a model |
+| ASR | from language using `models/asr.md` | user named a model |
 | TTS | Magpie TTS Multilingual, smallest supported batch profile, locale. Voice after runtime discovery | user named a model or voice |
 | Reasoning | off | specialized workload → on, budget 8192 |
 | Memory | profile reserves + runtime and startup headroom | recalculate whenever profile, batch, context, or placement changes |
@@ -139,12 +139,12 @@ Compatible LLM profile. If profile, memory fit, or placement changes, re-show th
 rows and wait for confirmation before writing files. During deployment, follow
 `platforms/deployment.md` §Per-slot reuse before starting services.
 
-## Stop only for
+## Stop Only For
 
 Missing credentials. Still too vague after one follow-up. Conflict (Omni + LiveKit).
 Self-hosted on a host with no compatible local platform.
 
-## Anti-patterns
+## Anti-Patterns
 
 Skip the Pipeline or Framework choice. Ask transport or deployment before proposing.
 Ask model slots separately. Offer choices without explaining trade-offs. Family names in

@@ -24,7 +24,7 @@ This use case has domain vocabulary. Should I add ASR word boosting and TTS pron
 rules? If yes, send any required terms or I will draft a glossary for approval.
 ```
 
-## Verify support first
+## Verify Support First
 
 Read the current official documentation before drafting or wiring:
 
@@ -40,7 +40,7 @@ custom-dictionary support also differs by model and language.
 If the locked model lacks a required feature, show the affected model row and propose one
 supported streaming alternative. Never swap models silently.
 
-### Platform source
+### Platform Source
 
 | Platform | Customization source |
 | --- | --- |
@@ -65,7 +65,7 @@ decoder or phoneme set. Global ASR lexicon changes and server-side TTS dictionar
 the current Riva model-build flow and may regenerate the model repository. Treat that as a
 deployment change, preserve the current repository, and get approval before rebuilding.
 
-## Glossary approval
+## Glossary Approval
 
 Draft one table and show every term before writing files:
 
@@ -108,7 +108,7 @@ terms. TTS pronunciation customization still applies.
 Domain terms may also be added to the Omni system instruction for response consistency,
 but that is not ASR boosting.
 
-## Generated project
+## Generated Project
 
 When customization is approved:
 
@@ -152,7 +152,7 @@ Test each term in a natural sentence:
 
 Tune one term or score at a time. Use `operations/iterate.md` for later glossary changes.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Writing or wiring a glossary before showing it and receiving approval.
 - Assuming every ASR model supports word boosting.

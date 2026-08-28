@@ -6,7 +6,7 @@ Jetson Thor does **not** use the workstation / DGX NIM deployment path. Run the 
 vLLM from Hugging Face weights and serve speech with the Riva Speech Skills L4T stack.
 Orin-class Jetsons are unsupported.
 
-## Source of truth
+## Source of Truth
 
 Before generating or running the Thor speech deployment, read the current
 [NVIDIA Riva Quick Start Guide](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide.html).
@@ -22,7 +22,7 @@ Follow the current guide, then apply the voice-agent choices below.
 Pass `platforms/readiness.md`, then generate the Thor services through
 `output-contract.md`. Do not ship a static Thor Compose recipe.
 
-## Platform stack
+## Platform Stack
 
 | Pipeline | LLM | Speech |
 | --- | --- | --- |
@@ -51,7 +51,7 @@ ARM64 Quick Start release from the guide and NGC resource:
 
 Do not copy an x86 Riva or NIM image onto Thor.
 
-## One-time Riva model build
+## One-Time Riva Model Build
 
 Follow the current Riva Quick Start to download the JetPack-compatible ARM64 bundle. Keep
 its model repository outside the generated project so it survives project rebuilds.
@@ -68,7 +68,7 @@ its model repository outside the generated project so it survives project rebuil
 Initialization commonly takes 30 to 60 minutes. Preserve the resulting model repository and
 mount it into the Riva service.
 
-### Model path and credentials
+### Model Path and Credentials
 
 Three `config.sh` behaviours each cost a full re-initialization when missed. Check all three
 before running `riva_init.sh`.
@@ -90,7 +90,7 @@ Two of the three fails during initialization in a way that reads like a bad key.
 when the current guide documents Enterprise use for this release, otherwise leave all three
 unset and use the standard NGC flow.
 
-## LLM model source
+## LLM Model Source
 
 Thor reads two sources, and neither one replaces the other:
 
@@ -107,7 +107,7 @@ Thor reads two sources, and neither one replaces the other:
 Read the relevant card immediately before generating the deployment. Do not reuse the
 cascaded launch command for Omni. Omni has model-specific vLLM and audio requirements.
 
-### What to take from the card
+### What to Take from the Card
 
 Work through the card's vLLM section and record every item below. Skimming it for the launch
 command is how the platform-specific pieces get missed.
@@ -146,11 +146,11 @@ Thor uses raw vLLM, so:
 - `HF_TOKEN` supplies model access.
 - `NIM_MODEL_PROFILE` and `list-model-profiles` do not apply.
 - The Omni repository name does not enable reasoning by itself.
-- Reasoning off has two halves. In agent requests set
-  `extra_body.chat_template_kwargs.enable_thinking` to `false`. In the serve command omit the
-  reasoning parser and its plugin, because the card's command assumes reasoning on and a
-  parser left in place is what makes a Thor agent go mute with no error in any log
-  (`models/llm.md` §Reasoning parser).
+- Reasoning off has two parts. In agent requests, set
+  `extra_body.chat_template_kwargs.enable_thinking` to `false`. In the serve command, keep the
+  reasoning parser required by the locked model card. The parser applies the model's
+  reasoning-off contract and keeps thinking out of TTS content
+  (`models/llm.md` §Reasoning Parser).
 - Take the flags this model requires from the current card, and each flag's meaning and
   current default from the vLLM `serve` CLI reference. Add nothing the card does not list
   unless a fatal log names it (`models/llm.md` §Serve flags).
@@ -159,7 +159,7 @@ Thor uses raw vLLM, so:
 - The framework client traps are the same as any local endpoint. Follow
   `frameworks/pipecat.md` §Local LLM wiring or `frameworks/livekit.md` §NVIDIA models.
 
-### Memory and context flags
+### Memory and Context Flags
 
 `--gpu-memory-utilization` and `--max-model-len` are **required in the generated Compose
 service** on Thor, because vLLM and Riva share one device. They are not tuning applied
@@ -181,7 +181,7 @@ than a fraction of a device both services share.
 
 Raise either value only after the complete vLLM + Riva stack is stable.
 
-### First boot compiles kernels
+### First Boot Compiles Kernels
 
 The NVFP4 path uses FlashInfer kernels that the card enables through environment variables.
 On first boot those kernels can be compiled on the device, which has been observed to run
@@ -193,7 +193,7 @@ starts skip the compile. Resolve the current cache location from the vLLM and Fl
 documentation for the version the card pins. Without that mount every container replacement
 pays the compile again. No serve flag shortens a kernel compile.
 
-### Host memory at startup
+### Host Memory at Startup
 
 vLLM's startup check has been observed to read Linux **free** memory rather than **available**
 memory on this platform. Page cache counts against it, so a host with plenty of reclaimable
@@ -204,7 +204,7 @@ or restart the host rather than lowering the model configuration. This failure a
 device OOM look alike and their fixes are opposite, so confirm which one the log describes
 before changing the memory budget.
 
-## Riva services
+## Riva Services
 
 Use the L4T Riva Speech image compatible with the Quick Start and mount the generated model
 repository. Riva serves ASR and TTS through one gRPC endpoint. Read
@@ -235,7 +235,7 @@ Say this in the proposal instead of presenting a fixed locale as a guarantee, an
 when the release contains no single-language model for the requested locale. Resolve what the
 selected release actually offers through `models/language-routing.md`.
 
-## Resource sharing
+## Resource Sharing
 
 Thor shares unified memory and one GPU between vLLM and Riva. Do not prescribe CPU
 pinning or fixed compute splits. Start from the compute and scheduling defaults supported by
@@ -246,14 +246,16 @@ consult the current platform guidance before applying CUDA MPS tuning.
 If the stack still OOMs with the calculated budget in place, lower `--max-model-len` first,
 then the memory fraction, before changing the approved model.
 
-## Start and verify
+## Start and Verify
 
 Assert each result. Do not read a step as done because the previous one produced output.
 
 1. Start the generated vLLM Compose service. Wait for `/v1/models` and confirm it returns
    the locked served id.
-2. Send one streaming chat completion with reasoning off. Assert non-empty `delta.content`
-   and empty or absent `delta.reasoning_content`.
+2. Prove the locked model's input path. For a cascaded pipeline, send one streaming chat
+   completion with reasoning off and assert non-empty `delta.content` plus empty or absent
+   `delta.reasoning_content`. For an Omni pipeline, send one minimal audio request and
+   assert a non-empty text response.
 3. Measure available unified memory. Start Riva only when the remaining budget covers the
    selected Quick Start configuration plus startup headroom. Otherwise stop vLLM and lower
    `--max-model-len` or the memory fraction.
@@ -272,7 +274,7 @@ Riva's first start after initialization can still spend a long time loading and 
 before it reports ready. Treat it like the first-boot window in `platforms/deployment.md`
 and read the logs rather than restarting.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Following build.nvidia.com NIM launch instructions on Thor.
 - Using `NIM_MODEL_PROFILE` or Speech `NIM_TAGS_SELECTOR` on the Thor stack.

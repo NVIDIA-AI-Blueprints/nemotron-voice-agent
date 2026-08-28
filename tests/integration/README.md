@@ -1,16 +1,16 @@
-# Integration / live tests
+# Integration and Live Tests
 
 These tests talk to a **running** voice-agent server. They are **not** part of
 CI (`pytest tests/unit`).
 
-## OpenAI Realtime compatibility
+## OpenAI Realtime Compatibility
 
-[`test_realtime_openai_sdk_compat.py`](test_realtime_openai_sdk_compat.py) against `WS /v1/realtime`:
+The integration test covers the following behavior against `WS /v1/realtime`:
 
 1. OpenAI Python SDK multi-turn (GA-shaped session fields)
 2. Mapped fields — instructions, Magpie voice, temperature, ignored client tools,
    Nemotron welcome gate, soft unknown-voice fallback, post-handoff / `response.create` rejects
-3. Rejects — Whisper transcription, text-only modalities
+3. Compatibility no-op for the Whisper transcription selector, plus rejection of text-only modalities
 
 ```bash
 # Plain HTTP (recommended for local integration):

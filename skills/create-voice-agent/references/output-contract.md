@@ -10,13 +10,14 @@ paths. Then start the services, resolve the runtime model id and TTS voice, and 
 the agent file, `scripts/smoke.sh`, and the README with those real values. No placeholder
 model, voice, endpoint, or command may survive the second pass.
 
-## Always write
+## Always Write
 
 | File | Purpose |
 | --- | --- |
 | `bot.py` or `agent.py` | selected framework pipeline |
 | `pyproject.toml` | dependencies resolved from current framework docs |
 | `.env.example` | secret placeholders only |
+| `.gitignore` | excludes `.env`, credential variants, caches, and generated model state while preserving `.env.example` |
 | `scripts/smoke.sh` | proves the stack before any client connects |
 | `README.md` | setup, start, verify, stop, logs, and troubleshooting |
 
@@ -76,7 +77,8 @@ never both. A multi-GPU LLM service must expose the exact topology required by i
 compatible profile.
 
 Compose may read secret values such as `NVIDIA_API_KEY` and `HF_TOKEN` from the user
-environment or `.env`. Keep model ids, endpoints, profiles, tags, ports, and GPU placement
+environment or `.env`. Write only placeholders to `.env.example`; the user supplies real
+values after file generation is approved. Keep model ids, endpoints, profiles, tags, ports, and GPU placement
 in `compose.yaml` or agent code, not `.env`.
 
 For Jetson Thor, mount the external Riva `model_repository` produced by the one-time
@@ -113,7 +115,7 @@ progress, and which cache path keeps the result.
 Do not leave placeholders such as “start the services” or “use the deploy page.” Resolve
 those instructions while building and persist the resulting commands in the README.
 
-## Smoke before client
+## Smoke Before Client
 
 The check list below is fixed by this contract. Plan it in the first pass and do not reduce
 it later. The second pass only fills in resolved values: take the LLM model string from that
@@ -147,7 +149,7 @@ no secrets. Run it after the services are healthy and before the runner starts. 
 run is still not a working agent, so the spoken exchange in `operations/run.md` remains the
 bar.
 
-## Verify the generated project
+## Verify the Generated Project
 
 Re-read this section after generation.
 

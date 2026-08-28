@@ -15,6 +15,9 @@ The catalog stores Compose DNS endpoints. The backend rewrites them to `localhos
 | --- | --- |
 | `http://nvidia-llm:8000/v1` | `http://localhost:18000/v1` |
 | `http://nvidia-llm-vllm:8000/v1` | `http://localhost:18000/v1` |
+| `http://nvidia-llm-omni:8000/v1` | `http://localhost:18002/v1` |
+| `http://nvidia-llm-vllm-omni:8002/v1` | `http://localhost:8002/v1` |
+| `http://booking-server:8001` | `http://localhost:8001` |
 | `magpie-multilingual-tts-service:50051` | `localhost:50151` |
 | `magpie-zeroshot-tts-service:50051` | `localhost:50151` |
 | `chatterbox-tts-service:50051` | `localhost:50151` |
@@ -62,7 +65,7 @@ docker compose --profile frontend-backend-agent/single-gpu up -d
 docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```
 
-For YAML-only edits that don't change env or sidecar membership, `docker compose restart <service>` is enough (e.g. `docker compose restart generic-assistant`).
+For YAML-only edits that do not change environment variables or sidecar membership, `docker compose restart <service>` is enough. For example, run `docker compose restart generic-assistant`.
 
 ## Optional Profile Overlays
 

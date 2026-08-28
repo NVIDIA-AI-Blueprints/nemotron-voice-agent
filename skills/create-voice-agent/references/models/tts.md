@@ -24,7 +24,7 @@ locked model against the current customization docs.
 If the user says “Magpie” without a variant, open the matrix and propose one concrete row.
 Do not pick silently.
 
-## Defaults (hints only)
+## Defaults (Hints Only)
 
 | Need | Start from | Then open |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ After the profile fits this GPU, check the combined stack in `preflight.md` §De
 fit. Reserve the matrix GPU memory plus startup and engine-build headroom. Verify measured
 free VRAM through `platforms/deployment.md` §Shared-GPU memory gate.
 
-## Lock self-hosted
+## Lock Self-Hosted
 
 1. From the matrix section: `CONTAINER_ID` + `NIM_TAGS_SELECTOR` for language, batch size,
    VRAM. On a shared GPU, choose the smallest supported batch profile and include the
@@ -79,7 +79,7 @@ free VRAM through `platforms/deployment.md` §Shared-GPU memory gate.
    service. Record the path in the README and smoke script, and never hardcode a voice the
    service did not return.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Treating “Magpie” as one model without checking the matrix.
 - Skipping the TTS matrix for a remembered build.nvidia.com slug.
