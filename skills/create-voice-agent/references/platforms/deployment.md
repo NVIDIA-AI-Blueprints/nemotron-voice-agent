@@ -218,5 +218,6 @@ device. Keep agent endpoint constants aligned with the resulting host ports.
   from the locked model's current build.nvidia.com instructions.
 - Applying workstation / DGX NIM instructions to Jetson Thor.
 - Starting all local NIMs together or assuming fixed ports.
-- Applying `NIM_TAGS_SELECTOR` to a generated LLM deployment or `NIM_MODEL_PROFILE` to ASR / TTS. The repository's fixed `generic-assistant/server-perf` benchmark is the only LLM selector exception.
+- Applying the deprecated `NIM_TAGS_SELECTOR` to a generated LLM deployment or
+  `NIM_MODEL_PROFILE` to ASR / TTS.
 - Killing every container because one slot was wrong.

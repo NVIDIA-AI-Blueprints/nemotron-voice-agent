@@ -10,7 +10,7 @@ Needs enough workstation GPU VRAM for the selected NIM services. One GPU is vali
 
 ## Precision
 
-The standard `*/server` LLM service leaves `NIM_TAGS_SELECTOR` unset so NIM can select a hardware-compatible profile for its single visible GPU. ASR and TTS keep their required selectors. Confirm the selected LLM profile in the startup logs. Automatic selection does not guarantee that the remaining VRAM is enough to colocate ASR and TTS.
+The standard `*/server` LLM service leaves `NIM_MODEL_PROFILE` unset so NIM can select a hardware-compatible profile for its single visible GPU. ASR and TTS keep their required `NIM_TAGS_SELECTOR` values. Confirm the selected LLM profile in the startup logs. Automatic selection does not guarantee that the remaining VRAM is enough to colocate ASR and TTS.
 
 1. List profiles on GPU 0. Read the image tag from the recipe compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
 
@@ -28,9 +28,9 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 | Ampere (CC 8.0–8.6) | `bf16` or `int4` when listed |
 | Below CC 8.0 | unsupported → cloud |
 
-1. For standard `*/server`, keep `NIM_TAGS_SELECTOR` unset and let NIM choose from the compatible manifest profiles. Use `NIM_MODEL_PROFILE` when an exact LLM profile must be pinned.
+1. For standard `*/server`, keep `NIM_MODEL_PROFILE` unset and let NIM choose from the compatible manifest profiles. Set it when an exact LLM profile must be pinned.
 
-`generic-assistant/server-perf` is the exception: its Compose service (`nvidia-llm-perf`) pins `precision=nvfp4,tp=2` and exposes GPUs `2` and `3` to the LLM. It targets a four-GPU Blackwell host. On older non-Blackwell hardware, run `list-model-profiles` and edit that literal to a compatible TP2 profile, such as BF16 when listed and when both GPUs have enough VRAM.
+`generic-assistant/server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1` and exposes GPUs `2` and `3` to the LLM. It targets a four-GPU Blackwell host. On older non-Blackwell hardware, run `list-model-profiles` and set `NIM_MODEL_PROFILE` to a compatible TP2 profile, such as `vllm-bf16-tp2-pp1` when listed and when both GPUs have enough VRAM.
 
 Run server-perf discovery against the actual LLM GPU assignment, not GPU `0`:
 
@@ -39,7 +39,7 @@ docker run --rm --gpus '"device=2,3"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
   <nim_llm_image> list-model-profiles
 ```
 
-Confirm GPUs `2` and `3` are the same supported GPU type and that the manifest lists the exact TP2 profile before changing the selector.
+Confirm GPUs `2` and `3` are the same supported GPU type and that the manifest lists the exact TP2 profile before changing `NIM_MODEL_PROFILE`.
 
 Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 
@@ -55,5 +55,5 @@ Cascaded Lightning NIM health: `curl -f http://localhost:18000/v1/health/ready`.
 ## Failures
 
 - **`pull access denied` / `unauthorized`** → NGC login missing or expired. Single-GPU does not use `nvcr.io`.
-- **`Could not match a profile in manifest`** → no profile matches the detected hardware or the pinned selector. Run `list-model-profiles`; for standard `*/server`, leave automatic selection enabled or pin a compatible `NIM_MODEL_PROFILE`. For `server-perf`, update its literal TP2 selector to a compatible precision, then recreate the LLM service.
+- **`Could not match a profile in manifest`** → no profile matches the detected hardware or `NIM_MODEL_PROFILE`. Run `list-model-profiles`; for standard `*/server`, leave automatic selection enabled or pin a compatible profile. For `server-perf`, set `NIM_MODEL_PROFILE` to a compatible TP2 profile, then recreate the LLM service.
 - **`No available memory for the cache blocks`** → `NIM_KVCACHE_PERCENT` is too **low**. Raise it. CUDA OOM during load is the opposite: lower it, or move TTS off that GPU. `LLM_MAX_NUM_SEQS` can be lowered if CUDA-graph capture fails.

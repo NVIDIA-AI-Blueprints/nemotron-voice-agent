@@ -20,7 +20,8 @@ Family browse: [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron
 - Lock language routing before selecting ASR and TTS.
 - Model ids, voice ids, and function ids go in generated code or config. `.env` is secrets only.
 - LLM tools (`list-model-profiles`, `NIM_MODEL_PROFILE`, LLM support matrix) never apply to ASR or TTS.
-- Speech profile tags (`NIM_TAGS_SELECTOR`, Speech matrices, `/deploy`) do not apply to generated LLM deployments. The repository's fixed `generic-assistant/server-perf` benchmark separately pins an LLM selector.
+- Speech profile tags (`NIM_TAGS_SELECTOR`, Speech matrices, `/deploy`) do not apply to
+  generated LLM deployments. Pin an LLM with `NIM_MODEL_PROFILE`.
 - For self-hosted Speech, the matrix owns profile fit and tags. The `/deploy` page owns
   image URI and launch shape. Stop if they still conflict.
 - Shared-GPU placement uses the runtime budget in `preflight.md`, LLM controls in

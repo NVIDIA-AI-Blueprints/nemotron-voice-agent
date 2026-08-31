@@ -83,7 +83,7 @@ scaling configuration:
 
 - Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
-- `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=nvfp4,tp=2`, GPUs `2,3`, alias
+- `nvidia-llm`: `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1`, GPUs `2,3`, alias
   `nvidia-llm`
 - `nemotron-asr-streaming-english`:
   `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
@@ -96,10 +96,10 @@ scaling configuration:
   `AUDIO_OUT_10MS_CHUNKS=40`
 
 The pinned NVFP4 profile requires Blackwell GPUs. On older non-Blackwell
-hardware, list the profiles packaged with the NIM image and change the literal
-LLM selector in `docker/docker-compose.nemotron35-lightning-nim.yaml` to a
-compatible TP2 profile, such as BF16 when the manifest and available VRAM
-support it.
+hardware, list the profiles packaged with the NIM image and change
+`NIM_MODEL_PROFILE` in `docker/docker-compose.nemotron35-lightning-nim.yaml`
+to a compatible TP2 profile, such as `vllm-bf16-tp2-pp1` when the manifest and
+available VRAM support it.
 
 Deploy it with:
 

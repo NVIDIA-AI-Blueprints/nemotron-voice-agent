@@ -203,13 +203,13 @@ environment to one of:
   `<backend>-<precision>-tp<N>-pp1`, backend `vllm` | `sglang` | `trtllm`)
 - the 64-char profile id from the listing
 
-For a standard `*/server` deployment, leave both LLM profile selectors unset so the
-manifest can auto-pick.
+For a standard `*/server` deployment, leave `NIM_MODEL_PROFILE` unset so the manifest
+can auto-pick.
 
 For a pinned LLM, use `NIM_MODEL_PROFILE` instead of `NIM_TAGS_SELECTOR`. Standard
-`*/server` LLMs leave both unset for automatic hardware-compatible selection. The
-repository's fixed `generic-assistant/server-perf` benchmark is the LLM exception because
-its Compose service pins an NVFP4 TP2 selector. ASR and TTS continue to use their required
+`*/server` LLMs leave it unset for automatic hardware-compatible selection. The
+`generic-assistant/server-perf` benchmark pins
+`NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1`. ASR and TTS continue to use their required
 `NIM_TAGS_SELECTOR` values. Cloud LLM skips this section. For same-image OOM or latency,
 re-run `list-model-profiles`, select a lighter profile or shorter max length, update the
 launch command, then health-check. A different model id requires discovery again.
@@ -321,6 +321,7 @@ Do not choose a knob from the pipeline name. Choose it from the actual server pa
 - Reasoning on locally without the reasoning parser and plugin file the card requires.
 - Cascaded slot → omni model. Model ids in `.env`.
 - Propose from memory / Verified GPUs list alone. Click matrix UI or use `.html.md` for fit.
-- Override a failed matrix / `list-model-profiles` check. Guess a SKU. `NIM_TAGS_SELECTOR` on a generated LLM deployment (the fixed `server-perf` benchmark is the exception).
+- Override a failed matrix / `list-model-profiles` check. Guess a SKU. Use the deprecated
+  `NIM_TAGS_SELECTOR` on a generated LLM deployment.
 - Treat quantized weight size as total LLM VRAM or leave vLLM at its default memory budget
   while co-locating speech.
