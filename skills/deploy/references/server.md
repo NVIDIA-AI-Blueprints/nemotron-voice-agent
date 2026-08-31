@@ -10,7 +10,7 @@ Needs enough workstation GPU VRAM for the selected NIM services. One GPU is vali
 
 ## Precision
 
-`NIM_TAGS_SELECTOR` defaults to `precision=fp8,tp=1`. That default is not universal. The NIM restart-loops with `Could not match a profile in manifest` when the GPU has no profile at that precision. Blackwell (for example RTX PRO 5000, `compute_cap` 12.0) has **no** `fp8` profile.
+The standard `*/server` LLM service leaves `NIM_MODEL_PROFILE` unset so NIM can select a hardware-compatible profile for its single visible GPU. ASR and TTS keep their required `NIM_TAGS_SELECTOR` values. Confirm the selected LLM profile in the startup logs. Automatic selection does not guarantee that the remaining VRAM is enough to colocate ASR and TTS.
 
 ### 1. List Compatible Profiles
 
@@ -23,20 +23,29 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 
 ### 2. Select a Precision
 
-Pick the lightest **Compatible** precision. Prefer readable tags over a profile hash. Use `tp=1` on one GPU and `tp=N` on N GPUs.
+Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. Use `tp=1` on one GPU and `tp=N` on N visible GPUs.
 
-| GPU compute capability | `NIM_TAGS_SELECTOR` precision |
+| GPU compute capability | Preferred compatible precision |
 | --- | --- |
 | Blackwell (CC 10.0+) | `nvfp4` (no `fp8` profile) |
-| Hopper or Ada (CC 8.9–9.0) | `fp8`, or `nvfp4` when listed |
-| Ampere (CC 8.0–8.6) | `int4` or `bf16` |
+| Hopper or Ada (CC 8.9–9.0) | `bf16` or another compatible quantized profile listed by the image |
+| Ampere (CC 8.0–8.6) | `bf16` or `int4` when listed |
 | Below CC 8.0 | unsupported → cloud |
 
 ### 3. Configure the Profile
 
-Set `NIM_TAGS_SELECTOR=precision=<compatible-precision>,tp=1` in `.env` while preserving other keys.
+For standard `*/server`, keep `NIM_MODEL_PROFILE` unset and let NIM choose from the compatible manifest profiles. For an explicitly pinned deployment, add `NIM_MODEL_PROFILE=<id-or-description>` to a Compose override. Do not use the deprecated LLM `NIM_TAGS_SELECTOR`.
 
-This applies to `*/server` only. `generic-assistant/server-perf` pins `precision=fp8,tp=2` as a literal in its Compose service (`nvidia-llm-perf`) and ignores the `.env` `NIM_TAGS_SELECTOR`. It targets a Hopper-class four-GPU host and does not fit a Blackwell workstation (no `fp8` profile). To retune it, edit the literal in the compose file, not `.env`.
+`generic-assistant/server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`, selected and benchmarked on two RTX PRO 6000 Blackwell GPUs, and exposes GPUs `2` and `3` to the LLM. This is an RTX PRO 6000 benchmark baseline, not a portable recommendation. Before running the recipe on H100 or another target, run `list-model-profiles` on the actual LLM GPUs, benchmark compatible TP2 profiles for TTFT, inter-token latency, and throughput per GPU, then replace the pin with the winner's exact ID or full description. Leave `NIM_MODEL_PROFILE` unset when portability is more important than predictable performance.
+
+Run server-perf discovery against the actual LLM GPU assignment, not GPU `0`:
+
+```bash
+docker run --rm --gpus '"device=2,3"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
+  <nim_llm_image> list-model-profiles
+```
+
+Confirm GPUs `2` and `3` are the same supported GPU type and that the manifest lists the exact TP2 profile before changing `NIM_MODEL_PROFILE`.
 
 Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 
@@ -52,5 +61,5 @@ Cascaded Lightning NIM health: `curl -f http://localhost:18000/v1/health/ready`.
 ## Failures
 
 - **`pull access denied` / `unauthorized`** → NGC login missing or expired. Single-GPU does not use `nvcr.io`.
-- **`Could not match a profile in manifest`** → default `fp8` has no profile on this GPU. Run `list-model-profiles`, set a Compatible `NIM_TAGS_SELECTOR`, recreate the LLM service.
+- **`Could not match a profile in manifest`** → no profile matches the detected hardware or `NIM_MODEL_PROFILE`. Run `list-model-profiles`. For standard `*/server`, leave automatic selection enabled or pin a compatible profile. For `server-perf`, set `NIM_MODEL_PROFILE` to a compatible TP2 profile, then recreate the LLM service.
 - **`No available memory for the cache blocks`** → `NIM_KVCACHE_PERCENT` is too **low**. Raise it. CUDA OOM during load is the opposite: lower it, or move TTS off that GPU. `LLM_MAX_NUM_SEQS` can be lowered if CUDA-graph capture fails.

@@ -17,7 +17,7 @@ metadata:
 - Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any recipe. They are not recipes.
 - Preserve existing `.env`. Create it only if missing: `test -f .env || cp .env.example .env`.
 - Use `configure-pipeline` for `.env`, catalog, or prompt changes. Do not write host-specific vLLM flags into `.env`.
-- Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU workstation load benchmark, not a UI deploy. See `benchmarking_tools/scaling-perf/README.md`.
+- Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU Blackwell workstation load benchmark with a pinned NVFP4 TP2 LLM profile, not a UI deploy. Older hardware requires a compatible TP2 profile. See `benchmarking_tools/scaling-perf/README.md`.
 - Selector modes (`all`, or one `<example>`) are host-native (`uv run`) only. No compose profile.
 - Generic, Multilingual, Omni, and Frontend/Backend `/single-gpu` support compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, that example is cloud-only (`omni-assistant-subagents`). Orin-class Jetson is unsupported (the model does not fit). Do not infer fit from the platform name. Complete memory-fit first. The single-GPU compose files detect product and compute capability. Do not set those by hand.
 
@@ -89,6 +89,6 @@ Tear down with the same recipe: `docker compose --profile <recipe> down`. After 
 Open only what the chosen family needs:
 
 - Recipe table and sidecar names: `references/recipes.md`
-- Server NIM precision: `references/server.md`
+- Server NIM profile selection: `references/server.md`
 - Single-GPU memory-fit: `references/single-gpu.md`
 - External clients: `references/turn.md`

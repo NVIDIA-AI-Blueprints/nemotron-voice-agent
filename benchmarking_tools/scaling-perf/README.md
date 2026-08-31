@@ -72,9 +72,9 @@ docker compose --profile generic-assistant/server-perf up -d
 This catalog defaults to `prompt_1000_tokens`. Available prompt entries are
 `prompt_200_tokens`, `prompt_1000_tokens`, and `prompt_5000_tokens`.
 
-## Reproducing the best scaling setup
+## Reproducing the recommended scaling setup
 
-For the best scaling numbers, use a `4xH100` setup with `1 GPU` for ASR,
+The recommended scaling setup uses four Blackwell GPUs with `1 GPU` for ASR,
 `1 GPU` for TTS, and `2 GPUs` for the `Nemotron 3.5 Lightning 30B` LLM.
 
 This setup is available as the dedicated Compose recipe
@@ -83,7 +83,7 @@ scaling configuration:
 
 - Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
-- `nvidia-llm`: `NIM_TAGS_SELECTOR=precision=fp8,tp=2`, GPUs `2,3`, alias
+- `nvidia-llm`: `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`, GPUs `2,3`, alias
   `nvidia-llm`
 - `nemotron-asr-streaming-english`:
   `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
@@ -94,6 +94,27 @@ scaling configuration:
 - app env: `UVICORN_WORKERS=200`,
   `USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`,
   `AUDIO_OUT_10MS_CHUNKS=40`
+
+> **Hardware-specific profile:** `vllm-nvfp4-tp2-pp1-18.0` was selected from
+> `list-model-profiles` and benchmarked on two NVIDIA RTX PRO 6000 Blackwell
+> GPUs. The checked-in pin is an RTX PRO 6000 benchmark baseline, not a portable
+> recommendation. Before running this performance recipe on any other hardware,
+> including H100, replace the pin by following these steps:
+>
+> 1. Run `list-model-profiles` with the deployed image on the actual LLM GPUs.
+> 1. Benchmark the compatible TP2 profiles for time to first token, inter-token
+>    latency, and total throughput per GPU.
+> 1. Set `NIM_MODEL_PROFILE` to the winning profile's exact ID or full
+>    description. H100 requires its own comparison of the listed FP8 and BF16
+>    TP2 profiles.
+>
+> If portability matters more than predictable benchmark performance, remove
+> the pin and let NIM select automatically. Do not use the deprecated NIM 1.x
+> `NIM_TAGS_SELECTOR` for an LLM.
+>
+> See NVIDIA NIM's [model profile selection](https://docs.nvidia.com/nim/large-language-models/latest/deployment/model-profiles-and-selection.html)
+> and [environment variable](https://docs.nvidia.com/nim/large-language-models/latest/reference/environment-variables.html)
+> documentation.
 
 Deploy it with:
 

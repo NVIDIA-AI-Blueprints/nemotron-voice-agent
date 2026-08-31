@@ -12,6 +12,8 @@ The reference performance benchmark measures the Nemotron Voice Agent on a dedic
 
 > **Note:** This benchmark uses a 4-GPU setup to measure scalability. Deployment options include cloud-only with no local GPUs, about 80 GB VRAM for the default all-on-one-GPU `*/server` NIM layout, or a supported one-GPU host for `*/single-gpu`. See [Configure LLM](how-to/configure-llm.md#vram--hardware-support) for the automatic VRAM plan.
 >
+> The current `generic-assistant/server-perf` Compose recipe pins the RTX PRO 6000-validated `vllm-nvfp4-tp2-pp1-18.0` profile for Nemotron 3.5 Lightning. The H100 results above are historical reference measurements. H100 and other architectures require listing and benchmarking their compatible TP2 profiles before pinning a hardware-specific winner. See the [scaling benchmark](../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
+>
 > **Note:** These reference results were collected with the previous Nemotron 3 Nano configuration. Nemotron 3.5 Lightning is the current default cascaded LLM.
 
 | Parallel Streams | E2E Latency | ASR Latency | TTS TTFB | LLM TTFT | LLM First-Sentence Latency |
