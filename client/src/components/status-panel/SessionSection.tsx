@@ -9,7 +9,7 @@ import { PanelSection } from "../PanelSection";
 import { StatusRow } from "./StatusRow";
 
 export function SessionSection() {
-  const { availableTransports, selectedTransport } = useApp();
+  const { availableTransports, selectedTransport, selectedExample } = useApp();
   const selectedTransportLabel =
     availableTransports.find((transport) => transport.id === selectedTransport)?.label ?? selectedTransport;
 
@@ -31,6 +31,14 @@ export function SessionSection() {
 
   return (
     <PanelSection label="SESSION">
+      {selectedExample && (
+        <StatusRow
+          label="Example"
+          value={selectedExample.label}
+          title={selectedExample.key}
+          valueClassName="status-value--wrap"
+        />
+      )}
       <StatusRow label="Transport" value={selectedTransportLabel} />
       <StatusRow label="RTVI protocol" value={protocolVersion || "---"} />
     </PanelSection>

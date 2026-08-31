@@ -1581,6 +1581,13 @@ body {
   font-size: var(--text-sm);
 }
 
+.status-value--wrap {
+  min-width: 0;
+  text-align: right;
+  white-space: normal;
+  word-break: break-word;
+}
+
 // Spinner animation
 .spinner {
   width: 14px;

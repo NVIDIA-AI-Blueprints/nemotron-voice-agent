@@ -8,9 +8,9 @@ import { PanelSection } from "./PanelSection";
 export function PipelineExampleSelector() {
   const { isLocked } = useConnectionState();
   const { selectedExample, selectExample, deploymentOptions, deploymentSelectable } = useApp();
-  const disabled = isLocked || !deploymentSelectable;
+  const canSwitch = deploymentSelectable && deploymentOptions.length > 1;
 
-  if (!selectedExample || deploymentOptions.length <= 1) return null;
+  if (!selectedExample || !canSwitch) return null;
 
   return (
     <PanelSection label="EXAMPLE">
@@ -18,7 +18,7 @@ export function PipelineExampleSelector() {
         className="select-dark select-full"
         value={selectedExample.key}
         onChange={(e) => selectExample(e.target.value)}
-        disabled={disabled}
+        disabled={isLocked}
         aria-label="Example"
       >
         {deploymentOptions.map((option) => (

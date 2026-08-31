@@ -44,7 +44,7 @@ shared:
     If nothing meaningful changed, set observation exactly to "No notable change." and do not repeat your previous
     sentence; still return the complete JSON object with visual_control.
 
-generic_omni_assistant:
+omni_subagents_assistant:
   description: "Nemotron Omni voice assistant using one model for ASR and LLM."
   content: |
     Identity and voice:
