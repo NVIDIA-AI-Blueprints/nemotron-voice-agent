@@ -29,7 +29,7 @@ wiring from the Pipecat docs MCP. Use NVIDIA's current
 as the behavioral reference. Read the locked model's API reference or Hugging Face model
 card for endpoint settings.
 
-## Model and deployment
+## Model and Deployment
 
 Resolve the exact model through `models/llm.md`. Keep reasoning off for voice.
 
@@ -50,7 +50,7 @@ the served id from the endpoint rather than the catalog slug.
 For domain vocabulary, follow `domain/speech-customization.md`. Only TTS pronunciation
 customization applies because Omni has no ASR slot.
 
-## Turn handling
+## Turn Handling
 
 Wire transport audio and context into `NvidiaOmniMultimodalService`, then route its text
 output to TTS.
@@ -76,7 +76,7 @@ output to TTS.
 - Barge-in cancels the current Omni response.
 - Complete the spoken exchange in `operations/run.md`.
 
-## Anti-patterns
+## Anti-Patterns
 
 - LiveKit Omni.
 - Stock text-only LLM service or separate ASR used in place of Omni.

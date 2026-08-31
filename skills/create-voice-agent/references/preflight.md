@@ -15,7 +15,7 @@ Per-slot footprints and knobs live in `models/llm.md`, `models/asr.md`, and
 | Deployment row | intake proposal |
 | A blocking credential, if any | halts everything before the table |
 
-## 1. Probe the host
+## 1. Probe the Host
 
 Collect the operating system, GPU inventory, machine identity, system RAM, and free disk.
 Failures on a machine without a GPU are expected and are not errors.
@@ -43,7 +43,7 @@ apart from a generic host.
 Re-probe if the user says they will run on a different machine from the one hosting the
 agent.
 
-## 2. Classify the host
+## 2. Classify the Host
 
 | Signal | Host class |
 | --- | --- |
@@ -58,10 +58,11 @@ Name the GPU to the user exactly as `nvidia-smi` reports it, for example
 `NVIDIA RTX 6000 Ada Generation`. Warn when system RAM is under 32 GiB or free disk is
 under 50 GiB, because NIM images are large.
 
-## 3. Check the credentials
+## 3. Check the Credentials
 
-`NVIDIA_API_KEY` is needed on every path, for cloud inference, for pulling NIM images from
-`nvcr.io`, and for model discovery. Check it now.
+`NVIDIA_API_KEY` is required for cloud inference and for pulling NIM images from `nvcr.io`.
+It is not required for a raw-vLLM path that pulls from Hugging Face. Check the credential
+that the selected deployment path requires.
 
 The rest depend on choices intake has not made yet, so check them the moment the table's
 shape is known, and before writing anything.
@@ -81,17 +82,18 @@ it is set. Ask for every missing key in one message rather than one at a time.
 
 | Key | Where the user gets it |
 | --- | --- |
-| `NVIDIA_API_KEY` | https://build.nvidia.com/settings/api-keys, starts with `nvapi-`, shown once |
+| `NVIDIA_API_KEY` | [NVIDIA API key settings](https://build.nvidia.com/settings/api-keys), starts with `nvapi-`, shown once |
 | `HF_TOKEN` | Hugging Face settings, access tokens, read access is enough |
 | `LIVEKIT_*` | the `lk cloud auth` browser flow, or project settings, API keys, create key |
 
 Fetch the LiveKit steps from the LiveKit documentation MCP before answering, because that
 console flow changes. Self-hosted LiveKit is an override the user has to ask for by name.
 
-Write the keys into `.env.example` as placeholders. Never write a real value to disk, and
+After the user approves file generation, write required keys to `.env.example` as
+placeholders as specified by `output-contract.md`. Never write a real value to disk, and
 never put model ids or endpoints in `.env`, which holds secrets only.
 
-## 4. Deployment fit
+## 4. Deployment Fit
 
 During proposal, set the intake **Deployment** row from usable VRAM. Model weights are
 planning hints, not service footprints. Authoritative speech VRAM comes from the selected
@@ -149,7 +151,7 @@ Host GPU detection is not container readiness. After self-hosting is approved an
 pulling an image, require Docker, Compose, NVIDIA Container Toolkit, in-container GPU
 visibility, and writable cache paths through `platforms/readiness.md`.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Asking whether to use cloud or self-hosted before probing.
 - Offering a deployment choice on a machine with no GPU.

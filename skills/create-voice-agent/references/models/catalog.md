@@ -13,7 +13,7 @@ slot you are resolving.
 
 Family browse: [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron#section-nvidia-nemotron-models).
 
-## Shared rules
+## Shared Rules
 
 - Proposal table gets exact catalog ids. Family names alone are wrong. Those ids describe
   the choice, and agent code uses the runtime ids resolved after startup.
@@ -30,7 +30,7 @@ Family browse: [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron
 - Jetson Thor bypasses Speech NIM selection and follows `platforms/jetson-thor.md`.
 - If the user names a model outside these families, say so and wait. Do not substitute.
 
-## Where they live
+## Where They Live
 
 | Identifier | Who | Source |
 | --- | --- | --- |

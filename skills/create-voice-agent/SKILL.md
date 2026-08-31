@@ -1,7 +1,7 @@
 ---
 name: create-voice-agent
 description: Create or refine an NVIDIA voice agent with Pipecat or LiveKit. Covers cascaded and omni pipelines, domain speech customization, NVIDIA cloud, GPU workstations, DGX Spark, and Jetson Thor. Use when asked to build, scaffold, start, or modify a voice agent, voice bot, speech assistant, real-time audio pipeline, ASR word boosting, or TTS pronunciation.
-version: "2.1.1"
+version: "2.2.0"
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [voice-agent, nvidia, nemotron, magpie, pipecat, livekit, nim, omni]
@@ -9,14 +9,20 @@ metadata:
 
 # Create Voice Agent
 
-Builds a working NVIDIA voice agent in an empty project:
+Creates a working NVIDIA voice agent or updates an existing project:
 
 - **Cascaded**: ASR transcribes, a text LLM answers, TTS speaks.
 - **Omni**: one audio-in LLM replaces ASR and the text LLM. TTS still speaks.
 
 ## Workflow
 
-Follow these phases in order:
+Classify the starting state before following the phases:
+
+- For an empty project, follow all phases in order.
+- For a working existing project, read `references/operations/iterate.md` first, and then route only the references needed for the requested change.
+- For a broken existing project, read `references/operations/troubleshoot.md` first. After restoring the baseline, continue with `references/operations/iterate.md`.
+
+For an empty project, follow these phases in order:
 
 | Phase | Read |
 | --- | --- |

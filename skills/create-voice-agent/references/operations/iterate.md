@@ -6,7 +6,7 @@ layer, then repeat the spoken exchange.
 If the agent is already broken, start with `operations/troubleshoot.md`. Do not mix a
 repair with an enhancement.
 
-## 1. Read the current project
+## 1. Read the Current Project
 
 Read the agent file, dependency file, `.env.example`, and any deployment instructions.
 Identify the current framework, pipeline, model ids, endpoints, and platform before
@@ -14,7 +14,7 @@ proposing a change.
 
 Never overwrite `.env` or read secrets into the response.
 
-## 2. Route the change
+## 2. Route the Change
 
 | Change | Reopen | Approval |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ Never overwrite `.env` or read secrets into the response.
 Do not repeat the full intake for a local change. Reopen only the affected row and
 anything it changes downstream.
 
-## 3. Revalidate dependencies
+## 3. Revalidate Dependencies
 
 - Re-query the framework documentation MCP before changing framework imports, classes,
   settings, or pipeline structure.
@@ -42,7 +42,7 @@ anything it changes downstream.
 - Keep healthy local services running unless their model, profile, tags, or endpoint must
   change.
 
-## Cascading changes
+## Cascading Changes
 
 - LLM swap: workstation / DGX NIM reruns the support matrix and
   `list-model-profiles`. Cloud rechecks model id/API. Jetson Thor reopens the vLLM model
@@ -65,7 +65,7 @@ anything it changes downstream.
 - Deployment change: update code constants, generated Compose, and README through
   `output-contract.md`. `.env` remains secrets only.
 
-## 4. Apply the smallest change
+## 4. Apply the Smallest Change
 
 Prefer a documented runtime setting update when the framework supports it. Otherwise
 restart only the affected agent or model service. Rebuild the pipeline when its framework
@@ -83,7 +83,7 @@ Do not regenerate unrelated files, reset user edits, or replace working services
 6. If verification fails, use `operations/troubleshoot.md` and keep the failure scoped to
    this change.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Editing framework APIs from memory.
 - Changing several layers before testing.

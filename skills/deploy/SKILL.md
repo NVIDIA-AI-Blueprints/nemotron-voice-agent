@@ -1,7 +1,7 @@
 ---
 name: deploy
-description: Deploy Nemotron Voice Agent via root compose using recipe profiles. Use when deploying or troubleshooting auth/startup.
-version: "2.1.1"
+description: Deploy Nemotron Voice Agent using root Compose recipe profiles. Use when deploying or troubleshooting authentication and startup.
+version: "2.2.0"
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [deployment, docker-compose, voice-agent, nemotron]
@@ -21,7 +21,7 @@ metadata:
 - Selector modes (`all`, or one `<example>`) are host-native (`uv run`) only. No compose profile.
 - Generic, Multilingual, Omni, and Frontend/Backend `/single-gpu` support compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, that example is cloud-only (`omni-assistant-subagents`). Orin-class Jetson is unsupported (the model does not fit). Do not infer fit from the platform name. Complete memory-fit first. The single-GPU compose files detect product and compute capability. Do not set those by hand.
 
-## Auth (do not mix)
+## Auth (Do Not Mix)
 
 | Recipe family | `.env` key | `docker login nvcr.io` |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io --username '$oauthtoken' --
 
 ## Deploy
 
-1. Hardware:
+### 1. Inspect Hardware
 
 ```bash
 cat /sys/class/dmi/id/product_name 2>/dev/null || true
@@ -49,7 +49,9 @@ nvidia-smi --query-gpu=index,name,memory.total,memory.free,compute_cap --format=
 free -h
 ```
 
-2. Choose **one** recipe from `references/recipes.md`. Hardware only tells you what *can* run:
+### 2. Choose One Recipe
+
+Choose **one** recipe from `references/recipes.md`. Hardware only tells you what *can* run:
 
 - Cloud: needs `NVIDIA_API_KEY`. It is the fallback when local VRAM is not enough.
 - `server`: workstation NIM only. **Not supported on DGX Spark or Jetson Thor.** If the hardware readout is Spark or Thor, do not open `references/server.md`. Use `single-gpu` or cloud. On a workstation: NGC login + `references/server.md`.
@@ -57,9 +59,11 @@ free -h
 
 If more than one family is viable, present the options and let the user pick. Auto-select only when a single option is viable (for example no usable GPU → cloud).
 
-3. Apply **only** that family's preflight. Never run the other family's login or key checks.
+### 3. Run the Matching Preflight
 
-4. Start:
+Apply **only** that family's preflight. Never run the other family's login or key checks.
+
+### 4. Start the Recipe
 
 ```bash
 docker compose --profile <recipe> up -d
@@ -69,7 +73,7 @@ Add `--profile tracing` (Phoenix) freely. Add `--profile turn` only after `refer
 
 Local recipes: the first voice turn may be slow while GPU sidecars finish loading. If later turns are fast, the deploy is fine.
 
-5. Verify:
+### 5. Verify the Deployment
 
 ```bash
 docker compose ps

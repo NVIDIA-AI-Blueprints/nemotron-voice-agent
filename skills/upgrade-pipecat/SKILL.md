@@ -1,7 +1,7 @@
 ---
 name: upgrade-pipecat
 description: Upgrade the Nemotron Voice Agent to a new Pipecat (pipecat-ai) version. Reads release notes for every release in range, diffs old vs new, discovers every example pipeline and Pipecat call site, implements changes, then runs multi-agent gap analysis until clean. Generic across Pipecat versions.
-version: "2.1.1"
+version: "2.2.0"
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [upgrade, migration, pipecat, voice-agent, nemotron]
@@ -26,9 +26,9 @@ The only input is the `pipecat-ai` version. Latest version and release notes com
 **<https://github.com/pipecat-ai/pipecat/releases>**. The skill scans BOTH dependency surfaces for every Pipecat
 package and reads each one's own release notes:
 
-- **Server (Python)** — `pyproject.toml`/`uv.lock`: every `pipecat*` dependency (e.g. `pipecat-ai-subagents`,
+- **Server (Python)** — `pyproject.toml`/`uv.lock`: every `pipecat*` dependency (for example, `pipecat-ai-subagents`,
   `pipecat-ai-flows`, …).
-- **Client (npm)** — `client/package.json`: every `@pipecat-ai/*` dependency (e.g. `client-js`, `client-react`,
+- **Client (npm)** — `client/package.json`: every `@pipecat-ai/*` dependency (for example, `client-js`, `client-react`,
   `*-transport`, …).
 
 Extras and every dependency change are derived from these notes + the lockfiles — nothing about specific
@@ -67,12 +67,15 @@ signatures, trust the actual installed/new source; use the MCP for intent and mi
   cross-cutting agent for `src/examples/shared/` and `src/server.py`.
 - **Custom service subclasses require parent-API review**: explicitly inspect
   `src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and
-  `src/examples/omni_assistant/nvidia_omni_multimodal_service.py`. Diff their upstream parent services before
-  validating overrides, lifecycle methods, settings, frames, and private compatibility contracts.
+  `src/examples/omni_assistant/nvidia_omni_multimodal_service.py`, plus the downstream
+  `SubagentsSpeakerOmniService` in
+  `src/examples/omni_assistant_subagents/subagents/speaker/agent.py`. Diff their upstream
+  parent services before validating overrides, lifecycle methods, settings, frames, and
+  private compatibility contracts.
 - **Server + client move together (RTVI contract)**: the RTVI wire protocol couples the Python server to the
   `@pipecat-ai/*` client packages, so they must be upgraded in lockstep. Bump `client/package.json` to versions
   compatible with the target `pipecat-ai`, migrate `client/src/` RTVI usage (renamed events/messages), and gate
-  on `npm` lint+build. Discover the client packages — don't assume which exist.
+  on `npm` lint+build. Discover the client packages — do not assume which exist.
 - **Iterative convergence**: gap analysis loops until a pass finds zero gaps.
 - **Validation gates**: `uv sync`, import smoke tests, `ruff`, `pytest`, Compose deploy. Human input only for
   plan confirmation and review.

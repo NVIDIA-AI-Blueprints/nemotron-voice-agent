@@ -1,6 +1,6 @@
 # Nemotron Voice Agent
 
-Nemotron Voice Agent Blueprint provides a comprehensive, end-to-end voice agent built with NVIDIA Nemotron state-of-the-art open models, as NVIDIA NIM for acceleration and scaling. It is designed to guide developers through the creation of a cascaded pipeline, integrating Nemotron ASR, LLM, and TTS, while solving for the complexities of streaming, interruptible conversations. Clone it, swap in your own logic, and deploy a working voice AI prototype in hours.
+Nemotron Voice Agent Blueprint provides a comprehensive, end-to-end voice agent built with open NVIDIA Nemotron models and NVIDIA NIM for acceleration and scaling. It is designed to guide developers through the creation of a cascaded pipeline, integrating Nemotron ASR, LLM, and TTS, while solving for the complexities of streaming, interruptible conversations. Clone it, swap in your own logic, and deploy a working voice AI prototype in hours.
 
 Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipecat) and leveraging NVIDIA NIM microservices, this example helps teams accelerate the deployment of high-performance voice AI solutions.
 
@@ -52,7 +52,7 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 | [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
 | [Frontend/Backend Agent](src/examples/frontend_backend_agent/README.md) | A fast frontend LLM handles the conversation while a specialized backend agent does the work. This is the pattern for giving an **existing text / agentic backend** a real-time conversational experience (the flight-booking agent as the reference backend). | Add voice to an existing text agent / agentic backend with minimal changes. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 
-> **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. The examples can be extended with other hardware configurations or models. Those just aren't included out of the box.
+> **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. The examples can be extended with other hardware configurations or models. Those configurations are not included by default.
 
 ---
 
@@ -92,23 +92,20 @@ npx skills add .
 
 ### Manual steps
 
-1. Clone the repository and navigate to the root directory and copy the example environment file [.env.example](.env.example) to the root directory.
+1. Clone the repository, navigate to the root directory, and copy the example environment file only if `.env` does not exist.
 
     ```bash
     git clone git@github.com:NVIDIA-AI-Blueprints/nemotron-voice-agent.git
     cd nemotron-voice-agent
-    cp .env.example .env
+    test -f .env || cp .env.example .env
     ```
 
-2. Set your NVIDIA API key as an environment variable:
+2. Set `NVIDIA_API_KEY` in `.env`. Docker Compose passes values from this file into the application and model services.
+
+3. Log in to the NVIDIA NGC Docker Registry.
 
     ```bash
-    export NVIDIA_API_KEY=<your-nvidia-api-key>
-    ```
-
-3. Login to NVIDIA NGC Docker Registry.
-
-    ```bash
+    set -a; . ./.env; set +a
     printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
     ```
 
@@ -163,7 +160,7 @@ Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-
 ## Roadmap
 
 **Future releases**
-- Fully open model support via HuggingFace and NeMo (no NIM required).
+- Fully open model support using Hugging Face and NeMo (no NIM required).
 - LiveKit Agents-based sample example.
 - Voice Agent skill for iterative development with AI coding agents.
 

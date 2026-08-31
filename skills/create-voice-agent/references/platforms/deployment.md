@@ -18,7 +18,7 @@ environment from the locked model's self-hosted page, then apply the verified pr
 tags from `models/llm.md`, `models/asr.md`, or `models/tts.md`. Persist the result as the
 generated `compose.yaml` defined by `output-contract.md`.
 
-## Source of truth per slot
+## Source of Truth per Slot
 
 | Slot | Cloud | Self-hosted deploy copy |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ the local Compose commands.
 For LiveKit, configure STT, LLM, and TTS independently through the current plugin APIs.
 Do not assume that selecting one cloud slot moves the full pipeline to cloud.
 
-## Workstation / DGX Spark NIM
+## Workstation and DGX Spark NIM
 
 1. Confirm the host clears `preflight.md` §Deployment fit (or move overflowing slots to
    cloud).
@@ -91,7 +91,7 @@ Jetson Thor skips the numbered path above and its shared-GPU memory gate, becaus
 `platforms/jetson-thor.md` defines the equivalent unified-memory check. §Service health
 checks, §First boot takes much longer, and §Per-slot reuse still apply to it.
 
-### Shared-GPU memory gate
+### Shared-GPU Memory Gate
 
 Do not treat LLM readiness as permission to start speech. This gate covers workstation and
 DGX Spark layouts. Jetson Thor uses the unified-memory check in
@@ -115,7 +115,7 @@ After every assigned service is healthy and the measured gate passes, update the
 deployment status from `provisional co-location` to `self-hosted, co-located`. The agent
 is still not complete until `operations/run.md` passes a spoken exchange.
 
-### Service health checks
+### Service Health Checks
 
 Use the health path from the build / NIM docs for that service. Common patterns:
 
@@ -136,7 +136,7 @@ actually used in the README and smoke script.
 For the LLM, compare the served model against the approved model. A different id string
 can still be the right model, but agent code must carry the exact served id.
 
-### First boot takes much longer
+### First Boot Takes Much Longer
 
 A speech NIM's first start downloads models and can then build a TensorRT engine for this
 GPU, which commonly runs 15 to 30 minutes or more with health reporting `starting` or a
@@ -149,7 +149,7 @@ batch size, or restart the service just because first boot is slow, because a re
 throws away partial work. Keep the documented cache mount so later starts reuse the
 downloaded models and the built engine and come up quickly.
 
-### Per-slot reuse
+### Per-Slot Reuse
 
 Before starting anything: `docker ps`, hit health on ports already in use, and run the
 speech gRPC configuration query when applicable. Keep a container that already matches
@@ -159,7 +159,7 @@ current source when needed, then start that service alone.
 Tell the user which slots will be reused or replaced.
 Never tear down healthy slots to fix one mismatch.
 
-### Why this order
+### Why This Order
 
 Intake decides language, framework, and pipeline. After that the deploy is the same ordered
 run every time, and each step above exists because skipping it produced a failure that
@@ -174,7 +174,7 @@ looked like something else:
 | Resolve the voice, finalize settings, run smoke | silent connect failures in the browser |
 | Start the agent and speak | a running process that is deaf or mute |
 
-## Scaling across GPUs
+## Scaling Across GPUs
 
 This section covers slot placement on a multi-GPU workstation or DGX system. It does not
 apply to single-GPU DGX Spark or Jetson Thor, and it does not define replica autoscaling.
@@ -205,14 +205,14 @@ Start and verify one slot at a time. Confirm from inside each container that it 
 the intended GPU set, then check host `nvidia-smi` to confirm memory landed on the planned
 device. Keep agent endpoint constants aligned with the resulting host ports.
 
-## Agent configuration
+## Agent Configuration
 
 - Cloud: use the URLs and function ids in §Cloud.
 - Workstation / DGX: use the host ports mapped from each live deploy page.
 - Jetson Thor: use the vLLM / Riva mappings in `platforms/jetson-thor.md`.
 - Self-hosted speech has empty function ids. Omni has no ASR.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Shipping a remembered image tag, `docker run`, or Compose recipe instead of generating it
   from the locked model's current build.nvidia.com instructions.

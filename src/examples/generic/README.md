@@ -8,11 +8,10 @@ Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`Nvidi
 
 This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance Server** (NIM), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The performance profile uses the dedicated four-GPU Blackwell layout and pinned NVFP4 TP2 LLM profile documented in the [scaling benchmark](../../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup). Older hardware requires a compatible TP2 profile. It runs 200 Uvicorn workers for load testing and is not intended for normal browser UI sessions. The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run commands from the repository root.
 
-1. Create your `.env` from the template and set your NVIDIA API key:
+1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud, Server, or Performance Server profile:
 
    ```bash
-   cp .env.example .env
-   export NVIDIA_API_KEY=<your-nvidia-api-key>
+   test -f .env || cp .env.example .env
    ```
 
    > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server and Performance Server profiles use NIMs from NGC (`NVIDIA_API_KEY`) and do not use `HF_TOKEN`.
@@ -20,6 +19,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance
 2. Log in to the NVIDIA NGC container registry (Server and Performance Server only. Skip for Cloud and Single GPU):
 
    ```bash
+   set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
@@ -64,7 +64,7 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 | `pipeline.py` | Pipecat entry point for the generic example |
 | `prompts.yaml` | example-local prompt catalog. Each entry may list `tools_available` to gate function calling per prompt |
 | `tools.yaml` | OpenAI function-calling schemas, keyed by tool name |
-| `tool_handlers.py` | async handlers for each schema in `tools.yaml`, exposed via the `TOOL_HANDLERS` registry |
+| `tool_handlers.py` | async handlers for each schema in `tools.yaml`, exposed through the `TOOL_HANDLERS` registry |
 | `tools.py` | builds a filtered `ToolsSchema` from `tools.yaml` for the tool names a prompt requests, skipping entries without a matching handler |
 | `services.cloud.yaml`, `services.local.yaml` | example-local service catalogs |
 

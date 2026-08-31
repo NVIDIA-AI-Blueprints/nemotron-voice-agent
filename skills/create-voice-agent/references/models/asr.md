@@ -7,7 +7,7 @@ Do not use the LLM support matrix, `list-model-profiles`, or `NIM_MODEL_PROFILE`
 Jetson Thor uses Riva L4T models selected from its ARM64 quickstart, not Speech NIM
 deployment. See `platforms/jetson-thor.md`.
 
-## Streaming first
+## Streaming First
 
 Voice agents need partial transcripts as audio arrives. Always propose a **streaming** ASR
 model and a streaming `NIM_TAGS_SELECTOR` (`mode=str` or a streaming-only model such as
@@ -17,7 +17,7 @@ Prefer streaming even when the user also wants diarization or multilingual. Pick
 row that exposes streaming for that need. Do not default to offline (`mode=ofl`) or to an
 offline-only model (Parakeet TDT, Whisper, Canary, and anything the docs mark offline only).
 
-### If the user chooses offline
+### If the User Chooses Offline
 
 Allow it only when they ask for offline by name, or for a capability that exists only on
 an offline profile. Before locking that row, tell them these limits in the proposal (or
@@ -57,7 +57,7 @@ Near-duplicates that must not collapse:
 If the user says “Parakeet” without size or decoder, open the docs disambiguation and
 propose one **streaming** concrete row. Do not pick silently.
 
-## Defaults (hints only)
+## Defaults (Hints Only)
 
 Re-check the matrix before the proposal table. Every default below is a streaming pick.
 
@@ -96,7 +96,7 @@ fit. If ASR does not fit beside the LLM, move ASR to another GPU or to the cloud
 When ASR shares a GPU, verify measured fit through `platforms/deployment.md` §Shared-GPU
 memory gate.
 
-## Lock self-hosted
+## Lock Self-Hosted
 
 1. From the matrix section: `CONTAINER_ID` + `NIM_TAGS_SELECTOR` for language, **streaming**
    mode, and VRAM. Prefer `mode=str` (or the model’s streaming-only tags). Tag strings, not
@@ -109,7 +109,7 @@ memory gate.
 5. Cloud: function id from the build page. Self-hosted: leave function id empty. Never
    look up a speech function id in `/v1/models`.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Defaulting to offline ASR or an offline-only model for a voice agent.
 - Locking offline ASR without telling the user the live-conversation limits.

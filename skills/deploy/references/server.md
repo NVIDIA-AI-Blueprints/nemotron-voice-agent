@@ -1,4 +1,4 @@
-# Server NIM preflight
+# Server NIM Preflight
 
 Use only for `*/server` and `generic-assistant/server-perf` on a **workstation**. Skip for cloud and `*/single-gpu`.
 
@@ -12,14 +12,18 @@ Needs enough workstation GPU VRAM for the selected NIM services. One GPU is vali
 
 The standard `*/server` LLM service leaves `NIM_MODEL_PROFILE` unset so NIM can select a hardware-compatible profile for its single visible GPU. ASR and TTS keep their required `NIM_TAGS_SELECTOR` values. Confirm the selected LLM profile in the startup logs. Automatic selection does not guarantee that the remaining VRAM is enough to colocate ASR and TTS.
 
-1. List profiles on GPU 0. Read the image tag from the recipe compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
+### 1. List Compatible Profiles
+
+List profiles on GPU 0. Read the image tag from the recipe Compose file rather than assuming `:latest` (`docker/docker-compose.nemotron35-lightning-nim.yaml` for cascaded, `docker/docker-compose.nemotron3-omni-nim.yaml` for Omni):
 
 ```bash
 docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
   <nim_llm_image> list-model-profiles
 ```
 
-1. Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. `tp=1` uses one GPU. `tp=N` needs N visible GPUs.
+### 2. Select a Precision
+
+Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. Use `tp=1` on one GPU and `tp=N` on N visible GPUs.
 
 | GPU compute capability | Preferred compatible precision |
 | --- | --- |
@@ -28,7 +32,9 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 | Ampere (CC 8.0–8.6) | `bf16` or `int4` when listed |
 | Below CC 8.0 | unsupported → cloud |
 
-1. For standard `*/server`, keep `NIM_MODEL_PROFILE` unset and let NIM choose from the compatible manifest profiles. Set it when an exact LLM profile must be pinned.
+### 3. Configure the Profile
+
+For standard `*/server`, keep `NIM_MODEL_PROFILE` unset and let NIM choose from the compatible manifest profiles. For an explicitly pinned deployment, add `NIM_MODEL_PROFILE=<id-or-description>` to a Compose override. Do not use the deprecated LLM `NIM_TAGS_SELECTOR`.
 
 `generic-assistant/server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`, selected and benchmarked on two RTX PRO 6000 Blackwell GPUs, and exposes GPUs `2` and `3` to the LLM. This is an RTX PRO 6000 benchmark baseline, not a portable recommendation. Before running the recipe on H100 or another target, run `list-model-profiles` on the actual LLM GPUs, benchmark compatible TP2 profiles for TTFT, inter-token latency, and throughput per GPU, then replace the pin with the winner's exact ID or full description. Leave `NIM_MODEL_PROFILE` unset when portability is more important than predictable performance.
 

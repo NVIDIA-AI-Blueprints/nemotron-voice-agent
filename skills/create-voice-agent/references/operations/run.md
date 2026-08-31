@@ -58,7 +58,7 @@ started with `-t` when it should not have been. See `frameworks/pipecat.md`.
 For remote Pipecat browsers, NAT, coturn, or a separate GPU host, follow
 `networking/remote-webrtc.md`. For LiveKit, use its current connectivity docs.
 
-## Prove it works
+## Prove It Works
 
 Speak and verify the selected pipeline:
 
@@ -78,7 +78,7 @@ Interrupt the agent, then use the generated README to stop the Compose services 
 started. Leaving them running holds the GPU and ports, which can make a later start fail
 to bind.
 
-## Hand over
+## Hand Over
 
 Leave the user with five things, written down rather than implied.
 
@@ -88,7 +88,7 @@ Leave the user with five things, written down rather than implied.
 - `operations/troubleshoot.md` as the debugging entry point.
 - `operations/iterate.md` for future changes.
 
-## Anti-patterns
+## Anti-Patterns
 
 - Starting the agent before the services report ready.
 - Opening a client before `scripts/smoke.sh` passes.
