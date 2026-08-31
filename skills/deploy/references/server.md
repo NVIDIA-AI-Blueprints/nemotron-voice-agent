@@ -30,7 +30,7 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 
 1. For standard `*/server`, keep `NIM_MODEL_PROFILE` unset and let NIM choose from the compatible manifest profiles. Set it when an exact LLM profile must be pinned.
 
-`generic-assistant/server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1` and exposes GPUs `2` and `3` to the LLM. It targets a four-GPU Blackwell host. On older non-Blackwell hardware, run `list-model-profiles` and set `NIM_MODEL_PROFILE` to a compatible TP2 profile, such as `vllm-bf16-tp2-pp1` when listed and when both GPUs have enough VRAM.
+`generic-assistant/server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`, selected and benchmarked on two RTX PRO 6000 Blackwell GPUs, and exposes GPUs `2` and `3` to the LLM. This is an RTX PRO 6000 benchmark baseline, not a portable recommendation. Before running the recipe on H100 or another target, run `list-model-profiles` on the actual LLM GPUs, benchmark compatible TP2 profiles for TTFT, inter-token latency, and throughput per GPU, then replace the pin with the winner's exact ID or full description. Leave `NIM_MODEL_PROFILE` unset when portability is more important than predictable performance.
 
 Run server-perf discovery against the actual LLM GPU assignment, not GPU `0`:
 

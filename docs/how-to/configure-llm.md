@@ -86,7 +86,7 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 | Controls | NIM (`.env`) | Single-GPU vLLM | Notes |
 |----------|--------------|--------------------------|-------|
 | **VRAM fit** | `NIM_KVCACHE_PERCENT` (default `0.6`) | `VLLM_VRAM_HEADROOM_MIB` (default `4096`) and optional `VLLM_GPU_MEMORY_UTILIZATION` override | vLLM calculates the utilization from free memory by default. |
-| **Precision** | Automatic for standard `*/server`. `server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1` | Selected automatically from GPU compute capability | NVFP4 needs Blackwell or later. On older hardware, choose a compatible profile listed by the NIM image. |
+| **Precision** | Automatic for standard `*/server`. `server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0` | Selected automatically from GPU compute capability | NVFP4 needs Blackwell or later. On older hardware, choose a compatible profile listed by the NIM image. |
 | **Hardware / scaling (TP)** | Automatic from the visible GPUs for standard `*/server`. Pinned to TP2 for `server-perf` | `--tensor-parallel-size N` | A pinned TP=N profile needs N visible `device_ids`. Merely exposing N GPUs does not guarantee automatic selection will use all of them. |
 | **Context length** | `NIM_MAX_MODEL_LEN` (default `32768`) | `--max-model-len` | Larger context costs more KV-cache VRAM. |
 | **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` | Max concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this (e.g. `64`–`128`). |
@@ -96,7 +96,7 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4 or FP8 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 
-**Pick a NIM model profile.** Standard `*/server` leaves `NIM_MODEL_PROFILE` unset, and NIM chooses a compatible profile from the detected GPU and manifest. Use `NIM_MODEL_PROFILE` only for an explicitly pinned custom deployment. The `server-perf` recipe pins `vllm-nvfp4-tp2-pp1`. On non-Blackwell hardware, replace it with an available TP2 profile listed by the deployed image, such as `vllm-bf16-tp2-pp1` when listed. Profile discovery must use the same image tag and GPU assignment as the deployed service.
+**Pick a NIM model profile.** Standard `*/server` leaves `NIM_MODEL_PROFILE` unset, and NIM chooses a compatible profile from the detected GPU and manifest. Use `NIM_MODEL_PROFILE` only for an explicitly pinned custom deployment. The `server-perf` recipe pins `vllm-nvfp4-tp2-pp1-18.0`, selected and benchmarked on two RTX PRO 6000 Blackwell GPUs. This is an RTX PRO 6000 benchmark baseline, not a portable recommendation. Before running the recipe on another target such as H100, list profiles using the deployed image and actual GPU assignment, benchmark compatible TP2 candidates for TTFT, inter-token latency, and throughput per GPU, then replace the pin with the winner's exact ID or full description. Leave the variable unset when portability is preferred.
 
 For standard `*/server`, inspect the image on its visible LLM GPU:
 

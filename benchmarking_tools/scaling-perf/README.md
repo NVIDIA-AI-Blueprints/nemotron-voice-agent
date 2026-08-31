@@ -83,7 +83,7 @@ scaling configuration:
 
 - Generic Assistant inherits the existing `nemotron-lightning` default from
   [`examples_registry.yaml`](../../examples_registry.yaml)
-- `nvidia-llm`: `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1`, GPUs `2,3`, alias
+- `nvidia-llm`: `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`, GPUs `2,3`, alias
   `nvidia-llm`
 - `nemotron-asr-streaming-english`:
   `NIM_TAGS_SELECTOR=type=en-US,mode=str,batch_size=128`, GPU `0`, alias
@@ -95,11 +95,26 @@ scaling configuration:
   `USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`,
   `AUDIO_OUT_10MS_CHUNKS=40`
 
-The pinned NVFP4 profile requires Blackwell GPUs. On older non-Blackwell
-hardware, list the profiles packaged with the NIM image and change
-`NIM_MODEL_PROFILE` in `docker/docker-compose.nemotron35-lightning-nim.yaml`
-to a compatible TP2 profile, such as `vllm-bf16-tp2-pp1` when the manifest and
-available VRAM support it.
+> **Hardware-specific profile:** `vllm-nvfp4-tp2-pp1-18.0` was selected from
+> `list-model-profiles` and benchmarked on two NVIDIA RTX PRO 6000 Blackwell
+> GPUs. The checked-in pin is an RTX PRO 6000 benchmark baseline, not a portable
+> recommendation. Before running this performance recipe on any other hardware,
+> including H100, replace the pin by following these steps:
+>
+> 1. Run `list-model-profiles` with the deployed image on the actual LLM GPUs.
+> 1. Benchmark the compatible TP2 profiles for time to first token, inter-token
+>    latency, and total throughput per GPU.
+> 1. Set `NIM_MODEL_PROFILE` to the winning profile's exact ID or full
+>    description. H100 requires its own comparison of the listed FP8 and BF16
+>    TP2 profiles.
+>
+> If portability matters more than predictable benchmark performance, remove
+> the pin and let NIM select automatically. Do not use the deprecated NIM 1.x
+> `NIM_TAGS_SELECTOR` for an LLM.
+>
+> See NVIDIA NIM's [model profile selection](https://docs.nvidia.com/nim/large-language-models/latest/deployment/model-profiles-and-selection.html)
+> and [environment variable](https://docs.nvidia.com/nim/large-language-models/latest/reference/environment-variables.html)
+> documentation.
 
 Deploy it with:
 

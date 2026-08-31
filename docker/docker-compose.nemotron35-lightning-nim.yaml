@@ -52,7 +52,7 @@ services:
       - generic-assistant/server-perf
     environment:
       <<: *nim-llm-env
-      NIM_MODEL_PROFILE: "vllm-nvfp4-tp2-pp1"
+      NIM_MODEL_PROFILE: "vllm-nvfp4-tp2-pp1-18.0"
     deploy:
       resources:
         reservations:

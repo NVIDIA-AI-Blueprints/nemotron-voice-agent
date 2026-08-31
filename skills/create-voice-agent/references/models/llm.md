@@ -209,7 +209,7 @@ can auto-pick.
 For a pinned LLM, use `NIM_MODEL_PROFILE` instead of `NIM_TAGS_SELECTOR`. Standard
 `*/server` LLMs leave it unset for automatic hardware-compatible selection. The
 `generic-assistant/server-perf` benchmark pins
-`NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1`. ASR and TTS continue to use their required
+`NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0`. ASR and TTS continue to use their required
 `NIM_TAGS_SELECTOR` values. Cloud LLM skips this section. For same-image OOM or latency,
 re-run `list-model-profiles`, select a lighter profile or shorter max length, update the
 launch command, then health-check. A different model id requires discovery again.
