@@ -52,7 +52,7 @@ services:
           --host 0.0.0.0
           --port 8000
           --served-model-name nvidia/nemotron-3.5-lightning-30b-a3b
-          --max-model-len 4096
+          --max-model-len 32768
           --trust-remote-code
           --enable-auto-tool-choice
           --tool-call-parser qwen3_coder
