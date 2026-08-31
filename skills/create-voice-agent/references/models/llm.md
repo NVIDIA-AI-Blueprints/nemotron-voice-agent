@@ -182,7 +182,7 @@ docker run --rm --gpus '"device=0"' <nim_llm_image> list-model-profiles
 ```
 
 Use the exact GPU assignment that the LLM service will see. GPU `0` is the standard
-`*/server` assignment; `generic-assistant/server-perf` uses `device=2,3`. Copy
+`*/server` assignment. `generic-assistant/server-perf` uses `device=2,3`. Copy
 `<nim_llm_image>` from the checked-in Compose service or current self-hosted build page.
 Do not infer the image or tag.
 

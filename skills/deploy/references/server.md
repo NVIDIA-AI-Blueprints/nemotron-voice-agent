@@ -19,7 +19,7 @@ docker run --rm --gpus '"device=0"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
   <nim_llm_image> list-model-profiles
 ```
 
-1. Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. `tp=1` uses one GPU; `tp=N` needs N visible GPUs.
+1. Check that the manifest contains a **Compatible** profile for the target GPU. Prefer the lightest compatible precision when pinning a profile. `tp=1` uses one GPU. `tp=N` needs N visible GPUs.
 
 | GPU compute capability | Preferred compatible precision |
 | --- | --- |
@@ -55,5 +55,5 @@ Cascaded Lightning NIM health: `curl -f http://localhost:18000/v1/health/ready`.
 ## Failures
 
 - **`pull access denied` / `unauthorized`** → NGC login missing or expired. Single-GPU does not use `nvcr.io`.
-- **`Could not match a profile in manifest`** → no profile matches the detected hardware or `NIM_MODEL_PROFILE`. Run `list-model-profiles`; for standard `*/server`, leave automatic selection enabled or pin a compatible profile. For `server-perf`, set `NIM_MODEL_PROFILE` to a compatible TP2 profile, then recreate the LLM service.
+- **`Could not match a profile in manifest`** → no profile matches the detected hardware or `NIM_MODEL_PROFILE`. Run `list-model-profiles`. For standard `*/server`, leave automatic selection enabled or pin a compatible profile. For `server-perf`, set `NIM_MODEL_PROFILE` to a compatible TP2 profile, then recreate the LLM service.
 - **`No available memory for the cache blocks`** → `NIM_KVCACHE_PERCENT` is too **low**. Raise it. CUDA OOM during load is the opposite: lower it, or move TTS off that GPU. `LLM_MAX_NUM_SEQS` can be lowered if CUDA-graph capture fails.
