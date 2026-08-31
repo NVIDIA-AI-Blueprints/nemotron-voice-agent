@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@pipecat-ai/client-js": "1.13.0",
-    "@pipecat-ai/client-react": "1.8.1",
+    "@pipecat-ai/client-react": "1.8.2",
     "@pipecat-ai/small-webrtc-transport": "1.10.6",
     "@pipecat-ai/websocket-transport": "1.7.1",
     "@tanstack/react-query": "^5.100.11",
