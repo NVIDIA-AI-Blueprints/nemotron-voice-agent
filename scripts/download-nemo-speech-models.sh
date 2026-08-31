@@ -109,4 +109,6 @@ tar -xf "${DEST}/magpie-tts/magpie_tts_multilingual_357m.nemo" \
   nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf \
   --local-dir "${DEST}/nano-codec"
 
+chmod -R a+rX "${DEST}"
+
 echo "Models ready at ${DEST}"
