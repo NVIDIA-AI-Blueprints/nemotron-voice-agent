@@ -30,11 +30,15 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 - Updated Magpie TTS Multilingual NIM to version 1.10.0 and `nvidia-riva-client` to version 2.27.0.
 - Renamed the Magpie Multilingual Compose services to `magpie-multilingual-tts-service` and `magpie-multilingual-tts-service-perf`.
 - Updated Chatterbox TTS Multilingual NIM to version 1.1.0 and documented its available model profiles.
+- Updated the React UI client to `@pipecat-ai/client-react` 1.8.2 and rendered the conversation transcript directly from Pipecat's `usePipecatConversation()` hook, removing the custom client-side turn reconstruction and timestamp re-anchoring.
 
 ### Fixed
 
 - Cap Omni NIM KV cache (`NIM_KVCACHE_PERCENT` default `0.6`, `NIM_MAX_MODEL_LEN` `32768`) so Magpie TTS can share GPU 0.
-- Emit `user-turn-finalized` from Omni Assistant Subagents and keep the earlier user-turn timestamp in the client so transcripts stay in speaking order.
+- Emit `user-turn-finalized` from Omni Assistant Subagents so the server signals user-turn boundaries.
+- Keep chat transcripts in speaking order by rendering the Pipecat SDK message stream directly instead of merging server- and client-derived timestamps, which could reorder turns under clock skew.
+- Render each bot turn as a single transcript bubble instead of splitting multi-sentence responses into separate messages.
+- Show the negotiated RTVI protocol version in the Session panel instead of the client library version.
 - Resolve shared TTS voice ids (`John`) against the catalog default language so the disabled language dropdown shows `en-US` instead of the alphabetically first locale.
 
 ### Removed

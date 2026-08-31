@@ -11,6 +11,7 @@ import {
 export function DevicesSection() {
   const { enableMic, isMicEnabled } = usePipecatClientMicControl();
   const { availableMics, selectedMic, updateMic } = usePipecatClientMediaDevices();
+  const [micOn, setMicOn] = useState(isMicEnabled);
   const [showDeviceMenu, setShowDeviceMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -26,7 +27,9 @@ export function DevicesSection() {
   }, [showDeviceMenu]);
 
   const handleMicToggle = () => {
-    enableMic(!isMicEnabled);
+    const next = !micOn;
+    setMicOn(next);
+    enableMic(next);
   };
 
   const handleMicSelect = (deviceId: string) => {
@@ -38,16 +41,16 @@ export function DevicesSection() {
     <div className="header-devices" ref={menuRef}>
       <div className="device-row">
         <button
-          className={`device-item device-button ${!isMicEnabled ? 'device-disabled' : ''}`}
+          className={`device-item device-button ${!micOn ? 'device-disabled' : ''}`}
           onClick={handleMicToggle}
-          title={isMicEnabled ? "Click to mute" : "Click to unmute"}
+          title={micOn ? "Click to mute" : "Click to unmute"}
         >
           <span className="device-icon">🎤</span>
           <div className="device-visualizer">
             <VoiceVisualizer
               participantType="local"
               backgroundColor="transparent"
-              barColor={isMicEnabled ? "#76b900" : "#666666"}
+              barColor={micOn ? "#76b900" : "#666666"}
               barCount={16}
               barGap={3}
               barWidth={4}

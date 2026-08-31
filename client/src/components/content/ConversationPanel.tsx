@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: BSD-2-Clause
 
-import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState, type ChangeEvent } from "react";
-import { RTVIEvent, type BotLLMTextData } from "@pipecat-ai/client-js";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { RTVIEvent } from "@pipecat-ai/client-js";
 import {
   usePipecatConversation,
   useRTVIClientEvent,
@@ -42,52 +42,14 @@ type AgentTask = {
   createdAt: string;
   updatedAt: string;
   attachmentName: string;
+  anchorCreatedAt: string;
 };
 
 type AssistantTurn = {
   id: string;
   text: string;
   createdAt: string;
-};
-
-type LlmTurn = {
-  id: string;
-  text: string;
-  createdAt: string;
-};
-
-type LlmTurnState = {
-  active: LlmTurn | null;
-  completed: LlmTurn[];
-};
-
-type LlmTurnAction =
-  | { type: "start"; turn: LlmTurn }
-  | { type: "append"; text: string; fallbackTurn: LlmTurn }
-  | { type: "finish" }
-  | { type: "reset" };
-
-const finishActiveLlmTurn = (state: LlmTurnState): LlmTurnState => {
-  const active = state.active;
-  if (!active) return state;
-  const text = active.text.trim();
-  return {
-    active: null,
-    completed: text
-      ? [...state.completed, { ...active, text }].slice(-40)
-      : state.completed,
-  };
-};
-
-const llmTurnReducer = (state: LlmTurnState, action: LlmTurnAction): LlmTurnState => {
-  if (action.type === "reset") return { active: null, completed: [] };
-  if (action.type === "finish") return finishActiveLlmTurn(state);
-  if (action.type === "start") {
-    const finished = finishActiveLlmTurn(state);
-    return { ...finished, active: action.turn };
-  }
-  const active = state.active ?? action.fallbackTurn;
-  return { ...state, active: { ...active, text: `${active.text}${action.text}` } };
+  anchorCreatedAt: string;
 };
 
 const renderPartText = (part: ConversationMessagePart): string => {
@@ -113,53 +75,7 @@ const renderMessageText = (message: ConversationMessage): string =>
 const isUserOrAssistant = (m: ConversationMessage) =>
   m.role === "user" || m.role === "assistant";
 
-const findLatestUserMessage = (messages: ConversationMessage[]) => {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === "user") return messages[i];
-  }
-  return undefined;
-};
-
-const findLatestUnanchoredUser = (
-  messages: ConversationMessage[],
-  anchors: { has: (key: string) => boolean }
-) => {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role !== "user") continue;
-    return anchors.has(messages[i].createdAt) ? undefined : messages[i];
-  }
-  return undefined;
-};
-
 const normalizeTranscript = (text?: string | null) => (text ?? "").trim().replace(/\s+/g, " ");
-
-const validTimestampOrNow = (timestamp: string) =>
-  Number.isNaN(Date.parse(timestamp)) ? new Date().toISOString() : timestamp;
-
-const earlierISO = (left: string | null, right: string) => {
-  if (!left) return right;
-  const leftMs = Date.parse(left);
-  const rightMs = Date.parse(right);
-  if (Number.isNaN(leftMs)) return right;
-  if (Number.isNaN(rightMs)) return left;
-  return leftMs <= rightMs ? left : right;
-};
-
-const findUserMessageByTranscript = (
-  messages: ConversationMessage[],
-  transcript: string | null | undefined,
-  finalizedCreatedAts: { has: (key: string) => boolean }
-) => {
-  const normalizedTranscript = normalizeTranscript(transcript);
-  if (!normalizedTranscript) return undefined;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    if (message.final || finalizedCreatedAts.has(message.createdAt)) continue;
-    if (normalizeTranscript(renderMessageText(message)) === normalizedTranscript) return message;
-  }
-  return undefined;
-};
 
 function mediaKindFromFile(file: File): MediaKind | null {
   if (file.type.startsWith("image/")) return "image";
@@ -239,6 +155,13 @@ function AttachMediaButton({ onClick }: Readonly<{ onClick: () => void }>) {
   );
 }
 
+const START_ANCHOR = "__start__";
+
+type ExtraItem =
+  | { kind: "task"; id: string; anchor: string; createdAt: string; sortKey: number; task: AgentTask }
+  | { kind: "assistant-turn"; id: string; anchor: string; createdAt: string; sortKey: number; turn: AssistantTurn }
+  | { kind: "attachment"; id: string; anchor: string; createdAt: string; sortKey: number; attachment: LocalAttachment };
+
 export function ConversationPanel() {
   const { currentSessionId, selectedExample, setCurrentSessionId } = useApp();
   const { messages } = usePipecatConversation();
@@ -246,57 +169,25 @@ export function ConversationPanel() {
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const attachmentsRef = useRef<LocalAttachment[]>([]);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const agentTasksRef = useRef<AgentTask[]>([]);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
-  const [llmTurnState, dispatchLlmTurn] = useReducer(llmTurnReducer, {
-    active: null,
-    completed: [],
-  });
-  const llmTurnSequenceRef = useRef(0);
-  const createLlmTurn = useCallback((): LlmTurn => {
-    llmTurnSequenceRef.current += 1;
-    return {
-      id: `llm-turn-${llmTurnSequenceRef.current}`,
-      text: "",
-      createdAt: new Date().toISOString(),
-    };
-  }, []);
   const canUploadAttachments = selectedExample?.capabilities?.includes("attachments") ?? false;
-  const [currentUserTurnActive, setCurrentUserTurnActive] = useState(false);
-  const [userTurnAnchors, setUserTurnAnchors] =
-    useState<Map<string, string>>(new Map());
-  const userTurnAnchorsRef = useRef(userTurnAnchors);
-  useEffect(() => {
-    userTurnAnchorsRef.current = userTurnAnchors;
-  }, [userTurnAnchors]);
-  // Holds a finalize signal that arrived before its turn's user bubble exists
-  // (the Omni model emits the user transcript late). Applied to the bubble once
-  // it appears.
-  const pendingUserAnchorRef = useRef<string | null>(null);
-  const anchorUserTurn = useCallback((createdAt: string, anchorISO: string) => {
-    setUserTurnAnchors((prev) => {
-      if (prev.has(createdAt)) return prev;
-      const next = new Map(prev);
-      next.set(createdAt, anchorISO);
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
 
+  useEffect(() => {
+    agentTasksRef.current = agentTasks;
+  }, [agentTasks]);
+
   const resetConversationExtras = useCallback(() => {
-    setCurrentUserTurnActive(false);
-    setUserTurnAnchors(new Map());
-    pendingUserAnchorRef.current = null;
     setAttachments((prev) => {
       prev.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
       return [];
     });
     setAgentTasks([]);
     setAssistantTurns([]);
-    dispatchLlmTurn({ type: "reset" });
-    llmTurnSequenceRef.current = 0;
   }, []);
 
   const visibleMessages = useMemo(
@@ -310,39 +201,6 @@ export function ConversationPanel() {
   }, [visibleMessages]);
 
   useRTVIClientEvent(
-    RTVIEvent.BotLlmStarted,
-    useCallback(() => {
-      dispatchLlmTurn({ type: "start", turn: createLlmTurn() });
-    }, [createLlmTurn])
-  );
-
-  useRTVIClientEvent(
-    RTVIEvent.BotLlmText,
-    useCallback((data: BotLLMTextData) => {
-      if (!data.text) return;
-      dispatchLlmTurn({
-        type: "append",
-        text: data.text,
-        fallbackTurn: createLlmTurn(),
-      });
-    }, [createLlmTurn])
-  );
-
-  useRTVIClientEvent(
-    RTVIEvent.BotLlmStopped,
-    useCallback(() => {
-      dispatchLlmTurn({ type: "finish" });
-    }, [])
-  );
-
-  useRTVIClientEvent(
-    RTVIEvent.UserStartedSpeaking,
-    useCallback(() => {
-      setCurrentUserTurnActive(true);
-    }, [])
-  );
-
-  useRTVIClientEvent(
     RTVIEvent.ServerMessage,
     useCallback((message: unknown) => {
       if (!isRecord(message)) return;
@@ -353,6 +211,9 @@ export function ConversationPanel() {
         if (!taskId) return;
         const now = new Date().toISOString();
         const spokenResponse = stringField(message, "spoken_response");
+        const existing = agentTasksRef.current.find((task) => task.id === taskId);
+        const anchorCreatedAt =
+          existing?.anchorCreatedAt ?? (visibleMessagesRef.current.at(-1)?.createdAt ?? "");
         setAgentTasks((prev) => {
           const previous = prev.find((task) => task.id === taskId);
           const next: AgentTask = {
@@ -371,31 +232,18 @@ export function ConversationPanel() {
             attachmentName: attachmentNameFromMessage(message) || previous?.attachmentName || "",
             createdAt: previous?.createdAt || now,
             updatedAt: now,
+            anchorCreatedAt: previous?.anchorCreatedAt || anchorCreatedAt,
           };
           return [...prev.filter((task) => task.id !== taskId), next].slice(-20);
         });
         if (stringField(message, "status") === "done" && spokenResponse) {
           setAssistantTurns((prev) => [
             ...prev.filter((turn) => turn.id !== taskId),
-            { id: taskId, text: spokenResponse, createdAt: now },
+            { id: taskId, text: spokenResponse, createdAt: now, anchorCreatedAt },
           ].slice(-20));
         }
-        return;
       }
-
-      if (type !== "user-turn-finalized") return;
-      setCurrentUserTurnActive(false);
-      const anchorISO = earlierISO(
-        pendingUserAnchorRef.current,
-        validTimestampOrNow(stringField(message, "timestamp"))
-      );
-      const anchors = userTurnAnchorsRef.current;
-      const target =
-        findUserMessageByTranscript(visibleMessagesRef.current, stringField(message, "transcript"), anchors) ??
-        findLatestUnanchoredUser(visibleMessagesRef.current, anchors);
-      if (target) anchorUserTurn(target.createdAt, anchorISO);
-      else pendingUserAnchorRef.current = anchorISO;
-    }, [anchorUserTurn])
+    }, [])
   );
 
   useRTVIClientEvent(
@@ -409,28 +257,6 @@ export function ConversationPanel() {
   useEffect(() => () => {
     attachmentsRef.current.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
   }, []);
-
-  useEffect(() => {
-    if (!pendingUserAnchorRef.current) return;
-    const target = findLatestUnanchoredUser(visibleMessages, userTurnAnchors);
-    if (!target) return;
-    const anchorISO = pendingUserAnchorRef.current;
-    pendingUserAnchorRef.current = null;
-    anchorUserTurn(target.createdAt, anchorISO);
-  }, [visibleMessages, userTurnAnchors, anchorUserTurn]);
-
-  const latestUserCreatedAt = useMemo(
-    () => findLatestUserMessage(visibleMessages)?.createdAt,
-    [visibleMessages]
-  );
-
-  const computeStreaming = (message: ConversationMessage): boolean => {
-    if (message.role !== "user") return !message.final;
-    if (message.final) return false;
-    if (userTurnAnchors.has(message.createdAt)) return false;
-    const isLatestUser = message.createdAt === latestUserCreatedAt;
-    return isLatestUser && currentUserTurnActive;
-  };
 
   const handleAttachmentSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -475,117 +301,90 @@ export function ConversationPanel() {
     }
   };
 
-  const conversationItems = useMemo(() => {
-    const messageItems = visibleMessages.flatMap((message, idx) => {
-      // Assistant bubbles come from RTVI LLM events, not TTS transcript frames.
-      if (message.role === "assistant") return [];
-      const text = renderMessageText(message);
-      if (!text) return [];
-      return [{
-        type: "message" as const,
-        id: `${message.createdAt}-${idx}`,
-        createdAt: message.createdAt,
-        message,
-        text,
-        index: idx,
-      }];
-    });
-    const allLlmTurns = llmTurnState.active
-      ? [...llmTurnState.completed, llmTurnState.active]
-      : llmTurnState.completed;
-    const llmItems = allLlmTurns.flatMap((turn) => {
-      const text = turn.text.trim();
-      if (!text) return [];
-      return [{
-        type: "llm-turn" as const,
-        id: turn.id,
-        createdAt: turn.createdAt,
-        turn,
-        text,
-        streaming: turn.id === llmTurnState.active?.id,
-        index: 100,
-      }];
-    });
-    const llmTurnTexts = new Set(
-      allLlmTurns.map((turn) => normalizeTranscript(turn.text)).filter(Boolean)
+  const assistantMessageTexts = useMemo(
+    () =>
+      new Set(
+        visibleMessages
+          .filter((m) => m.role === "assistant")
+          .map((m) => normalizeTranscript(renderMessageText(m)))
+          .filter(Boolean)
+      ),
+    [visibleMessages]
+  );
+
+  const extras = useMemo<ExtraItem[]>(() => {
+    const list: ExtraItem[] = [];
+    agentTasks.forEach((task) =>
+      list.push({ kind: "task", id: task.id, anchor: task.anchorCreatedAt, createdAt: task.createdAt, sortKey: 1, task })
     );
-    const taskItems = agentTasks.map((task) => ({
-      type: "task" as const,
-      id: task.id,
-      createdAt: task.createdAt,
-      task,
-      index: 101,
-    }));
-    // Analyzer follow-ups can bypass normal LLM lifecycle events. Keep their
-    // explicit spoken response, unless the same complete LLM turn is present.
-    const assistantTurnItems = assistantTurns
-      .filter((turn) => !llmTurnTexts.has(normalizeTranscript(turn.text)))
-      .map((turn) => ({
-        type: "assistant-turn" as const,
-        id: turn.id,
-        createdAt: turn.createdAt,
-        turn,
-        index: 102,
-      }));
-    const attachmentItems = attachments.map((attachment) => ({
-      type: "attachment" as const,
-      id: attachment.id,
-      createdAt: attachment.createdAt,
-      attachment,
-      index: 103,
-    }));
-    const orderTimeMs = (createdAt: string) => {
-      const created = new Date(createdAt).getTime();
-      const anchor = userTurnAnchors.get(createdAt);
-      return anchor ? Math.min(created, new Date(anchor).getTime()) : created;
+    assistantTurns
+      .filter((turn) => !assistantMessageTexts.has(normalizeTranscript(turn.text)))
+      .forEach((turn) =>
+        list.push({ kind: "assistant-turn", id: turn.id, anchor: turn.anchorCreatedAt, createdAt: turn.createdAt, sortKey: 2, turn })
+      );
+    attachments.forEach((attachment) =>
+      list.push({ kind: "attachment", id: attachment.id, anchor: attachment.anchorCreatedAt, createdAt: attachment.createdAt, sortKey: 3, attachment })
+    );
+    return list;
+  }, [agentTasks, assistantTurns, assistantMessageTexts, attachments]);
+
+  const { startExtras, extrasByAnchor } = useMemo(() => {
+    const messageIds = new Set(visibleMessages.map((m) => m.createdAt));
+    const lastCreatedAt = visibleMessages.at(-1)?.createdAt ?? "";
+    const resolve = (anchor: string) => {
+      if (!anchor) return START_ANCHOR;
+      if (messageIds.has(anchor)) return anchor;
+      return lastCreatedAt || START_ANCHOR;
     };
-    return [...messageItems, ...llmItems, ...taskItems, ...assistantTurnItems, ...attachmentItems].sort((a, b) => {
-      const timeDelta = orderTimeMs(a.createdAt) - orderTimeMs(b.createdAt);
-      return timeDelta || a.index - b.index;
-    });
-  }, [agentTasks, assistantTurns, attachments, llmTurnState, visibleMessages, userTurnAnchors]);
+    const byAnchor = new Map<string, ExtraItem[]>();
+    for (const extra of extras) {
+      const key = resolve(extra.anchor);
+      const bucket = byAnchor.get(key) ?? [];
+      bucket.push(extra);
+      byAnchor.set(key, bucket);
+    }
+    for (const bucket of byAnchor.values()) {
+      bucket.sort((a, b) => a.sortKey - b.sortKey || a.createdAt.localeCompare(b.createdAt));
+    }
+    return { startExtras: byAnchor.get(START_ANCHOR) ?? [], extrasByAnchor: byAnchor };
+  }, [extras, visibleMessages]);
+
+  const renderExtra = (extra: ExtraItem) => {
+    if (extra.kind === "task") return <AgentTaskCard key={extra.id} task={extra.task} />;
+    if (extra.kind === "attachment") return <AttachmentPreview key={extra.id} attachment={extra.attachment} />;
+    return (
+      <TranscriptMessage
+        key={`assistant-turn-${extra.id}`}
+        role="bot"
+        text={extra.turn.text}
+        timestamp={extra.turn.createdAt}
+        streaming={false}
+      />
+    );
+  };
 
   const showAttachmentControl = Boolean(currentSessionId) && canUploadAttachments && visibleMessages.length > 0;
-  const bottomAnchorRef = useStickToBottom(conversationItems);
+  const stickSignal = useMemo(() => ({ messages: visibleMessages, extras }), [visibleMessages, extras]);
+  const bottomAnchorRef = useStickToBottom(stickSignal);
 
   return (
     <div className="p-4">
       <ul className="d-flex flex-col gap-2" style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {conversationItems.map((item) => {
-          if (item.type === "task") return <AgentTaskCard key={item.id} task={item.task} />;
-          if (item.type === "attachment") return <AttachmentPreview key={item.id} attachment={item.attachment} />;
-          if (item.type === "llm-turn") {
-            return (
-              <TranscriptMessage
-                key={item.id}
-                role="bot"
-                text={item.text}
-                timestamp={item.createdAt}
-                streaming={item.streaming}
-              />
-            );
-          }
-          if (item.type === "assistant-turn") {
-            return (
-              <TranscriptMessage
-                key={`assistant-turn-${item.id}`}
-                role="bot"
-                text={item.turn.text}
-                timestamp={item.turn.createdAt}
-                streaming={false}
-              />
-            );
-          }
-
-          const msg = item.message;
+        {startExtras.map(renderExtra)}
+        {visibleMessages.map((message, idx) => {
+          const text = renderMessageText(message);
+          const bucket = extrasByAnchor.get(message.createdAt);
           return (
-            <Fragment key={item.id}>
-              <TranscriptMessage
-                role={msg.role === "assistant" ? "bot" : "user"}
-                text={item.text}
-                timestamp={userTurnAnchors.get(msg.createdAt) ?? msg.createdAt}
-                streaming={computeStreaming(msg)}
-              />
+            <Fragment key={`${message.createdAt}-${idx}`}>
+              {text && (
+                <TranscriptMessage
+                  role={message.role === "assistant" ? "bot" : "user"}
+                  text={text}
+                  timestamp={message.createdAt}
+                  streaming={!message.final}
+                />
+              )}
+              {bucket?.map(renderExtra)}
             </Fragment>
           );
         })}
