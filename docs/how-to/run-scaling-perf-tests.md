@@ -42,7 +42,7 @@ Use [`benchmarking_tools/scaling-perf/`](../../benchmarking_tools/scaling-perf/)
 
     Keep TLS enabled for the scaling benchmark. `PIPELINE_TLS=false` is for HTTP-only API tests and browser debugging, not for this WebSocket benchmark.
 
-    Or run it under Docker Compose with `--profile generic-assistant/server-perf`. See the [scaling-perf README](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup) for the 4×H100 layout and tuning variables.
+    Or run it under Docker Compose with `--profile generic-assistant/server-perf`. See the [scaling-perf README](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup) for the four-GPU Blackwell layout, its pinned NVFP4 TP2 LLM profile, and the compatible-profile change required on older hardware.
 
 ## Run
 

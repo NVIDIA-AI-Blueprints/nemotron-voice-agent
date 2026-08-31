@@ -109,7 +109,7 @@ npx skills add .
     printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
     ```
 
-4. Deploy the Generic Assistant on a local workstation GPU (about 80 GB VRAM for the default all-on-one-GPU NIM layout):
+4. Deploy the Generic Assistant on a local workstation GPU (about 80 GB VRAM for the default all-on-one-GPU NIM layout). NIM selects a compatible LLM profile automatically:
 
     ```bash
     docker compose --profile generic-assistant/server up -d
