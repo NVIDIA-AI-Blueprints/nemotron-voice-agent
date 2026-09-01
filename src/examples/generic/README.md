@@ -57,11 +57,35 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance
 
 To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.
 
+### Running the TTM Assistant
+
+The TTM Assistant uses external TTM turn events to determine when user turns start and stop. Run this integration on the host so the voice-agent server can connect to Dockerized TTM. Your Git credentials must provide access to the internal TTM repository.
+
+1. Install the optional TTM integration dependency:
+
+   ```bash
+   uv sync --group ttm
+   ```
+
+2. Start Dockerized TTM, and keep its turn-events endpoint on `ws://127.0.0.1:7860/v1/audio/turn-events`.
+3. Start the host voice-agent server on another port, such as `7862`, to avoid conflicting with TTM:
+
+   ```bash
+   EXAMPLE_SELECTION=ttm-assistant uv run --group ttm python3 src/server.py --port 7862
+   ```
+
+4. Open the UI at `https://localhost:7862/`.
+
+The default `TTM_TURN_EVENTS_URL` is `ws://127.0.0.1:7860/v1/audio/turn-events`. Set this environment variable only when TTM uses a different endpoint.
+
+TTM owns user turn boundaries for this assistant. `USE_SILERO_VAD_TURN_DETECTION`, `SILERO_VAD_STOP_SECS`, and `SMART_TURN_STOP_SECS` do not apply.
+
 ## Customization
 
 | Path | Role |
 | --- | --- |
 | `pipeline.py` | Pipecat entry point for the generic example |
+| `pipeline_ttm.py` | Host-only Generic Assistant variant with TTM-owned user turn boundaries |
 | `prompts.yaml` | example-local prompt catalog. Each entry may list `tools_available` to gate function calling per prompt |
 | `tools.yaml` | OpenAI function-calling schemas, keyed by tool name |
 | `tool_handlers.py` | async handlers for each schema in `tools.yaml`, exposed through the `TOOL_HANDLERS` registry |

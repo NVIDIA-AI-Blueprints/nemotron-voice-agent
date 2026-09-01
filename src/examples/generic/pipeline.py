@@ -20,7 +20,9 @@ from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
 )
+from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
@@ -61,6 +63,16 @@ CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
+    await _run_bot(runner_args)
+
+
+async def _run_bot(
+    runner_args: RunnerArguments,
+    *,
+    turn_processor: FrameProcessor | None = None,
+    user_aggregator_params: LLMUserAggregatorParams | None = None,
+) -> None:
+    """Build the generic pipeline with optional external turn handling."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
@@ -213,7 +225,11 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=build_user_aggregator_params(welcome_enabled),
+        user_params=(
+            user_aggregator_params
+            if user_aggregator_params is not None
+            else build_user_aggregator_params(welcome_enabled)
+        ),
     )
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
@@ -236,6 +252,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     pipeline = Pipeline(
         [
             transport.input(),
+            *([turn_processor] if turn_processor else []),
             stt,
             user_aggregator,
             llm,

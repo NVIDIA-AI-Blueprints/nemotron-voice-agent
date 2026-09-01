@@ -35,6 +35,20 @@ examples:
       tts: [magpie-multilingual-tts]
     bot: examples.generic.pipeline:bot
 
+  ttm-assistant:
+    label: TTM Assistant
+    slots: [llm, asr, tts]
+    activity_check:
+      first_warning_s: 480
+      second_warning_s: 30
+      warning_completion_timeout_s: 45
+    defaults:
+      prompt: [generic_assistant]
+      llm: [nemotron-lightning]
+      asr: [nemotron-asr-streaming-english]
+      tts: [magpie-multilingual-tts]
+    bot: examples.generic.pipeline_ttm:bot
+
   multilingual-assistant:
     label: Multilingual Assistant
     slots: [llm, asr, tts]
