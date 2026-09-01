@@ -86,7 +86,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
     **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container selects NVFP4, FP8, or BF16 from the supported platform and GPU compute capability. DGX Spark enables DSpark speculative decoding and Blackwell workstations enable DFlash automatically. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
 
-    Download the NeMo-Speech.cpp weights **once, as your user** (do not use `sudo`). The script reads `HF_TOKEN` from `.env` and creates `models/nemo-speech`:
+    Download the NeMo-Speech.cpp weights **once, as your user** (do not use `sudo`). The script reads `HF_TOKEN` from `.env`, pulls the GGUFs from Hugging Face, and fetches Magpie TTS text-normalization grammars from the [NeMo-Speech.cpp GitHub release](https://github.com/NVIDIA/NeMo-Speech.cpp/releases) into `models/nemo-speech`:
 
     ```bash
     bash scripts/download-nemo-speech-models.sh

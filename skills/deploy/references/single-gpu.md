@@ -14,7 +14,7 @@ Once, from the repo root, as your user (not sudo):
 bash scripts/download-nemo-speech-models.sh
 ```
 
-The script reads `HF_TOKEN` from `.env`. If `docker compose` already created `models/nemo-speech` as root, the script reclaims ownership automatically.
+The script reads `HF_TOKEN` from `.env` and also downloads Magpie TTS text-normalization grammars from the matching NeMo-Speech.cpp GitHub release. If `docker compose` already created `models/nemo-speech` as root, the script reclaims ownership automatically.
 
 ## Memory Fit
 

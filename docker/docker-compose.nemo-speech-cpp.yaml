@@ -3,6 +3,8 @@ x-nemo-speech: &nemo-speech
   ipc: host
   volumes:
     - ${NEMO_SPEECH_MODEL_LOC:-../models/nemo-speech}:/models:ro
+  tmpfs:
+    - /tmp
   ports:
     - "50051:50051"
   deploy:
@@ -28,6 +30,7 @@ services:
       - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2602.f16.gguf
       - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
       - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
+      - --tts.tn-model-dir=/models/tn_configs
       - --tts.language-code=en-US
       - --tts.voice-name=John
       - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
@@ -44,6 +47,7 @@ services:
       - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2602.f16.gguf
       - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
       - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
+      - --tts.tn-model-dir=/models/tn_configs
       - --tts.language-code=en-US
       - --tts.voice-name=John
       - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
@@ -58,6 +62,7 @@ services:
       - --tts.magpie-model=/models/magpie-tts/magpie_tts_multilingual_357m.v2602.f16.gguf
       - --tts.codec-model=/models/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf
       - --tts.tokenizer-model-dir=/models/magpie-tts/extracted
+      - --tts.tn-model-dir=/models/tn_configs
       - --tts.language-code=en-US
       - --tts.voice-name=John
       - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}

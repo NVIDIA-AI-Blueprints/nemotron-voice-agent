@@ -56,7 +56,7 @@ TTS runs one of these ways, and the repo wires the right one per profile:
   Then select the matching catalog key in the Services tab (or `defaults.tts`). Omitting the opt-in profile leaves that sidecar running and holding the ports—stop it before Magpie Multilingual can bind again (`docker compose --profile <profile> stop <service>`, then recipe `up -d`).
 
   Magpie Zeroshot NGC access is restricted — apply at the [Magpie TTS Zeroshot NGC page](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/magpie-tts-zeroshot). For audio-prompt cloning, see [Voice cloning / zero-shot](#voice-cloning--zero-shot).
-- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, an on-device sidecar serves Magpie TTS from local GGUF weights: `nemo-speech` / `nemo-speech-multilingual` (ASR + TTS together) or `nemo-speech-tts` (TTS only, for Omni). See [Jetson Thor](../03-jetson-thor.md).
+- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, an on-device sidecar serves Magpie TTS from local GGUF weights: `nemo-speech` / `nemo-speech-multilingual` (ASR + TTS together) or `nemo-speech-tts` (TTS only, for Omni). `scripts/download-nemo-speech-models.sh` also fetches Sparrowhawk TN grammars so digits and dates are spoken as words (`--tts.tn-model-dir=/models/tn_configs`). See [Jetson Thor](../03-jetson-thor.md).
 
 ### VRAM & Hardware Support
 

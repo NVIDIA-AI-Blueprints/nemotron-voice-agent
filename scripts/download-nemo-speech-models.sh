@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download NeMo-Speech.cpp GGUF weights for */single-gpu recipes.
+# Download NeMo-Speech.cpp GGUF weights and TTS TN grammars for */single-gpu recipes.
 #
 # Run as your user, never sudo. The script:
 #   - reads HF_TOKEN from the repo .env
@@ -82,6 +82,105 @@ reclaim_if_unwritable() {
   fi
 }
 
+# Magpie TTS text-normalization grammars live on the NeMo-Speech.cpp GitHub
+# release, not Hugging Face. Pin matches nvcr.io/nvidia/nemo-speech.cpp:0.1.0.
+NEMO_SPEECH_CPP_RELEASE="${NEMO_SPEECH_CPP_RELEASE:-v0.1.0}"
+TN_ARCHIVE="tn_configs.tar.bz2"
+TN_SHA256="${NEMO_SPEECH_TN_SHA256:-2ca242c6d29f551eba3663d7e508c0d9dad10440e287628234154c6d1a72c7bc}"
+TN_URL="https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/${NEMO_SPEECH_CPP_RELEASE}/${TN_ARCHIVE}"
+
+download_url() {
+  local url="$1"
+  local dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fL --retry 3 --connect-timeout 30 --max-time 180 -o "${dest}" "${url}"; then
+      return 0
+    fi
+    echo "curl failed for ${url}; trying another downloader..." >&2
+    rm -f "${dest}"
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    if wget -O "${dest}" "${url}"; then
+      return 0
+    fi
+    echo "wget failed for ${url}; trying another downloader..." >&2
+    rm -f "${dest}"
+  fi
+  if command -v gh >/dev/null 2>&1; then
+    if gh release download "${NEMO_SPEECH_CPP_RELEASE}" \
+      --repo NVIDIA/NeMo-Speech.cpp \
+      --pattern "${TN_ARCHIVE}" \
+      --dir "$(dirname "${dest}")"; then
+      return 0
+    fi
+    echo "gh release download failed for ${TN_ARCHIVE}." >&2
+  fi
+  echo "Need a working curl, wget, or gh to download ${url}" >&2
+  return 1
+}
+
+verify_sha256() {
+  local file="$1"
+  local expected="$2"
+  local actual
+  actual="$(sha256sum "${file}" | awk '{print $1}')"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "Checksum mismatch for ${file}" >&2
+    echo "  expected ${expected}" >&2
+    echo "  got      ${actual}" >&2
+    return 1
+  fi
+}
+
+# Best-effort install of the Magpie TTS text-normalization grammars. Returns
+# non-zero (without exiting) if the release asset is unavailable, corrupt, or
+# incomplete, so the GGUF setup still counts as a success.
+install_tn_grammars() {
+  local tar="${DEST}/${TN_ARCHIVE}"
+
+  if [[ -f "${tar}" ]]; then
+    local have
+    have="$(sha256sum "${tar}" | awk '{print $1}')"
+    if [[ "${have}" != "${TN_SHA256}" ]]; then
+      echo "Existing ${tar} has an unexpected checksum; re-downloading..."
+      rm -f "${tar}"
+    fi
+  fi
+
+  if [[ ! -f "${tar}" ]]; then
+    echo "Downloading TTS text-normalization grammars (${TN_ARCHIVE})..."
+    download_url "${TN_URL}" "${tar}" || return 1
+  fi
+
+  verify_sha256 "${tar}" "${TN_SHA256}" || return 1
+
+  rm -rf "${DEST}/tn_configs"
+  tar -xjf "${tar}" -C "${DEST}" || return 1
+
+  [[ -f "${DEST}/tn_configs/en/tokenize_and_classify.far" && \
+     -f "${DEST}/tn_configs/en/verbalize.far" ]] || return 1
+}
+
+warn_tn_unavailable() {
+  rm -rf "${DEST}/tn_configs"
+  cat >&2 <<EOF
+
+============================================================================
+WARNING: TTS text-normalization (TN) grammars could not be installed.
+
+  Source: ${TN_URL}
+
+  Without them, single-GPU Magpie TTS reads digits, dates, and currency
+  literally (for example "2" instead of "two").
+
+  The rest of the speech models downloaded successfully. Re-run this script
+  to retry the TN download. If the GitHub release asset moved, pin the new
+  checksum with NEMO_SPEECH_TN_SHA256.
+============================================================================
+
+EOF
+}
+
 reclaim_if_unwritable "${DEST}"
 reclaim_if_unwritable "${HF_CACHE}"
 mkdir -p "${DEST}/magpie-tts/extracted" "${DEST}/nano-codec" "${HF_CACHE}"
@@ -109,6 +208,16 @@ tar -xf "${DEST}/magpie-tts/magpie_tts_multilingual_357m.nemo" \
   nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf \
   --local-dir "${DEST}/nano-codec"
 
+tn_ok=true
+if ! install_tn_grammars; then
+  warn_tn_unavailable
+  tn_ok=false
+fi
+
 chmod -R a+rX "${DEST}"
 
-echo "Models ready at ${DEST}"
+if [[ "${tn_ok}" == true ]]; then
+  echo "Models ready at ${DEST} (TTS text normalization enabled)."
+else
+  echo "Models ready at ${DEST} (TTS text normalization NOT installed; see warning above)."
+fi

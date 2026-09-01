@@ -55,6 +55,7 @@ Self-hosted Nemotron-3 models only. Cloud (NVCF) has the parsers enabled server-
 |-----------------|-------------|-----------|
 | Synthesis fails or produces odd audio on code / Markdown / JSON output | Characters reserved by the Magpie preprocessor (`{`, `}`, `<tag>`) reached the engine. Apply the text filter, using `NemotronSpeechMarkdownTextFilter` for Markdown-heavy output. | [Configure TTS → TTS text filter](how-to/configure-tts.md#tts-text-filter) |
 | Mispronounced brand / domain terms | Add them to an IPA dictionary using `TTS_IPA_FILE_PATH`. | [Configure TTS → Pronunciation (IPA)](how-to/configure-tts.md#pronunciation-ipa) |
+| Single-GPU TTS reads digits, dates, or currency as characters (for example "2" instead of "two") | Magpie TTS text normalization is off. Re-run `bash scripts/download-nemo-speech-models.sh` so `models/nemo-speech/tn_configs` is present, then restart the `*/single-gpu` profile. The sidecar must receive `--tts.tn-model-dir=/models/tn_configs`. | [Getting Started](01-getting-started.md#docker-based-deployment) · [Jetson Thor](03-jetson-thor.md) |
 | Long replies are rejected or truncated | The TTS NIM caps a request at **2,000 normalized characters**. The NVIDIA Pipecat TTS service streams replies **sentence-by-sentence with a 200-character hard limit per sentence**, so the cap is not reached in normal use. It mainly affects custom integrations that synthesize large blocks at once. Split long text into sentence or paragraph chunks. | [Configure TTS](how-to/configure-tts.md) · [TTS NIM troubleshooting](https://docs.nvidia.com/nim/speech/latest/troubleshooting/tts.html) |
 
 ## Response quality (hallucination and repetition)
@@ -88,7 +89,7 @@ The hosted **[build.nvidia.com](https://build.nvidia.com/)** endpoints are for *
 |-----------------|-------------|-----------|
 | `RuntimeError: Engine core initialization failed` (vLLM) | Often low available memory from cached pages held by the kernel (the `nvidia-llm-vllm-lightning` logs show the engine-core failure). Reclaim caches with `sudo sync && sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'`, then re-up the `<example>/single-gpu` profile and re-check `free -h`. | [Jetson Thor](03-jetson-thor.md) · [Configure LLM → VRAM](how-to/configure-llm.md#vram--hardware-support) |
 | Choppy / glitchy bot speech (vLLM and the speech sidecar share one GPU) | vLLM is starved of GPU or host memory. For automatically sized recipes, increase `VLLM_VRAM_HEADROOM_MIB` in `.env` or set a lower `VLLM_GPU_MEMORY_UTILIZATION` override. Lightning on DGX Spark and Jetson Thor already uses a fixed value of `0.35`, so inspect host memory and reduce workload or concurrency first. Restart the profile and re-measure with the speech sidecar loaded. | [Jetson Thor](03-jetson-thor.md) |
-| Speech models not found | The GGUF weights are missing. Run `bash scripts/download-nemo-speech-models.sh` as your user (not sudo), or point `NEMO_SPEECH_MODEL_LOC` in `.env` at the absolute path holding them. | [Jetson Thor](03-jetson-thor.md) |
+| Speech models not found | The GGUF weights are missing. Run `bash scripts/download-nemo-speech-models.sh` as your user (not sudo), or point `NEMO_SPEECH_MODEL_LOC` in `.env` at the absolute path holding them. The same script also downloads TTS TN grammars into `tn_configs`. | [Jetson Thor](03-jetson-thor.md) |
 
 ## Browser access
 
