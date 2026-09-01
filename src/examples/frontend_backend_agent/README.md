@@ -20,7 +20,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    test -f .env || cp .env.example .env
    ```
 
-   > **Single-GPU profile:** `HF_TOKEN` is optional for the current public NVIDIA model repositories. Set it in `.env` only when Hugging Face requires authentication or to avoid unauthenticated download limits. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server profile uses a NIM from NGC and does not need `HF_TOKEN`.
+   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server profile uses a NIM from NGC and does not need `HF_TOKEN`.
 
 2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
 

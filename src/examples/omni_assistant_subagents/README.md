@@ -16,7 +16,7 @@ This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended fo
    test -f .env || cp .env.example .env
    ```
 
-   > **Single-GPU profile:** `HF_TOKEN` is optional for the current public NVIDIA model repositories. Set it in `.env` only when Hugging Face requires authentication or to avoid unauthenticated download limits. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
+   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
 
 2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
 

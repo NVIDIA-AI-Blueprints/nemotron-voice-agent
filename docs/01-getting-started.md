@@ -8,7 +8,7 @@ Before you begin, ensure you have the following:
 
 - Docker Compose v2.20 or newer. Check the version with `docker compose version`.
 - **Cloud and `*/server`:** an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com/). `*/server` also needs NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
-- **`*/single-gpu`:** Python 3 and either the Hugging Face `hf` CLI or `uvx`. The current NVIDIA model repositories are public, so `HF_TOKEN` is optional. Set a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) when a model requires authentication or to avoid unauthenticated download limits. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
+- **`*/single-gpu`:** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
 
 For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
@@ -45,7 +45,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     | --- | --- | --- |
     | Cloud (`<example>`) | `NVIDIA_API_KEY` | No |
     | Server (`<example>/server`) | `NVIDIA_API_KEY` | Yes, before `up` |
-    | Single-GPU (`<example>/single-gpu`) | Optional `HF_TOKEN` for Hugging Face downloads | No |
+    | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` | No |
 
     ```bash
     test -f .env || cp .env.example .env
@@ -86,7 +86,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
     **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container selects NVFP4, FP8, or BF16 from the supported platform and GPU compute capability. DGX Spark enables DSpark speculative decoding and Blackwell workstations enable DFlash automatically. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
 
-    Download the NeMo-Speech.cpp weights **once, as your user** (do not use `sudo`). The script uses `HF_TOKEN` from `.env` when set and creates `models/nemo-speech`:
+    Download the NeMo-Speech.cpp weights **once, as your user** (do not use `sudo`). The script reads `HF_TOKEN` from `.env` and creates `models/nemo-speech`:
 
     ```bash
     bash scripts/download-nemo-speech-models.sh

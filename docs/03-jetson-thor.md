@@ -12,7 +12,7 @@ the supported configuration on Thor.
 
 - **Jetson Thor** flashed with **JetPack 7.0** using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) (with CUDA, CUDA-X, TensorRT, and NVIDIA Container Runtime components installed). Orin-class Jetsons are not supported.
 - [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and [Docker Compose](https://docs.docker.com/compose/install/linux/)
-- Optional [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) for model downloads that require authentication or higher download limits
+- [HuggingFace API token](https://huggingface.co/docs/hub/en/security-tokens) for downloading LLM models
 - The [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/en/guides/cli) (`hf`) for downloading the speech GGUFs
 
 ---
@@ -27,10 +27,10 @@ the supported configuration on Thor.
     cp .env.example .env
     ```
 
-2. Optionally set `HF_TOKEN` in `.env` for Hugging Face model downloads that require authentication or higher download limits. The current NVIDIA model repositories are public. Thor uses `*/single-gpu` only. Do not set `NVIDIA_API_KEY` or run `docker login nvcr.io` for this path.
+2. Set `HF_TOKEN` in `.env` for Hugging Face model downloads. Thor uses `*/single-gpu` only. Do not set `NVIDIA_API_KEY` or run `docker login nvcr.io` for this path.
 
     ```bash
-    # Optional for public models; required only when the model host requires authentication
+    # Required for */single-gpu
     HF_TOKEN=<your-huggingface-token>
     ```
 
@@ -43,7 +43,7 @@ the supported configuration on Thor.
     bash scripts/download-nemo-speech-models.sh
     ```
 
-    Run as your user, not `sudo`. The script uses `HF_TOKEN` from `.env` when it is set.
+    Run as your user, not `sudo`. The script reads `HF_TOKEN` from `.env`.
 
     > To keep the weights outside the repo so they survive re-clones and worktrees, set
     > `NEMO_SPEECH_MODEL_LOC` in `.env` to an absolute path, or pass that path as

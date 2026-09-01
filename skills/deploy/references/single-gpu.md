@@ -2,7 +2,7 @@
 
 Use only for `*/single-gpu`. Skip for cloud and `*/server`.
 
-Auth is in `../SKILL.md`. `HF_TOKEN` is optional for the current public NVIDIA model repositories. Do not use `NVIDIA_API_KEY` or `docker login nvcr.io`.
+Auth is in `../SKILL.md`. Use `HF_TOKEN` only. Do not require `NVIDIA_API_KEY` or `docker login nvcr.io`.
 
 Generic, Multilingual, Omni, and Frontend/Backend cover compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, deploy `omni-assistant-subagents` (cloud). Orin-class Jetson is unsupported. The Lightning compose file (`docker/docker-compose.nemotron35-lightning.yaml`) and Omni compose file (`docker/docker-compose.nemotron3-omni.yaml`) detect product and compute capability. Speech sidecars live in `docker/docker-compose.nemo-speech-cpp.yaml`.
 
@@ -14,7 +14,7 @@ Once, from the repo root, as your user (not sudo):
 bash scripts/download-nemo-speech-models.sh
 ```
 
-The script uses `HF_TOKEN` from `.env` when it is set. If `docker compose` already created `models/nemo-speech` as root, the script reclaims ownership automatically.
+The script reads `HF_TOKEN` from `.env`. If `docker compose` already created `models/nemo-speech` as root, the script reclaims ownership automatically.
 
 ## Memory Fit
 
