@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Generic cascaded pipeline with TTM-owned user turn boundaries."""
+"""TTM Assistant entry point with externally detected user turns."""
 
 import os
 
@@ -52,7 +52,7 @@ def _build_ttm_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregato
 
 
 async def bot(runner_args: RunnerArguments) -> None:
-    """Build and run the generic pipeline with TTM turn detection."""
+    """Build and run the generic assistant with TTM turn detection."""
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     await _run_bot(

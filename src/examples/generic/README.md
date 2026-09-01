@@ -85,7 +85,7 @@ this safety window. The generic `USE_SILERO_VAD_TURN_DETECTION`,
 | Path | Role |
 | --- | --- |
 | `pipeline.py` | Pipecat entry point for the generic example |
-| `ttm_pipeline.py` | TTM Assistant pipeline entry point |
+| `ttm_assistant.py` | TTM Assistant entry point |
 | `ttm_user_turn_processor.py` | TTM SOU/EOU processor and Silero fallback |
 | `prompts.yaml` | example-local prompt catalog. Each entry may list `tools_available` to gate function calling per prompt |
 | `tools.yaml` | OpenAI function-calling schemas, keyed by tool name |

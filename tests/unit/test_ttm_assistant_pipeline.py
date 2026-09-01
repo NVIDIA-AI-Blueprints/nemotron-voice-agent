@@ -11,8 +11,8 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
 import examples_registry
-from examples.generic import ttm_pipeline
-from examples.generic.ttm_pipeline import (
+from examples.generic import ttm_assistant
+from examples.generic.ttm_assistant import (
     DEFAULT_TTM_EOU_FALLBACK_SILENCE_SECS,
     DEFAULT_TTM_OPEN_TIMEOUT_SECS,
     DEFAULT_TTM_TURN_EVENTS_URL,
@@ -68,7 +68,7 @@ class TTMAssistantPipelineTests(unittest.IsolatedAsyncioTestCase):
     def test_registry_exposes_separate_ttm_assistant(self) -> None:
         example = examples_registry.find("ttm-assistant")
 
-        self.assertEqual(example["bot"], "examples.generic.ttm_pipeline:bot")
+        self.assertEqual(example["bot"], "examples.generic.ttm_assistant:bot")
         self.assertEqual(example["slots"], ["llm", "asr", "tts"])
         self.assertEqual(
             examples_registry.prompt_default_key("ttm-assistant"),
@@ -81,10 +81,10 @@ class TTMAssistantPipelineTests(unittest.IsolatedAsyncioTestCase):
         processor = Mock()
 
         with (
-            patch.object(ttm_pipeline, "TTMUserTurnProcessor", return_value=processor) as processor_class,
-            patch.object(ttm_pipeline, "_run_bot", new_callable=AsyncMock) as run_bot,
+            patch.object(ttm_assistant, "TTMUserTurnProcessor", return_value=processor) as processor_class,
+            patch.object(ttm_assistant, "_run_bot", new_callable=AsyncMock) as run_bot,
         ):
-            await ttm_pipeline.bot(runner_args)
+            await ttm_assistant.bot(runner_args)
 
         processor_class.assert_called_once_with(
             url=DEFAULT_TTM_TURN_EVENTS_URL,
