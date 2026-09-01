@@ -4,7 +4,7 @@ x-nemo-speech: &nemo-speech
   volumes:
     - ${NEMO_SPEECH_MODEL_LOC:-../models/nemo-speech}:/models:ro
   tmpfs:
-    - /tmp
+    - /tmp:mode=1777
   ports:
     - "50051:50051"
   deploy:

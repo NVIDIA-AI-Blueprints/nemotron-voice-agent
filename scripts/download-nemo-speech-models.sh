@@ -84,9 +84,11 @@ reclaim_if_unwritable() {
 
 # Magpie TTS text-normalization grammars live on the NeMo-Speech.cpp GitHub
 # release, not Hugging Face. Pin matches nvcr.io/nvidia/nemo-speech.cpp:0.1.0.
-NEMO_SPEECH_CPP_RELEASE="${NEMO_SPEECH_CPP_RELEASE:-v0.1.0}"
+TN_PINNED_RELEASE="v0.1.0"
+TN_PINNED_SHA256="2ca242c6d29f551eba3663d7e508c0d9dad10440e287628234154c6d1a72c7bc"
+NEMO_SPEECH_CPP_RELEASE="${NEMO_SPEECH_CPP_RELEASE:-${TN_PINNED_RELEASE}}"
 TN_ARCHIVE="tn_configs.tar.bz2"
-TN_SHA256="${NEMO_SPEECH_TN_SHA256:-2ca242c6d29f551eba3663d7e508c0d9dad10440e287628234154c6d1a72c7bc}"
+TN_SHA256="${NEMO_SPEECH_TN_SHA256:-${TN_PINNED_SHA256}}"
 TN_URL="https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/${NEMO_SPEECH_CPP_RELEASE}/${TN_ARCHIVE}"
 
 download_url() {
@@ -138,6 +140,11 @@ verify_sha256() {
 install_tn_grammars() {
   local tar="${DEST}/${TN_ARCHIVE}"
 
+  if [[ "${NEMO_SPEECH_CPP_RELEASE}" != "${TN_PINNED_RELEASE}" && "${TN_SHA256}" == "${TN_PINNED_SHA256}" ]]; then
+    echo "NEMO_SPEECH_CPP_RELEASE=${NEMO_SPEECH_CPP_RELEASE} but the checksum is still the ${TN_PINNED_RELEASE} pin;" >&2
+    echo "set NEMO_SPEECH_TN_SHA256 for ${NEMO_SPEECH_CPP_RELEASE} or the download will fail verification." >&2
+  fi
+
   if [[ -f "${tar}" ]]; then
     local have
     have="$(sha256sum "${tar}" | awk '{print $1}')"
@@ -152,17 +159,22 @@ install_tn_grammars() {
     download_url "${TN_URL}" "${tar}" || return 1
   fi
 
-  verify_sha256 "${tar}" "${TN_SHA256}" || return 1
+  verify_sha256 "${tar}" "${TN_SHA256}" || { rm -f "${tar}"; return 1; }
 
   rm -rf "${DEST}/tn_configs"
-  tar -xjf "${tar}" -C "${DEST}" || return 1
+  if ! tar -xjf "${tar}" -C "${DEST}"; then
+    rm -rf "${DEST}/tn_configs"
+    return 1
+  fi
 
-  [[ -f "${DEST}/tn_configs/en/tokenize_and_classify.far" && \
-     -f "${DEST}/tn_configs/en/verbalize.far" ]] || return 1
+  if [[ ! -f "${DEST}/tn_configs/en/tokenize_and_classify.far" || \
+        ! -f "${DEST}/tn_configs/en/verbalize.far" ]]; then
+    rm -rf "${DEST}/tn_configs"
+    return 1
+  fi
 }
 
 warn_tn_unavailable() {
-  rm -rf "${DEST}/tn_configs"
   cat >&2 <<EOF
 
 ============================================================================
