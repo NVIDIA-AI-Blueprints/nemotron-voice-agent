@@ -8,15 +8,16 @@ import os
 from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
 from pipecat.runner.types import RunnerArguments
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
-from pipecat_ttm import TTMUserTurnProcessor
 
 import examples_registry
 from examples.generic.pipeline import _run_bot
+from examples.generic.ttm_user_turn_processor import TTMUserTurnProcessor
 from examples.shared.pipeline_utils import build_user_mute_strategies
 from utils import parse_env_float
 
 DEFAULT_TTM_TURN_EVENTS_URL = "ws://127.0.0.1:7860/v1/audio/turn-events"
 DEFAULT_TTM_OPEN_TIMEOUT_SECS = 10.0
+DEFAULT_TTM_EOU_FALLBACK_SILENCE_SECS = 5.0
 
 
 def _ttm_turn_events_url() -> str:
@@ -33,8 +34,17 @@ def _ttm_open_timeout_secs() -> float:
     )
 
 
+def _ttm_eou_fallback_silence_secs() -> float:
+    """Return the Silero silence window used when TTM EOU is delayed."""
+    return parse_env_float(
+        "TTM_EOU_FALLBACK_SILENCE_SECS",
+        DEFAULT_TTM_EOU_FALLBACK_SILENCE_SECS,
+        min_value=0.1,
+    )
+
+
 def _build_ttm_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
-    """Configure TTM as the sole owner of user turn boundaries."""
+    """Keep the local TTM processor as the sole turn-frame owner."""
     return LLMUserAggregatorParams(
         user_mute_strategies=build_user_mute_strategies(welcome_enabled),
         user_turn_strategies=ExternalUserTurnStrategies(),
@@ -50,6 +60,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         turn_processor=TTMUserTurnProcessor(
             url=_ttm_turn_events_url(),
             open_timeout=_ttm_open_timeout_secs(),
+            silence_fallback_secs=_ttm_eou_fallback_silence_secs(),
         ),
         user_aggregator_params=_build_ttm_user_aggregator_params(welcome_enabled),
     )

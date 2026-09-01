@@ -59,33 +59,34 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 
 ### Running the TTM Assistant
 
-The TTM Assistant uses external TTM turn events to determine when user turns start and stop. Run this integration on the host so the voice-agent server can connect to Dockerized TTM. Your Git credentials must provide access to the internal TTM repository.
+The TTM Assistant uses an external TTM inference server to determine when user
+turns start and stop. The Pipecat turn processor and Silero fallback live in
+this repository; the model deployment remains independent.
 
-1. Install the optional TTM integration dependency:
-
-   ```bash
-   uv sync --group ttm
-   ```
-
-2. Start Dockerized TTM, and keep its turn-events endpoint on `ws://127.0.0.1:7860/v1/audio/turn-events`.
-3. Start the host voice-agent server on another port, such as `7862`, to avoid conflicting with TTM:
+1. Start Dockerized TTM, and keep its turn-events endpoint on `ws://127.0.0.1:7860/v1/audio/turn-events`.
+2. Start the host voice-agent server on another port, such as `7862`, to avoid conflicting with TTM:
 
    ```bash
-   EXAMPLE_SELECTION=ttm-assistant uv run --group ttm python3 src/server.py --port 7862
+   EXAMPLE_SELECTION=ttm-assistant uv run python3 src/server.py --port 7862
    ```
 
-4. Open the UI at `https://localhost:7862/`.
+3. Open the UI at `https://localhost:7862/`.
 
 The default `TTM_TURN_EVENTS_URL` is `ws://127.0.0.1:7860/v1/audio/turn-events`. Set this environment variable only when TTM uses a different endpoint. The connection timeout defaults to 10 seconds; set `TTM_OPEN_TIMEOUT_SECS` if model load requires more time.
 
-TTM owns user turn boundaries for this assistant. `USE_SILERO_VAD_TURN_DETECTION`, `SILERO_VAD_STOP_SECS`, and `SMART_TURN_STOP_SECS` do not apply.
+TTM owns the primary user turn boundaries for this assistant. If TTM emits SOU
+but its matching EOU is delayed or missing, Silero ends the active turn after
+five seconds of detected silence. Set `TTM_EOU_FALLBACK_SILENCE_SECS` to tune
+this safety window. The generic `USE_SILERO_VAD_TURN_DETECTION`,
+`SILERO_VAD_STOP_SECS`, and `SMART_TURN_STOP_SECS` settings do not apply.
 
 ## Customization
 
 | Path | Role |
 | --- | --- |
 | `pipeline.py` | Pipecat entry point for the generic example |
-| `pipeline_ttm.py` | Host-only Generic Assistant variant with TTM-owned user turn boundaries |
+| `ttm_pipeline.py` | TTM Assistant pipeline entry point |
+| `ttm_user_turn_processor.py` | TTM SOU/EOU processor and Silero fallback |
 | `prompts.yaml` | example-local prompt catalog. Each entry may list `tools_available` to gate function calling per prompt |
 | `tools.yaml` | OpenAI function-calling schemas, keyed by tool name |
 | `tool_handlers.py` | async handlers for each schema in `tools.yaml`, exposed through the `TOOL_HANDLERS` registry |

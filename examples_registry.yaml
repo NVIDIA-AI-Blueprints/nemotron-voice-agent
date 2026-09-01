@@ -47,7 +47,7 @@ examples:
       llm: [nemotron-lightning]
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
-    bot: examples.generic.pipeline_ttm:bot
+    bot: examples.generic.ttm_pipeline:bot
 
   multilingual-assistant:
     label: Multilingual Assistant

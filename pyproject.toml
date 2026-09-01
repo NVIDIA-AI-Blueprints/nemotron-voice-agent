@@ -13,6 +13,8 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.40.0",
     "langchain-nvidia-ai-endpoints>=1.2.1",
     "imageio-ffmpeg>=0.5.1",
+    "soxr~=1.0.0",
+    "websockets>=13.1,<17",
 ]
 
 # Force patched versions for known CVEs
@@ -33,9 +35,6 @@ dev = [
     "ruff>=0.15.6",
     "pre-commit>=4.0.0",
     "pytest>=9.1.1",
-]
-ttm = [
-    "ttm-streaming[pipecat] @ git+https://gitlab-master.nvidia.com/slakshminara/ttm-vllm-online.git@0ca49af428212fc84349c0fd4472d4a10525672a",
 ]
 eval = [
     "pipecat-ai[evals]==1.7.0",
