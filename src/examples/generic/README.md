@@ -76,7 +76,7 @@ The TTM Assistant uses external TTM turn events to determine when user turns sta
 
 4. Open the UI at `https://localhost:7862/`.
 
-The default `TTM_TURN_EVENTS_URL` is `ws://127.0.0.1:7860/v1/audio/turn-events`. Set this environment variable only when TTM uses a different endpoint.
+The default `TTM_TURN_EVENTS_URL` is `ws://127.0.0.1:7860/v1/audio/turn-events`. Set this environment variable only when TTM uses a different endpoint. The connection timeout defaults to 10 seconds; set `TTM_OPEN_TIMEOUT_SECS` if model load requires more time.
 
 TTM owns user turn boundaries for this assistant. `USE_SILERO_VAD_TURN_DETECTION`, `SILERO_VAD_STOP_SECS`, and `SMART_TURN_STOP_SECS` do not apply.
 

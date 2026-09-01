@@ -23,8 +23,10 @@ except ModuleNotFoundError:
 
 from examples.generic import pipeline_ttm
 from examples.generic.pipeline_ttm import (
+    DEFAULT_TTM_OPEN_TIMEOUT_SECS,
     DEFAULT_TTM_TURN_EVENTS_URL,
     _build_ttm_user_aggregator_params,
+    _ttm_open_timeout_secs,
     _ttm_turn_events_url,
 )
 
@@ -43,6 +45,12 @@ class TTMAssistantPipelineTests(unittest.IsolatedAsyncioTestCase):
                 _ttm_turn_events_url(),
                 "ws://ttm.example:7860/v1/audio/turn-events",
             )
+
+    def test_ttm_open_timeout_is_configurable(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_ttm_open_timeout_secs(), DEFAULT_TTM_OPEN_TIMEOUT_SECS)
+        with patch.dict(os.environ, {"TTM_OPEN_TIMEOUT_SECS": "12.5"}):
+            self.assertEqual(_ttm_open_timeout_secs(), 12.5)
 
     def test_ttm_is_the_only_turn_strategy(self) -> None:
         params = _build_ttm_user_aggregator_params(welcome_enabled=False)
@@ -77,7 +85,10 @@ class TTMAssistantPipelineTests(unittest.IsolatedAsyncioTestCase):
         ):
             await pipeline_ttm.bot(runner_args)
 
-        processor_class.assert_called_once_with(url=DEFAULT_TTM_TURN_EVENTS_URL)
+        processor_class.assert_called_once_with(
+            url=DEFAULT_TTM_TURN_EVENTS_URL,
+            open_timeout=DEFAULT_TTM_OPEN_TIMEOUT_SECS,
+        )
         self.assertIs(run_bot.await_args.kwargs["turn_processor"], processor)
         self.assertIsInstance(
             run_bot.await_args.kwargs["user_aggregator_params"].user_turn_strategies,
