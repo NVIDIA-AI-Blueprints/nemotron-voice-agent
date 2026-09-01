@@ -161,17 +161,21 @@ install_tn_grammars() {
 
   verify_sha256 "${tar}" "${TN_SHA256}" || { rm -f "${tar}"; return 1; }
 
+  local stage="${DEST}/.tn_configs.staging"
+  rm -rf "${stage}"
+  mkdir -p "${stage}"
+  if ! tar -xjf "${tar}" -C "${stage}"; then
+    rm -rf "${stage}"
+    return 1
+  fi
+  if [[ ! -f "${stage}/tn_configs/en/tokenize_and_classify.far" || \
+        ! -f "${stage}/tn_configs/en/verbalize.far" ]]; then
+    rm -rf "${stage}"
+    return 1
+  fi
   rm -rf "${DEST}/tn_configs"
-  if ! tar -xjf "${tar}" -C "${DEST}"; then
-    rm -rf "${DEST}/tn_configs"
-    return 1
-  fi
-
-  if [[ ! -f "${DEST}/tn_configs/en/tokenize_and_classify.far" || \
-        ! -f "${DEST}/tn_configs/en/verbalize.far" ]]; then
-    rm -rf "${DEST}/tn_configs"
-    return 1
-  fi
+  mv "${stage}/tn_configs" "${DEST}/tn_configs"
+  rm -rf "${stage}"
 }
 
 warn_tn_unavailable() {
