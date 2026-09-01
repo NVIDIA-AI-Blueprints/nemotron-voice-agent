@@ -14,7 +14,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Performance
    test -f .env || cp .env.example .env
    ```
 
-   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server and Performance Server profiles use NIMs from NGC (`NVIDIA_API_KEY`) and do not use `HF_TOKEN`.
+   > **Single-GPU profile:** `HF_TOKEN` is optional for the current public NVIDIA model repositories. Set it in `.env` only when Hugging Face requires authentication or to avoid unauthenticated download limits. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. This profile serves the LLM with vLLM, which downloads model weights from Hugging Face. The Server and Performance Server profiles use NIMs from NGC (`NVIDIA_API_KEY`) and do not use `HF_TOKEN`.
 
 2. Log in to the NVIDIA NGC container registry (Server and Performance Server only. Skip for Cloud and Single GPU):
 

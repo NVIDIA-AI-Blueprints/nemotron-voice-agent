@@ -73,7 +73,7 @@ These are the minimum requirements, and support varies by example and deployment
 Credentials depend on the deployment profile. Do not mix them.
 
 - **Cloud and Server**: an **NVIDIA API Key** from [build.nvidia.com](https://build.nvidia.com/). Server additionally needs valid **NVIDIA NGC** credentials to pull NIM container images (see the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
-- **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads only. It does not use `NVIDIA_API_KEY` or `docker login nvcr.io`.
+- **Single GPU**: `HF_TOKEN` is optional for the current public NVIDIA model repositories. Set it when Hugging Face requires authentication or to avoid unauthenticated download limits. This family does not use `NVIDIA_API_KEY` or `docker login nvcr.io`.
 - **Docker**: With NVIDIA GPU support installed and Docker Compose v2.20 or newer.
 
 ---
@@ -135,7 +135,7 @@ This repository includes AI agent skills for deployment assistance. Install them
 npx skills add .
 ```
 
-- [`deploy`](skills/deploy/SKILL.md): recipe-family auth (`NVIDIA_API_KEY` + NGC login for `*/server`, `HF_TOKEN` only for `*/single-gpu`), profile selection, and compose bring-up.
+- [`deploy`](skills/deploy/SKILL.md): recipe-family auth (`NVIDIA_API_KEY` + NGC login for `*/server`, optional `HF_TOKEN` for `*/single-gpu`), profile selection, and compose bring-up.
 - [`configure-pipeline`](skills/configure-pipeline/SKILL.md): edit `.env`, prompts, and example service catalogs, then re-apply the change.
 
 ---
@@ -145,7 +145,7 @@ npx skills add .
 | Type | Guide | Description |
 |------|-------|-------------|
 | Tutorial | [Getting Started](docs/01-getting-started.md) | Full deployment: quick start, local GPU, DGX Spark, and the recipe matrix |
-| Launchable | [Brev Launchable](notebooks/brev_launchable.ipynb) | Deploy a `*/server` or `*/single-gpu` profile on a Brev instance. Server profiles require `NVIDIA_API_KEY` and an NGC Docker login; single-GPU profiles require `HF_TOKEN`. Switching profiles restarts application containers but preserves the Brev VM, Jupyter, and model caches unless you enable a volume reset. |
+| Launchable | [Brev Launchable](notebooks/brev_launchable.ipynb) | Deploy a `*/server` or `*/single-gpu` profile on a Brev instance. Server profiles require `NVIDIA_API_KEY` and an NGC Docker login; single-GPU profiles can download the current public NVIDIA models without `HF_TOKEN`; set one when authentication or higher download limits are needed. Switching profiles restarts application containers but preserves the Brev VM, Jupyter, and model caches unless you enable a volume reset. |
 | How-to | [Configuration Guide](docs/02-configuration-guide.md) | Index of all configuration and customization guides |
 | Reference | [LLM](docs/how-to/configure-llm.md) · [ASR](docs/how-to/configure-asr.md) · [TTS](docs/how-to/configure-tts.md) Models | NVIDIA model catalogs, VRAM usage and model configs |
 | How-to | [Jetson Thor](docs/03-jetson-thor.md) | Edge deployment guide for the `*/single-gpu` recipes |

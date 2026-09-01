@@ -34,7 +34,7 @@ UI is `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE
 Do not treat these as extra preflights.
 
 - **Generic:** cascaded NVIDIA STT, NIM/vLLM LLM, NVIDIA TTS, with function calling.
-- **Omni:** Nemotron 3 Nano Omni handles ASR and LLM in one multimodal chat-completions call. No ASR sidecar. Magpie or `nemo-speech-tts` speaks the reply. Companion `omni-assistant-subagents` is a separate recipe. First vLLM start downloads `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` from Hugging Face (`HF_TOKEN`) and can take ~30 minutes. Orin-class Jetson is unsupported.
+- **Omni:** Nemotron 3 Nano Omni handles ASR and LLM in one multimodal chat-completions call. No ASR sidecar. Magpie or `nemo-speech-tts` speaks the reply. Companion `omni-assistant-subagents` is a separate recipe. First vLLM start downloads `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` from the public Hugging Face repository and can take ~30 minutes. `HF_TOKEN` is optional unless Hugging Face requires authentication or unauthenticated download limits apply. Orin-class Jetson is unsupported.
   - Server NIM health: `curl -f http://localhost:18002/v1/health/ready`
   - Single-GPU vLLM health: `curl -f http://localhost:8002/health`
 - **Omni Subagents:** same Omni sidecars. Five Pipecat workers (transport, speaker, media analyzer, webcam, thinker) share a `WorkerBus`. Declares `capabilities: [attachments, webcam]` in `examples_registry.yaml`. Backend: `POST /api/sessions/{id}/attachments`, `POST /api/sessions/{id}/webcam/frames`, `GET /api/webcam-config`. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor use cloud (`omni-assistant-subagents`).

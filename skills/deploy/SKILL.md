@@ -55,7 +55,7 @@ Choose **one** recipe from `references/recipes.md`. Hardware only tells you what
 
 - Cloud: needs `NVIDIA_API_KEY`. It is the fallback when local VRAM is not enough.
 - `server`: workstation NIM only. **Not supported on DGX Spark or Jetson Thor.** If the hardware readout is Spark or Thor, do not open `references/server.md`. Use `single-gpu` or cloud. On a workstation: NGC login + `references/server.md`.
-- `single-gpu`: one GPU (workstation, DGX Spark, Jetson Thor). Needs `HF_TOKEN` + `references/single-gpu.md`. Exception: `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor**. Use cloud.
+- `single-gpu`: one GPU (workstation, DGX Spark, Jetson Thor). The current NVIDIA model repositories are public, so `HF_TOKEN` is optional; set it when Hugging Face requires authentication or to avoid unauthenticated download limits. Then read `references/single-gpu.md`. Exception: `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor**. Use cloud.
 
 If more than one family is viable, present the options and let the user pick. Auto-select only when a single option is viable (for example no usable GPU → cloud).
 
