@@ -19,6 +19,16 @@ _SPEC.loader.exec_module(run_cloud_tts_evals)
 
 
 class CloudTtsRunnerTests(unittest.TestCase):
+    def test_cloud_tts_runner_selects_catalog_tts_with_function_id(self) -> None:
+        body = run_cloud_tts_evals._runner_body_from_yaml(
+            run_cloud_tts_evals.ROOT / "tests/pipecat_evals/service/runner_bodies/cloud_tts.yaml",
+            "generic_default",
+        )
+
+        self.assertEqual(body["tts_id"], "cloud-nim:magpie-multilingual-tts")
+        self.assertNotIn("tts_server", body)
+        self.assertNotIn("tts_function_id", body)
+
     def test_yaml_runner_body_resolves_repo_root_relative_attachment_path(self) -> None:
         body = run_cloud_tts_evals._runner_body_from_yaml(
             run_cloud_tts_evals.ROOT / "tests/pipecat_evals/service/runner_bodies/cloud_tts.yaml",

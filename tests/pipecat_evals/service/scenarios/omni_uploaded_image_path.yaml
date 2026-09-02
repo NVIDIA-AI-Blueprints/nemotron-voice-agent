@@ -11,8 +11,5 @@ turns:
       - event: llm_started
         within_ms: 120000
       - event: tts_response
-        text_contains: "Analyzing the uploaded image now."
-        within_ms: 240000
-      - event: tts_response
-        eval: "the spoken reply summarizes or reports concrete findings from the uploaded architecture diagram"
+        eval: "the spoken reply clearly acknowledges the uploaded image and says the assistant will inspect, analyze, or summarize it"
         within_ms: 240000

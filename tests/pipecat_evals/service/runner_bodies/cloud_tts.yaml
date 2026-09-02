@@ -1,8 +1,10 @@
 defaults:
   llm_id: cloud-nim:nemotron-lightning
   asr_id: cloud-nim:nemotron-asr-streaming-english
-  tts_server: grpc.nvcf.nvidia.com:443
-  tts_voice_id: Magpie-Multilingual.EN-US.Aria
+  # Select TTS by catalog ID so session hydration includes NVCF's required
+  # function ID, model, and synthesis mode. Supplying only tts_server causes
+  # NVCF to reject the stream with "no function-id was passed in the metadata".
+  tts_id: cloud-nim:magpie-multilingual-tts
 
 bodies:
   generic_default:
@@ -61,7 +63,7 @@ bodies:
   omni_uploaded_image:
     pipeline_mode: omni-assistant-subagents
     llm_id: cloud-nim:nemotron-omni-nvfp4
-    system_prompt: "Eval-only routing guard: when Available input state says uploaded_attachment is available and the user asks about the uploaded attachment, image, file, or diagram, choose turn_action=analyze_attachment, selected_input_source=uploaded_attachment, and media_analysis_action=new, set response exactly to 'Analyzing the uploaded image now.', and let the media analyzer produce the actual description."
+    system_prompt: "Eval-only routing guard: when Available input state says uploaded_attachment is available and the user asks about the uploaded attachment, image, file, or diagram, choose turn_action=analyze_attachment, selected_input_source=uploaded_attachment, and media_analysis_action=new, acknowledge that you will inspect or analyze the uploaded image, and let the media analyzer produce the actual description."
     session_id: eval-omni-uploaded-image-cloud-tts
     eval_attachment:
       path: src/examples/omni_assistant/images/omni-assistant-architecture.png

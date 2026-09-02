@@ -1,7 +1,7 @@
 modality: audio
 eval:
-  service: ollama
-  model: gemma2:9b
+  factory: examples.shared.nvidia_inference_judge.create_nvidia_inference_judge
+  model: nvidia/google/gemma-4-31b-it
 transcription:
   service: moonshine
   model: small-streaming

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # Service-backed Pipecat evals. These use NVIDIA cloud ASR/LLM/TTS services,
-# a local Ollama judge, and the local frontend-backend booking server.
+# an NVIDIA Inference API judge, and the local frontend-backend booking server.
 
 name: Pipecat Service Evals
 
@@ -67,9 +67,14 @@ jobs:
       - name: Validate NVIDIA API key
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_INFERENCE_API_KEY: ${{ secrets.NVIDIA_INFERENCE_API_KEY }}
         run: |
           if [ -z "$NVIDIA_API_KEY" ]; then
             echo "NVIDIA_API_KEY repository secret is required for service-backed Pipecat evals."
+            exit 1
+          fi
+          if [ -z "$NVIDIA_INFERENCE_API_KEY" ]; then
+            echo "NVIDIA_INFERENCE_API_KEY repository secret is required for the NVIDIA Inference API judge."
             exit 1
           fi
 
@@ -79,63 +84,6 @@ jobs:
           python --version
           uv --version
           nvidia-smi || true
-
-      - name: Install Ollama prerequisites
-        run: |
-          if command -v zstd >/dev/null 2>&1; then
-            exit 0
-          fi
-
-          if ! command -v apt-get >/dev/null 2>&1; then
-            echo "zstd is required to install Ollama, and apt-get is not available."
-            exit 1
-          fi
-
-          if command -v sudo >/dev/null 2>&1 && sudo -n true; then
-            sudo apt-get update
-            sudo apt-get install -y zstd
-          elif [ "$(id -u)" -eq 0 ]; then
-            apt-get update
-            apt-get install -y zstd
-          else
-            echo "zstd is required to install Ollama. Install zstd in the runner image or grant passwordless sudo."
-            exit 1
-          fi
-
-      - name: Start Ollama judge
-        env:
-          OLLAMA_MODEL: gemma2:9b
-        run: |
-          if ! command -v ollama >/dev/null 2>&1; then
-            if ! curl -fsSL https://ollama.com/install.sh | sh; then
-              if ! command -v ollama >/dev/null 2>&1; then
-                echo "Ollama installer failed before installing the ollama binary."
-                exit 1
-              fi
-              echo "Ollama installer exited non-zero after installing the binary; continuing with explicit startup check."
-            fi
-          fi
-
-          if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-            rm -f "$RUNNER_TEMP/ollama.pid" "$RUNNER_TEMP/ollama.starttime"
-            nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
-            pid="$!"
-            echo "$pid" > "$RUNNER_TEMP/ollama.pid"
-            awk '{print $22}' "/proc/$pid/stat" > "$RUNNER_TEMP/ollama.starttime"
-          fi
-
-          for attempt in {1..60}; do
-            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" -eq 60 ]; then
-              cat "$RUNNER_TEMP/ollama.log" || true
-              exit 1
-            fi
-            sleep 2
-          done
-
-          ollama pull "$OLLAMA_MODEL"
 
       - name: Start booking backend
         run: |
@@ -193,6 +141,8 @@ jobs:
           SERVICE_EVAL_TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds || '360' }}
           SERVICE_EVAL_RETRIES: ${{ github.event.inputs.retries || '2' }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_INFERENCE_API_KEY: ${{ secrets.NVIDIA_INFERENCE_API_KEY }}
+          NVIDIA_INFERENCE_API_BASE_URL: https://inference-api.nvidia.com/v1
         run: |
           args=(
             --manifest "$SERVICE_EVAL_MANIFEST"
@@ -213,43 +163,7 @@ jobs:
           name: pipecat-service-eval-logs
           path: |
             eval-runs/
-            ${{ runner.temp }}/ollama.log
             ${{ runner.temp }}/booking-server.log
-
-      - name: Stop Ollama judge
-        if: always()
-        run: |
-          pid_file="$RUNNER_TEMP/ollama.pid"
-          starttime_file="$RUNNER_TEMP/ollama.starttime"
-
-          if [ ! -f "$pid_file" ] || [ ! -f "$starttime_file" ]; then
-            rm -f "$pid_file" "$starttime_file"
-            exit 0
-          fi
-
-          pid="$(cat "$pid_file")"
-          expected_starttime="$(cat "$starttime_file")"
-          rm -f "$pid_file" "$starttime_file"
-
-          is_owned_process() {
-            [ -n "$pid" ] || return 1
-            current_starttime="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
-            [ "$current_starttime" = "$expected_starttime" ]
-          }
-
-          is_owned_process || exit 0
-
-          kill "$pid" || true
-          for attempt in {1..10}; do
-            if ! is_owned_process; then
-              exit 0
-            fi
-            sleep 1
-          done
-
-          if is_owned_process; then
-            kill -9 "$pid" || true
-          fi
 
       - name: Stop booking backend
         if: always()
