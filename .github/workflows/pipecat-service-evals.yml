@@ -66,7 +66,7 @@ jobs:
           uname -a
           python --version
           uv --version
-          nvidia-smi || true
+          nvidia-smi
 
       - name: Install dependencies
         run: uv sync --locked --group eval
