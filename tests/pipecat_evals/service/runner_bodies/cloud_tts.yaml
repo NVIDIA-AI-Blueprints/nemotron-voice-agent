@@ -52,6 +52,11 @@ bodies:
     pipeline_mode: frontend-backend-agent
     prompt_key: talker
     thinker_llm_id: cloud-nim:nemotron-lightning
+    # The Thinker only emits a compact JSON tool plan. Keep its hosted-eval
+    # request bounded so a flight search can complete before the eval's
+    # response deadline instead of spending the tool budget on reasoning.
+    thinker_max_tokens: 1024
+    thinker_extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
     session_id: eval-frontend-backend-cloud-tts-default
 
   omni_default:
