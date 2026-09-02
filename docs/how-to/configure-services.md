@@ -24,6 +24,24 @@ When the same default key exists in both `services.cloud.yaml` and `services.loc
 
 > **On-prem note:** self-hosted promotion only applies when the `defaults` key also exists in `services.local.yaml`. A default whose key exists **only** in `services.cloud.yaml` resolves to the cloud model even on an on-prem recipe. Point `defaults` at a local key or pick the model from the Services tab.
 
+### Default Models by Example and Platform
+
+The following models resolve from each example's `defaults` entries in [`examples_registry.yaml`](../../examples_registry.yaml). The profile determines which service catalog implementation supplies the model.
+
+| Example | Cloud | Server | Single GPU |
+| --- | --- | --- | --- |
+| Generic Assistant | Nemotron ASR Streaming English; Nemotron 3.5 Lightning 30B A3B; Magpie TTS Multilingual | Nemotron ASR Streaming English NIM; Nemotron 3.5 Lightning 30B A3B NIM; Magpie TTS Multilingual NIM | Nemotron Speech Streaming English 0.6B; Nemotron 3.5 Lightning 30B A3B through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Multilingual Assistant | Parakeet 1.1B RNNT Multilingual ASR; Nemotron 3.5 Lightning 30B A3B; Magpie TTS Multilingual | Nemotron ASR Streaming Multilingual NIM; Nemotron 3.5 Lightning 30B A3B NIM; Magpie TTS Multilingual NIM | Nemotron 3.5 ASR Streaming Multilingual 0.6B; Nemotron 3.5 Lightning 30B A3B through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Nemotron Omni Assistant | Nemotron 3 Nano Omni 30B A3B Reasoning; Magpie TTS Multilingual | Nemotron 3 Nano Omni 30B A3B Reasoning NIM; Magpie TTS Multilingual NIM | Nemotron 3 Nano Omni 30B A3B Reasoning through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Nemotron Omni Assistant Subagents | Nemotron 3 Nano Omni 30B A3B Reasoning; Magpie TTS Multilingual | Nemotron 3 Nano Omni 30B A3B Reasoning NIM; Magpie TTS Multilingual NIM | Nemotron 3 Nano Omni 30B A3B Reasoning through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Frontend/Backend Agent | Nemotron ASR Streaming English; Nemotron 3.5 Lightning 30B A3B for the Talker and Thinker; Magpie TTS Multilingual | Nemotron ASR Streaming English NIM; Nemotron 3.5 Lightning 30B A3B NIM for the Talker and Thinker; Magpie TTS Multilingual NIM | Nemotron Speech Streaming English 0.6B; Nemotron 3.5 Lightning 30B A3B through vLLM for the Talker and Thinker; Magpie TTS Multilingual through NeMo-Speech.cpp |
+
+The Generic Assistant's `server-perf` profile uses the same default model set as Server. It changes the GPU layout, LLM NIM profile, and Magpie batch size for benchmarking.
+
+The Multilingual Assistant declares `nemotron-asr-streaming-multilingual` as its ASR default. This key resolves to Nemotron ASR for Server and Single GPU. The cloud catalog does not provide that key, so the resolver selects its first cloud ASR entry, Parakeet 1.1B RNNT Multilingual.
+
+The Omni model handles both speech recognition and response generation, so the Omni examples do not have a separate ASR default. The Frontend/Backend Thinker enables reasoning on the same Nemotron 3.5 Lightning model used by the Talker.
+
 ## On-prem catalog
 
 `services.local.yaml` groups entries under recipe sections (`server`, `singlegpu`).

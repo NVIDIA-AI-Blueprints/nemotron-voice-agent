@@ -91,7 +91,7 @@ docker compose --profile generic-assistant/single-gpu --profile tracing --profil
 
 - The selected recipe profile matches the example and hardware you want active.
 - `examples_registry.yaml` `defaults` references catalog keys that actually exist for that example.
-- Multilingual prompt selection is paired with multilingual-capable ASR (`parakeet-rnnt` by default, or `nemotron-asr-streaming-multilingual` when opted in) and TTS (`magpie-multilingual-tts`, `magpie-zeroshot-tts`, or `chatterbox-multilingual-tts`) in the active catalog.
+- Multilingual prompt selection is paired with multilingual-capable ASR (`nemotron-asr-streaming-multilingual` by default for local profiles, with `parakeet-rnnt` as the cloud fallback) and TTS (`magpie-multilingual-tts`, `magpie-zeroshot-tts`, or `chatterbox-multilingual-tts`) in the active catalog.
 - If `ENABLE_TRACING=true` with `phoenix:4317`, the `phoenix` service is started through the `tracing` profile.
 - Compose-managed local entries use service DNS names, not `localhost`.
 - Local catalog endpoints must match the exact Compose service name. Do not replace model-specific names with generic role names.
