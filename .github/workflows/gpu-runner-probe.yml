@@ -9,7 +9,7 @@ on:
       runner_label:
         description: "Self-hosted runner label to inspect"
         required: true
-        default: "arc-runners-org-nvidia-ai-bp-1-gpu"
+        default: "arc-runners-org-nvidia-ai-bp-2-gpu"
 
 permissions: {}
 
