@@ -40,7 +40,7 @@ concurrency:
 jobs:
   pipecat-service-evals:
     name: Pipecat service evals
-    runs-on: arc-runners-org-nvidia-ai-bp-1-gpu
+    runs-on: arc-runners-org-nvidia-ai-bp-2-gpu
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 180
 
