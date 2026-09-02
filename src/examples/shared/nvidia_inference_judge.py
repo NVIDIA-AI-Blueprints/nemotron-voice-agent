@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""NVIDIA Inference API judge factory for Pipecat evaluations."""
+"""NVIDIA-hosted judge factory for Pipecat evaluations."""
 
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ NVIDIA_INFERENCE_JUDGE_MODEL = "nvidia/google/gemma-4-31b-it"
 
 
 class NvidiaInferenceJudgeService:
-    """NVIDIA Inference API client implementing Pipecat's judge interface."""
+    """NVIDIA-hosted client implementing Pipecat's judge interface."""
 
     def __init__(self, *, api_key: str, base_url: str, model: str, temperature: float) -> None:
-        """Initialize the OpenAI-compatible NVIDIA Inference API client."""
+        """Initialize the OpenAI-compatible NVIDIA-hosted client."""
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
         self._temperature = temperature
@@ -27,7 +27,7 @@ class NvidiaInferenceJudgeService:
     async def run_inference(
         self, context: Any, max_tokens: int | None = None, system_instruction: str | None = None
     ) -> str | None:
-        """Retry transient NVIDIA Inference API server errors before failing the eval."""
+        """Retry transient NVIDIA-hosted server errors before failing the eval."""
         messages = [dict(message) for message in context.get_messages()]
         if system_instruction:
             messages.insert(0, {"role": "system", "content": system_instruction})
@@ -50,11 +50,11 @@ class NvidiaInferenceJudgeService:
 
 
 def create_nvidia_inference_judge(config: dict[str, Any]) -> NvidiaInferenceJudgeService:
-    """Create an OpenAI-compatible judge backed by NVIDIA Inference API.
+    """Create an OpenAI-compatible judge backed by the NVIDIA-hosted API.
 
     Pipecat's built-in ``service: openai`` judge only uses OpenAI's default API
-    endpoint. This factory supplies NVIDIA's OpenAI-compatible endpoint while
-    keeping the Inference API key in the ``NVIDIA_INFERENCE_API_KEY``
+    endpoint. This factory supplies NVIDIA's OpenAI-compatible hosted endpoint while
+    keeping the key in the ``NVIDIA_INFERENCE_API_KEY``
     environment variable. ``NVIDIA_API_KEY`` remains a fallback for backwards
     compatibility, so cloud-service eval configurations that use one credential
     continue to work.
@@ -62,7 +62,7 @@ def create_nvidia_inference_judge(config: dict[str, Any]) -> NvidiaInferenceJudg
     api_key = config.get("api_key") or os.environ.get("NVIDIA_INFERENCE_API_KEY") or os.environ.get("NVIDIA_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "NVIDIA_INFERENCE_API_KEY (or NVIDIA_API_KEY) is required for the NVIDIA Inference API judge"
+            "NVIDIA_INFERENCE_API_KEY (or NVIDIA_API_KEY) is required for the NVIDIA-hosted evaluation judge"
         )
 
     return NvidiaInferenceJudgeService(

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # Service-backed Pipecat evals. These use NVIDIA cloud ASR/LLM/TTS services,
-# an NVIDIA Inference API judge, and the local frontend-backend booking server.
+# an NVIDIA-hosted judge, and the local frontend-backend booking server.
 
 name: Pipecat Service Evals
 
@@ -74,7 +74,7 @@ jobs:
             exit 1
           fi
           if [ -z "$NVIDIA_INFERENCE_API_KEY" ]; then
-            echo "NVIDIA_INFERENCE_API_KEY repository secret is required for the NVIDIA Inference API judge."
+            echo "NVIDIA_INFERENCE_API_KEY repository secret is required for the NVIDIA-hosted evaluation judge."
             exit 1
           fi
 
