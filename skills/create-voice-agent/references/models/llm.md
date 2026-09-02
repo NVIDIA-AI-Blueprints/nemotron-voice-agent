@@ -1,10 +1,18 @@
 # LLM
 
 Cascaded Nemotron 3.5 Lightning (default), with Nemotron 3 Super / Ultra when named, plus
-Nemotron 3 Nano Omni for the Omni pipeline. Resolve before the proposal
-table. Self-hosted fit is mandatory. Cloud skips platform fit. Jetson Thor uses raw vLLM
-and follows `platforms/jetson-thor.md`. NIM profile selection below applies to workstation
-and DGX Spark.
+Nemotron 3 Omni for the Omni pipeline. Resolve before the proposal table. Self-hosted fit is
+mandatory. Cloud skips platform fit.
+
+Self-hosted quantization is verified by the documentation family for the routed service:
+
+| Routed stack | Quantization check | Owned by |
+| --- | --- | --- |
+| Cascaded LLM NIM, on a workstation serving many users | LLM NIM support matrix, then `list-model-profiles` on the assigned GPU | §Cascaded LLM NIM fit below |
+| Omni NIM, on a workstation serving many users | VLM NIM support matrix, then VLM `list-model-profiles` on the assigned GPU | `frameworks/omni.md` §Workstation NIM |
+| vLLM plus NeMo-Speech.cpp, on DGX Spark, Jetson Thor, or a low-concurrency workstation | the variant the locked page publishes for the probed compute capability | `platforms/single-gpu.md` §Precision |
+
+Never apply an LLM NIM matrix or profile rule to Omni. Raw vLLM has no NIM profile.
 
 ## Discover
 
@@ -12,16 +20,52 @@ and DGX Spark.
 | --- | --- |
 | Family browse | [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron#section-nvidia-nemotron-models) |
 | Confirm id / run | `build.nvidia.com/nvidia/<model>` · self-hosted: `?nim=self-hosted` |
-| Card / API | `…/<slug>/modelcard` · `docs.api.nvidia.com/nim/reference/nvidia-<slug>` |
+| Card / API | `…/<slug>/modelcard` · `docs.api.nvidia.com/nim/reference/nvidia-<slug>`, with dots in the slug written as dashes |
 
-Examples: [Lightning cloud](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b) ·
-[self-hosted](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b?nim=self-hosted) ·
-[Super card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) ·
-[Super API](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-super-120b-a12b).
+### Pages to Open
 
-**Omni** is the separate **Nemotron 3 Nano Omni** multimodal model (audio-native), not the
-cascaded text LLM and not a Lightning build. It is the only slot that keeps a Nano id.
-Exclude it from the cascaded LLM slot. Never interchange.
+Every slot has a build page that carries deployment and an API reference that carries the
+request contract. Open both for the slot being built.
+
+| Slot | Build page | API reference |
+| --- | --- | --- |
+| Cascaded LLM | [Nemotron 3.5 Lightning, self-hosted](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b?nim=self-hosted). Drop the parameter for cloud | [Lightning](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-5-lightning-30b-a3b) |
+| Omni | [Nemotron 3 Omni](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) | [Omni](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-omni-30b-a3b-reasoning) |
+| Super, only when named | [Super card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) | [Super](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-super-120b-a12b) |
+
+The API reference host replaces every dot in the slug with a dash, so
+`nemotron-3.5-lightning-30b-a3b` becomes `nvidia-nemotron-3-5-lightning-30b-a3b`. Carrying
+the dot across returns 404, so use these links rather than assembling one from §Discover.
+
+These models are the roster. Resolve every proposal from these pages, never from recall of
+what the family used to contain, and confirm the slot's model is still current when the page
+opens. If a page no longer serves it or marks it superseded, report that and propose the
+current model. When a user names a model off the roster, say so and wait
+(`models/catalog.md` §Shared rules).
+
+### The Omni Name and Its Ids Differ
+
+The product is **Nemotron 3 Omni**, and its slug, repository, and image ids carry
+`nano-omni`. Use the name for people and the ids verbatim in code. Dropping `nano` from a
+slug gives a 404, and from an image id a failed pull.
+
+Omni is the audio-native multimodal model. It is not a cascaded text LLM, so exclude it from
+that slot.
+
+### Reading These Pages in Realtime
+
+| Page | What a fetch returns |
+| --- | --- |
+| Omni build page | full self-host content: precision variants, required vLLM version, serve command, a DGX Spark section, and mode parameters |
+| Lightning build page `?nim=self-hosted` | the model card only. The deploy panel renders in the browser, so the `nvcr.io` image and run command are usually **not** in fetched content |
+| Either API reference | server-rendered and reliable to fetch. Use it for the request contract when a build panel does not come back |
+
+The Lightning card still gives the supported languages, context limit, and quantization
+recipe. It does not give the container.
+
+When the panel is not in what you fetched, do not build an `nvcr.io` tag from the slug and a
+guessed version. Read the tag from that NIM's NGC catalog page, or ask the user to paste the
+panel. State which you used, because an image tag with no source is not verified.
 
 Every card lists the languages the model supports, and that list is usually shorter than the
 speech coverage around it. Check the approved response language against it through
@@ -59,15 +103,13 @@ and can leak into TTS (`<think>`, silence, `redacted_thinking`).
 | off (propose this) | normal voice agent |
 | on, budget 8192 | user asked hard multi-step / specialized. Warn if budget > 16384 |
 
-Verify on the locked model's API reference, for example:
-[Lightning](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-5-lightning-30b-a3b) ·
+Verify on the locked slot's API reference in §Pages to open, alongside
 [NIM reasoning](https://docs.nvidia.com/nim/large-language-models/latest/reasoning-model.html).
 
-The model's own build.nvidia.com page is the fastest check. Its prototype panel shows a
-runnable request for that exact model, including where the reasoning fields sit. For example, use
-[Lightning](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b). Read that example and the
-API reference before generating the request, because field names and nesting move between
-model generations.
+The build page is the faster of the two checks, because its prototype panel shows a runnable
+request for that exact model with the reasoning fields already in position. Read that
+example and the API reference before generating the request, because field names and nesting
+move between model generations.
 
 With an OpenAI-compatible SDK these provider fields travel in `extra_body`, which
 merges them into the top level of the request body. A raw HTTP call sets them at the
@@ -101,28 +143,22 @@ constants + restart, not mid-session, unless the framework docs say otherwise.
 
 ### Reasoning Parser
 
-A model card's serve command can enable the reasoning parser independently of each request's
-thinking mode. Keep the parser enabled for both modes. It separates thinking from `content`
-when reasoning is on and applies the model's reasoning-off contract when
+A model card's serve command enables the reasoning parser independently of each request's
+thinking mode. **Keep the parser enabled in both modes.** It separates thinking from
+`content` when reasoning is on and applies the model's reasoning-off contract when
 `enable_thinking:false`. TTS must read only `content`.
 
-| Reasoning Mode | Serve Flags | Request Setting |
-| --- | --- | --- |
-| Off (voice default) | Enable the parser required by the locked model card | Set `extra_body.chat_template_kwargs.enable_thinking` to `false` |
-| On | Enable the parser required by the locked model card | Set `extra_body.chat_template_kwargs.enable_thinking` to `true`, and keep `reasoning_content` away from TTS |
+The serve command therefore does not change with the reasoning row. Only the request does,
+through `extra_body.chat_template_kwargs.enable_thinking`. With reasoning on, also keep
+`reasoning_content` away from TTS.
 
-Parser names and plugin requirements are not shared across this family. Read the row for the
-exact model and server you run:
-
-| Locked Model and Server | Current Parser Flag |
-| --- | --- |
-| Cascaded Lightning on vLLM | `--reasoning-parser nemotron_v3` (built-in, no plugin file) |
-| Omni NVFP4 on vLLM | `--reasoning-parser nemotron_v3` |
-
-Both add `--enable-auto-tool-choice --tool-call-parser qwen3_coder`. When a card names a
-separate parser-plugin file, it must be downloaded and present before the server starts.
-Confirm the parser and any plugin from the model card for the server you run, and never
-adapt a vLLM row for a different server such as SGLang.
+Parser names and plugin requirements are not shared across this family, so read them from
+the locked card for the server you actually run. Both current vLLM paths use
+`--reasoning-parser nemotron_v3` alongside
+`--enable-auto-tool-choice --tool-call-parser qwen3_coder`, which is a value to confirm
+rather than one to copy. When a card names a separate parser-plugin file, download it and
+have it present before the server starts. Never adapt a vLLM row for a different server
+such as SGLang.
 
 Prove the result on the streaming endpoint in both modes. `scripts/smoke.sh` asserts
 non-empty `delta.content` and empty or absent `delta.reasoning_content` when reasoning is
@@ -131,7 +167,7 @@ off (`output-contract.md` §Smoke Before Client). One non-streaming answer does 
 ## Serve Flags
 
 Every serve-time flag must trace to one of three sources: the locked model card, the memory
-controls in §Tight fit, or a fatal log line that names the flag. Nothing else belongs on the
+controls in §Runtime memory controls, or a fatal log line that names the flag. Nothing else belongs on the
 command line.
 
 Performance and scheduling flags are the usual trap. Reaching for eager mode, a scheduling
@@ -142,10 +178,14 @@ speculative flag then has to be reverted, and a revert is indistinguishable from
 When a flag looks necessary, name the log line that requires it, change that one thing, and
 rerun `scripts/smoke.sh` before touching anything else.
 
-## Platform Fit (Self-Hosted)
+## Cascaded LLM NIM Fit
 
 Hardware first from `preflight.md`. Never propose model / precision / TP until verified
 for the probed GPU.
+
+This section covers a cascaded LLM on LLM NIM only. Omni NIM uses the VLM NIM sources in
+`frameworks/omni.md` §Workstation NIM. The single-GPU stack uses
+`platforms/single-gpu.md` §Precision.
 
 ### 1. Support Matrix HTML
 
@@ -172,8 +212,8 @@ Before proposal, use the support matrix to select a candidate profile and mark s
 fit provisional. After the user approves self-hosting and container readiness passes, run
 `list-model-profiles` on that NIM for the probed GPU. Standard `*/server` deployments use
 the result to verify manifest auto-selection. Explicitly pinned self-hosted deployments use
-the exact result in generated Compose. Profile verification is mandatory on every
-workstation / DGX Spark NIM LLM deployment. Buckets:
+the exact result in generated Compose. Profile verification is mandatory on every NIM LLM
+deployment. Buckets:
 
 ```bash
 docker run --rm --gpus '"device=0"' <nim_llm_image> list-model-profiles
@@ -190,9 +230,10 @@ Do not infer the image or tag.
 | Low memory | apply the suggested `--max-model-len` / `NIM_MAX_MODEL_LEN` if the user accepts |
 | Incompatible | use lower precision on the same image, or a smaller LLM |
 
-Prefer the smallest Compatible precision that fits (nvfp4 > mxfp4 > w4a16 > fp8 > bf16)
-unless the user asked for a heavier one. On a local GPU under ~90 GB, prefer Compatible
-nvfp4 when listed. Do not default to a heavier precision if a lighter one is Compatible.
+Prefer the lightest Compatible precision that fits, in this order: `nvfp4`, `mxfp4`,
+`w4a16`, `fp8`, `bf16`. On a local GPU under about 90 GB, prefer Compatible `nvfp4` when
+listed. Do not default to a heavier precision when a lighter one is Compatible, unless the
+user asked for it.
 
 For an explicitly pinned self-hosted LLM deployment, set `NIM_MODEL_PROFILE` in the launch
 environment to one of:
@@ -241,85 +282,53 @@ rather than assuming a precision exists.
 | Lightning NVFP4 | ~19 GB |
 | Lightning W4A16 | ~19 GB |
 | Lightning BF16 | ~63 GB |
-| Omni 30B NVFP4 | ~15 GB (ASR in-process) |
 
 The support matrix lists exact min VRAM per GPU per precision and TP; use it over these
 estimates. Super / Ultra: on one workstation GPU, say they will not fit. Offer Lightning
 local or that model in the cloud. Do not silently substitute.
 
-### 4. Tight Fit
+## Runtime Memory Controls
 
-Apply this section to every shared single-GPU layout, not only after an OOM.
+This section covers both NIM families and raw vLLM. These controls are required in the
+generated `compose.yaml` on any shared GPU, not applied after an OOM. Choose the control
+from the actual server path, never from the pipeline name.
 
-| Deployment path | Knobs | Source |
-| --- | --- | --- |
-| Workstation / DGX NIM | `NIM_MAX_MODEL_LEN`, documented runtime memory limit | current NIM environment and memory troubleshooting docs |
-| Raw vLLM, including Jetson Thor | `--gpu-memory-utilization`, `--max-model-len` | locked Hugging Face model card for the required flags, [vLLM `serve` CLI reference](https://docs.vllm.ai/en/stable/cli/serve/) for their meaning and current defaults |
+| Path | Controls | Flag source | Budget owner |
+| --- | --- | --- | --- |
+| Cascaded LLM NIM | `NIM_MAX_MODEL_LEN`, plus exactly one documented runtime memory limit, either `--gpu-memory-utilization` through `NIM_PASSTHROUGH_ARGS` or `NIM_KVCACHE_PERCENT` when the image documents it | [LLM NIM environment variables](https://docs.nvidia.com/nim/large-language-models/latest/reference/environment-variables.html) · [LLM NIM memory troubleshooting](https://docs.nvidia.com/nim/large-language-models/latest/troubleshooting/memory.html) | `preflight.md` §NIM budget |
+| Omni NIM | `NIM_MAX_MODEL_LEN`, plus only the runtime memory limit its current VLM NIM instructions document | [VLM NIM environment variables](https://docs.nvidia.com/nim/vision-language-models/2.0.4-variant/environment-variables.html) · `frameworks/omni.md` §Workstation NIM | `preflight.md` §NIM budget |
+| Raw vLLM on the single-GPU stack | `--max-model-len`, `--gpu-memory-utilization` | locked model card, then [vLLM `serve` CLI reference](https://docs.vllm.ai/en/stable/cli/serve/) for meaning and current defaults | `platforms/single-gpu.md` §Memory |
 
-Both server paths fill their runtime budget with KV cache after weights and overhead. The
-documented default fraction is 0.9 or higher on each path, which can starve co-located
-speech even when quantized weights are small, so read the exact current default from the
-source in the table.
+Both servers fill their runtime budget with KV cache after weights and overhead, and the
+documented default fraction is 0.9 or higher on each. That default starves co-located
+speech even when quantized weights are small, so read the current default from the flag
+source and set the value from the budget owner instead of accepting it.
 
-On raw vLLM that fraction is per-instance and measured against total device memory. The
-reference states it does not account for memory another process already holds, so a
-co-located speech container does not lower it. Derive the fraction from the budget below
-rather than expecting vLLM to leave room.
+Four rules hold on both paths:
 
-Before first start:
-
-1. re-read free VRAM immediately before launch, including other GPU processes
-2. calculate `LLM budget = current free VRAM - startup reserve` minus the reserve of every
-   speech slot placed on this GPU, which is TTS plus ASR for Cascaded and TTS alone for
-   Omni. Slots in the cloud or on another GPU take nothing from this budget
-3. reject co-location when that budget cannot hold the selected build's weights, runtime
-   overhead, and a usable KV cache. Move a slot instead, or take a lighter build, which
-   is a smaller Compatible profile on NIM and a lighter quantization from the locked card
-   on raw vLLM
-4. set the context to the smallest value that satisfies the approved use case, through
-   `NIM_MAX_MODEL_LEN` on NIM or `--max-model-len` on raw vLLM
-5. cap runtime memory so the server cannot exceed `LLM budget`, which as a fraction is no
-   higher than `LLM budget / total GPU memory`:
-   - NIM: leave profile selection unset for standard `*/server`. For an explicitly pinned
-     deployment, pin the exact `NIM_MODEL_PROFILE`. Then take exactly one control from the
-     selected image's current docs, either `--gpu-memory-utilization` passed through
-     `NIM_PASSTHROUGH_ARGS` or `NIM_KVCACHE_PERCENT` when that image documents it
-   - raw vLLM: pass `--gpu-memory-utilization` directly, or an absolute KV cache size
-     when the current reference documents one
-
-Never set both runtime memory controls. Do not copy either value from another image or
-model version.
-If the calculated cap leaves no usable KV cache, the layout does not fit. Do not keep
-lowering the cap to force co-location.
-
-On a shared single GPU the chosen control is **required in the generated `compose.yaml`**,
-not a troubleshooting step applied after an OOM. Derive its value from the budget above
-rather than reusing a number. Leaving the container default in place is what lets the LLM
-take the whole device and starve TTS and ASR.
-
-At deployment, verify the measured budget before each service starts. NIM uses
-`platforms/deployment.md` §Shared-GPU memory gate. Raw vLLM on Jetson Thor uses the
-unified-memory check in `platforms/jetson-thor.md` §Start and verify. Do not let TTS
-discover an invalid LLM budget through repeated OOM restarts.
-
-Sources:
-[environment variables](https://docs.nvidia.com/nim/large-language-models/latest/reference/environment-variables.html) ·
-[GPU memory troubleshooting](https://docs.nvidia.com/nim/large-language-models/latest/troubleshooting/memory.html) ·
-[vLLM `serve` CLI reference](https://docs.vllm.ai/en/stable/cli/serve/).
-
-Do not choose a knob from the pipeline name. Choose it from the actual server path.
+1. **Never set both memory controls**, and never copy either value from another image or
+   model version.
+2. **Set context to the smallest length the approved use case needs.**
+3. **A cap that leaves no usable KV cache means the layout does not fit.** Take a lighter
+   build, which is a smaller Compatible profile on NIM and a lighter quantization on raw
+   vLLM, or move a slot. Do not keep lowering the cap to force co-location.
+4. **Verify the measured budget before each service starts**, through
+   `platforms/deployment.md` §Shared-GPU memory gate on NIM and
+   `platforms/single-gpu.md` §Start and verify on the single-GPU stack. Do not let TTS
+   discover an invalid LLM budget through repeated OOM restarts.
 
 ## Anti-Patterns
 
 - Voice agent with reasoning left at model default (on).
-- Reasoning parser or plugin left enabled while the reasoning row is off.
+- Serving without the reasoning parser, or without a plugin file the card requires, in
+  either reasoning mode. Dropping the parser because the reasoning row is off.
 - Adding a serve flag the card does not list and no fatal log demands.
 - `chat_template_kwargs` passed as a plain SDK argument rather than through `extra_body`.
   Reasoning flags in `.env`.
-- Reasoning on locally without the reasoning parser and plugin file the card requires.
 - Cascaded slot → omni model. Model ids in `.env`.
 - Propose from memory / Verified GPUs list alone. Click matrix UI or use `.html.md` for fit.
 - Override a failed matrix / `list-model-profiles` check. Guess a SKU. Use the deprecated
   `NIM_TAGS_SELECTOR` on a generated LLM deployment.
+- Validate Omni with the LLM NIM matrix or copy a cascaded LLM profile onto Omni NIM.
 - Treat quantized weight size as total LLM VRAM or leave vLLM at its default memory budget
   while co-locating speech.

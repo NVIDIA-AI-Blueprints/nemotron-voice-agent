@@ -1,0 +1,238 @@
+{
+  "skill_name": "create-voice-agent",
+  "evals": [
+    {
+      "id": "create-voice-agent-explicit-dgx-spark",
+      "prompt": "Use the create-voice-agent skill to plan a Pipecat cascaded English voice assistant on my DGX Spark for one user. Do not write files yet.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A concise proposal that routes DGX Spark to vLLM plus NeMo-Speech.cpp, uses current NVIDIA sources to resolve Nemotron 3.5 Lightning and speech models, requires HF_TOKEN rather than a NIM credential, and waits for approval before generating files.",
+      "assertions": [
+        "Loaded create-voice-agent/SKILL.md and the references routed for intake, preflight, Pipecat, models, and DGX Spark.",
+        "Selected the cascaded pipeline and Pipecat without asking the user to repeat choices already present.",
+        "Routed local deployment to vLLM plus NeMo-Speech.cpp rather than NIM.",
+        "Planned from available unified memory and included the measured speech reserve gate.",
+        "Presented one filled proposal table and did not write project files before approval."
+      ]
+    },
+    {
+      "id": "create-voice-agent-implicit-low-concurrency-workstation",
+      "prompt": "I have a Linux workstation with one RTX PRO 6000 Blackwell GPU. Build a private voice assistant for me and two colleagues using Pipecat, streaming speech, and low turn latency.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "The agent recognizes a low-concurrency NVIDIA voice-agent request, probes the host, proposes a cascaded Pipecat pipeline, and routes local services to vLLM plus NeMo-Speech.cpp with model-specific quantization and measured memory controls.",
+      "assertions": [
+        "Activated the skill without the user naming it.",
+        "Inferred low concurrency from the stated user count and recorded that assumption in the Deployment row.",
+        "Selected vLLM plus NeMo-Speech.cpp instead of workstation NIM.",
+        "Resolved quantization from the locked model page for the exact GPU rather than from memory.",
+        "Kept reasoning off by default for low voice latency."
+      ]
+    },
+    {
+      "id": "create-voice-agent-contextual-high-concurrency-workstation",
+      "prompt": "We are adding a spoken support agent to an existing service. It will run on an x86_64 NVIDIA GPU workstation and must serve hundreds of simultaneous customer sessions. Recommend the NVIDIA deployment and framework, then show the decisions for approval.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A proposal that infers high concurrency, recommends the workstation NIM path, resolves the framework and pipeline, verifies each NIM service against its current documentation family, budgets all co-located services, and waits for approval.",
+      "assertions": [
+        "Inferred high concurrency without asking a separate concurrency question.",
+        "Recommended NIM for the high-concurrency workstation.",
+        "Kept LLM, Speech, and VLM NIM documentation families distinct.",
+        "Marked co-location provisional until the measured shared-GPU gate passes.",
+        "Did not silently move a slot to cloud or select a smaller model."
+      ]
+    },
+    {
+      "id": "create-voice-agent-jetson-thor-omni",
+      "prompt": "Create a single-agent Nemotron 3 Omni voice assistant on Jetson Thor. I want Pipecat and one local user.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A Pipecat Omni proposal for Jetson Thor using raw vLLM plus NeMo-Speech.cpp TTS, with no ASR service, no speculative draft model, HF_TOKEN model access, arm64 checks, and current Omni model instructions.",
+      "assertions": [
+        "Confirmed Jetson Thor rather than treating every Jetson as supported.",
+        "Selected Pipecat because LiveKit does not support the Omni pipeline.",
+        "Used the single-GPU vLLM path and did not apply NIM profiles or Speech NIM tags.",
+        "Omitted ASR and configured the speech service for TTS only.",
+        "Rejected the concurrent-subagent Omni shape and did not add a draft model on Thor."
+      ]
+    },
+    {
+      "id": "create-voice-agent-workstation-omni-nim",
+      "prompt": "Plan a Nemotron 3 Omni contact-center voice agent on a multi-GPU workstation for high concurrency.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A high-concurrency Pipecat Omni proposal using Omni VLM NIM plus TTS, with no ASR service. Hardware fit, precision, image, profiles, environment and runtime controls come from current VLM NIM documentation rather than LLM NIM documentation.",
+      "assertions": [
+        "Selected Pipecat and the Omni pipeline.",
+        "Selected the workstation NIM path because the use case is high concurrency.",
+        "Used the Omni VLM NIM support matrix, quickstart, profiles, utilities, and environment documentation.",
+        "Did not validate Omni with the LLM NIM support matrix or a cascaded LLM profile.",
+        "Budgeted Omni plus TTS and omitted ASR."
+      ]
+    },
+    {
+      "id": "create-voice-agent-gpu-probe-partial-failure",
+      "prompt": "Set up a local NVIDIA voice agent. nvidia-smi -L shows an H100, but querying index,name,memory.total,memory.free,compute_cap together exits with code 2 saying compute_cap is not a valid field.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "The agent treats this as partial field support rather than no GPU, reruns stable memory fields separately, resolves compute capability through the documented fallback, and does not force cloud because one field failed.",
+      "assertions": [
+        "Accepted nvidia-smi -L as evidence that a GPU exists.",
+        "Separated compute_cap from the stable memory query.",
+        "Reported that compute capability was derived when the driver could not return it.",
+        "Required confirmation against the selected model's authoritative compatibility source.",
+        "Did not classify the host as no_gpu or silently route it to cloud."
+      ]
+    },
+    {
+      "id": "create-voice-agent-vram-reclamation",
+      "prompt": "Deploy the voice agent locally. The GPU has 20 GiB free out of 96 GiB and docker ps shows an old unhealthy model container from this project holding about 50 GiB.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "The agent identifies the named stale container as reclaimable memory, explains the resulting local fit, asks for explicit approval before stopping it, and remeasures memory afterward instead of immediately downgrading or using cloud.",
+      "assertions": [
+        "Reported total and free memory with the process or container holding the remainder.",
+        "Named the specific container and estimated memory it would return.",
+        "Waited for user approval before stopping anything.",
+        "Did not run broad kill, prune, or stop commands.",
+        "Did not reduce model, precision, context, or placement around reclaimable memory."
+      ]
+    },
+    {
+      "id": "create-voice-agent-livekit-omni-conflict",
+      "prompt": "Build the agent with LiveKit and the Nemotron 3 Omni pipeline.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A single focused conflict question asking whether to keep LiveKit with a Cascaded pipeline or keep Omni with Pipecat. No files or deployment proposal are generated until the user resolves the conflict.",
+      "assertions": [
+        "Recognized that LiveKit is Cascaded-only in this skill.",
+        "Did not generate a LiveKit Omni implementation.",
+        "Asked exactly one conflict-resolution question.",
+        "Offered the two valid combinations without silently changing either choice.",
+        "Did not write files before resolution and approval."
+      ]
+    },
+    {
+      "id": "create-voice-agent-reasoning-mode",
+      "prompt": "Create a voice agent for complex multi-step engineering diagnosis. I want reasoning enabled, but the spoken answer must never include internal reasoning.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "The proposal records reasoning as enabled, resolves budget, token limits, nesting and sampling from the exact locked model API reference, retains the required server parser, and ensures only final response content reaches TTS.",
+      "assertions": [
+        "Did not apply one universal reasoning budget across Lightning and Omni.",
+        "Resolved reasoning fields and sampling from the locked model's current API reference.",
+        "Kept the required reasoning parser enabled independently of request mode.",
+        "Passed provider fields through the framework's documented request mechanism.",
+        "Required a streaming verification that reasoning content never reaches TTS."
+      ]
+    },
+    {
+      "id": "create-voice-agent-negative-text-rag",
+      "prompt": "Build a text-only RAG chatbot over my PDF collection. It has no microphone, speech input, or audio output.",
+      "expected_skill": null,
+      "expected_output": "The create-voice-agent skill does not activate because the request is explicitly text-only and contains no voice-agent workflow.",
+      "assertions": [
+        "Did not load or apply create-voice-agent.",
+        "Did not introduce ASR, TTS, Pipecat voice transports, or NVIDIA speech services."
+      ]
+    },
+    {
+      "id": "create-voice-agent-e2e-cascaded-generation",
+      "prompt": "Use create-voice-agent for this approved build. Generate a Pipecat Cascaded English voice assistant for one local user on an RTX PRO 6000 Blackwell workstation. Use vLLM plus NeMo-Speech.cpp. Reasoning is off. The local model services are already running on documented OpenAI-compatible and Riva-compatible endpoints, so do not download models or start GPU containers. Create the complete project, validate it, run its non-GPU tests, exercise the generated smoke path against deterministic local mock endpoints, and report whether it is ready for the final live spoken exchange.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A complete generated Cascaded project with pinned configuration, Pipecat pipeline, transport, service adapters, environment template, Compose or service configuration, smoke test, observability, runbook, and README. Static checks and deterministic mock smoke tests pass. The agent distinguishes this from the final hardware-backed spoken exchange and does not claim production readiness without that exchange.",
+      "assertions": [
+        "Treated the supplied deployment and behavior decisions as approved and did not reopen intake.",
+        "Read current Pipecat documentation through its documentation source before generating framework APIs.",
+        "Generated the complete output contract without putting model ids, voice ids, or non-secret settings in the secrets file.",
+        "Connected transport audio through ASR, the Cascaded LLM, and TTS in the correct order.",
+        "Ran available formatting, static, unit, and deterministic mock smoke checks and reported their actual results.",
+        "Did not claim the final spoken exchange passed when only mock endpoints were exercised."
+      ]
+    },
+    {
+      "id": "create-voice-agent-e2e-omni-generation",
+      "prompt": "Proceed with an approved end-to-end build of a Pipecat Nemotron 3 Omni assistant for one user on DGX Spark. Use raw vLLM plus NeMo-Speech.cpp TTS, reasoning off, and no ASR. The model and TTS endpoints are already available locally. Generate the full project, validate all generated artifacts, test turn handling and reasoning filtering with deterministic local mocks, run the smoke script, and stop only at the real microphone and speaker acceptance test.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A complete DGX Spark Omni project that uses the current NVIDIA Omni service and Smart Turn implementations, routes audio directly to Omni and text content to TTS, contains no ASR, validates generated configuration, and passes deterministic local tests without falsely claiming that the physical spoken exchange ran.",
+      "assertions": [
+        "Used the current upstream NvidiaOmniLLMService and NvidiaOmniSettings implementation rather than reimplementing it.",
+        "Copied the current audio-only Smart Turn strategy and used the required turn mute behavior.",
+        "Generated no ASR service or transcription-dependent turn logic.",
+        "Installed or documented the vLLM audio extras and required modality limits for the locked Omni runtime.",
+        "Verified that reasoning content cannot reach TTS and that final content can.",
+        "Ran generated checks and clearly left the physical spoken exchange as the remaining acceptance gate."
+      ]
+    },
+    {
+      "id": "create-voice-agent-e2e-livekit-cascaded",
+      "prompt": "The proposal is approved. Build a LiveKit Cascaded voice agent for English and Spanish callers. Model services are reachable through deterministic local test endpoints. Generate the project end to end, including participant handling, streaming ASR, the LLM, TTS, configuration, tests, observability, smoke checks, and handover instructions. Run every check that does not require a real LiveKit room or GPU.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A complete LiveKit Cascaded project generated from current LiveKit documentation with explicit bilingual model and voice routing, participant lifecycle handling, tests and smoke checks. The report separates checks that ran from the real-room spoken exchange that remains.",
+      "assertions": [
+        "Used the LiveKit documentation source before generating framework APIs.",
+        "Generated a Cascaded pipeline and did not introduce Omni.",
+        "Handled participant connection, audio input, interruption, cleanup, and reconnect behavior.",
+        "Locked English and Spanish support across ASR, LLM, and TTS before selecting exact runtime identifiers.",
+        "Ran all non-room checks and did not state that a real-room spoken exchange passed."
+      ]
+    },
+    {
+      "id": "create-voice-agent-hybrid-remote-webrtc",
+      "prompt": "Plan a Pipecat Cascaded agent where ASR and TTS run on my workstation, the LLM uses NVIDIA cloud, and browser clients connect over WebRTC from another network. Expect 20 concurrent users. Include credentials, placement, TURN, security, and verification gates.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A hybrid deployment proposal with explicit per-slot placement, correct separation of NVIDIA cloud and NGC credentials, a measured local speech budget, remote WebRTC signaling and TURN requirements, security boundaries, and staged verification.",
+      "assertions": [
+        "Recorded placement for ASR, LLM, and TTS separately rather than treating hybrid as one service.",
+        "Required NVIDIA_API_KEY for the cloud LLM and NGC_API_KEY for self-hosted container pulls without conflating them.",
+        "Budgeted the local speech services and framework against measured free GPU memory.",
+        "Included coturn, advertised addresses, firewall ports, TLS, and credential handling for cross-network WebRTC.",
+        "Required local smoke, remote connectivity, and final spoken-exchange verification."
+      ]
+    },
+    {
+      "id": "create-voice-agent-unsupported-jetson-orin",
+      "prompt": "Deploy Nemotron 3.5 Lightning, ASR, and TTS locally on my Jetson AGX Orin 64GB using the Jetson Thor instructions.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "The agent identifies that Orin is not Jetson Thor and does not reuse the Thor local deployment. It offers supported cloud or remote-GPU placement and waits for the user to choose.",
+      "assertions": [
+        "Verified the Jetson model and identified it as Orin-class hardware.",
+        "Did not generate Thor containers, arm64 commands, quantization, or memory assumptions for Orin.",
+        "Explained the unsupported local route concisely.",
+        "Offered cloud or a supported remote NVIDIA GPU host rather than fabricating local compatibility."
+      ]
+    },
+    {
+      "id": "create-voice-agent-multilingual-domain-speech",
+      "prompt": "Create a Hindi and English healthcare appointment voice agent. It must recognize the drug names apixaban and empagliflozin and pronounce them consistently. Use Pipecat and a Cascaded pipeline. Show the proposal before writing files.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A proposal that locks Hindi and English support across every slot, selects exact compatible ASR and TTS entries from current sources, separates ASR word boosting from TTS pronunciation controls, preserves the supplied terms exactly, and waits for approval.",
+      "assertions": [
+        "Validated both languages across ASR, LLM, and TTS before selecting models.",
+        "Did not infer language support from the LLM alone.",
+        "Placed apixaban and empagliflozin in ASR customization with documented boost controls.",
+        "Created a separate TTS pronunciation plan using only controls documented for the selected TTS service.",
+        "Did not write files before proposal approval."
+      ]
+    },
+    {
+      "id": "create-voice-agent-existing-project-iteration",
+      "prompt": "My existing Pipecat Cascaded voice agent already passes its spoken smoke test. Change it from one English user to 80 concurrent English users on the same workstation, while preserving the approved language, voice, interruption behavior, and observability.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "An iteration plan that reads the existing project, preserves behavior locks, reopens deployment fit because concurrency changed, migrates the local stack from vLLM plus NeMo-Speech.cpp to the appropriate NIM services when supported, minimizes unrelated changes, and revalidates the complete spoken path.",
+      "assertions": [
+        "Used the iteration workflow rather than rebuilding blindly.",
+        "Reopened deployment routing because workstation concurrency changed materially.",
+        "Revalidated Cascaded LLM NIM, ASR NIM, and TTS NIM through their correct current sources.",
+        "Preserved language, voice, interruption, networking, and observability unless a required incompatibility was found.",
+        "Required regression checks and a new spoken exchange before declaring the modified agent healthy."
+      ]
+    },
+    {
+      "id": "create-voice-agent-e2e-failure-recovery",
+      "prompt": "Repair this previously working local Cascaded voice agent end to end. The GPU service starts, then TTS fails with an OOM. nvidia-smi shows an unrelated healthy training container using 42 GiB. Preserve that container. Diagnose the cause, make the smallest safe correction, rerun validation and smoke checks, and report the remaining live acceptance step.",
+      "expected_skill": "create-voice-agent",
+      "expected_output": "A troubleshooting workflow that preserves the unrelated container, reconstructs the measured memory budget, identifies over-allocation or placement as the cause, proposes a scoped documented memory correction, verifies services in dependency order, and reruns smoke checks without destructive cleanup.",
+      "assertions": [
+        "Used the troubleshooting workflow and collected runtime evidence before changing configuration.",
+        "Did not stop, kill, or prune the unrelated healthy training container.",
+        "Recomputed model, KV cache, ASR, TTS, framework, and startup reserves from current free memory.",
+        "Changed only documented runtime memory, context, profile, batch, or placement controls required by the measured budget.",
+        "Restarted and verified one affected service at a time, then reran smoke checks.",
+        "Did not claim recovery was complete before the final spoken exchange."
+      ]
+    }
+  ]
+}
