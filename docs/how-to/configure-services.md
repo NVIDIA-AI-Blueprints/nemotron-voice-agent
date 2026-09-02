@@ -38,7 +38,7 @@ The following models resolve from each example's `defaults` entries in [`example
 
 The Generic Assistant's `server-perf` profile uses the same default model set as Server. It changes the GPU layout, LLM NIM profile, and Magpie batch size for benchmarking.
 
-The Multilingual Assistant declares `nemotron-asr-streaming-multilingual` as its ASR default. This key resolves to Nemotron ASR for Server and Single GPU. The cloud catalog does not provide that key, so the resolver selects its first cloud ASR entry, Parakeet 1.1B RNNT Multilingual.
+The Multilingual Assistant declares `nemotron-asr-streaming-multilingual` as its ASR default. When the local default is reachable, this key resolves to Nemotron ASR for Server and Single GPU. If it is unreachable, the resolver first selects another reachable local ASR entry. Only when no local ASR is reachable does it select the first cloud ASR entry, Parakeet 1.1B RNNT Multilingual.
 
 The Omni model handles both speech recognition and response generation, so the Omni examples do not have a separate ASR default. The Frontend/Backend Thinker enables reasoning on the same Nemotron 3.5 Lightning model used by the Talker.
 
