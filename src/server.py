@@ -1028,7 +1028,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     @app.get("/api/services")
     async def get_services(pipeline_mode: str = Query(default="")):
         _bind_example_context_by_key(pipeline_mode or fallback_example_key)
-        return build_services_api_response()
+        return await _run_blocking(build_services_api_response)
 
     # ---- TTS config (voices & languages from the TTS service) ----
 
