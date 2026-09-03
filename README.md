@@ -145,6 +145,7 @@ npx skills add .
 | Type | Guide | Description |
 |------|-------|-------------|
 | Tutorial | [Getting Started](docs/01-getting-started.md) | Full deployment: quick start, local GPU, DGX Spark, and the recipe matrix |
+| Launchable | [Brev Launchable](notebooks/brev_launchable.ipynb) | Deploy a `*/server` or `*/single-gpu` profile on a Brev instance. Server profiles require `NVIDIA_API_KEY` and an NGC Docker login. Single-GPU profiles use local vLLM and NeMo-Speech.cpp. Switching profiles restarts application containers while preserving the Brev VM, Jupyter, and caches by default. `RESET_VOLUMES=True` removes Compose-managed named volumes but preserves the host Hugging Face cache. |
 | How-to | [Configuration Guide](docs/02-configuration-guide.md) | Index of all configuration and customization guides |
 | Reference | [LLM](docs/how-to/configure-llm.md) · [ASR](docs/how-to/configure-asr.md) · [TTS](docs/how-to/configure-tts.md) Models | NVIDIA model catalogs, VRAM usage and model configs |
 | How-to | [Jetson Thor](docs/03-jetson-thor.md) | Edge deployment guide for the `*/single-gpu` recipes |
