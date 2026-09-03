@@ -25,7 +25,7 @@ Per-example catalogs at `src/examples/<example>/services.{cloud,local}.yaml` are
 | `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech` (ASR + TTS) |
 
-Local catalogs merge by TCP reachability: NIM sidecars (`*/server`) and NeMo-Speech.cpp (`*/single-gpu`) appear when those endpoints are up. Host-native `uv run` uses the same rule.
+`NVIDIA_API_KEY` is required for cloud-only, `*/server`, and `generic-assistant/server-perf`. `HF_TOKEN` is required for `*/single-gpu`. Cloud catalog entries appear only when `NVIDIA_API_KEY` is set. Local catalogs merge by TCP reachability: NIM sidecars (`*/server`) and NeMo-Speech.cpp (`*/single-gpu`) appear when those endpoints are up. Host-native `uv run` uses the same rule.
 
 UI is `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`.
 

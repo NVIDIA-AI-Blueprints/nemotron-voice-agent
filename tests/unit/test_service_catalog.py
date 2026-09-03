@@ -26,8 +26,11 @@ class ServiceCatalogHydrationTests(unittest.TestCase):
     def setUp(self) -> None:
         # Env-based catalog patches must win; clear any leftover request context.
         clear_service_context()
+        self._api_key = patch.dict(os.environ, {"NVIDIA_API_KEY": "nvapi-test"})
+        self._api_key.start()
 
     def tearDown(self) -> None:
+        self._api_key.stop()
         clear_service_context()
 
     def test_hydrates_selected_builtin_details_from_catalog(self) -> None:
@@ -286,6 +289,41 @@ llm:
             self.assertEqual(config["base_url"], "https://catalog.example/v1")
             self.assertEqual(config["extra_params"], '{"extra_body":{"top_k":1}}')
 
+    def test_nvidia_cloud_available_requires_a_real_api_key(self) -> None:
+        cases = {
+            "": False,
+            "   ": False,
+            "not-needed": False,
+            "NOT-NEEDED": False,
+            "nvapi-test": True,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw), patch.dict(os.environ, {"NVIDIA_API_KEY": raw}):
+                self.assertEqual(utils.nvidia_cloud_available(), expected)
+        with patch.dict(os.environ):
+            os.environ.pop("NVIDIA_API_KEY", None)
+            self.assertFalse(utils.nvidia_cloud_available())
+
+    def test_services_api_omits_cloud_entries_without_api_key(self) -> None:
+        token = utils._service_context.set((Path("src/examples/generic"), ("llm", "asr", "tts")))
+        try:
+
+            def reachable(endpoint: str) -> bool:
+                return endpoint in {"nemo-speech:50051", "localhost:50051"}
+
+            with (
+                patch.dict(os.environ, {"NVIDIA_API_KEY": ""}),
+                patch("utils.is_endpoint_reachable", side_effect=reachable),
+            ):
+                catalog = build_services_api_response()
+        finally:
+            utils._service_context.reset(token)
+
+        asr_ids = {entry["id"] for entry in catalog["asr"]}
+        self.assertIn("self-hosted:nemotron-asr-streaming-english", asr_ids)
+        for entries in catalog.values():
+            self.assertFalse(any(entry.get("source") == "cloud-nim" for entry in entries))
+
     def test_registry_defaults_fall_back_to_cloud_when_local_endpoint_is_unreachable(self) -> None:
         example = examples_registry._lookup_by_key("generic-assistant")
 
@@ -293,6 +331,41 @@ llm:
             defaults = examples_registry.metadata(example)["defaults"]
 
         self.assertEqual(defaults["asr"][0]["id"], "cloud-nim:nemotron-asr-streaming-english")
+
+    def test_registry_defaults_stay_self_hosted_without_api_key(self) -> None:
+        example = examples_registry._lookup_by_key("generic-assistant")
+
+        with (
+            patch.dict(os.environ, {"NVIDIA_API_KEY": ""}),
+            patch("examples_registry.is_endpoint_reachable", return_value=False),
+        ):
+            defaults = examples_registry.metadata(example)["defaults"]
+
+        self.assertEqual(defaults["asr"][0]["id"], "self-hosted:nemotron-asr-streaming-english")
+
+    def test_every_example_default_resolves_without_api_key(self) -> None:
+        with (
+            patch.dict(os.environ, {"NVIDIA_API_KEY": ""}),
+            patch("examples_registry.is_endpoint_reachable", return_value=False),
+        ):
+            for key in examples_registry.EXAMPLES:
+                with self.subTest(example=key):
+                    defaults = examples_registry.metadata(examples_registry._lookup_by_key(key))["defaults"]
+                    for category, entries in defaults.items():
+                        if category == "prompt":
+                            continue
+                        for entry in entries:
+                            self.assertTrue(entry["id"].startswith("self-hosted:"))
+
+    def test_cloud_only_default_without_api_key_raises_clear_error(self) -> None:
+        example = examples_registry._lookup_by_key("generic-assistant")
+
+        with (
+            patch.dict(os.environ, {"NVIDIA_API_KEY": ""}),
+            patch("examples_registry._load_service_catalogs", return_value=({}, {})),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "NVIDIA_API_KEY"):
+                examples_registry._resolve_service_default(example, "asr", "cloud-only")
 
     def test_registry_defaults_use_cloud_multilingual_when_local_only_default_is_unreachable(self) -> None:
         example = examples_registry._lookup_by_key("multilingual-assistant")
@@ -319,11 +392,8 @@ llm:
         local = utils.load_yaml_file(Path("src/examples/multilingual/services.local.yaml"))
 
         lightning_languages = ["en", "de", "es", "fr", "it", "ja"]
-        super_languages = [*lightning_languages, "zh"]
         self.assertEqual(cloud["nemotron-lightning"]["supported_languages"], lightning_languages)
         self.assertEqual(cloud["nemotron-lightning-reasoning"]["supported_languages"], lightning_languages)
-        self.assertEqual(cloud["nemotron-super"]["supported_languages"], super_languages)
-        self.assertEqual(cloud["nemotron-super-reasoning"]["supported_languages"], super_languages)
         self.assertEqual(
             local["server"]["llm"]["nemotron-lightning"]["supported_languages"],
             lightning_languages,

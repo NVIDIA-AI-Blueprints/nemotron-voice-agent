@@ -14,7 +14,7 @@ from typing import Any, NamedTuple, TypedDict
 
 import yaml
 
-from utils import is_endpoint_reachable
+from utils import is_endpoint_reachable, nvidia_cloud_available
 
 
 class ExampleEntry(TypedDict):
@@ -231,7 +231,11 @@ def _load_local_service_catalog(example_dir: Path) -> dict[str, dict]:
 def _load_service_catalogs(example_dir: str) -> tuple[dict[str, dict], dict[str, dict]]:
     """Load cloud and local service catalogs for one example directory."""
     base = Path(example_dir)
-    cloud = _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml"))
+    cloud = (
+        _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml"))
+        if nvidia_cloud_available()
+        else {}
+    )
     local = _load_local_service_catalog(base)
     return cloud, local
 
@@ -267,7 +271,8 @@ def _resolve_service_default(example: EnrichedExample, category: str, service_id
     Prefers the self-hosted variant when it exists and is reachable, matching
     the runtime ``/api/services`` precedence where reachable local entries are
     used for on-prem recipes. Falls back to cloud when no local endpoint is
-    available, which keeps cloud-only recipe defaults usable.
+    available and NVIDIA Cloud is enabled, which keeps cloud-only recipe
+    defaults usable.
     """
     cloud, local = _load_service_catalogs(str(_example_dir(example)))
     local_section = local.get(category, {})
@@ -293,6 +298,14 @@ def _resolve_service_default(example: EnrichedExample, category: str, service_id
     if isinstance(local_entry, dict):
         return _service_entry_payload("self-hosted", service_id, local_entry)
 
+    if not nvidia_cloud_available():
+        raise RuntimeError(
+            f"Default service {service_id!r} for {example['key']} / {category!r} "
+            "has no self-hosted entry in services.local.yaml and the NVIDIA Cloud "
+            "catalog is disabled because NVIDIA_API_KEY is missing or unavailable "
+            "(unset, empty, or the 'not-needed' placeholder). Set NVIDIA_API_KEY to a "
+            "real key to use the cloud default, or add a self-hosted entry."
+        )
     raise RuntimeError(
         f"Default service {service_id!r} for {example['key']} / {category!r} "
         "was not found in services.cloud.yaml or services.local.yaml"

@@ -4,10 +4,23 @@ The Nemotron Voice Agent uses example-local service catalogs to manage LLM, ASR,
 
 This guide covers the **mechanics**: how catalogs are loaded, switched, and extended.
 
+## Required credentials
+
+Set one key per recipe family. Do not mix them.
+
+| Recipe family | Required `.env` key |
+| --- | --- |
+| Cloud (`<example>`) | `NVIDIA_API_KEY` |
+| Server (`<example>/server`) | `NVIDIA_API_KEY` |
+| Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` |
+| Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` |
+
+`NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server and Performance Server additionally need `docker login nvcr.io` before `up`. Single-GPU requires `HF_TOKEN` for Hugging Face model downloads and does not use `NVIDIA_API_KEY`.
+
 ## How catalog selection works
 
 - Each example owns its catalog at `<example-package>/services.cloud.yaml` (remote / NVCF) and optional `<example-package>/services.local.yaml` (Compose-managed sidecars).
-- The cloud catalog is always loaded.
+- The cloud catalog is loaded when `NVIDIA_API_KEY` is set, which is the expected state for cloud-only, `*/server`, and `generic-assistant/server-perf`. Empty, unset, and the Compose placeholder `not-needed` hide NVIDIA Cloud entries from the UI and the pipeline. The entries stay hidden on `*/single-gpu`, which uses `HF_TOKEN` only.
 - The local catalog is merged on top, but only entries whose endpoint is reachable on TCP are exposed in the UI and used by the pipeline.
 - `services.local.yaml` is grouped into recipe sections (`server` for NIM sidecars, `singlegpu` for vLLM + NeMo-Speech.cpp). The backend merges all sections and exposes only endpoints that are reachable on TCP. Host-native runs work the same way: start the sidecars, then start the app.
 - The same `--profile` works whether you run cloud-only or with local sidecars. Nothing else needs to be set.
@@ -22,9 +35,9 @@ Each example declares its default service per slot via `defaults` in `examples_r
 
 The [Examples table](../../README.md#examples) links to each example README. Each README lists the models selected for every supported profile.
 
-When the same default key exists in both `services.cloud.yaml` and `services.local.yaml`, the resolver prefers the **self-hosted** variant so that deploying local NIM sidecars automatically promotes them to the active default. No UI click is needed. If the self-hosted endpoint is unreachable at session-start time, the runtime falls back to the cloud variant.
+When the same default key exists in both `services.cloud.yaml` and `services.local.yaml`, the resolver prefers the **self-hosted** variant so that deploying local NIM sidecars automatically promotes them to the active default. No UI click is needed. If the self-hosted endpoint is unreachable at session-start time, the runtime falls back to the cloud variant when a real `NVIDIA_API_KEY` is set (not empty or `not-needed`).
 
-> **On-prem note:** self-hosted promotion only applies when the `defaults` key also exists in `services.local.yaml`. A default whose key exists **only** in `services.cloud.yaml` resolves to the cloud model even on an on-prem recipe. Point `defaults` at a local key or pick the model from the Services tab.
+> **On-prem note:** self-hosted promotion only applies when the `defaults` key also exists in `services.local.yaml`. A default whose key exists **only** in `services.cloud.yaml` resolves to the cloud model even on an on-prem recipe, but only when `NVIDIA_API_KEY` is set; without a key the cloud catalog is disabled and such a default has nothing to resolve to. Point `defaults` at a local key or pick the model from the Services tab.
 
 ## On-prem catalog
 
