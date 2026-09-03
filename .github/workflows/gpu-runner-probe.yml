@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+name: Probe GPU Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Self-hosted runner label to inspect"
+        required: true
+        default: "arc-runners-org-nvidia-ai-bp-1-gpu"
+
+permissions: {}
+
+jobs:
+  probe:
+    name: GPU inventory
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 10
+    env:
+      RUNNER_LABEL: ${{ inputs.runner_label }}
+    steps:
+      - name: Report runner and GPU inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Requested runner label: %s\n' "$RUNNER_LABEL"
+          uname -a
+          nvidia-smi -L
+          nvidia-smi --query-gpu=index,name,uuid,memory.total,driver_version,compute_cap --format=csv,noheader
+          nvidia-smi topo -m || true

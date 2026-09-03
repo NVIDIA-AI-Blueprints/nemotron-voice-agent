@@ -335,7 +335,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         task=task,
         context=context,
         runner_args=runner_args,
-        intro_prompt="Please greet the user briefly.",
+        intro_prompt=(
+            "This is an initial direct greeting, not a flight request. Do not call any tools. "
+            "Greet the user briefly as Ava, the G Force Airlines flight-booking assistant."
+        ),
         on_start=_on_session_start,
         welcome_enabled=welcome_enabled,
     )
