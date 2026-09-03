@@ -10,12 +10,12 @@ Models are declared per example in `services.cloud.yaml` (remote / NVCF) and `se
 
 ## Models
 
-Three unique Nemotron models back the examples. Each is served by the self-hosted Compose service(s) below, or from the cloud catalog with no sidecar.
+Three unique Nemotron models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. Nemotron 3 Super is self-hosted only.
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
-| **Nemotron 3 Super 120B A12B**: higher-capability alternative for complex tasks. Its cloud-hosted deployment is deprecated, but you can pull the model from build.nvidia.com and deploy it locally | [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
+| **Nemotron 3 Super 120B A12B**: higher-capability alternative for complex tasks, available self-hosted | [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
 | **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni-nim.yaml`](../../docker/docker-compose.nemotron3-omni-nim.yaml) (NIM), [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 
 Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` / `services.local.yaml`:
@@ -23,7 +23,7 @@ Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` /
 | Model | Catalog keys |
 |-------|--------------|
 | Nemotron 3.5 Lightning | `nemotron-lightning`, `nemotron-lightning-reasoning` |
-| Nemotron 3 Super | `nemotron-super`, `nemotron-super-reasoning` |
+| Nemotron 3 Super | `nemotron-super`, `nemotron-super-reasoning` (self-hosted only) |
 | Nemotron 3 Nano Omni | `nemotron-omni-nvfp4` |
 
 The `*-reasoning` keys are the **same weights** with thinking enabled (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) under `defaults`.
@@ -35,11 +35,11 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 | Built-in LLM | Supported language bases |
 | --- | --- |
 | Nemotron 3.5 Lightning (`nemotron-lightning`, `nemotron-lightning-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
-| Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
+| Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`, self-hosted) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
 
 The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3.5 Lightning model card](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) and [Nemotron 3 Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
 
-> **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages (for example Hindi). For multilingual deployments where language fidelity matters, prefer **Nemotron 3 Super** (`nemotron-super`). It stays more reliably in the target language and reads more naturally across languages.
+> **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages (for example Hindi). For multilingual deployments where language fidelity matters, self-host **Nemotron 3 Super** (`nemotron-super`) with [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) and add it to the example catalog. It stays more reliably in the target language and reads more naturally across languages.
 
 ## Hardware Requirements and Deployment Configs
 

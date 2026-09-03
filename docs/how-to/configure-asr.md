@@ -10,7 +10,7 @@ ASR services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 |-------|-----------------------------|-----------|
 | **Nemotron ASR Streaming (English)**: default, low-latency streaming ASR, English only | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
 | **Nemotron ASR Streaming (Multilingual)**: cache-aware streaming multilingual ASR covering 40 language locales | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
-| **Parakeet CTC 1.1B**: English-only ASR | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
+| **Parakeet CTC 1.1B**: English-only ASR, self-hosted only | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
 | **Parakeet 1.1B RNNT Multilingual**: multilingual ASR (25+ languages)  | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) |
 
 Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.local.yaml`:
@@ -19,7 +19,7 @@ Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.
 |-------|-------------|
 | Nemotron ASR Streaming (English) | `nemotron-asr-streaming-english` |
 | Nemotron ASR Streaming (Multilingual) | `nemotron-asr-streaming-multilingual` |
-| Parakeet CTC 1.1B | `parakeet-ctc` |
+| Parakeet CTC 1.1B | `parakeet-ctc` (self-hosted only) |
 | Parakeet 1.1B RNNT Multilingual | `parakeet-rnnt` |
 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).

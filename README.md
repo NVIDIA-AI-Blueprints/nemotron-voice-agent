@@ -72,7 +72,7 @@ These are the minimum requirements, and support varies by example and deployment
 
 Credentials depend on the deployment profile. Do not mix them.
 
-- **Cloud and Server**: an **NVIDIA API Key** from [build.nvidia.com](https://build.nvidia.com/). Server additionally needs valid **NVIDIA NGC** credentials to pull NIM container images (see the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
+- **Cloud, Server, and Performance Server**: an **NVIDIA API Key** (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server (`*/server`) and Performance Server (`generic-assistant/server-perf`) also need valid **NVIDIA NGC** credentials to pull NIM container images (refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
 - **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads only. It does not use `NVIDIA_API_KEY` or `docker login nvcr.io`.
 - **Docker**: With NVIDIA GPU support installed and Docker Compose v2.20 or newer.
 
@@ -100,9 +100,9 @@ npx skills add .
     test -f .env || cp .env.example .env
     ```
 
-2. Set `NVIDIA_API_KEY` in `.env`. Docker Compose passes values from this file into the application and model services.
+2. Set `NVIDIA_API_KEY` in `.env`. This Quick Start uses the Server profile, which requires that key (the same key is required for cloud-only and `generic-assistant/server-perf`). Single-GPU uses `HF_TOKEN` instead. Docker Compose passes values from this file into the application and model services.
 
-3. Log in to the NVIDIA NGC Docker Registry.
+3. Log in to the NVIDIA NGC Docker Registry (required for Server and Performance Server; skip for cloud-only and Single-GPU).
 
     ```bash
     set -a; . ./.env; set +a

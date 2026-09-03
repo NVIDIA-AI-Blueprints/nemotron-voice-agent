@@ -26,6 +26,7 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 - Standardized the self-hosted Nemotron 3.5 Lightning served model ID with NVIDIA Cloud across NIM and single-GPU vLLM deployments.
 - Consolidated on-prem deployment recipes under `<example>/server` for scaling-oriented stacks and universal `<example>/single-gpu` for supported one-GPU deployments on workstations, DGX Spark, and Jetson Thor. Renamed `generic-assistant/workstation-perf` to `generic-assistant/server-perf`.
 - Replaced `PLATFORM`-based local service selection with endpoint reachability.
+- Gated the NVIDIA Cloud (NVCF) service catalog on `NVIDIA_API_KEY`, so those entries appear in the UI and pipeline only when a cloud key is set.
 - Updated Nemotron ASR Streaming NIM to version 1.3.1.
 - Updated Parakeet CTC 1.1B ASR NIM to version 1.5.3.
 - Updated Magpie TTS Multilingual NIM to version 1.10.0 and `nvidia-riva-client` to version 2.27.0.
@@ -46,6 +47,7 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 
 - Platform-specific **`*/workstation`, `*/dgx-spark`, and `*/jetson-thor` recipes** and the Jetson Riva sidecars (`nemotron-speech`, `nemotron-speech-tts`), along with the CUDA MPS helper scripts, CPU-pinning knobs, and `RIVA_*` environment knobs. Use `*/server`, `generic-assistant/server-perf`, or `*/single-gpu` instead.
 - **Nemotron 3 Nano** cascaded LLM catalog entries and its NIM compose file. Use Nemotron 3.5 Lightning instead.
+- **NVIDIA Cloud (NVCF) catalog entries** for Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`) and Parakeet CTC 1.1B (`parakeet-ctc`). Both models remain available self-hosted.
 
 ## [2.1.1] - 2026-08-21
 

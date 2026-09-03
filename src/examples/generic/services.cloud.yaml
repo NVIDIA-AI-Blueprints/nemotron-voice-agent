@@ -19,20 +19,6 @@ llm:
     system_prompt: ""
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":16384,"repetition_penalty":1.05}}'
 
-  nemotron-super:
-    name: "Nemotron 3 Super 120B A12B"
-    model_id: "nvidia/nemotron-3-super-120b-a12b"
-    base_url: "https://integrate.api.nvidia.com/v1"
-    system_prompt: ""
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
-
-  nemotron-super-reasoning:
-    name: "Nemotron 3 Super 120B A12B (Reasoning)"
-    model_id: "nvidia/nemotron-3-super-120b-a12b"
-    base_url: "https://integrate.api.nvidia.com/v1"
-    system_prompt: ""
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"repetition_penalty":1.05}}'
-
 # ── TTS Services (Cascaded pipeline) ──
 tts:
   magpie-multilingual-tts:
@@ -58,12 +44,6 @@ asr:
     server: "grpc.nvcf.nvidia.com:443"
     model: "nemotron-asr-streaming"
     function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
-
-  parakeet-ctc:
-    name: "Parakeet CTC 1.1B"
-    server: "grpc.nvcf.nvidia.com:443"
-    model: "parakeet-ctc-1.1b-asr"
-    function_id: "d8dd4e9b-fbf5-4fb0-9dba-8cf436c8d965"
 
   parakeet-rnnt:
     name: "Parakeet 1.1B RNNT Multilingual ASR"

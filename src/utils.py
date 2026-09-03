@@ -381,7 +381,13 @@ def _first_reachable_variant(variants: list[tuple[str, dict]]) -> tuple[str, dic
 
 
 def _load_cloud_services_catalog() -> dict:
-    """Load cloud service entries from ``services.cloud.yaml``."""
+    """Load cloud service entries from ``services.cloud.yaml``.
+
+    Returns an empty catalog when NVIDIA Cloud is unavailable so those
+    entries are not exposed in the UI or selected by the pipeline.
+    """
+    if not nvidia_cloud_available():
+        return _normalize_services_catalog({})
     return _normalize_services_catalog(load_yaml_file(_services_cloud_path()))
 
 
@@ -432,9 +438,11 @@ def _load_local_services_catalog() -> dict:
 def _load_effective_services_catalog() -> dict:
     """Return the merged catalog combining cloud and reachable local entries.
 
-    Reachable local entries are ordered first and win on shared keys, so the
-    pipeline picks the deployed local service. When no local endpoint is
-    reachable, the cloud catalog takes effect.
+    Reachable local entries win on shared keys, so the pipeline picks the
+    deployed local service. When NVIDIA Cloud is available, cloud entries fill
+    each remaining key, so a cloud-only key stays exposed even while other local
+    endpoints are reachable; the cloud variant of a shared key is used only when
+    no reachable local entry takes precedence.
     """
     cloud = _load_cloud_services_catalog()
     local = _filter_reachable_entries(_load_local_services_catalog())
@@ -716,13 +724,25 @@ def parse_json_dict(raw: object, label: str = "JSON") -> dict:
     return {}
 
 
+def nvidia_cloud_available() -> bool:
+    """Return whether NVIDIA Cloud catalog entries can be used.
+
+    True only when ``NVIDIA_API_KEY`` is a real key. Empty, unset, and the
+    Compose placeholder ``not-needed`` keep cloud services hidden.
+    """
+    key = (os.getenv("NVIDIA_API_KEY") or "").strip()
+    return bool(key) and key.casefold() != "not-needed"
+
+
 def nvidia_api_key(default: str = "not-needed") -> str:
     """Return NVIDIA_API_KEY, defaulting for local OpenAI-compatible endpoints.
 
-    Empty or unset values become ``default`` so the OpenAI SDK can construct a
-    client against local vLLM/NIM without a real cloud key.
+    Empty, whitespace-only, and unset values become ``default`` so the OpenAI
+    SDK can construct a client against local vLLM/NIM without a real cloud key.
+    The value is stripped to stay consistent with ``nvidia_cloud_available()``.
     """
-    return os.getenv("NVIDIA_API_KEY") or default
+    key = (os.getenv("NVIDIA_API_KEY") or "").strip()
+    return key or default
 
 
 def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:
