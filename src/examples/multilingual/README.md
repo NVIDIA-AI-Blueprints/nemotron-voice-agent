@@ -16,7 +16,7 @@ The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) reso
 | Server | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
 | Single GPU | Nemotron 3.5 ASR Streaming Multilingual 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
 
-The registry declares `nemotron-asr-streaming-multilingual` as the ASR default. When that local service is unreachable, the resolver tries another reachable local ASR before falling back to the cloud catalog. The cloud catalog provides Parakeet 1.1B RNNT Multilingual ASR.
+The registry declares `nemotron-asr-streaming-multilingual` as the ASR default. When that local service is unreachable, the resolver tries another reachable local ASR before falling back to the cloud catalog. The cloud catalog has no Nemotron ASR Streaming Multilingual entry, so it uses Parakeet 1.1B RNNT Multilingual ASR.
 
 ## Running the example
 

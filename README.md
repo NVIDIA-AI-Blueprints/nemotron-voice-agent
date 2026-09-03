@@ -34,7 +34,7 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 | | [Magpie TTS Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) | |
 | | [Chatterbox TTS Multilingual](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) | |
 | **LLM** | [Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) | Any OpenAI-compatible |
-| | [Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) | |
+| | [Nemotron 3 Super 120B A12B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8) | |
 | | [Nemotron 3 Nano Omni 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) | |
 | **Orchestration** | [Pipecat](https://github.com/pipecat-ai/pipecat) | [LiveKit Agents with NVIDIA plugin](https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-nvidia) |
 
