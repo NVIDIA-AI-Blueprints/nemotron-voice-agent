@@ -44,7 +44,7 @@ examples:
     defaults:
       default_session_language: de-DE
       prompt: [multilingual_voice_assistant]
-      llm: [nemotron-super]
+      llm: [nemotron-lightning]
       asr: [nemotron-asr-streaming-multilingual]
       tts: [magpie-multilingual-tts]
     bot: examples.multilingual.pipeline:bot
@@ -63,7 +63,7 @@ examples:
     slots: [llm, tts]
     capabilities: [attachments, webcam]
     defaults:
-      prompt: [generic_omni_assistant]
+      prompt: [omni_subagents_assistant]
       llm: [nemotron-omni-nvfp4]
       tts: [magpie-multilingual-tts]
     bot: examples.omni_assistant_subagents.pipeline:bot

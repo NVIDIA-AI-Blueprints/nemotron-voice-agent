@@ -10,7 +10,7 @@ ASR services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 |-------|-----------------------------|-----------|
 | **Nemotron ASR Streaming (English)**: default, low-latency streaming ASR, English only | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
 | **Nemotron ASR Streaming (Multilingual)**: cache-aware streaming multilingual ASR covering 40 language locales | [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-asr-streaming/modelcard) |
-| **Parakeet CTC 1.1B**: English-only ASR | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
+| **Parakeet CTC 1.1B**: English-only ASR, self-hosted only | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
 | **Parakeet 1.1B RNNT Multilingual**: multilingual ASR (25+ languages)  | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) |
 
 Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.local.yaml`:
@@ -19,7 +19,7 @@ Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.
 |-------|-------------|
 | Nemotron ASR Streaming (English) | `nemotron-asr-streaming-english` |
 | Nemotron ASR Streaming (Multilingual) | `nemotron-asr-streaming-multilingual` |
-| Parakeet CTC 1.1B | `parakeet-ctc` |
+| Parakeet CTC 1.1B | `parakeet-ctc` (self-hosted only) |
 | Parakeet 1.1B RNNT Multilingual | `parakeet-rnnt` |
 
 > The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
@@ -55,14 +55,14 @@ To use one of these, configure the NIM endpoint to point to the corresponding mo
 ASR runs one of three ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. The simplest starting point.
-- **NIM for Speech sidecar**: an ASR NIM microservice on the `*/workstation` and `*/dgx-spark` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
-- **Riva embedded (Jetson Thor)**: on `*/jetson-thor`, Riva Embedded SDK (`nemotron-speech`, `docker-compose.speech-jetson.yaml`) serves **ASR + TTS together**. See [Jetson Thor](../03-jetson-thor.md) and [Riva embedded ASR](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide/asr.html).
+- **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
+- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, one sidecar serves **ASR + TTS together** from local GGUF weights (`nemo-speech` for English, `nemo-speech-multilingual` for the multilingual example, both in `docker-compose.nemo-speech-cpp.yaml`). See [Jetson Thor](../03-jetson-thor.md).
 
-> Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs run on compute capability **≥ 8.0** (Ampere and newer) with **≥ 16 GB** VRAM.
+> Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs require compute capability **≥ 8.0** and **≥ 16 GB** VRAM.
 
 ### VRAM & hardware support
 
-The ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. On a single ~80 GB GPU, ASR (~15 GB) + TTS (~14 GB) + the LLM (~30 GB FP8) fit together. If they don't, move ASR/TTS to a second GPU via their `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml). See [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the full multi-GPU layout.
+The ASR sidecar uses roughly **~15 GB VRAM** and, on local profiles, runs alongside the LLM and TTS. Standard `*/server` deployments let NIM select the LLM profile automatically, so its memory footprint depends on the detected GPU and selected precision. Confirm the selected profile before assuming ASR (~15 GB), TTS (~14 GB), and the LLM fit on one ~80 GB GPU. If they don't fit, move the speech sidecars separately: update the ASR `device_ids` in [`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml) and the selected TTS service's `device_ids` in its Compose file. See the [Server NIM device-placement guidance](../../skills/deploy/references/server.md#precision) and [Configure LLM → VRAM & hardware support](configure-llm.md#vram--hardware-support) for the complete multi-GPU layout.
 
 ### Performance
 
@@ -112,4 +112,3 @@ asr:
 - [Multilingual example](../../src/examples/multilingual/README.md): multilingual ASR/TTS behavior and example-specific troubleshooting.
 - [NVIDIA NIM for Speech — ASR](https://docs.nvidia.com/nim/speech/latest/asr/index.html): [customization / word boosting](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html), [support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html), [performance benchmarks](https://docs.nvidia.com/nim/speech/latest/reference/performances/asr/performance.html), [ASR troubleshooting](https://docs.nvidia.com/nim/speech/latest/troubleshooting/asr.html).
 - [Pipecat NVIDIA ASR service](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/services/nvidia/stt.py): `NvidiaSTTService`.
-- [Riva embedded (Jetson) ASR](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/quick-start-guide/asr.html): L4T / Jetson Thor ASR via the Riva quick-start.

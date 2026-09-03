@@ -6,22 +6,34 @@ The pattern splits responsibility across a transport agent, speaker agent, media
 
 ![Omni Assistant Subagents architecture](images/omni-subagent-example.jpeg)
 
+## Default Models
+
+The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+
+| Profile | Audio-input LLM | TTS |
+| --- | --- | --- |
+| Cloud | Nemotron 3 Nano Omni 30B A3B Reasoning | Magpie TTS Multilingual |
+| Server | Nemotron 3 Nano Omni 30B A3B Reasoning NIM | Magpie TTS Multilingual NIM |
+| Single GPU | Nemotron 3 Nano Omni 30B A3B Reasoning through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
+
+Nemotron Omni handles both speech recognition and response generation, so this example does not configure a separate ASR model. The agents share this model and apply role-specific prompts and reasoning settings.
+
 ## Running the example
 
-This example runs on the **Cloud** (no local GPU, NVCF endpoints), **Workstation** (single GPU), and **DGX Spark** (Blackwell, 128 GB unified memory) profiles. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended for scaling), and **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations and DGX Spark. It is **not supported on Jetson Thor**. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
 
-1. Create your `.env` from the template and set your NVIDIA API key:
+1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile:
 
    ```bash
-   cp .env.example .env
-   export NVIDIA_API_KEY=<your-nvidia-api-key>
+   test -f .env || cp .env.example .env
    ```
 
-   > **Local profiles (Workstation, DGX Spark):** also set `HF_TOKEN` in `.env`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
+   > **Single-GPU profile:** set `HF_TOKEN` in `.env` only. Do not set `NVIDIA_API_KEY` or log in to `nvcr.io`. Omni is served with vLLM, which downloads the model weights from Hugging Face.
 
-2. Log in to the NVIDIA NGC container registry:
+2. Log in to the NVIDIA NGC container registry (Server only. Skip for Cloud and Single GPU):
 
    ```bash
+   set -a; . ./.env; set +a
    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
    ```
 
@@ -29,22 +41,27 @@ This example runs on the **Cloud** (no local GPU, NVCF endpoints), **Workstation
 
    ```bash
    docker compose --profile omni-assistant-subagents up -d              # Cloud (no local GPU)
-   docker compose --profile omni-assistant-subagents/workstation up -d  # Workstation
-   docker compose --profile omni-assistant-subagents/dgx-spark up -d    # DGX Spark
+   docker compose --profile omni-assistant-subagents/server up -d  # Server (Omni NIM + NIM TTS, recommended for scaling)
+
+   # One GPU (workstation or DGX Spark). Download speech weights once, as your user:
+   bash scripts/download-nemo-speech-models.sh
+   docker compose --profile omni-assistant-subagents/single-gpu up -d
    ```
 
    | Recipe profile | App service | Shared sidecars pulled from `docker/` |
    | --- | --- | --- |
    | `omni-assistant-subagents` | `omni-assistant-subagents` | none (cloud NVCF) |
-   | `omni-assistant-subagents/workstation` | `omni-assistant-subagents` | `nvidia-llm-vllm-omni`, `tts-service` |
-   | `omni-assistant-subagents/dgx-spark` | `omni-assistant-subagents` | `nvidia-llm-vllm-omni`, `tts-service` |
+   | `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
+   | `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` |
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
 5. Clean up when you are done by tearing down with the same profile you started with:
 
    ```bash
-   docker compose --profile omni-assistant-subagents/workstation down
+   docker compose --profile omni-assistant-subagents down              # Cloud (no local GPU)
+   docker compose --profile omni-assistant-subagents/server down       # Server
+   docker compose --profile omni-assistant-subagents/single-gpu down   # One GPU (incl. DGX Spark)
    ```
 
 To run host-native without Docker, set `selection: omni-assistant-subagents` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.

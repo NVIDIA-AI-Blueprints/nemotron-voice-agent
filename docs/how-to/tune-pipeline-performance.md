@@ -27,7 +27,7 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 | `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance. Applies **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). |
 | `SMART_TURN_STOP_SECS` | `1.0` | Smart Turn silence fallback (seconds) before the turn completes without a `COMPLETE` classification. Applies **only** in Smart Turn mode (`USE_SILERO_VAD_TURN_DETECTION=false`). |
 
-> On the Smart Turn path, a fixed `0.2 s` Silero VAD pause (`stop_secs=0.2`) first detects the silence. The Smart Turn model then gets up to the configured fallback period (default `1.0 s`, `SMART_TURN_STOP_SECS`) to finalize the turn. Only `SILERO_VAD_STOP_SECS` is ignored in Smart Turn mode. The `generic-assistant/workstation-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
+> On the Smart Turn path, a fixed `0.2 s` Silero VAD pause (`stop_secs=0.2`) first detects the silence. The Smart Turn model then gets up to the configured fallback period (default `1.0 s`, `SMART_TURN_STOP_SECS`) to finalize the turn. Only `SILERO_VAD_STOP_SECS` is ignored in Smart Turn mode. The `generic-assistant/server-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
 
 ### Key Components
 
@@ -102,7 +102,7 @@ AUDIO_OUT_10MS_CHUNKS=10
 UVICORN_WORKERS=<workers>
 ```
 
-Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the benchmarked best-scaling deployment shape and its companion tuning values, see [Reproducing the best scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-best-scaling-setup).
+Keep `UVICORN_WORKERS=1` for local development or a personal assistant. For cloud deployments and scaling experiments, use a higher value. For the recommended scaling deployment shape and its companion tuning values, see [Reproducing the recommended scaling setup](../../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
 
 When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows are disabled** because that state is process-local. For multi-worker deployments, use one of these patterns:
 

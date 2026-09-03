@@ -42,12 +42,14 @@ type AgentTask = {
   createdAt: string;
   updatedAt: string;
   attachmentName: string;
+  anchorCreatedAt: string;
 };
 
 type AssistantTurn = {
   id: string;
   text: string;
   createdAt: string;
+  anchorCreatedAt: string;
 };
 
 const renderPartText = (part: ConversationMessagePart): string => {
@@ -70,49 +72,10 @@ const renderPartText = (part: ConversationMessagePart): string => {
 const renderMessageText = (message: ConversationMessage): string =>
   message.parts.map(renderPartText).join("");
 
-const stripAssistantTurnText = (text: string, assistantTurns: AssistantTurn[]) =>
-  assistantTurns
-    .reduce((current, turn) => current.replace(turn.text, ""), text)
-    .trim();
-
 const isUserOrAssistant = (m: ConversationMessage) =>
   m.role === "user" || m.role === "assistant";
 
-const findLatestUserMessage = (messages: ConversationMessage[]) => {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === "user") return messages[i];
-  }
-  return undefined;
-};
-
-const findLatestUnanchoredUser = (
-  messages: ConversationMessage[],
-  anchors: { has: (key: string) => boolean }
-) => {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role !== "user") continue;
-    return anchors.has(messages[i].createdAt) ? undefined : messages[i];
-  }
-  return undefined;
-};
-
 const normalizeTranscript = (text?: string | null) => (text ?? "").trim().replace(/\s+/g, " ");
-
-const findUserMessageByTranscript = (
-  messages: ConversationMessage[],
-  transcript: string | null | undefined,
-  finalizedCreatedAts: { has: (key: string) => boolean }
-) => {
-  const normalizedTranscript = normalizeTranscript(transcript);
-  if (!normalizedTranscript) return undefined;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    if (message.final || finalizedCreatedAts.has(message.createdAt)) continue;
-    if (normalizeTranscript(renderMessageText(message)) === normalizedTranscript) return message;
-  }
-  return undefined;
-};
 
 function mediaKindFromFile(file: File): MediaKind | null {
   if (file.type.startsWith("image/")) return "image";
@@ -192,6 +155,13 @@ function AttachMediaButton({ onClick }: Readonly<{ onClick: () => void }>) {
   );
 }
 
+const START_ANCHOR = "__start__";
+
+type ExtraItem =
+  | { kind: "task"; id: string; anchor: string; createdAt: string; sortKey: number; task: AgentTask }
+  | { kind: "assistant-turn"; id: string; anchor: string; createdAt: string; sortKey: number; turn: AssistantTurn }
+  | { kind: "attachment"; id: string; anchor: string; createdAt: string; sortKey: number; attachment: LocalAttachment };
+
 export function ConversationPanel() {
   const { currentSessionId, selectedExample, setCurrentSessionId } = useApp();
   const { messages } = usePipecatConversation();
@@ -199,42 +169,19 @@ export function ConversationPanel() {
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const attachmentsRef = useRef<LocalAttachment[]>([]);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
-  // Workaround for the lack of an explicit assistant-turn boundary in
-  // @pipecat-ai/client-react: assistant bubbles are finalized ~2.5s after
-  // BotStoppedSpeaking, so analyzer follow-ups are surfaced as standalone
-  // turns recorded here. Server side mirrors this with
-  // ``_ANALYZER_FOLLOWUP_TURN_DELAY_SECS`` in
-  // ``examples.omni_assistant_subagents.subagents.transport``.
+  const agentTasksRef = useRef<AgentTask[]>([]);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
   const canUploadAttachments = selectedExample?.capabilities?.includes("attachments") ?? false;
-  const [currentUserTurnActive, setCurrentUserTurnActive] = useState(false);
-  const [userTurnAnchors, setUserTurnAnchors] =
-    useState<Map<string, string>>(new Map());
-  const userTurnAnchorsRef = useRef(userTurnAnchors);
-  useEffect(() => {
-    userTurnAnchorsRef.current = userTurnAnchors;
-  }, [userTurnAnchors]);
-  // Holds a finalize signal that arrived before its turn's user bubble exists
-  // (the Omni model emits the user transcript late). Applied to the bubble once
-  // it appears.
-  const pendingUserAnchorRef = useRef<string | null>(null);
-  const anchorUserTurn = useCallback((createdAt: string, anchorISO: string) => {
-    setUserTurnAnchors((prev) => {
-      if (prev.has(createdAt)) return prev;
-      const next = new Map(prev);
-      next.set(createdAt, anchorISO);
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
 
+  useEffect(() => {
+    agentTasksRef.current = agentTasks;
+  }, [agentTasks]);
+
   const resetConversationExtras = useCallback(() => {
-    setCurrentUserTurnActive(false);
-    setUserTurnAnchors(new Map());
-    pendingUserAnchorRef.current = null;
     setAttachments((prev) => {
       prev.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
       return [];
@@ -254,14 +201,6 @@ export function ConversationPanel() {
   }, [visibleMessages]);
 
   useRTVIClientEvent(
-    RTVIEvent.UserStartedSpeaking,
-    useCallback(() => {
-      setCurrentUserTurnActive(true);
-      pendingUserAnchorRef.current = null;
-    }, [])
-  );
-
-  useRTVIClientEvent(
     RTVIEvent.ServerMessage,
     useCallback((message: unknown) => {
       if (!isRecord(message)) return;
@@ -272,6 +211,9 @@ export function ConversationPanel() {
         if (!taskId) return;
         const now = new Date().toISOString();
         const spokenResponse = stringField(message, "spoken_response");
+        const existing = agentTasksRef.current.find((task) => task.id === taskId);
+        const anchorCreatedAt =
+          existing?.anchorCreatedAt ?? (visibleMessagesRef.current.at(-1)?.createdAt ?? "");
         setAgentTasks((prev) => {
           const previous = prev.find((task) => task.id === taskId);
           const next: AgentTask = {
@@ -290,28 +232,18 @@ export function ConversationPanel() {
             attachmentName: attachmentNameFromMessage(message) || previous?.attachmentName || "",
             createdAt: previous?.createdAt || now,
             updatedAt: now,
+            anchorCreatedAt: previous?.anchorCreatedAt || anchorCreatedAt,
           };
           return [...prev.filter((task) => task.id !== taskId), next].slice(-20);
         });
         if (stringField(message, "status") === "done" && spokenResponse) {
           setAssistantTurns((prev) => [
             ...prev.filter((turn) => turn.id !== taskId),
-            { id: taskId, text: spokenResponse, createdAt: now },
+            { id: taskId, text: spokenResponse, createdAt: now, anchorCreatedAt },
           ].slice(-20));
         }
-        return;
       }
-
-      if (type !== "user-turn-finalized") return;
-      setCurrentUserTurnActive(false);
-      const anchorISO = new Date().toISOString();
-      const anchors = userTurnAnchorsRef.current;
-      const target =
-        findUserMessageByTranscript(visibleMessagesRef.current, stringField(message, "transcript"), anchors) ??
-        findLatestUnanchoredUser(visibleMessagesRef.current, anchors);
-      if (target) anchorUserTurn(target.createdAt, anchorISO);
-      else pendingUserAnchorRef.current = anchorISO;
-    }, [anchorUserTurn])
+    }, [])
   );
 
   useRTVIClientEvent(
@@ -325,28 +257,6 @@ export function ConversationPanel() {
   useEffect(() => () => {
     attachmentsRef.current.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
   }, []);
-
-  useEffect(() => {
-    if (!pendingUserAnchorRef.current) return;
-    const target = findLatestUnanchoredUser(visibleMessages, userTurnAnchors);
-    if (!target) return;
-    const anchorISO = pendingUserAnchorRef.current;
-    pendingUserAnchorRef.current = null;
-    anchorUserTurn(target.createdAt, anchorISO);
-  }, [visibleMessages, userTurnAnchors, anchorUserTurn]);
-
-  const latestUserCreatedAt = useMemo(
-    () => findLatestUserMessage(visibleMessages)?.createdAt,
-    [visibleMessages]
-  );
-
-  const computeStreaming = (message: ConversationMessage): boolean => {
-    if (message.role !== "user") return !message.final;
-    if (message.final) return false;
-    if (userTurnAnchors.has(message.createdAt)) return false;
-    const isLatestUser = message.createdAt === latestUserCreatedAt;
-    return isLatestUser && currentUserTurnActive;
-  };
 
   const handleAttachmentSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -391,111 +301,90 @@ export function ConversationPanel() {
     }
   };
 
-  const conversationItems = useMemo(() => {
-    const messageItems = visibleMessages.flatMap((message, idx) => {
-      const text =
-        message.role === "assistant"
-          ? stripAssistantTurnText(renderMessageText(message), assistantTurns)
-          : renderMessageText(message);
-      if (!text) return [];
-      return [{
-        type: "message" as const,
-        id: `${message.createdAt}-${idx}`,
-        createdAt: message.createdAt,
-        message,
-        text,
-        index: idx,
-      }];
-    });
-    const taskItems = agentTasks.map((task) => ({
-      type: "task" as const,
-      id: task.id,
-      createdAt: task.createdAt,
-      task,
-      index: 101,
-    }));
-    const assistantTurnItems = assistantTurns.map((turn) => ({
-      type: "assistant-turn" as const,
-      id: turn.id,
-      createdAt: turn.createdAt,
-      turn,
-      index: 102,
-    }));
-    const attachmentItems = attachments.map((attachment) => ({
-      type: "attachment" as const,
-      id: attachment.id,
-      createdAt: attachment.createdAt,
-      attachment,
-      index: 103,
-    }));
-    const orderTimeMs = (createdAt: string) => {
-      const created = new Date(createdAt).getTime();
-      const anchor = userTurnAnchors.get(createdAt);
-      return anchor ? Math.min(created, new Date(anchor).getTime()) : created;
-    };
-    const sorted = [...messageItems, ...taskItems, ...assistantTurnItems, ...attachmentItems].sort((a, b) => {
-      const timeDelta = orderTimeMs(a.createdAt) - orderTimeMs(b.createdAt);
-      return timeDelta || a.index - b.index;
-    });
+  const assistantMessageTexts = useMemo(
+    () =>
+      new Set(
+        visibleMessages
+          .filter((m) => m.role === "assistant")
+          .map((m) => normalizeTranscript(renderMessageText(m)))
+          .filter(Boolean)
+      ),
+    [visibleMessages]
+  );
 
-    // TODO: Remove once @pipecat-ai/client-react stops finalizing each assistant
-    // sentence as its own message. Merge only assistant bubbles that are adjacent
-    // in the display stream, so interleaved tasks/turns/attachments stay between
-    // the sentences they landed in.
-    const items: typeof sorted = [];
-    const mergedChunks: string[][] = [];
-    for (const item of sorted) {
-      const previous = items.at(-1);
-      if (
-        item.type === "message" && item.message.role === "assistant" &&
-        previous?.type === "message" && previous.message.role === "assistant"
-      ) {
-        mergedChunks[items.length - 1].push(item.text);
-        previous.message = { ...previous.message, final: item.message.final };
-        continue;
-      }
-      items.push(item);
-      mergedChunks.push(
-        item.type === "message" && item.message.role === "assistant" ? [item.text] : []
-      );
-    }
-    return items.map((item, idx) =>
-      item.type === "message" && mergedChunks[idx].length > 1
-        ? { ...item, text: mergedChunks[idx].join(" ") }
-        : item
+  const extras = useMemo<ExtraItem[]>(() => {
+    const list: ExtraItem[] = [];
+    agentTasks.forEach((task) =>
+      list.push({ kind: "task", id: task.id, anchor: task.anchorCreatedAt, createdAt: task.createdAt, sortKey: 1, task })
     );
-  }, [agentTasks, assistantTurns, attachments, visibleMessages, userTurnAnchors]);
+    assistantTurns
+      .filter((turn) => !assistantMessageTexts.has(normalizeTranscript(turn.text)))
+      .forEach((turn) =>
+        list.push({ kind: "assistant-turn", id: turn.id, anchor: turn.anchorCreatedAt, createdAt: turn.createdAt, sortKey: 2, turn })
+      );
+    attachments.forEach((attachment) =>
+      list.push({ kind: "attachment", id: attachment.id, anchor: attachment.anchorCreatedAt, createdAt: attachment.createdAt, sortKey: 3, attachment })
+    );
+    return list;
+  }, [agentTasks, assistantTurns, assistantMessageTexts, attachments]);
+
+  const { startExtras, extrasByAnchor } = useMemo(() => {
+    const messageIds = new Set(visibleMessages.map((m) => m.createdAt));
+    const lastCreatedAt = visibleMessages.at(-1)?.createdAt ?? "";
+    const resolve = (anchor: string) => {
+      if (!anchor) return START_ANCHOR;
+      if (messageIds.has(anchor)) return anchor;
+      return lastCreatedAt || START_ANCHOR;
+    };
+    const byAnchor = new Map<string, ExtraItem[]>();
+    for (const extra of extras) {
+      const key = resolve(extra.anchor);
+      const bucket = byAnchor.get(key) ?? [];
+      bucket.push(extra);
+      byAnchor.set(key, bucket);
+    }
+    for (const bucket of byAnchor.values()) {
+      bucket.sort((a, b) => a.sortKey - b.sortKey || a.createdAt.localeCompare(b.createdAt));
+    }
+    return { startExtras: byAnchor.get(START_ANCHOR) ?? [], extrasByAnchor: byAnchor };
+  }, [extras, visibleMessages]);
+
+  const renderExtra = (extra: ExtraItem) => {
+    if (extra.kind === "task") return <AgentTaskCard key={extra.id} task={extra.task} />;
+    if (extra.kind === "attachment") return <AttachmentPreview key={extra.id} attachment={extra.attachment} />;
+    return (
+      <TranscriptMessage
+        key={`assistant-turn-${extra.id}`}
+        role="bot"
+        text={extra.turn.text}
+        timestamp={extra.turn.createdAt}
+        streaming={false}
+      />
+    );
+  };
 
   const showAttachmentControl = Boolean(currentSessionId) && canUploadAttachments && visibleMessages.length > 0;
-  const bottomAnchorRef = useStickToBottom(conversationItems);
+  const stickSignal = useMemo(() => ({ messages: visibleMessages, extras }), [visibleMessages, extras]);
+  const bottomAnchorRef = useStickToBottom(stickSignal);
 
   return (
     <div className="p-4">
       <ul className="d-flex flex-col gap-2" style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {conversationItems.map((item) => {
-          if (item.type === "task") return <AgentTaskCard key={item.id} task={item.task} />;
-          if (item.type === "attachment") return <AttachmentPreview key={item.id} attachment={item.attachment} />;
-          if (item.type === "assistant-turn") {
-            return (
-              <TranscriptMessage
-                key={`assistant-turn-${item.id}`}
-                role="bot"
-                text={item.turn.text}
-                timestamp={item.turn.createdAt}
-                streaming={false}
-              />
-            );
-          }
-
-          const msg = item.message;
+        {startExtras.map(renderExtra)}
+        {visibleMessages.map((message, idx) => {
+          const text = renderMessageText(message);
+          const bucket = extrasByAnchor.get(message.createdAt);
           return (
-            <Fragment key={item.id}>
-              <TranscriptMessage
-                role={msg.role === "assistant" ? "bot" : "user"}
-                text={item.text}
-                timestamp={msg.createdAt}
-                streaming={computeStreaming(msg)}
-              />
+            <Fragment key={`${message.createdAt}-${idx}`}>
+              {text && (
+                <TranscriptMessage
+                  role={message.role === "assistant" ? "bot" : "user"}
+                  text={text}
+                  timestamp={message.createdAt}
+                  streaming={!message.final}
+                />
+              )}
+              {bucket?.map(renderExtra)}
             </Fragment>
           );
         })}

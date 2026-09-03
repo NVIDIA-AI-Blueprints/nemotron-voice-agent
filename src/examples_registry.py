@@ -14,8 +14,7 @@ from typing import Any, NamedTuple, TypedDict
 
 import yaml
 
-from runtime_platform import select_runtime_platform_catalog
-from utils import is_endpoint_reachable
+from utils import is_endpoint_reachable, nvidia_cloud_available
 
 
 class ExampleEntry(TypedDict):
@@ -152,20 +151,23 @@ def _rewrite_entry_for_host_runtime(entry: dict) -> dict:
         if field == "base_url":
             out[field] = (
                 value.replace("http://nvidia-llm:8000/v1", "http://localhost:18000/v1")
+                .replace("http://nvidia-llm-omni:8000/v1", "http://localhost:18002/v1")
                 .replace("http://nvidia-llm-vllm:8000/v1", "http://localhost:18000/v1")
+                .replace("http://nvidia-llm-vllm-omni:8002/v1", "http://localhost:8002/v1")
                 .replace("host.docker.internal", "localhost")
             )
         else:
             out[field] = (
                 value.replace("magpie-zeroshot-tts-service:50051", "localhost:50151")
                 .replace("chatterbox-tts-service:50051", "localhost:50151")
-                .replace("tts-service:50051", "localhost:50151")
+                .replace("magpie-multilingual-tts-service:50051", "localhost:50151")
                 .replace("nemotron-asr-streaming-english:50052", "localhost:50152")
                 .replace("nemotron-asr-streaming-multilingual:50052", "localhost:50152")
                 .replace("parakeet-ctc-asr:50052", "localhost:50152")
                 .replace("parakeet-rnnt-asr:50052", "localhost:50152")
-                .replace("nemotron-speech:50051", "localhost:50051")
-                .replace("nemotron-speech-tts:50051", "localhost:50051")
+                .replace("nemo-speech:50051", "localhost:50051")
+                .replace("nemo-speech-multilingual:50051", "localhost:50051")
+                .replace("nemo-speech-tts:50051", "localhost:50051")
                 .replace("booking-server:8001", "localhost:8001")
                 .replace("host.docker.internal", "localhost")
             )
@@ -193,12 +195,8 @@ def _first_reachable_variant(variants: list[tuple[str, dict]]) -> tuple[str, dic
 
 
 def _load_local_service_catalog(example_dir: Path) -> dict[str, dict]:
-    """Load platform-scoped local service entries for one example."""
+    """Load local service entries, merging recipe sections by reachability."""
     data = _load_yaml_mapping(example_dir / "services.local.yaml")
-    platform_data = select_runtime_platform_catalog(data)
-    if platform_data is not None:
-        return _rewrite_catalog_for_host_runtime(_normalize_service_catalog(platform_data))
-
     variants: dict[str, dict[str, list[tuple[str, dict]]]] = {}
     for platform_name, platform_data in data.items():
         if not isinstance(platform_data, dict):
@@ -220,12 +218,10 @@ def _load_local_service_catalog(example_dir: Path) -> dict[str, dict]:
             if all(entry == first_entry for _, entry in entries):
                 target[service_key] = first_entry
                 continue
-            active = _first_reachable_variant(entries)
-            if active is not None:
-                active_platform, active_entry = active
-                target[service_key] = active_entry
-            else:
-                active_platform = ""
+            # Keep the plain key resolvable even when nothing is reachable, so
+            # defaults can still fall back to cloud instead of failing lookup.
+            active_platform, active_entry = _first_reachable_variant(entries) or entries[0]
+            target[service_key] = active_entry
             for platform_name, entry in entries:
                 if platform_name != active_platform:
                     target[f"{service_key}-{platform_name}"] = entry
@@ -235,7 +231,11 @@ def _load_local_service_catalog(example_dir: Path) -> dict[str, dict]:
 def _load_service_catalogs(example_dir: str) -> tuple[dict[str, dict], dict[str, dict]]:
     """Load cloud and local service catalogs for one example directory."""
     base = Path(example_dir)
-    cloud = _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml"))
+    cloud = (
+        _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml"))
+        if nvidia_cloud_available()
+        else {}
+    )
     local = _load_local_service_catalog(base)
     return cloud, local
 
@@ -271,7 +271,8 @@ def _resolve_service_default(example: EnrichedExample, category: str, service_id
     Prefers the self-hosted variant when it exists and is reachable, matching
     the runtime ``/api/services`` precedence where reachable local entries are
     used for on-prem recipes. Falls back to cloud when no local endpoint is
-    available, which keeps cloud-only recipe defaults usable.
+    available and NVIDIA Cloud is enabled, which keeps cloud-only recipe
+    defaults usable.
     """
     cloud, local = _load_service_catalogs(str(_example_dir(example)))
     local_section = local.get(category, {})
@@ -297,6 +298,14 @@ def _resolve_service_default(example: EnrichedExample, category: str, service_id
     if isinstance(local_entry, dict):
         return _service_entry_payload("self-hosted", service_id, local_entry)
 
+    if not nvidia_cloud_available():
+        raise RuntimeError(
+            f"Default service {service_id!r} for {example['key']} / {category!r} "
+            "has no self-hosted entry in services.local.yaml and the NVIDIA Cloud "
+            "catalog is disabled because NVIDIA_API_KEY is missing or unavailable "
+            "(unset, empty, or the 'not-needed' placeholder). Set NVIDIA_API_KEY to a "
+            "real key to use the cloud default, or add a self-hosted entry."
+        )
     raise RuntimeError(
         f"Default service {service_id!r} for {example['key']} / {category!r} "
         "was not found in services.cloud.yaml or services.local.yaml"
@@ -340,11 +349,16 @@ def prompt_default_key(example_key: str = "", *, ignore_lock: bool = False) -> s
     return prompt_keys[0] if prompt_keys else None
 
 
+def default_session_language(example_key: str = "") -> str:
+    """Return the registry-declared fixed session language for an example."""
+    return str(find(example_key)["defaults"].get("default_session_language") or "")
+
+
 def welcome_message_enabled(example_key: str = "") -> bool:
     """Return whether an example greets the user at session start.
 
     Resolution order: the ``ENABLE_WELCOME_MESSAGE`` environment variable wins
-    when set (a global override used by the ``generic-assistant/workstation-perf``
+    when set (a global override used by the ``generic-assistant/server-perf``
     compose profile), otherwise the per-example ``welcome_message`` registry value
     applies (default ``True``).
     """

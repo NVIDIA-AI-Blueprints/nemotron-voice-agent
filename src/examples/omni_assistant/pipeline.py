@@ -13,7 +13,6 @@ This is the current experimental pipeline for the clean
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from dotenv import load_dotenv
@@ -21,12 +20,11 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
-    LLMRunFrame,
     TTSUpdateSettingsFrame,
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -35,7 +33,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
-from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
@@ -50,8 +47,12 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
+    build_pipeline_params,
     build_smart_turn_analyzer,
     build_user_mute_strategies,
+    create_transport,
+    register_session_start_handlers,
+    with_realtime_observers,
 )
 from tracing import IS_TRACING_ENABLED
 from utils import (
@@ -59,6 +60,7 @@ from utils import (
     load_ipa_dictionary,
     load_service_entry,
     normalize_lang_code,
+    nvidia_api_key,
     parse_env_bool,
     parse_env_float,
     parse_env_int,
@@ -84,7 +86,7 @@ def _build_user_turn_processor() -> UserTurnProcessor:
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Nemotron Omni cascaded pipeline for one session."""
-    transport = _create_transport(runner_args)
+    transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
@@ -121,7 +123,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         # benchmark) attribute Omni's TTFB/processing/token-usage metrics to the
         # LLM stage. Omni fuses ASR+LLM, so these are the pipeline's LLM metrics.
         name="NemotronOmniLLM",
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         context=context,
         extra=extra_params,
@@ -139,7 +141,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
-    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     raw_tts_function_id = body.get("tts_function_id")
     tts_function_id = (
         str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
@@ -154,7 +156,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -316,12 +318,12 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=PipelineParams(
+        params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=[latency_observer],
+        observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
     )
 
@@ -339,16 +341,19 @@ async def bot(runner_args: RunnerArguments) -> None:
             )
         )
 
-    @task.rtvi.event_handler("on_client_ready")
-    async def on_client_connected(rtvi):
-        logger.info("Client connected")
+    async def _on_session_start() -> None:
         if audio_recorder:
             await audio_recorder.start_recording()
-        if not welcome_enabled:
-            logger.info("Welcome message disabled; waiting for the user to speak first")
-            return
-        context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
-        await task.queue_frames([LLMRunFrame()])
+
+    register_session_start_handlers(
+        transport=transport,
+        task=task,
+        context=context,
+        runner_args=runner_args,
+        intro_prompt="Please introduce yourself to the user.",
+        on_start=_on_session_start,
+        welcome_enabled=welcome_enabled,
+    )
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
@@ -380,62 +385,3 @@ async def bot(runner_args: RunnerArguments) -> None:
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(task)
     await runner.run()
-
-
-def _create_transport(runner_args: RunnerArguments):
-    """Create a transport from runner arguments (WebRTC, WebSocket, or eval)."""
-    from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
-
-    if isinstance(runner_args, SmallWebRTCRunnerArguments):
-        from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
-
-        return SmallWebRTCTransport(
-            params=TransportParams(
-                audio_in_enabled=True,
-                audio_out_enabled=True,
-                audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
-            ),
-            webrtc_connection=runner_args.webrtc_connection,
-        )
-
-    if isinstance(runner_args, EvalRunnerArguments):
-        from pipecat.evals.serializer import RTVIEvalSerializer
-        from pipecat.evals.transport import EvalTransport, EvalTransportParams
-
-        return EvalTransport(
-            params=EvalTransportParams(
-                audio_in_enabled=True,
-                audio_in_sample_rate=16000,
-                audio_out_enabled=True,
-                audio_out_sample_rate=16000,
-                audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
-                add_wav_header=False,
-                serializer=RTVIEvalSerializer(),
-            ),
-            host=runner_args.host,
-            port=runner_args.port,
-        )
-
-    from pipecat.serializers.base_serializer import FrameSerializer
-    from pipecat.serializers.protobuf import ProtobufFrameSerializer
-    from pipecat.transports.websocket.fastapi import (
-        FastAPIWebsocketParams,
-        FastAPIWebsocketTransport,
-    )
-
-    websocket = getattr(runner_args, "websocket", None)
-    if websocket is None:
-        raise TypeError(f"Unsupported runner args type: {type(runner_args)}")
-
-    return FastAPIWebsocketTransport(
-        websocket=websocket,
-        params=FastAPIWebsocketParams(
-            audio_in_enabled=True,
-            audio_in_sample_rate=16000,
-            audio_out_enabled=True,
-            audio_out_sample_rate=16000,
-            audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
-            add_wav_header=False,
-            serializer=ProtobufFrameSerializer(params=FrameSerializer.InputParams(ignore_rtvi_messages=False)),
-        ),
-    )

@@ -1,0 +1,148 @@
+# Nemotron 3.5 Lightning for cascaded one-GPU deployments.
+# The container selects a fixed serving recipe from the host product and GPU
+# compute capability; .env remains limited to secrets and host paths.
+x-vllm-lightning: &vllm-lightning
+  image: vllm/vllm-openai:v0.27.1
+  pull_policy: if_not_present
+  shm_size: 16GB
+  env_file:
+    - ../.env
+  environment:
+    - FLASHINFER_DISABLE_VERSION_CHECK=1
+  ports:
+    - "18000:8000"
+  volumes:
+    - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    - llm_cache:/root/.cache/vllm
+  ulimits:
+    nofile:
+      soft: 65535
+      hard: 65535
+  restart: unless-stopped
+  entrypoint: ["/bin/bash", "-c"]
+  healthcheck:
+    test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+    interval: 30s
+    timeout: 15s
+    retries: 10
+    start_period: 1200s
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0"]
+            capabilities: [gpu]
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+services:
+  nvidia-llm-vllm-lightning:
+    <<: *vllm-lightning
+    profiles:
+      - generic-assistant/single-gpu
+      - multilingual-assistant/single-gpu
+      - frontend-backend-agent/single-gpu
+    command:
+      - |
+        args=(
+          --host 0.0.0.0
+          --port 8000
+          --served-model-name nvidia/nemotron-3.5-lightning-30b-a3b
+          --max-model-len 32768
+          --trust-remote-code
+          --enable-auto-tool-choice
+          --tool-call-parser qwen3_coder
+          --reasoning-parser nemotron_v3
+          --enable-prefix-caching
+          --mamba-backend flashinfer
+          --mamba-cache-mode align
+        )
+
+        gpu_name="$$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)"
+        compute_cap="$$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1)"
+        device_model=""
+        dmi_product=""
+        [[ -r /proc/device-tree/model ]] && device_model="$$(tr -d '\0' </proc/device-tree/model)"
+        [[ -r /sys/class/dmi/id/product_name ]] && dmi_product="$$(tr -d '\0' </sys/class/dmi/id/product_name)"
+        compute_major="$${compute_cap%%.*}"
+        compute_minor="$${compute_cap#*.}"
+
+        auto_gpu_memory=1
+        if [[ "$${gpu_name}" == *"NVIDIA GB10"* || "$${dmi_product}" == *"DGX_Spark"* ]]; then
+          echo "LLM recipe: DGX Spark / NVFP4 / DSpark"
+          auto_gpu_memory=0
+          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+          args+=(
+            --gpu-memory-utilization 0.35
+            --moe-backend marlin
+            --kv-cache-dtype fp8
+            --speculative_config.model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark
+            --speculative_config.num_speculative_tokens 3
+          )
+        elif [[ "$${device_model}" == *"Jetson"* && "$${device_model}" == *"Thor"* ]] ||
+             [[ "$${dmi_product}" == *"Jetson"* && "$${dmi_product}" == *"Thor"* ]]; then
+          echo "LLM recipe: Jetson Thor / NVFP4"
+          auto_gpu_memory=0
+          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+          args+=(--gpu-memory-utilization 0.35 --moe-backend marlin --kv-cache-dtype fp8 --async-scheduling)
+        elif [[ "$${compute_major}" =~ ^[0-9]+$ ]] && (( compute_major >= 10 )); then
+          echo "LLM recipe: Blackwell workstation / NVFP4 / DFlash"
+          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+          args+=(
+            --moe-backend marlin
+            --kv-cache-dtype fp8
+            --async-scheduling
+            --speculative_config.method dflash
+            --speculative_config.model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash
+            --speculative_config.num_speculative_tokens 3
+          )
+        elif [[ "$${compute_major}" == "9" ]] ||
+             [[ "$${compute_major}" == "8" && "$${compute_minor}" =~ ^[0-9]+$ && "$${compute_minor}" -ge 9 ]]; then
+          echo "LLM recipe: Hopper/Ada workstation / NVFP4 W4A16 via Marlin"
+          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+          args+=(
+            --quantization modelopt_fp4
+            --moe-backend marlin
+            --kv-cache-dtype fp8
+            --async-scheduling
+          )
+        elif [[ "$${compute_major}" == "8" ]]; then
+          echo "LLM recipe: Ampere workstation / NVFP4 W4A16 via Marlin"
+          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+          args+=(
+            --quantization modelopt_fp4
+            --linear-backend marlin
+            --moe-backend marlin
+            --async-scheduling
+          )
+        else
+          echo "Unsupported GPU compute capability: $${compute_cap:-unknown}" >&2
+          exit 1
+        fi
+
+        if (( auto_gpu_memory )); then
+          total="$$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
+          free="$$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
+          headroom="$${VLLM_VRAM_HEADROOM_MIB:-4096}"
+          safe=$$((free > headroom ? free - headroom : 0))
+          if (( safe < 28672 )); then
+            echo "Not enough free VRAM for Lightning (need >= 28GiB after $${headroom}MiB headroom, free=$${free}MiB)." >&2
+            exit 1
+          fi
+          util="$${VLLM_GPU_MEMORY_UTILIZATION:-$$(awk -v s="$${safe}" -v t="$${total}" 'BEGIN { u=s/t; if (u>0.90) u=0.90; printf "%.2f", u }')}"
+          echo "LLM VRAM plan: $${free}MiB free / $${total}MiB total -> --gpu-memory-utilization $${util}"
+          args+=(--gpu-memory-utilization "$${util}")
+        fi
+
+        exec vllm serve "$${model}" "$${args[@]}"
+    networks:
+      default:
+        aliases:
+          - nvidia-llm-vllm
+
+volumes:
+  llm_cache:

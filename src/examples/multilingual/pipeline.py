@@ -4,22 +4,22 @@
 """Multilingual cascaded pipeline: NVIDIA STT -> Nemotron LLM -> Magpie TTS.
 
 The session is locked to a single language for the whole connection (selected in
-the UI, default ``de-DE``): the ASR, the TTS voice, and the LLM all operate in
-that one language. The LLM replies with plain spoken text, kept on-language by
-the fixed-session prompt addon plus a per-turn reminder.
+the UI, defaulting to ``default_session_language`` in ``examples_registry.yaml``):
+the ASR, the TTS voice, and the LLM all operate in that one language. The LLM
+replies with plain spoken text, kept on-language by the fixed-session prompt
+addon plus a per-turn reminder.
 """
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
+from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -50,9 +50,12 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
+    build_pipeline_params,
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
+    register_session_start_handlers,
+    with_realtime_observers,
 )
 from examples.shared.prewarm import (
     prewarm_asr,
@@ -68,6 +71,7 @@ from utils import (
     load_service_entry,
     load_service_entry_by_id,
     normalize_lang_code,
+    nvidia_api_key,
     parse_env_bool,
     parse_env_float,
     parse_env_int,
@@ -179,7 +183,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": asr_server,
         "use_ssl": asr_ssl,
     }
@@ -190,7 +194,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_model = body.get("asr_model", "") or default_asr.get("model", "")
     asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
     if not asr_language_code or asr_language_code.strip().lower() == "auto":
-        asr_language_code = DEFAULT_SESSION_LANGUAGE
+        registry_language = examples_registry.default_session_language(body.get("pipeline_mode", ""))
+        asr_language_code = registry_language or DEFAULT_SESSION_LANGUAGE
     fixed_session_language = normalize_lang_code(asr_language_code)
     validate_llm_session_language(fixed_session_language, llm_supported_languages)
     if asr_function_id or asr_model:
@@ -253,7 +258,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if llm_temperature is not None:
         llm_settings.temperature = llm_temperature
     llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
     )
@@ -265,14 +270,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     if llm_temperature is not None:
         summary_llm_settings.temperature = llm_temperature
     summary_llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         settings=summary_llm_settings,
     )
 
     # --- TTS ---
     custom_dictionary = load_ipa_dictionary()
-    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
         "zero_shot_audio_prompt_file", ""
     )
@@ -293,7 +298,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             tts_settings_kwargs["voice"] = resolved_voice
 
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -417,12 +422,12 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=PipelineParams(
+        params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=[latency_observer],
+        observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
     )
 
@@ -439,16 +444,19 @@ async def bot(runner_args: RunnerArguments) -> None:
             )
         )
 
-    @task.rtvi.event_handler("on_client_ready")
-    async def on_client_connected(rtvi):
-        logger.info("Client connected")
+    async def _on_session_start() -> None:
         if audio_recorder:
             await audio_recorder.start_recording()
-        if not welcome_enabled:
-            logger.info("Welcome message disabled; waiting for the user to speak first")
-            return
-        context.add_message({"role": "user", "content": FIXED_SESSION_GREETING_TRIGGER})
-        await task.queue_frames([LLMRunFrame()])
+
+    register_session_start_handlers(
+        transport=transport,
+        task=task,
+        context=context,
+        runner_args=runner_args,
+        intro_prompt=FIXED_SESSION_GREETING_TRIGGER,
+        on_start=_on_session_start,
+        welcome_enabled=welcome_enabled,
+    )
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

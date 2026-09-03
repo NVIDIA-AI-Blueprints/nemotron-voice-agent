@@ -15,43 +15,57 @@ The catalog stores Compose DNS endpoints. The backend rewrites them to `localhos
 | --- | --- |
 | `http://nvidia-llm:8000/v1` | `http://localhost:18000/v1` |
 | `http://nvidia-llm-vllm:8000/v1` | `http://localhost:18000/v1` |
-| `tts-service:50051` | `localhost:50151` |
+| `http://nvidia-llm-omni:8000/v1` | `http://localhost:18002/v1` |
+| `http://nvidia-llm-vllm-omni:8002/v1` | `http://localhost:8002/v1` |
+| `http://booking-server:8001` | `http://localhost:8001` |
+| `magpie-multilingual-tts-service:50051` | `localhost:50151` |
+| `magpie-zeroshot-tts-service:50051` | `localhost:50151` |
 | `chatterbox-tts-service:50051` | `localhost:50151` |
 | `nemotron-asr-streaming-english:50052` | `localhost:50152` |
 | `nemotron-asr-streaming-multilingual:50052` | `localhost:50152` |
 | `parakeet-ctc-asr:50052` | `localhost:50152` |
 | `parakeet-rnnt-asr:50052` | `localhost:50152` |
-| `nemotron-speech:50051` | `localhost:50051` |
+| `nemo-speech:50051` | `localhost:50051` |
+| `nemo-speech-multilingual:50051` | `localhost:50051` |
+| `nemo-speech-tts:50051` | `localhost:50051` |
+
+Use the exact Compose service name for each local endpoint. Model-specific TTS and ASR names let Compose define alternatives that share host ports.
 
 Cloud catalog entries use NVCF endpoints (`grpc.nvcf.nvidia.com:443`, `https://integrate.api.nvidia.com/v1`, `wss://grpc.nvcf.nvidia.com/v1/realtime`) and are not rewritten.
 
 ## Apply Commands
 
-Pick a single recipe profile (`<example>` for cloud or `<example>/<hardware>` for on-prem). Each recipe is a complete deployment — never combine two recipes.
+Pick one recipe profile. Use `<example>` for cloud, `<example>/server` for NIM deployments, or `<example>/single-gpu` for one-GPU deployments. Each recipe is a complete deployment. Never combine two recipes.
 
 ```bash
 # Cloud-only (NVCF)
 docker compose --profile generic-assistant up -d
 docker compose --profile multilingual-assistant up -d
 docker compose --profile omni-assistant up -d
+docker compose --profile omni-assistant-subagents up -d
 docker compose --profile frontend-backend-agent up -d
 
-# Workstation (local NIM ASR/TTS/LLM)
-docker compose --profile generic-assistant/workstation up -d
-docker compose --profile multilingual-assistant/workstation up -d
-docker compose --profile omni-assistant/workstation up -d
-docker compose --profile frontend-backend-agent/workstation up -d
+# Server (local NIM ASR/TTS/LLM, recommended for scaling)
+docker compose --profile generic-assistant/server up -d
+docker compose --profile multilingual-assistant/server up -d
+docker compose --profile omni-assistant/server up -d
+docker compose --profile omni-assistant-subagents/server up -d
+docker compose --profile frontend-backend-agent/server up -d
 
-# DGX Spark
-docker compose --profile generic-assistant/dgx-spark up -d
-docker compose --profile multilingual-assistant/dgx-spark up -d
-docker compose --profile omni-assistant/dgx-spark up -d
+# Multi-GPU performance benchmark only
+docker compose --profile generic-assistant/server-perf up -d
 
-# Jetson (Generic Cascaded only. Omni does not fit on Orin today)
-docker compose --profile generic-assistant/jetson-thor up -d
+# Universal one-GPU path (workstation, DGX Spark, or Jetson Thor)
+docker compose --profile generic-assistant/single-gpu up -d
+docker compose --profile multilingual-assistant/single-gpu up -d
+docker compose --profile omni-assistant/single-gpu up -d
+docker compose --profile frontend-backend-agent/single-gpu up -d
+
+# Resource-heavy single-GPU path (workstation or DGX Spark)
+docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```
 
-For YAML-only edits that don't change env or sidecar membership, `docker compose restart <service>` is enough (e.g. `docker compose restart generic-assistant`).
+For YAML-only edits that do not change environment variables or sidecar membership, `docker compose restart <service>` is enough. For example, run `docker compose restart generic-assistant`.
 
 ## Optional Profile Overlays
 
@@ -69,18 +83,18 @@ Add when clients connect from outside the host's network. Set `TURN_USERNAME` an
 
 ```bash
 docker compose --profile generic-assistant --profile tracing up -d
-docker compose --profile generic-assistant/workstation --profile turn up -d
-docker compose --profile generic-assistant/dgx-spark --profile tracing --profile turn up -d
+docker compose --profile generic-assistant/server --profile turn up -d
+docker compose --profile generic-assistant/single-gpu --profile tracing --profile turn up -d
 ```
 
 ## Validation Checklist
 
 - The selected recipe profile matches the example and hardware you want active.
 - `examples_registry.yaml` `defaults` references catalog keys that actually exist for that example.
-- Multilingual prompt selection is paired with multilingual-capable ASR (`parakeet-rnnt` by default, or `nemotron-asr-streaming-multilingual` when opted in) and TTS (`magpie-multilingual-tts` or `chatterbox-multilingual-tts`) in the active catalog.
+- Multilingual prompt selection is paired with multilingual-capable ASR (`nemotron-asr-streaming-multilingual` by default for local profiles, with `parakeet-rnnt` as the cloud fallback) and TTS (`magpie-multilingual-tts`, `magpie-zeroshot-tts`, or `chatterbox-multilingual-tts`) in the active catalog.
 - If `ENABLE_TRACING=true` with `phoenix:4317`, the `phoenix` service is started through the `tracing` profile.
 - Compose-managed local entries use service DNS names, not `localhost`.
-- ASR/TTS image variants use their Compose service DNS names (for example `nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `tts-service:50051`).
+- Local catalog endpoints must match the exact Compose service name. Do not replace model-specific names with generic role names.
 
 ## Verify
 

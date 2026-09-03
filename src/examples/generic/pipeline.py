@@ -10,14 +10,13 @@ Uses pipecat's built-in NVIDIA classes directly:
 """
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -37,8 +36,11 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
+    build_pipeline_params,
     build_user_aggregator_params,
     create_transport,
+    register_session_start_handlers,
+    with_realtime_observers,
 )
 from tracing import IS_TRACING_ENABLED
 from utils import (
@@ -46,6 +48,7 @@ from utils import (
     load_ipa_dictionary,
     load_service_entry,
     normalize_lang_code,
+    nvidia_api_key,
     parse_env_int,
     parse_json_dict,
     resolve_prompt,
@@ -75,7 +78,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": asr_server,
         "use_ssl": asr_ssl,
     }
@@ -104,25 +107,45 @@ async def bot(runner_args: RunnerArguments) -> None:
         label="extra_params",
     )
 
+    raw_temperature = body.get("temperature", "")
+    if raw_temperature in ("", None):
+        raw_temperature = default_llm.get("temperature", "")
+    llm_temperature = None
+    if raw_temperature not in ("", None):
+        try:
+            llm_temperature = float(raw_temperature)
+        except (TypeError, ValueError):
+            logger.warning(f"Ignoring invalid temperature={raw_temperature!r}")
+
+    llm_settings = NvidiaLLMSettings(model=model_id)
+    max_tokens = body.get("max_tokens", "") or default_llm.get("max_tokens", "")
+    if max_tokens not in ("", None):
+        try:
+            llm_settings.max_tokens = int(max_tokens)
+        except (TypeError, ValueError):
+            logger.warning(f"Ignoring invalid max_tokens={max_tokens!r}")
+    if llm_temperature is not None:
+        llm_settings.temperature = llm_temperature
+    if extra_params:
+        llm_settings.extra = extra_params
     logger.info(
         f"LLM: model={model_id}, base_url={base_url}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
+        f"temperature={llm_temperature if llm_temperature is not None else '(default)'}, "
         f"extra_params={extra_params or '(none)'}"
     )
-
-    llm_settings = NvidiaLLMSettings(model=model_id)
-    if extra_params:
-        llm_settings.extra = extra_params
     llm = NvidiaLLMService(
-        api_key=os.getenv("NVIDIA_API_KEY"),
+        api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
     )
 
+    tools_schema = None
+    registered_tools: list[str] = []
+    tool_choice = body.get("tool_choice", "auto") or "auto"
     tools_available = resolve_tools_available(__file__, prompt_key)
     tools_schema, registered_tools = build_tools_schema(__file__, tools_available)
     tools_enabled = tools_schema is not None
-
     if tools_enabled:
         for name in registered_tools:
             llm.register_function(name, TOOL_HANDLERS[name])
@@ -134,7 +157,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
-    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     raw_tts_function_id = body.get("tts_function_id")
     tts_function_id = (
         str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
@@ -154,7 +177,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_language_code:
         tts_settings_kwargs["language"] = tts_language_code
     tts_kwargs: dict = {
-        "api_key": os.getenv("NVIDIA_API_KEY"),
+        "api_key": nvidia_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -183,7 +206,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     messages = build_context_messages(base_system_content, system_prompt)
 
     if tools_enabled:
-        context = LLMContext(messages, tools=tools_schema, tool_choice="auto")
+        context = LLMContext(messages, tools=tools_schema, tool_choice=tool_choice)
     else:
         context = LLMContext(messages)
     preserve_prompt_messages = len(messages)
@@ -285,12 +308,12 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=PipelineParams(
+        params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=[latency_observer],
+        observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
     )
 
@@ -307,18 +330,21 @@ async def bot(runner_args: RunnerArguments) -> None:
             )
         )
 
-    @task.rtvi.event_handler("on_client_ready")
-    async def on_client_connected(rtvi):
-        logger.info("Client connected")
+    async def _on_session_start() -> None:
         if audio_recorder:
             await audio_recorder.start_recording()
         if activity_check:
             activity_check.start()
-        if not welcome_enabled:
-            logger.info("Welcome message disabled; waiting for the user to speak first")
-            return
-        context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
-        await task.queue_frames([LLMRunFrame()])
+
+    register_session_start_handlers(
+        transport=transport,
+        task=task,
+        context=context,
+        runner_args=runner_args,
+        intro_prompt="Please introduce yourself to the user.",
+        on_start=_on_session_start,
+        welcome_enabled=welcome_enabled,
+    )
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

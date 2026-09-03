@@ -18,7 +18,6 @@ workers under ``examples.omni_assistant_subagents.subagents``:
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -28,14 +27,21 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.runner.types import RunnerArguments
 from pipecat.workers.runner import WorkerRunner
 
-from examples.omni_assistant.pipeline import _create_transport
 from examples.omni_assistant_subagents.subagents.media_analyzer import MediaAnalyzerWorker
 from examples.omni_assistant_subagents.subagents.speaker import SpeakerOmniAgent
 from examples.omni_assistant_subagents.subagents.thinker import ThinkerWorker
 from examples.omni_assistant_subagents.subagents.transport import OmniTransportAgent
 from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
+from examples.shared.pipeline_utils import create_transport as _create_transport
 from examples.shared.subagents import SubagentRegistry, load_subagent_registry
-from utils import is_nvcf, load_prompt_catalog, load_service_entry, parse_json_dict, resolve_prompt
+from utils import (
+    is_nvcf,
+    load_prompt_catalog,
+    load_service_entry,
+    nvidia_api_key,
+    parse_json_dict,
+    resolve_prompt,
+)
 
 load_dotenv(override=True)
 
@@ -124,7 +130,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
-    tts_synthesis_mode = body.get("tts_synthesis_mode", "")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     raw_tts_function_id = body.get("tts_function_id")
     tts_function_id = (
         str(raw_tts_function_id) if raw_tts_function_id is not None else default_tts.get("function_id", "")
@@ -133,7 +139,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
         "zero_shot_audio_prompt_file", ""
     )
-    api_key = os.getenv("NVIDIA_API_KEY")
+    api_key = nvidia_api_key()
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     transport_agent = OmniTransportAgent(

@@ -15,7 +15,7 @@ thinker-llm:
     model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
     base_url: "https://integrate.api.nvidia.com/v1"
     max_tokens: 4096
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true,"thinking_budget":1024},"repetition_penalty":1.05}}'
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
 
 booking-server:
   default:
@@ -45,9 +45,3 @@ asr:
     server: "grpc.nvcf.nvidia.com:443"
     model: "nemotron-asr-streaming"
     function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
-
-  parakeet-ctc:
-    name: "Parakeet CTC 1.1B"
-    server: "grpc.nvcf.nvidia.com:443"
-    model: "parakeet-ctc-1.1b-asr"
-    function_id: "d8dd4e9b-fbf5-4fb0-9dba-8cf436c8d965"

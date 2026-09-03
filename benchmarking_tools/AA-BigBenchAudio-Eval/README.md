@@ -91,6 +91,8 @@ Then run `eval.py` / `find_invalid_results.py` / `analyze_results.py` as above.
 
 ## Reference results
 
+> **Note:** The Nemotron 3 Nano rows are historical benchmark results and do not represent the current default model.
+
 | Model / API | Reasoning | Text-only (%) | In voice pipeline (%) |
 |-------------|-----------|---------------|------------------------|
 | Llama Nemotron Super 49B v1.5 | ON | 91.90 | 81.30 |

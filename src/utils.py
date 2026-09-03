@@ -16,8 +16,6 @@ from urllib.parse import urlparse, urlunparse
 import yaml
 from loguru import logger
 
-from runtime_platform import select_runtime_platform_catalog
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_FILENAME = "prompts.yaml"
 TOOLS_FILENAME = "tools.yaml"
@@ -39,7 +37,7 @@ def _services_local_path() -> Path:
 
 
 _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
-    "llm": frozenset({"llm_id", "model_id", "base_url", "system_prompt", "max_tokens", "extra_params"}),
+    "llm": frozenset({"llm_id", "model_id", "base_url", "system_prompt", "max_tokens", "temperature", "extra_params"}),
     "thinker-llm": frozenset(
         {"thinker_llm_id", "thinker_model_id", "thinker_base_url", "thinker_max_tokens", "thinker_extra_params"}
     ),
@@ -56,7 +54,7 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
         }
     ),
 }
-_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content"})
+_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content", "tool_choice"})
 _active_slots: frozenset[str] | None = None
 _active_slot_order: tuple[str, ...] | None = None
 
@@ -75,6 +73,11 @@ def set_active_slots(slots: list[str] | tuple[str, ...] | None) -> None:
 def set_service_context(example_dir: str | Path, slots: Iterable[str] | None) -> None:
     """Bind service catalogs and active slots to the current request context."""
     _service_context.set((Path(example_dir), tuple(slots) if slots is not None else ()))
+
+
+def clear_service_context() -> None:
+    """Clear the request-scoped service catalog binding."""
+    _service_context.set(None)
 
 
 def _effective_active_slots() -> frozenset[str] | None:
@@ -221,8 +224,9 @@ def _is_container_runtime() -> bool:
 
 _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm", 8000): 18000,
+    ("nvidia-llm-omni", 8000): 18002,
     ("nvidia-llm-vllm", 8000): 18000,
-    ("tts-service", 50051): 50151,
+    ("magpie-multilingual-tts-service", 50051): 50151,
     ("chatterbox-tts-service", 50051): 50151,
     ("magpie-zeroshot-tts-service", 50051): 50151,
     ("nemotron-asr-streaming-english", 50052): 50152,
@@ -377,21 +381,24 @@ def _first_reachable_variant(variants: list[tuple[str, dict]]) -> tuple[str, dic
 
 
 def _load_cloud_services_catalog() -> dict:
-    """Load cloud service entries from ``services.cloud.yaml``."""
+    """Load cloud service entries from ``services.cloud.yaml``.
+
+    Returns an empty catalog when NVIDIA Cloud is unavailable so those
+    entries are not exposed in the UI or selected by the pipeline.
+    """
+    if not nvidia_cloud_available():
+        return _normalize_services_catalog({})
     return _normalize_services_catalog(load_yaml_file(_services_cloud_path()))
 
 
 def _load_local_services_catalog() -> dict:
-    """Load local service entries for the configured platform."""
+    """Load local service entries, merging recipe sections by reachability."""
     local_path = _services_local_path()
     if not local_path.is_file():
         return _normalize_services_catalog({})
     data = load_yaml_file(local_path)
     if not isinstance(data, dict):
         return _normalize_services_catalog({})
-    platform_data = select_runtime_platform_catalog(data)
-    if platform_data is not None:
-        return _rewrite_local_runtime_endpoints(_normalize_services_catalog(platform_data))
 
     variants: dict[str, dict[str, list[tuple[str, dict]]]] = {}
     for platform_name, platform_data in data.items():
@@ -413,14 +420,11 @@ def _load_local_services_catalog() -> dict:
             if all(entry == first_entry for _, entry in entries):
                 target[key] = first_entry
                 continue
-            active = _first_reachable_variant(entries)
-            if active is not None:
-                active_platform, active_entry = active
-                target[key] = active_entry
-                emitted = [active_entry]
-            else:
-                active_platform = ""
-                emitted = []
+            # Keep the plain key present even when nothing is reachable, so
+            # callers resolving a catalog key by name still find an entry.
+            active_platform, active_entry = _first_reachable_variant(entries) or entries[0]
+            target[key] = active_entry
+            emitted = [active_entry]
             for platform_name, entry in entries:
                 if platform_name == active_platform:
                     continue
@@ -434,9 +438,11 @@ def _load_local_services_catalog() -> dict:
 def _load_effective_services_catalog() -> dict:
     """Return the merged catalog combining cloud and reachable local entries.
 
-    Reachable local entries are ordered first and win on shared keys, so the
-    pipeline picks the deployed local service. When no local endpoint is
-    reachable, the cloud catalog takes effect.
+    Reachable local entries win on shared keys, so the pipeline picks the
+    deployed local service. When NVIDIA Cloud is available, cloud entries fill
+    each remaining key, so a cloud-only key stays exposed even while other local
+    endpoints are reachable; the cloud variant of a shared key is used only when
+    no reachable local entry takes precedence.
     """
     cloud = _load_cloud_services_catalog()
     local = _filter_reachable_entries(_load_local_services_catalog())
@@ -465,6 +471,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "base_url",
         "system_prompt",
         "max_tokens",
+        "temperature",
         "extra_params",
         "thinker_llm_id",
         "thinker_model_id",
@@ -473,6 +480,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "thinker_max_tokens",
         "prompt_key",
         "prompt_content",
+        "tool_choice",
         "asr_server",
         "asr_model",
         "asr_function_id",
@@ -498,6 +506,7 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "base_url": "base_url",
             "system_prompt": "system_prompt",
             "max_tokens": "max_tokens",
+            "temperature": "temperature",
             "extra_params": "extra_params",
         },
     ),
@@ -537,7 +546,9 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
 )
 
 # Body fields the client may set explicitly; catalog hydration must not overwrite them.
-_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset({"asr_language_code", "tts_language_code", "tts_voice_id"})
+_CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset(
+    {"asr_language_code", "tts_language_code", "tts_voice_id", "max_tokens", "temperature"}
+)
 
 
 def hydrate_config_from_catalog(config: dict) -> None:
@@ -552,10 +563,15 @@ def hydrate_config_from_catalog(config: dict) -> None:
             continue
         for yaml_field, body_field in field_map.items():
             if body_field in _CLIENT_OVERRIDABLE_BODY_FIELDS:
-                user_value = str(config.get(body_field, "") or "").strip()
-                if user_value:
-                    config[body_field] = user_value
-                    continue
+                raw_user_value = config.get(body_field, "")
+                if isinstance(raw_user_value, bool | dict | list):
+                    # Reject non-scalar overrides; fall through to catalog.
+                    pass
+                else:
+                    user_value = str(raw_user_value).strip() if raw_user_value not in ("", None) else ""
+                    if user_value:
+                        config[body_field] = user_value
+                        continue
             value = entry.get(yaml_field, "")
             if value in ("", None):
                 config.pop(body_field, None)
@@ -706,6 +722,27 @@ def parse_json_dict(raw: object, label: str = "JSON") -> dict:
     except json.JSONDecodeError:
         logger.warning(f"Invalid {label}, ignoring: {raw!r}")
     return {}
+
+
+def nvidia_cloud_available() -> bool:
+    """Return whether NVIDIA Cloud catalog entries can be used.
+
+    True only when ``NVIDIA_API_KEY`` is a real key. Empty, unset, and the
+    Compose placeholder ``not-needed`` keep cloud services hidden.
+    """
+    key = (os.getenv("NVIDIA_API_KEY") or "").strip()
+    return bool(key) and key.casefold() != "not-needed"
+
+
+def nvidia_api_key(default: str = "not-needed") -> str:
+    """Return NVIDIA_API_KEY, defaulting for local OpenAI-compatible endpoints.
+
+    Empty, whitespace-only, and unset values become ``default`` so the OpenAI
+    SDK can construct a client against local vLLM/NIM without a real cloud key.
+    The value is stripped to stay consistent with ``nvidia_cloud_available()``.
+    """
+    key = (os.getenv("NVIDIA_API_KEY") or "").strip()
+    return key or default
 
 
 def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:

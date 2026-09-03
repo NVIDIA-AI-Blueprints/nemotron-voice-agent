@@ -10,10 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@pipecat-ai/client-js": "1.12.0",
-    "@pipecat-ai/client-react": "1.7.1",
-    "@pipecat-ai/small-webrtc-transport": "1.10.5",
-    "@pipecat-ai/websocket-transport": "1.7.0",
+    "@pipecat-ai/client-js": "1.13.0",
+    "@pipecat-ai/client-react": "1.8.2",
+    "@pipecat-ai/small-webrtc-transport": "1.10.6",
+    "@pipecat-ai/websocket-transport": "1.7.1",
     "@tanstack/react-query": "^5.100.11",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -33,5 +33,8 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4"
+  },
+  "overrides": {
+    "browserslist": "4.28.8"
   }
 }

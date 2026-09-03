@@ -8,18 +8,22 @@ This guide provides reference benchmarks for the Nemotron Voice Agent covering *
 
 ### Reference Results
 
-The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x H100 GPU** setup (one GPU for Parakeet CTC 1.1B ASR, one for Magpie TTS, and two for Nemotron-3-Nano LLM). Most tested concurrency levels are below one second E2E latency, and the 64-stream run reaches 1.00 second. All latencies are in seconds.
+The reference performance benchmark measures the Nemotron Voice Agent on a dedicated **4x B200 GPU** setup (one GPU for Nemotron ASR Streaming (English), one for Magpie Multilingual TTS, and two for the Nemotron 3.5 Lightning LLM). E2E latency stays below one second through 64 concurrent streams. All latencies are in seconds.
 
-> **Note:** This benchmark uses a 4-GPU setup to measure scalability. The [minimum deployment requirement](01-getting-started.md#docker-based-deployment) is cloud-only (no local GPUs) or 1 GPU with roughly 80 GB available VRAM for a local profile.
+> **Note:** This benchmark uses a 4-GPU setup to measure scalability. Deployment options include cloud-only with no local GPUs, about 80 GB VRAM for the default all-on-one-GPU `*/server` NIM layout, or a supported one-GPU host for `*/single-gpu`. See [Configure LLM](how-to/configure-llm.md#vram--hardware-support) for the automatic VRAM plan.
+>
+> The current `generic-assistant/server-perf` Compose recipe pins the `vllm-nvfp4-tp2-pp1-18.0` profile for Nemotron 3.5 Lightning. Other architectures require listing and benchmarking their compatible TP2 profiles before pinning a hardware-specific winner. See the [scaling benchmark](../benchmarking_tools/scaling-perf/README.md#reproducing-the-recommended-scaling-setup).
 
-| Parallel Streams | E2E Latency | ASR Latency | TTS TTFB | LLM TTFT | LLM First-Sentence Latency |
+| Parallel Streams | Server E2E Latency | ASR TTFB | LLM Processing Time | LLM TTFT | TTS TTFB |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 0.79 | 0.04 | 0.078 | 0.126 | 0.138 |
-| 4 | 0.76 | 0.046 | 0.066 | 0.061 | 0.181 |
-| 8 | 0.77 | 0.052 | 0.066 | 0.062 | 0.136 |
-| 16 | 0.91 | 0.057 | 0.068 | 0.105 | 0.208 |
-| 32 | 0.80 | 0.061 | 0.080 | 0.073 | 0.294 |
-| 64 | 1.00 | 0.067 | 0.110 | 0.156 | 0.386 |
+| 1 | 0.93 | 0.47 | 0.43 | 0.23 | 0.08 |
+| 2 | 0.87 | 0.5 | 0.35 | 0.16 | 0.07 |
+| 4 | 0.86 | 0.49 | 0.41 | 0.17 | 0.07 |
+| 8 | 0.87 | 0.49 | 0.35 | 0.14 | 0.08 |
+| 16 | 0.86 | 0.49 | 0.34 | 0.13 | 0.08 |
+| 32 | 0.9 | 0.48 | 0.37 | 0.13 | 0.09 |
+| 64 | 0.93 | 0.49 | 0.4 | 0.13 | 0.1 |
+| Mean | 0.89 | 0.49 | 0.38 | 0.16 | 0.08 |
 
 *E2E: End-to-End · TTFB: Time to First Byte · TTFT: Time to First Token*
 
@@ -37,10 +41,10 @@ BigBench Audio evaluates **answer correctness** on the [ArtificialAnalysis/big_b
 
 The following table shows accuracy (%) on Big Bench Audio for the LLM standalone (text-only) vs the LLM running in the voice agent pipeline:
 
+> **Note:** The Nemotron 3 Nano rows are historical benchmark results and do not represent the current default model.
+
 | Model / API | Reasoning Mode | Text Only Standalone LLM (%) | LLM In Voice Agent Pipeline (%) |
 | --- | --- | --- | --- |
-| Nemotron 49B (`llama-3.3-nemotron-super-49b-v1.5`) | Reasoning ON | 91.90 | 81.30 |
-| Nemotron 49B (`llama-3.3-nemotron-super-49b-v1.5`) | Reasoning OFF | 82.70 | 60.30 |
 | Nemotron 30B (`nemotron-3-nano`) | Reasoning ON, Budget 500 | 78.76 | 75.60 |
 | Nemotron 30B (`nemotron-3-nano`)| Reasoning OFF | 56.50 | 50.40 |
 

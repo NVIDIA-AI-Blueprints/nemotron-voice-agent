@@ -4,12 +4,25 @@ The Nemotron Voice Agent uses example-local service catalogs to manage LLM, ASR,
 
 This guide covers the **mechanics**: how catalogs are loaded, switched, and extended.
 
+## Required credentials
+
+Set one key per recipe family. Do not mix them.
+
+| Recipe family | Required `.env` key |
+| --- | --- |
+| Cloud (`<example>`) | `NVIDIA_API_KEY` |
+| Server (`<example>/server`) | `NVIDIA_API_KEY` |
+| Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` |
+| Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` |
+
+`NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server and Performance Server additionally need `docker login nvcr.io` before `up`. Single-GPU requires `HF_TOKEN` for Hugging Face model downloads and does not use `NVIDIA_API_KEY`.
+
 ## How catalog selection works
 
 - Each example owns its catalog at `<example-package>/services.cloud.yaml` (remote / NVCF) and optional `<example-package>/services.local.yaml` (Compose-managed sidecars).
-- The cloud catalog is always loaded.
+- The cloud catalog is loaded when `NVIDIA_API_KEY` is set, which is the expected state for cloud-only, `*/server`, and `generic-assistant/server-perf`. Empty, unset, and the Compose placeholder `not-needed` hide NVIDIA Cloud entries from the UI and the pipeline. The entries stay hidden on `*/single-gpu`, which uses `HF_TOKEN` only.
 - The local catalog is merged on top, but only entries whose endpoint is reachable on TCP are exposed in the UI and used by the pipeline.
-- `services.local.yaml` is split into per-platform sections (`workstation`, `dgxspark`, `jetson`), and the `PLATFORM` env var selects which one is merged. Docker Compose recipe profiles set `PLATFORM` automatically, so the matching local services load with no extra steps. For host-native on-prem runs, set it in `.env` to `cloud`, `workstation`, `dgxspark`, or `jetsonthor`.
+- `services.local.yaml` is grouped into recipe sections (`server` for NIM sidecars, `singlegpu` for vLLM + NeMo-Speech.cpp). The backend merges all sections and exposes only endpoints that are reachable on TCP. Host-native runs work the same way: start the sidecars, then start the app.
 - The same `--profile` works whether you run cloud-only or with local sidecars. Nothing else needs to be set.
 
 ## Switching services in the UI
@@ -20,23 +33,25 @@ The Services tab lists all services exposed by the active catalog (cloud and rea
 
 Each example declares its default service per slot via `defaults` in `examples_registry.yaml`. The pipeline resolves that default at startup, and the UI uses it as the initial selection. Edit `defaults` (and optionally reorder entries in the `services.cloud.yaml` / `services.local.yaml` for visual ordering in the UI) to change defaults.
 
-When the same default key exists in both `services.cloud.yaml` and `services.local.yaml`, the resolver prefers the **self-hosted** variant so that deploying local NIM sidecars automatically promotes them to the active default. No UI click is needed. If the self-hosted endpoint is unreachable at session-start time, the runtime falls back to the cloud variant.
+The [Examples table](../../README.md#examples) links to each example README. Each README lists the models selected for every supported profile.
 
-> **On-prem note:** self-hosted promotion only applies when the `defaults` key also exists in `services.local.yaml`. A default whose key exists **only** in `services.cloud.yaml` resolves to the cloud model even on an on-prem recipe. Point `defaults` at a local key or pick the model from the Services tab.
+When the same default key exists in both `services.cloud.yaml` and `services.local.yaml`, the resolver prefers the **self-hosted** variant so that deploying local NIM sidecars automatically promotes them to the active default. No UI click is needed. If the self-hosted endpoint is unreachable at session-start time, the runtime falls back to the cloud variant when a real `NVIDIA_API_KEY` is set (not empty or `not-needed`).
+
+> **On-prem note:** self-hosted promotion only applies when the `defaults` key also exists in `services.local.yaml`. A default whose key exists **only** in `services.cloud.yaml` resolves to the cloud model even on an on-prem recipe, but only when `NVIDIA_API_KEY` is set; without a key the cloud catalog is disabled and such a default has nothing to resolve to. Point `defaults` at a local key or pick the model from the Services tab.
 
 ## On-prem catalog
 
-`services.local.yaml` groups entries under platform sections (`workstation`, `dgxspark`, `jetson`).
+`services.local.yaml` groups entries under recipe sections (`server`, `singlegpu`).
 
 To configure a specific local model, check its Docker Compose file under [`docker/`](../../docker/) for the **service name**, **port**, and the **profile** that launches it, then point a catalog entry at that endpoint. For example, Nemotron ASR Streaming (English) is defined in [`docker/docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml):
 
 ```yaml
 services:
   nemotron-asr-streaming-english:
-    image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.0
+    image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.1
     profiles:
-      - generic-assistant/workstation
-      - frontend-backend-agent/workstation
+      - generic-assistant/server
+      - frontend-backend-agent/server
     ports:
       - "50152:50052"   # host:container (gRPC)
     environment:
@@ -46,7 +61,7 @@ services:
 The matching `asr` entry in the example's `services.local.yaml` points at that Compose service name and **container** port (`50052`):
 
 ```yaml
-workstation:
+server:
   asr:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
@@ -57,7 +72,7 @@ workstation:
 
 Use the Compose service name and container port in `server`. For host-native runs (outside Docker), the backend rewrites it to the published host port automatically. Here `nemotron-asr-streaming-english:50052` becomes `localhost:50152`.
 
-Each ASR, LLM, and TTS model sidecar is defined in a `docker/docker-compose.*.yaml` file and gated by Compose `profiles`. Check those files for the service that serves a given model. To run models locally for a **new example**, add your example's profile (e.g. `my-example/workstation`) to the relevant service(s) there, and add the matching entries to that example's `services.local.yaml` (as shown above). The catalog then picks up the sidecars automatically once they are reachable. See [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
+Each ASR, LLM, and TTS model sidecar is defined in a `docker/docker-compose.*.yaml` file and gated by Compose `profiles`. Check those files for the service that serves a given model. To run models locally for a **new example**, add your example's profile (e.g. `my-example/server`) to the relevant service(s) there, and add the matching entries to that example's `services.local.yaml` (as shown above). The catalog then picks up the sidecars automatically once they are reachable. See [Deployment Profiles](../01-getting-started.md#docker-based-deployment) for the profile list.
 
 ## Adding built-in cloud services
 

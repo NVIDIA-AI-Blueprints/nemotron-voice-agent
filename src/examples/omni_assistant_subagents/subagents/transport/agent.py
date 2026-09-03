@@ -28,7 +28,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -38,7 +38,9 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import (
     MuteUntilFirstBotCompleteUserMuteStrategy,
 )
+from pipecat.utils.time import time_now_iso8601
 
+import examples_registry
 from attachment_store import (
     clear_session_attachments,
     create_capture_request,
@@ -63,6 +65,7 @@ from examples.omni_assistant_subagents.subagents.transport.webcam_controller imp
 )
 from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.pipeline_utils import build_pipeline_params
 from examples.shared.subagents import SubagentRegistry
 from tracing import IS_TRACING_ENABLED
 from utils import load_ipa_dictionary, normalize_lang_code, parse_env_float
@@ -127,6 +130,7 @@ class OmniTransportAgent(PipelineWorker):
         self._capture_task: asyncio.Task[None] | None = None
         self._assistant_speaking = False
         self._user_speaking = False
+        self._user_turn_started_at: str | None = None
 
         tts_settings_kwargs: dict[str, Any] = {"voice": tts_voice}
         if tts_synthesis_mode:
@@ -196,9 +200,9 @@ class OmniTransportAgent(PipelineWorker):
             pipeline,
             name=resolved_name,
             active=True,
-            params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+            params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
             idle_timeout_secs=self._runner_args.pipeline_idle_timeout_secs,
-            observers=[self._build_latency_observer()],
+            observers=self._build_observers(),
             enable_tracing=IS_TRACING_ENABLED,
             enable_rtvi=True,
         )
@@ -207,12 +211,13 @@ class OmniTransportAgent(PipelineWorker):
     def _build_pipeline(self, *, bus: WorkerBus, worker_name: str) -> Pipeline:
         """Build the transport pipeline with a bus bridge in the LLM slot."""
         assistant_aggregator = LLMAssistantAggregator(self._context)
+        self._user_turn_processor = _build_user_turn_processor()
         return Pipeline(
             [
                 self._transport.input(),
                 UserMuteProcessor(strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()]),
                 VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams())),
-                _build_user_turn_processor(),
+                self._user_turn_processor,
                 BusBridgeProcessor(
                     bus=bus,
                     worker_name=worker_name,
@@ -314,17 +319,54 @@ class OmniTransportAgent(PipelineWorker):
 
         return latency_observer
 
-    def _register_client_handlers(self) -> None:
-        """Register RTVI client and transport event handlers on this worker."""
+    def _build_observers(self) -> list:
+        """Latency observer plus Realtime lifecycle observer when applicable."""
+        from examples.shared.pipeline_utils import with_realtime_observers
 
-        @self.rtvi.event_handler("on_client_ready")
-        async def on_client_connected(rtvi):
-            logger.info("Nemotron Omni subagents client connected")
+        return with_realtime_observers(
+            self._build_latency_observer(),
+            transport=self._transport,
+        )
+
+    def _register_client_handlers(self) -> None:
+        """Register RTVI/Realtime client and transport event handlers on this worker."""
+        from examples.shared.pipeline_utils import runner_protocol
+
+        body = self._runner_args.body if isinstance(getattr(self._runner_args, "body", None), dict) else {}
+        welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+        started = False
+
+        async def _start_session(source: str) -> None:
+            nonlocal started
+            if started:
+                return
+            started = True
+            logger.info(f"Nemotron Omni subagents client session start via {source}")
             self._start_attachment_state_listener()
-            intro_prompt = "Please introduce yourself to the user."
-            self._context.add_message({"role": "user", "content": intro_prompt})
             self._webcam_controller.start_summary_loop()
+            if not welcome_enabled:
+                logger.info("Welcome message disabled; waiting for the user to speak first")
+                return
+            self._context.add_message({"role": "user", "content": "Please introduce yourself to the user."})
             await self.queue_frame(LLMRunFrame())
+
+        if runner_protocol(self._runner_args) == "realtime":
+            # Align with shared register_session_start_handlers: no welcome race window.
+            if not welcome_enabled:
+                serializer = getattr(self._transport, "_realtime_serializer", None)
+                conversation = getattr(serializer, "conversation", None)
+                if conversation is not None:
+                    conversation.open_client_text()
+
+            @self._transport.event_handler("on_client_connected")
+            async def on_realtime_connected(transport, client):  # noqa: ARG001
+                await _start_session("realtime-transport-connected")
+
+        else:
+
+            @self.rtvi.event_handler("on_client_ready")
+            async def on_client_connected(rtvi):  # noqa: ARG001
+                await _start_session("rtvi-client-ready")
 
         @self._transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
@@ -334,6 +376,19 @@ class OmniTransportAgent(PipelineWorker):
             clear_session_attachments(self._session_id)
             clear_session_webcam_frames(self._session_id)
             await self.send_bus_message(BusCancelMessage(source=self.name, reason="client disconnected"))
+
+        @self._user_turn_processor.event_handler("on_user_turn_stopped")
+        async def on_user_turn_stopped(processor, strategy):  # noqa: ARG001
+            await self.queue_frame(
+                RTVIServerMessageFrame(
+                    data={
+                        "type": "user-turn-finalized",
+                        "timestamp": self._user_turn_started_at or time_now_iso8601(),
+                        "transcript": None,
+                        "user_id": "user",
+                    }
+                )
+            )
 
         @self.rtvi.event_handler("on_client_message")
         async def on_client_message(rtvi, message):
@@ -465,6 +520,7 @@ class OmniTransportAgent(PipelineWorker):
     async def on_user_voice_turn_started(self) -> None:
         """Track whether the user is currently speaking."""
         self._user_speaking = True
+        self._user_turn_started_at = time_now_iso8601()
 
     async def on_user_voice_turn_stopped(self) -> None:
         """Track when the user turn reaches EOU."""

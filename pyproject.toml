@@ -1,11 +1,11 @@
 [project]
 name = "nemotron-voice-agent"
-version = "2.1.1"
+version = "2.2.0"
 description = "End-to-end voice agent blueprint powered by NVIDIA Nemotron ASR, LLM, and TTS"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.5.0",
+    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.7.0",
     "python-dotenv>=1.2.2",
     "loguru>=0.7.3",
     "pyyaml>=6.0.3",
@@ -25,6 +25,7 @@ override-dependencies = [
     "langchain-core>=1.4.1",
     "uuid-utils>=0.16.0",
     "pillow>=12.3.0",
+    "nvidia-riva-client>=2.27.0,<3",
 ]
 
 [dependency-groups]
@@ -34,7 +35,7 @@ dev = [
     "pytest>=9.1.1",
 ]
 eval = [
-    "pipecat-ai[evals]==1.5.0",
+    "pipecat-ai[evals]==1.7.0",
 ]
 # Dependencies for everything under `benchmarking_tools/`. Install with:
 #   uv sync --group benchmark
@@ -46,7 +47,7 @@ benchmark = [
     "aiohttp>=3.11.0",
     "requests>=2.32.0",
     "grpcio>=1.67.0",
-    "nvidia-riva-client>=2.21.0",
+    "nvidia-riva-client>=2.27.0",
     "datasets>=2.19.0",
     "huggingface-hub>=0.23.0",
 ]

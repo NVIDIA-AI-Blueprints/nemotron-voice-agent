@@ -10,6 +10,7 @@ from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.pipeline.worker import PipelineParams
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
@@ -34,6 +35,18 @@ from utils import parse_env_bool, parse_env_float, parse_env_int
 # Pipecat's stock default is 3.0s.
 SMART_TURN_FALLBACK_SECS = 1.0
 
+# Magpie TTS (nemo-speech) accepts sample_rate_hz in [8000, 22050] or 0 (auto).
+# Use Magpie's native max for output. Pipecat's default out rate (24000) is rejected.
+PIPELINE_AUDIO_IN_SAMPLE_RATE = 16000
+PIPELINE_AUDIO_OUT_SAMPLE_RATE = 22050
+
+
+def build_pipeline_params(**kwargs) -> PipelineParams:
+    """Build PipelineParams with Magpie-safe audio sample rates."""
+    kwargs.setdefault("audio_in_sample_rate", PIPELINE_AUDIO_IN_SAMPLE_RATE)
+    kwargs.setdefault("audio_out_sample_rate", PIPELINE_AUDIO_OUT_SAMPLE_RATE)
+    return PipelineParams(**kwargs)
+
 
 def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
     """Return LocalSmartTurnAnalyzerV3 with the configurable silence fallback."""
@@ -57,6 +70,83 @@ def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotC
     if not welcome_enabled:
         return []
     return [MuteUntilFirstBotCompleteUserMuteStrategy()]
+
+
+def runner_protocol(runner_args: RunnerArguments) -> str:
+    """Return the wire protocol for this session (``rtvi`` or ``realtime``)."""
+    body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
+    protocol = str(body.get("protocol") or "").strip().lower()
+    return protocol if protocol else "rtvi"
+
+
+def with_realtime_observers(*observers, transport=None) -> list:
+    """Append the Realtime lifecycle observer when the transport speaks Realtime.
+
+    Example::
+
+        observers=with_realtime_observers(latency_observer, transport=transport)
+    """
+    out = list(observers)
+    if transport is None:
+        return out
+    from realtime.transport import realtime_lifecycle_observer
+
+    realtime_obs = realtime_lifecycle_observer(transport)
+    if realtime_obs is not None:
+        out.append(realtime_obs)
+    return out
+
+
+def register_session_start_handlers(
+    *,
+    transport,
+    task,
+    context,
+    runner_args: RunnerArguments,
+    intro_prompt: str = "Please introduce yourself to the user.",
+    on_start=None,
+    welcome_enabled: bool = True,
+) -> None:
+    """Start the session using the correct signal for the wire protocol.
+
+    RTVI/WebRTC uses ``on_client_ready``; Realtime uses ``on_client_connected``.
+    Both share the same optional ``on_start`` + welcome intro path. When welcome
+    is off, skip the intro and (on Realtime) open the client text gate.
+    """
+    from pipecat.frames.frames import LLMRunFrame
+
+    started = False
+
+    async def _start_session(source: str) -> None:
+        nonlocal started
+        if started:
+            return
+        started = True
+        logger.info(f"Client session start via {source}")
+        if on_start is not None:
+            await on_start()
+        if not welcome_enabled:
+            logger.info("Welcome message disabled; waiting for the user to speak first")
+            return
+        context.add_message({"role": "user", "content": intro_prompt})
+        await task.queue_frames([LLMRunFrame()])
+
+    if runner_protocol(runner_args) == "realtime":
+        if not welcome_enabled:
+            serializer = getattr(transport, "_realtime_serializer", None)
+            conversation = getattr(serializer, "conversation", None)
+            if conversation is not None:
+                conversation.open_client_text()
+
+        @transport.event_handler("on_client_connected")
+        async def _on_realtime_connected(transport_obj, client):  # noqa: ARG001
+            await _start_session("realtime-transport-connected")
+
+    else:
+
+        @task.rtvi.event_handler("on_client_ready")
+        async def _on_rtvi_ready(rtvi):  # noqa: ARG001
+            await _start_session("rtvi-client-ready")
 
 
 def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
@@ -197,7 +287,7 @@ async def apply_pinned_prompt_summary(
 
 
 def create_transport(runner_args: RunnerArguments):
-    """Create a transport from runner arguments (WebRTC, WebSocket, or eval)."""
+    """Create a transport from runner arguments (WebRTC, WebSocket, Realtime, or eval)."""
     from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
 
     if isinstance(runner_args, SmallWebRTCRunnerArguments):
@@ -206,7 +296,9 @@ def create_transport(runner_args: RunnerArguments):
         return SmallWebRTCTransport(
             params=TransportParams(
                 audio_in_enabled=True,
+                audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
                 audio_out_enabled=True,
+                audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
             ),
             webrtc_connection=runner_args.webrtc_connection,
@@ -219,15 +311,31 @@ def create_transport(runner_args: RunnerArguments):
         return EvalTransport(
             params=EvalTransportParams(
                 audio_in_enabled=True,
-                audio_in_sample_rate=16000,
+                audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
                 audio_out_enabled=True,
-                audio_out_sample_rate=16000,
+                audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
                 add_wav_header=False,
                 serializer=RTVIEvalSerializer(),
             ),
             host=runner_args.host,
             port=runner_args.port,
+        )
+
+    websocket = getattr(runner_args, "websocket", None)
+    if websocket is None:
+        raise TypeError(f"Unsupported runner args type: {type(runner_args)}")
+
+    body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
+    if runner_protocol(runner_args) == "realtime":
+        from realtime.transport import create_realtime_transport
+
+        return create_realtime_transport(
+            websocket,
+            session_view=body.get("realtime_session_view")
+            if isinstance(body.get("realtime_session_view"), dict)
+            else None,
+            runtime_config=body,
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer
@@ -237,17 +345,13 @@ def create_transport(runner_args: RunnerArguments):
         FastAPIWebsocketTransport,
     )
 
-    websocket = getattr(runner_args, "websocket", None)
-    if websocket is None:
-        raise TypeError(f"Unsupported runner args type: {type(runner_args)}")
-
     return FastAPIWebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
-            audio_in_sample_rate=16000,
+            audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
             audio_out_enabled=True,
-            audio_out_sample_rate=16000,
+            audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
             audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
             add_wav_header=False,
             serializer=ProtobufFrameSerializer(params=FrameSerializer.InputParams(ignore_rtvi_messages=False)),

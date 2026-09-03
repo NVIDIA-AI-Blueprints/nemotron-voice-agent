@@ -1,7 +1,7 @@
 ---
 name: deploy
-description: Deploy Nemotron Voice Agent via root compose using recipe profiles. Use when deploying or troubleshooting auth/startup.
-version: "2.0.0"
+description: Deploy Nemotron Voice Agent using root Compose recipe profiles. Use when deploying or troubleshooting authentication and startup.
+version: "2.2.0"
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [deployment, docker-compose, voice-agent, nemotron]
@@ -9,21 +9,38 @@ metadata:
 
 # Nemotron Voice Agent Deployment
 
+`SKILL.md` is the decision tree. Open a reference only for the family you chose. Do not open the others.
+
 ## Rules
 
-- Run commands from the repository root containing `docker-compose.yml`.
-- Use Docker Compose for deployment.
-- Preserve existing `.env`. Create it only if missing.
-- Use `configure-pipeline` for `.env`, catalog, or prompt changes.
-- Every deployment specifies **exactly one recipe profile** (plus optional observability profiles). `docker compose up` with no profile is a no-op.
-- Recipe profile names are `<example>` for cloud-only deployments and `<example>/<hardware>` for on-prem deployments (for example `generic-assistant` and `generic-assistant/workstation`). The profile is a complete, self-contained recipe — never combine two recipes.
-- Selector modes (`all`, or a single `<example>` such as `generic-assistant`) remain host-native only (`uv run`) and have no compose profile.
-- Observability profiles (`tracing`, `turn`) compose orthogonally with any recipe.
-- When adding the `turn` profile, complete the TURN preflight before `docker compose up`: confirm bundled coturn is supported on the host architecture, ensure `.env` has `TURN_USERNAME` and `TURN_PASSWORD`, set `TURN_URL` when TURN is hosted separately or the request host is not client-reachable, and remind the user to open UDP `3478` and `49160-49200`.
+- Run commands from the repository root that contains `docker-compose.yml`. Use Docker Compose.
+- Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any recipe. They are not recipes.
+- Preserve existing `.env`. Create it only if missing: `test -f .env || cp .env.example .env`.
+- Use `configure-pipeline` for `.env`, catalog, or prompt changes. Do not write host-specific vLLM flags into `.env`.
+- Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU Blackwell workstation load benchmark with a pinned NVFP4 TP2 LLM profile, not a UI deploy. Older hardware requires a compatible TP2 profile. See `benchmarking_tools/scaling-perf/README.md`.
+- Selector modes (`all`, or one `<example>`) are host-native (`uv run`) only. No compose profile.
+- Generic, Multilingual, Omni, and Frontend/Backend `/single-gpu` support compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, that example is cloud-only (`omni-assistant-subagents`). Orin-class Jetson is unsupported (the model does not fit). Do not infer fit from the platform name. Complete memory-fit first. The single-GPU compose files detect product and compute capability. Do not set those by hand.
+
+## Auth (Do Not Mix)
+
+| Recipe family | `.env` key | `docker login nvcr.io` |
+| --- | --- | --- |
+| Cloud (`<example>`) | `NVIDIA_API_KEY` (NVCF) | **No** |
+| Server (`<example>/server`, including `server-perf`) | `NVIDIA_API_KEY` (NGC + NIM) | **Yes**, before `up` |
+| Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` (Hugging Face download speed / rate limits) | **No**. Do not use `NVIDIA_API_KEY`. |
+
+`HF_TOKEN` is not a substitute for `NVIDIA_API_KEY`. The reverse is also false. `TURN_USERNAME` and `TURN_PASSWORD` are required only with `--profile turn`.
+
+Server NGC login:
+
+```bash
+set -a; . ./.env; set +a
+printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+```
 
 ## Deploy
 
-1. Check hardware:
+### 1. Inspect Hardware
 
 ```bash
 cat /sys/class/dmi/id/product_name 2>/dev/null || true
@@ -32,91 +49,46 @@ nvidia-smi --query-gpu=index,name,memory.total,memory.free,compute_cap --format=
 free -h
 ```
 
-2. Identify the hardware target:
-- `jetson-thor`: `/proc/device-tree/model` identifies a Jetson platform, or the GPU name is `NVIDIA Thor`.
-- `dgx-spark`: `/sys/class/dmi/id/product_name` contains `DGX Spark` or `DGX_Spark` case-insensitively.
-- `workstation`: non-DGX Spark, non-Jetson host with enough GPU VRAM for the selected local NIM services. Single-GPU hosts are valid when capacity is sufficient.
-- _(omit hardware)_: local platform requirements are not met, or remote/NVCF services are preferred (cloud-only).
+### 2. Choose One Recipe
 
-3. Prepare `.env`:
+Choose **one** recipe from `references/recipes.md`. Hardware only tells you what *can* run:
 
-```bash
-test -f .env || cp .env.example .env
-```
+- Cloud: needs `NVIDIA_API_KEY`. It is the fallback when local VRAM is not enough.
+- `server`: workstation NIM only. **Not supported on DGX Spark or Jetson Thor.** If the hardware readout is Spark or Thor, do not open `references/server.md`. Use `single-gpu` or cloud. On a workstation: NGC login + `references/server.md`.
+- `single-gpu`: one GPU (workstation, DGX Spark, Jetson Thor). Needs `HF_TOKEN` + `references/single-gpu.md`. Exception: `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor**. Use cloud.
 
-Required keys: `NVIDIA_API_KEY` for all recipes. `HF_TOKEN` for any recipe that ends in `/dgx-spark` or `/jetson-thor`, plus `omni-assistant/workstation` and `omni-assistant-subagents/workstation`. `TURN_USERNAME` and `TURN_PASSWORD` are required when adding `--profile turn`.
+If more than one family is viable, present the options and let the user pick. Auto-select only when a single option is viable (for example no usable GPU → cloud).
 
-Compose recipe profiles set `PLATFORM` automatically for UI service filtering.
-For host-native `uv run` on-prem testing, set `PLATFORM` in `.env` manually.
+### 3. Run the Matching Preflight
 
-For on-prem (`workstation`) recipes, set GPU-aware overrides for the local LLM (`nvidia-llm`) in `.env` from the step 1 readout, and say what you changed and why. The defaults (`NIM_KVCACHE_PERCENT=0.6`, `NIM_TAGS_SELECTOR=precision=fp8,tp=1`) suit one ~80 GB Ada/Hopper GPU running ASR + TTS + LLM together.
+Apply **only** that family's preflight. Never run the other family's login or key checks.
 
-- `compute_cap` < 8.9 (e.g. A100/Ampere): FP8 is unsupported (`modelopt ... Minimum capability: 89`) — set `NIM_TAGS_SELECTOR=precision=bf16,tp=1`. BF16 weights are ~60 GB and need an 80 GB GPU dedicated to the LLM (move ASR/TTS to a second GPU) with `NIM_KVCACHE_PERCENT=0.9`. On GPUs too small for the BF16 weights, set `precision=bf16,tp=N` and give the LLM `N` GPUs (`device_ids: ['0','1']` for `tp=2`, ASR/TTS in the cloud), or use a cloud LLM.
-- LLM alone on a GPU below ~72 GB (ASR/TTS on a second GPU): raise `NIM_KVCACHE_PERCENT` so `value × VRAM` stays above ~40 GB (≈ `0.9` on a 48 GB L40), else it aborts with `No available memory for the cache blocks`.
-- A single GPU below ~72 GB cannot host all three models at once — split ASR/TTS onto a second GPU.
-- Startup fails CUDA-graph capture (not the memory error): the cache holds fewer Mamba blocks than sequences — lower `LLM_MAX_NUM_SEQS` (e.g. 64-128).
-- Omni Assistant (`nvidia-llm-vllm-omni`) and the DGX Spark / Jetson cascaded vLLM are NVFP4 and need a Blackwell GPU (DGX Spark, Jetson Thor, or a Blackwell workstation); on Ampere (A100) only the cascaded NIM (BF16) or a cloud LLM is viable.
-
-Device placement (which GPU each sidecar uses) is **not** an `.env` knob — `device_ids` are hardcoded to `['0']`. To move a service to GPU `N`, edit `device_ids: ['N']` under `deploy.resources.reservations.devices` in that service's compose file: `docker/docker-compose.nemotron-asr.yaml` (ASR), `docker/docker-compose.magpie-tts.yaml` (TTS), `docker/docker-compose.nemotron3-nano.yaml` (NIM LLM), `docker/docker-compose.nemotron3-omni.yaml` (Omni LLM). A tensor-parallel LLM (`tp=N`) needs `N` GPUs — list every index it uses (e.g. `device_ids: ['0','1']` for `tp=2`) and keep those GPUs free of ASR/TTS. Each target index must appear in the step 1 readout. With only one GPU you cannot split — keep everything on GPU 0, or run the cloud-only profile (no `/workstation`) so ASR/TTS/LLM use NVCF instead.
-
-Apply only what step 1 indicates; never silently change values. See `docs/how-to/configure-llm.md` (VRAM & hardware support) for the full reasoning.
-
-4. Pick the recipe profile:
-
-| Goal | Recipe profile |
-| --- | --- |
-| Cloud-only Generic Cascaded | `generic-assistant` |
-| Cloud-only Multilingual Cascaded | `multilingual-assistant` |
-| Cloud-only Omni Assistant | `omni-assistant` |
-| Cloud-only Omni Assistant Subagents | `omni-assistant-subagents` |
-| Cloud-only Frontend/Backend Agent Airline Assistant | `frontend-backend-agent` |
-| Generic Cascaded on a workstation | `generic-assistant/workstation` |
-| Generic Cascaded on DGX Spark | `generic-assistant/dgx-spark` |
-| Generic Cascaded on Jetson Thor | `generic-assistant/jetson-thor` |
-| Multilingual Cascaded on a workstation | `multilingual-assistant/workstation` |
-| Multilingual Cascaded on DGX Spark | `multilingual-assistant/dgx-spark` |
-| Omni Assistant on a workstation | `omni-assistant/workstation` |
-| Omni Assistant on DGX Spark | `omni-assistant/dgx-spark` |
-| Omni Assistant on Jetson Thor | `omni-assistant/jetson-thor` |
-| Omni Assistant Subagents on a workstation | `omni-assistant-subagents/workstation` |
-| Omni Assistant Subagents on DGX Spark | `omni-assistant-subagents/dgx-spark` |
-| Frontend/Backend Agent Airline Assistant on a workstation | `frontend-backend-agent/workstation` |
-
-
-For any on-prem recipe, log in to `nvcr.io` first.
-
-5. Start:
+### 4. Start the Recipe
 
 ```bash
 docker compose --profile <recipe> up -d
 ```
 
-Add observability profiles freely: `--profile tracing` (Phoenix), `--profile turn` (coturn). Before adding `--profile turn`, follow `references/platform-deployment.md#turn` to populate TURN credentials and any required `TURN_URL`. Use `--build` only after source or `Dockerfile` changes.
+Add `--profile tracing` (Phoenix) freely. Add `--profile turn` only after `references/turn.md`. Use `--build` only after source or `Dockerfile` changes.
 
-After containers are healthy, remind the user that on local recipes (`*/workstation`, `*/dgx-spark`, `*/jetson-thor`) the first voice turn may take longer than later turns while on GPU LLM sidecars finish loading or warm up. This is more common right after a fresh deploy. If later turns are fast, the deploy is fine.
+Local recipes: the first voice turn may be slow while GPU sidecars finish loading. If later turns are fast, the deploy is fine.
 
-6. Verify:
+### 5. Verify the Deployment
 
 ```bash
 docker compose ps
-docker compose logs --tail 200 <service-name>
+docker compose logs --tail 200 <app-or-sidecar>
 ```
 
-For TURN deployments, also verify `coturn` is running and the app publishes ICE config:
+UI is `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`.
 
-```bash
-docker compose ps coturn
-# HTTPS by default; if PIPELINE_TLS=false the HTTPS call fails and the HTTP one returns the config
-curl -k https://localhost:${PIPELINE_APP_PORT:-7860}/api/ice-servers \
-  || curl http://localhost:${PIPELINE_APP_PORT:-7860}/api/ice-servers
-```
-
-App service names follow the active example: `generic-assistant`, `multilingual-assistant`, `omni-assistant`, `omni-assistant-subagents`, or `frontend-backend-agent`. Sidecars keep their own names (`nvidia-llm`, `nvidia-llm-vllm`, `nvidia-llm-vllm-omni`, `nemotron-asr-streaming-english`, `nemotron-asr-streaming-multilingual`, `parakeet-ctc-asr`, `parakeet-rnnt-asr`, `tts-service`, `nemotron-speech`, `booking-server`).
+Tear down with the same recipe: `docker compose --profile <recipe> down`. After a service rename, add `--remove-orphans`.
 
 ## References
 
-- Hardware details and TURN: `references/platform-deployment.md`
-- Generic-only deploy: `references/generic-deploy.md`
-- Omni Assistant deploy: `references/omni-assistant-deploy.md`
-- Omni Assistant Subagents deploy: `references/omni-assistant-subagents-deploy.md`
-- Frontend/Backend Agent deploy: `references/frontend-backend-agent-deploy.md`
+Open only what the chosen family needs:
+
+- Recipe table and sidecar names: `references/recipes.md`
+- Server NIM profile selection: `references/server.md`
+- Single-GPU memory-fit: `references/single-gpu.md`
+- External clients: `references/turn.md`

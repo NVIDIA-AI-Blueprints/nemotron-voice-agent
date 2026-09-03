@@ -170,14 +170,14 @@ class PromptAndStreamingContractTests(unittest.TestCase):
         for action in ("respond", "think", "analyze_attachment", "capture_highres", "clarify"):
             self.assertIn(action, self.full)
             self.assertIn(action, lean)
-        system = _expand_fragments(self.catalog["generic_omni_assistant"]["content"], self.catalog)
+        system = _expand_fragments(self.catalog["omni_subagents_assistant"]["content"], self.catalog)
         self.assertIn("ten-sentence story", system)
         self.assertIn("one, two, three, four, five", system)
         self.assertIn("What would you like help with?", system)
         self.assertIn("the camera is ON", system)
 
     def test_catalog_prompts_have_no_unresolved_fragments(self) -> None:
-        contents = [self.catalog["generic_omni_assistant"]["content"]]
+        contents = [self.catalog["omni_subagents_assistant"]["content"]]
         for prompts in self.catalog["agent_prompts"].values():
             contents.extend(prompt["content"] for prompt in prompts.values())
         for content in contents:
@@ -221,7 +221,7 @@ class PromptFragmentTests(unittest.TestCase):
         self.assertIn("visual_sources", shared)
 
     def test_all_placeholders_resolve_with_no_leftovers(self) -> None:
-        generic = _expand_fragments(self.catalog["generic_omni_assistant"]["content"], self.catalog)
+        generic = _expand_fragments(self.catalog["omni_subagents_assistant"]["content"], self.catalog)
         thinker = _agent_prompt_content(self.catalog, "ThinkerAgent", "thinking_system_prompt")
         media = _agent_prompt_content(self.catalog, "MediaAnalyzerAgent", "analysis_system_prompt")
         for expanded in (generic, thinker, media):
