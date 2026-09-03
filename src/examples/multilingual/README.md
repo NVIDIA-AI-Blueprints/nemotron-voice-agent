@@ -6,6 +6,18 @@ The pattern uses dedicated ASR, LLM, and TTS services with a plain-text response
 
 ![Architecture Diagram](../../../docs/images/arch.png)
 
+## Default Models
+
+The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+
+| Profile | ASR | LLM | TTS |
+| --- | --- | --- | --- |
+| Cloud | Parakeet 1.1B RNNT Multilingual ASR | Nemotron 3.5 Lightning 30B A3B | Magpie TTS Multilingual |
+| Server | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
+| Single GPU | Nemotron 3.5 ASR Streaming Multilingual 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
+
+The registry declares `nemotron-asr-streaming-multilingual` as the ASR default. When that local service is unreachable, the resolver tries another reachable local ASR before falling back to the cloud catalog. The cloud catalog provides Parakeet 1.1B RNNT Multilingual ASR.
+
 ## Running the example
 
 This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. Refer to the [Jetson Thor guide](../../../docs/03-jetson-thor.md) when applicable. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
@@ -57,8 +69,6 @@ To run host-native without Docker, set `selection: multilingual-assistant` in [`
 After deploying, validate the session language with the steps in [Testing](#testing).
 
 ## Customization
-
-The server recipe defaults to **Nemotron ASR Streaming Multilingual** (`nemotron-asr-streaming-multilingual`) through `examples_registry.yaml` and `services.local.yaml`. The universal single-GPU recipe uses NeMo-Speech.cpp. There is no NVCF endpoint for Nemotron ASR Streaming Multilingual, so the cloud recipe falls back to **Parakeet 1.1B RNNT Multilingual** (`parakeet-rnnt`), the only multilingual ASR available on NVCF.
 
 TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service. The UI language selector contains only locales supported by the selected ASR, TTS, and built-in LLM. Changing the LLM refreshes that compatible set. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
 

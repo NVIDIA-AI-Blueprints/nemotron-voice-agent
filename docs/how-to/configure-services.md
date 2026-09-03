@@ -20,27 +20,11 @@ The Services tab lists all services exposed by the active catalog (cloud and rea
 
 Each example declares its default service per slot via `defaults` in `examples_registry.yaml`. The pipeline resolves that default at startup, and the UI uses it as the initial selection. Edit `defaults` (and optionally reorder entries in the `services.cloud.yaml` / `services.local.yaml` for visual ordering in the UI) to change defaults.
 
+Each [example README](../../README.md#examples) lists the models these keys select for Cloud, Server, and Single GPU profiles.
+
 When the same default key exists in both `services.cloud.yaml` and `services.local.yaml`, the resolver prefers the **self-hosted** variant so that deploying local NIM sidecars automatically promotes them to the active default. No UI click is needed. If the self-hosted endpoint is unreachable at session-start time, the runtime falls back to the cloud variant.
 
 > **On-prem note:** self-hosted promotion only applies when the `defaults` key also exists in `services.local.yaml`. A default whose key exists **only** in `services.cloud.yaml` resolves to the cloud model even on an on-prem recipe. Point `defaults` at a local key or pick the model from the Services tab.
-
-### Default Models by Example and Platform
-
-The following models resolve from each example's `defaults` entries in [`examples_registry.yaml`](../../examples_registry.yaml). The profile determines which service catalog implementation supplies the model.
-
-| Example | Cloud | Server | Single GPU |
-| --- | --- | --- | --- |
-| Generic Assistant | Nemotron ASR Streaming English; Nemotron 3.5 Lightning 30B A3B; Magpie TTS Multilingual | Nemotron ASR Streaming English NIM; Nemotron 3.5 Lightning 30B A3B NIM; Magpie TTS Multilingual NIM | Nemotron Speech Streaming English 0.6B; Nemotron 3.5 Lightning 30B A3B through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
-| Multilingual Assistant | Parakeet 1.1B RNNT Multilingual ASR; Nemotron 3.5 Lightning 30B A3B; Magpie TTS Multilingual | Nemotron ASR Streaming Multilingual NIM; Nemotron 3.5 Lightning 30B A3B NIM; Magpie TTS Multilingual NIM | Nemotron 3.5 ASR Streaming Multilingual 0.6B; Nemotron 3.5 Lightning 30B A3B through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
-| Nemotron Omni Assistant | Nemotron 3 Nano Omni 30B A3B Reasoning; Magpie TTS Multilingual | Nemotron 3 Nano Omni 30B A3B Reasoning NIM; Magpie TTS Multilingual NIM | Nemotron 3 Nano Omni 30B A3B Reasoning through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
-| Nemotron Omni Assistant Subagents | Nemotron 3 Nano Omni 30B A3B Reasoning; Magpie TTS Multilingual | Nemotron 3 Nano Omni 30B A3B Reasoning NIM; Magpie TTS Multilingual NIM | Nemotron 3 Nano Omni 30B A3B Reasoning through vLLM; Magpie TTS Multilingual through NeMo-Speech.cpp |
-| Frontend/Backend Agent | Nemotron ASR Streaming English; Nemotron 3.5 Lightning 30B A3B for the Talker and Thinker; Magpie TTS Multilingual | Nemotron ASR Streaming English NIM; Nemotron 3.5 Lightning 30B A3B NIM for the Talker and Thinker; Magpie TTS Multilingual NIM | Nemotron Speech Streaming English 0.6B; Nemotron 3.5 Lightning 30B A3B through vLLM for the Talker and Thinker; Magpie TTS Multilingual through NeMo-Speech.cpp |
-
-The Generic Assistant's `server-perf` profile uses the same default model set as Server. It changes the GPU layout, LLM NIM profile, and Magpie batch size for benchmarking.
-
-The Multilingual Assistant declares `nemotron-asr-streaming-multilingual` as its ASR default. When the local default is reachable, this key resolves to Nemotron ASR for Server and Single GPU. If it is unreachable, the resolver first selects another reachable local ASR entry. Only when no local ASR is reachable does it select the first cloud ASR entry, Parakeet 1.1B RNNT Multilingual.
-
-The Omni model handles both speech recognition and response generation, so the Omni examples do not have a separate ASR default. The Frontend/Backend Thinker enables reasoning on the same Nemotron 3.5 Lightning model used by the Talker.
 
 ## On-prem catalog
 
