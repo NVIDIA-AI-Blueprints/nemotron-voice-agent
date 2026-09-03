@@ -20,7 +20,7 @@ The Services tab lists all services exposed by the active catalog (cloud and rea
 
 Each example declares its default service per slot via `defaults` in `examples_registry.yaml`. The pipeline resolves that default at startup, and the UI uses it as the initial selection. Edit `defaults` (and optionally reorder entries in the `services.cloud.yaml` / `services.local.yaml` for visual ordering in the UI) to change defaults.
 
-Each [example README](../../README.md#examples) lists the models these keys select for Cloud, Server, and Single GPU profiles.
+Each [example README](../../README.md#examples) lists the models these keys select for Cloud, Server, Server Performance where applicable, and Single GPU profiles.
 
 When the same default key exists in both `services.cloud.yaml` and `services.local.yaml`, the resolver prefers the **self-hosted** variant so that deploying local NIM sidecars automatically promotes them to the active default. No UI click is needed. If the self-hosted endpoint is unreachable at session-start time, the runtime falls back to the cloud variant.
 

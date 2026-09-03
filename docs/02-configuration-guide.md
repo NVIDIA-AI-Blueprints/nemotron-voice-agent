@@ -16,7 +16,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 
 | Guide | Description |
 |-------|-------------|
-| [Configure Services](how-to/configure-services.md) | How to switch, add, and override services via the UI or YAML |
+| [Configure Services](how-to/configure-services.md) | How the catalog works: switch, add, and override LLM/ASR/TTS services via the UI or YAML |
 | [Configure Prompts](how-to/configure-prompts.md) | Switch and add prompt presets via the UI or example-local prompt catalogs |
 | [Multilingual Voice Agent](../src/examples/multilingual/README.md) | Prompt-driven multilingual replies with a fixed language and TTS voice per session |
 | [Enable OpenTelemetry Tracing](how-to/enable-opentelemetry-tracing.md) | Monitor latency and conversation flows with Phoenix or any OTLP backend |
