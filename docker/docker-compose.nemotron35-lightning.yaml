@@ -102,13 +102,23 @@ services:
           )
         elif [[ "$${compute_major}" == "9" ]] ||
              [[ "$${compute_major}" == "8" && "$${compute_minor}" =~ ^[0-9]+$ && "$${compute_minor}" -ge 9 ]]; then
-          echo "LLM recipe: Hopper/Ada workstation / online FP8"
-          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
-          args+=(--quantization fp8 --kv-cache-dtype fp8 --async-scheduling)
+          echo "LLM recipe: Hopper/Ada workstation / NVFP4 W4A16 via Marlin"
+          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+          args+=(
+            --quantization modelopt_fp4
+            --moe-backend marlin
+            --kv-cache-dtype fp8
+            --async-scheduling
+          )
         elif [[ "$${compute_major}" == "8" ]]; then
-          echo "LLM recipe: Ampere workstation / BF16"
-          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
-          args+=(--async-scheduling)
+          echo "LLM recipe: Ampere workstation / NVFP4 W4A16 via Marlin"
+          model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+          args+=(
+            --quantization modelopt_fp4
+            --linear-backend marlin
+            --moe-backend marlin
+            --async-scheduling
+          )
         else
           echo "Unsupported GPU compute capability: $${compute_cap:-unknown}" >&2
           exit 1
