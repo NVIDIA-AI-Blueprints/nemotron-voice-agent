@@ -4,8 +4,13 @@ Nemotron ASR, Parakeet CTC / RNNT / TDT, and other models on the live Speech mat
 Docs first. Never invent the roster from memory.
 
 Do not use the LLM support matrix, `list-model-profiles`, or `NIM_MODEL_PROFILE` here.
-Jetson Thor uses Riva L4T models selected from its ARM64 quickstart, not Speech NIM
-deployment. See `platforms/jetson-thor.md`.
+
+This file covers cloud ASR and Speech NIM ASR. The single-GPU stack does not run Speech
+NIM, so when `preflight.md` §4 routes there, select the ASR model from
+`platforms/single-gpu.md` §One-time speech model setup instead. That path serves a GGUF
+build of a streaming Nemotron ASR model from local files, so there is no `CONTAINER_ID`,
+no `NIM_TAGS_SELECTOR`, and no batch-size tag to choose. §Streaming first and the language
+rules below still apply.
 
 ## Streaming First
 
@@ -86,6 +91,10 @@ Planning estimates only. Authoritative GPU memory is the chosen row on the
 | Nemotron ASR Streaming, `batch_size=64` | about 15 GB |
 | Self-hosted floor | compute capability 8.0+, ≥16 GB VRAM for the speech NIM |
 | Selection | `NIM_TAGS_SELECTOR` (not `NIM_MODEL_PROFILE`) |
+
+A quantized GGUF model on the single-GPU stack is far smaller than these figures, and it
+shares one service with TTS. Do not plan that stack from this table. Measure the combined
+speech reserve through `platforms/single-gpu.md` §Memory.
 
 Batch size moves ASR memory by more than a factor of two, so on a shared GPU take the
 smallest documented streaming batch that satisfies the use case and write that tag

@@ -16,10 +16,10 @@ Record:
 
 Resolve locale codes from the selected platform's current source:
 
-| Platform | Language source |
+| Routed stack | Language source |
 | --- | --- |
-| Cloud / workstation / DGX Spark | Speech NIM ASR and TTS matrices + model pages |
-| Jetson Thor | current Riva ARM64 Quick Start `config.sh` and model documentation |
+| Cloud, or NIM on a workstation | Speech NIM ASR and TTS matrices plus the model pages |
+| vLLM plus NeMo-Speech.cpp | each speech model's Hugging Face page for coverage, then `GetRivaSynthesisConfig` on the running service for what the container actually serves |
 
 For Omni input, use the locked Omni model card and service documentation instead of the
 ASR matrix.
@@ -53,7 +53,11 @@ separately and reflect the response language in `domain/agent-behavior.md`.
 
 Follow `models/asr.md` and require a streaming row that supports the locked locale or
 language set. The model card, matrix language table, and profile tags must agree.
-Jetson Thor instead uses the streaming Riva model enabled by `platforms/jetson-thor.md`.
+
+On the single-GPU stack, the choice is between the English streaming model and the
+multilingual streaming model in `platforms/single-gpu.md` §One-time speech model setup.
+Take coverage from the selected model's Hugging Face page, and treat a multilingual model
+as auto-detecting unless its page says otherwise.
 
 Omni bypasses ASR. Verify its supported audio languages and detection behavior from the
 locked Omni source. Do not apply an ASR locale or assume multilingual detection.
@@ -83,7 +87,12 @@ Follow `models/tts.md` and require a TTS model that supports the response locale
 the service starts, query its documented voice-discovery API and choose only a returned
 voice compatible with that locale.
 
-On Jetson Thor, use only voices exposed by the selected Riva L4T service.
+On the single-GPU stack, the model's language list is an upper bound rather than the served
+set. Some languages are build-time options on that container and are off by default, so a
+locale the model supports can still be unavailable in the image being run. Take the served
+languages and the acceptable voice names from `GetRivaSynthesisConfig` on the running
+service, and say so in the proposal when the requested locale is one of the optional ones.
+See `platforms/single-gpu.md` §Languages and voices.
 
 If no returned voice matches, reopen the TTS row and ask for approval before changing the
 model, locale, or response language.

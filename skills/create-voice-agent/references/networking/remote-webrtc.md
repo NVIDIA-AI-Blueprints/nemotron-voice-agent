@@ -75,6 +75,11 @@ Generate a coturn Compose service only when this project owns the TURN deploymen
 derive it from current coturn deployment documentation. Otherwise document the external
 TURN endpoint. Do not duplicate infrastructure the user already has.
 
+DGX Spark and Jetson Thor are aarch64, and common coturn images publish `amd64` only.
+Confirm an `arm64` image exists before generating that service on either platform. When
+none does, use an external TURN endpoint and say why, rather than generating a service that
+cannot start.
+
 ## Browser Security
 
 Remote microphone access requires a secure browser context. Serve the client and signaling

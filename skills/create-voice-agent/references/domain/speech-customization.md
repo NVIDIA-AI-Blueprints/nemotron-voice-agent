@@ -42,28 +42,41 @@ supported streaming alternative. Never swap models silently.
 
 ### Platform Source
 
-| Platform | Customization source |
+| Routed stack | Customization source |
 | --- | --- |
-| Cloud / workstation / DGX Spark | Speech NIM docs and matrices above |
-| Jetson Thor | current Riva Quick Start plus the Riva ASR / TTS docs below |
+| Cloud, or NIM on a workstation | Speech NIM docs and matrices above |
+| vLLM plus NeMo-Speech.cpp | [NeMo-Speech.cpp ASR configuration](https://github.com/NVIDIA/NeMo-Speech.cpp/blob/main/docs/asr/configuration.md) and [TTS configuration](https://github.com/NVIDIA/NeMo-Speech.cpp/blob/main/docs/tts/configuration.md) |
 
-Jetson Thor runs Riva L4T, not Speech NIM. For the Riva model selected in
-`platforms/jetson-thor.md`, verify against:
+The single-GPU stack does not run Speech NIM, so Speech NIM tags and customization
+procedures do not apply to it. Read the two configuration documents above before drafting
+a glossary for DGX Spark, Jetson Thor, or a low-concurrency workstation.
 
-- [Riva ASR customization and word boosting](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-customizing.html#word-boosting)
-- [Riva TTS custom models and pronunciations](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/public/tts/tts-custom.html)
+Its two speech directions are not symmetric, and that asymmetry has to reach the user
+before a glossary is approved.
 
-Prefer request-time Riva customization:
+**ASR boosting is supported and depends on the decoder.** Approved phrases and a score
+travel per request in the recognition configuration's speech contexts. The cache-aware
+streaming Nemotron models this stack uses accept boosting with no extra artifacts.
+Flashlight beam decoding on a CTC model needs a language model and a lexicon first, and a
+greedy CTC model with no language model ignores boosting entirely, as does an offline-only
+model. Score ranges are not comparable across decoders, so read the range for the decoder
+actually loaded and never carry a score over from a NIM deployment. Boosting also depends
+on the tokenizer embedded in the model file, so an older GGUF may need reconversion before
+it takes effect.
 
-- ASR: add the approved phrases and score to the streaming recognition request through
-  `SpeechContext` or the current Riva client helper.
-- TTS: send approved custom pronunciations or SSML through the synthesis request when the
-  selected Riva model supports them.
+**TTS pronunciation customization is not available on this stack.** The synthesis service
+takes plain text and exposes no request-time phoneme, IPA, or pronunciation-dictionary
+path. Say that plainly rather than drafting IPA that cannot be wired. Two supported
+options remain, and both belong in the proposal instead:
 
-Do not apply Speech NIM tags or assume every ARM64 Quick Start model supports the same
-decoder or phoneme set. Global ASR lexicon changes and server-side TTS dictionaries require
-the current Riva model-build flow and may regenerate the model repository. Treat that as a
-deployment change, preserve the current repository, and get approval before rebuilding.
+- text-normalization grammars, which decide how written numbers, dates, and currency are
+  spoken (`platforms/single-gpu.md` §One-time speech model setup)
+- the spelling of the term in the LLM instruction, so the model emits a form the voice
+  already pronounces correctly (`domain/agent-behavior.md`)
+
+If correct pronunciation of a specific term is a hard requirement, say that the NIM path
+or cloud is where that control exists, and let the user decide before build rather than
+discovering it at verification.
 
 ## Glossary Approval
 
@@ -75,6 +88,10 @@ Draft one table and show every term before writing files:
 
 Use the current docs for score ranges and IPA support. Start with the lowest recommended
 boost that solves the ambiguity. Higher scores increase false positives.
+
+On the single-GPU stack the TTS column stays empty, because that path has no pronunciation
+control. Show the table with that column marked unsupported rather than filling it, and
+name the alternative you are proposing for each affected term.
 
 Wait for explicit approval of the displayed terms, scores, and pronunciations. “Use your
 suggestions” counts only after the complete table has been shown. Do not create a glossary
@@ -94,16 +111,22 @@ RNNT, TDT, or Nemotron ASR without checking the current docs.
 
 ## TTS
 
-Use the current TTS docs to choose request-time SSML phonemes or a custom pronunciation
-dictionary. Use only phonemes supported by the locked model and language.
+On cloud and the NIM path, use the current TTS docs to choose request-time SSML phonemes
+or a custom pronunciation dictionary. Use only phonemes supported by the locked model and
+language.
 
 Wire the approved dictionary through the selected framework's current NVIDIA TTS API.
 After startup, synthesize every customized term and let the user confirm pronunciation.
 
+The single-GPU stack has no pronunciation control, so there is nothing to wire there. Use
+the alternatives in §Platform source and still synthesize every term at verification, so
+the user hears what the agent will actually say.
+
 ## Omni
 
 Omni has no ASR slot, so ASR word boosting does not apply. Do not add ASR just for domain
-terms. TTS pronunciation customization still applies.
+terms. TTS pronunciation customization still applies wherever the routed stack supports
+it.
 
 Domain terms may also be added to the Omni system instruction for response consistency,
 but that is not ASR boosting.
@@ -136,7 +159,8 @@ When customization is approved:
 ```
 
 - Omit `asr` for Omni or when boosting is not approved. Omit `tts` when pronunciation
-  customization is not approved. Do not write placeholder or `null` entries.
+  customization is not approved or the routed stack does not support it. Do not write
+  placeholder or `null` entries.
 - Keep model ids, scores, and pronunciation data out of `.env`.
 - Load the glossary from agent code and map it to the framework APIs documented today.
 - Include a short README note explaining how to edit and revalidate the glossary.
@@ -146,7 +170,8 @@ When customization is approved:
 Test each term in a natural sentence:
 
 1. ASR returns the intended spelling without causing nearby false positives.
-2. TTS pronounces the term correctly.
+2. TTS pronounces the term acceptably, and where pronunciation is not controllable, the
+   user hears it and accepts the result.
 3. A normal sentence without glossary terms still works.
 4. The full spoken exchange in `operations/run.md` still passes.
 
@@ -155,7 +180,10 @@ Tune one term or score at a time. Use `operations/iterate.md` for later glossary
 ## Anti-Patterns
 
 - Writing or wiring a glossary before showing it and receiving approval.
-- Assuming every ASR model supports word boosting.
+- Assuming every ASR model supports word boosting, or that the loaded decoder does.
+- Carrying a boost score across decoders or across deployment stacks.
 - Applying ASR boosting to Omni.
 - Inventing IPA unsupported by the selected TTS model or language.
+- Drafting pronunciation rules for a stack that has no pronunciation control, instead of
+  saying so before approval.
 - Raising boost scores without checking false positives.

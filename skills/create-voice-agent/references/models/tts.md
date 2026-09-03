@@ -4,8 +4,14 @@ Magpie and other TTS models on the live Speech matrix. Docs first. Never invent 
 roster from memory.
 
 Do not use the LLM support matrix, `list-model-profiles`, or `NIM_MODEL_PROFILE` here.
-Jetson Thor uses Riva L4T TTS selected from its ARM64 quickstart, not Magpie Speech NIM.
-See `platforms/jetson-thor.md`.
+
+This file covers cloud TTS and Speech NIM TTS. The single-GPU stack does not run Speech
+NIM, so when `preflight.md` §4 routes there, select TTS from
+`platforms/single-gpu.md` §One-time speech model setup instead. That path serves a GGUF
+Magpie token generator plus a NanoCodec decoder from local files, so there is no
+`CONTAINER_ID`, no `NIM_TAGS_SELECTOR`, and no batch-size tag to choose. The voice-locking
+rule below still applies, and §Languages and voices in that file owns which languages the
+container actually serves.
 
 ## Discover
 
@@ -48,6 +54,11 @@ Planning estimates only. Authoritative GPU memory is the chosen row on the
 Self-hosted floor: compute capability 8.0+, ≥16 GB VRAM for the speech NIM. Selection is
 `NIM_TAGS_SELECTOR` (not `NIM_MODEL_PROFILE`).
 
+A quantized GGUF Magpie build on the single-GPU stack is far smaller than these figures,
+has no batch profile, and shares one service with ASR. Do not plan that stack from this
+table. Measure the combined speech reserve through
+`platforms/single-gpu.md` §Memory.
+
 Batch size is the TTS memory profile, not only a throughput knob. On a shared single-GPU
 layout, select the smallest documented batch profile that satisfies the use case and
 write it explicitly into `NIM_TAGS_SELECTOR`. For Magpie TTS Multilingual that is
@@ -72,12 +83,16 @@ free VRAM through `platforms/deployment.md` §Shared-GPU memory gate.
    look up a speech function id in `/v1/models`.
 6. Voice id: after the TTS service is up, query its voice list and lock a voice from that
    response before handover. Speech NIM currently serves `GET /v1/audio/list_voices`, while
-   raw Riva exposes
+   a gRPC service exposes
    [`GetRivaSynthesisConfig`](https://docs.nvidia.com/nim/speech/latest/reference/api-references/tts/protos.html)
    through its client instead. Confirm the path on the API reference above before calling
    it, because a near miss such as `/v1/audio/voices` returns 404 and reads like a mute
    service. Record the path in the README and smoke script, and never hardcode a voice the
    service did not return.
+
+The single-GPU stack is gRPC only, so it has no voice-list URL. It answers
+`GetRivaSynthesisConfig`, and that response is also the authority for which languages the
+container was built with. See `platforms/single-gpu.md` §Languages and voices.
 
 ## Anti-Patterns
 
