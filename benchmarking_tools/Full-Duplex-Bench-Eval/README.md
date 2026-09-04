@@ -22,22 +22,34 @@ PIPELINE_TLS=false uv run python src/server.py
 
 Defaults to `http://localhost:7860`. Set `PIPELINE_TLS=true` or unset it to use HTTPS on the same port.
 
-## Client
+## RTVI client
 
 `--server-url` uses `http://` or `https://` (not `ws://`). Omit the port to use `7860`.
 
 ```bash
 cd benchmarking_tools/Full-Duplex-Bench-Eval
-uv run python inference.py --input_dir /path/to/samples --server-url http://127.0.0.1:7860
+uv run python inference_rtvi.py --input-dir /path/to/samples --server-url http://127.0.0.1:7860
 ```
 
 HTTPS uses normal certificate verification by default. For local self-signed certs, add `--insecure-skip-verify`, for example:
 
 ```bash
-uv run python inference.py --input_dir /path/to/samples --server-url https://127.0.0.1:7860 --insecure-skip-verify
+uv run python inference_rtvi.py --input-dir /path/to/samples --server-url https://127.0.0.1:7860 --insecure-skip-verify
 ```
 
-Optional: `--retry_samples 1 5 10`.
+## OpenAI Realtime client
+
+Set the API key and pass the provider's WebSocket endpoint:
+
+```bash
+export REALTIME_API_KEY=...
+uv run python inference_realtime.py \
+  --input-dir /path/to/samples \
+  --realtime-ws-url wss://example.com/realtime
+```
+
+Use `--api-key-env` or `--auth-scheme` when the provider expects different authentication.
+Both clients support `--retry-samples 1 5 10`.
 
 ## Dataset
 
