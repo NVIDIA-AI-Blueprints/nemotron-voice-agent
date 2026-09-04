@@ -28,15 +28,23 @@ import resampy
 import soundfile as sf
 import websockets
 from pipecat.frames.protobufs import frames_pb2
+from pipecat.processors.frameworks.rtvi import models as RTVI
 
 # Audio processing constants
 SAMPLE_RATE = 16000  # Target sample rate in Hz
 CHUNK_MS = 32  # Chunk duration in milliseconds
 SILENCE_DUR = 2.0  # Silence duration after input audio (seconds) for end-of-utterance detection
-RECV_TIMEOUT = 5.0  # Timeout for receiving responses after input ends (seconds)
+RECV_POLL_TIMEOUT = 1.0
+POST_INPUT_RESPONSE_TIMEOUT = 30.0
+POST_AUDIO_IDLE_TIMEOUT = 3.0
+MAX_POST_SEND_DURATION = 120.0
+SEND_TIMEOUT = 30.0
+BOT_INTRO_FIRST_FRAME_TIMEOUT = 30.0
+BOT_INTRO_IDLE_TIMEOUT = 1.5
+BOT_INTRO_MAX_DURATION = 120.0
 
-# Minimal body so the server selects cascaded mode; ASR/LLM/TTS come from server config.
-MINIMAL_SESSION_BODY: dict[str, str] = {"pipeline_mode": "cascaded"}
+# Example selection and ASR/LLM/TTS come from server configuration.
+MINIMAL_SESSION_BODY: dict[str, str] = {}
 
 DEFAULT_HTTP_PORT = 7860
 
@@ -109,11 +117,82 @@ def request_session_id(
 class InferenceClient:
     """Client for the Nemotron Voice Agent WebSocket server."""
 
-    def __init__(self, http_base: str, ws_origin: str, ssl_context: ssl.SSLContext | None):
+    def __init__(
+        self,
+        http_base: str,
+        ws_origin: str,
+        ssl_context: ssl.SSLContext | None,
+        *,
+        input_tail_silence: float = SILENCE_DUR,
+        post_input_response_timeout: float = POST_INPUT_RESPONSE_TIMEOUT,
+        post_audio_idle_timeout: float = POST_AUDIO_IDLE_TIMEOUT,
+        preserve_late_output: bool = False,
+        send_client_ready: bool = True,
+        drain_bot_intro: bool = False,
+        bot_intro_first_frame_timeout: float = BOT_INTRO_FIRST_FRAME_TIMEOUT,
+        bot_intro_idle_timeout: float = BOT_INTRO_IDLE_TIMEOUT,
+        bot_intro_max_duration: float = BOT_INTRO_MAX_DURATION,
+        max_post_send_duration: float = MAX_POST_SEND_DURATION,
+    ):
         """Initialize with parsed ``--server-url`` components."""
         self.http_base = http_base.rstrip("/")
         self.ws_origin = ws_origin.rstrip("/")
         self._ssl_context = ssl_context
+        self._input_tail_silence = max(0.0, input_tail_silence)
+        self._post_input_response_timeout = max(0.0, post_input_response_timeout)
+        self._post_audio_idle_timeout = max(0.0, post_audio_idle_timeout)
+        self._preserve_late_output = preserve_late_output
+        self._send_client_ready = send_client_ready
+        self._drain_bot_intro = drain_bot_intro
+        self._bot_intro_first_frame_timeout = max(0.0, bot_intro_first_frame_timeout)
+        self._bot_intro_idle_timeout = max(0.0, bot_intro_idle_timeout)
+        self._bot_intro_max_duration = max(0.0, bot_intro_max_duration)
+        self._max_post_send_duration = max(0.0, max_post_send_duration)
+
+    @staticmethod
+    def _parse_frame(response: Any) -> frames_pb2.Frame | None:
+        """Parse a binary protobuf frame, ignoring unrelated messages."""
+        if not isinstance(response, bytes | bytearray):
+            return None
+        try:
+            return frames_pb2.Frame.FromString(response)
+        except Exception:
+            return None
+
+    async def _send_client_ready_frame(self, websocket: Any) -> None:
+        """Send the RTVI ready signal required to start the pipeline."""
+        payload = {
+            "label": "rtvi-ai",
+            "type": "client-ready",
+            "id": "full-duplex-bench-client-ready",
+            "data": {"version": RTVI.PROTOCOL_VERSION, "about": {"name": "full-duplex-bench"}},
+        }
+        frame = frames_pb2.Frame(message=frames_pb2.MessageFrame(data=json.dumps(payload)))
+        await asyncio.wait_for(websocket.send(frame.SerializeToString()), timeout=SEND_TIMEOUT)
+
+    async def _drain_bot_intro_audio(self, websocket: Any) -> tuple[int, float]:
+        """Discard an optional welcome turn before benchmark input starts."""
+        received_audio = False
+        chunk_count = 0
+        duration = 0.0
+        deadline = time.monotonic() + self._bot_intro_max_duration
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return chunk_count, duration
+            idle_timeout = self._bot_intro_idle_timeout if received_audio else self._bot_intro_first_frame_timeout
+            timeout = min(idle_timeout, remaining)
+            try:
+                response = await asyncio.wait_for(websocket.recv(), timeout=timeout)
+            except (TimeoutError, websockets.exceptions.ConnectionClosed):
+                return chunk_count, duration
+            frame = self._parse_frame(response)
+            if frame is None or frame.WhichOneof("frame") != "audio" or not frame.audio.audio:
+                continue
+            received_audio = True
+            chunk_count += 1
+            bytes_per_sample = 2 * max(1, frame.audio.num_channels)
+            duration += len(frame.audio.audio) / bytes_per_sample / max(1, frame.audio.sample_rate)
 
     def _websocket_url(self, session_id: str) -> str:
         q = urllib.parse.urlencode({"session_id": session_id})
@@ -166,19 +245,19 @@ class InferenceClient:
                 frame = frames_pb2.Frame(
                     audio=frames_pb2.AudioRawFrame(audio=chunk.tobytes(), sample_rate=SAMPLE_RATE, num_channels=1)
                 )
-                await websocket.send(frame.SerializeToString())
+                await asyncio.wait_for(websocket.send(frame.SerializeToString()), timeout=SEND_TIMEOUT)
 
                 current_idx = end_idx
             else:
                 if silence_start is None:
                     silence_start = time.time()
-                elif time.time() - silence_start > SILENCE_DUR:
+                elif time.time() - silence_start > self._input_tail_silence:
                     break
 
                 frame = frames_pb2.Frame(
                     audio=frames_pb2.AudioRawFrame(audio=silence, sample_rate=SAMPLE_RATE, num_channels=1)
                 )
-                await websocket.send(frame.SerializeToString())
+                await asyncio.wait_for(websocket.send(frame.SerializeToString()), timeout=SEND_TIMEOUT)
 
             next_send_time += chunk_duration
 
@@ -188,48 +267,92 @@ class InferenceClient:
         """Receive output audio until idle timeout after send completes."""
         output_chunks: list[np.ndarray] = []
         chunk_times: list[float] = []
+        send_done_at: float | None = None
+        last_post_send_audio_at: float | None = None
+        post_send_deadline: float | None = None
+        last_arrival: float | None = None
 
         while True:
             try:
-                response = await asyncio.wait_for(websocket.recv(), timeout=RECV_TIMEOUT)
+                response = await asyncio.wait_for(websocket.recv(), timeout=RECV_POLL_TIMEOUT)
 
-                frame = frames_pb2.Frame.FromString(response)
-                if frame.WhichOneof("frame") == "audio":
+                frame = self._parse_frame(response)
+                if frame is not None and frame.WhichOneof("frame") == "audio":
                     audio_data = frame.audio.audio
-                    if not audio_data:
-                        continue
+                    if audio_data and len(audio_data) % np.dtype(np.int16).itemsize == 0:
+                        chunk = np.frombuffer(audio_data, dtype=np.int16)
+                        previous_chunk = output_chunks[-1] if output_chunks else None
+                        now = time.monotonic()
+                        current_time = now - start_time
+                        output_chunks.append(chunk)
+                        if send_task.done():
+                            send_task.result()
+                            send_done_at = send_done_at or now
+                            post_send_deadline = post_send_deadline or now + self._max_post_send_duration
+                            last_post_send_audio_at = now
 
-                    chunk = np.frombuffer(audio_data, dtype=np.int16)
-
-                    current_time = time.time() - start_time
-                    output_chunks.append(chunk)
-
-                    if not chunk_times:
-                        chunk_times.append(current_time)
-                    else:
-                        expected_time = chunk_times[-1] + len(output_chunks[-1]) / SAMPLE_RATE
-                        if abs(current_time - chunk_times[-1]) < 0.05:
-                            chunk_times.append(expected_time)
-                        else:
+                        if not chunk_times:
                             chunk_times.append(current_time)
+                        else:
+                            assert previous_chunk is not None
+                            expected_time = chunk_times[-1] + len(previous_chunk) / SAMPLE_RATE
+                            assert last_arrival is not None
+                            if now - last_arrival < 0.05:
+                                chunk_times.append(expected_time)
+                            else:
+                                chunk_times.append(current_time)
+                        last_arrival = now
 
             except TimeoutError:
-                if send_task.done():
-                    break
-                continue
+                pass
             except websockets.exceptions.ConnectionClosed:
                 break
 
+            if not send_task.done():
+                continue
+            send_task.result()
+            now = time.monotonic()
+            send_done_at = send_done_at or now
+            post_send_deadline = post_send_deadline or send_done_at + self._max_post_send_duration
+            if now >= post_send_deadline:
+                break
+            if last_post_send_audio_at is None:
+                if now - send_done_at >= self._post_input_response_timeout:
+                    break
+            elif now - last_post_send_audio_at >= self._post_audio_idle_timeout:
+                break
+
         return output_chunks, chunk_times
+
+    @staticmethod
+    async def _settle_send_task(send_task: asyncio.Task) -> None:
+        """Cancel and consume a sender task during connection cleanup."""
+        if not send_task.done():
+            send_task.cancel()
+        try:
+            await send_task
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling() > 0:
+                raise
+        except Exception:
+            pass
 
     def assemble_and_trim_output(
         self, output_chunks: list[np.ndarray], chunk_times: list[float], target_duration: float
     ) -> np.ndarray:
         """Assemble chunks on a time axis and trim to input duration."""
+        target_samples = int(round(target_duration * SAMPLE_RATE))
         if not output_chunks:
-            return np.array([], dtype=np.int16)
-
-        target_samples = int(target_duration * SAMPLE_RATE)
+            return np.zeros(target_samples, dtype=np.int16)
+        if self._preserve_late_output:
+            target_samples = max(
+                target_samples,
+                max(
+                    int(timestamp * SAMPLE_RATE) + len(chunk)
+                    for chunk, timestamp in zip(output_chunks, chunk_times, strict=True)
+                ),
+            )
         output = np.zeros(target_samples, dtype=np.int16)
 
         next_expected_time: float | None = None
@@ -269,15 +392,23 @@ class InferenceClient:
 
         ssl_kw = {"ssl": self._ssl_context} if self._ssl_context else {}
         async with websockets.connect(ws_url, **ssl_kw) as websocket:
+            if self._send_client_ready:
+                await self._send_client_ready_frame(websocket)
+            if self._drain_bot_intro:
+                intro_chunks, intro_duration = await self._drain_bot_intro_audio(websocket)
+                print(f"Drained bot intro: chunks={intro_chunks} duration={intro_duration:.2f}s")
             send_task = asyncio.create_task(self.send_audio_stream(websocket, input_audio))
-            start_time = time.time()
-            output_chunks, chunk_times = await self.receive_audio_stream(websocket, start_time, send_task)
-            await send_task
+            try:
+                start_time = time.monotonic()
+                output_chunks, chunk_times = await self.receive_audio_stream(websocket, start_time, send_task)
+                await send_task
+            finally:
+                await self._settle_send_task(send_task)
 
         output_audio = self.assemble_and_trim_output(output_chunks, chunk_times, input_duration)
         sf.write(output_path, output_audio, SAMPLE_RATE)
 
-    async def process_directory(self, input_dir: str, retry_samples: list[int] | None = None) -> None:
+    async def process_directory(self, input_dir: str, retry_samples: list[int] | None = None) -> int:
         """Process numeric sample subdirectories (input.wav / clean_input.wav)."""
         if retry_samples:
             sample_ids = retry_samples
@@ -288,6 +419,7 @@ class InferenceClient:
                 if os.path.isdir(os.path.join(input_dir, name)) and name.isdigit()
             )
 
+        failed_count = 0
         for sample_id in sample_ids:
             sample_dir = os.path.join(input_dir, str(sample_id))
             file_pairs = [("input.wav", "output.wav"), ("clean_input.wav", "clean_output.wav")]
@@ -307,11 +439,12 @@ class InferenceClient:
                     processed_count += 1
                 except Exception as e:
                     print(f"Error processing sample {sample_id}/{input_filename}: {e}")
-
-                await asyncio.sleep(1)
+                    failed_count += 1
 
             if processed_count == 0:
                 print(f"Warning: Skipped sample {sample_id}")
+                failed_count += 1
+        return failed_count
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -319,11 +452,13 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Full-Duplex-Bench inference client for Nemotron Voice Agent (WebSocket mode).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Example: python inference.py --input_dir /path/to/samples --server-url http://127.0.0.1:7860",
+        epilog=("Example: python inference_rtvi.py --input-dir /path/to/samples --server-url http://127.0.0.1:7860"),
     )
 
     parser.add_argument(
+        "--input-dir",
         "--input_dir",
+        dest="input_dir",
         type=str,
         required=True,
         help="Directory containing numeric sample subfolders with audio files",
@@ -342,7 +477,71 @@ def parse_arguments() -> argparse.Namespace:
         help="Disable TLS certificate verification for https:// server URLs. Use only for local self-signed certs.",
     )
 
-    parser.add_argument("--retry_samples", nargs="+", type=int, help="Only process these sample IDs")
+    parser.add_argument(
+        "--retry-samples",
+        "--retry_samples",
+        dest="retry_samples",
+        nargs="+",
+        type=int,
+        help="Only process these sample IDs",
+    )
+    parser.add_argument(
+        "--input-tail-silence",
+        type=float,
+        default=SILENCE_DUR,
+        help="Trailing silence sent after input audio, in seconds.",
+    )
+    parser.add_argument(
+        "--post-input-response-timeout",
+        type=float,
+        default=POST_INPUT_RESPONSE_TIMEOUT,
+        help="Maximum wait for first output audio after input sending completes.",
+    )
+    parser.add_argument(
+        "--post-audio-idle-timeout",
+        type=float,
+        default=POST_AUDIO_IDLE_TIMEOUT,
+        help="Idle period after the last output audio chunk that ends collection.",
+    )
+    parser.add_argument(
+        "--max-post-send-duration",
+        type=float,
+        default=MAX_POST_SEND_DURATION,
+        help="Absolute maximum output collection time after input sending completes.",
+    )
+    parser.add_argument(
+        "--skip-client-ready",
+        action="store_true",
+        help="Do not send the RTVI client-ready handshake.",
+    )
+    parser.add_argument(
+        "--drain-bot-intro",
+        action="store_true",
+        help="Discard an enabled server welcome turn before streaming benchmark input.",
+    )
+    parser.add_argument(
+        "--bot-intro-first-frame-timeout",
+        type=float,
+        default=BOT_INTRO_FIRST_FRAME_TIMEOUT,
+        help="Maximum wait for the first bot-intro audio frame.",
+    )
+    parser.add_argument(
+        "--bot-intro-idle-timeout",
+        type=float,
+        default=BOT_INTRO_IDLE_TIMEOUT,
+        help="Idle period after bot-intro audio that ends intro draining.",
+    )
+    parser.add_argument(
+        "--bot-intro-max-duration",
+        type=float,
+        default=BOT_INTRO_MAX_DURATION,
+        help="Absolute maximum duration for draining the bot intro.",
+    )
+    parser.add_argument(
+        "--preserve-late-output",
+        action="store_true",
+        help="Write audio after input EOF. Use only for the v1.0 user-interruption workflow.",
+    )
 
     return parser.parse_args()
 
@@ -359,12 +558,28 @@ async def main() -> None:
     except ValueError as e:
         raise SystemExit(f"error: {e}") from e
 
-    client = InferenceClient(http_base, ws_origin, ssl_context)
+    client = InferenceClient(
+        http_base,
+        ws_origin,
+        ssl_context,
+        input_tail_silence=args.input_tail_silence,
+        post_input_response_timeout=args.post_input_response_timeout,
+        post_audio_idle_timeout=args.post_audio_idle_timeout,
+        preserve_late_output=args.preserve_late_output,
+        send_client_ready=not args.skip_client_ready,
+        drain_bot_intro=args.drain_bot_intro,
+        bot_intro_first_frame_timeout=args.bot_intro_first_frame_timeout,
+        bot_intro_idle_timeout=args.bot_intro_idle_timeout,
+        bot_intro_max_duration=args.bot_intro_max_duration,
+        max_post_send_duration=args.max_post_send_duration,
+    )
 
     print(f"Server: {http_base} (WebSocket {ws_origin}/api/ws)")
     print(f"Processing directory: {args.input_dir}")
 
-    await client.process_directory(input_dir=args.input_dir, retry_samples=args.retry_samples)
+    failed_count = await client.process_directory(input_dir=args.input_dir, retry_samples=args.retry_samples)
+    if failed_count:
+        raise SystemExit(f"Inference failed for {failed_count} sample/audio file(s)")
 
     print("Processing complete!")
 
