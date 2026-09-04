@@ -79,12 +79,24 @@ The repository's gateway is available at
 so local runs need `--insecure`:
 
 ```bash
-./simulate_concurrency.sh \
+uv run python3 benchmark.py \
   --protocol realtime \
   --ws-url wss://localhost:7860/v1/realtime \
-  --insecure \
-  --clients 1
+  --drain-bot-intro \
+  --insecure
 ```
+
+The built-in examples enable a welcome response by default. When you use one
+of these examples, drain the response before sending the first measured turn.
+Use `--skip-bot-intro` when the target server has welcome messages disabled.
+For concurrency runs, use a server with the welcome message disabled so intro
+draining does not overlap the synchronized measurement window. The
+`generic-assistant/server-perf` Compose profile disables the welcome message.
+
+For direct `benchmark.py` runs without explicit `--metrics-start-time` and
+`--session-end-time` values, the metric window starts after connection setup
+and optional intro draining. The configured `--test-duration` starts at that
+point.
 
 The client validates that every WAV is mono, uncompressed PCM16 with one common
 sample rate, resamples input chunks to the OpenAI Realtime 24 kHz PCM format,
@@ -213,10 +225,11 @@ wrapper and `benchmark.py` unless the description states otherwise:
 | `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. In Realtime mode, the same value bounds the `session.updated` readiness wait. |
 | `--turn-response-timeout` | RTVI: `10`; Realtime: `45` | Seconds to wait for first response audio after the WAV ends. |
 | `--insecure` | off | Disable TLS certificate verification for Realtime. Intended for local development certificates. |
-| `--skip-bot-intro` | RTVI: off; Realtime: on | Skip draining an initial assistant utterance. Realtime skips it by default. |
-| `--drain-bot-intro` | RTVI: on; Realtime: off | Wait for and discard an initial assistant utterance. Only direct `benchmark.py` runs accept this flag. It is mutually exclusive with `--skip-bot-intro`; passing both is a CLI error. |
+| `--skip-bot-intro` | RTVI: off; Realtime: on | Skip draining an initial assistant utterance. Realtime skips it by default. Mutually exclusive with `--drain-bot-intro`. |
+| `--drain-bot-intro` | RTVI: on; Realtime: off | Wait for and discard an initial assistant utterance. Required for Realtime targets that emit a welcome response. Mutually exclusive with `--skip-bot-intro`. |
+| `--bot-intro-timeout` | `5` | Seconds to wait for initial bot audio. Increase this for high-latency cloud deployments. |
 | `--test-duration` | `300` | Seconds of metric collection per level. |
-| `--client-start-delay` | `1` | Shell wrapper only. Stagger between clients connecting (s). With N clients and delay D, the metric window opens at ``now + (N-1)*D`` so every worker is connected before measurement starts. |
+| `--client-start-delay` | `1` | Shell wrapper only. Stagger between client connection attempts in seconds. With N clients and delay D, the shared metric window opens at `now + (N-1)*D`. |
 | `--cooldown` | `10` | Shell wrapper only. Pause between sweep levels (s) — lets the server settle between bursts. |
 | `--reverse-barge-in-threshold` | `0.4` | Bot audio arriving within this many seconds of the user finishing speaking is discarded as a *reverse* barge-in (the server racing the end of the user's utterance) instead of being timed as the real response. Used internally. Not surfaced in summaries. |
 | `--no-save-audio` | (audio saved) | Skip writing per-client output WAVs. |
@@ -231,6 +244,9 @@ wrapper and `benchmark.py` unless the description states otherwise:
 (single-level or sweeps). For direct `uv run python3 benchmark.py` runs, check
 the client summary line and `result_<id>.json`. Per-client `.log` files are
 mainly for debugging specific failures.
+
+A direct run exits with a nonzero status when `result.error` is set or no valid
+turn completes. It still writes the result JSON and log for diagnosis.
 
 Single concurrency level (`--clients 1`, `--clients 4`, etc.):
 

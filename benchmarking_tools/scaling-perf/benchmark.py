@@ -343,6 +343,7 @@ class PerfClient:
         auth_scheme: str = DEFAULT_AUTH_SCHEME,
         connect_timeout: float = WS_CONNECT_TIMEOUT,
         drain_bot_intro: bool | None = None,
+        bot_intro_timeout: float = BOT_INTRO_TIMEOUT,
         verify_tls: bool = True,
     ):
         self.stream_id = stream_id
@@ -354,6 +355,7 @@ class PerfClient:
         self.auth_scheme = auth_scheme
         self.connect_timeout = connect_timeout
         self.drain_bot_intro = drain_bot_intro if drain_bot_intro is not None else protocol != "realtime"
+        self.bot_intro_timeout = max(0.0, bot_intro_timeout)
         self.verify_tls = verify_tls
         self._realtime: OpenAIRealtimeSocket | None = None
         self.audio_files = audio_files
@@ -615,7 +617,7 @@ class PerfClient:
 
     async def _receive_initial_bot_intro(self, websocket, wf):
         try:
-            data = await self._recv_audio_frame(websocket, timeout=BOT_INTRO_TIMEOUT)
+            data = await self._recv_audio_frame(websocket, timeout=self.bot_intro_timeout)
         except FailedBotUtterance as exc:
             await self._synchronize_failed_realtime_response(exc)
             await self.logger.log(f"{self.stream_id} initial bot intro failed: {exc}")
@@ -626,7 +628,7 @@ class PerfClient:
         except TimeoutError:
             if self._realtime is not None:
                 await self._cancel_active_realtime_response()
-            await self.logger.log(f"{self.stream_id} no initial bot intro within {BOT_INTRO_TIMEOUT}s")
+            await self.logger.log(f"{self.stream_id} no initial bot intro within {self.bot_intro_timeout:g}s")
             return wf
         await self.logger.log(f"{self.stream_id} received initial bot intro")
         try:
@@ -917,6 +919,10 @@ class PerfClient:
         wf = None
         if self.drain_bot_intro:
             wf = await self._receive_initial_bot_intro(websocket, wf)
+        if self.metrics_start_time is None:
+            self.metrics_start_time = time.time()
+            if self.session_end_time is None:
+                self.session_end_time = self.metrics_start_time + self.test_duration
         silence_task = asyncio.create_task(self._silence_sender_loop(websocket))
         try:
             wf = await self._continuous_audio_loop(websocket, wf)
@@ -944,7 +950,7 @@ class PerfClient:
         fallback_deadline = self.test_duration + HARD_DEADLINE_BUFFER
         if self.session_end_time:
             remaining = self.session_end_time - time.time()
-            hard_deadline = max(remaining + 10, 30) if remaining > 0 else 30
+            hard_deadline = max(remaining + HARD_DEADLINE_BUFFER, HARD_DEADLINE_BUFFER)
         elif self.metrics_start_time:
             remaining = (self.metrics_start_time + self.test_duration + HARD_DEADLINE_BUFFER) - time.time()
             hard_deadline = max(remaining, 60) if remaining > 0 else fallback_deadline
@@ -1018,6 +1024,9 @@ class PerfClient:
             error = str(exc) or exc.__class__.__name__
 
         if error:
+            await self.logger.log(f"{self.stream_id} finished with error: {error}")
+        elif not self.valid_latency_values:
+            error = "No valid benchmark turns completed"
             await self.logger.log(f"{self.stream_id} finished with error: {error}")
         else:
             await self.logger.log(f"{self.stream_id} finished successfully")
@@ -1135,6 +1144,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Do not wait for an initial bot utterance.",
     )
     parser.add_argument(
+        "--bot-intro-timeout",
+        type=float,
+        default=BOT_INTRO_TIMEOUT,
+        help=f"Seconds to wait for initial bot audio before continuing (default: {BOT_INTRO_TIMEOUT}).",
+    )
+    parser.add_argument(
         "--dataset-dir",
         type=Path,
         default=script_dir / "dataset",
@@ -1225,9 +1240,7 @@ async def async_main(args: argparse.Namespace) -> int:
     if not args.stream_id:
         args.stream_id = f"client_1_{str(time.time_ns())[:13]}"
 
-    if args.metrics_start_time is None:
-        args.metrics_start_time = time.time() + max(0.0, args.start_delay)
-    if args.session_end_time is None:
+    if args.metrics_start_time is not None and args.session_end_time is None:
         args.session_end_time = args.metrics_start_time + args.test_duration
 
     result_path, logger_path, audio_output_path = _resolve_paths(args)
@@ -1260,8 +1273,8 @@ async def async_main(args: argparse.Namespace) -> int:
         port=int(args.port),
         audio_files=audio_files,
         start_delay=float(args.start_delay),
-        metrics_start_time=float(args.metrics_start_time),
-        session_end_time=float(args.session_end_time),
+        metrics_start_time=float(args.metrics_start_time) if args.metrics_start_time is not None else None,
+        session_end_time=float(args.session_end_time) if args.session_end_time is not None else None,
         test_duration=float(args.test_duration),
         reverse_barge_in_threshold=float(args.reverse_barge_in_threshold),
         turn_response_timeout=turn_response_timeout,
@@ -1273,6 +1286,7 @@ async def async_main(args: argparse.Namespace) -> int:
         auth_scheme=auth_scheme,
         connect_timeout=connect_timeout,
         drain_bot_intro=args.drain_bot_intro,
+        bot_intro_timeout=float(args.bot_intro_timeout),
         verify_tls=not args.insecure,
     )
     result = await client.run()
@@ -1284,7 +1298,7 @@ async def async_main(args: argparse.Namespace) -> int:
         f"glitch={result.glitch_detected} "
         f"result={result_path}"
     )
-    return 0
+    return 1 if result.error else 0
 
 
 # ---------------------------------------------------------------------------
