@@ -757,6 +757,10 @@ class PerfClient:
                         error=f"unable to synchronize timed-out response: {exc}",
                     )
                     raise
+            else:
+                raise RuntimeError(
+                    "RTVI turn timed out without a synchronization event; reconnect before starting another turn"
+                )
             await self._record_realtime_turn_metrics(
                 audio_file_path,
                 realtime_event_start,
@@ -819,10 +823,13 @@ class PerfClient:
             "error",
         )
         first_by_type: dict[str, dict[str, Any]] = {}
+        first_item_failure: dict[str, Any] | None = None
         for event in self._realtime.events[event_start:]:
             kind = str(event.get("type") or "")
             if kind in lifecycle_types and kind not in first_by_type:
                 first_by_type[kind] = event
+            if first_item_failure is None and kind.endswith(".failed"):
+                first_item_failure = event
 
         offsets: dict[str, float | None] = {}
         for kind in lifecycle_types:
@@ -879,7 +886,12 @@ class PerfClient:
             },
             "response_status": response_done.get("status"),
             "usage": response_done.get("usage"),
-            "error": error or (first_by_type.get("error") or {}).get("error") or response_done.get("error"),
+            "error": (
+                error
+                or (first_by_type.get("error") or {}).get("error")
+                or (first_item_failure or {}).get("error")
+                or response_done.get("error")
+            ),
         }
         self.realtime_turn_metrics.append(metrics)
         self._realtime.events.clear()

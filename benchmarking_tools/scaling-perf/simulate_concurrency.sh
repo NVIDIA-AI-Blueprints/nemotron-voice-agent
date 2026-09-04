@@ -117,6 +117,10 @@ if [[ "$SKIP_BOT_INTRO" == "1" && "$DRAIN_BOT_INTRO" == "1" ]]; then
   exit 2
 fi
 
+if [[ -n "$WS_URL" ]]; then
+  export OPENAI_REALTIME_WS_URL="$WS_URL"
+fi
+
 if [[ ! -d "$DATASET_DIR" ]]; then
   echo "Dataset directory not found: $DATASET_DIR" >&2
   exit 1
@@ -189,7 +193,6 @@ for num_clients in "${CLIENT_COUNTS_ARR[@]}"; do
 
     extra_args=()
     if [[ -n "$PROTOCOL" ]]; then extra_args+=(--protocol "$PROTOCOL"); fi
-    if [[ -n "$WS_URL" ]]; then extra_args+=(--ws-url "$WS_URL"); fi
     if [[ -n "$AUTH_SCHEME" ]]; then extra_args+=(--auth-scheme "$AUTH_SCHEME"); fi
     if [[ -n "$CONNECT_TIMEOUT" ]]; then extra_args+=(--connect-timeout "$CONNECT_TIMEOUT"); fi
     if [[ -n "$TURN_RESPONSE_TIMEOUT" ]]; then extra_args+=(--turn-response-timeout "$TURN_RESPONSE_TIMEOUT"); fi

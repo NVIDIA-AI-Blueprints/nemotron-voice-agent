@@ -111,8 +111,9 @@ sending PCM silence after each WAV and expects base64 mono PCM in
 `response.output_audio.delta` events. A `response.done` event marks response
 completion; any explicit status other than `completed` records a failed turn
 and the next turn continues. In-turn `error` events are handled the same way,
-while errors during session configuration remain fatal. Item-level failures
-remain in the event log while the response continues.
+while errors during session configuration remain fatal. Item-level failures do
+not end the session; the current turn records their details in its `error`
+metric while the response continues.
 
 ### Prompt override for perf runs
 

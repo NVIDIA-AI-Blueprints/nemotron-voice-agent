@@ -262,7 +262,11 @@ class OpenAIRealtimeSocket:
                 summary["status"] = response.get("status")
                 if response.get("usage") is not None:
                     summary["usage"] = response["usage"]
-        if kind == "error" or (kind == "response.done" and summary.get("status") == "failed"):
+        if (
+            kind == "error"
+            or kind.endswith(".failed")
+            or (kind == "response.done" and summary.get("status") == "failed")
+        ):
             summary["error"] = error_message(event)
         self.events.append(summary)
         return event
