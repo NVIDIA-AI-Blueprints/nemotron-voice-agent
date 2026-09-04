@@ -186,6 +186,12 @@ This simulates the Webex Universal Harness and helps confirm that:
 - bot audio is returned end-to-end
 - transcript keyword matching can produce transfer-to-agent or session-end
 
+For both NVIDIA `per_sentence` and `stitched` synthesis modes, the server sends
+`bot-output-drained` after Pipecat 1.7.0's output transport drains its audio
+FIFO and re-pushes `TTSStoppedFrame`. The adapter sends Cisco `FINAL` after
+this signal. It does not use `bot-stopped-speaking` or a fixed normal-path
+timer to determine successful completion. Timeouts remain failure fallbacks.
+
 ## Notes
 
 - Calls enter through the Webex Contact Center IVR; the adapter is the client of

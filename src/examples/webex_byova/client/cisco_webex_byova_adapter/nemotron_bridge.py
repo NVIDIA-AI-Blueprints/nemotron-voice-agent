@@ -69,7 +69,6 @@ class NemotronSession:
     outbound_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     websocket: Any | None = None
     reader_task: asyncio.Task | None = None
-    finalizer_task: asyncio.Task | None = None
     closed: bool = False
     vendor_config: dict[str, Any] = field(default_factory=dict)
     transcripts: list[str] = field(default_factory=list)
@@ -85,7 +84,6 @@ class NemotronSession:
     response_started: bool = False
     pending_bot_prompt_text: str = ""
     last_spoken_bot_text: str = ""
-    bot_speaking: bool = False
     transfer_requested: bool = False
     end_session_requested: bool = False
     caller_resample_state: Any = None
@@ -193,8 +191,6 @@ class NemotronSession:
                         item["text"] = self.pending_bot_prompt_text
                         self.pending_bot_prompt_text = ""
                     await self.outbound_queue.put(item)
-                    # A fresh audio chunk resets turn-final detection.
-                    self._schedule_final_marker()
                 elif frame_type == "text":
                     text = getattr(frame.text, "text", "").strip()
                     if text:
@@ -206,14 +202,11 @@ class NemotronSession:
                         message_data = ""
                     _trace(f"message data={message_data[:300]}")
                     self._handle_message_payload(message_data)
-                    await self.outbound_queue.put({"kind": "message", "message": frame.message})
         except Exception as exc:
             logger.exception("Nemotron websocket reader failed conversation_id=%s", self.conversation_id)
             await self.outbound_queue.put({"kind": "error", "error": str(exc)})
         finally:
             self.closed = True
-            if self.finalizer_task:
-                self.finalizer_task.cancel()
 
     def _handle_message_payload(self, message_data: str) -> None:
         if not message_data:
@@ -273,13 +266,13 @@ class NemotronSession:
             self.outbound_queue.put_nowait({"kind": "user_stopped_speaking"})
             return
         if message_type == "bot-started-speaking":
-            self.bot_speaking = True
             self.outbound_queue.put_nowait({"kind": "bot_started_speaking"})
             return
         if message_type == "bot-stopped-speaking":
-            self.bot_speaking = False
             self.outbound_queue.put_nowait({"kind": "bot_stopped_speaking"})
-            self._schedule_final_marker()
+            return
+        if message_type == "bot-output-drained":
+            self.outbound_queue.put_nowait({"kind": "output_drained"})
             return
 
         if not isinstance(data, dict):
@@ -334,15 +327,6 @@ class NemotronSession:
         except json.JSONDecodeError:
             return {"route": "live-agent"}
 
-    def _schedule_final_marker(self) -> None:
-        if self.finalizer_task:
-            self.finalizer_task.cancel()
-        self.finalizer_task = asyncio.create_task(self._emit_final_after_idle())
-
-    async def _emit_final_after_idle(self) -> None:
-        await asyncio.sleep(self.config.output_idle_timeout_ms / 1000)
-        await self.outbound_queue.put({"kind": "final"})
-
     async def wait_for_response_settle(self) -> None:
         """Wait for outbound activity to settle before closing the websocket."""
         start = time.monotonic()
@@ -367,8 +351,6 @@ class NemotronSession:
             self.conversation_id,
         )
         self.closed = True
-        if self.finalizer_task:
-            self.finalizer_task.cancel()
         if self.websocket is not None:
             await self.websocket.close()
         if self.reader_task is not None:

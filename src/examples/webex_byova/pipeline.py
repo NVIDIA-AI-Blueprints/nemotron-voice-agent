@@ -42,6 +42,7 @@ from examples.shared.pipeline_utils import (
     build_context_messages,
     create_transport,
 )
+from examples.webex_byova.output_completion import WebexBYOVAOutputCompletionObserver
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -163,18 +164,26 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria")
+    tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     custom_dictionary = load_ipa_dictionary()
 
+    tts_settings: dict = {"voice": tts_voice}
+    if tts_synthesis_mode:
+        tts_settings["synthesis_mode"] = tts_synthesis_mode
     tts = NvidiaTTSService(
         api_key=os.getenv("NVIDIA_API_KEY"),
         server=tts_server,
-        settings=NvidiaTTSSettings(voice=tts_voice),
+        settings=NvidiaTTSSettings(**tts_settings),
         use_ssl=tts_ssl,
         text_filters=[NemotronSpeechTextFilter()],
         custom_dictionary=custom_dictionary,
     )
 
-    logger.info(f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, text_filters=[NemotronSpeechTextFilter]")
+    logger.info(
+        f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
+        f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
+        "text_filters=[NemotronSpeechTextFilter]"
+    )
 
     messages = build_context_messages(base_system_content, system_prompt)
 
@@ -211,6 +220,11 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     latency_observer = UserBotLatencyObserver()
     summary_lock = asyncio.Lock()
+
+    async def notify_output_drained() -> None:
+        await task.queue_frame(RTVIServerMessageFrame(data={"type": "bot-output-drained"}))
+
+    output_completion_observer = WebexBYOVAOutputCompletionObserver(on_output_drained=notify_output_drained)
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):
@@ -273,7 +287,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=[latency_observer],
+        observers=[latency_observer, output_completion_observer],
         enable_tracing=IS_TRACING_ENABLED,
     )
 

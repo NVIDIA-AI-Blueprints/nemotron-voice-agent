@@ -500,10 +500,7 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                     reader_task = asyncio.create_task(_reader_loop())
 
                     yielded_first_audio = False
-                    bot_response_done = False
                     bridge_error_response: voicevirtualagent_pb2.VoiceVAResponse | None = None
-                    idle_timeout = max(self._config.response_idle_timeout_secs, 0.5)
-                    no_final_idle_secs = max(idle_timeout, 2.0)
 
                     try:
                         async with entry.lock:
@@ -525,16 +522,16 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                                         timeout=0.10,
                                     )
                                 except TimeoutError:
-                                    # Nemotron emits an explicit final marker
-                                    # after output goes idle, but we also stop
-                                    # once the caller stream is closed and no
-                                    # more bot activity arrives.
-                                    if bot_response_done and (time.monotonic() - last_activity_t) > 0.3:
-                                        break
+                                    # Explicit completion normally arrives after
+                                    # the output transport drains. Retain an idle
+                                    # fallback for broken or disconnected streams.
                                     if reader_done.is_set():
                                         idle_for = time.monotonic() - last_activity_t
                                         turn_age = time.monotonic() - turn_start_t
-                                        if yielded_first_audio and idle_for > no_final_idle_secs:
+                                        if (
+                                            yielded_first_audio
+                                            and idle_for > self._config.output_completion_timeout_secs
+                                        ):
                                             logger.warning(
                                                 (
                                                     "No explicit final marker; closing turn after "
@@ -609,12 +606,17 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                                     mulaw = to_byova_audio(item["audio"])
                                     if mulaw and len(mulaw) >= 100:
                                         yield _streaming_chunk_response(mulaw)
-                                elif kind == "final":
-                                    bot_response_done = True
+                                elif kind == "output_drained":
+                                    if yielded_first_audio:
+                                        break
+                                    logger.debug(
+                                        "Ignoring output completion before bot audio conversation_id=%s",
+                                        cid,
+                                    )
                                 elif kind == "error":
                                     bridge_error_response = self._convert_bridge_item(item)
                                     break
-                                # message / unknown: ignore
+                                # Unknown items are ignored.
                     finally:
                         if not reader_task.done():
                             reader_task.cancel()
@@ -675,12 +677,11 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
             session = entry.session
             loop = asyncio.get_running_loop()
             first_audio_deadline = loop.time() + self._config.first_audio_timeout_secs
-            idle_timeout = max(self._config.response_idle_timeout_secs, 0.5)
             got_audio = False
 
             while True:
                 if got_audio:
-                    timeout = idle_timeout
+                    timeout = self._config.output_completion_timeout_secs
                 else:
                     timeout = first_audio_deadline - loop.time()
                     if timeout <= 0:
@@ -704,9 +705,9 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                     response = self._convert_bridge_item(item)
                     if response is not None:
                         yield response
-                elif kind == "final":
-                    # Ignore stray finals until at least one audio chunk for
-                    # this turn has been observed.
+                elif kind == "output_drained":
+                    # Ignore stale completion from a preceding turn until this
+                    # turn has produced at least one audio chunk.
                     if got_audio:
                         return
                 elif kind == "error":
@@ -754,7 +755,7 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                 text=bridge_item.get("text", ""),
                 barge_in=True,
             )
-        if kind in ("final", "message"):
+        if kind == "output_drained":
             return None
         if kind == "error":
             response = _final_turn_response()

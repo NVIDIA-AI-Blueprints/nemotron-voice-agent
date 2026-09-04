@@ -90,6 +90,14 @@ ALLOW_PLAINTEXT_ADAPTER=true ./scripts/run_external_adapter.sh
 - Converts caller audio from 8 kHz G.711 to 16 kHz PCM for Nemotron
 - Sends caller audio to Nemotron in unpaced chunks of at most 32 ms
 - Converts bot audio from 16 kHz PCM to 8 kHz G.711 for Webex
+- Sends Cisco `FINAL` after the server reports `bot-output-drained`, which
+  means Pipecat 1.7.0's output transport has drained its audio FIFO
+- Uses this explicit completion signal for NVIDIA `per_sentence` and `stitched`
+  synthesis modes; timeouts only provide failure fallbacks
+- Does not use `bot-stopped-speaking` or a fixed normal-path timer to decide
+  when bot output is complete
+- Uses `OUTPUT_COMPLETION_TIMEOUT_SECS` (default `10`) only if the explicit
+  completion signal is missing after audio
 - Does not apply adapter-side VAD gating to caller audio
 - Supports keyword-triggered `TRANSFER_TO_AGENT` and `SESSION_END` when
   transcript text matches the configured keywords

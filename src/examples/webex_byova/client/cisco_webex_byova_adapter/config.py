@@ -27,9 +27,10 @@ class AdapterConfig:
     expected_jwt_audience: str = os.getenv("CISCO_JWT_AUDIENCE", "")
     expected_jwt_subject: str = os.getenv("CISCO_JWT_SUBJECT", "")
     jwk_cache_ttl_secs: int = int(os.getenv("CISCO_JWK_CACHE_TTL_SECS", "3600"))
-    output_idle_timeout_ms: int = int(os.getenv("OUTPUT_IDLE_TIMEOUT_MS", "350"))
     response_settle_timeout_secs: float = float(os.getenv("RESPONSE_SETTLE_TIMEOUT_SECS", "8.0"))
     response_idle_timeout_secs: float = float(os.getenv("RESPONSE_IDLE_TIMEOUT_SECS", "1.5"))
+    # Failure fallback when the backend does not emit output-drained completion.
+    output_completion_timeout_secs: float = float(os.getenv("OUTPUT_COMPLETION_TIMEOUT_SECS", "10.0"))
     # Time to wait for Nemotron's first audio chunk before ending the turn.
     first_audio_timeout_secs: float = float(os.getenv("FIRST_AUDIO_TIMEOUT_SECS", "120.0"))
     health_http_host: str = os.getenv("NEMOTRON_BYOVA_ADAPTER_HEALTH_HOST", "0.0.0.0")

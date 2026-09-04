@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -128,6 +129,29 @@ class NemotronSessionConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("?", uri)
         websocket.send.assert_awaited_once()
 
+    async def test_output_completion_requires_explicit_drained_event(self) -> None:
+        """Do not treat sentence-level bot stop events as turn completion."""
+        session = NemotronSession(
+            config=AdapterConfig(enable_auth=False),
+            conversation_id="output-completion",
+        )
+
+        session._handle_message_payload(json.dumps({"type": "bot-stopped-speaking"}))
+
+        self.assertEqual((await session.outbound_queue.get())["kind"], "bot_stopped_speaking")
+        self.assertTrue(session.outbound_queue.empty())
+
+        session._handle_message_payload(
+            json.dumps(
+                {
+                    "type": "server-message",
+                    "data": {"type": "bot-output-drained"},
+                }
+            )
+        )
+
+        self.assertEqual((await session.outbound_queue.get())["kind"], "output_drained")
+
 
 class _FakeSession:
     """Minimal Nemotron session used by service stream tests."""
@@ -219,6 +243,31 @@ class VoiceVirtualAgentLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(responses[0].output_events[0].name, "nemotron-error")
         self.assertTrue(session.closed)
         self.assertNotIn(conversation_id, servicer._sessions)
+
+    async def test_output_drained_finishes_turn_after_streamed_audio(self) -> None:
+        """Return FINAL immediately after all output audio has drained."""
+        conversation_id = "output-drained"
+        session = _FakeSession(
+            {"kind": "audio", "audio": b"\x00\x00" * 320},
+            {"kind": "output_drained"},
+        )
+        servicer = self._servicer_with_session(conversation_id, session)
+
+        responses = [
+            response
+            async for response in servicer.ProcessCallerInput(
+                _request_stream(_audio_request(conversation_id)),
+                object(),
+            )
+        ]
+
+        self.assertEqual(
+            [response.response_type for response in responses],
+            [
+                voicevirtualagent_pb2.VoiceVAResponse.CHUNK,
+                voicevirtualagent_pb2.VoiceVAResponse.FINAL,
+            ],
+        )
 
     async def test_intro_bridge_error_emits_one_final_and_closes_session(self) -> None:
         """Return one error FINAL during the initial bot turn."""

@@ -22,6 +22,13 @@ The example pushes generated TTS audio to the adapter without browser-style
 real-time pacing. The adapter also defers Cisco `END_OF_INPUT` until bot speech
 starts, preserving the caller's full barge-in opportunity before the response.
 
+The server emits `bot-output-drained` after Pipecat 1.7.0's output transport
+drains its audio FIFO and re-pushes `TTSStoppedFrame`. The adapter then sends
+Cisco `FINAL`, so normal turn completion does not depend on
+`bot-stopped-speaking` or a fixed timer. This drain signal is authoritative for
+NVIDIA `per_sentence` and `stitched` synthesis modes. Completion timeouts
+remain failure fallbacks.
+
 ## Running the backend
 
 Start the backend from the repo root:
