@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from realtime.conversation import ConversationState, ResponseSnapshot
 from realtime.events import (
     SERVER_CONTENT_PART_ADDED,
@@ -21,6 +23,7 @@ from realtime.events import (
     response_created_body,
     server_event,
 )
+from realtime.metrics import RealtimeResponseTelemetry
 
 
 async def announce_response(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
@@ -82,6 +85,7 @@ async def finish_response(
     emit: EmitFn,
     *,
     status: str,
+    telemetry: RealtimeResponseTelemetry | None = None,
 ) -> bool:
     """Complete the in-flight response, emit the done sequence, then reset the slot.
 
@@ -94,7 +98,7 @@ async def finish_response(
     snap = conversation.complete_response(status)
     if snap is None:
         return False
-    await emit_finish_from_snapshot(snap, emit)
+    await emit_finish_from_snapshot(snap, emit, telemetry=telemetry)
     conversation.reset_response_slot(generation=snap.generation)
     return True
 
@@ -102,6 +106,8 @@ async def finish_response(
 async def emit_finish_from_snapshot(
     snap: ResponseSnapshot,
     emit: EmitFn,
+    *,
+    telemetry: RealtimeResponseTelemetry | None = None,
 ) -> None:
     """Emit audio/item/response done events for a completed snapshot."""
     response_id = snap.response_id
@@ -159,22 +165,28 @@ async def emit_finish_from_snapshot(
             },
         ),
     )
+    response: dict[str, Any] = {
+        "id": response_id,
+        "status": snap.status,
+        "output": [
+            {
+                "id": item_id,
+                "type": "message",
+                "role": "assistant",
+                "status": item_status,
+                "content": [{"type": "output_audio", "transcript": transcript}],
+            }
+        ],
+    }
+    if telemetry is not None:
+        if telemetry.usage is not None:
+            response["usage"] = telemetry.usage
+        if telemetry.metadata is not None:
+            response["metadata"] = telemetry.metadata
     await emit_with_aliases(
         emit,
         server_event(
             SERVER_RESPONSE_DONE,
-            response={
-                "id": response_id,
-                "status": snap.status,
-                "output": [
-                    {
-                        "id": item_id,
-                        "type": "message",
-                        "role": "assistant",
-                        "status": item_status,
-                        "content": [{"type": "output_audio", "transcript": transcript}],
-                    }
-                ],
-            },
+            response=response,
         ),
     )
