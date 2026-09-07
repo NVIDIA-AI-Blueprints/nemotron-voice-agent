@@ -13,6 +13,6 @@ turns:
       - event: tts_response
         eval: "the spoken reply clearly acknowledges the uploaded image and says the assistant will inspect, analyze, or summarize it"
         within_ms: 240000
-      - event: tts_response
-        eval: "the spoken reply reports at least one concrete diagram detail, such as the WebRTC or WebSocket transport, turn-taking, Nemotron Omni service, chat history or LLM context, Magpie TTS service, or playout synchronization"
+      - event: llm_response
+        eval: "the reply reports at least one concrete diagram detail, such as the WebRTC or WebSocket transport, turn-taking, Nemotron Omni service, chat history or LLM context, Magpie TTS service, or playout synchronization"
         within_ms: 240000
