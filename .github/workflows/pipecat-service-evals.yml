@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # Service-backed Pipecat evals. These use NVIDIA-hosted ASR/LLM/TTS services,
-# an NVIDIA-hosted judge, a local Omni vLLM server, and the local booking server.
+# an NVIDIA-hosted judge, a local Omni NIM server, and the local booking server.
 
 name: Pipecat Service Evals
 
@@ -87,44 +87,35 @@ jobs:
             exit 1
           fi
 
-      - name: Validate Hugging Face token
+      - name: Start local Omni NIM
         if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
-          if [ -z "$HF_TOKEN" ]; then
-            echo "HF_TOKEN repository secret is required for the local Omni evaluation model."
-            exit 1
-          fi
-
-      - name: Start local Omni model
-        if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          umask 077
-          printf 'HF_TOKEN=%s\n' "$HF_TOKEN" > .env
-          docker compose --profile omni-assistant-subagents/single-gpu up -d nvidia-llm-vllm-omni
+          trap 'docker logout nvcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+          docker compose --profile omni-assistant-subagents/server up -d nvidia-llm-omni
 
       - name: Install dependencies
         run: uv sync --locked --group eval
 
-      - name: Wait for local Omni model
+      - name: Wait for local Omni NIM
         if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')
         run: |
           for attempt in {1..160}; do
-            if curl -fsS http://127.0.0.1:8002/health >/dev/null 2>&1; then
-              echo "Local Omni model is ready."
+            if curl -fsS http://127.0.0.1:18002/v1/health/ready >/dev/null 2>&1; then
+              echo "Local Omni NIM is ready."
               exit 0
             fi
-            if ! docker inspect --format '{{.State.Running}}' vllm-nemotron-omni 2>/dev/null | grep -qx true; then
-              docker compose logs --no-color nvidia-llm-vllm-omni || true
+            container_id="$(docker compose ps -q nvidia-llm-omni)"
+            if [ -z "$container_id" ] || ! docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null | grep -qx true; then
+              docker compose logs --no-color nvidia-llm-omni || true
               exit 1
             fi
             sleep 15
           done
-          docker compose logs --no-color nvidia-llm-vllm-omni || true
-          echo "Local Omni model did not become ready within 40 minutes."
+          docker compose logs --no-color nvidia-llm-omni || true
+          echo "Local Omni NIM did not become ready within 40 minutes."
           exit 1
 
       - name: Start booking backend
@@ -198,9 +189,9 @@ jobs:
 
           uv run --group eval python tests/pipecat_evals/service/run_cloud_tts_evals.py "${args[@]}"
 
-      - name: Collect local Omni logs
+      - name: Collect local Omni NIM logs
         if: always() && (github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_'))
-        run: docker compose logs --no-color nvidia-llm-vllm-omni > "$RUNNER_TEMP/omni-vllm.log" 2>&1 || true
+        run: docker compose logs --no-color nvidia-llm-omni > "$RUNNER_TEMP/omni-nim.log" 2>&1 || true
 
       - name: Upload eval logs
         if: always()
@@ -210,13 +201,11 @@ jobs:
           path: |
             eval-runs/
             ${{ runner.temp }}/booking-server.log
-            ${{ runner.temp }}/omni-vllm.log
+            ${{ runner.temp }}/omni-nim.log
 
-      - name: Stop local Omni model
+      - name: Stop local Omni NIM
         if: always() && (github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_'))
-        run: |
-          docker compose --profile omni-assistant-subagents/single-gpu rm -f -s nvidia-llm-vllm-omni || true
-          rm -f .env
+        run: docker compose --profile omni-assistant-subagents/server rm -f -s nvidia-llm-omni || true
 
       - name: Stop booking backend
         if: always()
