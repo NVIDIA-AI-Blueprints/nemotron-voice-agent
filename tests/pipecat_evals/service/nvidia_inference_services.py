@@ -93,4 +93,5 @@ class InferenceMagpieTTSService(TTSService):
             await self.stop_ttfb_metrics()
             yield TTSAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=1, context_id=context_id)
         except Exception as exc:
+            await self.stop_ttfb_metrics()
             yield ErrorFrame(error=f"Inference API TTS failed: {exc}")
