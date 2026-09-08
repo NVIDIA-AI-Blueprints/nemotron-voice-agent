@@ -153,10 +153,22 @@ The gateway can emit the following events.
 | `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `item_rejected_pre_intro`, `response_create_rejected_pre_intro`, `invalid_item`, `invalid_truncate` |
 | `input_audio_buffer.*` | Server-VAD speech / commit / clear events |
 | `conversation.item.*` | Item created; cascaded ASR input transcription. `conversation.item.truncated` is not emitted. |
-| `response.*` | Response lifecycle, audio, and audio-transcript events |
+| `response.*` | Response lifecycle, audio, and audio-transcript events. `response.done` includes standard token `usage` plus response-scoped NVIDIA timing metadata when available. |
 | `nvidia.tool.started` / `nvidia.tool.completed` | Observation of internally executed catalog tools |
 
 GA clients receive `response.output_audio.*` and `response.output_audio_transcript.*`. Clients that negotiate the beta dialect receive the corresponding `response.audio.*` and `response.audio_transcript.*` names. Audio content parts do not emit `response.output_text.*`.
+
+### Response Metrics
+
+Pipecat LLM token accounting is mapped to the standard
+`response.done.response.usage` fields: `total_tokens`, `input_tokens`,
+`output_tokens`, and supported input/output token details.
+
+The Realtime schema has no standard ASR, LLM, TTS, VAD, or end-to-end latency
+fields. The gateway therefore serializes those response-scoped values as
+compact JSON in the standard string metadata entry
+`response.done.response.metadata.nvidia_metrics`. It does not add a custom
+top-level event type or duplicate these values in `session.nvidia`.
 
 ### Audio
 
