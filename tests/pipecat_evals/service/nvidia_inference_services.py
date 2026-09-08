@@ -47,6 +47,10 @@ class InferenceNvidiaOmniLLMService(NvidiaOmniLLMService):
 class InferenceMagpieTTSService(TTSService):
     """Translate Pipecat TTS calls to NVIDIA's hosted multipart endpoint."""
 
+    def can_generate_metrics(self) -> bool:
+        """Indicate that this service reports TTFB and usage metrics."""
+        return True
+
     def __init__(self, *args, settings=None, text_filters=None, text_transforms=None, **kwargs) -> None:
         """Accept the NVIDIA gRPC constructor shape used by the examples."""
         voice = getattr(settings, "voice", None) or "Magpie-Multilingual.EN-US.Aria"
