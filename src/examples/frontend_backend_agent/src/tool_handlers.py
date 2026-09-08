@@ -92,6 +92,7 @@ def build_handlers(
     stage_metrics: StageMetricsCoordinator | None = None,
 ) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent."""
+    tool_result_mode_default = getattr(thinker, "tool_result_mode_default", "talker")
 
     async def handle_call_backend(params: FunctionCallParams) -> None:
         arguments = _normalize_arguments(params.arguments or {})
@@ -183,7 +184,12 @@ def build_handlers(
                 "response_text": "I could not complete that request right now. Please try again.",
                 "context": "call_backend",
             }
-        await _deliver_tool_payload(params, payload, stage_metrics=stage_metrics)
+        await _deliver_tool_payload(
+            params,
+            payload,
+            default_mode=tool_result_mode_default,
+            stage_metrics=stage_metrics,
+        )
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
         cancelled = thinker.cancel_active("user_cancelled")
@@ -208,7 +214,7 @@ def build_handlers(
             "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
             "context": "cancel_backend",
         }
-        if _tool_result_mode() == "direct":
+        if _tool_result_mode(tool_result_mode_default) == "direct":
             await _emit_talker_response(params.llm, str(payload["response_text"]), append_to_context=False)
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
             if stage_metrics is not None:
@@ -275,6 +281,7 @@ async def _deliver_tool_payload(
     params: FunctionCallParams,
     payload: dict[str, Any],
     *,
+    default_mode: object = "talker",
     stage_metrics: StageMetricsCoordinator | None = None,
 ) -> None:
     """Deliver one grounded payload through the configured final-response path."""
@@ -285,7 +292,7 @@ async def _deliver_tool_payload(
         return
     response_text = str(payload.get("response_text") or "")
     _remember_backend_response(params.llm, response_text, payload)
-    if _should_deliver_directly(payload):
+    if _should_deliver_directly(payload, default_mode=default_mode):
         await _emit_talker_response(params.llm, response_text, append_to_context=False)
         await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
         if stage_metrics is not None:
@@ -297,15 +304,18 @@ async def _deliver_tool_payload(
     )
 
 
-def _tool_result_mode() -> str:
+def _tool_result_mode(default_mode: object = "talker") -> str:
     raw = os.getenv("FRONTEND_BACKEND_TOOL_RESULT_MODE", "").strip().lower()
     if raw in {"direct", "hybrid", "talker"}:
         return raw
-    return "direct" if _direct_tool_response_enabled() else "talker"
+    if _direct_tool_response_enabled():
+        return "direct"
+    normalized_default = str(default_mode or "").strip().lower()
+    return normalized_default if normalized_default in {"direct", "hybrid", "talker"} else "talker"
 
 
-def _should_deliver_directly(payload: dict[str, Any]) -> bool:
-    mode = _tool_result_mode()
+def _should_deliver_directly(payload: dict[str, Any], *, default_mode: object = "talker") -> bool:
+    mode = _tool_result_mode(default_mode)
     if mode == "direct":
         return True
     if mode == "hybrid":

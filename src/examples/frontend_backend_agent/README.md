@@ -12,24 +12,79 @@ Each request follows the same path for every domain:
 
 1. The transport receives user audio, and automatic speech recognition (ASR) produces a transcript.
 2. The Talker answers stable conversational requests directly or calls `call_backend` with a self-contained request.
-3. The session-local backend asks the Thinker for a plan. The selected registry entry controls the hidden Thinker prompt and, for the generic domain, the enabled internal tools.
-4. The generic planner appends a generated tool-contract block for only those enabled tools. The airline domain keeps its existing prompt-owned contracts. Domain code validates each plan before dispatch.
+3. The session-local backend asks the Thinker for a plan. The selected registry entry controls the hidden Thinker prompt and the generic domain's maximum internal-tool allowlist. A browser session can narrow that tool set.
+4. The generic planner appends a generated tool-contract block for only the effective session tools. The airline domain keeps its existing prompt-owned contracts. Domain code validates each plan before dispatch.
 5. The backend runs the approved tools and returns a structured `response_hint` or `tool_result`. The generic domain also generates user-facing capability text from the enabled tool specifications.
-6. The Talker converts `response_text` into a concise spoken reply, and text-to-speech (TTS) produces audio.
+6. The runtime either speaks trusted `response_text` directly or asks the Talker for a concise reply. Text-to-speech (TTS) then produces audio.
 7. `cancel_backend` or a newer superseding request cancels pending work and prevents stale results from reaching the conversation.
+
+For WebSocket sessions, the browser client supplies an explicit
+`DailyMediaManager`. When the public client callback reports that the user
+started speaking, the client calls `userStartedSpeaking()` and clears buffered
+bot audio. The raw protobuf interruption frame remains a compatibility no-op;
+the public user-speaking callback drives browser playback interruption.
+
+The server separately tracks whether that user turn began while bot speech was
+active. If an explicit `cancel_backend` follows a speech-only interruption, it
+responds, “Okay, I stopped that,” even when no backend task remains. If the same
+turn contains a substantive replacement request, the Talker answers or delegates
+that replacement instead of cancelling it. “There is nothing pending right now”
+is reserved for a cancellation turn with no active backend, pending work, or
+interrupted bot speech.
+
+When direct tool speech is enabled, the structured function result is the single retained copy of the deterministic backend response; the separately emitted TTS frame is not appended again as an assistant message. The Talker remembers a bounded normalized signature outside the prompt context. If a later completion substantially replays that cached result without a native tool call, the runtime withholds it and retries once with an internal contract correction. It never selects a domain tool or constructs a function call. A second invalid replay fails closed with deterministic speech.
+
+The runtime retains bounded successful subject arguments by capability. A
+non-successful or subjectless result clears only that capability's baseline,
+so a failed stock lookup cannot erase an unrelated weather subject. For an
+explicit stock repeat, a company literally named in the current user turn is
+the trusted validation subject. For an implicit repeat, the runtime selects the
+latest retained subject for the named capability instead of an unrelated newer
+tool result.
+
+When the user explicitly says repeat, refresh, recheck, again, check again, or
+one more time, the runtime validates the Talker-authored `call_backend` query
+against every resolved subject value. If Lightning changes the subject, the
+runtime withholds the native call, retries Lightning once with an internal
+correction, and then fails closed if the retry still drifts. Capability matching
+is validation-only: it never infers user intent, selects a domain tool, or writes
+a corrected tool call in Python.
+
+When `FRONTEND_BACKEND_TOOL_RESULT_MODE` is absent, each backend selects its
+default. Generic uses `direct`, which speaks trusted backend text without a
+second Talker inference. Airline retains `talker`, which sends every speakable
+result through the guarded final Talker pass. An explicit `direct`, `hybrid`,
+or `talker` value overrides either backend default. `hybrid` speaks successful
+results directly and uses the Talker for failures or clarifications.
+
+The checked-in NVCF chart explicitly sets
+`app.frontendBackendToolResultMode: "talker"`. That chart value becomes
+`FRONTEND_BACKEND_TOOL_RESULT_MODE=talker` in the application pod and
+overrides the Generic source default. Changing only the backend source does not
+change this rendered Helm behavior.
+
+Replay validation buffers a completion only after a direct backend response has been recorded. Initial and pre-tool conversation remains streamed, preserving its existing time-to-first-audio behavior.
 
 The React client is only the user interface. The agent orchestration runs in the Python Pipecat pipeline.
 
 ## Built-In Domains
 
-Both built-ins point to `examples.frontend_backend_agent.pipeline:bot`. The selected example registry entry supplies the trusted domain and hidden Thinker prompt. The generic entry also supplies its enabled tool set.
+Both built-ins point to `examples.frontend_backend_agent.pipeline:bot`. The selected example registry entry supplies the trusted domain and hidden Thinker prompt. The generic entry also supplies its maximum allowed tool set.
 
 | Registry Example | Domain Profile | Talker Prompt | Thinker Prompt | Internal Tools | Extra Dependency |
 | --- | --- | --- | --- | --- | --- |
 | `frontend-backend-agent` | `airline` | `talker` | `thinker` | Airline domain defaults | `booking-server` |
 | `generic-frontend-backend-agent` | `generic` | `generic_talker` | `generic_thinker` | `get_weather`, `get_stock_price`, `web_search`, `calculate_bmi`, and `generate_random_number` | WeatherAPI, Finnhub, and Perplexity credentials for their respective live tools |
 
-`domain_profile`, `thinker_prompt`, and `tools` are registry-owned. The server binds these values from `examples_registry.yaml`; a client session cannot replace the hidden prompt or widen the enabled tool set. `tools_available` is not accepted as session configuration. The pipeline resolves `domain_profile` through the code allowlist in `src/domain.py`. It never imports a client-provided module or path.
+When users ask its identity, developer, or pipeline, the generic Talker uses this exact response:
+
+> I am Nemotron Voice Agent, developed by engineers at NVIDIA. I use a cascaded pipeline of Nemotron ASR, Magpie TTS, and Nemotron LLM models.
+
+The NVCF chart loads the shared pronunciation registry for Magpie requests. It
+sends only International Phonetic Alphabet (IPA) mappings; Chatterbox receives
+no custom dictionary. Refer to [Configure TTS](../../../docs/how-to/configure-tts.md#pronunciation-ipa).
+
+`domain_profile`, `thinker_prompt`, and `tools` are registry-owned. The server binds these values from `examples_registry.yaml`; a client session cannot replace the hidden prompt or widen the allowed tool set. For a domain-profile session, optional `tools_available` input can only select a subset of that registry list. Unknown names grant no capability, and `none` disables every optional tool. The pipeline resolves `domain_profile` through the code allowlist in `src/domain.py`. It never imports a client-provided module or path.
 
 The existing `frontend-backend-agent` identifier remains the airline example. Existing airline prompts, booking behavior, booking-server selection, pronunciation handling, and call/cancel contract remain compatible.
 
@@ -112,16 +167,47 @@ The following environment variables bound shared and domain-specific orchestrati
 | Environment Variable | Default | Purpose |
 | --- | --- | --- |
 | `CHAT_HISTORY_RECENT_TURNS` | `20` | Retains this many recent non-prompt messages in the Talker context |
+| `FRONTEND_BACKEND_VAD_STOP_SECS` | `0.5` | Waits for trailing ASR text before finalizing a Frontend/Backend Agent turn; changing it affects latency and fragmented follow-ups |
+| `FRONTEND_BACKEND_TALKER_FILLER_MODE` | `emit` | Uses `off`, `observe`, or `emit` to suppress, validate-only, or speak an accepted Talker filler |
+| `FRONTEND_BACKEND_TOOL_RESULT_MODE` | Domain default: Generic `direct`; Airline `talker`; NVCF chart `talker` | An explicit `direct`, `hybrid`, or `talker` value overrides the backend default for grounded post-tool responses |
+| `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE` | Disabled | Legacy switch that forces direct mode only when the explicit result-mode variable is absent |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delays progress speech until delegated work remains active past the threshold |
-| `THINKER_TOOL_TIMEOUT_SECONDS` | `30.0` | Bounds the shared Talker-to-backend function handler |
-| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `15.0` | Bounds generic Thinker planning |
+| `THINKER_TOOL_TIMEOUT_SECONDS` | `45.0` | Bounds the shared Talker-to-backend function handler |
+| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `18.0` | Bounds generic Thinker planning |
 | `GENERIC_BACKEND_TIMEOUT_SECONDS` | `40.0` | Bounds the generic planner and tool execution together |
+| `GENERIC_WEB_SEARCH_TIMEOUT_SECONDS` | `20.0` | Bounds the complete web-search tool execution inside the backend deadline |
 | `AIRLINE_PLANNER_TIMEOUT_SECONDS` | `30.0` | Bounds airline Thinker planning; capped at the overall airline deadline |
 | `AIRLINE_BACKEND_TIMEOUT_SECONDS` | `30.0` | Bounds airline planning and tool execution together |
 
+The Generic Talker supplies `filler_text` in the same native `call_backend`
+selection. The runtime validates that candidate as 3 to 12 words, at most 96
+characters, query-grounded, and free of result claims or internal names. It
+emits an accepted filler at most once after the threshold and never adds it to
+conversation history. A missing or rejected candidate stays silent and never
+blocks the backend; there is no static fallback.
+
 The `generic-frontend-backend-agent` registry entry enables all 5 built-in generic tools. To expose a subset, create or edit a trusted registry entry. Client session data and Talker prompt metadata do not widen that set.
 
+Finnhub quote requests retry once after a short bounded backoff only for
+transport errors, HTTP 429, or HTTP 5xx responses. Authentication failures and
+malformed data fail closed without retry, and a second transient failure returns
+the existing grounded unavailable response.
+
+Web search makes at most 2 attempts. Each attempt has a 9-second ceiling, and
+the single retry waits 0.5 seconds. The resulting 18.5-second retry budget fits
+inside the default 20-second `GENERIC_WEB_SEARCH_TIMEOUT_SECONDS` tool
+deadline. Transport failures, attempt timeouts, malformed JSON, HTTP 429, and
+HTTP 5xx responses can trigger the retry. Other HTTP errors fail immediately.
+After the second failure, the tool returns the existing grounded unavailable
+response.
+
 For model and catalog settings, refer to [Configure LLM](../../../docs/how-to/configure-llm.md) and [Configure Services](../../../docs/how-to/configure-services.md). For prompt behavior, tool subsets, and domain extension, refer to [Configure Frontend/Backend Agent Domains](../../../docs/how-to/configure-frontend-backend-domains.md).
+
+The built-in generic profile keeps Nemotron 3 Super reasoning enabled for the
+Thinker at temperature `0.0`. Its server and cloud catalog entries bound each
+plan to 768 output tokens and a 256-token reasoning budget. These limits reduce
+synchronized planner saturation while preserving model-based planning and
+Python plan validation.
 
 ## Domain Contract
 
@@ -136,11 +222,11 @@ For model and catalog settings, refer to [Configure LLM](../../../docs/how-to/co
 | `runtime_context` | Trusted date, time, or domain context appended to the Talker prompt |
 | `intro_prompt` | Initial Talker instruction when welcome messages are enabled |
 | `tts_text_transform` | Optional domain pronunciation transformation |
-| `filler_policy` and `filler_selector` | Choose code-authored or planner-authored progress speech and provide the trusted selector when required |
+| `filler_policy` and `filler_selector` | Choose Talker-authored, planner-authored, or legacy code-authored progress speech and provide a selector only for the legacy policy |
 | `tool_registry` | Publish the domain's code-owned `ToolSpec` allowlist for registry-selected capabilities |
 | `max_query_chars` | Maximum delegated query length |
 
-`build_backend` receives a `DomainBuildContext` with `thinker_llm`, the resolved `thinker_prompt`, `thinker_max_tokens`, registry-owned `tool_names`, `tool_delay_seconds`, `tool_delay_min_seconds`, and `load_service_entry`. The context does not expose the raw session body or prompt metadata to domain code.
+`build_backend` receives a `DomainBuildContext` with `thinker_llm`, the resolved `thinker_prompt`, `thinker_max_tokens`, server-approved `tool_names`, `tool_delay_seconds`, `tool_delay_min_seconds`, and `load_service_entry`. The context does not expose the raw session body or prompt metadata to domain code.
 
 The backend returned by `build_backend` implements 3 operations: `call`, `cancel_active`, and `cancel_pending_work`. The pipeline does not need to know the domain's state machine, external services, or result format.
 
@@ -150,7 +236,12 @@ The backend returned by `build_backend` implements 3 operations: `call`, `cancel
 
 The executable service function remains Python code. Configuration selects existing capabilities; it does not define network requests, authentication, retries, or response parsing. This boundary keeps executable behavior reviewable and prevents registry data from becoming a code-injection surface.
 
-At session startup, the generic planner renders an available-tool contract block from only the registry-enabled specifications. Its runtime `enabled_tools` list uses the same subset, and Python rejects plans outside that subset. Static output examples can still mention built-in names, but they do not enable those tools. The unsupported-request response also names only enabled capabilities.
+`GET /api/tools?pipeline_mode=<example-key>` renders the registry-allowed
+`ToolSpec` objects for the browser. Each response includes the tool description
+and JSON Schema parameters. The browser sends checked names through
+`tools_available`, and the server intersects them with the registry allowlist.
+
+At session startup, the generic planner renders an available-tool contract block from only the effective session specifications. Its runtime `enabled_tools` list uses the same subset, and Python rejects plans outside that subset. Static output examples can still mention built-in names, but they do not enable those tools. The unsupported-request response also names only enabled capabilities.
 
 ## Add a Read-Only Flavor
 
@@ -162,7 +253,7 @@ You do not need a new Python package when a flavor reuses the generic domain's e
 4. Hide internal prompts with `agent_prompt_keys`.
 5. Add tests that verify the registry selection, generated tool block, capability response, and disabled-tool behavior.
 
-The server treats the registry entry as trusted application configuration. Do not accept `domain_profile`, `thinker_prompt`, or `tools` from a client request.
+The server treats the registry entry as trusted application configuration. Do not accept `domain_profile`, `thinker_prompt`, or `tools` from a client request. Treat `tools_available` only as an untrusted request to narrow the trusted tool list.
 
 ## Add a Capability or Stateful Domain
 
@@ -205,10 +296,22 @@ The pipeline enforces the following boundaries:
 - Up to 3 validated generic read-only tools can run concurrently. Results return in planner order.
 - A backend instance and its state belong to one voice session. A new delegated request cancels and replaces unfinished work in that session.
 - Cancellation invalidates the active call identifier, so a late result cannot become the current response.
+- The generic Talker cancels work only after an explicit withdrawal. Status words such as "complete" or "done" do not cancel work by themselves.
+- WebSocket barge-in clears buffered browser audio through the client media manager. The server records speech-only interruption separately from backend cancellation.
+- A barge-in with a substantive replacement stays in direct-answer or delegation mode. It does not discard the replacement as a cancellation.
+- The generic Talker refuses unsupported side effects, such as sending email, instead of treating them as cancellation.
+- The generic Talker delegates live requests with missing parameters. The backend asks for a location or other required detail instead of guessing.
+- The generic Talker speaks a backend clarification directly. It does not expose private planning, tool names, or missing-parameter narration.
+- A challenge that says an answer is old or not current triggers a new grounded lookup for the retained subject. The Talker does not defend or replay the earlier value.
+- If a request combines prompt injection or secret extraction with a safe supported lookup, the Talker and Thinker ignore the hostile portion and perform only the safe lookup.
+- The Talker answers simple, stable arithmetic directly. It does not invent an unavailable calculator capability or fabricate a result when values are missing.
+- When the country is unknown, direct crisis guidance remains location-neutral and omits country-specific numbers. Dangerous misinformation receives a concise, evidence-based correction.
 - Airline planning and overall backend execution have bounded deadlines. A superseded airline generation cannot deliver a late result.
 - Live-data tools read credentials from the process environment. Credentials never enter the Thinker request or tool parameters.
 - Missing credentials, timeouts, invalid responses, and upstream failures return bounded unavailable responses. The generic tools do not substitute fabricated data.
 - Deterministic Python formatters produce TTS-safe result text from validated inputs and returned service data.
-- The generic domain uses code-authored progress speech and ignores model-supplied filler text. The airline domain retains planner-authored filler for backward compatibility.
+- The generic domain validates Talker-authored, query-grounded progress speech
+  and has no static fallback. The airline domain retains planner-authored filler
+  for backward compatibility.
 
 After a prompt or domain change, test direct Talker replies, delegation, cancellation, parameter clarification, disabled tools, unavailable credentials, parallel calls, session isolation, and repeated tool-calling behavior.
