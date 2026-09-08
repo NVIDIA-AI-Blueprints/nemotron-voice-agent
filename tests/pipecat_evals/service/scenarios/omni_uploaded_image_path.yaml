@@ -3,8 +3,8 @@ user: !include _audio_user_kokoro.yaml
 judge: !include _audio_judge_moonshine.yaml
 turns:
   - expect:
-      - event: response
-        eval: "the spoken reply is a brief friendly initial greeting from an NVIDIA voice assistant"
+      - event: llm_response
+        eval: "the reply is a brief friendly initial greeting from an NVIDIA voice assistant"
         within_ms: 120000
   - user: "Use the uploaded attachment image. Please inspect the uploaded image and summarize what the diagram shows."
     expect:
@@ -14,5 +14,10 @@ turns:
         eval: "the spoken reply clearly acknowledges the uploaded image and says the assistant will inspect, analyze, or summarize it"
         within_ms: 240000
       - event: llm_response
-        eval: "the reply reports at least one concrete diagram detail, such as the WebRTC or WebSocket transport, turn-taking, Nemotron Omni service, chat history or LLM context, Magpie TTS service, or playout synchronization"
+        eval: >-
+          the reply describes concrete visual structure from the uploaded diagram,
+          such as a left-to-right pipeline or workflow with connected processing
+          stages, icons, or arrows, or identifies a labeled component such as WebRTC,
+          WebSocket, turn taking, Nemotron Omni, chat history, Magpie TTS, or playout
+          synchronization
         within_ms: 240000
