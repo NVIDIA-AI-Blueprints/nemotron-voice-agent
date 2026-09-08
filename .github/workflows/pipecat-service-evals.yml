@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# Service-backed Pipecat evals. These use NVIDIA cloud ASR/LLM/TTS services,
-# an NVIDIA-hosted judge, and the local frontend-backend booking server.
+# Service-backed Pipecat evals. These use NVIDIA-hosted ASR/LLM/TTS services,
+# an NVIDIA-hosted judge, a local Omni vLLM server, and the local booking server.
 
 name: Pipecat Service Evals
 
@@ -73,9 +73,6 @@ jobs:
           docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 bash -c "nvidia-smi -L"
           docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 bash -c "nvidia-smi"
 
-      - name: Install dependencies
-        run: uv sync --locked --group eval
-
       - name: Validate NVIDIA API key
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
@@ -89,6 +86,46 @@ jobs:
             echo "NVIDIA_INFERENCE_API_KEY repository secret is required for the NVIDIA-hosted evaluation judge."
             exit 1
           fi
+
+      - name: Validate Hugging Face token
+        if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN repository secret is required for the local Omni evaluation model."
+            exit 1
+          fi
+
+      - name: Start local Omni model
+        if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          umask 077
+          printf 'HF_TOKEN=%s\n' "$HF_TOKEN" > .env
+          docker compose --profile omni-assistant-subagents/single-gpu up -d nvidia-llm-vllm-omni
+
+      - name: Install dependencies
+        run: uv sync --locked --group eval
+
+      - name: Wait for local Omni model
+        if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')
+        run: |
+          for attempt in {1..160}; do
+            if curl -fsS http://127.0.0.1:8002/health >/dev/null 2>&1; then
+              echo "Local Omni model is ready."
+              exit 0
+            fi
+            if ! docker inspect --format '{{.State.Running}}' vllm-nemotron-omni 2>/dev/null | grep -qx true; then
+              docker compose logs --no-color nvidia-llm-vllm-omni || true
+              exit 1
+            fi
+            sleep 15
+          done
+          docker compose logs --no-color nvidia-llm-vllm-omni || true
+          echo "Local Omni model did not become ready within 40 minutes."
+          exit 1
 
       - name: Start booking backend
         run: |
@@ -161,6 +198,10 @@ jobs:
 
           uv run --group eval python tests/pipecat_evals/service/run_cloud_tts_evals.py "${args[@]}"
 
+      - name: Collect local Omni logs
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_'))
+        run: docker compose logs --no-color nvidia-llm-vllm-omni > "$RUNNER_TEMP/omni-vllm.log" 2>&1 || true
+
       - name: Upload eval logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -169,6 +210,13 @@ jobs:
           path: |
             eval-runs/
             ${{ runner.temp }}/booking-server.log
+            ${{ runner.temp }}/omni-vllm.log
+
+      - name: Stop local Omni model
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_'))
+        run: |
+          docker compose --profile omni-assistant-subagents/single-gpu rm -f -s nvidia-llm-vllm-omni || true
+          rm -f .env
 
       - name: Stop booking backend
         if: always()

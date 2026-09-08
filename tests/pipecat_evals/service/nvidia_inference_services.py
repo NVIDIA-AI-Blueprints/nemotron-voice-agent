@@ -11,7 +11,7 @@ import wave
 from collections.abc import AsyncGenerator
 
 import httpx
-from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame, TTSStartedFrame, TTSStoppedFrame
+from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
@@ -53,6 +53,8 @@ class InferenceMagpieTTSService(TTSService):
         language = getattr(settings, "language", None) or "en-US"
         super().__init__(
             sample_rate=22050,
+            push_start_frame=True,
+            push_stop_frames=True,
             settings=TTSSettings(
                 model="nvidia/nvidia/magpie-tts-multilingual-357m",
                 voice=str(voice),
@@ -66,7 +68,6 @@ class InferenceMagpieTTSService(TTSService):
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
         """Synthesize one text segment and emit its decoded PCM audio."""
         try:
-            await self.start_ttfb_metrics()
             await self.start_tts_usage_metrics(text)
             async with httpx.AsyncClient(timeout=90.0) as client:
                 response = await client.post(
@@ -86,8 +87,6 @@ class InferenceMagpieTTSService(TTSService):
                 sample_rate = wav.getframerate()
                 audio = wav.readframes(wav.getnframes())
             await self.stop_ttfb_metrics()
-            yield TTSStartedFrame(context_id=context_id)
             yield TTSAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=1, context_id=context_id)
-            yield TTSStoppedFrame(context_id=context_id)
         except Exception as exc:
             yield ErrorFrame(error=f"Inference API TTS failed: {exc}")
