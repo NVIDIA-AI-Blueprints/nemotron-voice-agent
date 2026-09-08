@@ -97,7 +97,7 @@ def _load_prompt_few_shots(prompt_key: str, *, custom_prompt: bool) -> list[dict
         if not isinstance(raw_message, dict):
             raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] must be an object")
         role = raw_message.get("role")
-        if role not in {"user", "assistant", "tool"}:
+        if role not in {"user", "assistant", "tool", "developer"}:
             raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] has unsupported role {role!r}")
         content = raw_message.get("content")
         if content is not None and not isinstance(content, str):
@@ -349,6 +349,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         user_params=build_user_aggregator_params(
             welcome_enabled,
             vad_stop_secs=FRONTEND_BACKEND_VAD_STOP_SECS,
+            interruption_min_words=2 if domain.key == "generic" else None,
+            on_interruption_trigger=(stage_metrics.record_interruption_trigger if domain.key == "generic" else None),
         ),
     )
     audio_recorder = create_audio_recorder(body.get("session_id", ""))

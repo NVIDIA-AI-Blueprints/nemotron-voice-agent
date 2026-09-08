@@ -216,10 +216,25 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
         raise ValueError("session config must be a JSON object")
     example = _bind_example_context_by_key(str(data.get("pipeline_mode", "")) or fallback_example_key)
     config = dict(data)
+    config["pipeline_mode"] = example["key"]
     # Registry-owned: a client cannot pair a prompt catalog with another domain backend.
     config["domain_profile"] = example.get("domain_profile", "")
     config["thinker_prompt"] = example.get("thinker_prompt", "")
-    config["tools"] = list(example.get("tools") or ())
+    allowed_tools = list(dict.fromkeys(example.get("tools") or ()))
+    config["tools"] = allowed_tools
+    if example.get("domain_profile"):
+        requested_tools = config.pop("tools_available", None)
+        if requested_tools is not None:
+            if isinstance(requested_tools, str):
+                requested = [] if requested_tools.strip().lower() == "none" else requested_tools.split(",")
+            elif isinstance(requested_tools, list | tuple):
+                requested = requested_tools
+            else:
+                requested = []
+            requested_names = {str(name).strip() for name in requested}
+            # The browser may narrow a domain's registry-owned allowlist, but it
+            # can never add a tool that the selected example did not declare.
+            config["tools"] = [name for name in allowed_tools if name in requested_names]
 
     _bind_registry_prompt(example, config)
     return filter_session_config(config)
@@ -253,6 +268,56 @@ def _example_with_module_file(example_key: str = "") -> tuple[dict, Path]:
     """Return ``(registry_entry, module_file)`` for a registry example key."""
     selected = examples_registry.find(example_key)
     return selected, examples_registry.example_module_file(selected)
+
+
+def _domain_tools_payload(example: dict) -> list[dict]:
+    """Render registry-allowlisted domain ToolSpecs for the browser catalog."""
+    profile = str(example.get("domain_profile") or "").strip()
+    if not profile:
+        return []
+
+    from examples.frontend_backend_agent.src.domain import resolve_domain_spec
+
+    spec = resolve_domain_spec(profile)
+    kind_to_json = {str: "string", int: "integer", float: "number", bool: "boolean"}
+    payload: list[dict] = []
+    for name in dict.fromkeys(example.get("tools") or ()):
+        tool = spec.tool_registry.get(name)
+        if tool is None:
+            continue
+        properties: dict[str, dict] = {}
+        required: list[str] = []
+        for param_name, param in tool.params.items():
+            property_schema: dict = {"type": kind_to_json.get(param.kind, "string")}
+            if param.label:
+                property_schema["description"] = param.label
+            if param.kind is str:
+                property_schema["minLength"] = 1
+                property_schema["maxLength"] = param.max_len
+            if param.choices:
+                property_schema["enum"] = sorted(param.choices)
+            if param.bounds:
+                lower, upper = param.bounds
+                property_schema["minimum"] = int(lower) if param.kind is int else lower
+                property_schema["maximum"] = int(upper) if param.kind is int else upper
+            if not param.required and param.default is not None:
+                property_schema["default"] = param.default
+            if param.required:
+                required.append(param_name)
+            properties[param_name] = property_schema
+        payload.append(
+            {
+                "name": name,
+                "description": tool.contract,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                    "additionalProperties": False,
+                },
+            }
+        )
+    return payload
 
 
 def _activate_example_catalog(module_file: Path, example: dict) -> None:
@@ -1022,7 +1087,9 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
     @app.get("/api/tools")
     async def get_tools(pipeline_mode: str = Query(default="")):
-        _, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
+        example, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
+        if example.get("domain_profile"):
+            return _domain_tools_payload(example)
         catalog = load_tools_catalog(module_file)
         tools: list[dict] = []
         for name, entry in catalog.items():

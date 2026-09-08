@@ -93,6 +93,7 @@ def build_handlers(
 ) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent."""
     tool_result_mode_default = getattr(thinker, "tool_result_mode_default", "talker")
+    talker_result_tools = frozenset(getattr(thinker, "talker_result_tools", ()))
 
     async def handle_call_backend(params: FunctionCallParams) -> None:
         arguments = _normalize_arguments(params.arguments or {})
@@ -131,11 +132,19 @@ def build_handlers(
             slots = {key: value for key, value in arguments.items() if key not in {"query", "intent", "filler_text"}}
             filler_task: asyncio.Task | None = None
             filler_started = False
+            filler_emitted = False
+
+            async def emit_filler_once() -> None:
+                nonlocal filler_emitted
+                if filler_emitted or not filler_text:
+                    return
+                filler_emitted = True
+                await _emit_talker_response(params.llm, filler_text, append_to_context=False)
 
             async def emit_filler_after_threshold() -> None:
                 try:
                     await asyncio.sleep(filler_threshold_seconds)
-                    await _emit_talker_response(params.llm, filler_text, append_to_context=False)
+                    await emit_filler_once()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -145,13 +154,19 @@ def build_handlers(
                 nonlocal filler_started, filler_task
                 if stage_metrics is not None:
                     await stage_metrics.bind_backend_call(params.tool_call_id, event.call_id)
+                if event.marker == "IntermediateResponse" and filler_text and not filler_emitted:
+                    await _cancel_pending_filler(filler_task)
+                    filler_task = None
+                    await emit_filler_once()
+                    return
+
                 if event.marker != "ThinkerStarted" or not filler_text:
                     return
                 if filler_started or (filler_task is not None and not filler_task.done()):
                     return
                 filler_started = True
                 if filler_threshold_seconds <= 0:
-                    await _emit_talker_response(params.llm, filler_text, append_to_context=False)
+                    await emit_filler_once()
                     return
                 filler_task = asyncio.create_task(emit_filler_after_threshold())
 
@@ -188,6 +203,7 @@ def build_handlers(
             params,
             payload,
             default_mode=tool_result_mode_default,
+            talker_result_tools=talker_result_tools,
             stage_metrics=stage_metrics,
         )
 
@@ -283,6 +299,7 @@ async def _deliver_tool_payload(
     *,
     default_mode: object = "talker",
     stage_metrics: StageMetricsCoordinator | None = None,
+    talker_result_tools: frozenset[str] = frozenset(),
 ) -> None:
     """Deliver one grounded payload through the configured final-response path."""
     if not is_speakable_payload(payload):
@@ -292,7 +309,7 @@ async def _deliver_tool_payload(
         return
     response_text = str(payload.get("response_text") or "")
     _remember_backend_response(params.llm, response_text, payload)
-    if _should_deliver_directly(payload, default_mode=default_mode):
+    if _should_deliver_directly(payload, default_mode=default_mode, talker_result_tools=talker_result_tools):
         await _emit_talker_response(params.llm, response_text, append_to_context=False)
         await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
         if stage_metrics is not None:
@@ -314,11 +331,19 @@ def _tool_result_mode(default_mode: object = "talker") -> str:
     return normalized_default if normalized_default in {"direct", "hybrid", "talker"} else "talker"
 
 
-def _should_deliver_directly(payload: dict[str, Any], *, default_mode: object = "talker") -> bool:
+def _should_deliver_directly(
+    payload: dict[str, Any],
+    *,
+    default_mode: object = "talker",
+    talker_result_tools: frozenset[str] = frozenset(),
+) -> bool:
     mode = _tool_result_mode(default_mode)
     if mode == "direct":
         return True
     if mode == "hybrid":
+        if talker_result_tools:
+            dynamic_success = _payload_outcome(payload) == "success" and payload.get("tool") in talker_result_tools
+            return not dynamic_success
         return _payload_outcome(payload) == "success"
     return False
 
@@ -336,19 +361,23 @@ def _payload_outcome(payload: dict[str, Any]) -> str:
 
 
 def _talker_result_projection(payload: dict[str, Any]) -> dict[str, Any]:
-    """Expose only the trusted spoken contract, never raw provider data."""
-    allowed = {
-        "type",
-        "tool",
-        "status",
-        "response_text",
-        "reason",
-        "action",
-        "context",
-        "params_needed",
-        "params_resolved",
-    }
-    return {key: value for key, value in payload.items() if key in allowed}
+    """Expose the trusted spoken contract plus a bounded weather fact projection."""
+    allowed = {"type", "tool", "status", "response_text", "reason", "action", "context", "params_needed"}
+    projected = {key: value for key, value in payload.items() if key in allowed}
+    data = payload.get("data")
+    result = data.get("result") if isinstance(data, dict) else None
+    if payload.get("tool") == "get_weather" and isinstance(result, dict):
+        weather_keys = {
+            "city",
+            "temperature",
+            "temperature_unit",
+            "condition",
+            "feels_like",
+            "humidity_percent",
+            "wind_kph",
+        }
+        projected["data"] = {key: result[key] for key in weather_keys if key in result}
+    return projected
 
 
 def _talker_filler_mode() -> str:

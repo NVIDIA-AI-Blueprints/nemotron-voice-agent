@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import copy
 import json
 import os
 import re
@@ -36,7 +37,9 @@ from examples.frontend_backend_agent.src.domain import DomainBuildContext, resol
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent
 from examples.frontend_backend_agent.src.tool_handlers import (
     _payload_outcome,
+    _should_deliver_directly,
     _talker_filler_mode,
+    _talker_result_projection,
     _tool_result_mode,
     _validated_talker_filler,
     build_handlers,
@@ -97,6 +100,20 @@ class _TransientPlanner:
         return {"tool": "generate_random_number", "params": {"min": 5, "max": 5}}
 
 
+class _SequencedPlanner:
+    def __init__(self, plans: list[dict | BaseException]) -> None:
+        self.plans = list(plans)
+        self.states: list[dict] = []
+
+    async def plan(self, *, query: str, state: dict) -> dict:
+        del query
+        self.states.append(copy.deepcopy(state))
+        item = self.plans.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
 class _CapturingLLM:
     def __init__(self) -> None:
         self.frames = []
@@ -137,6 +154,29 @@ class _DelayedThinker:
 
     def cancel_pending_work(self) -> bool:
         return False
+
+
+class _InterRoundThinker(_DelayedThinker):
+    async def call(self, query: str, slots=None, *, on_started=None) -> dict:
+        del slots
+        if on_started:
+            await on_started(ThinkerLifecycleEvent(marker="ThinkerStarted", call_id="multi", query=query))
+            await on_started(
+                ThinkerLifecycleEvent(
+                    marker="IntermediateResponse",
+                    call_id="multi",
+                    query=query,
+                    payload={"type": "tool_result", "tool": "get_stock_price", "status": "success"},
+                )
+            )
+        return {
+            "type": "tool_result",
+            "tool": "multi_tool",
+            "status": "success",
+            "data": {},
+            "response_text": "The checks completed.",
+            "context": "multi_tool",
+        }
 
 
 async def _noop_tool(arguments, context: ToolContext) -> dict:
@@ -437,7 +477,7 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(backend._overall_timeout_seconds, 40.0)
-        self.assertEqual(backend._planner_timeout_seconds, 18.0)
+        self.assertEqual(backend._planner_timeout_seconds, 6.0)
         self.assertEqual(backend.tool_result_mode_default, "direct")
         self.assertEqual(TOOLS["web_search"].timeout_s, 20.0)
         retry_budget = (
@@ -843,6 +883,106 @@ class FrontendBackendDomainAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service_calls, 0)
         self.assertEqual(payload["reason"], "timeout")
 
+    async def test_dependent_planning_receives_and_accumulates_prior_results(self) -> None:
+        planner = _SequencedPlanner(
+            [
+                {
+                    "tool": "get_stock_price",
+                    "params": {"company_name": "NVIDIA"},
+                    "continue_after_results": True,
+                },
+                {"tool": "web_search", "params": {"query": "why NVIDIA stock moved today"}},
+            ]
+        )
+
+        async def stock(arguments):
+            return {"status": "success", "company": "NVIDIA", "symbol": "NVDA", "price": 100, "currency": "USD"}
+
+        async def search(arguments):
+            return {"status": "success", "answer": "The move followed current market news."}
+
+        backend = GenericThinkerBackend(
+            planner=planner,
+            tools=_tool_registry(get_stock_price=stock, web_search=search),
+            enabled_tools=("get_stock_price", "web_search"),
+            overall_timeout_seconds=3,
+            planner_timeout_seconds=1,
+        )
+        callback_events: list[ThinkerLifecycleEvent] = []
+
+        async def observe(event: ThinkerLifecycleEvent) -> None:
+            callback_events.append(event)
+
+        payload = await backend.call("Check NVIDIA stock and search for why it moved today.", on_started=observe)
+
+        self.assertEqual(len(planner.states), 2)
+        self.assertEqual(planner.states[0]["planning_round"], 1)
+        self.assertEqual(planner.states[0]["prior_tool_results"], [])
+        self.assertEqual(planner.states[1]["prior_tool_results"][0]["tool"], "get_stock_price")
+        self.assertEqual(payload["tool"], "multi_tool")
+        self.assertEqual([item["tool"] for item in payload["data"]["results"]], ["get_stock_price", "web_search"])
+        self.assertEqual([event.marker for event in callback_events], ["ThinkerStarted", "IntermediateResponse"])
+        self.assertEqual(callback_events[-1].payload["tool"], "get_stock_price")
+
+    async def test_dependent_planning_hard_stops_after_three_rounds(self) -> None:
+        plans = [
+            {
+                "tool": "generate_random_number",
+                "params": {"min": 5, "max": 5},
+                "continue_after_results": True,
+            }
+            for _ in range(4)
+        ]
+        planner = _SequencedPlanner(plans)
+        service_calls = 0
+
+        async def fixed_random(arguments):
+            nonlocal service_calls
+            service_calls += 1
+            return {"status": "success", "result": 5, "min": 5, "max": 5}
+
+        backend = GenericThinkerBackend(
+            planner=planner,
+            tools=_tool_registry(generate_random_number=fixed_random),
+            enabled_tools=("generate_random_number",),
+            overall_timeout_seconds=3,
+            planner_timeout_seconds=1,
+        )
+        payload = await backend.call("Generate a random number, then repeat if required.")
+        self.assertEqual(len(planner.states), 3)
+        self.assertEqual(service_calls, 3)
+        self.assertEqual(len(payload["data"]["results"]), 3)
+        self.assertEqual(len(planner.plans), 1)
+
+    async def test_inter_round_progress_emits_talker_filler_once_without_waiting_for_threshold(self) -> None:
+        handler = build_handlers(
+            _InterRoundThinker(),
+            filler_policy="talker_authored",
+            filler_threshold_seconds=60,
+            max_query_chars=2000,
+        )["call_backend"]
+        params = _FunctionParams(
+            {
+                "query": "Check NVIDIA stock and then search for why it moved.",
+                "filler_text": "Let me check NVIDIA's latest movement.",
+            }
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "FRONTEND_BACKEND_TALKER_FILLER_MODE": "emit",
+                "FRONTEND_BACKEND_TOOL_RESULT_MODE": "talker",
+            },
+            clear=False,
+        ):
+            await handler(params)
+
+        spoken = [frame.text for frame in params.llm.frames if isinstance(frame, LLMTextFrame)]
+        self.assertEqual(spoken, ["Let me check NVIDIA's latest movement."])
+        filler_frame = next(frame for frame in params.llm.frames if isinstance(frame, LLMTextFrame))
+        self.assertFalse(filler_frame.append_to_context)
+
     async def test_generic_filler_is_talker_authored_grounded_and_ephemeral(self) -> None:
         handler = build_handlers(
             _DelayedThinker(),
@@ -944,6 +1084,39 @@ class FrontendBackendDomainAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_payload_outcome({"type": "tool_result", "status": "partial"}), "partial")
         self.assertEqual(_payload_outcome({"type": "response_hint", "reason": "params_missing"}), "needs_input")
         self.assertEqual(_payload_outcome({"type": "response_hint", "reason": "timeout"}), "failure")
+
+    def test_weather_only_hybrid_routes_clean_weather_success_through_talker(self) -> None:
+        dynamic_tools = frozenset({"get_weather"})
+        weather = {"type": "tool_result", "tool": "get_weather", "status": "success"}
+        stock = {"type": "tool_result", "tool": "get_stock_price", "status": "success"}
+        unavailable = {"type": "tool_result", "tool": "get_weather", "status": "unavailable"}
+
+        with patch.dict(os.environ, {"FRONTEND_BACKEND_TOOL_RESULT_MODE": "hybrid"}, clear=True):
+            self.assertFalse(_should_deliver_directly(weather, talker_result_tools=dynamic_tools))
+            self.assertTrue(_should_deliver_directly(stock, talker_result_tools=dynamic_tools))
+            self.assertTrue(_should_deliver_directly(unavailable, talker_result_tools=dynamic_tools))
+
+    def test_weather_projection_exposes_only_bounded_grounding_facts(self) -> None:
+        payload = {
+            "type": "tool_result",
+            "tool": "get_weather",
+            "status": "success",
+            "response_text": "Trusted weather.",
+            "data": {
+                "arguments": {"api_key": "must-not-project"},
+                "result": {
+                    "city": "Pune",
+                    "temperature": 29,
+                    "temperature_unit": "C",
+                    "humidity_percent": 48,
+                    "wind_kph": 9.5,
+                    "provider_debug": "must-not-project",
+                },
+            },
+        }
+
+        projected = _talker_result_projection(payload)
+        self.assertEqual(projected["data"]["city"], "Pune")
 
     async def test_generic_backend_defaults_to_direct_grounded_delivery(self) -> None:
         thinker = _DelayedThinker(delay=0)

@@ -11,6 +11,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
+from loguru import logger
 from openai.types.chat import ChatCompletionChunk
 from pipecat.frames.frames import MetricsFrame
 from pipecat.metrics.metrics import ProcessingMetricsData, TTFBMetricsData
@@ -24,6 +25,8 @@ _PROCESSORS = {
     "frontend_tool_selection": "frontend_tool_selection_llm",
     "backend_thinker": "backend_thinker_llm",
     "frontend_final_response": "frontend_final_response_llm",
+    "backend_thinker_step2": "backend_thinker_step2_llm",
+    "backend_thinker_step3": "backend_thinker_step3_llm",
 }
 
 
@@ -199,16 +202,18 @@ class StageMetricsCoordinator:
         *,
         model: str | None,
         attempt: int,
+        planning_round: int = 1,
     ) -> StageSpan:
         """Start one streamed Thinker attempt."""
         async with self._lock:
             turn_id = self._backend_turns.get(backend_call_id)
             if turn_id is None:
                 turn_id = self._next_orphan_turn_locked()
-            invocation_id = self._next_invocation_locked("thinker")
+            invocation_id = self._next_invocation_locked(f"thinker-step{planning_round}")
+        stage = "backend_thinker" if planning_round == 1 else f"backend_thinker_step{planning_round}"
         return StageSpan(
             self,
-            stage="backend_thinker",
+            stage=stage,
             model=model,
             turn_id=turn_id,
             invocation_id=invocation_id,
@@ -259,6 +264,23 @@ class StageMetricsCoordinator:
                     "invocation_id": span.invocation_id,
                     "parent_invocation_id": span.parent_invocation_id,
                     "outcome": outcome,
+                }
+            )
+
+    async def record_interruption_trigger(self, transcript: str, word_count: int) -> None:
+        """Expose the bounded transcript evidence that caused a bot-speech interruption."""
+        bounded_text = " ".join(transcript.split())[:240]
+        logger.bind(
+            event="user_interruption_trigger",
+            word_count=word_count,
+            transcript=bounded_text,
+        ).info("Bot speech interruption passed the minimum-word gate")
+        if self._emit_server_event is not None:
+            await self._emit_server_event(
+                {
+                    "type": "user-interruption-trigger",
+                    "transcript": bounded_text,
+                    "word_count": word_count,
                 }
             )
 

@@ -19,6 +19,10 @@ def weather(arguments: dict[str, Any], data: dict[str, Any]) -> str:
     text = f"In {city}, it's {data.get('temperature')} degrees {unit} with {condition.lower()}"
     if data.get("feels_like") is not None:
         text += f", and it feels like {data.get('feels_like')} degrees {unit}"
+    if data.get("humidity_percent") is not None:
+        text += f", with {data.get('humidity_percent')} percent humidity"
+    if data.get("wind_kph") is not None:
+        text += f" and winds at {data.get('wind_kph')} kilometres per hour"
     return f"{text}."
 
 

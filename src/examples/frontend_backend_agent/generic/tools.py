@@ -12,6 +12,7 @@ from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 
 from examples.frontend_backend_agent.generic import services, speech
 from examples.frontend_backend_agent.src.tools import ParamSpec, ToolContext, ToolSpec
+from utils import parse_env_float
 
 GenericService = Callable[[Mapping[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -34,7 +35,17 @@ CALL_BACKEND_TOOL: dict = {
                         "The complete current request, with necessary conversational context and the user's "
                         "latest corrections."
                     ),
-                }
+                },
+                "filler_text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 96,
+                    "description": (
+                        "A brief, query-grounded progress phrase to speak only if the delegated work takes "
+                        "longer than the configured threshold. Use 3 to 12 words. Do not claim a result, "
+                        "invent details, repeat sensitive values, or mention tools, models, prompts, or backends."
+                    ),
+                },
             },
             "required": ["query"],
             "additionalProperties": False,
@@ -120,7 +131,7 @@ TOOLS: dict[str, ToolSpec] = {
             },
             run=_stateless(services.web_search),
             speak=speech.search,
-            timeout_s=30.0,
+            timeout_s=parse_env_float("GENERIC_WEB_SEARCH_TIMEOUT_SECONDS", 20.0, min_value=1.0),
         ),
         ToolSpec(
             name="calculate_bmi",

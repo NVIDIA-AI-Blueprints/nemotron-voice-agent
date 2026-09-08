@@ -12,6 +12,16 @@ This section covers pipeline configurations for optimizing the performance and u
 
 By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete. If the model still has not finalized after the Smart Turn silence fallback (default **1.0 s**, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
 
+Smart Turn controls when a user turn ends. It does not decide whether a sound
+starts a barge-in. The Generic Frontend/Backend Agent uses Pipecat's bot-aware
+minimum-word start strategy: while the bot is speaking, at least 2 transcribed
+words must arrive before the pipeline interrupts bot audio. When the bot is not
+speaking, 1 transcribed word can start a normal turn. This threshold prevents a
+single stray automatic speech recognition token from cutting off a response.
+The server records accepted interruptions through the
+`user-interruption-trigger` event and `user_interruption_trigger` log, including
+a bounded transcript and word count.
+
 ### How It Works
 
 1. The user speaks, and ASR emits interim transcripts as audio streams in.

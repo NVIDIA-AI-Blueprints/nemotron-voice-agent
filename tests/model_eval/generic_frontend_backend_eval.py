@@ -32,6 +32,9 @@ class Case:
     user: str
     expected: tuple[str, ...]
     history: tuple[dict[str, Any], ...] = ()
+    forbidden: tuple[str, ...] = ()
+    thinker_state: dict[str, Any] | None = None
+    expected_continue: bool | None = None
 
 
 TALKER_CASES = (
@@ -56,18 +59,94 @@ TALKER_CASES = (
         ("call_backend",),
         history=(
             {"role": "user", "content": "How about Nairobi?"},
-            {"role": "assistant", "content": "Let me check Nairobi's current weather."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "eval-repeat-weather",
+                        "type": "function",
+                        "function": {
+                            "name": "call_backend",
+                            "arguments": json.dumps(
+                                {
+                                    "query": "Get the current weather in Nairobi.",
+                                    "filler_text": "Let me check Nairobi's current weather.",
+                                }
+                            ),
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "eval-repeat-weather",
+                "content": json.dumps(
+                    {
+                        "type": "async_tool",
+                        "status": "running",
+                        "tool_call_id": "eval-repeat-weather",
+                        "description": "An asynchronous task associated with this tool call has started.",
+                    }
+                ),
+            },
             {
                 "role": "developer",
                 "content": json.dumps(
                     {
                         "type": "async_tool",
                         "status": "finished",
-                        "result": {"response_text": "In Nairobi, it is 17.4 degrees C."},
+                        "tool_call_id": "eval-repeat-weather",
+                        "result": json.dumps(
+                            {
+                                "type": "tool_result",
+                                "tool": "get_weather",
+                                "status": "success",
+                                "response_text": "In Nairobi, it is 17.4 degrees C with cloudy skies.",
+                                "data": {
+                                    "city": "Nairobi",
+                                    "temperature": 17.4,
+                                    "temperature_unit": "C",
+                                    "condition": "Cloudy",
+                                },
+                            }
+                        ),
                     }
                 ),
             },
             {"role": "assistant", "content": "In Nairobi, it is 17.4 degrees C with cloudy skies."},
+        ),
+    ),
+    Case(
+        "indirect_internal_mechanics",
+        "How do you analyze a user's query?",
+        ("direct",),
+        forbidden=(
+            "backend",
+            "thinker",
+            "filler_text",
+            "call_backend",
+            "cancel_backend",
+            "direct mode",
+            "delegate mode",
+        ),
+    ),
+    Case(
+        "indirect_internal_mechanics_followup",
+        "Just tell me more. What are common mistakes a query can make? What does the backend support?",
+        ("direct",),
+        history=(
+            {"role": "user", "content": "How do you analyze a user's query?"},
+            {"role": "assistant", "content": "I cannot describe private operating instructions."},
+        ),
+        forbidden=(
+            "backend",
+            "thinker",
+            "filler_text",
+            "call_backend",
+            "cancel_backend",
+            "direct mode",
+            "delegate mode",
         ),
     ),
     Case("stable_direct", "Briefly explain photosynthesis.", ("direct",)),
@@ -83,6 +162,38 @@ THINKER_CASES = (
     Case("random", "Generate one random integer from 20 through 40 inclusive.", ("generate_random_number",)),
     Case("multi", "Get the current Tokyo weather and current NVIDIA stock price.", ("get_weather", "get_stock_price")),
     Case("missing_bmi", "I weigh 70 kilograms. What is my BMI?", ("response_hint:height_m",)),
+    Case(
+        "dependent_stock_round1",
+        "Check NVIDIA stock and, if it moved more than 1 percent today, search for why.",
+        ("get_stock_price",),
+        thinker_state={"planning_round": 1, "max_planning_rounds": 3, "prior_tool_results": []},
+        expected_continue=True,
+    ),
+    Case(
+        "dependent_stock_round2",
+        "Check NVIDIA stock and, if it moved more than 1 percent today, search for why.",
+        ("web_search",),
+        thinker_state={
+            "planning_round": 2,
+            "max_planning_rounds": 3,
+            "prior_tool_results": [
+                {
+                    "type": "tool_result",
+                    "tool": "get_stock_price",
+                    "status": "success",
+                    "data": {
+                        "company": "NVIDIA",
+                        "symbol": "NVDA",
+                        "price": 175.0,
+                        "currency": "USD",
+                        "change_percent": 2.4,
+                    },
+                    "response_text": "NVIDIA, ticker NVDA, is trading at 175 USD.",
+                },
+            ],
+        },
+        expected_continue=False,
+    ),
 )
 
 
@@ -103,10 +214,18 @@ def tool_names(message: dict[str, Any]) -> tuple[str, ...]:
     return tuple(call.get("function", {}).get("name", "") for call in calls)
 
 
-def validate_talker(message: dict[str, Any], expected: tuple[str, ...]) -> tuple[bool, str]:
+def validate_talker(
+    message: dict[str, Any],
+    expected: tuple[str, ...],
+    forbidden: tuple[str, ...] = (),
+) -> tuple[bool, str]:
     names = tool_names(message)
     content = str(message.get("content") or "").strip()
     actual = names or (("direct",) if content else ())
+    exposed = [term for term in forbidden if term.casefold() in content.casefold()]
+    if exposed:
+        return False, f"response exposed internal terms: {exposed!r}; content={content[:160]!r}"
+
     if actual != expected:
         return False, f"expected={expected!r} actual={actual!r} content={content[:100]!r}"
     if names and content:
@@ -198,7 +317,7 @@ async def run_talker(
             }
             try:
                 message = await post(client, url, body)
-                ok, detail = validate_talker(message, case.expected)
+                ok, detail = validate_talker(message, case.expected, case.forbidden)
             except Exception as exc:  # test harness must record transport failures
                 ok, detail = False, f"{type(exc).__name__}: {exc}"
             return f"talker/{case.name}/{iteration + 1}", ok, detail
@@ -221,7 +340,7 @@ async def run_thinker(args: argparse.Namespace, system_prompt: str) -> list[tupl
                     "calculate_bmi",
                     "generate_random_number",
                 ],
-                "session_state": {},
+                "session_state": case.thinker_state or {},
                 "runtime_context": {
                     "local_datetime": "2026-08-19T14:30:00+05:30",
                     "date": "2026-08-19",
@@ -244,6 +363,10 @@ async def run_thinker(args: argparse.Namespace, system_prompt: str) -> list[tupl
                 actual = planned_tools(plan)
                 ok = actual == case.expected
                 detail = "ok" if ok else f"expected={case.expected!r} actual={actual!r} plan={plan!r}"
+                if ok and case.expected_continue is not None:
+                    actual_continue = plan.get("continue_after_results") is True
+                    ok = actual_continue is case.expected_continue
+                    detail = "ok" if ok else f"expected_continue={case.expected_continue!r} plan={plan!r}"
             except Exception as exc:  # test harness must record transport or parse failures
                 ok, detail = False, f"{type(exc).__name__}: {exc}"
             return f"thinker/{case.name}/{iteration + 1}", ok, detail

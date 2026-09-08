@@ -62,7 +62,16 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
     ),
 }
 _SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset(
-    {"pipeline_mode", "prompt_key", "prompt_content", "tool_choice", "domain_profile", "thinker_prompt", "tools"}
+    {
+        "pipeline_mode",
+        "prompt_key",
+        "prompt_content",
+        "tool_choice",
+        "domain_profile",
+        "thinker_prompt",
+        "tools",
+        "tools_available",
+    }
 )
 _active_slots: frozenset[str] | None = None
 _active_slot_order: tuple[str, ...] | None = None
@@ -487,6 +496,7 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "domain_profile",
         "thinker_prompt",
         "tools",
+        "tools_available",
         "asr_model",
         "asr_function_id",
         "asr_language_code",
