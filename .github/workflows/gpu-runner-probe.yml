@@ -9,7 +9,12 @@ on:
       runner_label:
         description: "Self-hosted runner label to inspect"
         required: true
-        default: "arc-runners-org-nvidia-ai-bp-1-gpu"
+        type: choice
+        default: "arc-runners-org-nvidia-ai-bp-4-gpu"
+        options:
+          - "arc-runners-org-nvidia-ai-bp-4-gpu"
+          - "arc-runners-org-nvidia-ai-bp-2-gpu"
+          - "arc-runners-org-nvidia-ai-bp-1-gpu"
 
 permissions: {}
 
@@ -27,6 +32,8 @@ jobs:
           set -euo pipefail
           printf 'Requested runner label: %s\n' "$RUNNER_LABEL"
           uname -a
-          nvidia-smi -L
-          nvidia-smi --query-gpu=index,name,uuid,memory.total,driver_version,compute_cap --format=csv,noheader
-          nvidia-smi topo -m || true
+          docker version
+          docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 bash -c "nvidia-smi -L"
+          docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 bash -c \
+            "nvidia-smi --query-gpu=index,name,uuid,memory.total,driver_version,compute_cap --format=csv,noheader"
+          docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 bash -c "nvidia-smi topo -m"
