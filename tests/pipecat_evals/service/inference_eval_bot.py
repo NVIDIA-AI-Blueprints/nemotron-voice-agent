@@ -41,6 +41,17 @@ def _install_ci_services(pipeline_mode: str) -> None:
         import examples.omni_assistant_subagents.pipeline as pipeline
         import examples.omni_assistant_subagents.subagents.transport.agent as transport_agent
 
+        configured_reasoning_for = pipeline._reasoning_for
+
+        def ci_reasoning_for(registry, key: str, default: str) -> str:
+            if key == pipeline.MediaAnalyzerWorker.AGENT_NAME:
+                return "off"
+            return configured_reasoning_for(registry, key, default)
+
+        # The local NIM can return a reasoning-only stream for image analysis,
+        # leaving no visible content for the eval to verify. Keep the example's
+        # default intact and disable thinking only in this disposable CI process.
+        pipeline._reasoning_for = ci_reasoning_for
         pipeline.nvidia_api_key = lambda: __import__("os").environ["NVIDIA_INFERENCE_API_KEY"]
         transport_agent.NvidiaTTSService = InferenceMagpieTTSService
 
