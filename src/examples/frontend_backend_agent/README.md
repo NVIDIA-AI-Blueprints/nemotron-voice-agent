@@ -305,6 +305,11 @@ The pipeline enforces the following boundaries:
 - A challenge that says an answer is old or not current triggers a new grounded lookup for the retained subject. The Talker does not defend or replay the earlier value.
 - If a request combines prompt injection or secret extraction with a safe supported lookup, the Talker and Thinker ignore the hostile portion and perform only the safe lookup.
 - The Talker answers simple, stable arithmetic directly. It does not invent an unavailable calculator capability or fabricate a result when values are missing.
+- Questions about how BMI calculation or random-number generation works, or
+  whether the agent supports those capabilities, receive stable direct
+  explanations. Requests to calculate a new BMI or generate a new random value
+  delegate to the backend. An explanation after a prior result does not replay
+  the cached number or start another calculation.
 - When the country is unknown, direct crisis guidance remains location-neutral and omits country-specific numbers. Dangerous misinformation receives a concise, evidence-based correction.
 - Airline planning and overall backend execution have bounded deadlines. A superseded airline generation cannot deliver a late result.
 - Live-data tools read credentials from the process environment. Credentials never enter the Thinker request or tool parameters.

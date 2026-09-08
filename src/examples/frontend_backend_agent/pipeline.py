@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -81,6 +82,32 @@ def _build_context_messages(
     return [{"role": "system", "content": base_prompt}]
 
 
+def _load_prompt_few_shots(prompt_key: str, *, custom_prompt: bool) -> list[dict]:
+    """Load trusted native-call demonstrations without changing session history."""
+    if custom_prompt or not prompt_key:
+        return []
+    entry = load_prompt_catalog(__file__).get(prompt_key)
+    raw_messages = entry.get("few_shots") if isinstance(entry, dict) else None
+    if raw_messages is None:
+        return []
+    if not isinstance(raw_messages, list):
+        raise ValueError(f"Prompt {prompt_key!r} few_shots must be a list")
+    messages: list[dict] = []
+    for index, raw_message in enumerate(raw_messages):
+        if not isinstance(raw_message, dict):
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] must be an object")
+        role = raw_message.get("role")
+        if role not in {"user", "assistant", "tool"}:
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] has unsupported role {role!r}")
+        content = raw_message.get("content")
+        if content is not None and not isinstance(content, str):
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] content must be text or null")
+        if role == "tool" and not isinstance(raw_message.get("tool_call_id"), str):
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] tool message needs tool_call_id")
+        messages.append(copy.deepcopy(raw_message))
+    return messages
+
+
 def _apply_chat_history_sliding_window(
     context: LLMContext,
     preserve_prompt_messages: int,
@@ -128,6 +155,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         __file__,
         body.get("prompt_content", ""),
         body.get("prompt_key", ""),
+    )
+    talker_few_shots = _load_prompt_few_shots(
+        prompt_key,
+        custom_prompt=bool(body.get("prompt_content")),
     )
     thinker_prompt_key = str(body.get("thinker_prompt") or domain.thinker_prompt_key)
     thinker_prompt = _load_required_catalog_prompt(thinker_prompt_key)
@@ -309,6 +340,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- Context + aggregators ---
     messages = _build_context_messages(talker_prompt, system_prompt, runtime_context=domain.runtime_context())
+    messages.extend(talker_few_shots)
+    logger.info(f"Talker native few-shot messages: {len(talker_few_shots)}")
     context = LLMContext(messages, tools=domain.talker_tools_schema, tool_choice="auto")
     preserve_prompt_messages = len(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
