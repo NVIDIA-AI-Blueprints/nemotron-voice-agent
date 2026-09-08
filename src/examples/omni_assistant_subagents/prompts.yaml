@@ -41,8 +41,10 @@ shared:
     label, but the text is too small to read') so the assistant knows there is something to read and can offer
     a high-resolution snapshot. Describe only non-text visuals (the object's kind, colors, and imagery).
   webcam_no_change_rule: >-
-    If nothing meaningful changed, set observation exactly to "No notable change." and do not repeat your previous
-    sentence; still return the complete JSON object with visual_control.
+    Always describe what is present in the newest frames. Use "No notable change." only when
+    those newest frames still match the last note, including the same objects still in view. An object leaving the
+    frame is a change — describe the new current state and do not keep naming the missing object. Never invent an
+    item (not a phone, bottle, screen, or anything else) just to fill the observation.
 
 omni_subagents_assistant:
   description: "Nemotron Omni voice assistant using one model for ASR and LLM."
@@ -127,7 +129,7 @@ agent_prompts:
         {{webcam_role_intro}}
         Reply with STRICT JSON only — one object, nothing else:
         {"observation": "<one short sentence>", "focus": "<short visible focus from the conversation, or empty>", "visual_control": {"intent": "none|greet|stop|continue|down", "confidence": 0.0, "reason": "<short>"}}
-        observation: in natural, professional language, say what the person is DOING and name the KIND of item they hold up or show (a phone, a screen, a document, an object). {{webcam_appearance_rule}} {{webcam_text_too_small_rule}} Interpret cues as behavior ('speaking', 'thinking', 'smiling'), never raw anatomy ('mouth open'); keep hand gestures OUT of the observation. {{webcam_no_change_rule}}
+        observation: one short sentence of what is happening NOW in the newest frames. Name a held object only if it is clearly visible there; otherwise just say what the person is doing and never mention an object as absent, missing, or not visible. {{webcam_appearance_rule}} {{webcam_text_too_small_rule}} Interpret cues as behavior ('speaking', 'thinking', 'smiling'), never raw anatomy ('mouth open'); keep hand gestures OUT of the observation. {{webcam_no_change_rule}}
         focus: when recent conversation steers attention to a visible subject, name that subject in a few words; otherwise "".
         visual_control.intent: score ONLY a clear, deliberate hand gesture occurring in the final roughly 1.5 seconds of the video. Earlier frames are historical context and MUST NOT produce an intent, even if they contain an unmistakable gesture. The gesture must still be visible or actively finishing in the newest frames; otherwise return 'none'. Judge the HANDS, not the face (a smile never changes the gesture):
         - greet: ONLY a hand that CLEARLY and REPEATEDLY moves side to side across the video (an unmistakable wave). A hand that is merely raised, reaching toward the camera or webcam, adjusting the device, scratching, resting, gesturing while talking, or holding something is NOT a wave — use 'none'.
@@ -139,9 +141,9 @@ agent_prompts:
     gesture_prompt:
       description: "Webcam per-frame user prompt requesting the strict-JSON gesture object."
       content: >-
-        Now — use the older part of this short video only as background, report the person's current state from its
-        newest frames, and score a hand gesture only if it occurs in the final roughly 1.5 seconds. Reply with the
-        strict JSON object only.
+        Now — report only the person's current state from the newest frames (an object that left those frames is
+        gone), and score a hand gesture only if it occurs in the final roughly 1.5 seconds. Reply with the strict
+        JSON object only.
 
   TransportAgent:
     proactive_greet:

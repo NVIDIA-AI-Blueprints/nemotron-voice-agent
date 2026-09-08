@@ -466,23 +466,27 @@ class OmniTransportAgent(PipelineWorker):
         return self._webcam_controller.current_visual_status()
 
     def _recent_conversation(self, max_turns: int = 6, max_chars: int = 600) -> str:
-        """Render the last few user/assistant turns as plain text for the webcam analyzer.
+        """Render the last few user turns as plain text for the webcam analyzer.
 
-        Only conversational turns are included, never the pinned board, so the webcam worker
-        learns the current topic without a feedback loop from its own past observations. Capped
-        in turns and characters to keep the continuous sub-second webcam loop fast.
+        Assistant replies are omitted so a spoken visual claim cannot lock the webcam
+        worker onto a stale object after it leaves the frame. Gesture directives are
+        injected as user turns, so they are skipped for the same reason. Capped in
+        turns and characters to keep the continuous webcam loop fast.
         """
+        directives = {text.strip() for text in self._proactive_directives.values() if text.strip()}
         turns: list[str] = []
         for message in self._context.get_messages():
             if not isinstance(message, dict):
                 continue
-            role = str(message.get("role") or "")
+            if str(message.get("role") or "") != "user":
+                continue
             content = message.get("content")
-            if role not in ("user", "assistant") or not isinstance(content, str):
+            if not isinstance(content, str):
                 continue
             text = content.strip()
-            if text:
-                turns.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
+            if not text or text in directives:
+                continue
+            turns.append(f"User: {text}")
         rendered = "\n".join(turns[-max_turns:]).strip()
         return rendered[-max_chars:] if len(rendered) > max_chars else rendered
 

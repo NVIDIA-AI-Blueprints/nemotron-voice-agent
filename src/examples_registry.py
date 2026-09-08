@@ -232,9 +232,7 @@ def _load_service_catalogs(example_dir: str) -> tuple[dict[str, dict], dict[str,
     """Load cloud and local service catalogs for one example directory."""
     base = Path(example_dir)
     cloud = (
-        _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml"))
-        if nvidia_cloud_available()
-        else {}
+        _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml")) if nvidia_cloud_available() else {}
     )
     local = _load_local_service_catalog(base)
     return cloud, local
