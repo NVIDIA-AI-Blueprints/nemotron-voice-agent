@@ -25,7 +25,10 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
+from examples.frontend_backend_agent.src.barge_in import BargeInState, BargeInTracker
 from examples.frontend_backend_agent.src.domain import DomainBuildContext, resolve_domain_spec
+from examples.frontend_backend_agent.src.reliable_talker import ReliableNvidiaLLMService
+from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
@@ -36,6 +39,8 @@ from examples.shared.pipeline_utils import (
     register_session_start_handlers,
     with_realtime_observers,
 )
+from examples.shared.tool_call_speech_gate import ToolCallSpeechGate
+from session_capture.capture import mark_pipeline_finished, run_finalize
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -56,7 +61,8 @@ CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 20)
 THINKER_TOOL_DELAY_MIN_SECONDS = 0.1
 THINKER_TOOL_DELAY_MAX_SECONDS = 0.5
 THINKER_FILLER_THRESHOLD_SECONDS = parse_env_float("THINKER_FILLER_THRESHOLD_SECONDS", 0.3, min_value=0.0)
-THINKER_TOOL_TIMEOUT_SECONDS = parse_env_float("THINKER_TOOL_TIMEOUT_SECONDS", 30.0, min_value=1.0)
+THINKER_TOOL_TIMEOUT_SECONDS = parse_env_float("THINKER_TOOL_TIMEOUT_SECONDS", 45.0, min_value=1.0)
+FRONTEND_BACKEND_VAD_STOP_SECS = parse_env_float("FRONTEND_BACKEND_VAD_STOP_SECS", 0.5, min_value=0.0)
 
 
 def _build_context_messages(
@@ -90,6 +96,15 @@ def _apply_chat_history_sliding_window(
     context.set_messages(messages[:preserve] + messages[preserve:][-chat_history_limit:])
 
 
+def _registry_default_service_key(example_key: str, category: str) -> str:
+    """Return the active example's first configured service key for ``category``."""
+    defaults = examples_registry.find(example_key).get("defaults", {})
+    service_keys = defaults.get(category, []) if isinstance(defaults, dict) else []
+    if isinstance(service_keys, list) and service_keys:
+        return str(service_keys[0])
+    return ""
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Frontend/Backend Agent cascaded pipeline for one session."""
     logger.info("Starting Frontend/Backend Agent cascaded pipeline")
@@ -97,6 +112,17 @@ async def bot(runner_args: RunnerArguments) -> None:
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     domain = resolve_domain_spec(body.get("domain_profile", "airline"))
+    task: PipelineWorker | None = None
+
+    async def emit_stage_metric(frame) -> None:
+        if task is not None:
+            await task.queue_frame(frame)
+
+    async def emit_stage_server_event(data: dict) -> None:
+        if task is not None:
+            await task.queue_frame(RTVIServerMessageFrame(data=data))
+
+    stage_metrics = StageMetricsCoordinator(emit_stage_metric, emit_stage_server_event)
 
     prompt_key, talker_prompt = resolve_prompt(
         __file__,
@@ -106,10 +132,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     thinker_prompt_key = str(body.get("thinker_prompt") or domain.thinker_prompt_key)
     thinker_prompt = _load_required_catalog_prompt(thinker_prompt_key)
     tool_names = tuple(name for name in body.get("tools", ()) if isinstance(name, str))
-    default_llm = load_service_entry("llm", "")
-    default_tts = load_service_entry("tts", "")
-    default_asr = load_service_entry("asr", "")
-    default_thinker_llm = load_service_entry("thinker-llm", "")
+    pipeline_mode = str(body.get("pipeline_mode", ""))
+    default_llm = load_service_entry("llm", _registry_default_service_key(pipeline_mode, "llm"))
+    default_tts = load_service_entry("tts", _registry_default_service_key(pipeline_mode, "tts"))
+    default_asr = load_service_entry("asr", _registry_default_service_key(pipeline_mode, "asr"))
+    default_thinker_llm = load_service_entry(
+        "thinker-llm",
+        _registry_default_service_key(pipeline_mode, "thinker-llm"),
+    )
 
     # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
@@ -150,10 +180,12 @@ async def bot(runner_args: RunnerArguments) -> None:
         llm_settings.temperature = talker_temperature
     if extra_params:
         llm_settings.extra = extra_params
-    talker_llm = NvidiaLLMService(
+    talker_llm = ReliableNvidiaLLMService(
         api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
+        stage_metrics=stage_metrics,
+        stage_model_name=model_id,
     )
     logger.info(
         f"Talker LLM: model={model_id}, base_url={base_url}, prompt={prompt_key}, "
@@ -186,15 +218,22 @@ async def bot(runner_args: RunnerArguments) -> None:
         base_url=thinker_base_url,
         settings=thinker_llm_settings,
     )
+
+    async def on_internal_tool_started(tool_name: str) -> None:
+        await task.queue_frame(RTVIServerMessageFrame(data={"type": "tool-call", "tool": tool_name}))
+
     thinker = domain.build_backend(
         DomainBuildContext(
             thinker_llm=thinker_llm,
+            thinker_model_name=thinker_model_id,
             thinker_prompt=thinker_prompt,
             thinker_max_tokens=thinker_max_tokens,
             tool_names=tool_names,
             tool_delay_seconds=THINKER_TOOL_DELAY_MAX_SECONDS,
             tool_delay_min_seconds=THINKER_TOOL_DELAY_MIN_SECONDS,
             load_service_entry=load_service_entry,
+            on_tool_started=on_internal_tool_started,
+            stage_metrics=stage_metrics,
         )
     )
     logger.info(f"Frontend/Backend domain: {domain.key} ({domain.label})")
@@ -207,12 +246,15 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info(f"Thinker tool delay: {THINKER_TOOL_DELAY_MIN_SECONDS:.3f}s-{THINKER_TOOL_DELAY_MAX_SECONDS:.3f}s")
     logger.info(f"Thinker filler threshold: {THINKER_FILLER_THRESHOLD_SECONDS:.3f}s")
     logger.info(f"Thinker tool timeout: {THINKER_TOOL_TIMEOUT_SECONDS:.3f}s")
+    barge_in_state = BargeInState()
     for name, handler in build_handlers(
         thinker,
         filler_threshold_seconds=THINKER_FILLER_THRESHOLD_SECONDS,
         filler_policy=domain.filler_policy,
         filler_selector=domain.filler_selector,
+        interrupted_speech_consumer=barge_in_state.consume_interrupted_speech,
         max_query_chars=domain.max_query_chars,
+        stage_metrics=stage_metrics,
     ).items():
         cancel_on_interruption = name != "call_backend"
         talker_llm.register_function(
@@ -236,7 +278,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
         "zero_shot_audio_prompt_file", ""
     )
-    custom_dictionary = load_ipa_dictionary()
+    custom_dictionary = load_ipa_dictionary(tts_model)
     tts_settings_kwargs: dict = {"voice": tts_voice}
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
@@ -271,16 +313,21 @@ async def bot(runner_args: RunnerArguments) -> None:
     preserve_prompt_messages = len(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=build_user_aggregator_params(welcome_enabled),
+        user_params=build_user_aggregator_params(
+            welcome_enabled,
+            vad_stop_secs=FRONTEND_BACKEND_VAD_STOP_SECS,
+        ),
     )
-    audio_recorder = create_audio_recorder()
+    audio_recorder = create_audio_recorder(body.get("session_id", ""))
 
     pipeline = Pipeline(
         [
             transport.input(),
+            BargeInTracker(barge_in_state),
             stt,
             user_aggregator,
             talker_llm,
+            ToolCallSpeechGate(),
             tts,
             transport.output(),
             *([audio_recorder] if audio_recorder else []),
@@ -308,6 +355,20 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info(f"User-to-bot latency: {latency:.3f}s")
         await task.queue_frame(
             RTVIServerMessageFrame(data={"type": "user-bot-latency", "latency": round(latency, 3), "first": False})
+        )
+
+    @latency_observer.event_handler("on_latency_breakdown")
+    async def on_breakdown(observer, breakdown):
+        await task.queue_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "latency-breakdown",
+                    "vad_smart_turn": round(breakdown.user_turn_secs, 3)
+                    if breakdown.user_turn_secs is not None
+                    else None,
+                    "events": breakdown.chronological_events(),
+                }
+            )
         )
 
     task = PipelineWorker(
@@ -344,6 +405,18 @@ async def bot(runner_args: RunnerArguments) -> None:
         on_start=_on_session_start,
         welcome_enabled=welcome_enabled,
     )
+
+    @task.event_handler("on_pipeline_finished")
+    async def on_pipeline_finished(task, frame):
+        # Fires only once the CancelFrame queued by task.cancel() (below) has
+        # genuinely reached the end of the pipeline (or timed out) -- i.e. every
+        # processor, including the audio recorder's final turn, has actually
+        # flushed. Finalizing any earlier risks the last turn's WAV missing
+        # from the tarball, plus a late write recreating it after finalize's
+        # own cleanup deletes the session prefix. Offloaded via to_thread: this
+        # does blocking store I/O, tar assembly and, on the winning pod, a
+        # subprocess upload with up to a 300s timeout -- never safe on the loop.
+        await run_finalize(mark_pipeline_finished, body.get("session_id", ""))
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

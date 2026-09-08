@@ -149,16 +149,21 @@ def register_session_start_handlers(
             await _start_session("rtvi-client-ready")
 
 
-def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
-    """Return user-turn configuration, defaulting to Pipecat smart turn."""
+def build_user_aggregator_params(
+    welcome_enabled: bool, *, vad_stop_secs: float | None = None
+) -> LLMUserAggregatorParams:
+    """Return user-turn configuration with an optional VAD finalization delay."""
+    default_stop_secs = 0.2 if vad_stop_secs is None else max(0.0, vad_stop_secs)
     if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
         return LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=default_stop_secs)),
             user_mute_strategies=build_user_mute_strategies(welcome_enabled),
             user_turn_strategies=UserTurnStrategies(stop=build_smart_turn_stop_strategies()),
         )
 
-    stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
+    stop_secs = (
+        parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0) if vad_stop_secs is None else default_stop_secs
+    )
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
         user_mute_strategies=build_user_mute_strategies(welcome_enabled),
