@@ -23,7 +23,6 @@ The reference performance benchmark measures the Nemotron Voice Agent on a dedic
 | 16 | 0.86 | 0.49 | 0.34 | 0.13 | 0.08 |
 | 32 | 0.9 | 0.48 | 0.37 | 0.13 | 0.09 |
 | 64 | 0.93 | 0.49 | 0.4 | 0.13 | 0.1 |
-| Mean | 0.89 | 0.49 | 0.38 | 0.16 | 0.08 |
 
 *E2E: End-to-End · TTFB: Time to First Byte · TTFT: Time to First Token*
 
