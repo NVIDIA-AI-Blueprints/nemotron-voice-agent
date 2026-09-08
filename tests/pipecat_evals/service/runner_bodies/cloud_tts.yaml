@@ -1,10 +1,11 @@
 defaults:
-  llm_id: cloud-nim:nemotron-lightning
+  llm_id: custom-inference-api
+  model_id: nvidia/nvidia/nemotron-3.5-lightning
+  base_url: https://inference-api.nvidia.com/v1
   asr_id: cloud-nim:nemotron-asr-streaming-english
-  # Select TTS by catalog ID so session hydration includes NVCF's required
-  # function ID, model, and synthesis mode. Supplying only tts_server causes
-  # NVCF to reject the stream with "no function-id was passed in the metadata".
-  tts_id: cloud-nim:magpie-multilingual-tts
+  # The CI-only eval bot replaces the example's gRPC TTS class with the hosted
+  # Inference API adapter. Production catalogs and example pipelines stay unchanged.
+  tts_id: custom-inference-api
 
 bodies:
   generic_default:
@@ -54,7 +55,9 @@ bodies:
   frontend_backend_default:
     pipeline_mode: frontend-backend-agent
     prompt_key: talker
-    thinker_llm_id: cloud-nim:nemotron-lightning
+    thinker_llm_id: custom-inference-api
+    thinker_model_id: nvidia/nvidia/nemotron-3.5-lightning
+    thinker_base_url: https://inference-api.nvidia.com/v1
     # The Thinker only emits a compact JSON tool plan. Keep its hosted-eval
     # request bounded so a flight search can complete before the eval's
     # response deadline instead of spending the tool budget on reasoning.
@@ -65,12 +68,16 @@ bodies:
   omni_default:
     pipeline_mode: omni-assistant
     prompt_key: generic_omni_assistant
-    llm_id: cloud-nim:nemotron-omni-nvfp4
+    llm_id: custom-inference-api
+    model_id: nvidia/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+    base_url: https://inference-api.nvidia.com/v1
     session_id: eval-omni-cloud-tts-default
 
   omni_uploaded_image:
     pipeline_mode: omni-assistant-subagents
-    llm_id: cloud-nim:nemotron-omni-nvfp4
+    llm_id: custom-inference-api
+    model_id: nvidia/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+    base_url: https://inference-api.nvidia.com/v1
     system_prompt: "Eval-only routing guard: when Available input state says uploaded_attachment is available and the user asks about the uploaded attachment, image, file, or diagram, choose turn_action=analyze_attachment, selected_input_source=uploaded_attachment, and media_analysis_action=new, acknowledge that you will inspect or analyze the uploaded image, and let the media analyzer produce the actual description."
     session_id: eval-omni-uploaded-image-cloud-tts
     eval_attachment:
