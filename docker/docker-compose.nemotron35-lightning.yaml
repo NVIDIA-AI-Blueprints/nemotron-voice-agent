@@ -46,6 +46,7 @@ services:
       - generic-assistant/single-gpu
       - multilingual-assistant/single-gpu
       - frontend-backend-agent/single-gpu
+      - webex-byova-ws-assistant/single-gpu
     command:
       - |
         args=(

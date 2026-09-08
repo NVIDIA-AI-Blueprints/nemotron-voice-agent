@@ -14,6 +14,7 @@ name: nemotron-voice-agent
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
 #   frontend-backend-agent       Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
 #   webex-byova-assistant        Cascaded backend for Cisco Webex BYOVA adapter
+#   webex-byova-ws-assistant     Generic baseline for Cisco Webex BYOVA WebSocket
 #
 # Hardware targets:
 #   server                    NIM ASR + LLM + TTS. Recommended for scaling
@@ -27,6 +28,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant up
 #   docker compose --profile omni-assistant-subagents up
 #   docker compose --profile frontend-backend-agent up
+#   docker compose --profile webex-byova-ws-assistant up
 #
 # On-prem recipes:
 #   docker compose --profile generic-assistant/server up
@@ -41,6 +43,8 @@ name: nemotron-voice-agent
 #   docker compose --profile frontend-backend-agent/server up
 #   docker compose --profile frontend-backend-agent/single-gpu up
 #   docker compose --profile webex-byova-assistant/server up
+#   docker compose --profile webex-byova-ws-assistant/server up
+#   docker compose --profile webex-byova-ws-assistant/single-gpu up
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
@@ -243,3 +247,79 @@ services:
       USE_SILERO_VAD_TURN_DETECTION: "true"
       SILERO_VAD_STOP_SECS: "${SILERO_VAD_STOP_SECS:-0.5}"
       AUDIO_OUT_10MS_CHUNKS: "40"
+
+  webex-byova-ws-assistant:
+    <<: *app-base
+    profiles:
+      - webex-byova-ws-assistant
+    networks:
+      default:
+        aliases:
+          - webex-byova-ws-pipeline
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: webex-byova-ws-assistant
+      TRANSPORT_SELECTION: websocket
+
+  webex-byova-ws-assistant-server:
+    <<: *app-base
+    profiles:
+      - webex-byova-ws-assistant/server
+    networks:
+      default:
+        aliases:
+          - webex-byova-ws-pipeline
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: webex-byova-ws-assistant
+      TRANSPORT_SELECTION: websocket
+
+  webex-byova-ws-assistant-single-gpu:
+    <<: *app-base
+    profiles:
+      - webex-byova-ws-assistant/single-gpu
+    networks:
+      default:
+        aliases:
+          - webex-byova-ws-pipeline
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: webex-byova-ws-assistant
+      TRANSPORT_SELECTION: websocket
+
+  webex-byova-ws-adapter:
+    build:
+      context: ./src/examples/webex_byova_ws/client
+      dockerfile: Dockerfile
+    image: nemotron-webex-byova-ws-adapter:latest
+    profiles:
+      - webex-byova-ws-assistant
+      - webex-byova-ws-assistant/server
+      - webex-byova-ws-assistant/single-gpu
+    ports:
+      - "${BYOVA_WS_PUBLISH_ADDRESS:-127.0.0.1}:${BYOVA_WS_PUBLISH_PORT:-18086}:8086"
+    env_file:
+      - .env
+    environment:
+      BYOVA_WS_HOST: 0.0.0.0
+      BYOVA_WS_PORT: "8086"
+      BYOVA_AUTH_ENABLED: "${BYOVA_AUTH_ENABLED:-false}"
+      BYOVA_ALLOW_PLAINTEXT_LOCAL: "${BYOVA_ALLOW_PLAINTEXT_LOCAL:-true}"
+      BYOVA_ALLOW_AUTH_DISABLED_LOCAL: "${BYOVA_ALLOW_AUTH_DISABLED_LOCAL:-true}"
+      NEMOTRON_VOICE_AGENT_WS: "${NEMOTRON_VOICE_AGENT_WS:-wss://webex-byova-ws-pipeline:7860/api/ws}"
+      NEMOTRON_INSECURE_TLS: "${NEMOTRON_INSECURE_TLS:-true}"
+    volumes:
+      - type: bind
+        source: ${BYOVA_TLS_CERT_HOST:-/dev/null}
+        target: /run/secrets/byova-tls.crt
+        read_only: true
+      - type: bind
+        source: ${BYOVA_TLS_KEY_HOST:-/dev/null}
+        target: /run/secrets/byova-tls.key
+        read_only: true
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

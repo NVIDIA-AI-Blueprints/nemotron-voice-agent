@@ -1,0 +1,47 @@
+[project]
+name = "cisco-webex-byova-ws-adapter"
+version = "0.1.0"
+description = "Cisco Webex BYOVA WebSocket to Nemotron RTVI adapter"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aiohttp>=3.12.15,<4",
+    "pipecat-ai[websocket]==1.1.0",
+    "PyJWT[crypto]>=2.10.1,<3",
+    "websockets>=15.0.1,<16",
+]
+
+[project.scripts]
+cisco-webex-byova-ws-adapter = "webex_byova_ws_adapter.main:main"
+
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.1,<2",
+    "ruff==0.15.6",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I", "D"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["D"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["webex_byova_ws_adapter*"]

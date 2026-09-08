@@ -1,0 +1,121 @@
+convert_currency:
+  type: function
+  function:
+    name: convert_currency
+    description: Convert a certain amount of currency from one currency to another.
+    parameters:
+      type: object
+      properties:
+        amount:
+          type: number
+          description: The amount of currency to convert
+        from_currency:
+          type: string
+          description: The currency to convert from
+        to_currency:
+          type: string
+          description: The currency to convert to
+      required:
+        - amount
+        - from_currency
+        - to_currency
+
+calculate_bmi:
+  type: function
+  function:
+    name: calculate_bmi
+    description: Calculate the Body Mass Index (BMI) given weight and height.
+    parameters:
+      type: object
+      properties:
+        weight_kg:
+          type: number
+          description: Weight in kilograms
+        height_m:
+          type: number
+          description: Height in meters
+      required:
+        - weight_kg
+        - height_m
+
+get_current_date_time:
+  type: function
+  function:
+    name: get_current_date_time
+    description: >-
+      Get the current date and time, optionally for a specific IANA timezone.
+      When the timezone is omitted, the server's local time is returned.
+    parameters:
+      type: object
+      properties:
+        timezone:
+          type: string
+          description: >-
+            Optional IANA timezone name (e.g. 'UTC', 'America/New_York',
+            'Europe/London', 'Asia/Kolkata', 'Australia/Sydney').
+            Abbreviations like 'EST' or 'PST' are not accepted; unknown
+            values return an error.
+      required: []
+
+get_stock_price:
+  type: function
+  function:
+    name: get_stock_price
+    description: Get the current stock price for a given company name.
+    parameters:
+      type: object
+      properties:
+        company_name:
+          type: string
+          description: The name of the company, e.g. Apple, Tesla, Microsoft, NVIDIA
+      required:
+        - company_name
+
+generate_random_number:
+  type: function
+  function:
+    name: generate_random_number
+    description: Generate a random number within a specified range.
+    parameters:
+      type: object
+      properties:
+        min:
+          type: number
+          description: The minimum value (inclusive), defaults to 1
+        max:
+          type: number
+          description: The maximum value (inclusive), defaults to 100
+      required: []
+
+get_weather:
+  type: function
+  function:
+    name: get_weather
+    description: Get the current weather for a given city.
+    parameters:
+      type: object
+      properties:
+        city:
+          type: string
+          description: The city name, e.g. London, New York, Tokyo
+        units:
+          type: string
+          description: "Temperature units: 'celsius' or 'fahrenheit', defaults to celsius"
+      required:
+        - city
+
+get_news_headlines:
+  type: function
+  function:
+    name: get_news_headlines
+    description: Get the latest news headlines.
+    parameters:
+      type: object
+      properties:
+        country:
+          type: string
+          description: The country for which news headlines should be retrieved
+        category:
+          type: string
+          description: The category of news, e.g. business, sports, entertainment
+      required: []

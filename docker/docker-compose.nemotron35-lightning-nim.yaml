@@ -37,6 +37,7 @@ services:
       - multilingual-assistant/server
       - frontend-backend-agent/server
       - webex-byova-assistant/server
+      - webex-byova-ws-assistant/server
     environment:
       <<: *nim-llm-env
     deploy:
