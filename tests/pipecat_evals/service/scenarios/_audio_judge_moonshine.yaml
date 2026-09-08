@@ -1,5 +1,6 @@
 modality: audio
 eval:
+  service: nvidia-inference-api
   factory: examples.shared.nvidia_inference_judge.create_nvidia_inference_judge
   model: nvidia/google/gemma-4-31b-it
 transcription:

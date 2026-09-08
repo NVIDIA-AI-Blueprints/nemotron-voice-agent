@@ -1,5 +1,5 @@
-# Service-backed scenarios for low-VRAM self-hosted runners. These use NVIDIA
-# cloud ASR/LLM/TTS, plus local Ollama judge and local booking server.
+# Service-backed scenarios for self-hosted runners. These use NVIDIA-hosted
+# ASR/LLM/TTS and evaluation judge services, plus the local booking server.
 
 bots_dir: .
 scenarios_dir: scenarios
