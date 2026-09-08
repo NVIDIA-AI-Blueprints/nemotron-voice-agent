@@ -43,7 +43,7 @@ const DEFAULT_WEBCAM_CONFIG: Required<WebcamConfig> = {
 };
 const IDLE_UPLOAD_STATE: WebcamUploadState = { mode: "idle", label: "" };
 const HIGHRES_JPEG_QUALITY = 0.92;
-const DEFAULT_CHUNK_SECONDS = 8;
+const DEFAULT_CHUNK_SECONDS = 2;
 
 function normalizeWebcamConfig(config: WebcamConfig): NormalizedWebcamConfig {
   return {
@@ -444,7 +444,7 @@ export function WebcamVisionPanel({ sessionId }: Readonly<{ sessionId: string }>
           <small className="webcam-status-label">{statusLabel}</small>
           {error && <small className="webcam-error">{error}</small>}
         </div>
-        <label className="webcam-chunk-control" title="Recent seconds sent to the model as one continuous video">
+        <label className="webcam-chunk-control" title="How many recent seconds of live video the webcam agent sees. Shorter keeps the summary on what is in frame now.">
           <span>Chunk</span>
           <select
             value={chunkSeconds}

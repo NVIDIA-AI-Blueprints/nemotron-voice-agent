@@ -6,10 +6,10 @@
 This is the ``omni-video-stream`` style capability: while the browser webcam is
 on, frames are uploaded continuously and each fresh frame is sent to the
 ``WebcamAgent`` (reasoning-off, rolling visual memory) for a one-sentence
-description. There is no scene-change gate and no speech-conditioned gating: each fresh
-observation is streamed to the client UI and mirrored into the Speaker's pinned
-subagents board (its "live eyes"), updated in one place so the Speaker always
-knows what it currently sees.
+description of the newest moments. There is no speech-conditioned gating: each
+fresh observation is streamed to the client UI and mirrored into the Speaker's
+pinned subagents board (its "live eyes"), with the last note passed back so a
+disappeared object is not kept in the description.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ _CAMERA_OFF_STATE = "the camera is OFF right now — there is nothing visible li
 _CAMERA_ON_STATE = "the camera just turned on; the live view is loading"
 _NOOP_OBSERVATION = "no notable change"
 _STREAM_INTERVAL_MS = 800
-_WINDOW_SECONDS = 8.0
+_WINDOW_SECONDS = 2.0
 
 
 def _is_noop_observation(observation: str) -> bool:
@@ -143,7 +143,7 @@ class WebcamController:
         logger.info(f"Webcam video window set to {self._window_seconds}s")
 
     def _conversation_context(self) -> str:
-        """Recent conversation text for the webcam analyzer, or "" if unavailable."""
+        """Recent user-turn text for the webcam analyzer, or "" if unavailable."""
         if self._conversation_provider is None:
             return ""
         try:
@@ -151,6 +151,13 @@ class WebcamController:
         except Exception as exc:
             logger.debug(f"Webcam conversation context unavailable: {exc}")
             return ""
+
+    def _previous_observation(self) -> str:
+        """Last published scene note, or "" when the camera is off/loading."""
+        state = self._board_state.strip()
+        if not state or state in (_CAMERA_OFF_STATE, _CAMERA_ON_STATE):
+            return ""
+        return state
 
     def current_visual_status(self) -> str:
         """A fresh, per-turn line stating what the assistant can see right now.
@@ -255,6 +262,7 @@ class WebcamController:
                             "frame": frame.metadata(),
                             "window_seconds": self._window_seconds,
                             "conversation_context": self._conversation_context(),
+                            "previous_observation": self._previous_observation(),
                         },
                         timeout=60.0,
                     )

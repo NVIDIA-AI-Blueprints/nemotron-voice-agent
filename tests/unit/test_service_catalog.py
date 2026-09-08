@@ -363,9 +363,9 @@ llm:
         with (
             patch.dict(os.environ, {"NVIDIA_API_KEY": ""}),
             patch("examples_registry._load_service_catalogs", return_value=({}, {})),
+            self.assertRaisesRegex(RuntimeError, "NVIDIA_API_KEY"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "NVIDIA_API_KEY"):
-                examples_registry._resolve_service_default(example, "asr", "cloud-only")
+            examples_registry._resolve_service_default(example, "asr", "cloud-only")
 
     def test_registry_defaults_use_cloud_multilingual_when_local_only_default_is_unreachable(self) -> None:
         example = examples_registry._lookup_by_key("multilingual-assistant")
