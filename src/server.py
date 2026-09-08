@@ -216,11 +216,37 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
         raise ValueError("session config must be a JSON object")
     example = _bind_example_context_by_key(str(data.get("pipeline_mode", "")) or fallback_example_key)
     config = dict(data)
-    if not config.get("prompt_key") and not config.get("prompt_content"):
-        prompt_key = examples_registry.prompt_default_key(example["key"])
-        if prompt_key:
-            config["prompt_key"] = prompt_key
+    # Registry-owned: a client cannot pair a prompt catalog with another domain backend.
+    config["domain_profile"] = example.get("domain_profile", "")
+    config["thinker_prompt"] = example.get("thinker_prompt", "")
+    config["tools"] = list(example.get("tools") or ())
+
+    _bind_registry_prompt(example, config)
     return filter_session_config(config)
+
+
+def _bind_registry_prompt(example: dict, config: dict) -> None:
+    """Prevent a domain profile from selecting another domain's catalog prompt."""
+    if config.get("prompt_content"):
+        return
+    default_key = examples_registry.prompt_default_key(example["key"])
+    requested_key = str(config.get("prompt_key") or default_key or "").strip()
+    if not example.get("domain_profile"):
+        if requested_key:
+            config["prompt_key"] = requested_key
+        return
+
+    module_file = examples_registry.example_module_file(example)
+    catalog = load_prompt_catalog(module_file)
+    hidden_keys = frozenset(example.get("agent_prompt_keys") or ())
+    if requested_key not in catalog or requested_key in hidden_keys:
+        logger.warning(
+            f"Prompt {requested_key!r} is not selectable for domain {example['domain_profile']!r}; "
+            f"using registry default {default_key!r}"
+        )
+        requested_key = default_key or ""
+    if requested_key:
+        config["prompt_key"] = requested_key
 
 
 def _example_with_module_file(example_key: str = "") -> tuple[dict, Path]:

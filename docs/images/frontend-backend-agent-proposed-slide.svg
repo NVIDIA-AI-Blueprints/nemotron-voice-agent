@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a4d"/></marker><marker id="arb" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0b6bcb"/></marker><marker id="arm" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7b8a82"/></marker></defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<text x="60" y="78" font-size="46" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Proposed: one definition per tool   (design — not built)</text>
+<text x="60" y="118" font-size="23" font-weight="normal" fill="#5b6b62" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">The voice pipeline does not change. What a tool is — and which tools an assistant has — becomes configuration.</text>
+<rect x="40" y="142" width="1840" height="196" rx="16" fill="#2e8b57" fill-opacity="0.04" stroke="#1f7a4d" stroke-opacity="0.45" stroke-width="1.6"/>
+<text x="62" y="176" font-size="23" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Voice pipeline</text>
+<text x="1858" y="176" font-size="21" font-weight="bold" fill="#7b8a82" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">UNCHANGED</text>
+<rect x="60" y="178" width="220" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="170.0" y="218.56" font-size="23" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">You speak</text>
+<rect x="370" y="178" width="260" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="500.0" y="218.56" font-size="23" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Speech → text</text>
+<rect x="720" y="178" width="480" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="960.0" y="220.0" font-size="25" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Talker LLM</text>
+<text x="960.0" y="250.0" font-size="18" font-weight="normal" fill="#33403a" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">still sees exactly two tools</text>
+<rect x="1290" y="178" width="260" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="1420.0" y="218.56" font-size="23" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Text → speech</text>
+<rect x="1640" y="178" width="220" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="1750.0" y="218.56" font-size="23" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">You hear</text>
+<line x1="286" y1="233" x2="364" y2="233" stroke="#7b8a82" stroke-width="2.6" marker-end="url(#arm)"/>
+<line x1="636" y1="233" x2="714" y2="233" stroke="#7b8a82" stroke-width="2.6" marker-end="url(#arm)"/>
+<line x1="1206" y1="233" x2="1284" y2="233" stroke="#7b8a82" stroke-width="2.6" marker-end="url(#arm)"/>
+<line x1="1556" y1="233" x2="1634" y2="233" stroke="#7b8a82" stroke-width="2.6" marker-end="url(#arm)"/>
+<rect x="40" y="352" width="1840" height="186" rx="16" fill="#2e8b57" fill-opacity="0.04" stroke="#1f7a4d" stroke-opacity="0.45" stroke-width="1.6"/>
+<text x="62" y="386" font-size="23" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Backend agent</text>
+<text x="1858" y="386" font-size="21" font-weight="bold" fill="#7b8a82" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">UNCHANGED</text>
+<rect x="140" y="398" width="440" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="360.0" y="440.0" font-size="25" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Thinker LLM</text>
+<text x="360.0" y="470.0" font-size="18" font-weight="normal" fill="#33403a" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">does the thinking</text>
+<rect x="740" y="398" width="440" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="960.0" y="440.0" font-size="25" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">One plan</text>
+<text x="960.0" y="470.0" font-size="18" font-weight="normal" fill="#33403a" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">checked by Python before it runs</text>
+<rect x="1340" y="398" width="440" height="110" rx="12" fill="#2e8b57" fill-opacity="0.08" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="1560.0" y="440.0" font-size="25" font-weight="bold" fill="#14532d" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Tools run</text>
+<text x="1560.0" y="470.0" font-size="18" font-weight="normal" fill="#33403a" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">same tools, same APIs</text>
+<line x1="586" y1="453" x2="734" y2="453" stroke="#7b8a82" stroke-width="2.6" marker-end="url(#arm)"/>
+<line x1="1186" y1="453" x2="1334" y2="453" stroke="#7b8a82" stroke-width="2.6" marker-end="url(#arm)"/>
+<rect x="40" y="552" width="1840" height="300" rx="16" fill="#2e8b57" fill-opacity="0.04" stroke="#1f7a4d" stroke-opacity="0.45" stroke-width="1.6"/>
+<text x="62" y="586" font-size="23" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">What changes</text>
+<text x="1858" y="586" font-size="21" font-weight="bold" fill="#0b6bcb" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">NEW — one place a tool is defined</text>
+<rect x="70" y="600" width="620" height="230" rx="12" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="90" y="643.44" font-size="27" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">ToolSpec — one entry per tool</text>
+<text x="90" y="675.44" font-size="20" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">· its name</text>
+<text x="90" y="704.44" font-size="20" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">· one line saying what it does</text>
+<text x="90" y="733.44" font-size="20" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">· the inputs it needs</text>
+<text x="90" y="762.44" font-size="20" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">· how to run it</text>
+<text x="90" y="791.44" font-size="20" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">· how to say the answer</text>
+<rect x="608.6752" y="614" width="67.32480000000001" height="30" rx="15" fill="#0b6bcb" fill-opacity="0.13" stroke="#0b6bcb" stroke-width="1.4"/>
+<text x="642.3376" y="634" font-size="16" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">NEW</text>
+<rect x="790" y="600" width="1070" height="52" rx="12" fill="#2e8b57" fill-opacity="0.13" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="812" y="634.28" font-size="23" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">The Thinker’s instructions</text>
+<text x="1838" y="634.28" font-size="19" font-weight="normal" fill="#33403a" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">written from the tool list, never by hand</text>
+<line x1="742" y1="626" x2="784" y2="626" stroke="#0b6bcb" stroke-width="2.6" marker-end="url(#arb)"/>
+<rect x="790" y="658" width="1070" height="52" rx="12" fill="#2e8b57" fill-opacity="0.13" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="812" y="692.28" font-size="23" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Input checks</text>
+<text x="1838" y="692.28" font-size="19" font-weight="normal" fill="#33403a" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">from the same entry, before anything runs</text>
+<line x1="742" y1="684" x2="784" y2="684" stroke="#0b6bcb" stroke-width="2.6" marker-end="url(#arb)"/>
+<rect x="790" y="716" width="1070" height="52" rx="12" fill="#2e8b57" fill-opacity="0.13" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="812" y="750.28" font-size="23" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Running the tool</text>
+<text x="1838" y="750.28" font-size="19" font-weight="normal" fill="#33403a" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">its timeout, and what may run in parallel</text>
+<line x1="742" y1="742" x2="784" y2="742" stroke="#0b6bcb" stroke-width="2.6" marker-end="url(#arb)"/>
+<rect x="790" y="774" width="1070" height="52" rx="12" fill="#2e8b57" fill-opacity="0.13" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="812" y="808.28" font-size="23" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">What it says back</text>
+<text x="1838" y="808.28" font-size="19" font-weight="normal" fill="#33403a" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">including an honest “here’s what I can do”</text>
+<line x1="742" y1="800" x2="784" y2="800" stroke="#0b6bcb" stroke-width="2.6" marker-end="url(#arb)"/>
+<line x1="696" y1="715" x2="742" y2="715" stroke="#0b6bcb" stroke-width="2.6"/>
+<line x1="742" y1="626" x2="742" y2="774" stroke="#0b6bcb" stroke-width="2.6"/>
+<text x="950" y="868" font-size="19" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">one entry feeds all four — so a tool can never be half-added, and turning one off really turns it off</text>
+<rect x="60" y="892" width="900" height="158" rx="12" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="80" y="936.16" font-size="28" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Adding a tool</text>
+<text x="80" y="968.16" font-size="20" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">one entry (plus the API call, if it is new)</text>
+<text x="80" y="997.16" font-size="20" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">no prompt edit · no plumbing edit · nothing to keep in sync</text>
+<rect x="830.2912" y="906" width="115.70880000000001" height="30" rx="15" fill="#0b6bcb" fill-opacity="0.13" stroke="#0b6bcb" stroke-width="1.4"/>
+<text x="888.1456" y="926" font-size="16" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">7 files → 1</text>
+<rect x="990" y="892" width="870" height="158" rx="12" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="2.2"/>
+<text x="1010" y="936.16" font-size="28" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">Adding a whole new assistant</text>
+<text x="1010" y="967.16" font-size="19" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace">support-desk-agent:</text>
+<text x="1010" y="995.16" font-size="19" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace">  thinker_prompt: support_thinker</text>
+<text x="1010" y="1023.16" font-size="19" font-weight="normal" fill="#33403a" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace">  tools: [web_search, get_weather]</text>
+<rect x="1698.496" y="906" width="147.50400000000002" height="30" rx="15" fill="#0b6bcb" fill-opacity="0.13" stroke="#0b6bcb" stroke-width="1.4"/>
+<text x="1772.248" y="926" font-size="16" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">no new Python</text>
+<text x="60" y="1071" font-size="15" font-weight="normal" fill="#5b6b62" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">“No new Python” means: over tools that already exist. A genuinely new capability is still one Python function — a deliberate boundary, not a gap.</text>
+</svg>

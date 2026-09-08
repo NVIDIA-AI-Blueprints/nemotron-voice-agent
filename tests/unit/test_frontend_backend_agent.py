@@ -15,7 +15,8 @@ from unittest.mock import patch
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.services.llm_service import FunctionCallParams
 
-from examples.frontend_backend_agent import pipeline as frontend_backend_pipeline
+import server
+from examples.frontend_backend_agent.airline import domain as airline_domain
 from examples.frontend_backend_agent.airline.airports import spoken_time
 from examples.frontend_backend_agent.airline.database.api import BookingAPI
 from examples.frontend_backend_agent.airline.database.db import apply_schema
@@ -23,6 +24,7 @@ from examples.frontend_backend_agent.airline.state import MAX_LIFECYCLE_EVENTS, 
 from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
 from examples.frontend_backend_agent.airline.tools import CALL_BACKEND_TOOL, CANCEL_BACKEND_TOOL
 from examples.frontend_backend_agent.airline.transform import _server_booking_to_record, _server_flight_to_option
+from examples.frontend_backend_agent.airline.tts_filter import FrontendBackendAgentPronunciationTextFilter
 from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload
 from examples.frontend_backend_agent.src.runtime_context import runtime_today
@@ -31,7 +33,6 @@ from examples.frontend_backend_agent.src.tool_handlers import (
     _normalize_arguments,
     build_handlers,
 )
-from examples.frontend_backend_agent.src.tts_filter import FrontendBackendAgentPronunciationTextFilter
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 
 
@@ -356,27 +357,58 @@ class FrontendBackendPipelineConfigTests(unittest.TestCase):
             {"BOOKING_BACKEND_URL": "http://custom.example:8001", "APP_RUNTIME": ""},
             clear=True,
         ):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking-server:8001"})
 
         self.assertEqual(url, "http://custom.example:8001")
 
     def test_booking_backend_url_rewrites_docker_hostname_for_host_native(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking-server:8001"})
 
         self.assertEqual(url, "http://localhost:8001")
 
     def test_booking_backend_url_preserves_container_docker_hostname(self) -> None:
         with patch.dict("os.environ", {"APP_RUNTIME": "container"}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking-server:8001"})
 
         self.assertEqual(url, "http://booking-server:8001")
 
     def test_booking_backend_url_preserves_custom_catalog_url(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking.internal:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking.internal:8001"})
 
         self.assertEqual(url, "http://booking.internal:8001")
+
+    def test_server_keeps_catalog_prompts_with_the_selected_domain(self) -> None:
+        generic_with_airline_prompt = server._sanitize_session_config(
+            {
+                "pipeline_mode": "generic-frontend-backend-agent",
+                "prompt_key": "talker",
+            }
+        )
+        generic_with_unknown_prompt = server._sanitize_session_config(
+            {
+                "pipeline_mode": "generic-frontend-backend-agent",
+                "prompt_key": "does-not-exist",
+            }
+        )
+        airline_with_generic_prompt = server._sanitize_session_config(
+            {
+                "pipeline_mode": "frontend-backend-agent",
+                "prompt_key": "generic_talker",
+            }
+        )
+        custom = server._sanitize_session_config(
+            {
+                "pipeline_mode": "generic-frontend-backend-agent",
+                "prompt_content": "A repository operator supplied this custom prompt.",
+            }
+        )
+
+        self.assertEqual(generic_with_airline_prompt["prompt_key"], "generic_talker")
+        self.assertEqual(generic_with_unknown_prompt["prompt_key"], "generic_talker")
+        self.assertEqual(airline_with_generic_prompt["prompt_key"], "talker")
+        self.assertEqual(custom["prompt_content"], "A repository operator supplied this custom prompt.")
 
 
 class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
@@ -1389,6 +1421,61 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payload["data"]["results"]), 2)
         self.assertEqual(payload["data"]["results"][0]["tool"], "flight_search")
         self.assertEqual(payload["data"]["results"][1]["reason"], "tool_error")
+
+    async def test_hung_airline_planner_returns_timeout_payload(self) -> None:
+        class HungPlanner:
+            async def plan(self, *, query: str, slots: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        thinker = ThinkerBackend(
+            backend=_TestBookingBackend(),
+            planner=HungPlanner(),
+        )
+        thinker._planner_timeout_seconds = 0.01
+
+        payload = await asyncio.wait_for(thinker.call("Search flights"), timeout=0.2)
+
+        self.assertEqual(payload["type"], "response_hint")
+        self.assertEqual(payload["reason"], "timeout")
+        self.assertEqual(payload["action"], "retry")
+        self.assertIsNone(thinker.state.active_task)
+        self.assertIsNone(thinker.state.active_call_id)
+
+    async def test_superseded_airline_call_cannot_deliver_late_payload(self) -> None:
+        class CancellationResistantPlanner:
+            def __init__(self) -> None:
+                self.first_started = asyncio.Event()
+
+            async def plan(
+                self,
+                *,
+                query: str,
+                slots: dict[str, Any],
+                state: dict[str, Any],
+            ) -> dict[str, Any]:
+                if query == "first":
+                    self.first_started.set()
+                    with suppress(asyncio.CancelledError):
+                        await asyncio.sleep(10)
+                return {
+                    "tool": "response_hint",
+                    "reason": "unsupported_request",
+                    "action": "answer_directly",
+                    "context": "general",
+                    "response_text": f"Result for {query}.",
+                }
+
+        planner = CancellationResistantPlanner()
+        thinker = ThinkerBackend(backend=_TestBookingBackend(), planner=planner)
+        first = asyncio.create_task(thinker.call("first"))
+        await asyncio.wait_for(planner.first_started.wait(), timeout=0.2)
+
+        second = await thinker.call("second")
+
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        self.assertEqual(second["response_text"], "Result for second.")
 
     async def test_abort_records_internal_marker_and_does_not_return_speakable_payload(self) -> None:
         thinker = _make_thinker(tool_delay_seconds=1.0)

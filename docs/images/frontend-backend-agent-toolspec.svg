@@ -1,0 +1,314 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="2215" viewBox="0 0 1760 2215" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a4d"/></marker><marker id="arrowdim" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a9a91"/></marker><marker id="arrownew" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0b6bcb"/></marker></defs>
+<rect x="0" y="0" width="1760" height="2215" fill="#ffffff"/>
+<text x="40" y="46" font-size="25" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Frontend/Backend Agent — ToolSpec architecture (proposed)</text>
+<text x="40" y="72" font-size="13" font-weight="normal" fill="#5b6b62" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">NOT IMPLEMENTED — design only.  Same pipeline, one tool definition; a flavour = a registry entry + two prompts over tools that already exist, and a new capability still needs Python (§2.4).</text>
+<text x="1720" y="46" font-size="11" font-weight="normal" fill="#0b6bcb" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">blue = new or changed   ·   red = Step 0 / 2a, land first   ·   dashed = Step 2b, gated</text>
+<rect x="40" y="95" width="1680" height="212" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="56" y="118" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">1 · Session bootstrap</text>
+<text x="1704" y="118" font-size="11.5" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the flavour is now data, not a Python package</text>
+<rect x="60.0" y="132" width="300.8" height="160" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72.0" y="153" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">examples_registry.yaml</text>
+<text x="72.0" y="170" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic-frontend-backend-agent:</text>
+<text x="72.0" y="184" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  domain_profile: generic</text>
+<text x="72.0" y="198" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  thinker_prompt: generic_thinker      # NEW</text>
+<text x="72.0" y="212" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  tools: [get_weather, get_stock_price,  # NEW</text>
+<text x="72.0" y="226" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">          web_search, calculate_bmi,</text>
+<text x="72.0" y="240" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">          generate_random_number]</text>
+<text x="72.0" y="254" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  defaults: { prompt: [generic_talker] }</text>
+<rect x="281.8" y="140" width="70.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="316.8" y="152.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">new keys</text>
+<rect x="394.8" y="132" width="300.8" height="160" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="406.8" y="153" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">src/server.py</text>
+<text x="406.8" y="170" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">_sanitize_session_config()</text>
+<text x="406.8" y="184" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· binds domain_profile (as today)</text>
+<text x="406.8" y="198" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· binds thinker_prompt + tools from the</text>
+<text x="406.8" y="212" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  registry — server-owned, same trust level</text>
+<text x="406.8" y="226" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· tools_available DROPPED from the body allowlist</text>
+<text x="406.8" y="240" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  (utils.py:65, :488) → a body cannot widen the set</text>
+<rect x="616.6" y="140" width="70.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="651.6" y="152.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">extended</text>
+<rect x="729.6" y="132" width="300.8" height="160" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="741.6" y="153" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">pipeline.py :: bot()</text>
+<text x="741.6" y="170" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">domain = resolve_domain_spec(profile)</text>
+<text x="741.6" y="184" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">specs  = domain.resolve_tools(registry tools)</text>
+<text x="741.6" y="198" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">thinker_prompt = catalog[registry override</text>
+<text x="741.6" y="212" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">                 or domain default]</text>
+<text x="741.6" y="226" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">         + render_tool_block(specs)   # NEW</text>
+<text x="741.6" y="240" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">ASR / Talker / Thinker / TTS build unchanged</text>
+<rect x="937.4000000000001" y="140" width="84.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="979.4000000000001" y="152.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">1 new line</text>
+<rect x="1064.4" y="132" width="300.8" height="160" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1076.4" y="153" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">src/domain.py :: DomainSpec</text>
+<text x="1076.4" y="170" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">_DOMAIN_FACTORIES = { airline, generic }  §2.5</text>
+<text x="1076.4" y="184" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">+ tools: Mapping[str, ToolSpec]       # NEW</text>
+<text x="1076.4" y="198" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">+ response_hint_policy:               # NEW</text>
+<text x="1076.4" y="212" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">    'closed_vocabulary' | 'planner_authored'</text>
+<text x="1076.4" y="226" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">+ filler_policy:                      # NEW  (§1.4)</text>
+<text x="1076.4" y="240" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">    'code_authored' | 'planner_authored'</text>
+<rect x="1286.2" y="140" width="70.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1321.2" y="152.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">extended</text>
+<rect x="1399.2" y="132" width="300.8" height="160" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1411.2" y="153" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">prompts.yaml</text>
+<text x="1411.2" y="170" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">talker · generic_talker  — unchanged</text>
+<text x="1411.2" y="184" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">thinker · generic_thinker keep only:</text>
+<text x="1411.2" y="198" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  trust boundary · output schema</text>
+<text x="1411.2" y="212" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  routing policy · worked examples</text>
+<text x="1411.2" y="226" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the per-tool contract list is deleted —</text>
+<text x="1411.2" y="240" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">it is generated from the enabled specs</text>
+<rect x="1628.0" y="140" width="63.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1659.5" y="152.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">slimmed</text>
+<line x1="364.8" y1="212" x2="390.8" y2="212" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<line x1="699.6" y1="212" x2="725.6" y2="212" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<line x1="1034.4" y1="212" x2="1060.4" y2="212" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<line x1="1369.2" y1="212" x2="1395.2" y2="212" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="40" y="330" width="1680" height="172" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="56" y="353" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">2 · Realtime voice path — Pipecat Pipeline</text>
+<text x="1704" y="353" font-size="11.5" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">UNCHANGED — no edits in this band</text>
+<rect x="60.0" y="372" width="212.0" height="76" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72.0" y="393" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">transport.input()</text>
+<text x="72.0" y="410" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">audio in</text>
+<rect x="298.0" y="372" width="212.0" height="76" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="310.0" y="393" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">NvidiaSTTService</text>
+<text x="310.0" y="410" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Riva ASR</text>
+<rect x="536.0" y="372" width="212.0" height="76" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="548.0" y="393" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">user_aggregator</text>
+<text x="548.0" y="410" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">LLMContext pair</text>
+<rect x="774.0" y="372" width="212.0" height="76" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="786.0" y="393" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Talker LLM</text>
+<text x="786.0" y="410" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">tools = talker_tools_schema</text>
+<text x="786.0" y="424" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">call_backend · cancel_backend</text>
+<rect x="1012.0" y="372" width="212.0" height="76" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1024.0" y="393" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">NvidiaTTSService</text>
+<text x="1024.0" y="410" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">speech filter · IPA dict</text>
+<rect x="1250.0" y="372" width="212.0" height="76" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1262.0" y="393" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">transport.output()</text>
+<text x="1262.0" y="410" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">audio out</text>
+<rect x="1488.0" y="372" width="212.0" height="76" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1500.0" y="393" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">assistant_aggregator</text>
+<text x="1500.0" y="410" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">20-turn window</text>
+<line x1="275.0" y1="410" x2="295.0" y2="410" stroke="#8a9a91" stroke-width="1.8" marker-end="url(#arrowdim)"/>
+<line x1="513.0" y1="410" x2="533.0" y2="410" stroke="#8a9a91" stroke-width="1.8" marker-end="url(#arrowdim)"/>
+<line x1="751.0" y1="410" x2="771.0" y2="410" stroke="#8a9a91" stroke-width="1.8" marker-end="url(#arrowdim)"/>
+<line x1="989.0" y1="410" x2="1009.0" y2="410" stroke="#8a9a91" stroke-width="1.8" marker-end="url(#arrowdim)"/>
+<line x1="1227.0" y1="410" x2="1247.0" y2="410" stroke="#8a9a91" stroke-width="1.8" marker-end="url(#arrowdim)"/>
+<line x1="1465.0" y1="410" x2="1485.0" y2="410" stroke="#8a9a91" stroke-width="1.8" marker-end="url(#arrowdim)"/>
+<text x="60" y="480" font-size="11" font-weight="normal" fill="#5b6b62" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">LLMContext, observers, RTVI control plane, sliding-history window, TTS text filters and the domain tts_text_transform are all untouched.</text>
+<rect x="40" y="524" width="1680" height="154" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="56" y="547" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">3 · Talker tool boundary — src/tool_handlers.py</text>
+<text x="1704" y="547" font-size="11.5" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">UNCHANGED — still the only seam the Talker can reach</text>
+<rect x="60.0" y="566" width="526.7" height="88" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72.0" y="587" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">build_handlers(thinker, …)</text>
+<text x="72.0" y="604" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">filler threshold 0.3 s · timeout_secs 30 · max_query_chars from the domain</text>
+<text x="72.0" y="618" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">call_backend cancel_on_interruption = False · cancel_backend = True</text>
+<rect x="616.7" y="566" width="526.7" height="88" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="628.7" y="587" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">handle_call_backend</text>
+<text x="628.7" y="604" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">validates the query, splits slots, awaits thinker.call(query, slots, on_started=…)</text>
+<text x="628.7" y="618" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the Talker still sees exactly two tools, whatever the flavour enables</text>
+<rect x="1173.3" y="566" width="526.7" height="88" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1185.3" y="587" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">delayed filler + result</text>
+<text x="1185.3" y="604" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">filler text follows DomainSpec.filler_policy; the payload returns via result_callback()</text>
+<text x="1185.3" y="618" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">abort path (speakable=False, run_llm=False) unchanged</text>
+<rect x="40" y="700" width="1680" height="322" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="56" y="723" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">4 · src/tools.py — one definition per tool</text>
+<text x="1704" y="723" font-size="11.5" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">subsumes INTERNAL_TOOL_NAMES · TOOL_SERVICES · _TOOL_TIMEOUTS · _PARAMS · _validate_values · labels · format_tool_result chain · _READ_ONLY_TOOLS</text>
+<rect x="580" y="740" width="600" height="262" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="592" y="761" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">ToolSpec  (new dataclass)</text>
+<text x="592" y="778" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">@dataclass(frozen=True, slots=True)</text>
+<text x="592" y="792" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">class ToolSpec:</text>
+<text x="592" y="806" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    name: str</text>
+<text x="592" y="820" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    contract: str      # one line → Thinker prompt</text>
+<text x="592" y="834" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    capability: str    # phrase → "I can …" sentence</text>
+<text x="592" y="848" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    params: dict[str, ParamSpec]</text>
+<text x="592" y="862" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    run:   Callable[[Mapping, ToolContext], Awaitable]</text>
+<text x="592" y="876" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    speak: Callable[[dict, dict], str] | None = None</text>
+<text x="592" y="890" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    mutates: bool = False    # serialize vs parallel</text>
+<text x="592" y="904" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">    timeout_s: float = 12.0</text>
+<text x="592" y="918" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0"></text>
+<text x="592" y="932" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">ParamSpec(kind, required, label, bounds, choices,</text>
+<text x="592" y="946" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">          max_len, default)</text>
+<text x="592" y="960" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">ToolContext(state, backend)   # pure tools ignore it</text>
+<text x="592" y="974" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">validate_arguments(spec, args) · render_tool_block(specs)</text>
+<rect x="1101.0" y="748" width="70.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1136.0" y="760.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">NEW file</text>
+<rect x="60" y="740" width="470" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="761" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">resolve_tools()</text>
+<text x="72" y="778" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the registry's tools: list is filtered against the</text>
+<text x="72" y="792" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">domain registry; an unknown name is dropped with</text>
+<text x="72" y="806" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">a warning (same posture as resolve_enabled_tools)</text>
+<line x1="576" y1="781" x2="534" y2="781" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="828" width="470" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="849" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">validate_plan()  — atomic, as today</text>
+<text x="72" y="866" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">validate_arguments(spec, args) for every planned call:</text>
+<text x="72" y="880" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">required · type · bounds · choices · max_len</text>
+<text x="72" y="894" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">still fully checked before the first side effect</text>
+<line x1="576" y1="869" x2="534" y2="869" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="916" width="470" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="937" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">execute</text>
+<text x="72" y="954" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">spec.run(args, ToolContext(state, backend)) under</text>
+<text x="72" y="968" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">spec.timeout_s;  MAX_PARALLEL_TOOL_CALLS = 3</text>
+<text x="72" y="982" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">spec.mutates partitions serialized vs concurrent calls</text>
+<line x1="576" y1="957" x2="534" y2="957" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="1230" y="740" width="470" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1242" y="761" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Thinker system prompt</text>
+<text x="1242" y="778" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">render_tool_block(enabled specs) is appended at</text>
+<text x="1242" y="792" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">session start, the way runtime_context() already is</text>
+<text x="1242" y="806" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">→ disable really means disabled; drift impossible</text>
+<line x1="1184" y1="781" x2="1226" y2="781" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="1230" y="828" width="470" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1242" y="849" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">speech</text>
+<text x="1242" y="866" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">spec.speak(args, data) formats the success branch</text>
+<text x="1242" y="880" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">ParamSpec.label drives missing_parameters()</text>
+<text x="1242" y="894" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the closed-vocabulary response_hint is unchanged</text>
+<line x1="1184" y1="869" x2="1226" y2="869" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="1230" y="916" width="470" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1242" y="937" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">capability sentence</text>
+<text x="1242" y="954" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">unsupported_request(enabled specs) is built from</text>
+<text x="1242" y="968" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">spec.capability → the assistant can no longer offer</text>
+<text x="1242" y="982" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">a capability this session has disabled   (bug fixed)</text>
+<line x1="1184" y1="957" x2="1226" y2="957" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="40" y="1044" width="1080" height="970" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="56" y="1067" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">5a · Generic Assistant flavour   (domain_profile: generic)</text>
+<text x="1104" y="1067" font-size="11.5" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Step 1 — additive</text>
+<rect x="1140" y="1044" width="580" height="970" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3" stroke-dasharray="8 5"/>
+<text x="1156" y="1067" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">5b · Airline flavour</text>
+<text x="1704" y="1067" font-size="11.5" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Step 2b — gated on a third stateful domain (§4.0)</text>
+<rect x="60" y="1088" width="1040" height="76" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1109" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/domain.py :: create_domain_spec()</text>
+<text x="72" y="1126" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">tools = TOOLS registry  ·  response_hint_policy = 'closed_vocabulary'</text>
+<text x="72" y="1140" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">thinker_prompt_key default 'generic_thinker' (registry entry may override)</text>
+<rect x="1035.0" y="1096" width="56.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1063.0" y="1108.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">edited</text>
+<rect x="60" y="1179" width="1040" height="150" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1200" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/tools.py :: TOOLS — the registry</text>
+<text x="72" y="1217" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">TOOLS = {spec.name: spec for spec in (</text>
+<text x="72" y="1231" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">    ToolSpec(name='get_weather',</text>
+<text x="72" y="1245" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">             contract='live CURRENT conditions; never forecast or history',</text>
+<text x="72" y="1259" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">             capability='check current weather',</text>
+<text x="72" y="1273" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">             params={'city': ParamSpec(str, label='the city or location'),</text>
+<text x="72" y="1287" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">                     'units': ParamSpec(str, required=False, default='celsius',</text>
+<text x="72" y="1301" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">                                        choices={'celsius','fahrenheit'})},</text>
+<text x="72" y="1315" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">             run=lambda a, ctx: services.get_weather(a), speak=speech.weather), … )}</text>
+<rect x="1000.0" y="1187" width="91.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1045.5" y="1199.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">single site</text>
+<line x1="580.0" y1="1167" x2="580.0" y2="1176" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="1344" width="1040" height="76" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1365" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/services.py — UNCHANGED</text>
+<text x="72" y="1382" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the five async functions stay exactly as they are; only the trailing</text>
+<text x="72" y="1396" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">TOOL_SERVICES dict is deleted — its content now lives in ToolSpec.run</text>
+<line x1="580.0" y1="1332" x2="580.0" y2="1341" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="1435" width="1040" height="76" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1456" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/speech.py  (extracted)</text>
+<text x="72" y="1473" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">weather · stock · search · bmi · random_number — the five success</text>
+<text x="72" y="1487" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">branches lifted out of format_tool_result(), wired as ToolSpec.speak</text>
+<rect x="1021.0" y="1443" width="70.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1056.0" y="1455.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">new file</text>
+<line x1="580.0" y1="1423" x2="580.0" y2="1432" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="1526" width="1040" height="76" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1547" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/planner.py :: NvidiaGenericPlanner</text>
+<text x="72" y="1564" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">system prompt = generic_thinker  +  render_tool_block(enabled specs)</text>
+<text x="72" y="1578" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">one strict JSON plan per call; Python still owns all execution</text>
+<rect x="1035.0" y="1534" width="56.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1063.0" y="1546.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">edited</text>
+<line x1="580.0" y1="1514" x2="580.0" y2="1523" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="1617" width="1040" height="76" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1638" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">src/backend.py :: PlannedBackend</text>
+<text x="72" y="1655" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/backend.py promoted: overall 40 s / planner 15 s deadlines,</text>
+<text x="72" y="1669" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">stale-generation guard, lifecycle events — one copy for every flavour</text>
+<rect x="1042.0" y="1625" width="49.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1066.5" y="1637.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">moved</text>
+<line x1="580.0" y1="1605" x2="580.0" y2="1614" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="1708" width="1040" height="104" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1729" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/dispatcher.py   −70 lines</text>
+<text x="72" y="1746" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">_TOOL_TIMEOUTS · _PARAMS · _validate_values() elif chain all deleted</text>
+<text x="72" y="1760" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">validate_plan() → validate_arguments(spec, args), still atomic</text>
+<text x="72" y="1774" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">_execute() → spec.run(args, ctx) under spec.timeout_s</text>
+<text x="72" y="1788" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">mutates partition added now, so Step 2 never reopens this function</text>
+<rect x="1007.0" y="1716" width="84.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1049.0" y="1728.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">simplified</text>
+<line x1="580.0" y1="1696" x2="580.0" y2="1705" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="1827" width="1040" height="90" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1848" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">generic/result_formatters.py   −45 lines</text>
+<text x="72" y="1865" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">success branch → spec.speak(args, data); labels{} → ParamSpec.label</text>
+<text x="72" y="1879" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">unsupported_request(enabled specs) → generated capability sentence</text>
+<text x="72" y="1893" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">unavailable / not_found / _speech_text / combine_tool_results unchanged</text>
+<rect x="1007.0" y="1835" width="84.0" height="17" rx="8" fill="#0b6bcb" fill-opacity="0.12" stroke="#0b6bcb" stroke-width="1"/>
+<text x="1049.0" y="1847.5" font-size="9.6" font-weight="bold" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">simplified</text>
+<line x1="580.0" y1="1815" x2="580.0" y2="1824" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="60" y="1932" width="1040" height="64" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="1953" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">external services — UNCHANGED</text>
+<text x="72" y="1970" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">WeatherAPI · Finnhub · Perplexity Sonar; credentials from process env only</text>
+<line x1="580.0" y1="1920" x2="580.0" y2="1929" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<rect x="1160" y="1088" width="540" height="104" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7" stroke-dasharray="7 4"/>
+<text x="1172" y="1109" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">airline/domain.py</text>
+<text x="1172" y="1126" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">tools = 4 ToolSpecs</text>
+<text x="1172" y="1140" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">response_hint_policy =</text>
+<text x="1172" y="1154" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  'planner_authored'  → the airline</text>
+<text x="1172" y="1168" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  posture is preserved explicitly,</text>
+<text x="1172" y="1182" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  not by weakening the toolset domain</text>
+<rect x="1160" y="1207" width="540" height="118" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7" stroke-dasharray="7 4"/>
+<text x="1172" y="1228" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">ToolSpec adapters</text>
+<text x="1172" y="1245" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">flight_search · booking → mutates=True,</text>
+<text x="1172" y="1259" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">run reads ctx.state + ctx.backend</text>
+<text x="1172" y="1273" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">pnr_status → mutates=False</text>
+<text x="1172" y="1287" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">response_hint → policy, not a tool</text>
+<text x="1172" y="1301" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">speak=None: these tools already return</text>
+<text x="1172" y="1315" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">finished protocol payloads</text>
+<line x1="1430.0" y1="1195" x2="1430.0" y2="1204" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)" stroke-dasharray="6 4"/>
+<rect x="1160" y="1340" width="540" height="90" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7" stroke-dasharray="7 4"/>
+<text x="1172" y="1361" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">airline/thinker.py  301 → ~60 lines</text>
+<text x="1172" y="1378" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the hand-written lifecycle, the</text>
+<text x="1172" y="1392" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">if/elif dispatch chain and</text>
+<text x="1172" y="1406" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">_READ_ONLY_TOOLS are all deleted;</text>
+<text x="1172" y="1420" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">PlannedBackend replaces them</text>
+<line x1="1430.0" y1="1328" x2="1430.0" y2="1337" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)" stroke-dasharray="6 4"/>
+<rect x="1160" y="1445" width="540" height="118" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7" stroke-dasharray="7 4"/>
+<text x="1172" y="1466" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">behaviour airline acquires</text>
+<text x="1172" y="1483" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· overall + planner deadlines   ← Step 2a, ship now</text>
+<text x="1172" y="1497" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· stale-generation guard        ← Step 2a, ship now</text>
+<text x="1172" y="1511" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· parameter validation before the</text>
+<text x="1172" y="1525" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">  first side effect</text>
+<text x="1172" y="1539" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">2a is a small standalone diff;</text>
+<text x="1172" y="1553" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">param validation waits for 2b (§4.0)</text>
+<line x1="1430.0" y1="1433" x2="1430.0" y2="1442" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)" stroke-dasharray="6 4"/>
+<rect x="1160" y="1578" width="540" height="76" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7" stroke-dasharray="7 4"/>
+<text x="1172" y="1599" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">prompts.yaml → thinker</text>
+<text x="1172" y="1616" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">the 'Available internal tools:' block</text>
+<text x="1172" y="1630" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">is generated; policy and examples stay</text>
+<line x1="1430.0" y1="1566" x2="1430.0" y2="1575" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)" stroke-dasharray="6 4"/>
+<rect x="1160" y="1669" width="540" height="76" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7" stroke-dasharray="7 4"/>
+<text x="1172" y="1690" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">backend + database — UNCHANGED</text>
+<text x="1172" y="1707" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">BookingBackend HTTP client,</text>
+<text x="1172" y="1721" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">FastAPI service and Postgres seed data</text>
+<line x1="1430.0" y1="1657" x2="1430.0" y2="1666" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)" stroke-dasharray="6 4"/>
+<line x1="720" y1="1006" x2="420" y2="1080" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<text x="570.0" y="1038.0" font-size="10" font-weight="normal" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">enabled specs</text>
+<line x1="1060" y1="1006" x2="1420" y2="1080" stroke="#0b6bcb" stroke-width="1.8" marker-end="url(#arrownew)"/>
+<text x="1240.0" y="1038.0" font-size="10" font-weight="normal" fill="#0b6bcb" text-anchor="middle" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">enabled specs</text>
+<rect x="40.0" y="2036" width="540.0" height="130" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="52.0" y="2057" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Adding or removing a tool</text>
+<text x="52.0" y="2074" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">1 · write one ToolSpec in the flavour's TOOLS registry</text>
+<text x="52.0" y="2088" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">2 · add the async service function, if it is new</text>
+<text x="52.0" y="2102" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">3 · list the name under tools: in the registry entry</text>
+<text x="52.0" y="2116" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0"></text>
+<text x="52.0" y="2130" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">no prompt edit · no dispatcher edit · no formatter edit</text>
+<text x="52.0" y="2144" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">duplication factor per tool:  7  →  1</text>
+<rect x="610.0" y="2036" width="540.0" height="130" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="622.0" y="2057" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Adding a flavour over existing tools — no new Python</text>
+<text x="622.0" y="2074" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">support-desk-agent:</text>
+<text x="622.0" y="2088" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">  domain_profile: generic</text>
+<text x="622.0" y="2102" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">  thinker_prompt: support_thinker</text>
+<text x="622.0" y="2116" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">  tools: [web_search, get_weather]</text>
+<text x="622.0" y="2130" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">  defaults: { prompt: [support_talker] }</text>
+<text x="622.0" y="2144" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" opacity="1.0">one registry entry + two prompts.  A new capability still needs Python (§2.4).</text>
+<rect x="1180.0" y="2036" width="540.0" height="130" rx="9" fill="#2e8b57" fill-opacity="0.1" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1192.0" y="2057" font-size="12.5" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Registry consistency test  (new)</text>
+<text x="1192.0" y="2074" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· every name in a registry entry resolves to a ToolSpec</text>
+<text x="1192.0" y="2088" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· every ToolSpec has run, params and a contract line</text>
+<text x="1192.0" y="2102" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">· render_tool_block() lists exactly the enabled specs</text>
+<text x="1192.0" y="2116" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0"></text>
+<text x="1192.0" y="2130" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">retires the silent half-registration failure class:</text>
+<text x="1192.0" y="2144" font-size="10.3" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">a partially wired tool now fails the suite, not the call</text>
+<text x="52" y="2176" font-size="10.3" font-weight="bold" fill="#b3261e" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Step 0 — land first, independent of everything above:  move src/tts_filter.py into airline/  ·  drop pipeline.py's module-scope airline import  ·  delete the unreachable airline fallback at pipeline.py:72.</text>
+<text x="52" y="2192" font-size="10.3" font-weight="normal" fill="#b3261e" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" opacity="1.0">Step 2a — land first:  give airline the overall/planner deadlines and the stale-generation guard that generic/backend.py already has.  Neither needs ToolSpec.</text>
+</svg>

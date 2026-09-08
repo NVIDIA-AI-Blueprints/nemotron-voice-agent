@@ -21,6 +21,8 @@ from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
 
+    from examples.frontend_backend_agent.src.domain import FillerPolicy
+
 
 class ThinkerBackend(Protocol):
     """Minimal runtime interface required by the frontend tool handlers."""
@@ -37,21 +39,28 @@ class ThinkerBackend(Protocol):
     def cancel_active(self, reason: str = "new_user_query") -> bool:
         """Cancel any active Thinker invocation."""
 
-    def cancel_pending_booking(self) -> bool:
-        """Cancel pending domain work that has no active task."""
+    def cancel_pending_work(self) -> bool:
+        """Cancel pending domain state that has no active task."""
 
 
-def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float = 0.8) -> dict[str, Callable]:
+def build_handlers(
+    thinker: ThinkerBackend,
+    *,
+    filler_threshold_seconds: float = 0.8,
+    filler_policy: FillerPolicy = "planner_authored",
+    filler_selector: Callable[[str], str] | None = None,
+    max_query_chars: int = 4000,
+) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent."""
 
     async def handle_call_backend(params: FunctionCallParams) -> None:
         arguments = _normalize_arguments(params.arguments or {})
         query = str(arguments.get("query", "") or "").strip()
-        if not query:
+        if not query or len(query) > max_query_chars:
             await params.result_callback(
                 {
                     "type": "response_hint",
-                    "reason": "params_missing",
+                    "reason": "params_missing" if not query else "params_invalid",
                     "action": "req_params",
                     "params_needed": ["query"],
                     "response_text": "What would you like me to check?",
@@ -60,7 +69,12 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             )
             return
         try:
-            filler_text = str(arguments.get("filler_text", "") or "").strip()
+            if filler_policy == "planner_authored":
+                filler_text = str(arguments.get("filler_text", "") or "").strip()
+            elif filler_policy == "code_authored":
+                filler_text = filler_selector(query) if filler_selector is not None else "Let me check that."
+            else:
+                raise ValueError(f"Unknown filler policy: {filler_policy}")
             slots = {key: value for key, value in arguments.items() if key not in {"query", "intent", "filler_text"}}
             filler_task: asyncio.Task | None = None
             filler_started = False
@@ -111,7 +125,6 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
                     "type": "response_hint",
                     "reason": "tool_error",
                     "action": "retry",
-                    "error": str(exc),
                     "response_text": "I could not complete that request right now. Please try again.",
                     "context": "call_backend",
                 }
@@ -125,8 +138,13 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
         cancelled = thinker.cancel_active("user_cancelled")
-        cleared_pending_booking = thinker.cancel_pending_booking()
-        did_cancel = cancelled or cleared_pending_booking
+        cancel_pending = getattr(thinker, "cancel_pending_work", None)
+        if not callable(cancel_pending):
+            # Compatibility for third-party/older airline backends while they
+            # migrate to the domain-neutral protocol.
+            cancel_pending = getattr(thinker, "cancel_pending_booking", None)
+        cleared_pending_work = bool(cancel_pending()) if callable(cancel_pending) else False
+        did_cancel = cancelled or cleared_pending_work
         payload = {
             "type": "response_hint",
             "reason": "cancelled" if did_cancel else "nothing_to_cancel",

@@ -24,6 +24,9 @@ class ExampleEntry(TypedDict):
     slots: list[str]
     capabilities: list[str]
     agent_prompt_keys: list[str]
+    domain_profile: str
+    thinker_prompt: str
+    tools: list[str]
     activity_check: ActivityCheckConfig | None
     defaults: dict[str, list[str] | str]
     welcome_message: bool
@@ -374,6 +377,9 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
         slots = entry.get("slots", [])
         capabilities = entry.get("capabilities", [])
         agent_prompt_keys = entry.get("agent_prompt_keys", [])
+        domain_profile = str(entry.get("domain_profile") or "").strip().lower()
+        thinker_prompt = str(entry.get("thinker_prompt") or "").strip()
+        tools = entry.get("tools", [])
         activity_check = entry.get("activity_check")
         defaults = entry.get("defaults", {})
         if not label or not bot_spec:
@@ -384,6 +390,8 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             raise RuntimeError(f"Example {example_id!r} capabilities must be a list of strings")
         if not isinstance(agent_prompt_keys, list) or not all(isinstance(key, str) for key in agent_prompt_keys):
             raise RuntimeError(f"Example {example_id!r} agent_prompt_keys must be a list of strings")
+        if not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
+            raise RuntimeError(f"Example {example_id!r} tools must be a list of strings")
         if activity_check is not None and not isinstance(activity_check, dict):
             raise RuntimeError(f"Example {example_id!r} activity_check must be a mapping")
         welcome_message = entry.get("welcome_message", True)
@@ -414,8 +422,11 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             "slots": list(slots),
             "capabilities": list(capabilities),
             "agent_prompt_keys": list(agent_prompt_keys),
+            "domain_profile": domain_profile,
             "activity_check": normalized_activity_check,
             "defaults": normalized_defaults,
+            "thinker_prompt": thinker_prompt,
+            "tools": list(tools),
             "welcome_message": welcome_message,
             "bot": bot_spec,
         }
@@ -542,6 +553,7 @@ def metadata(example: EnrichedExample) -> dict:
         "label": example["label"],
         "slots": example["slots"],
         "capabilities": example["capabilities"],
+        "domainProfile": example["domain_profile"],
         "default_session_language": str(example["defaults"].get("default_session_language") or ""),
         "defaults": defaults,
     }

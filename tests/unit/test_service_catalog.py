@@ -94,10 +94,8 @@ tts:
             self.assertEqual(config["model_id"], "catalog-model")
             self.assertEqual(config["base_url"], "https://catalog.example/v1")
             self.assertEqual(config["system_prompt"], "catalog system")
-            self.assertEqual(
-                config["extra_params"],
-                '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}',
-            )
+            # Explicit client reasoning settings must survive catalog hydration.
+            self.assertEqual(config["extra_params"], "{}")
             self.assertEqual(config["asr_server"], "catalog-asr:443")
             self.assertEqual(config["asr_model"], "catalog-asr-model")
             self.assertEqual(config["asr_function_id"], "catalog-asr-function")
@@ -109,6 +107,49 @@ tts:
             self.assertEqual(config["tts_synthesis_mode"], "stitched")
             self.assertEqual(config["tts_language_code"], "en-US")
             self.assertEqual(config["tts_zero_shot_audio_prompt_file"], "/data/prompts/clone.wav")
+
+    def test_talker_and_thinker_temperatures_hydrate_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text(
+                dedent(
+                    """\
+                    llm:
+                      talker:
+                        name: Talker
+                        model_id: talker-model
+                        base_url: https://catalog.example/v1
+                        temperature: 0.2
+                    thinker-llm:
+                      thinker:
+                        name: Thinker
+                        model_id: thinker-model
+                        base_url: https://catalog.example/v1
+                        temperature: 0.0
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "llm_id": "cloud-nim:talker",
+                "thinker_llm_id": "cloud-nim:thinker",
+                "temperature": "0.7",
+                "thinker_temperature": "0.9",
+            }
+
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                hydrate_config_from_catalog(config)
+
+            self.assertEqual(config["model_id"], "talker-model")
+            self.assertEqual(config["thinker_model_id"], "thinker-model")
+            self.assertEqual(config["temperature"], "0.7")
+            self.assertEqual(config["thinker_temperature"], "0.0")
 
     def test_chatterbox_hydrates_per_sentence_even_with_sticky_stitched(self) -> None:
         """UI TTS switches must not keep Magpie's stitched mode on Chatterbox."""
@@ -496,6 +537,30 @@ llm:
 
         self.assertEqual(nim["base_url"], "http://localhost:18002/v1")
         self.assertEqual(vllm["base_url"], "http://localhost:8002/v1")
+
+
+class SessionToolsConfigTests(unittest.TestCase):
+    """The additive per-session `tools` selection (default behavior preserved)."""
+
+    def test_tools_list_survives_slot_filtering(self) -> None:
+        # Active slots restrict keys, but `tools` is slot-agnostic (like prompt_key).
+        token = utils._service_context.set((Path("src/examples/generic"), ("llm", "asr", "tts")))
+        try:
+            out = filter_session_config(
+                {
+                    "pipeline_mode": "generic-assistant",
+                    "tools_available": "get_weather,calculate_bmi",
+                    "bogus": "x",
+                }
+            )
+        finally:
+            utils._service_context.reset(token)
+        self.assertEqual(out.get("tools_available"), "get_weather,calculate_bmi")
+        self.assertNotIn("bogus", out)
+
+    def test_absent_tools_preserves_prompt_default(self) -> None:
+        out = filter_session_config({"pipeline_mode": "generic-assistant"})
+        self.assertNotIn("tools_available", out)
 
 
 if __name__ == "__main__":

@@ -10,12 +10,27 @@ server:
       system_prompt: ""
       max_tokens: 2048
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
+    nemotron-lightning-talker:
+      name: "Nemotron 3.5 Lightning Fast Talker"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://nvidia-llm:8000/v1"
+      system_prompt: ""
+      max_tokens: 512
+      temperature: 0.2
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   thinker-llm:
     nemotron-lightning:
       name: "Nemotron 3.5 Lightning 30B A3B Thinker"
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
       base_url: "http://nvidia-llm:8000/v1"
       max_tokens: 4096
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
+    nemotron-super-reasoning:
+      name: "Nemotron 3 Super Reasoning Thinker"
+      model_id: "nvidia/nemotron-3-super-120b-a12b"
+      base_url: "http://nemotron-3-super:8000/v1"
+      max_tokens: 2048
+      temperature: 0.0
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
   booking-server:
     default:
@@ -63,6 +78,14 @@ singlegpu:
       base_url: "http://nvidia-llm-vllm:8000/v1"
       system_prompt: ""
       max_tokens: 2048
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
+    nemotron-lightning-talker:
+      name: "Nemotron 3.5 Lightning Fast Talker"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://nvidia-llm-vllm:8000/v1"
+      system_prompt: ""
+      max_tokens: 512
+      temperature: 0.2
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   thinker-llm:
     nemotron-lightning:

@@ -39,7 +39,14 @@ def _services_local_path() -> Path:
 _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
     "llm": frozenset({"llm_id", "model_id", "base_url", "system_prompt", "max_tokens", "temperature", "extra_params"}),
     "thinker-llm": frozenset(
-        {"thinker_llm_id", "thinker_model_id", "thinker_base_url", "thinker_max_tokens", "thinker_extra_params"}
+        {
+            "thinker_llm_id",
+            "thinker_model_id",
+            "thinker_base_url",
+            "thinker_max_tokens",
+            "thinker_temperature",
+            "thinker_extra_params",
+        }
     ),
     "asr": frozenset({"asr_id", "asr_server", "asr_model", "asr_function_id", "asr_language_code"}),
     "tts": frozenset(
@@ -54,7 +61,9 @@ _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
         }
     ),
 }
-_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content", "tool_choice"})
+_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset(
+    {"pipeline_mode", "prompt_key", "prompt_content", "tool_choice", "domain_profile", "thinker_prompt", "tools"}
+)
 _active_slots: frozenset[str] | None = None
 _active_slot_order: tuple[str, ...] | None = None
 
@@ -470,10 +479,14 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "thinker_base_url",
         "thinker_extra_params",
         "thinker_max_tokens",
+        "thinker_temperature",
         "prompt_key",
         "prompt_content",
         "tool_choice",
         "asr_server",
+        "domain_profile",
+        "thinker_prompt",
+        "tools",
         "asr_model",
         "asr_function_id",
         "asr_language_code",
@@ -509,6 +522,7 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "model_id": "thinker_model_id",
             "base_url": "thinker_base_url",
             "max_tokens": "thinker_max_tokens",
+            "temperature": "thinker_temperature",
             "extra_params": "thinker_extra_params",
         },
     ),
@@ -539,7 +553,15 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
 
 # Body fields the client may set explicitly; catalog hydration must not overwrite them.
 _CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset(
-    {"asr_language_code", "tts_language_code", "tts_voice_id", "max_tokens", "temperature"}
+    {
+        "asr_language_code",
+        "tts_language_code",
+        "tts_voice_id",
+        "max_tokens",
+        "temperature",
+        "extra_params",
+        "thinker_extra_params",
+    }
 )
 
 
