@@ -103,7 +103,8 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_')
         run: |
           for attempt in {1..160}; do
-            if curl -fsS http://127.0.0.1:18002/v1/health/ready >/dev/null 2>&1; then
+            probe_started=$SECONDS
+            if curl -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:18002/v1/health/ready >/dev/null 2>&1; then
               echo "Local Omni NIM is ready."
               exit 0
             fi
@@ -112,7 +113,10 @@ jobs:
               docker compose logs --no-color nvidia-llm-omni || true
               exit 1
             fi
-            sleep 15
+            probe_elapsed=$((SECONDS - probe_started))
+            if ((probe_elapsed < 15)); then
+              sleep $((15 - probe_elapsed))
+            fi
           done
           docker compose logs --no-color nvidia-llm-omni || true
           echo "Local Omni NIM did not become ready within 40 minutes."
