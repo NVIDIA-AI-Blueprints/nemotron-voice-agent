@@ -6,7 +6,7 @@ judge:
   eval:
     service: nvidia-inference-api
     factory: tests.pipecat_evals.service.nvidia_inference_judge.create_nvidia_inference_judge
-    model: google/gemma-4-31b-it
+    model: nvidia/google/gemma-4-31b-it
 turns:
   - expect:
       - event: response

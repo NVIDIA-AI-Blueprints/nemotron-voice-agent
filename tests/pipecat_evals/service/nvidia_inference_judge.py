@@ -11,7 +11,7 @@ from typing import Any
 from pipecat.services.openai.llm import OpenAILLMService
 
 NVIDIA_INFERENCE_API_BASE_URL = "https://inference-api.nvidia.com/v1"
-NVIDIA_INFERENCE_JUDGE_MODEL = "google/gemma-4-31b-it"
+NVIDIA_INFERENCE_JUDGE_MODEL = "nvidia/google/gemma-4-31b-it"
 
 
 def create_nvidia_inference_judge(config: dict[str, Any]) -> OpenAILLMService:
