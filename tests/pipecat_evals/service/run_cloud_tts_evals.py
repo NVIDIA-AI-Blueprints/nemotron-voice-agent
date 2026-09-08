@@ -31,6 +31,17 @@ def _scenario_names(manifest: Path) -> list[str]:
     return names
 
 
+def _selected_scenarios(requested: list[str] | None, manifest: Path) -> list[str]:
+    """Return requested scenarios with workflow-dispatch whitespace removed."""
+    if requested is None:
+        return _scenario_names(manifest)
+
+    scenarios = [scenario.strip() for scenario in requested]
+    if not all(scenarios):
+        raise ValueError("--scenario cannot be blank")
+    return scenarios
+
+
 def _slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
 
@@ -168,7 +179,11 @@ def main() -> int:
     """Run all requested cloud-TTS eval scenarios and return a process status."""
     args = _parse_args()
     manifest = args.manifest if args.manifest.is_absolute() else ROOT / args.manifest
-    scenarios = args.scenario or _scenario_names(manifest)
+    try:
+        scenarios = _selected_scenarios(args.scenario, manifest)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if not scenarios:
         print(f"No scenarios found in {manifest}", file=sys.stderr)
         return 2

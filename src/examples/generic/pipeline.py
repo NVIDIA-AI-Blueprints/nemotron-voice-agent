@@ -341,7 +341,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         task=task,
         context=context,
         runner_args=runner_args,
-        intro_prompt="Please introduce yourself to the user.",
+        intro_prompt="Greet the user warmly, introduce yourself as Nemotron, and ask how you can help.",
         on_start=_on_session_start,
         welcome_enabled=welcome_enabled,
     )
