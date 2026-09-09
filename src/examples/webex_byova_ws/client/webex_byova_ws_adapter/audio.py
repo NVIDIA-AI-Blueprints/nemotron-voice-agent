@@ -7,9 +7,10 @@ import base64
 import binascii
 from dataclasses import dataclass, field
 
-PCM_RATE = 16_000
+PIPELINE_RATE = 16_000
 WEBEX_RATE = 8_000
 MIN_CHUNK = 320
+TARGET_CHUNK = 8_000
 MAX_CHUNK = 32 * 1024
 
 
@@ -30,30 +31,42 @@ class CallerAudioConverter:
         except (binascii.Error, ValueError) as exc:
             raise ValueError("caller_audio_b64 is invalid Base64") from exc
         pcm = audioop.ulaw2lin(mulaw, 2)
-        pcm, self._state = audioop.ratecv(pcm, 2, 1, WEBEX_RATE, PCM_RATE, self._state)
+        pcm, self._state = audioop.ratecv(pcm, 2, 1, WEBEX_RATE, PIPELINE_RATE, self._state)
         return pcm
 
 
 @dataclass(slots=True)
 class WebexAudioChunker:
-    """Convert PCM16 16 kHz and emit raw mu-law chunks within Cisco bounds."""
+    """Convert mono PCM16 at its declared rate to bounded raw mu-law chunks."""
 
     _resample_state: object | None = None
+    _source_rate: int | None = None
     _buffer: bytearray = field(default_factory=bytearray)
 
-    def feed(self, pcm: bytes) -> list[bytes]:
+    def feed(self, pcm: bytes, sample_rate: int, num_channels: int) -> list[bytes]:
         """Convert and return every currently complete output chunk."""
+        if not isinstance(sample_rate, int) or sample_rate <= 0:
+            raise ValueError("PCM16 sample rate must be a positive integer")
+        if num_channels != 1:
+            raise ValueError("only mono PCM16 output is supported")
         if len(pcm) % 2:
             raise ValueError("PCM16 audio must contain complete samples")
-        downsampled, self._resample_state = audioop.ratecv(pcm, 2, 1, PCM_RATE, WEBEX_RATE, self._resample_state)
+        if self._source_rate != sample_rate:
+            self._resample_state = None
+            self._source_rate = sample_rate
+        downsampled, self._resample_state = audioop.ratecv(
+            pcm,
+            2,
+            1,
+            sample_rate,
+            WEBEX_RATE,
+            self._resample_state,
+        )
         self._buffer.extend(audioop.lin2ulaw(downsampled, 2))
         chunks: list[bytes] = []
-        while len(self._buffer) >= MIN_CHUNK:
-            size = min(len(self._buffer), MAX_CHUNK)
-            if 0 < len(self._buffer) - size < MIN_CHUNK:
-                size -= MIN_CHUNK - (len(self._buffer) - size)
-            chunks.append(bytes(self._buffer[:size]))
-            del self._buffer[:size]
+        while len(self._buffer) >= TARGET_CHUNK:
+            chunks.append(bytes(self._buffer[:TARGET_CHUNK]))
+            del self._buffer[:TARGET_CHUNK]
         return chunks
 
     def flush(self) -> list[bytes]:

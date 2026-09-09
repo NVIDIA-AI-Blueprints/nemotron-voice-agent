@@ -37,11 +37,11 @@ from examples.shared.pipeline_utils import (
     build_context_messages,
     build_pipeline_params,
     build_user_aggregator_params,
-    create_transport,
     register_session_start_handlers,
     with_realtime_observers,
 )
 from examples.webex_byova_ws.tools import TOOL_HANDLERS, build_tools_schema
+from examples.webex_byova_ws.transport import create_webex_transport
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -61,7 +61,7 @@ CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
-    transport = create_transport(runner_args)
+    transport = create_webex_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(

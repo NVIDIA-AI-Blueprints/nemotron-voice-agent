@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+from enum import Enum, auto
 from typing import Any
 
 from aiohttp import WSMsgType, web
 
 from webex_byova_ws_adapter.audio import CallerAudioConverter, WebexAudioChunker, encode_audio
 from webex_byova_ws_adapter.bridge import NemotronBridge
-from webex_byova_ws_adapter.completion import BaselineCompletionPolicy
+from webex_byova_ws_adapter.completion import ReplyLifecycle
 from webex_byova_ws_adapter.config import AdapterConfig
 from webex_byova_ws_adapter.protocol import (
     OutboundSequence,
@@ -22,12 +24,25 @@ from webex_byova_ws_adapter.protocol import (
     response,
 )
 
+LOGGER = logging.getLogger(__name__)
+
+
+class SessionPhase(Enum):
+    """Canonical phases for one persistent Cisco WebSocket."""
+
+    WAITING_SESSION_START = auto()
+    WELCOME_REPLY = auto()
+    LISTENING = auto()
+    CALLER_ACTIVE = auto()
+    ASSISTANT_REPLY = auto()
+    TERMINAL = auto()
+
 
 class Conversation:
     """Handle one Webex WebSocket and one stable conversation ID."""
 
     def __init__(self, config: AdapterConfig, websocket: web.WebSocketResponse) -> None:
-        """Create isolated state for one accepted Webex socket."""
+        """Create isolated state for one logical Webex conversation."""
         self.config = config
         self.websocket = websocket
         self.conversation_id = ""
@@ -37,32 +52,120 @@ class Conversation:
         self.bridge_pump: asyncio.Task[None] | None = None
         self.reply_timeout_task: asyncio.Task[None] | None = None
         self.send_lock = asyncio.Lock()
+        self.attach_lock = asyncio.Lock()
         self.caller_audio = CallerAudioConverter()
         self.bot_audio = WebexAudioChunker()
-        self.completion = BaselineCompletionPolicy()
-        self.session_started = False
+        self.reply = ReplyLifecycle()
+        self.phase = SessionPhase.WAITING_SESSION_START
         self.pending_transcript = ""
         self.closed = False
+        self.closed_event = asyncio.Event()
+        self.reply_complete = asyncio.Event()
+        self.reply_complete.set()
+        self.idle_close_task: asyncio.Task[None] | None = None
+        self.audio_chunks_sent = 0
+        self.audio_bytes_sent = 0
 
-    async def run(self) -> None:
-        """Run until SESSION_END, protocol failure, or transport close."""
+    async def attach(
+        self,
+        websocket: web.WebSocketResponse,
+        initial_envelope: dict[str, Any],
+    ) -> None:
+        """Attach a Cisco continuation socket to this logical conversation."""
+        async with self.attach_lock:
+            if self.closed:
+                raise ProtocolError("conversation is already closed")
+            if self.idle_close_task:
+                self.idle_close_task.cancel()
+                self.idle_close_task = None
+            try:
+                await asyncio.wait_for(
+                    self.reply_complete.wait(),
+                    self.config.first_audio_timeout_seconds + self.config.completion_timeout_seconds,
+                )
+            except TimeoutError:
+                await self.close()
+                raise
+            async with self.send_lock:
+                previous = self.websocket
+                self.websocket = websocket
+                self.last_inbound_seq = 0
+                self.sequence = OutboundSequence()
+                if previous is not websocket and not previous.closed:
+                    await previous.close(code=1000, message=b"conversation continued")
+            await self._process_envelope(initial_envelope)
+            LOGGER.info(
+                "Attached Cisco continuation socket conversation_id=%s phase=%s",
+                self.conversation_id,
+                self.phase.name,
+            )
+
+    async def run(
+        self,
+        initial_envelope: dict[str, Any] | None = None,
+        websocket: web.WebSocketResponse | None = None,
+    ) -> None:
+        """Serve the currently attached physical Cisco socket."""
+        attached_websocket = websocket or self.websocket
         try:
-            async for message in self.websocket:
+            if initial_envelope is not None:
+                await self._process_envelope(initial_envelope)
+            async for message in attached_websocket:
                 if message.type != WSMsgType.TEXT:
+                    LOGGER.warning(
+                        "Rejected non-text Cisco frame conversation_id=%s type=%s",
+                        self.conversation_id or "unknown",
+                        message.type.name,
+                    )
                     await self._send_error("bad_request", "only JSON text frames are accepted")
                     break
                 try:
-                    await self._handle(parse_text(message.data))
-                except ProtocolError as exc:
-                    await self._send_error(exc.code, exc.detail)
-                    break
-                except ValueError as exc:
-                    await self._send_error("unsupported_media", str(exc))
+                    await self._process_envelope(parse_text(message.data))
+                except (ProtocolError, ValueError):
                     break
                 if self.closed:
                     break
         finally:
-            await self.close()
+            if self.websocket is attached_websocket and not self.closed:
+                self._schedule_idle_close(attached_websocket)
+
+    def _schedule_idle_close(self, websocket: web.WebSocketResponse) -> None:
+        """Retain state briefly while Cisco opens a continuation socket."""
+        if self.idle_close_task:
+            self.idle_close_task.cancel()
+        self.idle_close_task = asyncio.create_task(
+            self._close_if_not_continued(websocket),
+            name=f"continuation-grace-{self.conversation_id}",
+        )
+
+    async def _close_if_not_continued(self, websocket: web.WebSocketResponse) -> None:
+        try:
+            await asyncio.sleep(self.config.continuation_grace_seconds)
+            if self.websocket is websocket and not self.closed:
+                await self.close()
+        except asyncio.CancelledError:
+            pass
+
+    async def _process_envelope(self, envelope: dict[str, Any]) -> None:
+        try:
+            await self._handle(envelope)
+        except ProtocolError as exc:
+            LOGGER.warning(
+                "Rejected Cisco request conversation_id=%s code=%s detail=%s",
+                self.conversation_id or "unknown",
+                exc.code,
+                exc.detail,
+            )
+            await self._send_error(exc.code, exc.detail)
+            raise
+        except ValueError as exc:
+            LOGGER.warning(
+                "Rejected Cisco media conversation_id=%s detail=%s",
+                self.conversation_id or "unknown",
+                exc,
+            )
+            await self._send_error("unsupported_media", str(exc))
+            raise
 
     async def _handle(self, envelope: dict[str, Any]) -> None:
         message_type = envelope.get("type")
@@ -84,27 +187,39 @@ class Conversation:
         if self.conversation_id and request.conversation_id != self.conversation_id:
             raise ProtocolError("one WebSocket cannot carry multiple conversations")
         event_type = request.input_value.get("event_type") if request.input_kind == "event_input" else None
-        if not self.session_started:
+        if self.phase is SessionPhase.WAITING_SESSION_START:
             if request.input_kind != "event_input" or event_type != "SESSION_START":
+                LOGGER.warning(
+                    "First Cisco request was not SESSION_START conversation_id=%s seq=%s input_kind=%s event_type=%s",
+                    request.conversation_id,
+                    request.seq,
+                    request.input_kind,
+                    event_type,
+                )
                 raise ProtocolError("SESSION_START must be the first application request")
             await self._start(request)
             return
         if event_type == "SESSION_START":
             raise ProtocolError("SESSION_START may only be sent once")
+        if self.phase is SessionPhase.TERMINAL:
+            raise ProtocolError("session is already terminal")
         if event_type == "SESSION_END":
             await self._session_end()
         elif request.input_kind == "audio_input":
-            self._begin_reply()
             value = request.input_value
+            encoded_audio = value.get("caller_audio_b64")
+            if not encoded_audio:
+                return
             pcm = self.caller_audio.convert(
-                value.get("caller_audio_b64"),
+                encoded_audio,
                 value.get("encoding"),
                 value.get("sample_rate_hertz"),
             )
             assert self.bridge is not None
             await self.bridge.send_audio(pcm)
         else:
-            self._begin_reply()
+            self._begin_reply(request.input_kind)
+            self._arm_timeout(self.config.first_audio_timeout_seconds)
             assert self.bridge is not None
             if request.input_kind == "dtmf_input":
                 await self.bridge.send_input("dtmf", request.input_value)
@@ -124,8 +239,10 @@ class Conversation:
             raise ProtocolError("Nemotron connection timed out", "timeout") from exc
         except Exception as exc:
             raise ProtocolError("Nemotron connection failed", "upstream_error") from exc
-        self.session_started = True
-        self._begin_reply()
+        self.phase = SessionPhase.WELCOME_REPLY
+        LOGGER.info("Started Cisco conversation conversation_id=%s", self.conversation_id)
+        self._begin_reply("welcome")
+        self._arm_timeout(self.config.first_audio_timeout_seconds)
         self.bridge_pump = asyncio.create_task(self._pump_bridge(), name=f"bridge-pump-{self.conversation_id}")
 
     async def _pump_bridge(self) -> None:
@@ -134,14 +251,24 @@ class Conversation:
             item = await self.bridge.events.get()
             kind = item.get("kind")
             if kind == "audio":
-                self.completion.note_audio()
+                if not self.reply.active:
+                    self._begin_reply("assistant-output")
+                if self.phase is not SessionPhase.WELCOME_REPLY:
+                    self.phase = SessionPhase.ASSISTANT_REPLY
+                self.reply.note_audio()
                 self._arm_timeout(self.config.completion_timeout_seconds)
-                for chunk in self.bot_audio.feed(item["audio"]):
+                for chunk in self.bot_audio.feed(
+                    item["audio"],
+                    item["sample_rate"],
+                    item["num_channels"],
+                ):
                     await self._send_audio(chunk)
             elif kind == "transcript":
                 self.pending_transcript = item["text"]
             elif kind == "event":
                 await self._handle_backend_event(item["type"])
+            elif kind == "output-complete":
+                await self._finish_reply()
             elif kind == "error":
                 await self._send_error("upstream_error", item.get("detail", "Nemotron failed"))
                 self.closed = True
@@ -150,20 +277,59 @@ class Conversation:
 
     async def _handle_backend_event(self, event_type: str) -> None:
         if event_type == "user-started-speaking":
+            if self.phase is SessionPhase.CALLER_ACTIVE:
+                return
+            if not self.reply.active:
+                self._begin_reply("caller-turn")
+            self.phase = SessionPhase.CALLER_ACTIVE
             await self._send_event("START_OF_INPUT")
         elif event_type == "user-turn-finalized":
+            if self.phase is not SessionPhase.CALLER_ACTIVE:
+                return
+            if not self.reply.active:
+                self._begin_reply("caller-turn")
             await self._send_event("END_OF_INPUT")
-        elif self.completion.should_finalize(event_type):
-            self._cancel_reply_timeout()
-            for chunk in self.bot_audio.flush():
-                await self._send_audio(chunk)
-            await self._send_payload({"response_type": "FINAL", "input_mode": "INPUT_VOICE_DTMF"})
+            self.phase = SessionPhase.ASSISTANT_REPLY
+            self._arm_timeout(self.config.first_audio_timeout_seconds)
+        elif event_type == "bot-started-speaking":
+            if not self.reply.active:
+                self._begin_reply("assistant-output")
+            if self.phase is not SessionPhase.WELCOME_REPLY:
+                self.phase = SessionPhase.ASSISTANT_REPLY
 
-    def _begin_reply(self) -> None:
-        if self.completion.reply_open:
+    async def _finish_reply(self) -> None:
+        if not self.reply.finish():
             return
-        self.completion.begin_reply()
-        self._arm_timeout(self.config.first_audio_timeout_seconds)
+        self._cancel_reply_timeout()
+        for chunk in self.bot_audio.flush():
+            await self._send_audio(chunk)
+        await self._send_audio_final()
+        if self.phase not in {SessionPhase.CALLER_ACTIVE, SessionPhase.TERMINAL}:
+            self.phase = SessionPhase.LISTENING
+
+    async def _send_audio_final(self) -> None:
+        await self._send_payload(
+            {
+                "prompts": [{"audio_content_b64": "", "is_barge_in_enabled": True}],
+                "input_mode": "INPUT_VOICE_DTMF",
+                "input_sensitive": False,
+                "response_type": "FINAL",
+            }
+        )
+        self.reply_complete.set()
+
+    def _begin_reply(self, label: str) -> None:
+        if self.reply.active:
+            return
+        self.reply.begin(label)
+        self.reply_complete.clear()
+        LOGGER.debug(
+            "Opened Cisco reply conversation_id=%s reply=%s label=%s phase=%s",
+            self.conversation_id,
+            self.reply.ordinal,
+            label,
+            self.phase.name,
+        )
 
     def _arm_timeout(self, delay: float) -> None:
         self._cancel_reply_timeout()
@@ -177,11 +343,12 @@ class Conversation:
     async def _reply_timeout(self, delay: float) -> None:
         try:
             await asyncio.sleep(delay)
-            if self.completion.force_finalize() and not self.closed:
+            if self.reply.finish() and not self.closed:
                 for chunk in self.bot_audio.flush():
                     await self._send_audio(chunk)
                 await self._send_error("timeout", "Nemotron reply timed out")
-                await self._send_payload({"response_type": "FINAL", "input_mode": "INPUT_VOICE_DTMF"})
+                await self._send_audio_final()
+                self.phase = SessionPhase.LISTENING
         except asyncio.CancelledError:
             raise
         finally:
@@ -191,6 +358,14 @@ class Conversation:
     async def _send_audio(self, chunk: bytes) -> None:
         if not 320 <= len(chunk) <= 32 * 1024:
             raise RuntimeError("internal audio chunk bound violation")
+        self.audio_chunks_sent += 1
+        self.audio_bytes_sent += len(chunk)
+        if self.audio_chunks_sent == 1:
+            LOGGER.info(
+                "Sending first audio chunk conversation_id=%s bytes=%s",
+                self.conversation_id,
+                len(chunk),
+            )
         prompt: dict[str, Any] = {
             "audio_content_b64": encode_audio(chunk),
             "is_barge_in_enabled": True,
@@ -212,21 +387,28 @@ class Conversation:
         await self._send_payload(
             {
                 "output_events": [{"event_type": event_type}],
-                "response_type": "CHUNK",
+                "response_type": "FINAL" if event_type == "TRANSFER_TO_AGENT" else "CHUNK",
             }
         )
+        if event_type == "TRANSFER_TO_AGENT":
+            self._cancel_reply_timeout()
+            self.reply.reset()
+            self.reply_complete.set()
+            self.phase = SessionPhase.TERMINAL
 
     async def _session_end(self) -> None:
         self._cancel_reply_timeout()
-        self.completion.force_finalize()
+        self.reply.reset()
+        self.reply_complete.set()
+        self.phase = SessionPhase.TERMINAL
         await self._send_payload(
             {
                 "output_events": [{"event_type": "SESSION_END"}],
                 "response_type": "FINAL",
             }
         )
-        self.closed = True
         await self.websocket.close(code=1000, message=b"session ended")
+        await self.close()
 
     async def _send_payload(self, payload: dict[str, Any]) -> None:
         await self._send(response(self.sequence.next(), self.conversation_id, payload))
@@ -243,6 +425,12 @@ class Conversation:
         if self.closed and self.bridge is None and self.bridge_pump is None:
             return
         self.closed = True
+        self.phase = SessionPhase.TERMINAL
+        self.reply.reset()
+        self.reply_complete.set()
+        if self.idle_close_task is not None and self.idle_close_task is not asyncio.current_task():
+            self.idle_close_task.cancel()
+        self.idle_close_task = None
         bridge, self.bridge = self.bridge, None
         pump, self.bridge_pump = self.bridge_pump, None
         timeout_task, self.reply_timeout_task = self.reply_timeout_task, None
@@ -258,3 +446,10 @@ class Conversation:
                 await timeout_task
         if not self.websocket.closed:
             await self.websocket.close()
+        LOGGER.info(
+            "Closed Cisco conversation conversation_id=%s audio_chunks=%s audio_bytes=%s",
+            self.conversation_id or "unknown",
+            self.audio_chunks_sent,
+            self.audio_bytes_sent,
+        )
+        self.closed_event.set()

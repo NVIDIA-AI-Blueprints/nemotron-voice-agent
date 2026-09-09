@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator, FormatChecker
 
 from webex_byova_ws_adapter.protocol import (
     OutboundSequence,
@@ -13,6 +15,15 @@ from webex_byova_ws_adapter.protocol import (
     parse_request,
     parse_text,
     pong,
+    response,
+)
+
+OUTBOUND_SCHEMA = json.loads(
+    (Path(__file__).parent / "fixtures" / "outbound.schema.json").read_text(encoding="utf-8")
+)
+OUTBOUND_VALIDATOR = Draft202012Validator(
+    OUTBOUND_SCHEMA,
+    format_checker=FormatChecker(),
 )
 
 
@@ -41,6 +52,27 @@ def test_request_is_strict_and_preserves_input() -> None:
     bad["payload"]["unexpected"] = True
     with pytest.raises(ProtocolError, match="unknown fields"):
         parse_request(bad)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("metadata",),
+        ("payload", "virtual_agent_id"),
+        ("payload", "vendor_specific_config"),
+        ("payload", "allow_partial_responses"),
+        ("payload", "additional_info"),
+        ("payload", "voice_va_input_type", "event_input", "name"),
+        ("payload", "voice_va_input_type", "event_input", "parameters"),
+    ],
+)
+def test_request_accepts_null_optional_fields(path: tuple[str, ...]) -> None:
+    value = request()
+    target = value
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = None
+    assert parse_request(value).conversation_id == "call-1"
 
 
 @pytest.mark.parametrize(
@@ -85,6 +117,65 @@ def test_error_is_schema_shaped_and_bounded() -> None:
     assert result.keys() == {"type", "seq", "ts", "conversation_id", "code", "status", "detail"}
     assert len(result["detail"]) == 256
     json.dumps(result)
+
+
+def test_response_validates_schema_shaped_payload() -> None:
+    result = response(
+        1,
+        "call-1",
+        {
+            "prompts": [{"audio_content_b64": "AA==", "is_barge_in_enabled": True}],
+            "output_events": [],
+            "input_mode": "INPUT_VOICE_DTMF",
+            "input_sensitive": False,
+            "response_type": "CHUNK",
+        },
+    )
+    assert result["type"] == "VOICE_VA_RESPONSE"
+    assert result["conversation_id"] == "call-1"
+
+
+def test_all_outbound_envelopes_match_pinned_cisco_schema() -> None:
+    messages = [
+        response(
+            1,
+            "call-1",
+            {
+                "prompts": [{"audio_content_b64": "AA==", "is_barge_in_enabled": True}],
+                "output_events": [{"event_type": "END_OF_INPUT"}],
+                "input_mode": "INPUT_VOICE_DTMF",
+                "input_sensitive": False,
+                "response_type": "CHUNK",
+            },
+        ),
+        response(2, "call-1", {"response_type": "FINAL"}),
+        error(3, "call-1", "timeout", "upstream reply timed out"),
+        pong(
+            {
+                "type": "PING",
+                "seq": 4,
+                "ts": "2026-09-07T00:00:00Z",
+                "conversation_id": "call-1",
+            },
+            "call-1",
+        ),
+    ]
+    for message in messages:
+        OUTBOUND_VALIDATOR.validate(message)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"response_type": "UNKNOWN"},
+        {"response_type": "CHUNK", "prompts": [{}]},
+        {"response_type": "FINAL", "output_events": [{"event_type": "UNKNOWN"}]},
+    ],
+)
+def test_response_rejects_invalid_outbound_payload(payload: dict) -> None:
+    with pytest.raises(ProtocolError):
+        response(1, "call-1", payload)
 
 
 @pytest.mark.parametrize(

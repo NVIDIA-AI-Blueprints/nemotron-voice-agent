@@ -8,19 +8,29 @@ adapter.
 
 ## Endpoints
 
-- `GET /v1/va`: one authenticated WebSocket per conversation. Only JSON text
-  frames are accepted. The envelope and payload follow Cisco's official
-  `VoiceVirtualAgent_WsSchema.json`.
+- `GET /v1/va`: one authenticated persistent WebSocket per conversation. It
+  carries `SESSION_START`, all media and event turns, heartbeat traffic, and
+  `SESSION_END`. Only JSON text frames are accepted. The envelope and payload
+  follow Cisco's official `VoiceVirtualAgent_WsSchema.json`.
 - `GET /v1/listVirtualAgents`: authenticated, short-lived WebSocket discovery.
   Its request and response are unwrapped, as required by
   `VoiceVirtualAgent_WsListVASchema.json`.
 - `GET /health`: local/operator process health only. This is not part of either
   Cisco AsyncAPI schema and should normally remain behind the operator ingress.
 
+The 2026-09-09 production qualification observed Cisco close the socket after
+the welcome `FINAL` and open continuation sockets. The adapter retains the
+logical conversation for a bounded grace period and attaches those sockets by
+`conversation_id`, preserving the Nemotron session while resetting
+connection-scoped sequence counters. See the example README for qualification
+status.
+
 The adapter converts raw Base64 G.711 mu-law 8 kHz mono caller media into
 PCM16 16 kHz for Nemotron. Return media is converted back to raw mu-law and
-sent in 320-byte through 32-KiB chunks. The adapter adds no playback delay;
-the Generic pipeline retains its existing output pacing. Prompts always enable
+normally sent in Cisco's recommended 8-KiB chunks, with a legal 320-byte
+minimum for the final short tail. Conversion uses each pipeline frame's
+declared sample rate. An adapter-owned output transport omits browser playback
+pacing because Webex buffers and paces partner audio. Prompts always enable
 caller barge-in.
 
 RTVI events map as follows:
@@ -28,12 +38,10 @@ RTVI events map as follows:
 - `user-started-speaking` → `START_OF_INPUT`
 - `user-turn-finalized` → `END_OF_INPUT`
 - output audio → `CHUNK`
-- `bot-stopped-speaking` → one deduplicated `FINAL`
+- output serialized and generation stopped → exactly one `FINAL`
 
-The last mapping is isolated in `completion.py`. Generic currently has no
-authoritative output-drained event, so `bot-stopped-speaking` is the baseline
-compatibility edge. The policy requires output audio and deduplicates repeated
-stop notifications.
+The reply lifecycle is isolated in `completion.py`; it cannot infer completion
+from arbitrary timing or caller-media arrival.
 
 ## Production configuration
 

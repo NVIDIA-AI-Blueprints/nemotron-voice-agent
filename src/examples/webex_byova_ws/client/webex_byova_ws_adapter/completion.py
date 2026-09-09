@@ -1,4 +1,4 @@
-"""Encapsulated assistant-output completion policy."""
+"""Exactly-once lifecycle for one outbound Cisco reply."""
 
 from __future__ import annotations
 
@@ -6,44 +6,42 @@ from dataclasses import dataclass
 
 
 @dataclass(slots=True)
-class BaselineCompletionPolicy:
-    """Use Generic's bot-stop event while guaranteeing one FINAL per reply.
+class ReplyLifecycle:
+    """Track one logical reply without inferring transport completion."""
 
-    Generic has no authoritative output-drained event. This compatibility
-    policy is deliberately isolated so it can be replaced without changing
-    Cisco protocol handling.
-    """
-
-    reply_open: bool = False
+    active: bool = False
+    label: str = ""
+    ordinal: int = 0
     audio_seen: bool = False
     final_sent: bool = False
 
-    def begin_reply(self) -> None:
-        """Open a new logical reply if none is currently active."""
-        if not self.reply_open:
-            self.reply_open = True
-            self.audio_seen = False
-            self.final_sent = False
+    def begin(self, label: str) -> None:
+        """Open a new logical reply."""
+        if self.active:
+            raise RuntimeError(f"reply {self.ordinal} is already active")
+        self.active = True
+        self.label = label
+        self.ordinal += 1
+        self.audio_seen = False
+        self.final_sent = False
 
     def note_audio(self) -> None:
-        """Record that this reply produced assistant audio."""
-        self.begin_reply()
+        """Record serialized audio for the active reply."""
+        if not self.active:
+            raise RuntimeError("audio arrived without an active reply")
         self.audio_seen = True
 
-    def should_finalize(self, event_type: str) -> bool:
-        """Return true once for the accepted baseline completion edge."""
-        if event_type != "bot-stopped-speaking" or not self.reply_open or self.final_sent:
-            return False
-        if not self.audio_seen:
+    def finish(self) -> bool:
+        """Mark the active reply final exactly once."""
+        if not self.active or self.final_sent:
             return False
         self.final_sent = True
-        self.reply_open = False
+        self.active = False
         return True
 
-    def force_finalize(self) -> bool:
-        """Finalize an active reply once on timeout or event-only completion."""
-        if not self.reply_open or self.final_sent:
-            return False
-        self.final_sent = True
-        self.reply_open = False
-        return True
+    def reset(self) -> None:
+        """Clear reply state when the session terminates."""
+        self.active = False
+        self.label = ""
+        self.audio_seen = False
+        self.final_sent = False

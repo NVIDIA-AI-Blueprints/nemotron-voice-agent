@@ -18,7 +18,44 @@ REQUEST_KEYS = {
     "additional_info",
 }
 INPUT_KEYS = {"audio_input", "dtmf_input", "event_input"}
-EVENT_TYPES = {"SESSION_START", "SESSION_END", "NO_INPUT", "START_OF_DTMF", "CUSTOM_EVENT"}
+EVENT_TYPES = {
+    "UNSPECIFIED_INPUT",
+    "SESSION_START",
+    "SESSION_END",
+    "NO_INPUT",
+    "START_OF_DTMF",
+    "CUSTOM_EVENT",
+}
+RESPONSE_KEYS = {
+    "prompts",
+    "output_events",
+    "input_sensitive",
+    "input_mode",
+    "input_handling_config",
+    "session_transcript",
+    "session_summary",
+    "disable_prompt_cancellation",
+    "response_type",
+}
+RESPONSE_TYPES = {"PARTIAL", "CHUNK", "FINAL"}
+INPUT_MODES = {
+    "INPUT_VOICE_MODE_UNSPECIFIED",
+    "INPUT_VOICE",
+    "INPUT_EVENT_DTMF",
+    "INPUT_VOICE_DTMF",
+}
+OUTPUT_EVENT_TYPES = {
+    "UNSPECIFIED_EVENT",
+    "START_OF_INPUT",
+    "END_OF_INPUT",
+    "NO_INPUT",
+    "NO_MATCH",
+    "TRANSFER_TO_AGENT",
+    "CUSTOM_EVENT",
+    "SESSION_END",
+}
+PROMPT_KEYS = {"audio_content_b64", "audio_uri", "text", "is_barge_in_enabled"}
+OUTPUT_EVENT_KEYS = {"event_type", "name", "metadata"}
 DTMF_DIGITS = {
     *(
         f"DTMF_DIGIT_{name}"
@@ -27,6 +64,7 @@ DTMF_DIGITS = {
     *(f"DTMF_DIGIT_{letter}" for letter in "ABCD"),
     "DTMF_DIGIT_STAR",
     "DTMF_DIGIT_POUND",
+    "DTMF_EVENT_UNSPECIFIED",
 }
 ERROR_STATUS = {
     "unauthorized": 401,
@@ -134,7 +172,7 @@ def parse_request(message: dict[str, Any]) -> Request:
     if not isinstance(conversation_id, str) or not conversation_id:
         raise ProtocolError("conversation_id must be a nonempty string")
     _date_time(message["ts"], "ts")
-    if "metadata" in message:
+    if message.get("metadata") is not None:
         _object(message["metadata"], "metadata")
     payload = _object(message["payload"], "payload")
     _only_keys(payload, REQUEST_KEYS, "payload")
@@ -145,11 +183,11 @@ def parse_request(message: dict[str, Any]) -> Request:
     if not isinstance(payload["customer_org_id"], str) or not payload["customer_org_id"]:
         raise ProtocolError("customer_org_id must be a nonempty string")
     for name in ("virtual_agent_id", "vendor_specific_config"):
-        if name in payload and not isinstance(payload[name], str):
+        if payload.get(name) is not None and not isinstance(payload[name], str):
             raise ProtocolError(f"{name} must be a string")
-    if "allow_partial_responses" in payload and not isinstance(payload["allow_partial_responses"], bool):
+    if payload.get("allow_partial_responses") is not None and not isinstance(payload["allow_partial_responses"], bool):
         raise ProtocolError("allow_partial_responses must be a boolean")
-    if "additional_info" in payload:
+    if payload.get("additional_info") is not None:
         additional_info = _object(payload["additional_info"], "additional_info")
         if any(not isinstance(key, str) or not isinstance(value, str) for key, value in additional_info.items()):
             raise ProtocolError("additional_info values must be strings")
@@ -175,7 +213,7 @@ def _validate_input(kind: str, value: dict[str, Any]) -> None:
         _only_keys(value, allowed, kind)
         if not {"encoding", "sample_rate_hertz"} <= value.keys():
             raise ProtocolError("audio_input is missing encoding or sample_rate_hertz")
-        if "caller_audio_b64" in value and not isinstance(value["caller_audio_b64"], str):
+        if value.get("caller_audio_b64") is not None and not isinstance(value["caller_audio_b64"], str):
             raise ProtocolError("caller_audio_b64 must be a string")
         if value["encoding"] not in {
             "UNSPECIFIED_FORMAT",
@@ -186,11 +224,11 @@ def _validate_input(kind: str, value: dict[str, Any]) -> None:
             raise ProtocolError("audio_input contains an invalid encoding")
         if not isinstance(value["sample_rate_hertz"], int) or isinstance(value["sample_rate_hertz"], bool):
             raise ProtocolError("sample_rate_hertz must be an integer")
-        if "audio_timestamp" in value:
+        if value.get("audio_timestamp") is not None:
             _date_time(value["audio_timestamp"], "audio_timestamp")
-        if "language_code" in value and not isinstance(value["language_code"], str):
+        if value.get("language_code") is not None and not isinstance(value["language_code"], str):
             raise ProtocolError("language_code must be a string")
-        if "is_single_utterance" in value and not isinstance(value["is_single_utterance"], bool):
+        if value.get("is_single_utterance") is not None and not isinstance(value["is_single_utterance"], bool):
             raise ProtocolError("is_single_utterance must be a boolean")
     elif kind == "dtmf_input":
         _only_keys(value, {"dtmf_events"}, kind)
@@ -201,9 +239,9 @@ def _validate_input(kind: str, value: dict[str, Any]) -> None:
         _only_keys(value, {"event_type", "name", "parameters"}, kind)
         if value.get("event_type") not in EVENT_TYPES:
             raise ProtocolError("event_input contains an invalid event_type")
-        if "name" in value and not isinstance(value["name"], str):
+        if value.get("name") is not None and not isinstance(value["name"], str):
             raise ProtocolError("event_input name must be a string")
-        if "parameters" in value:
+        if value.get("parameters") is not None:
             _object(value["parameters"], "event_input parameters")
 
 
@@ -212,8 +250,98 @@ def timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _validate_text_content(value: Any, name: str) -> None:
+    content = _object(value, name)
+    _only_keys(content, {"text", "ssml", "language_code"}, name)
+    present = [field for field in ("text", "ssml") if field in content]
+    if len(present) != 1 or not isinstance(content[present[0]], str):
+        raise ProtocolError(f"{name} must contain exactly one string text or ssml field")
+    if content.get("language_code") is not None and not isinstance(content["language_code"], str):
+        raise ProtocolError(f"{name}.language_code must be a string")
+
+
+def _validate_response_payload(payload: dict[str, Any]) -> None:
+    _only_keys(payload, RESPONSE_KEYS, "response payload")
+    if payload.get("response_type") not in RESPONSE_TYPES:
+        raise ProtocolError("response_type must be PARTIAL, CHUNK, or FINAL")
+    if payload.get("input_mode") is not None and payload["input_mode"] not in INPUT_MODES:
+        raise ProtocolError("input_mode contains an invalid value")
+    for name in ("input_sensitive", "disable_prompt_cancellation"):
+        if payload.get(name) is not None and not isinstance(payload[name], bool):
+            raise ProtocolError(f"{name} must be a boolean")
+    if payload.get("input_handling_config") is not None:
+        config = _object(payload["input_handling_config"], "input_handling_config")
+        _only_keys(config, {"dtmf_config", "speech_timers"}, "input_handling_config")
+        if config.get("dtmf_config") is not None:
+            dtmf = _object(config["dtmf_config"], "dtmf_config")
+            _only_keys(
+                dtmf,
+                {"inter_digit_timeout_msec", "termchar", "dtmf_input_length"},
+                "dtmf_config",
+            )
+            for name in ("inter_digit_timeout_msec", "dtmf_input_length"):
+                if dtmf.get(name) is not None and (
+                    not isinstance(dtmf[name], int) or isinstance(dtmf[name], bool)
+                ):
+                    raise ProtocolError(f"dtmf_config.{name} must be an integer")
+            if dtmf.get("termchar") is not None and dtmf["termchar"] not in DTMF_DIGITS:
+                raise ProtocolError("dtmf_config.termchar contains an invalid digit")
+        if config.get("speech_timers") is not None:
+            timers = _object(config["speech_timers"], "speech_timers")
+            timer_fields = {
+                "max_speech_timeout_msec",
+                "complete_timeout_msec",
+                "incomplete_timeout_msec",
+            }
+            _only_keys(timers, timer_fields, "speech_timers")
+            if any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in timers.values()
+            ):
+                raise ProtocolError("speech_timers values must be integers")
+    for name in ("session_transcript", "session_summary"):
+        if payload.get(name) is not None:
+            _validate_text_content(payload[name], name)
+
+    prompts = payload.get("prompts")
+    if prompts is not None:
+        if not isinstance(prompts, list):
+            raise ProtocolError("prompts must be an array")
+        for prompt_value in prompts:
+            prompt = _object(prompt_value, "prompt")
+            _only_keys(prompt, PROMPT_KEYS, "prompt")
+            for field in ("audio_content_b64", "audio_uri", "text"):
+                if prompt.get(field) is not None and not isinstance(prompt[field], str):
+                    raise ProtocolError(f"prompt.{field} must be a string")
+            if not isinstance(prompt.get("audio_content_b64"), str) and not isinstance(prompt.get("text"), str):
+                raise ProtocolError("prompt must contain text or audio_content_b64")
+            if prompt.get("is_barge_in_enabled") is not None and not isinstance(
+                prompt["is_barge_in_enabled"], bool
+            ):
+                raise ProtocolError("prompt.is_barge_in_enabled must be a boolean")
+
+    events = payload.get("output_events")
+    if events is not None:
+        if not isinstance(events, list):
+            raise ProtocolError("output_events must be an array")
+        for event_value in events:
+            event = _object(event_value, "output_event")
+            _only_keys(event, OUTPUT_EVENT_KEYS, "output_event")
+            if event.get("event_type") not in OUTPUT_EVENT_TYPES:
+                raise ProtocolError("output_event contains an invalid event_type")
+            if event.get("name") is not None and not isinstance(event["name"], str):
+                raise ProtocolError("output_event.name must be a string")
+            if event.get("metadata") is not None:
+                _object(event["metadata"], "output_event.metadata")
+
+
 def response(seq: int, conversation_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Build a schema-conformant response envelope."""
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+        raise ProtocolError("response seq must be a positive integer")
+    if not isinstance(conversation_id, str) or not conversation_id:
+        raise ProtocolError("response conversation_id must be a nonempty string")
+    _validate_response_payload(payload)
     return {
         "type": "VOICE_VA_RESPONSE",
         "seq": seq,
@@ -246,7 +374,7 @@ def pong(ping: dict[str, Any], conversation_id: str) -> dict[str, Any]:
     if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
         raise ProtocolError("PING seq must be a positive integer")
     _date_time(ping.get("ts"), "PING ts")
-    if "metadata" in ping:
+    if ping.get("metadata") is not None:
         _object(ping["metadata"], "PING metadata")
     if ping.get("conversation_id") != conversation_id:
         raise ProtocolError("PING conversation_id does not match session")

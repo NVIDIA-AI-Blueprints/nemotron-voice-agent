@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Outbound subset pinned from Webex VoiceVirtualAgent_WsSchema.json, schema a38a10b7-43e4-4676-a076-a7d6dce9387d, main@c16938fcaea2eaee4270d2dede2b8704dbae0c8f.",
+  "oneOf": [
+    {"$ref": "#/$defs/response"},
+    {"$ref": "#/$defs/error"},
+    {"$ref": "#/$defs/pong"}
+  ],
+  "$defs": {
+    "baseProperties": {
+      "type": {"type": "string"},
+      "seq": {"type": "integer", "minimum": 1},
+      "ts": {"type": "string", "format": "date-time"},
+      "conversation_id": {"type": "string"},
+      "metadata": {"type": "object"}
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {"type": "string"},
+        "audio_uri": {"type": "string"},
+        "audio_content_b64": {"type": "string"},
+        "is_barge_in_enabled": {"type": "boolean"}
+      },
+      "anyOf": [
+        {"required": ["text"]},
+        {"required": ["audio_content_b64"]}
+      ]
+    },
+    "outputEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event_type": {
+          "enum": [
+            "UNSPECIFIED_EVENT",
+            "SESSION_END",
+            "TRANSFER_TO_AGENT",
+            "CUSTOM_EVENT",
+            "START_OF_INPUT",
+            "END_OF_INPUT",
+            "NO_MATCH",
+            "NO_INPUT"
+          ]
+        },
+        "name": {"type": "string"},
+        "metadata": {"type": "object"}
+      },
+      "required": ["event_type"]
+    },
+    "textContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {"type": "string"},
+        "ssml": {"type": "string"},
+        "language_code": {"type": "string"}
+      },
+      "oneOf": [
+        {"required": ["text"]},
+        {"required": ["ssml"]}
+      ]
+    },
+    "responsePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompts": {"type": "array", "items": {"$ref": "#/$defs/prompt"}},
+        "output_events": {"type": "array", "items": {"$ref": "#/$defs/outputEvent"}},
+        "input_sensitive": {"type": "boolean"},
+        "input_mode": {
+          "enum": [
+            "INPUT_VOICE_MODE_UNSPECIFIED",
+            "INPUT_VOICE",
+            "INPUT_EVENT_DTMF",
+            "INPUT_VOICE_DTMF"
+          ]
+        },
+        "input_handling_config": {"type": "object"},
+        "session_transcript": {"$ref": "#/$defs/textContent"},
+        "session_summary": {"$ref": "#/$defs/textContent"},
+        "response_type": {"enum": ["FINAL", "PARTIAL", "CHUNK"]},
+        "disable_prompt_cancellation": {"type": "boolean"}
+      },
+      "required": ["response_type"]
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "VOICE_VA_RESPONSE"},
+        "seq": {"type": "integer", "minimum": 1},
+        "ts": {"type": "string", "format": "date-time"},
+        "conversation_id": {"type": "string"},
+        "metadata": {"type": "object"},
+        "payload": {"$ref": "#/$defs/responsePayload"}
+      },
+      "required": ["type", "seq", "ts", "conversation_id", "payload"]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "ERROR"},
+        "seq": {"type": "integer", "minimum": 1},
+        "ts": {"type": "string", "format": "date-time"},
+        "conversation_id": {"type": "string"},
+        "metadata": {"type": "object"},
+        "code": {
+          "enum": [
+            "unauthorized",
+            "bad_request",
+            "unsupported_media",
+            "upstream_error",
+            "rate_limit",
+            "timeout"
+          ]
+        },
+        "status": {"type": "integer"},
+        "detail": {"type": "string"}
+      },
+      "required": ["type", "seq", "ts", "conversation_id", "code", "status", "detail"]
+    },
+    "pong": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "PONG"},
+        "seq": {"type": "integer", "minimum": 1},
+        "ts": {"type": "string", "format": "date-time"},
+        "conversation_id": {"type": "string"},
+        "metadata": {"type": "object"}
+      },
+      "required": ["type", "seq", "ts", "conversation_id"]
+    }
+  }
+}

@@ -53,6 +53,9 @@ class AdapterConfig:
     completion_timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv("BYOVA_COMPLETION_TIMEOUT_SECONDS", "10"))
     )
+    continuation_grace_seconds: float = field(
+        default_factory=lambda: float(os.getenv("BYOVA_CONTINUATION_GRACE_SECONDS", "5"))
+    )
     max_message_bytes: int = field(default_factory=lambda: int(os.getenv("BYOVA_MAX_MESSAGE_BYTES", "1048576")))
 
     def validate(self) -> None:
@@ -65,6 +68,7 @@ class AdapterConfig:
             self.send_timeout_seconds <= 0
             or self.first_audio_timeout_seconds <= 0
             or self.completion_timeout_seconds <= 0
+            or self.continuation_grace_seconds <= 0
             or self.jwks_ttl_seconds <= 0
             or self.auth_clock_skew_seconds < 0
         ):

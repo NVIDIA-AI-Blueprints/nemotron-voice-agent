@@ -35,10 +35,15 @@ def test_registry_defaults_match_generic() -> None:
     assert webex_ws["bot"] == "examples.webex_byova_ws.pipeline:bot"
 
 
-def test_pipeline_retains_generic_pacing() -> None:
+def test_pipeline_disables_browser_pacing_for_cisco_only() -> None:
     pipeline = (WEBEX_WS / "pipeline.py").read_text(encoding="utf-8")
+    transport = (WEBEX_WS / "transport.py").read_text(encoding="utf-8")
 
     assert "OutputCompletionObserver" not in pipeline
     assert "audio_out_10ms_chunks" not in pipeline
     assert "AUDIO_OUT_10MS_CHUNKS" not in pipeline
+    assert "_write_audio_sleep =" not in pipeline
+    assert "create_webex_transport(runner_args)" in pipeline
+    assert "class WebexUnpacedOutputTransport" in transport
+    assert "await self._write_frame(normalized)" in transport
     assert "build_pipeline_params(" in pipeline

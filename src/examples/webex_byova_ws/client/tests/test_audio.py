@@ -31,7 +31,7 @@ def test_caller_rejects_nonqualified_media_and_invalid_base64() -> None:
 
 def test_output_chunks_obey_cisco_bounds_and_flush_tail() -> None:
     chunker = WebexAudioChunker()
-    chunks = chunker.feed(b"\x00\x00" * 80_000)
+    chunks = chunker.feed(b"\x00\x00" * 80_000, 16_000, 1)
     chunks.extend(chunker.flush())
     assert chunks
     assert all(320 <= len(chunk) <= 32 * 1024 for chunk in chunks)
@@ -40,5 +40,19 @@ def test_output_chunks_obey_cisco_bounds_and_flush_tail() -> None:
 
 def test_short_output_is_padded_to_minimum_raw_chunk() -> None:
     chunker = WebexAudioChunker()
-    assert chunker.feed(b"\x00\x00" * 100) == []
+    assert chunker.feed(b"\x00\x00" * 100, 16_000, 1) == []
     assert len(chunker.flush()[0]) == 320
+
+
+def test_output_uses_declared_pipeline_sample_rate() -> None:
+    one_second_pcm = b"\x00\x00" * 22_050
+    chunks = WebexAudioChunker().feed(one_second_pcm, 22_050, 1)
+    assert sum(map(len, chunks)) == 8_000
+
+
+def test_output_rejects_missing_rate_and_non_mono_audio() -> None:
+    chunker = WebexAudioChunker()
+    with pytest.raises(ValueError, match="sample rate"):
+        chunker.feed(b"\x00\x00", 0, 1)
+    with pytest.raises(ValueError, match="mono"):
+        chunker.feed(b"\x00\x00", 16_000, 2)

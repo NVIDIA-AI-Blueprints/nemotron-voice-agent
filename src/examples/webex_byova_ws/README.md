@@ -8,9 +8,9 @@ Pipecat RTVI WebSocket protocol.
 This example does not modify or replace the existing
 [gRPC Webex BYOVA example](../webex_byova/README.md). The pipeline, prompts,
 tools, and service catalogs intentionally match the
-[Generic Assistant](../generic/README.md). Generated text-to-speech (TTS)
-audio retains Generic real-time pacing; it does not use the gRPC example's
-burst-output behavior.
+[Generic Assistant](../generic/README.md). The sole pipeline transport
+deviation disables browser playback pacing because Webex buffers and paces
+partner audio itself.
 
 ## Connection Boundaries
 
@@ -172,15 +172,26 @@ The adapter maps conversation events as follows:
 | --- | --- |
 | Cisco `SESSION_START` | Opens one internal RTVI connection and sends `client-ready`. |
 | Pipecat `user-started-speaking` | Sends Cisco `START_OF_INPUT` immediately for barge-in. |
-| Pipecat `user-turn-finalized` | Sends Cisco `END_OF_INPUT`; raw `user-stopped-speaking` is not a final turn edge. |
-| Pipecat output audio | Converts PCM16 16 kHz mono to raw Base64 G.711 mu-law 8 kHz Cisco `CHUNK` output. |
-| Deduplicated Pipecat `bot-stopped-speaking` | Sends one baseline Cisco `FINAL` after reply audio. |
+| Pipecat `user-turn-finalized` | Sends Cisco `END_OF_INPUT` at the canonical finalized-turn edge. |
+| Pipecat output audio | Uses the frame's declared sample rate and converts mono PCM16 to raw Base64 G.711 mu-law 8 kHz Cisco `CHUNK` output. |
+| Adapter output-complete edge | Sends exactly one Cisco `FINAL` after unpaced generated audio is serialized. |
 | Cisco `SESSION_END` or socket closure | Closes the internal connection and releases conversation state. |
 
-Generic has no authoritative output-drained event. The adapter therefore
-isolates its baseline completion policy and deduplicates
-`bot-stopped-speaking`, with a completion timeout as a fallback. This policy
-does not use the gRPC example's `bot-output-drained` completion edge.
+The documented contract uses one authenticated Cisco WebSocket for the entire
+conversation. The adapter also supports the continuation sockets observed in
+production: the logical conversation and Nemotron connection remain stable,
+while physical Cisco sockets are attached by `conversation_id` with
+connection-scoped sequence counters.
+
+An adapter-owned Pipecat output transport serializes audio without browser
+playback sleeps. Its stop event is therefore an output-written edge rather
+than simulated playback completion.
+
+> **Live qualification (2026-09-09):** the Cisco production connector closed
+> the documented socket immediately after the welcome `FINAL` and opened four
+> continuation sockets. Compatibility handling is enabled so these sockets can
+> resume the existing logical conversation. Cisco should still confirm this
+> behavior because it differs from the published single-socket contract.
 
 Caller audio must be raw Base64 G.711 mu-law, 8 kHz, mono data with
 `encoding=MULAW_FORMAT` and `sample_rate_hertz=8000`. Adapter output chunks
@@ -188,19 +199,9 @@ range from 320 bytes through 32 KB.
 
 ## Generic Baseline Fit
 
-The current event mapping does not need the gRPC example's
-`user-stopped-speaking` to `bot-started-speaking` workaround. The adapter
-ignores the raw VAD stop edge and sends `END_OF_INPUT` only after Pipecat emits
-`user-turn-finalized`. If Cisco sandbox evidence shows that boundary is still
-too early, defer the pending event in the adapter until first bot audio. Do not
-change the pipeline for that case.
-
-Cisco recommends sending each generated audio chunk without playback pacing.
-This first implementation deliberately retains Generic pipeline pacing so you
-can qualify event ordering independently. The local smoke test verifies
-streaming and finality, but it does not prove Cisco timing compliance. If the
-Cisco harness reports delayed or buffered output, disabling transport pacing
-is the next isolated pipeline change to evaluate.
+The adapter ignores raw `user-stopped-speaking` and uses Pipecat's finalized
+turn for `END_OF_INPUT`. Cisco receives generated audio without
+transport-side playback pacing.
 
 ## Customize the Assistant
 

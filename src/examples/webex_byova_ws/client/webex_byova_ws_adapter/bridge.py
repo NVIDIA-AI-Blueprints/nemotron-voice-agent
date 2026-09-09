@@ -98,7 +98,14 @@ class NemotronBridge:
                 frame = frames_pb2.Frame.FromString(raw)
                 frame_type = frame.WhichOneof("frame")
                 if frame_type == "audio" and frame.audio.audio:
-                    await self._put({"kind": "audio", "audio": bytes(frame.audio.audio)})
+                    await self._put(
+                        {
+                            "kind": "audio",
+                            "audio": bytes(frame.audio.audio),
+                            "sample_rate": frame.audio.sample_rate,
+                            "num_channels": frame.audio.num_channels,
+                        }
+                    )
                 elif frame_type == "message":
                     await self._handle_message(frame.message.data)
         except asyncio.CancelledError:
@@ -114,11 +121,12 @@ class NemotronBridge:
         if payload.get("type") == "server-message" and isinstance(payload.get("data"), dict):
             payload = payload["data"]
         event_type = payload.get("type")
-        if event_type in {
+        if event_type == "bot-stopped-speaking":
+            await self._put({"kind": "output-complete"})
+        elif event_type in {
             "user-started-speaking",
             "user-turn-finalized",
             "bot-started-speaking",
-            "bot-stopped-speaking",
         }:
             await self._put({"kind": "event", "type": event_type, "data": payload.get("data", {})})
         elif event_type == "bot-output":

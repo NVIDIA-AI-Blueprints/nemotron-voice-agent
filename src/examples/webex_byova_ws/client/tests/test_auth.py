@@ -101,6 +101,7 @@ def test_unsafe_modes_require_explicit_local_flags() -> None:
         {"send_timeout_seconds": 0},
         {"first_audio_timeout_seconds": 0},
         {"completion_timeout_seconds": 0},
+        {"continuation_grace_seconds": 0},
         {"jwks_ttl_seconds": 0},
         {"auth_clock_skew_seconds": -1},
     ],

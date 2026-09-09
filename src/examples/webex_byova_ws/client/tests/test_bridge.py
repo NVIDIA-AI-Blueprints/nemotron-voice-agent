@@ -28,6 +28,21 @@ class FakeBackend:
         return empty()
 
 
+class IncomingBackend(FakeBackend):
+    """Backend that yields predefined protobuf frames."""
+
+    def __init__(self, incoming: list[bytes]) -> None:
+        super().__init__()
+        self.incoming = incoming
+
+    def __aiter__(self):
+        async def frames():
+            for frame in self.incoming:
+                yield frame
+
+        return frames()
+
+
 @pytest.mark.asyncio
 async def test_bridge_opens_api_ws_and_sends_client_ready() -> None:
     backend = FakeBackend()
@@ -60,13 +75,40 @@ async def test_bridge_maps_required_rtvi_events() -> None:
     await bridge._handle_message(json.dumps({"type": "server-message", "data": {"type": "user-turn-finalized"}}))
     await bridge._handle_message(json.dumps({"type": "bot-started-speaking"}))
     await bridge._handle_message(json.dumps({"type": "bot-stopped-speaking"}))
-    assert [(await bridge.events.get())["type"] for _ in range(4)] == [
+    assert [(await bridge.events.get())["type"] for _ in range(3)] == [
         "user-started-speaking",
         "user-turn-finalized",
         "bot-started-speaking",
-        "bot-stopped-speaking",
     ]
+    assert await bridge.events.get() == {"kind": "output-complete"}
     assert bridge.events.empty()
+
+
+@pytest.mark.asyncio
+async def test_bridge_preserves_output_audio_format_metadata() -> None:
+    raw = frames_pb2.Frame(
+        audio=frames_pb2.AudioRawFrame(
+            audio=b"\x00\x00",
+            sample_rate=22_050,
+            num_channels=1,
+        )
+    ).SerializeToString()
+    bridge = NemotronBridge(
+        AdapterConfig(
+            allow_plaintext_local=True,
+            auth_enabled=False,
+            allow_auth_disabled_local=True,
+        ),
+        "call-1",
+        websocket=IncomingBackend([raw]),
+    )
+    await bridge._reader()
+    assert await bridge.events.get() == {
+        "kind": "audio",
+        "audio": b"\x00\x00",
+        "sample_rate": 22_050,
+        "num_channels": 1,
+    }
 
 
 @pytest.mark.asyncio
