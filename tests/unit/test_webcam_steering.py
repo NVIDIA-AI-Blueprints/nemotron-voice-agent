@@ -95,6 +95,12 @@ class SteeringPreambleTests(unittest.TestCase):
         self.assertIn("never invent a phone, bottle", block)
         self.assertIn("final roughly 1.5 seconds", block)
 
+    def test_empty_scene_does_not_invent_a_person(self) -> None:
+        block = _steering_preamble("")
+        self.assertIn("check whether a person is clearly visible", block)
+        self.assertIn("describe only the actual room, furniture, or other surroundings", block)
+        self.assertIn("never invent a person, face, pose, gaze, expression, or activity", block)
+
     def test_absent_things_are_never_narrated(self) -> None:
         block = _steering_preamble("")
         self.assertIn("never report anything as absent, missing, hidden, or not visible", block)
