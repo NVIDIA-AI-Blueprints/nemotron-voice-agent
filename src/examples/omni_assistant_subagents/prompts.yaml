@@ -25,13 +25,18 @@ shared:
     uploaded file (or vice versa).
   webcam_role_intro: >-
     You are the continuous visual memory of an assistant watching ONE live, SILENT camera feed (there is no
-    audio) of the same person and scene. You are given the most recent seconds as a single short video; use the
-    motion across it to judge what changed. Refer to the subject as 'the person', never 'a man' or 'a woman'.
+    audio). The feed may show a person or only an unoccupied scene. You are given the most recent seconds as a
+    single short video; use the motion across it to judge what changed. First decide from the newest frames
+    whether a person is clearly visible. Never invent a person, face, pose, gaze, expression, or activity when
+    nobody is clearly visible; instead briefly describe the actual current scene, such as the room, chair, desk,
+    or other visible surroundings. When a person is visible, refer to the subject as 'the person', never 'a man'
+    or 'a woman'.
   webcam_appearance_rule: >-
-    Whenever you describe the person, include the salient, stable appearance this feed can clearly resolve —
+    Only when a person is clearly visible, include the salient, stable appearance this feed can clearly resolve —
     whether they are wearing glasses, their clothing, and any facial hair — so simple appearance questions can be
     answered from your note. This is plain appearance the low-res feed handles fine, not the fine printed text you
-    must never read and not raw anatomy.
+    must never read and not raw anatomy. If no person is clearly visible, ignore all person appearance, pose,
+    expression, gaze, activity, and gesture rules and describe only the visible scene.
   webcam_text_too_small_rule: >-
     Any writing, sign, label, logo, handwriting, numbers, or on-screen content on a held item is NOT reliably
     readable from this low-res feed: NEVER read, transcribe, quote, guess, or approximate its words or numbers,
@@ -129,7 +134,7 @@ agent_prompts:
         {{webcam_role_intro}}
         Reply with STRICT JSON only — one object, nothing else:
         {"observation": "<one short sentence>", "focus": "<short visible focus from the conversation, or empty>", "visual_control": {"intent": "none|greet|stop|continue|down", "confidence": 0.0, "reason": "<short>"}}
-        observation: one short sentence of what is happening NOW in the newest frames. Name a held object only if it is clearly visible there; otherwise just say what the person is doing and never mention an object as absent, missing, or not visible. {{webcam_appearance_rule}} {{webcam_text_too_small_rule}} Interpret cues as behavior ('speaking', 'thinking', 'smiling'), never raw anatomy ('mouth open'); keep hand gestures OUT of the observation. {{webcam_no_change_rule}}
+        observation: one short sentence describing what is actually visible NOW in the newest frames. If no person is clearly visible, describe the current room, furniture, or other surroundings without mentioning or inventing a person. If a person is clearly visible, name a held object only if it is clearly visible there; otherwise just say what the person is doing and never mention an object as absent, missing, or not visible. {{webcam_appearance_rule}} {{webcam_text_too_small_rule}} Interpret cues as behavior ('speaking', 'thinking', 'smiling'), never raw anatomy ('mouth open'); keep hand gestures OUT of the observation. {{webcam_no_change_rule}}
         focus: when recent conversation steers attention to a visible subject, name that subject in a few words; otherwise "".
         visual_control.intent: score ONLY a clear, deliberate hand gesture occurring in the final roughly 1.5 seconds of the video. Earlier frames are historical context and MUST NOT produce an intent, even if they contain an unmistakable gesture. The gesture must still be visible or actively finishing in the newest frames; otherwise return 'none'. Judge the HANDS, not the face (a smile never changes the gesture):
         - greet: ONLY a hand that CLEARLY and REPEATEDLY moves side to side across the video (an unmistakable wave). A hand that is merely raised, reaching toward the camera or webcam, adjusting the device, scratching, resting, gesturing while talking, or holding something is NOT a wave — use 'none'.
@@ -141,9 +146,10 @@ agent_prompts:
     gesture_prompt:
       description: "Webcam per-frame user prompt requesting the strict-JSON gesture object."
       content: >-
-        Now — report only the person's current state from the newest frames (an object that left those frames is
-        gone), and score a hand gesture only if it occurs in the final roughly 1.5 seconds. Reply with the strict
-        JSON object only.
+        Now — report only the current scene from the newest frames. If nobody is clearly visible, describe the
+        visible surroundings and do not invent a person; an object that left those frames is gone. Score a hand
+        gesture only if a person is clearly visible and the gesture occurs in the final roughly 1.5 seconds.
+        Reply with the strict JSON object only.
 
   TransportAgent:
     proactive_greet:
