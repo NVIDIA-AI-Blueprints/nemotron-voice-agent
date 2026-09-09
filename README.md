@@ -65,16 +65,17 @@ These are the minimum requirements, and support varies by example and deployment
 | Deployment Profile | Hardware | Notes |
 |------|----------|-------|
 | Cloud | CPU only (no GPU) | Model endpoints from NVIDIA cloud APIs (NVCF). |
-| Server | NVIDIA GPU **workstation** (not DGX Spark or Jetson Thor). GPU count and memory depend on the selected models and scale | Scaling-oriented NIM deployment. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
-| Single GPU | 1 workstation GPU, DGX Spark (128 GB unified memory), or Jetson Thor (128 GB unified memory) | Uses the universal `*/single-gpu` recipes. Required memory varies by model and precision. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
+| Server | NVIDIA GPU workstation. GPU count and memory depend on the selected models and scale. | Scaling-oriented NIM deployment. DGX Spark and Jetson Thor are not supported for this profile. Default all-on-one-GPU layout is about 80 GB. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
+| Performance Server | Four-GPU Blackwell workstation | `generic-assistant/server-perf` load benchmark only, not a browser UI session. |
+| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
 
 ### Software Requirements
 
 Credentials depend on the deployment profile. Do not mix them.
 
 - **Cloud, Server, and Performance Server**: an **NVIDIA API Key** (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server (`*/server`) and Performance Server (`generic-assistant/server-perf`) also need valid **NVIDIA NGC** credentials to pull NIM container images (refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
-- **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads only. It does not use `NVIDIA_API_KEY` or `docker login nvcr.io`.
-- **Docker**: With NVIDIA GPU support installed and Docker Compose v2.20 or newer.
+- **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads and NVIDIA driver 580.x or newer for NeMo-Speech.cpp. It does not require `NVIDIA_API_KEY` or authentication with `docker login nvcr.io`.
+- **Docker**: Docker Compose v2.20 or newer. Cloud needs Docker only. Server, Performance Server, and Single GPU also need Docker with NVIDIA GPU support ([NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)).
 
 ---
 
@@ -161,9 +162,14 @@ Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-
 ## Roadmap
 
 **Future releases**
-- Fully open model support using Hugging Face and NeMo (no NIM required).
-- LiveKit Agents-based sample example.
-- Voice Agent skill for iterative development with AI coding agents.
+- LiveKit Agents-based voice agent example.
+- Voice agent integrations for NemoClaw-supported harnesses.
+
+**v2.2.0** (September 2026)
+- Expanded open model support with Nemotron 3.5 Lightning and Nemotron 3 Nano Omni.
+- Unified local deployment across workstations, DGX Spark, and Jetson Thor.
+- OpenAI Realtime API compatibility for external voice clients.
+- Agent Skills for building voice agents with Nemotron.
 
 **v2.0.0** (July 2026)
 - Omni-based example showcasing a single multimodal model replacing the ASR + LLM stages.
