@@ -8,15 +8,28 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 from loguru import logger
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.services.llm_service import FunctionCallResultProperties
 
-from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload
+from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload, response_hint
+from examples.frontend_backend_agent.src.runtime_context import runtime_today
+
+_ISO_DATE_PATTERN = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
+_NAMED_DATE_PATTERN = re.compile(
+    r"\b("
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r")\s+(\d{1,2})(?:st|nd|rd|th)?(?:,\s*|\s+)(\d{4})\b",
+    re.IGNORECASE,
+)
+_MAX_PLANNER_ERROR_ATTEMPTS = 2
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
@@ -43,11 +56,14 @@ class ThinkerBackend(Protocol):
 
 def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float = 0.8) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent."""
+    consecutive_planner_errors = 0
 
     async def handle_call_backend(params: FunctionCallParams) -> None:
+        nonlocal consecutive_planner_errors
         arguments = _normalize_arguments(params.arguments or {})
         query = str(arguments.get("query", "") or "").strip()
         if not query:
+            consecutive_planner_errors = 0
             await params.result_callback(
                 {
                     "type": "response_hint",
@@ -58,6 +74,20 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
                     "context": "call_backend",
                 }
             )
+            return
+        past_date = _past_date_in_query(query)
+        if past_date is not None:
+            consecutive_planner_errors = 0
+            payload = response_hint(
+                reason="past_date",
+                action="request_future_date",
+                response_text=(
+                    f"{past_date.strftime('%B')} {past_date.day}, {past_date.year} has already passed. "
+                    "Please provide a future travel date."
+                ),
+                context="flight_search",
+            )
+            await _emit_terminal_payload(params, payload)
             return
         try:
             filler_text = str(arguments.get("filler_text", "") or "").strip()
@@ -91,6 +121,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             finally:
                 await _cancel_pending_filler(filler_task)
         except asyncio.CancelledError:
+            consecutive_planner_errors = 0
             logger.info("call_backend result suppressed after Thinker abort")
             await params.result_callback(
                 {
@@ -105,6 +136,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             )
             return
         except Exception as exc:
+            consecutive_planner_errors = 0
             logger.exception(f"call_backend failed before producing a result: {exc}")
             await params.result_callback(
                 {
@@ -117,6 +149,25 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
                 }
             )
             return
+        if payload.get("reason") == "planner_error":
+            consecutive_planner_errors += 1
+            if consecutive_planner_errors >= _MAX_PLANNER_ERROR_ATTEMPTS:
+                logger.warning(f"Planner failed {_MAX_PLANNER_ERROR_ATTEMPTS} consecutive times; ending retries")
+                terminal_payload = dict(payload)
+                terminal_payload.update(
+                    {
+                        "reason": "planner_error_exhausted",
+                        "action": "answer_directly",
+                        "response_text": (
+                            "I could not process that request after a few attempts. Please try again later."
+                        ),
+                    }
+                )
+                await _emit_terminal_payload(params, terminal_payload)
+                consecutive_planner_errors = 0
+                return
+        else:
+            consecutive_planner_errors = 0
         if _direct_tool_response_enabled() and is_speakable_payload(payload):
             await _emit_talker_response(params.llm, str(payload.get("response_text") or ""))
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
@@ -124,6 +175,8 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
         await params.result_callback(payload)
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
+        nonlocal consecutive_planner_errors
+        consecutive_planner_errors = 0
         cancelled = thinker.cancel_active("user_cancelled")
         cleared_pending_booking = thinker.cancel_pending_booking()
         did_cancel = cancelled or cleared_pending_booking
@@ -157,6 +210,12 @@ async def _emit_talker_response(llm, text: str) -> None:
             await llm.push_frame(LLMFullResponseEndFrame())
 
 
+async def _emit_terminal_payload(params: FunctionCallParams, payload: dict[str, Any]) -> None:
+    """Speak a validated terminal payload without asking the Talker to reinterpret it."""
+    await _emit_talker_response(params.llm, str(payload.get("response_text") or ""))
+    await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
+
+
 async def _cancel_pending_filler(task: asyncio.Task | None) -> None:
     """Cancel a delayed filler if the Thinker returned before it fired."""
     if task is None or task.done():
@@ -177,6 +236,35 @@ def _normalize_arguments(arguments: dict) -> dict:
         if isinstance(decoded, dict):
             return decoded
     return arguments
+
+
+def _past_date_in_query(query: str, *, today: date | None = None) -> date | None:
+    """Return a past ISO travel date when the query contains no future date.
+
+    The Talker contract supplies known travel dates as ISO values. If a correction
+    contains both an old and a new date, the future date wins and the Thinker still
+    receives the request.
+    """
+    dates: list[date] = []
+    for match in _ISO_DATE_PATTERN.finditer(query):
+        try:
+            dates.append(date.fromisoformat(match.group(1)))
+        except ValueError:
+            continue
+    for match in _NAMED_DATE_PATTERN.finditer(query):
+        candidate = " ".join(match.groups())
+        for date_format in ("%B %d %Y", "%b %d %Y"):
+            try:
+                dates.append(datetime.strptime(candidate, date_format).date())
+                break
+            except ValueError:
+                continue
+    if not dates:
+        return None
+    today = today or runtime_today()
+    if any(value >= today for value in dates):
+        return None
+    return max(dates)
 
 
 def _direct_tool_response_enabled() -> bool:

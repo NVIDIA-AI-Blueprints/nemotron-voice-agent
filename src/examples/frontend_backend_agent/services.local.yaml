@@ -60,7 +60,7 @@ singlegpu:
     nemotron-lightning:
       name: "Nemotron 3.5 Lightning 30B A3B"
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
-      base_url: "http://nvidia-llm-vllm:8000/v1"
+      base_url: "http://nvidia-llm-vllm-frontend-backend:8000/v1"
       system_prompt: ""
       max_tokens: 2048
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
@@ -68,9 +68,9 @@ singlegpu:
     nemotron-lightning:
       name: "Nemotron 3.5 Lightning 30B A3B Thinker"
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
-      base_url: "http://nvidia-llm-vllm:8000/v1"
+      base_url: "http://nvidia-llm-vllm-frontend-backend:8000/v1"
       max_tokens: 4096
-      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"thinking_token_budget":1024,"repetition_penalty":1.05}}'
   booking-server:
     default:
       name: "Booking Server"
