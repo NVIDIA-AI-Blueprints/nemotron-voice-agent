@@ -40,12 +40,14 @@ x-vllm-lightning: &vllm-lightning
       max-file: "5"
 
 services:
-  nvidia-llm-vllm-lightning:
+  nvidia-llm-vllm-lightning: &vllm-lightning-service
     <<: *vllm-lightning
     profiles:
       - generic-assistant/single-gpu
       - multilingual-assistant/single-gpu
-      - frontend-backend-agent/single-gpu
+    environment:
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      VLLM_USE_V2_MODEL_RUNNER: "1"
     command:
       - |
         args=(
@@ -73,16 +75,22 @@ services:
 
         auto_gpu_memory=1
         if [[ "$${gpu_name}" == *"NVIDIA GB10"* || "$${dmi_product}" == *"DGX_Spark"* ]]; then
-          echo "LLM recipe: DGX Spark / NVFP4 / DSpark"
           auto_gpu_memory=0
           model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
           args+=(
             --gpu-memory-utilization 0.35
             --moe-backend marlin
             --kv-cache-dtype fp8
-            --speculative_config.model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark
-            --speculative_config.num_speculative_tokens 3
           )
+          if [[ "$${VLLM_USE_V2_MODEL_RUNNER}" == "0" ]]; then
+            echo "LLM recipe: DGX Spark / NVFP4 / Model Runner V1"
+          else
+            echo "LLM recipe: DGX Spark / NVFP4 / DSpark"
+            args+=(
+              --speculative_config.model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark
+              --speculative_config.num_speculative_tokens 3
+            )
+          fi
         elif [[ "$${device_model}" == *"Jetson"* && "$${device_model}" == *"Thor"* ]] ||
              [[ "$${dmi_product}" == *"Jetson"* && "$${dmi_product}" == *"Thor"* ]]; then
           echo "LLM recipe: Jetson Thor / NVFP4"
@@ -90,16 +98,22 @@ services:
           model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
           args+=(--gpu-memory-utilization 0.35 --moe-backend marlin --kv-cache-dtype fp8 --async-scheduling)
         elif [[ "$${compute_major}" =~ ^[0-9]+$ ]] && (( compute_major >= 10 )); then
-          echo "LLM recipe: Blackwell workstation / NVFP4 / DFlash"
           model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
           args+=(
             --moe-backend marlin
             --kv-cache-dtype fp8
             --async-scheduling
-            --speculative_config.method dflash
-            --speculative_config.model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash
-            --speculative_config.num_speculative_tokens 3
           )
+          if [[ "$${VLLM_USE_V2_MODEL_RUNNER}" == "0" ]]; then
+            echo "LLM recipe: Blackwell workstation / NVFP4 / Model Runner V1"
+          else
+            echo "LLM recipe: Blackwell workstation / NVFP4 / DFlash"
+            args+=(
+              --speculative_config.method dflash
+              --speculative_config.model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash
+              --speculative_config.num_speculative_tokens 3
+            )
+          fi
         elif [[ "$${compute_major}" == "9" ]] ||
              [[ "$${compute_major}" == "8" && "$${compute_minor}" =~ ^[0-9]+$ && "$${compute_minor}" -ge 9 ]]; then
           echo "LLM recipe: Hopper/Ada workstation / NVFP4 W4A16 via Marlin"
@@ -143,6 +157,20 @@ services:
       default:
         aliases:
           - nvidia-llm-vllm
+
+  nvidia-llm-vllm-lightning-frontend-backend:
+    <<: *vllm-lightning-service
+    profiles:
+      - frontend-backend-agent/single-gpu
+    environment:
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      VLLM_USE_V2_MODEL_RUNNER: "0"
+    ports:
+      - "18001:8000"
+    networks:
+      default:
+        aliases:
+          - nvidia-llm-vllm-frontend-backend
 
 volumes:
   llm_cache:

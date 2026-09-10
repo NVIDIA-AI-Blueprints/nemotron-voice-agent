@@ -104,16 +104,19 @@ def register_session_start_handlers(
     context,
     runner_args: RunnerArguments,
     intro_prompt: str = "Please introduce yourself to the user.",
+    intro_tool_choice: str | None = None,
     on_start=None,
     welcome_enabled: bool = True,
 ) -> None:
     """Start the session using the correct signal for the wire protocol.
 
     RTVI/WebRTC uses ``on_client_ready``; Realtime uses ``on_client_connected``.
-    Both share the same optional ``on_start`` + welcome intro path. When welcome
-    is off, skip the intro and (on Realtime) open the client text gate.
+    Both share the same optional ``on_start`` + welcome intro path. Set
+    ``intro_tool_choice`` for a one-off greeting context without changing the
+    shared context's tool behavior for subsequent user turns. When welcome is
+    off, skip the intro and (on Realtime) open the client text gate.
     """
-    from pipecat.frames.frames import LLMRunFrame
+    from pipecat.frames.frames import LLMContextFrame, LLMRunFrame
 
     started = False
 
@@ -129,7 +132,16 @@ def register_session_start_handlers(
             logger.info("Welcome message disabled; waiting for the user to speak first")
             return
         context.add_message({"role": "user", "content": intro_prompt})
-        await task.queue_frames([LLMRunFrame()])
+        if intro_tool_choice is None:
+            run_frame = LLMRunFrame()
+        else:
+            intro_context = LLMContext(
+                messages=list(context.get_messages()),
+                tools=context.tools,
+                tool_choice=intro_tool_choice,
+            )
+            run_frame = LLMContextFrame(context=intro_context)
+        await task.queue_frames([run_frame])
 
     if runner_protocol(runner_args) == "realtime":
         if not welcome_enabled:

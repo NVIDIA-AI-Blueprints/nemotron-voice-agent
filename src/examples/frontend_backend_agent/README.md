@@ -6,6 +6,8 @@ The frontend LLM is the only user-facing LLM and exposes `call_backend` plus `ca
 
 The airline backend agent is the reference backend, but the architecture is reusable: treat the frontend LLM as a generic conversational layer in front of another backend agent that exposes compatible call/cancel behavior. Booking is intentionally gated, so the user must search flights first and select one returned flight before the backend agent can continue booking.
 
+The example validates known past travel dates before it invokes the backend agent. It asks the user for a future date without waiting for planning or backend tools. If planning fails, the example limits retries and then returns a terminal user-facing error instead of repeatedly delegating the same request. The initial synthetic greeting runs with tool execution disabled, so it cannot invoke the backend agent; normal tool behavior resumes for user turns.
+
 ![Frontend/Backend Agent architecture](images/frontend-backend-agent-architecture.png)
 
 The diagram shows the full runtime path. User audio enters through the WebRTC/WebSocket transport, audio input processing produces a user transcript for the frontend LLM, the frontend LLM sends rephrased task requirements to the backend agent, and backend results return to the frontend LLM before audio output is synthesized and played back.
@@ -20,11 +22,13 @@ The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) reso
 | Server | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Nemotron 3.5 Lightning 30B A3B NIM with reasoning enabled | Magpie TTS Multilingual NIM |
 | Single GPU | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Nemotron 3.5 Lightning 30B A3B through vLLM with reasoning enabled | Magpie TTS Multilingual through NeMo-Speech.cpp |
 
-The Talker and Thinker use the same model weights with different runtime settings. The Talker disables reasoning for lower latency, while the Thinker enables reasoning with a 1,024-token budget.
+The Talker and Thinker use the same model weights with different runtime settings. The Talker disables reasoning for lower latency. The Cloud and Server Thinkers enable reasoning with a 1,024-token budget. The Single GPU Thinker runs on its dedicated Model Runner V1 service with `thinking_token_budget=1024` and `max_tokens=4096`.
 
 ## Running the example
 
 This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.
+
+> **Known limitation:** The `frontend-backend-agent/single-gpu` profile currently shows a conversational-experience regression compared with Cloud and Server deployments, including longer backend-planning pauses.
 
 1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile:
 
@@ -56,7 +60,7 @@ This example runs with **Cloud**, **Server** (NIM, recommended for scaling), and
    | --- | --- | --- |
    | `frontend-backend-agent` | `frontend-backend-agent` | `booking-server` |
    | `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
-   | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech` |
+   | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning-frontend-backend`, `nemo-speech` |
 
 4. Open the UI at `https://localhost:7860/`. Keep TLS enabled for browser UI testing. `PIPELINE_TLS=false` serves plain HTTP for headless performance and API testing. For plain-HTTP browser testing, see [browser access](../../../docs/06-troubleshooting.md#browser-access).
 
@@ -89,7 +93,9 @@ Reusable Frontend/Backend Agent helpers live under `src/`, airline flight-bookin
 | --- | --- | --- |
 | `CHAT_HISTORY_RECENT_TURNS` | `20` | Number of recent non-prompt messages retained in the frontend LLM context window |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delay before optional `call_backend.filler_text` is spoken while backend work is still running |
-| `THINKER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout for `call_backend` / `cancel_backend` tool handlers |
+| `THINKER_TOOL_TIMEOUT_SECONDS` | `30.0` (`90` for single-GPU Compose) | Timeout for `call_backend` / `cancel_backend` tool handlers |
+
+The single-GPU profile uses a dedicated Model Runner V1 service, separate from the V2 service used by the generic and multilingual profiles. The Thinker sets `thinking_token_budget=1024` and `max_tokens=4096`, while the single-GPU Compose profile gives backend tool calls 90 seconds to complete. The numeric thinking budget requires Model Runner V1 in vLLM 0.27.1.
 
 For model, prompt, and catalog configuration, see [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure Prompts](../../../docs/how-to/configure-prompts.md), and [Configure Services](../../../docs/how-to/configure-services.md). For deployment and general failure modes, see the [Troubleshooting guide](../../../docs/06-troubleshooting.md).
 
@@ -114,7 +120,10 @@ Prompt edits can silently break the architecture contract. After changing the fr
 - Frontend LLM calls `call_backend` for flight search, booking continuation, flight selection, passenger details, seat or meal preferences, confirmations, corrections, and PNR-status requests.
 - Frontend LLM calls `cancel_backend` for stop, cancel, never-mind requests, and topic switches while flight work is pending.
 - Frontend LLM does not call tools for greetings, thanks, or small talk when no flight task is pending.
+- The initial greeting does not call `call_backend` or `cancel_backend`.
 - Backend agent calls `flight_search` only when required route and date details are available.
+- Known past travel dates return a future-date request without invoking the backend agent.
 - Backend agent calls `booking` only after a searched flight has been selected.
 - Backend agent calls `pnr_status` for PNR, record-locator, or booking-status requests.
 - Backend agent returns `response_hint` for missing information or unsupported requests instead of inventing backend results.
+- Planner failures stop after two total attempts (the initial attempt and one retry) and return a terminal response rather than causing repeated backend calls.

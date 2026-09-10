@@ -31,7 +31,7 @@ class NvidiaThinkerPlanner:
         *,
         llm: NvidiaLLMService,
         system_prompt: str,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
     ) -> None:
         """Create an NVIDIA-backed Thinker planner."""
         if not system_prompt.strip():
