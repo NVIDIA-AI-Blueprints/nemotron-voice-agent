@@ -82,6 +82,13 @@ reclaim_if_unwritable() {
   fi
 }
 
+MAGPIE_REPO="nvidia/magpie_tts_multilingual_357m"
+MAGPIE_REVISION="9e73758a7db5ff6895f66cfc7a02f4a2f8c2acef"
+MAGPIE_GGUF="magpie_tts_multilingual_357m.v2602.f16.gguf"
+MAGPIE_NEMO="magpie_tts_multilingual_357m.nemo"
+MAGPIE_GGUF_SHA256="901d299a8b1df016cf81cae0089a7a7c15627b9633d033357e15a47d9a219a75"
+MAGPIE_NEMO_SHA256="ec675fa8c02b9c1d5382c5c2b5a6acec6492c1e8344866c07cf3892185d18953"
+
 # Magpie TTS text-normalization grammars live on the NeMo-Speech.cpp GitHub
 # release, not Hugging Face. Pin matches nvcr.io/nvidia/nemo-speech.cpp:0.1.0.
 TN_PINNED_RELEASE="v0.1.0"
@@ -131,6 +138,57 @@ verify_sha256() {
     echo "  expected ${expected}" >&2
     echo "  got      ${actual}" >&2
     return 1
+  fi
+}
+
+require_nonempty() {
+  local path="$1"
+  if [[ ! -s "${path}" ]]; then
+    echo "Required speech model missing or empty: ${path}" >&2
+    echo "Do not start */single-gpu until this file is present." >&2
+    exit 1
+  fi
+}
+
+sha256_matches() {
+  local file="$1"
+  local expected="$2"
+  [[ -s "${file}" ]] || return 1
+  local actual
+  actual="$(sha256sum "${file}" | awk '{print $1}')"
+  [[ "${actual}" == "${expected}" ]]
+}
+
+download_magpie_tts() {
+  local dir="${DEST}/magpie-tts"
+  local gguf="${dir}/${MAGPIE_GGUF}"
+  local nemo="${dir}/${MAGPIE_NEMO}"
+
+  if sha256_matches "${gguf}" "${MAGPIE_GGUF_SHA256}" && \
+     sha256_matches "${nemo}" "${MAGPIE_NEMO_SHA256}"; then
+    echo "Magpie TTS already present and checksums match (${MAGPIE_REVISION})."
+  else
+    if [[ -e "${gguf}" || -e "${nemo}" ]]; then
+      echo "Existing Magpie TTS files do not match the pinned checksums; re-downloading..."
+    else
+      echo "Downloading Magpie TTS from ${MAGPIE_REPO}@${MAGPIE_REVISION}..."
+    fi
+    "${HF[@]}" download "${MAGPIE_REPO}" \
+      "${MAGPIE_GGUF}" \
+      "${MAGPIE_NEMO}" \
+      --revision "${MAGPIE_REVISION}" \
+      --local-dir "${dir}"
+    require_nonempty "${gguf}"
+    require_nonempty "${nemo}"
+    verify_sha256 "${gguf}" "${MAGPIE_GGUF_SHA256}" || exit 1
+    verify_sha256 "${nemo}" "${MAGPIE_NEMO_SHA256}" || exit 1
+  fi
+
+  tar -xf "${nemo}" -C "${dir}/extracted"
+  if [[ -z "$(find "${dir}/extracted" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    echo "Magpie tokenizer extract is empty: ${dir}/extracted" >&2
+    echo "The tokenizer lives in the .nemo archive, not the GGUF." >&2
+    exit 1
   fi
 }
 
@@ -212,17 +270,16 @@ fi
 "${HF[@]}" download nvidia/nemotron-3.5-asr-streaming-0.6b \
   nemotron-3.5-asr-streaming-0.6b.q8_0.gguf --local-dir "${DEST}"
 
-"${HF[@]}" download nvidia/magpie_tts_multilingual_357m \
-  --include magpie_tts_multilingual_357m.v2602.f16.gguf \
-  --include magpie_tts_multilingual_357m.nemo \
-  --local-dir "${DEST}/magpie-tts"
-
-tar -xf "${DEST}/magpie-tts/magpie_tts_multilingual_357m.nemo" \
-  -C "${DEST}/magpie-tts/extracted"
+download_magpie_tts
 
 "${HF[@]}" download nvidia/nemo-nano-codec-22khz-1.89kbps-21.5fps \
   nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf \
   --local-dir "${DEST}/nano-codec"
+
+require_nonempty "${DEST}/nemotron-speech-streaming-en-0.6b.q8_0.gguf"
+require_nonempty "${DEST}/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf"
+require_nonempty "${DEST}/magpie-tts/${MAGPIE_GGUF}"
+require_nonempty "${DEST}/nano-codec/nemo_nano_codec_22khz_1.89kbps_21.5fps.decoder.f16.gguf"
 
 tn_ok=true
 if ! install_tn_grammars; then
