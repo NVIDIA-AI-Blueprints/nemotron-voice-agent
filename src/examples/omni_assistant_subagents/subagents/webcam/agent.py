@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: Apache-2.0
 
 """Browser webcam vision worker subagent.
 
@@ -48,38 +48,50 @@ SPEAKER_STATE_PREFIXES: tuple[str, ...] = (WEBCAM_CONTEXT_PREFIX, WEBCAM_FIRST_S
 
 _FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 _SUMMARY_MAX_TOKENS = 128
-_WINDOW_SECONDS = 8.0
+_WINDOW_SECONDS = 2.0
 _MAX_FRAMES = 32
 _ENCODE_FPS = 2
 _TEMPERATURE = 0.2
 _FFMPEG_TIMEOUT_SECONDS = 15
 
 
-def _steering_preamble(conversation: str) -> str:
+def _steering_preamble(conversation: str, previous_observation: str = "") -> str:
     """Build the self-steering block prepended to the per-frame prompt.
 
-    The worker steers itself: by default it prioritizes the person's current activity —
-    what they are holding, showing, or doing — and, when a recent conversation is given,
-    it emphasizes whichever visible things and details that conversation is about. Both
-    are priorities, not strict filters, and neither changes the output format or the
-    gesture-scoring rules that follow.
+    Newest frames win. Conversation may point at a visible subject, but it cannot
+    keep a previous object in the note after that object has left the live view.
+    ``previous_observation`` is the last published note, treated as stale memory.
     """
     parts: list[str] = []
     if conversation:
         parts.append(
-            f"RECENT CONVERSATION (context only; the person cannot be heard in this silent video):\n{conversation}\n"
+            f"RECENT USER TURNS (context only; the person cannot be heard in this silent video):\n{conversation}\n"
+        )
+    previous = previous_observation.strip()
+    if previous:
+        parts.append(
+            f"LAST NOTE (stale unless still visible in the newest frames): {previous}\n"
+            "That note is memory, not current evidence. If an object, pose, or action from it is not clearly "
+            "visible in the final roughly 1.5 seconds, it is GONE — drop it silently and describe the new "
+            "current state instead. Never announce that it left, and never name it again.\n"
         )
     parts.append(
-        "TEMPORAL PRIORITY: this video is ordered oldest to newest. Treat its earlier portion only as background "
-        "for understanding how the scene reached its current state. The final roughly 1.5 seconds are the source of "
-        "truth for what is happening NOW. Lead with what the person is actively holding, showing, or doing in those "
-        "newest frames, and describe ALL items they are currently presenting or interacting with, not stale items that "
-        "disappeared earlier. Mention an earlier event only when it is necessary to explain the current action. "
-        "When the conversation above is about something visible, emphasize that; otherwise simply prioritize their "
-        "current activity. Report ONLY what is genuinely visible in this video: never state a detail the conversation "
-        "implies but the video does not actually show, and if a relevant detail is not visually clear, say so rather "
-        "than guessing. Still obey the output format, the rule against reading fine printed text, and the gesture "
-        "rules below exactly.\n"
+        "TEMPORAL PRIORITY: this video is ordered oldest to newest. Use the earlier portion only to judge "
+        "motion (gestures). The final roughly 1.5 seconds are the ONLY source of truth for the observation — "
+        "which objects are present, what the person is holding, and what they are doing NOW. Do not name an "
+        "object that left those newest frames. Lead with current activity there. Describe ONLY what is "
+        "present: never report anything as absent, missing, hidden, or not visible, so no 'hands not "
+        "visible', 'no object in view', or 'the bottle is gone'. First check whether a person is clearly visible "
+        "in the newest frames. If nobody is clearly visible, describe only the actual room, furniture, or other "
+        "surroundings; never invent a person, face, pose, gaze, expression, or activity. When the person is "
+        "visible and simply sitting, talking, or looking at the camera, that alone is the whole observation — "
+        "never invent a phone, bottle, screen, or other item to fill the sentence. When the user turns above are "
+        "about something visible, "
+        "mention it ONLY if it is still visible in those newest frames; otherwise ignore that topic. Report "
+        "ONLY what is genuinely visible: never state a detail the conversation implies but the newest frames "
+        "do not show, and leave out any detail that is not visually clear rather than guessing at it. Still "
+        "obey the output format, the rule against reading fine printed text, and the gesture rules below "
+        "exactly.\n"
     )
     return "".join(parts)
 
@@ -144,6 +156,7 @@ class WebcamAgent(BaseWorker):
         frame_metadata = payload.get("frame") if isinstance(payload.get("frame"), dict) else {}
         session_id = str(payload.get("session_id") or "").strip()
         conversation_context = str(payload.get("conversation_context") or "").strip()
+        previous_observation = str(payload.get("previous_observation") or "").strip()
         try:
             window_seconds = float(payload.get("window_seconds") or self._window_seconds)
         except (TypeError, ValueError):
@@ -160,7 +173,11 @@ class WebcamAgent(BaseWorker):
                 mp4 = await asyncio.to_thread(self._encode_mp4, frames)
                 if mp4:
                     observation, visual_control, focus = await self._describe(
-                        mp4, len(frames), window_seconds, conversation_context
+                        mp4,
+                        len(frames),
+                        window_seconds,
+                        conversation_context,
+                        previous_observation,
                     )
             except Exception as exc:
                 logger.exception(f"Webcam video summary failed: {exc}")
@@ -212,14 +229,20 @@ class WebcamAgent(BaseWorker):
             return out.read_bytes()
 
     async def _describe(
-        self, mp4: bytes, n_frames: int, window_seconds: float, conversation: str = ""
+        self,
+        mp4: bytes,
+        n_frames: int,
+        window_seconds: float,
+        conversation: str = "",
+        previous_observation: str = "",
     ) -> tuple[str, dict[str, Any], str]:
         """Describe the recent-window video and score gestures.
 
-        The recent ``conversation`` is prepended so the worker self-steers onto the
-        details that matter now while defaulting to the person's current activity.
+        Newest frames are the observation source. ``conversation`` may point at a
+        visible subject; ``previous_observation`` is stale unless those frames
+        still show it.
         """
-        steering = _steering_preamble(conversation)
+        steering = _steering_preamble(conversation, previous_observation)
         prompt = f"{steering}\n{self._prompt}" if steering else self._prompt
         content = [video_message_part(mp4), text_message_part(prompt)]
         context = LLMContext(
@@ -231,7 +254,7 @@ class WebcamAgent(BaseWorker):
         logger.debug(
             f"Webcam video Omni request: base_url={self._base_url}, model={self._model_id}, "
             f"mp4_bytes={len(mp4)}, frames={n_frames}, window_s={window_seconds}, "
-            f"conversation_chars={len(conversation)}"
+            f"conversation_chars={len(conversation)}, previous_chars={len(previous_observation)}"
         )
         result = await self._omni.run_multimodal_inference(
             context,

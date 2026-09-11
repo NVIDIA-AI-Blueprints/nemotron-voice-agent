@@ -30,7 +30,9 @@ and cite the `source_url`.
 **Cross-cutting** (one agent): shared plumbing (`src/examples/shared/`), `src/server.py` wiring,
 `Nvidia{LLM,STT,TTS}Service`+`*Settings`, `turns.*`+`audio.turn.smart_turn.*`, all `frames.frames` imports,
 extras + every dependency change (bump/rename/removed-if-folded-in) in `pyproject.toml`/`uv.lock`, dead imports
-(`ruff` F401/F811). Report PASS/GAP.
+(`ruff` F401/F811). Explicitly validate `NvidiaWordTTSService` and the custom Omni multimodal service against
+their upgraded parent classes, including overridden lifecycle methods, settings, emitted frames, and private
+compatibility contracts. Report PASS/GAP.
 
 **Client** (one agent): every `@pipecat-ai/*` import in `client/src/**` resolves; RTVI usage (events, messages,
 providers/hooks, transport setup) matches the renamed client APIs from the notes; `client/package.json` versions

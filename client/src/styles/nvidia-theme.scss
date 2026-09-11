@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 // ==========================================
 // NVIDIA Theme - Utility Classes
@@ -1579,6 +1579,13 @@ body {
   color: var(--text-primary);
   font-weight: var(--font-medium);
   font-size: var(--text-sm);
+}
+
+.status-value--wrap {
+  min-width: 0;
+  text-align: right;
+  white-space: normal;
+  word-break: break-word;
 }
 
 // Spinner animation

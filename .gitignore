@@ -11,8 +11,12 @@ venv/
 .venv/
 .certs/
 
-# Local models
-models/
+# Local models. Keep the speech bind-mount point tracked so `docker compose up`
+# does not create models/nemo-speech as root when the path is missing.
+models/*
+!models/nemo-speech/
+models/nemo-speech/*
+!models/nemo-speech/.gitkeep
 
 # CProfile outputs
 *.prof

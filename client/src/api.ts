@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 import { useQuery, QueryClient } from "@tanstack/react-query";
 
@@ -169,6 +169,7 @@ export interface TTSConfig {
   languages: string[];
   voices: TTSVoice[];
   defaultVoiceId: string;
+  defaultLanguage?: string;
 }
 
 export interface ServiceEntry {
@@ -204,6 +205,10 @@ export interface DeploymentResponse {
   selectable: boolean;
   options: DeploymentOption[];
   transports: TransportOption[];
+  audio?: {
+    input_sample_rate: number;
+    output_sample_rate: number;
+  };
 }
 
 export interface IceServersResponse {

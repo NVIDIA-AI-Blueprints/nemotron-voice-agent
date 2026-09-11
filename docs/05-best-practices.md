@@ -80,7 +80,7 @@ To optimize latency, first measure end-to-end and per-component latency. Voice a
 **Model Inference:**
 - **Contribution**: 200-800ms depending on model size and complexity
 - **Optimization**:
-  - **Model Selection**: Use smaller, faster models (Nemotron 3 Nano 30B).
+  - **Model Selection**: Use smaller, faster models (Nemotron 3.5 Lightning 30B).
   - **TRT LLM Optimized**: Use TRT LLM optimized NIM deployments.
   - **Quantization**: Use NVFP4/FP8 models for 2-3x speedup.
   - **KV-Cache Optimization**: Enable KV caching for lower TTFB and optimize based on use case.

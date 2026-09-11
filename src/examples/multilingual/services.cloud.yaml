@@ -19,23 +19,7 @@ llm:
     base_url: "https://integrate.api.nvidia.com/v1"
     supported_languages: [en, de, es, fr, it, ja]
     system_prompt: ""
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"repetition_penalty":1.05}}'
-
-  nemotron-super:
-    name: "Nemotron 3 Super 120B A12B"
-    model_id: "nvidia/nemotron-3-super-120b-a12b"
-    base_url: "https://integrate.api.nvidia.com/v1"
-    supported_languages: [en, de, es, fr, it, ja, zh]
-    system_prompt: ""
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
-
-  nemotron-super-reasoning:
-    name: "Nemotron 3 Super 120B A12B (Reasoning)"
-    model_id: "nvidia/nemotron-3-super-120b-a12b"
-    base_url: "https://integrate.api.nvidia.com/v1"
-    supported_languages: [en, de, es, fr, it, ja, zh]
-    system_prompt: ""
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"repetition_penalty":1.05}}'
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":16384,"repetition_penalty":1.05}}'
 
 # ── TTS Services (Cascaded pipeline) ──
 tts:

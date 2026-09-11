@@ -1,0 +1,39 @@
+# Nemotron 3 Nano Omni NIM for */server recipes.
+services:
+  nvidia-llm-omni:
+    profiles:
+      - omni-assistant/server
+      - omni-assistant-subagents/server
+    image: nvcr.io/nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:2.0.4-variant
+    ipc: host
+    shm_size: 32GB
+    environment:
+      NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
+      NIM_KVCACHE_PERCENT: ${NIM_KVCACHE_PERCENT:-0.6}
+      NIM_MAX_MODEL_LEN: "32768"
+    ports:
+      - "18002:8000"
+    volumes:
+      - omni_nim_cache:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/v1/health/ready\").read()' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 1800s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  omni_nim_cache:
