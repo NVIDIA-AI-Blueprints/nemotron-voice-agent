@@ -1,7 +1,8 @@
 # On-prem catalog. Entries are grouped by recipe (`server` = NIM sidecars,
-# `singlegpu` = vLLM + NeMo-Speech.cpp). The backend merges all sections and
-# exposes only the reachable ones. Compose endpoints are rewritten to localhost
-# for host-native runs.
+# `singlegpu` = vLLM + NeMo-Speech.cpp). The UI and RTVI resolver merge all
+# sections and expose only reachable entries. Realtime selects exactly one
+# section through `REALTIME_SERVICE_PLATFORM`. Compose endpoints are rewritten
+# to localhost for host-native runs.
 
 server:
   llm:
@@ -9,6 +10,8 @@ server:
       name: "Nemotron 3.5 Lightning 30B A3B"
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
       base_url: "http://nvidia-llm:8000/v1"
+      supports_tokenize: true
+      realtime_max_output_tokens: 4096
       supported_languages: [en, de, es, fr, it, ja]
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
@@ -53,8 +56,11 @@ singlegpu:
       name: "Nemotron 3.5 Lightning 30B A3B"
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
       base_url: "http://nvidia-llm-vllm:8000/v1"
+      supports_tokenize: true
+      realtime_max_output_tokens: 2048
       supported_languages: [en, de, es, fr, it, ja]
       system_prompt: ""
+      forced_tool_call_stops: ["</tool_call>"]
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
   tts:
     magpie-multilingual-tts:

@@ -8,6 +8,7 @@ Routes:
   POST      /api/offer       - WebRTC SDP offer
   PATCH     /api/offer       - WebRTC ICE candidate trickle
   WebSocket /api/ws          - WebSocket transport (RTVI / Pipecat)
+  POST      /v1/realtime/client_secrets - OpenAI Realtime client-secret bootstrap
   WebSocket /v1/realtime     - OpenAI Realtime–shaped JSON (session + pipeline handoff)
   GET       /api/deployment  - Active example metadata
   GET       /api/prompts     - Prompt catalog
@@ -39,9 +40,12 @@ load_dotenv(override=True)
 import argparse
 import asyncio
 import contextlib
+import copy
 import json
 import os
+import re
 import sys
+import time
 import urllib.request
 import uuid
 from contextlib import asynccontextmanager
@@ -52,7 +56,7 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket
+from fastapi import BackgroundTasks, FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
@@ -68,8 +72,17 @@ import config_store
 import examples_registry
 from attachment_store import consume_capture_request, store_attachment
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, PIPELINE_AUDIO_OUT_SAMPLE_RATE
-from examples.shared.prewarm import build_session_languages, peek_cached_tts_config, prewarm_tts, warmup_tts_synthesis
+from examples.shared.prewarm import (
+    build_session_languages,
+    get_tts_config,
+    peek_cached_asr_config,
+    peek_cached_tts_config,
+    prewarm_tts,
+    resolve_voice_for_language,
+    warmup_tts_synthesis,
+)
 from examples.shared.subagents import load_subagent_registry
+from realtime.protocol import MAX_REALTIME_EVENT_BYTES
 from utils import (
     PROJECT_ROOT,
     build_services_api_response,
@@ -81,7 +94,9 @@ from utils import (
     load_service_entry,
     load_service_entry_by_id,
     load_tools_catalog,
+    normalize_lang_code,
     parse_endpoint,
+    resolve_prompt,
     set_active_slots,
     set_service_context,
 )
@@ -92,6 +107,7 @@ _session_configs: dict[str, dict] = {}
 _active_session_configs: dict[str, dict] = {}
 _CONNECT_PREWARM_TIMEOUT_SECS = parse_env_int("CONNECT_PREWARM_TIMEOUT_SECS", 45)
 _CONNECT_HEALTH_TIMEOUT_SECS = 5
+_REALTIME_GA_MAX_OUTPUT_TOKENS = 4096
 _NIM_READY_PATH = "/v1/health/ready"
 _LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 _SPEECH_READY_ENDPOINTS = {
@@ -121,6 +137,8 @@ _TURN_LISTEN_PORT = 3478
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+_MAX_REALTIME_CLIENT_SECRET_REQUEST_BYTES = 256 * 1024
+_REALTIME_TRUNCATION_PIPELINES = frozenset({"frontend-backend-agent", "generic-assistant", "multilingual-assistant"})
 _MULTI_WORKER_SESSION_CONFIG_MESSAGE = (
     "Session-config based WebRTC and WebSocket flows are disabled when "
     "UVICORN_WORKERS is greater than 1. Use a single worker, sticky routing, "
@@ -166,7 +184,13 @@ def _parse_min_int(value: str, minimum: int = 1) -> int:
 
 def _run_single_worker(args: argparse.Namespace, app: FastAPI, ssl_kwargs: dict) -> None:
     """Run uvicorn with a pre-built app instance."""
-    uvicorn.run(app, host=args.host, port=args.port, **ssl_kwargs)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ws_max_size=MAX_REALTIME_EVENT_BYTES,
+        **ssl_kwargs,
+    )
 
 
 def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) -> None:
@@ -177,6 +201,7 @@ def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) 
         port=args.port,
         workers=workers,
         factory=True,
+        ws_max_size=MAX_REALTIME_EVENT_BYTES,
         **ssl_kwargs,
     )
 
@@ -293,6 +318,9 @@ def _resolve_tts_selection(
     voice, function_id, and model together. When ``server`` is explicit, keep
     empty function_id/model (do not borrow Magpie defaults for another NIM).
     """
+    if server and voice_id:
+        return server, voice_id, function_id, model
+
     default_server, default_voice, default_function_id, default_model = _get_default_tts_selection()
     if server:
         return server, voice_id or default_voice, function_id, model
@@ -330,6 +358,21 @@ def _store_session_config(data: dict, fallback_example_key: str = "") -> str:
     session_id = uuid.uuid4().hex[:12]
     _session_configs[session_id] = _sanitize_session_config(data, fallback_example_key=fallback_example_key)
     return session_id
+
+
+def _build_rtvi_runner_body(
+    config: dict,
+    *,
+    session_id: str,
+    request_data: object = None,
+) -> dict:
+    """Build an RTVI runner body without accepting client protocol authority."""
+    body = dict(request_data) if isinstance(request_data, dict) else {}
+    body.update(config)
+    body.pop("realtime_controller", None)
+    body["protocol"] = "rtvi"
+    body["session_id"] = session_id
+    return body
 
 
 def _session_capability_error(session_id: str, capability: str) -> JSONResponse | None:
@@ -530,9 +573,12 @@ async def _ensure_llm_ready_for_connection(config: dict, example: dict) -> None:
     if "llm" not in (example.get("slots") or []):
         return
 
-    default_base_url, default_model_id = _get_default_llm_selection()
-    base_url = config.get("base_url", "") or default_base_url
-    model_id = config.get("model_id", "") or default_model_id
+    base_url = config.get("base_url", "")
+    model_id = config.get("model_id", "")
+    if not base_url or not model_id:
+        default_base_url, default_model_id = _get_default_llm_selection()
+        base_url = base_url or default_base_url
+        model_id = model_id or default_model_id
     health_url, expects_ready_json = _local_llm_health_url(base_url, model_id)
     if not health_url:
         return
@@ -616,14 +662,499 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
         )
 
 
-async def _ensure_services_ready_for_connection(config: dict, example: dict) -> None:
-    """Verify selected services before the UI starts a session."""
+async def _ensure_services_ready_for_connection(
+    config: dict,
+    example: dict,
+    *,
+    is_realtime: bool,
+) -> None:
+    """Verify selected services before transport session handoff."""
     await _ensure_llm_ready_for_connection(config, example)
     await _ensure_asr_ready_for_connection(config, example)
-    await _ensure_tts_ready_for_connection(config, example)
+    # Realtime text output sets Pipecat's skip_tts mode before the first turn,
+    # so an unused speech synthesizer must not block that session at handoff.
+    if not (is_realtime and config.get("output_modalities") == ["text"]):
+        await _ensure_tts_ready_for_connection(config, example)
 
 
-def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
+def _trusted_realtime_model_max_output_tokens(entry: dict) -> int | None:
+    """Return the catalog-declared Realtime output ceiling for one LLM route."""
+    value = entry.get("realtime_max_output_tokens")
+    if value is None:
+        if entry.get("supports_tokenize") is True:
+            raise RuntimeError(
+                "A Realtime LLM route with supports_tokenize=true must declare realtime_max_output_tokens"
+            )
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _REALTIME_GA_MAX_OUTPUT_TOKENS:
+        raise RuntimeError("Realtime LLM catalog field realtime_max_output_tokens must be an integer from 1 to 4096")
+    return value
+
+
+def _sanitize_realtime_config(data: dict, fallback_example_key: str = "") -> dict:
+    """Bind Realtime to the exact catalog defaults the pipeline will use."""
+    config = _sanitize_session_config(data, fallback_example_key=fallback_example_key)
+    selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
+    slots = set(selected.get("slots") or [])
+
+    _, module_file = _example_with_module_file(selected["key"])
+    prompt_key, prompt_content = resolve_prompt(
+        module_file,
+        str(config.get("prompt_content") or ""),
+        str(config.get("prompt_key") or ""),
+    )
+    config["prompt_key"] = prompt_key
+    config["prompt_content"] = prompt_content
+
+    def _apply_selected_service(category: str, field_map: dict[str, str]) -> None:
+        # Realtime model profiles already carry source- and platform-qualified
+        # selectors. Hydrate from that exact entry so connection setup never
+        # performs reachability-based discovery for unrelated local recipes.
+        entry = _trusted_realtime_service_entry(config, category)
+        for catalog_field, body_field in field_map.items():
+            value = entry.get(catalog_field)
+            if value not in (None, ""):
+                config.setdefault(body_field, value)
+
+    if "llm" in slots:
+        _apply_selected_service(
+            "llm",
+            {
+                "model_id": "model_id",
+                "base_url": "base_url",
+                "system_prompt": "system_prompt",
+                "max_tokens": "max_tokens",
+                "temperature": "temperature",
+                "extra_params": "extra_params",
+            },
+        )
+        llm_entry = _trusted_realtime_service_entry(config, "llm")
+        model_output_limit = _trusted_realtime_model_max_output_tokens(llm_entry)
+        if model_output_limit is None:
+            config.pop("realtime_model_max_output_tokens", None)
+        else:
+            config["realtime_model_max_output_tokens"] = model_output_limit
+    if "asr" in slots:
+        _apply_selected_service(
+            "asr",
+            {
+                "server": "asr_server",
+                "model": "asr_model",
+                "function_id": "asr_function_id",
+                "language_code": "asr_language_code",
+            },
+        )
+    if "tts" in slots:
+        _apply_selected_service(
+            "tts",
+            {
+                "server": "tts_server",
+                "voice_id": "tts_voice_id",
+                "function_id": "tts_function_id",
+                "model": "tts_model",
+                "synthesis_mode": "tts_synthesis_mode",
+                "language_code": "tts_language_code",
+            },
+        )
+    if selected["key"] in {"omni-assistant", "omni-assistant-subagents"}:
+        config.setdefault(
+            "max_tokens",
+            min(parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64), 4096),
+        )
+        if selected["key"] == "omni-assistant-subagents" or parse_env_bool(
+            "OMNI_EMIT_TRANSCRIPTIONS",
+            default=True,
+        ):
+            config["realtime_input_transcription_model"] = str(config.get("model_id") or "")
+    return config
+
+
+def _trusted_realtime_service_entry(config: dict, category: str) -> dict:
+    """Resolve the exact built-in service entry that hydrated a Realtime route."""
+    selector = config.get(f"{category}_id")
+    if isinstance(selector, str) and selector:
+        entry = load_service_entry_by_id(category, selector)
+        if not entry:
+            raise RuntimeError(f"Selected Realtime {category.upper()} service {selector!r} is not trusted")
+        return entry
+    entry = load_service_entry(category, "")
+    if not entry:
+        raise RuntimeError(f"No trusted Realtime {category.upper()} service is configured")
+    return entry
+
+
+def _validate_realtime_service_route(
+    config: dict,
+    entry: dict,
+    *,
+    category: str,
+    fields: tuple[tuple[str, str], ...],
+) -> None:
+    """Ensure endpoint/function/model routing still matches its trusted entry."""
+    for runtime_field, catalog_field in fields:
+        actual = str(config.get(runtime_field) or "")
+        expected = str(entry.get(catalog_field) or "")
+        if actual != expected:
+            raise RuntimeError(
+                f"Realtime {category.upper()} route field {runtime_field!r} does not match the selected catalog"
+            )
+
+
+def _transcription_language_aliases(languages: list[object]) -> tuple[tuple[str, str], ...]:
+    """Build exact BCP-47 aliases plus only unambiguous ISO-639 base aliases."""
+    canonical_by_key: dict[str, str] = {}
+    canonical_by_base: dict[str, set[str]] = {}
+    for raw_language in languages:
+        if not isinstance(raw_language, str) or not raw_language.strip():
+            continue
+        canonical = normalize_lang_code(raw_language.strip())
+        key = canonical.lower()
+        canonical_by_key[key] = canonical
+        canonical_by_base.setdefault(key.split("-", 1)[0], set()).add(canonical)
+    for base, candidates in canonical_by_base.items():
+        if len(candidates) == 1:
+            canonical_by_key.setdefault(base, next(iter(candidates)))
+    return tuple(sorted(canonical_by_key.items()))
+
+
+async def _resolve_realtime_session_capabilities(
+    config: dict,
+    discover_output_voices: bool = True,
+):
+    """Resolve exact-route media capabilities before validating the session."""
+    from realtime.session import AudioFormatCapability, RealtimeSessionCapabilities
+
+    selected = _bind_example_context_by_key(str(config.get("pipeline_mode") or ""))
+    slots = set(selected.get("slots") or [])
+    function_tools = selected["key"] != "omni-assistant-subagents"
+    if "llm" not in slots:
+        raise RuntimeError(f"Realtime language-model inference is not configured for {selected['key']!r}")
+    if "tts" not in slots:
+        raise RuntimeError(f"Realtime audio output is not configured for {selected['key']!r}")
+
+    llm_entry = _trusted_realtime_service_entry(config, "llm")
+    model_output_limit = _trusted_realtime_model_max_output_tokens(llm_entry)
+    _validate_realtime_service_route(
+        config,
+        llm_entry,
+        category="llm",
+        fields=(("base_url", "base_url"), ("model_id", "model_id")),
+    )
+    if config.get("realtime_model_max_output_tokens") != model_output_limit:
+        raise RuntimeError("Realtime LLM model output limit does not match the selected catalog")
+
+    tts_entry = _trusted_realtime_service_entry(config, "tts")
+    _validate_realtime_service_route(
+        config,
+        tts_entry,
+        category="tts",
+        fields=(("tts_server", "server"), ("tts_function_id", "function_id"), ("tts_model", "model")),
+    )
+    tts_server = str(config.get("tts_server") or "")
+    tts_voice = str(config.get("tts_voice_id") or "")
+    tts_function_id = str(config.get("tts_function_id") or "")
+    tts_model = str(config.get("tts_model") or "")
+    if not tts_server or not tts_voice:
+        raise RuntimeError("The selected Realtime TTS route is incomplete")
+    voices = {tts_voice}
+    if discover_output_voices:
+        tts_catalog = peek_cached_tts_config(
+            tts_server,
+            tts_voice,
+            tts_function_id,
+            tts_model,
+        )
+        if tts_catalog is None:
+            try:
+                tts_catalog = await _run_blocking(
+                    get_tts_config,
+                    tts_server,
+                    tts_voice,
+                    tts_function_id,
+                    tts_model,
+                    timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
+                )
+            except TimeoutError as exc:
+                raise RuntimeError(f"The selected Realtime TTS voice catalog timed out for {tts_server!r}") from exc
+        if not isinstance(tts_catalog, dict) or tts_catalog.get("error"):
+            raise RuntimeError(f"The selected Realtime TTS voice catalog is unavailable for {tts_server!r}")
+        catalog_voices = tts_catalog.get("voices")
+        if not isinstance(catalog_voices, list):
+            raise RuntimeError(f"The selected Realtime TTS voice catalog is invalid for {tts_server!r}")
+        voices.update(
+            voice["id"]
+            for voice in catalog_voices
+            if isinstance(voice, dict) and isinstance(voice.get("id"), str) and voice["id"]
+        )
+
+    transcription_models: frozenset[str] = frozenset()
+    transcription_language_aliases: tuple[tuple[str, str], ...] = ()
+    if "asr" in slots:
+        asr_entry = _trusted_realtime_service_entry(config, "asr")
+        _validate_realtime_service_route(
+            config,
+            asr_entry,
+            category="asr",
+            fields=(("asr_server", "server"), ("asr_function_id", "function_id"), ("asr_model", "model")),
+        )
+        asr_server = str(config.get("asr_server") or "")
+        asr_model = str(config.get("asr_model") or "")
+        asr_function_id = str(config.get("asr_function_id") or "")
+        if not asr_server or not asr_model:
+            raise RuntimeError("The selected Realtime ASR route is incomplete")
+        transcription_models = frozenset({asr_model})
+        asr_catalog = peek_cached_asr_config(asr_server, asr_model, asr_function_id)
+        if isinstance(asr_catalog, dict) and not asr_catalog.get("error"):
+            raw_languages = asr_catalog.get("languages")
+            if isinstance(raw_languages, list):
+                transcription_language_aliases = _transcription_language_aliases(raw_languages)
+
+    return RealtimeSessionCapabilities(
+        input_formats=frozenset(
+            {
+                AudioFormatCapability("audio/pcm", 24000),
+                AudioFormatCapability("audio/pcma"),
+                AudioFormatCapability("audio/pcmu"),
+            }
+        ),
+        output_formats=frozenset(
+            {
+                AudioFormatCapability("audio/pcm", 24000),
+                AudioFormatCapability("audio/pcma"),
+                AudioFormatCapability("audio/pcmu"),
+            }
+        ),
+        voices=frozenset(voices),
+        supports_custom_voices=False,
+        input_transcription_models=transcription_models,
+        input_transcription_language_aliases=transcription_language_aliases,
+        # A cascaded ASR service remains required to feed the LLM, but OpenAI's
+        # input-transcription setting controls whether that transcript is
+        # published to the client. The lifecycle observer reads the canonical
+        # session on every turn, so public transcription can be disabled
+        # without pretending the pipeline can run without ASR.
+        supports_input_transcription_disable="asr" in slots,
+        function_tools=function_tools,
+        mcp_tools=function_tools,
+        sequential_tool_calls=function_tools,
+        truncation=(selected["key"] in _REALTIME_TRUNCATION_PIPELINES and llm_entry.get("supports_tokenize") is True),
+    )
+
+
+def _as_realtime_tool_schema(tool: dict) -> dict | None:
+    """Project one trusted Chat Completions function into canonical Realtime shape."""
+    function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+    if function is None:
+        return None
+    name = function.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    schema: dict = {
+        "type": "function",
+        "name": name,
+        "parameters": function.get("parameters") if isinstance(function.get("parameters"), dict) else {},
+    }
+    if isinstance(function.get("description"), str):
+        schema["description"] = function["description"]
+    return schema
+
+
+def _resolve_realtime_server_tools(config: dict, fallback_example_key: str) -> list[str]:
+    _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
+    prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
+    if not isinstance(prompt, dict):
+        return []
+    raw_tools = prompt.get("tools_available")
+    if not isinstance(raw_tools, list):
+        return []
+    return [name for name in raw_tools if isinstance(name, str) and name]
+
+
+def _resolve_realtime_server_tool_schemas(config: dict, fallback_example_key: str) -> list[dict]:
+    _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
+    catalog = load_tools_catalog(module_file)
+    schemas: list[dict] = []
+    for name in _resolve_realtime_server_tools(config, fallback_example_key):
+        raw = catalog.get(name)
+        schema = _as_realtime_tool_schema(raw) if isinstance(raw, dict) else None
+        if schema is not None:
+            schemas.append(schema)
+    return schemas
+
+
+def _resolve_realtime_delegate_tool_schemas(config: dict, fallback_example_key: str) -> list[dict]:
+    selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
+    if selected["key"] != "frontend-backend-agent":
+        return []
+    from examples.frontend_backend_agent.airline.tools import CALL_BACKEND_TOOL, CANCEL_BACKEND_TOOL
+
+    return [
+        schema
+        for tool in (CALL_BACKEND_TOOL, CANCEL_BACKEND_TOOL)
+        if (schema := _as_realtime_tool_schema(tool)) is not None
+    ]
+
+
+def _resolve_realtime_delegate_tools(config: dict, fallback_example_key: str) -> list[str]:
+    return [
+        schema["name"]
+        for schema in _resolve_realtime_delegate_tool_schemas(config, fallback_example_key)
+        if isinstance(schema.get("name"), str)
+    ]
+
+
+_REALTIME_LANGUAGE_SELECTOR = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+
+
+def _validate_realtime_bootstrap_selectors(session: dict, fallback_example_key: str) -> None:
+    """Reject selectors that do not resolve to the trusted registry and catalogs."""
+    raw_nvidia = session.get("nvidia")
+    if not isinstance(raw_nvidia, dict) or not raw_nvidia:
+        return
+
+    requested_pipeline = str(raw_nvidia.get("pipeline_mode") or fallback_example_key)
+    selected = examples_registry.find(requested_pipeline)
+    if requested_pipeline != selected["key"]:
+        raise ValueError(f"Unknown or unavailable pipeline_mode {requested_pipeline!r}")
+    _bind_example_context_by_key(selected["key"])
+    slots = set(selected.get("slots") or [])
+
+    for field, slot, category in (
+        ("llm_id", "llm", "llm"),
+        ("thinker_llm_id", "thinker-llm", "thinker-llm"),
+        ("asr_id", "asr", "asr"),
+        ("tts_id", "tts", "tts"),
+    ):
+        value = raw_nvidia.get(field)
+        if value is None:
+            continue
+        if slot not in slots or not load_service_entry_by_id(category, value):
+            raise ValueError(f"Unknown or unavailable {field} {value!r} for {selected['key']!r}")
+
+    prompt_key = raw_nvidia.get("prompt_key")
+    if prompt_key is not None:
+        _, module_file = _example_with_module_file(selected["key"])
+        prompt = load_prompt_catalog(module_file).get(prompt_key)
+        if (
+            not isinstance(prompt, dict)
+            or not isinstance(prompt.get("content"), str)
+            or prompt.get("internal") is True
+            or prompt_key in examples_registry.agent_prompt_keys(selected["key"])
+        ):
+            raise ValueError(f"Unknown or unavailable prompt_key {prompt_key!r} for {selected['key']!r}")
+
+    for field in ("asr_language_code", "tts_language_code"):
+        language = raw_nvidia.get(field)
+        if language is None:
+            continue
+        required_slot = "asr" if field == "asr_language_code" else "tts"
+        if required_slot not in slots:
+            raise ValueError(f"{field} is not available for {selected['key']!r}")
+        if language.lower() != "auto" and _REALTIME_LANGUAGE_SELECTOR.fullmatch(language) is None:
+            raise ValueError(f"Invalid {field} {language!r}")
+        raw_nvidia[field] = "auto" if language.lower() == "auto" else normalize_lang_code(language)
+
+
+def _resolve_realtime_model_route(
+    requested_model: str | None,
+    nvidia_overrides: dict,
+    fallback_example_key: str,
+):
+    """Resolve one public model to an exact, catalog-bound Realtime route."""
+    from realtime.gateway import RealtimeModelRoute
+    from realtime.protocol import RealtimeProtocolError
+
+    explicit_pipeline = nvidia_overrides.get("pipeline_mode")
+    pipeline_hint = str(explicit_pipeline or (fallback_example_key if requested_model is None else ""))
+    try:
+        profile = examples_registry.resolve_realtime_model_profile(
+            requested_model or "",
+            pipeline_mode=pipeline_hint,
+        )
+    except examples_registry.RealtimeModelProfileNotAvailable as exc:
+        raise RealtimeProtocolError(
+            message=str(exc),
+            code="model_not_available",
+            param="model" if requested_model is not None else "session.nvidia.pipeline_mode",
+        ) from exc
+
+    profile_pipeline = profile["pipeline_mode"]
+    requested_pipeline = nvidia_overrides.get("pipeline_mode")
+    if requested_pipeline is not None and requested_pipeline != profile_pipeline:
+        raise RealtimeProtocolError(
+            message=(
+                f"Model {profile['model']!r} is configured for pipeline {profile_pipeline!r}, "
+                f"not {requested_pipeline!r}"
+            ),
+            code="model_not_available",
+            param="model",
+        )
+
+    profile_prompt = profile["selectors"].get("prompt_key")
+    requested_prompt = nvidia_overrides.get("prompt_key")
+    if requested_prompt is not None and requested_prompt != profile_prompt:
+        raise RealtimeProtocolError(
+            message=(
+                f"Model {profile['model']!r} is configured for prompt {profile_prompt!r}, "
+                f"not {requested_prompt!r}; use session.instructions to customize behavior"
+            ),
+            code="model_not_available",
+            param="session.nvidia.prompt_key",
+        )
+
+    selectors = examples_registry.materialize_realtime_profile_selectors(profile)
+    selectors["pipeline_mode"] = profile_pipeline
+    canonical_overrides = copy.deepcopy(nvidia_overrides)
+    for selector_name in ("llm_id", "thinker_llm_id", "asr_id", "tts_id"):
+        override = canonical_overrides.get(selector_name)
+        if override is None:
+            continue
+        try:
+            canonical_overrides[selector_name] = examples_registry.canonicalize_realtime_service_selector(
+                profile_pipeline,
+                selector_name,
+                override,
+            )
+        except RuntimeError as exc:
+            raise RealtimeProtocolError(
+                message=str(exc),
+                code="invalid_value",
+                param=f"session.nvidia.{selector_name}",
+            ) from exc
+    selectors.update(canonical_overrides)
+    try:
+        _validate_realtime_bootstrap_selectors({"nvidia": selectors}, fallback_example_key)
+    except ValueError as exc:
+        raise RealtimeProtocolError(
+            message=str(exc),
+            code="invalid_value",
+            param="session.nvidia",
+        ) from exc
+    return RealtimeModelRoute(model=profile["model"], runtime_config=selectors)
+
+
+def _canonical_realtime_secret_session(controller) -> dict:
+    """Bind a client secret to the complete validated private session template."""
+    from realtime.bootstrap import TRUSTED_NVIDIA_SELECTOR_FIELDS
+
+    # The encrypted grant must carry the same normalized/defaulted session that
+    # the mint response advertises. Use the controller's private view so hosted
+    # MCP credentials survive redemption, then remove response-only identity
+    # fields which are regenerated for the new WebSocket session.
+    canonical = controller.session.public_view()
+    canonical.pop("id", None)
+    canonical.pop("object", None)
+    canonical["type"] = "realtime"
+    selectors = {
+        field: copy.deepcopy(controller.runtime_config[field])
+        for field in TRUSTED_NVIDIA_SELECTOR_FIELDS
+        if controller.runtime_config.get(field) not in (None, "")
+    }
+    canonical["nvidia"] = selectors
+    return canonical
+
+
+def create_app(host: str = "localhost", prompt_file: str = "", *, realtime_only: bool = False) -> FastAPI:
     """Build and return the FastAPI application with all routes."""
     if prompt_file:
         os.environ["PROMPT_FILE_PATH"] = prompt_file
@@ -638,12 +1169,13 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         f"transports={examples_registry.visible_transports()})"
     )
 
-    handler = SmallWebRTCRequestHandler(host=host)
+    handler = None if realtime_only else SmallWebRTCRequestHandler(host=host)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
-        await handler.close()
+        if handler is not None:
+            await handler.close()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -662,7 +1194,11 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     async def _readiness_check_or_503(config: dict, log_label: str) -> JSONResponse | None:
         """Return a 503 response if any selected service is not ready, else ``None``."""
         try:
-            await _ensure_services_ready_for_connection(config, _resolve_example(config))
+            await _ensure_services_ready_for_connection(
+                config,
+                _resolve_example(config),
+                is_realtime=False,
+            )
         except RuntimeError as exc:
             logger.warning(f"Rejecting {log_label} during service readiness check: {exc}")
             return JSONResponse(status_code=503, content={"info": str(exc)})
@@ -824,9 +1360,11 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                     _active_session_configs.pop(session_id, None)
 
         async def on_connection(connection: SmallWebRTCConnection):
-            body = dict(request.request_data) if isinstance(request.request_data, dict) else {}
-            body.update(config)
-            body["session_id"] = session_id
+            body = _build_rtvi_runner_body(
+                config,
+                session_id=session_id,
+                request_data=request.request_data,
+            )
             _bind_example_context_by_key(example["key"])
             runner_args = SmallWebRTCRunnerArguments(webrtc_connection=connection, body=body)
             runner_args.pipeline_idle_timeout_secs = parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300)
@@ -859,7 +1397,11 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             example = _resolve_example(config)
             if not session_id:
                 try:
-                    await _ensure_services_ready_for_connection(config, example)
+                    await _ensure_services_ready_for_connection(
+                        config,
+                        example,
+                        is_realtime=False,
+                    )
                 except RuntimeError as exc:
                     logger.warning(f"Rejecting WebSocket start during service readiness check: {exc}")
                     await websocket.close(code=1011, reason=str(exc))
@@ -874,7 +1416,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
             runner_args = SimpleNamespace(
                 websocket=websocket,
-                body={**config, "session_id": session_id},
+                body=_build_rtvi_runner_body(config, session_id=session_id),
                 handle_sigint=False,
                 pipeline_idle_timeout_secs=parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300),
             )
@@ -888,66 +1430,289 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 with contextlib.suppress(Exception):
                     await websocket.close()
 
-    # ---- OpenAI Realtime–shaped JSON WebSocket ----
+    # ---- OpenAI Realtime bootstrap and JSON WebSocket ----
+
+    def _realtime_http_error(
+        *,
+        status_code: int,
+        message: str,
+        code: str,
+        param: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> JSONResponse:
+        error: dict[str, str] = {
+            "message": message,
+            "type": "invalid_request_error" if status_code < 500 else "server_error",
+            "code": code,
+        }
+        if param is not None:
+            error["param"] = param
+        return JSONResponse(status_code=status_code, content={"error": error}, headers=headers)
+
+    async def _prepare_initial_realtime_runtime(config: dict) -> dict:
+        """Resolve multilingual settings at the first actionable event."""
+        selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
+        if selected["key"] != "multilingual-assistant":
+            return config
+
+        raw_language = str(config.get("asr_language_code") or "").strip()
+        if not raw_language or raw_language.lower() == "auto":
+            raw_language = examples_registry.default_session_language(selected["key"])
+        language = normalize_lang_code(raw_language)
+        config["asr_language_code"] = language
+        if config.get("output_modalities") == ["text"]:
+            return config
+
+        tts_server, tts_voice, tts_function_id, tts_model = _resolve_tts_selection(
+            str(config.get("tts_server") or ""),
+            str(config.get("tts_voice_id") or ""),
+            str(config.get("tts_function_id") or ""),
+            str(config.get("tts_model") or ""),
+        )
+        tts_catalog = await _run_blocking(
+            get_tts_config,
+            tts_server,
+            tts_voice,
+            tts_function_id,
+            tts_model,
+            timeout=_CONNECT_PREWARM_TIMEOUT_SECS,
+        )
+        if not isinstance(tts_catalog, dict) or tts_catalog.get("error"):
+            raise RuntimeError(f"The selected TTS voice catalog is unavailable for {tts_server!r}")
+        resolved_voice = resolve_voice_for_language(
+            language,
+            tts_voice,
+            server=tts_server,
+            function_id=tts_function_id,
+            model=tts_model,
+        )
+        if not resolved_voice:
+            raise RuntimeError(f"No TTS voice is available for the fixed session language {language!r}")
+        config["tts_voice_id"] = resolved_voice
+        return config
+
+    @app.post("/v1/realtime/client_secrets")
+    async def create_realtime_client_secret(request: Request):
+        """Mint a stateless client secret bound to a validated Realtime session template."""
+        from realtime.auth import (
+            authenticate_realtime_master_key,
+            configured_realtime_api_key,
+            issue_realtime_client_secret,
+        )
+        from realtime.bootstrap import parse_realtime_client_secret_request
+        from realtime.gateway import create_realtime_controller
+        from realtime.protocol import RealtimeProtocolError, strict_json_loads
+
+        api_key = configured_realtime_api_key()
+        if api_key is None:
+            return _realtime_http_error(
+                status_code=503,
+                message="Realtime client-secret minting is not configured",
+                code="realtime_auth_not_configured",
+            )
+        if not authenticate_realtime_master_key(request.headers, api_key=api_key):
+            return _realtime_http_error(
+                status_code=401,
+                message="Invalid Realtime API key",
+                code="invalid_api_key",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        raw_body = bytearray()
+        async for chunk in request.stream():
+            raw_body.extend(chunk)
+            if len(raw_body) > _MAX_REALTIME_CLIENT_SECRET_REQUEST_BYTES:
+                return _realtime_http_error(
+                    status_code=413,
+                    message="Realtime client-secret request is too large",
+                    code="request_too_large",
+                )
+        try:
+            body = strict_json_loads(raw_body) if raw_body else {}
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return _realtime_http_error(
+                status_code=400,
+                message="Request body must be valid JSON",
+                code="invalid_json",
+                param="body",
+            )
+
+        try:
+            parsed = parse_realtime_client_secret_request(body)
+            controller = await create_realtime_controller(
+                sanitize_session_config=lambda data, **kwargs: _sanitize_realtime_config(data, **kwargs),
+                initial_session=parsed.session,
+                resolve_server_tools=lambda config: _resolve_realtime_server_tools(config, fallback_example_key),
+                resolve_delegate_tools=lambda config: _resolve_realtime_delegate_tools(config, fallback_example_key),
+                resolve_server_tool_schemas=lambda config: _resolve_realtime_server_tool_schemas(
+                    config,
+                    fallback_example_key,
+                ),
+                resolve_delegate_tool_schemas=lambda config: _resolve_realtime_delegate_tool_schemas(
+                    config,
+                    fallback_example_key,
+                ),
+                resolve_session_capabilities=_resolve_realtime_session_capabilities,
+                resolve_model_route=lambda model, selectors: _resolve_realtime_model_route(
+                    model,
+                    selectors,
+                    fallback_example_key,
+                ),
+                default_example_key=fallback_example_key,
+                default_pipeline_mode=fallback_example_key,
+            )
+            issued_at = int(time.time())
+            expires_at = issued_at + parsed.ttl_seconds
+            secret = issue_realtime_client_secret(
+                api_key=api_key,
+                session=_canonical_realtime_secret_session(controller),
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
+        except RealtimeProtocolError as exc:
+            return _realtime_http_error(
+                status_code=400,
+                message=exc.message,
+                code=exc.code,
+                param=exc.param,
+            )
+        except ValueError as exc:
+            logger.warning(f"Realtime client-secret request rejected: {exc}")
+            return _realtime_http_error(
+                status_code=400,
+                message=str(exc),
+                code="invalid_session",
+                param="session",
+            )
+        except RuntimeError as exc:
+            logger.warning(f"Realtime client-secret media capability resolution failed: {exc}")
+            return _realtime_http_error(
+                status_code=503,
+                message="The selected Realtime media services are not available",
+                code="services_not_ready",
+            )
+        except Exception:
+            logger.exception("Failed to create Realtime client secret")
+            return _realtime_http_error(
+                status_code=500,
+                message="The Realtime client secret could not be created",
+                code="client_secret_creation_failed",
+            )
+
+        effective_session = controller.public_session()
+        return JSONResponse(
+            content={"value": secret, "expires_at": expires_at, "session": effective_session},
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.websocket("/v1/realtime")
     async def realtime_websocket_endpoint(websocket: WebSocket):
-        """OpenAI Realtime–compatible session endpoint (no REST bootstrap).
+        """OpenAI Realtime–compatible authenticated session endpoint.
 
-        After ``session.update`` + the same readiness checks as ``/api/ws``,
-        hands the socket to the selected example bot (``protocol=realtime``).
+        Immediately creates the default session. An optional initial
+        ``session.update`` is validated before modality-aware readiness checks
+        hand the socket to the selected example bot (``protocol=realtime``).
         """
-        from realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
+        from realtime import RealtimeSessionController, handle_realtime_websocket
+        from realtime.auth import RealtimeAuthenticationError, authenticate_realtime_websocket
+        from realtime.protocol import RealtimeProtocolError
+
+        try:
+            authentication = authenticate_realtime_websocket(websocket.headers)
+        except RealtimeAuthenticationError:
+            await websocket.close(code=1008, reason="realtime authentication failed")
+            return
+        initial_session = authentication.claims.session if authentication.claims is not None else None
 
         async def _ensure_ready(config: dict) -> None:
-            await _ensure_services_ready_for_connection(config, _resolve_example(config))
-
-        def _resolve_server_tools(config: dict) -> list[str]:
-            _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
-            prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
-            if not isinstance(prompt, dict):
-                return []
-            raw_tools = prompt.get("tools_available")
-            if not isinstance(raw_tools, list):
-                return []
-            return [name for name in raw_tools if isinstance(name, str) and name]
-
-        async def _start_bot(ws: WebSocket, config: dict, session_view: dict) -> None:
-            selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
-            bot_fn = examples_registry.resolve_bot(selected)
-            _bind_example_context_by_key(selected["key"])
-            session_id = str(session_view.get("id") or "")
-            if session_id:
-                _active_session_configs[session_id] = dict(config)
-            runner_args = SimpleNamespace(
-                websocket=ws,
-                body={
-                    **config,
-                    "protocol": "realtime",
-                    "realtime_session_view": session_view,
-                    "session_id": session_id,
-                },
-                handle_sigint=False,
-                pipeline_idle_timeout_secs=parse_env_int("PIPELINE_IDLE_TIMEOUT_SECS", 600, min_value=300),
+            await _ensure_services_ready_for_connection(
+                config,
+                _resolve_example(config),
+                is_realtime=True,
             )
+
+        async def _start_bot(
+            ws: WebSocket,
+            config: dict,
+            controller: RealtimeSessionController,
+        ) -> None:
+            session_id = controller.id
+            close_code = 1000
+            close_reason = "realtime session complete"
+            close_on_return = True
             try:
+                selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
+                bot_fn = examples_registry.resolve_bot(selected)
+                _bind_example_context_by_key(selected["key"])
+                if session_id:
+                    _active_session_configs[session_id] = dict(config)
+                runner_args = SimpleNamespace(
+                    websocket=ws,
+                    body={
+                        **config,
+                        "protocol": "realtime",
+                        "realtime_controller": controller,
+                        "session_id": session_id,
+                    },
+                    handle_sigint=False,
+                    pipeline_idle_timeout_secs=parse_env_int(
+                        "PIPELINE_IDLE_TIMEOUT_SECS",
+                        600,
+                        min_value=300,
+                    ),
+                )
                 await bot_fn(runner_args)
-            except Exception as e:
-                logger.error(f"Realtime pipeline session error: {e}")
+            except asyncio.CancelledError:
+                # The outer Realtime lifetime owns deadline cancellation and
+                # its clean expiry close. Avoid replacing that terminal reason
+                # from this nested pipeline wrapper.
+                close_on_return = False
+                raise
+            except WebSocketDisconnect:
+                logger.info(f"Realtime pipeline client disconnected session_id={session_id}")
+            except Exception:
+                close_code = 1011
+                close_reason = "realtime pipeline failed"
+                logger.exception(f"Realtime pipeline session failed session_id={session_id}")
+                event = RealtimeProtocolError(
+                    message="The Realtime pipeline failed",
+                    code="pipeline_runtime_error",
+                    error_type="server_error",
+                ).to_event()
+                with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+                    await ws.send_text(json.dumps(event))
             finally:
                 if session_id:
                     _active_session_configs.pop(session_id, None)
-                with contextlib.suppress(Exception):
-                    await ws.close()
+                if close_on_return:
+                    with contextlib.suppress(Exception):
+                        await ws.close(code=close_code, reason=close_reason)
 
         await handle_realtime_websocket(
             websocket,
-            sanitize_session_config=_sanitize_session_config,
+            sanitize_session_config=_sanitize_realtime_config,
+            initial_session=initial_session,
+            prepare_initial_runtime=_prepare_initial_realtime_runtime,
             ensure_services_ready=_ensure_ready,
             start_bot=_start_bot,
-            resolve_server_tools=_resolve_server_tools,
-            fallback_example_key=fallback_example_key,
-            default_pipeline_mode=DEFAULT_PIPELINE_MODE,
+            resolve_server_tools=lambda config: _resolve_realtime_server_tools(config, fallback_example_key),
+            resolve_delegate_tools=lambda config: _resolve_realtime_delegate_tools(config, fallback_example_key),
+            resolve_server_tool_schemas=lambda config: _resolve_realtime_server_tool_schemas(
+                config,
+                fallback_example_key,
+            ),
+            resolve_delegate_tool_schemas=lambda config: _resolve_realtime_delegate_tool_schemas(
+                config,
+                fallback_example_key,
+            ),
+            resolve_session_capabilities=_resolve_realtime_session_capabilities,
+            resolve_model_route=lambda model, selectors: _resolve_realtime_model_route(
+                model,
+                selectors,
+                fallback_example_key,
+            ),
+            default_example_key=fallback_example_key,
+            default_pipeline_mode=fallback_example_key,
         )
 
     # ---- Prompt catalog (read-only, scoped to the active example) ----
@@ -1109,9 +1874,15 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         """
         return {"iceServers": _build_ice_servers(request)}
 
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
     # ---- Static client UI ----
 
-    if CLIENT_DIST.is_dir():
+    if realtime_only:
+        pass
+    elif CLIENT_DIST.is_dir():
         logger.info(f"Serving client UI from {CLIENT_DIST}")
         index_path = CLIENT_DIST / "index.html"
 
@@ -1137,10 +1908,15 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 "hint": "Build the client UI: cd client && npm run build",
             }
 
-    @app.get("/health")
-    async def health():
-        return {"status": "ok"}
+    return app
 
+
+def create_realtime_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
+    """Build the standalone app with only Realtime and liveness routes exposed."""
+    app = create_app(host=host, prompt_file=prompt_file, realtime_only=True)
+    exposed = {"/health", "/v1/realtime/client_secrets", "/v1/realtime"}
+    app.router.routes[:] = [route for route in app.router.routes if getattr(route, "path", "") in exposed]
+    app.title = "Nemotron Voice Agent Realtime API"
     return app
 
 

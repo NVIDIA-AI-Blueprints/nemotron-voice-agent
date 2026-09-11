@@ -21,7 +21,8 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
-from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
+from pipecat.services.nvidia.llm import NvidiaLLMService as PipecatNvidiaLLMService
+from pipecat.services.nvidia.llm import NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
@@ -41,6 +42,9 @@ from examples.shared.pipeline_utils import (
     build_user_aggregator_params,
     create_transport,
     register_session_start_handlers,
+    resolve_pipeline_prompt,
+    runner_protocol,
+    select_max_tokens_config,
     with_realtime_observers,
 )
 from tracing import IS_TRACING_ENABLED
@@ -48,13 +52,13 @@ from utils import (
     is_nvcf,
     load_ipa_dictionary,
     load_prompt_catalog,
+    load_selected_service_entry,
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
-    resolve_prompt,
 )
 
 load_dotenv(override=True)
@@ -106,19 +110,40 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info("Starting Frontend/Backend Agent cascaded pipeline")
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
-    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+    is_realtime = runner_protocol(runner_args) == "realtime"
+    if is_realtime:
+        from examples.shared.nvidia_llm import NvidiaLLMService as RealtimeNvidiaLLMService
+        from examples.shared.tool_runtime import select_trusted_tools, terminal_tool_handler, tool_parameter_schema
+        from realtime.transport import (
+            bind_realtime_assistant_context_message,
+            bind_realtime_context,
+            bind_realtime_deferred_service_responses,
+            bind_realtime_tts_service,
+            configure_realtime_client_tools,
+            prepare_realtime_tools,
+            realtime_response_gate_processors,
+            realtime_tool_result_processors,
+        )
 
-    prompt_key, talker_prompt = resolve_prompt(
-        __file__,
-        body.get("prompt_content", ""),
-        body.get("prompt_key", ""),
-    )
+    welcome_enabled = not is_realtime and examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+
+    prompt_key, talker_prompt = resolve_pipeline_prompt(__file__, body, is_realtime=is_realtime)
     thinker_prompt = _load_required_catalog_prompt(THINKER_PROMPT_KEY)
-    default_llm = load_service_entry("llm", "")
-    default_tts = load_service_entry("tts", "")
-    default_asr = load_service_entry("asr", "")
+    selected_llm_id = str(body.get("llm_id", "") or "")
+    default_llm = load_selected_service_entry("llm", selected_llm_id) if is_realtime else load_service_entry("llm", "")
+    llm_profile = default_llm
+    default_tts = (
+        load_selected_service_entry("tts", body.get("tts_id")) if is_realtime else load_service_entry("tts", "")
+    )
+    default_asr = (
+        load_selected_service_entry("asr", body.get("asr_id")) if is_realtime else load_service_entry("asr", "")
+    )
+    default_thinker_llm = (
+        load_selected_service_entry("thinker-llm", body.get("thinker_llm_id"))
+        if is_realtime
+        else load_service_entry("thinker-llm", "")
+    )
     default_booking_server = load_service_entry("booking-server", "")
-    default_thinker_llm = load_service_entry("thinker-llm", "")
 
     # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
@@ -138,7 +163,12 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if asr_language_code:
         asr_kwargs["settings"] = NvidiaSTTSettings(language=asr_language_code)
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
+    if is_realtime:
+        from realtime.asr import RealtimeNvidiaSTTService
+
+        stt = RealtimeNvidiaSTTService(**asr_kwargs, stop_history=400)
+    else:
+        stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}"
@@ -148,27 +178,45 @@ async def bot(runner_args: RunnerArguments) -> None:
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
-    talker_max_tokens = _parse_optional_int(body.get("max_tokens", "") or default_llm.get("max_tokens"), 2048)
+    raw_talker_max_tokens = select_max_tokens_config(
+        body,
+        default_llm.get("max_tokens"),
+        is_realtime=is_realtime,
+    )
+    talker_max_tokens = (
+        None if is_realtime and raw_talker_max_tokens is None else _parse_optional_int(raw_talker_max_tokens, 2048)
+    )
     extra_params = parse_json_dict(
         body.get("extra_params", "") or default_llm.get("extra_params", ""),
         label="extra_params",
     )
-    llm_settings = NvidiaLLMSettings(model=model_id, max_tokens=talker_max_tokens)
+    llm_settings = NvidiaLLMSettings(model=model_id)
+    if talker_max_tokens is not None:
+        llm_settings.max_tokens = talker_max_tokens
     if extra_params:
         llm_settings.extra = extra_params
-    talker_llm = NvidiaLLMService(
-        api_key=nvidia_api_key(),
-        base_url=base_url,
-        settings=llm_settings,
-    )
+    if is_realtime:
+        talker_llm = RealtimeNvidiaLLMService(
+            api_key=nvidia_api_key(),
+            base_url=base_url,
+            settings=llm_settings,
+            forced_tool_call_stops=llm_profile.get("forced_tool_call_stops"),
+            realtime_parallel_tool_calls=body.get("parallel_tool_calls", True),
+            realtime_model_max_output_tokens=body.get("realtime_model_max_output_tokens"),
+        )
+    else:
+        talker_llm = PipecatNvidiaLLMService(
+            api_key=nvidia_api_key(),
+            base_url=base_url,
+            settings=llm_settings,
+        )
     logger.info(
         f"Talker LLM: model={model_id}, base_url={base_url}, prompt={prompt_key}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
-        f"max_tokens={talker_max_tokens}, "
+        f"max_tokens={talker_max_tokens if talker_max_tokens is not None else '(provider maximum)'}, "
         f"extra_params={extra_params or '(none)'}"
     )
 
-    booking_backend_url = _booking_backend_url(default_booking_server)
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
     thinker_max_tokens = _parse_optional_int(
@@ -179,18 +227,27 @@ async def bot(runner_args: RunnerArguments) -> None:
         body.get("thinker_extra_params", "") or default_thinker_llm.get("extra_params", ""),
         label="thinker_extra_params",
     )
+    booking_backend_url = _booking_backend_url(default_booking_server)
     thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id, max_tokens=thinker_max_tokens)
     if thinker_extra_params:
         thinker_llm_settings.extra = thinker_extra_params
-    thinker_llm = NvidiaLLMService(
-        api_key=nvidia_api_key(),
-        base_url=thinker_base_url,
-        settings=thinker_llm_settings,
-    )
+    if is_realtime:
+        thinker_llm = RealtimeNvidiaLLMService(
+            api_key=nvidia_api_key(),
+            base_url=thinker_base_url,
+            settings=thinker_llm_settings,
+        )
+    else:
+        thinker_llm = PipecatNvidiaLLMService(
+            api_key=nvidia_api_key(),
+            base_url=thinker_base_url,
+            settings=thinker_llm_settings,
+        )
     thinker_planner = NvidiaThinkerPlanner(
         llm=thinker_llm,
         system_prompt=thinker_prompt,
         max_tokens=thinker_max_tokens,
+        structured_output=is_realtime,
     )
     thinker = ThinkerBackend(
         backend=HTTPBookingBackend(booking_backend_url),
@@ -206,18 +263,61 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info(f"Thinker tool delay: {THINKER_TOOL_DELAY_MIN_SECONDS:.3f}s-{THINKER_TOOL_DELAY_MAX_SECONDS:.3f}s")
     logger.info(f"Thinker filler threshold: {THINKER_FILLER_THRESHOLD_SECONDS:.3f}s")
     logger.info(f"Thinker tool timeout: {THINKER_TOOL_TIMEOUT_SECONDS:.3f}s")
-    for name, handler in build_handlers(
+    available_talker_handlers = build_handlers(
         thinker,
         filler_threshold_seconds=THINKER_FILLER_THRESHOLD_SECONDS,
-    ).items():
-        cancel_on_interruption = name != "call_backend"
-        talker_llm.register_function(
-            name,
-            handler,
-            cancel_on_interruption=cancel_on_interruption,
-            timeout_secs=THINKER_TOOL_TIMEOUT_SECONDS,
-        )
+        allow_talker_frames=not is_realtime,
+    )
+    if is_realtime:
+        raw_delegate_tools = body.get("delegate_tools", [])
+        if not isinstance(raw_delegate_tools, list) or not all(isinstance(name, str) for name in raw_delegate_tools):
+            raise ValueError("delegate_tools must be a list of trusted function names")
+        active_delegate_tools = list(dict.fromkeys(raw_delegate_tools))
+        missing_delegate_handlers = set(active_delegate_tools) - set(available_talker_handlers)
+        if missing_delegate_handlers:
+            raise ValueError(
+                f"Trusted pipeline tool {sorted(missing_delegate_handlers)[0]!r} has no registered handler"
+            )
+        talker_handlers = {name: available_talker_handlers[name] for name in active_delegate_tools}
+        trusted_tools_schema = select_trusted_tools(TOOLS_SCHEMA, active_delegate_tools)
+    else:
+        talker_handlers = available_talker_handlers
+        trusted_tools_schema = TOOLS_SCHEMA
+    for name, original_handler in talker_handlers.items():
+        if is_realtime:
+            handler = terminal_tool_handler(
+                original_handler,
+                parameters=tool_parameter_schema(trusted_tools_schema, name),
+                timeout_secs=THINKER_TOOL_TIMEOUT_SECONDS,
+            )
+            # A Realtime call is a durable conversation item, so barge-in
+            # cancels response media but not its accepted backend result.
+            cancel_on_interruption = False
+            talker_llm.register_function(
+                name,
+                handler,
+                cancel_on_interruption=cancel_on_interruption,
+            )
+        else:
+            cancel_on_interruption = name != "call_backend"
+            talker_llm.register_function(
+                name,
+                original_handler,
+                cancel_on_interruption=cancel_on_interruption,
+                timeout_secs=THINKER_TOOL_TIMEOUT_SECONDS,
+            )
         logger.info(f"Registered Talker tool: {name}, cancel_on_interruption={cancel_on_interruption}")
+    tools_schema = trusted_tools_schema
+    tool_choice = body.get("tool_choice", "auto") or "auto"
+    if is_realtime:
+        tools_schema = configure_realtime_client_tools(
+            transport,
+            talker_llm,
+            body.get("client_tools"),
+            trusted_tools=trusted_tools_schema,
+            trusted_tool_names=talker_handlers,
+        )
+        tools_schema, tool_choice = await prepare_realtime_tools(transport, talker_llm)
 
     # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
@@ -253,6 +353,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
     tts = NvidiaTTSService(**tts_kwargs)
+    if is_realtime:
+        bind_realtime_tts_service(transport, tts)
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
         f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
@@ -261,21 +363,41 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # --- Context + aggregators ---
-    messages = _build_context_messages(talker_prompt, system_prompt)
-    context = LLMContext(messages, tools=TOOLS_SCHEMA, tool_choice="auto")
+    def render_realtime_instructions(instructions: str) -> list[dict]:
+        return _build_context_messages(instructions, system_prompt)
+
+    messages = render_realtime_instructions(talker_prompt)
+    if tools_schema is not None:
+        context = LLMContext(messages, tools=tools_schema, tool_choice=tool_choice)
+    else:
+        context = LLMContext(messages)
+    if is_realtime:
+        bind_realtime_context(
+            transport,
+            context,
+            render_instructions=render_realtime_instructions,
+        )
+        bind_realtime_deferred_service_responses(transport, talker_llm)
     preserve_prompt_messages = len(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=build_user_aggregator_params(welcome_enabled),
+        user_params=build_user_aggregator_params(
+            welcome_enabled,
+            transport=transport if is_realtime else None,
+        ),
     )
     audio_recorder = create_audio_recorder()
 
+    response_gate_processors = realtime_response_gate_processors(transport) if is_realtime else []
+    tool_result_processors = realtime_tool_result_processors(transport) if is_realtime else []
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
             user_aggregator,
+            *response_gate_processors,
             talker_llm,
+            *tool_result_processors,
             tts,
             transport.output(),
             *([audio_recorder] if audio_recorder else []),
@@ -288,6 +410,12 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):
+        if is_realtime:
+            bind_realtime_assistant_context_message(transport, message)
+        # Realtime item edits and deletes address this canonical context. Its
+        # provider-only snapshot owns any native token-budget truncation.
+        if is_realtime:
+            return
         async with summary_lock:
             _apply_chat_history_sliding_window(context, preserve_prompt_messages, CHAT_HISTORY_RECENT_TURNS)
 
@@ -307,10 +435,19 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
-        params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
+        params=build_pipeline_params(
+            enable_metrics=True,
+            enable_usage_metrics=True,
+            send_initial_empty_metrics=not is_realtime,
+        ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=with_realtime_observers(latency_observer, transport=transport),
+        observers=with_realtime_observers(
+            latency_observer,
+            transport=transport,
+            is_realtime=is_realtime,
+        ),
         enable_tracing=IS_TRACING_ENABLED,
+        enable_rtvi=not is_realtime,
     )
 
     @user_aggregator.event_handler("on_user_turn_stopped")
@@ -319,6 +456,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(
                 data={
                     "type": "user-turn-finalized",
+                    **({"turn_frame_id": getattr(strategy, "turn_frame_id", None)} if is_realtime else {}),
                     "timestamp": getattr(message, "timestamp", None),
                     "transcript": getattr(message, "content", None),
                     "user_id": getattr(message, "user_id", None),
@@ -356,15 +494,28 @@ async def bot(runner_args: RunnerArguments) -> None:
         await task.queue_frame(TTSUpdateSettingsFrame(delta=NvidiaTTSSettings(**settings_kwargs), service=tts))
         logger.info(f"Voice switched to {voice_id}, language={settings_kwargs.get('language', '(unchanged)')}")
 
-    @task.rtvi.event_handler("on_client_message")
-    async def on_client_message(rtvi, message):
-        payload = message.data if isinstance(message.data, dict) else {}
-        if message.type == "set-voice":
-            await _apply_set_voice(payload)
+    if not is_realtime:
+
+        @task.rtvi.event_handler("on_client_message")
+        async def on_client_message(rtvi, message):
+            payload = message.data if isinstance(message.data, dict) else {}
+            if message.type == "set-voice":
+                await _apply_set_voice(payload)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(task)
     await runner.run()
+
+
+def _parse_optional_int(raw: object, default: int) -> int:
+    """Parse optional integer config values."""
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid integer config value {raw!r}; using {default}")
+        return default
 
 
 def _default_booking_backend_url() -> str:
@@ -385,17 +536,6 @@ def _booking_backend_url(default_booking_server: dict) -> str:
     if runtime_default == "http://localhost:8001" and configured_url == "http://booking-server:8001":
         return runtime_default
     return configured_url or runtime_default
-
-
-def _parse_optional_int(raw: object, default: int) -> int:
-    """Parse optional integer config values."""
-    if raw in (None, ""):
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        logger.warning(f"Invalid integer config value {raw!r}; using {default}")
-        return default
 
 
 def _load_required_catalog_prompt(prompt_key: str) -> str:

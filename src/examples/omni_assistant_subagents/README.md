@@ -77,6 +77,10 @@ The example declares `capabilities: [attachments, webcam]` in `examples_registry
 | `POST /api/sessions/{session_id}/webcam/frames` | Upload one webcam JPEG frame |
 | `GET /api/webcam-config` | Browser webcam capture defaults |
 
+The OpenAI Realtime WebSocket supports text or audio output for this example,
+but it does not accept client-owned functions. Refer to [Use the Realtime
+Gateway](../../../docs/how-to/use-realtime-gateway.md).
+
 ## Tips & best practices
 
 - **Keep the voice loop responsive.** Media, webcam, and reasoning analysis run as separate worker agents so the transport and speaker agents never block on vision or reasoning work. Preserve that split when adding new capabilities.

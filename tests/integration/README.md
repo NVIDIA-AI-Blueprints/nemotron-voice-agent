@@ -5,26 +5,39 @@ CI (`pytest tests/unit`).
 
 ## OpenAI Realtime Compatibility
 
-The integration test covers the following behavior against `WS /v1/realtime`:
+`test_realtime_openai_sdk_compat.py` is an opt-in live suite for the OpenAI
+Realtime-compatible WebSocket subset. It covers:
 
-1. OpenAI Python SDK multi-turn (GA-shaped session fields)
-2. Mapped fields — instructions, Magpie voice, temperature, ignored client tools,
-   Nemotron welcome gate, soft unknown-voice fallback, post-handoff / `response.create` rejects
-3. Compatibility no-op for the Whisper transcription selector, plus rejection of text-only modalities
+- OpenAI Python SDK audio conversations.
+- Text responses, session updates, response overrides, and isolated input.
+- Rejection of unsupported session configuration.
+- Manual turn control and automatic VAD negotiation.
+- Client-owned function output and follow-up response ordering.
+
+Start a local server without TLS:
 
 ```bash
-# Plain HTTP (recommended for local integration):
-# Option A — set in .env then recreate:
-#   PIPELINE_TLS=false
-# Option B — one-shot compose override:
-printf '%s\n' 'services:' '  generic-assistant:' '    environment:' '      PIPELINE_TLS: "false"' > /tmp/nva-tls-off.yml
-PIPELINE_TLS=false docker compose -f docker-compose.yml -f /tmp/nva-tls-off.yml \
-  --profile generic-assistant up -d --force-recreate generic-assistant
+PIPELINE_TLS=false uv run python src/server.py --host 127.0.0.1 --port 7860
+```
 
-OPENAI_REALTIME_WS_BASE=ws://127.0.0.1:7860/v1 RUN_REALTIME_COMPAT=1 \
-  uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v -s
+Run the live suite from another shell:
 
-# TLS docker default (self-signed; browsers often fail wss without trusting the cert):
-RUN_REALTIME_COMPAT=1 OPENAI_REALTIME_WS_BASE=wss://127.0.0.1:7860/v1 \
+```bash
+OPENAI_REALTIME_WS_BASE=ws://127.0.0.1:7860/v1 \
+  RUN_REALTIME_COMPAT=1 \
   uv run pytest tests/integration/test_realtime_openai_sdk_compat.py -v -s
 ```
+
+`ENABLE_WELCOME_MESSAGE` controls RTVI and does not change the Realtime
+handshake. The manual-configuration test skips when the selected deployment is
+not an eligible cascaded ASR pipeline. If the server sets `REALTIME_API_KEY`,
+export the accepted master key or client secret as
+`OPENAI_REALTIME_API_KEY` for the test process.
+
+The live suite uses signed 24 kHz PCM16 and verifies manual-mode negotiation
+rather than a complete manual audio turn. It does not cover every media format,
+timeout, conversation mutation, MCP path, or long-session boundary. Run the
+unit suite for deterministic protocol coverage. Use the [Realtime test
+guidance](../../docs/how-to/use-realtime-gateway.md#collect-metrics-and-run-tests)
+and [scaling client](../../benchmarking_tools/scaling-perf/README.md) for
+deployed and concurrent qualification.

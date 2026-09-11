@@ -162,6 +162,10 @@ For development and debugging, you can run the server directly:
 
     By default a host-native server uses the cloud (NVCF) service endpoints. To run against **local on-prem services**, start the matching Compose sidecars first. The catalog merges `services.local.yaml` and exposes only endpoints that are reachable, so NIM (`/server`) or NeMo-Speech.cpp (`/single-gpu`) entries appear automatically.
 
+    For a host-native OpenAI Realtime connection, set
+    `REALTIME_SERVICE_PLATFORM` to `cloud`, `server`, or `singlegpu`. Realtime
+    uses that catalog section instead of selecting one by reachability.
+
     | `selection` in `examples_registry.yaml` | UI behavior |
     |-----------------------------------------|-------------|
     | `all` | Show every registered example (default) |

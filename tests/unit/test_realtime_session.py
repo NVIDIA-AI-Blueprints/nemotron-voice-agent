@@ -5,493 +5,897 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from typing import Any
 
 from realtime_helpers import FakeWebSocket
 
-from realtime.events import SERVER_ERROR, SERVER_SESSION_CREATED, SERVER_SESSION_UPDATED
-from realtime.gateway import _select_realtime_subprotocol, handle_realtime_websocket
-from realtime.session import (
-    DEFAULT_PIPELINE_MODE,
-    DEFAULT_PROMPT_KEY,
-    RealtimeSession,
-    map_session_update_to_flat_config,
-    unsupported_live_session_fields,
+from realtime.controller import RealtimeSessionController
+from realtime.events import (
+    SERVER_CONVERSATION_CREATED,
+    SERVER_ERROR,
+    SERVER_SESSION_CREATED,
+    SERVER_SESSION_UPDATED,
 )
-from realtime.transport import _prefers_beta_event_names, create_realtime_transport
+from realtime.gateway import _select_realtime_subprotocol, handle_realtime_websocket
+from realtime.protocol import RealtimeProtocolError
+from realtime.session import (
+    AudioFormatCapability,
+    CanonicalRealtimeSession,
+    RealtimeSessionCapabilities,
+)
+
+MODEL = "nvidia/nemotron-realtime"
+VOICE = "Magpie-Multilingual.EN-US.Aria"
+SECOND_VOICE = "Magpie-Multilingual.EN-US.Jason"
+SERVER_VAD_DEFAULTS = {
+    "type": "server_vad",
+    "threshold": 0.5,
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 500,
+    "create_response": True,
+    "interrupt_response": True,
+    "idle_timeout_ms": None,
+}
 
 
-class MapSessionUpdateTests(unittest.TestCase):
-    def test_defaults_pipeline_and_prompt_without_tools(self) -> None:
-        flat = map_session_update_to_flat_config({})
-        self.assertEqual(flat["pipeline_mode"], DEFAULT_PIPELINE_MODE)
-        self.assertEqual(flat["prompt_key"], DEFAULT_PROMPT_KEY)
+def _capabilities(**overrides: Any) -> RealtimeSessionCapabilities:
+    values: dict[str, Any] = {"voices": frozenset({VOICE})}
+    values.update(overrides)
+    return RealtimeSessionCapabilities(**values)
 
-    def test_instructions_map_to_prompt_content(self) -> None:
-        flat = map_session_update_to_flat_config({"instructions": "Be brief."})
-        self.assertEqual(flat["prompt_content"], "Be brief.")
-        self.assertNotIn("system_prompt", flat)
 
-    def test_voice_maps_to_tts_voice_id(self) -> None:
-        flat = map_session_update_to_flat_config({"voice": "Magpie-Multilingual.EN-US.Aria"})
-        self.assertEqual(flat["tts_voice_id"], "Magpie-Multilingual.EN-US.Aria")
-        nested = map_session_update_to_flat_config({"audio": {"output": {"voice": "Magpie-Multilingual.EN-US.Aria"}}})
-        self.assertEqual(nested["tts_voice_id"], "Magpie-Multilingual.EN-US.Aria")
+def _session(
+    *,
+    capabilities: RealtimeSessionCapabilities | None = None,
+    **overrides: Any,
+) -> CanonicalRealtimeSession:
+    values: dict[str, Any] = {
+        "model": MODEL,
+        "voice": VOICE,
+        "capabilities": capabilities or _capabilities(),
+    }
+    values.update(overrides)
+    return CanonicalRealtimeSession(**values)
 
-    def test_model_is_ignored(self) -> None:
-        flat = map_session_update_to_flat_config({"model": "gpt-realtime"})
-        self.assertNotIn("model", flat)
-        self.assertNotIn("model_id", flat)
 
-    def test_nvidia_endpoint_overrides_are_ignored(self) -> None:
-        flat = map_session_update_to_flat_config(
+def _sanitize_runtime(data: dict[str, Any], **_: Any) -> dict[str, Any]:
+    runtime = dict(data)
+    runtime.setdefault("pipeline_mode", "generic-assistant")
+    runtime.setdefault("model_id", MODEL)
+    runtime.setdefault("tts_voice_id", VOICE)
+    runtime.setdefault("prompt_key", "generic_assistant")
+    return runtime
+
+
+class CanonicalRealtimeSessionTests(unittest.TestCase):
+    def test_defaults_are_canonical_ga_and_public_view_is_detached(self) -> None:
+        session = _session(input_transcription_model="nvidia-asr")
+
+        view = session.public_view()
+        self.assertEqual(view["object"], "realtime.session")
+        self.assertEqual(view["type"], "realtime")
+        self.assertEqual(view["model"], MODEL)
+        self.assertEqual(view["output_modalities"], ["audio"])
+        self.assertEqual(view["audio"]["input"]["format"], {"type": "audio/pcm", "rate": 24000})
+        self.assertEqual(view["audio"]["output"]["format"], {"type": "audio/pcm", "rate": 24000})
+        self.assertEqual(view["audio"]["input"]["turn_detection"], SERVER_VAD_DEFAULTS)
+        self.assertEqual(view["audio"]["input"]["transcription"], {"model": "nvidia-asr"})
+
+        view["instructions"] = "mutated outside the session"
+        self.assertEqual(session.public_view()["instructions"], "")
+
+    def test_supported_partial_update_deep_merges(self) -> None:
+        session = _session()
+
+        updated = session.apply_update(
             {
-                "nvidia": {
-                    "pipeline_mode": "generic-assistant",
-                    "tts_id": "cloud-nim:magpie-multilingual-tts",
-                    "base_url": "https://evil.example/v1",
-                    "tts_server": "attacker:443",
-                    "asr_server": "attacker-asr:443",
-                    "tts_function_id": "steal",
-                    "asr_function_id": "steal",
+                "instructions": "Be brief.",
+                "max_output_tokens": 256,
+                "output_modalities": ["text"],
+                "audio": {"output": {"voice": VOICE}},
+            }
+        )
+
+        self.assertEqual(updated["instructions"], "Be brief.")
+        self.assertEqual(updated["max_output_tokens"], 256)
+        self.assertEqual(updated["output_modalities"], ["text"])
+        self.assertEqual(updated["audio"]["input"]["turn_detection"], SERVER_VAD_DEFAULTS)
+        self.assertEqual(updated["audio"]["output"]["voice"], VOICE)
+        self.assertEqual(
+            session.response_defaults(),
+            {
+                "instructions": "Be brief.",
+                "output_modalities": ["text"],
+                "max_output_tokens": 256,
+                "parallel_tool_calls": True,
+            },
+        )
+
+    def test_pre_ga_flat_and_beta_fields_are_rejected(self) -> None:
+        cases = (
+            ({"voice": VOICE}, "session.voice"),
+            ({"temperature": 0.8}, "session.temperature"),
+            ({"input_audio_format": {"type": "audio/pcm", "rate": 24000}}, "session.input_audio_format"),
+            ({"modalities": ["audio"]}, "session.modalities"),
+            ({"nvidia": {"pipeline_mode": "generic-assistant"}}, "session.nvidia"),
+        )
+
+        for patch, param in cases:
+            with self.subTest(param=param), self.assertRaises(RealtimeProtocolError) as raised:
+                _session().apply_update(patch)
+            self.assertEqual(raised.exception.code, "unknown_parameter")
+            self.assertEqual(raised.exception.param, param)
+
+    def test_model_is_explicit_and_immutable(self) -> None:
+        session = _session()
+        self.assertEqual(session.apply_update({"model": MODEL})["model"], MODEL)
+
+        with self.assertRaises(RealtimeProtocolError) as raised:
+            session.apply_update({"model": "different-model"})
+        self.assertEqual(raised.exception.code, "immutable_field")
+        self.assertEqual(raised.exception.param, "session.model")
+
+    def test_max_output_tokens_require_supported_integer_or_inf(self) -> None:
+        session = _session()
+        self.assertEqual(session.apply_update({"max_output_tokens": "inf"})["max_output_tokens"], "inf")
+
+        for value, code in (
+            (True, "invalid_type"),
+            (2.9, "invalid_type"),
+            (0, "invalid_value"),
+            (4097, "invalid_value"),
+        ):
+            with self.subTest(value=value), self.assertRaises(RealtimeProtocolError) as raised:
+                session.apply_update({"max_output_tokens": value})
+            self.assertEqual(raised.exception.code, code)
+
+    def test_response_inference_overrides_validate_without_mutating_defaults(self) -> None:
+        session = _session(instructions="session prompt", max_output_tokens=256)
+
+        self.assertEqual(session.validate_response_instructions(""), "")
+        self.assertEqual(session.validate_response_max_output_tokens("inf"), "inf")
+        self.assertEqual(session.validate_response_max_output_tokens(32), 32)
+        self.assertEqual(session.public_view()["instructions"], "session prompt")
+        self.assertEqual(session.public_view()["max_output_tokens"], 256)
+
+        for value, code in (
+            (None, "invalid_type"),
+            (True, "invalid_type"),
+            (0, "invalid_value"),
+            (4097, "invalid_value"),
+        ):
+            with self.subTest(value=value), self.assertRaises(RealtimeProtocolError) as raised:
+                session.validate_response_max_output_tokens(value)
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.param, "response.max_output_tokens")
+
+    def test_output_modalities_are_exactly_audio_or_text(self) -> None:
+        session = _session()
+        self.assertEqual(session.apply_update({"output_modalities": ["text"]})["output_modalities"], ["text"])
+        self.assertEqual(session.apply_update({"output_modalities": ["audio"]})["output_modalities"], ["audio"])
+
+        for value in ([], ["audio", "text"], ["text", "audio"]):
+            with self.subTest(value=value), self.assertRaises(RealtimeProtocolError) as raised:
+                session.apply_update({"output_modalities": value})
+            self.assertEqual(raised.exception.code, "invalid_value")
+
+    def test_session_update_is_atomic_when_a_later_field_fails(self) -> None:
+        session = _session(instructions="Original")
+
+        with self.assertRaises(RealtimeProtocolError) as raised:
+            session.apply_update(
+                {
+                    "instructions": "Must not leak",
+                    "audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}},
+                }
+            )
+
+        self.assertEqual(raised.exception.code, "unsupported_capability")
+        self.assertEqual(session.public_view()["instructions"], "Original")
+        self.assertEqual(session.public_view()["audio"]["input"]["format"]["rate"], 24000)
+
+    def test_audio_formats_are_driven_by_explicit_capabilities(self) -> None:
+        pcm16 = AudioFormatCapability("audio/pcm", 16000)
+        with self.assertRaises(RealtimeProtocolError) as raised:
+            _session().apply_update({"audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}}})
+        self.assertEqual(raised.exception.code, "unsupported_capability")
+
+        capabilities = _capabilities(
+            input_formats=frozenset({AudioFormatCapability("audio/pcm", 24000), pcm16}),
+            output_formats=frozenset({AudioFormatCapability("audio/pcm", 24000), pcm16}),
+        )
+        session = _session(capabilities=capabilities)
+        updated = session.apply_update(
+            {
+                "audio": {
+                    "input": {"format": {"type": "audio/pcm", "rate": 16000}},
+                    "output": {"format": {"type": "audio/pcm", "rate": 16000}},
                 }
             }
         )
-        self.assertEqual(flat["tts_id"], "cloud-nim:magpie-multilingual-tts")
-        for key in ("base_url", "tts_server", "asr_server", "tts_function_id", "asr_function_id"):
-            self.assertNotIn(key, flat)
+        self.assertEqual(updated["audio"]["input"]["format"]["rate"], 16000)
+        self.assertEqual(updated["audio"]["output"]["format"]["rate"], 16000)
 
-    def test_nvidia_fields_pass_through_without_voice_duplicate(self) -> None:
-        flat = map_session_update_to_flat_config(
+    def test_omitted_pcm_rates_normalize_to_24khz_for_session_and_response(self) -> None:
+        pcm16 = AudioFormatCapability("audio/pcm", 16000)
+        session = _session(
+            capabilities=_capabilities(
+                input_formats=frozenset({AudioFormatCapability("audio/pcm", 24000), pcm16}),
+                output_formats=frozenset({AudioFormatCapability("audio/pcm", 24000), pcm16}),
+            )
+        )
+
+        updated = session.apply_update(
             {
-                "nvidia": {
-                    "pipeline_mode": "generic-assistant",
-                    "llm_id": "cloud-nim:nemotron-lightning",
-                    "asr_id": "cloud-nim:nemotron-asr",
-                    "tts_id": "cloud-nim:magpie-multilingual-tts",
-                    "prompt_key": "generic_assistant",
-                    "tts_voice_id": "should-be-ignored",
+                "audio": {
+                    "input": {"format": {"type": "audio/pcm"}},
+                    "output": {"format": {"type": "audio/pcm"}},
                 }
             }
         )
-        self.assertEqual(flat["llm_id"], "cloud-nim:nemotron-lightning")
-        self.assertEqual(flat["prompt_key"], "generic_assistant")
-        self.assertNotIn("tts_voice_id", flat)
 
-    def test_tools_are_ignored(self) -> None:
-        omitted = map_session_update_to_flat_config({})
-        empty = map_session_update_to_flat_config({"tools": []})
-        populated = map_session_update_to_flat_config(
-            {
-                "tools": [
+        self.assertEqual(updated["audio"]["input"]["format"], {"type": "audio/pcm", "rate": 24000})
+        self.assertEqual(updated["audio"]["output"]["format"], {"type": "audio/pcm", "rate": 24000})
+        response_audio = session.validate_response_audio_output({"output": {"format": {"type": "audio/pcm"}}})
+        self.assertEqual(response_audio["format"], {"type": "audio/pcm", "rate": 24000})
+
+    def test_explicit_non_integer_pcm_rates_remain_invalid(self) -> None:
+        for side in ("input", "output"):
+            for rate in (None, True, 24000.0):
+                with self.subTest(side=side, rate=rate), self.assertRaises(RealtimeProtocolError) as raised:
+                    _session().apply_update({"audio": {side: {"format": {"type": "audio/pcm", "rate": rate}}}})
+                self.assertEqual(raised.exception.code, "invalid_type")
+                self.assertEqual(raised.exception.param, f"session.audio.{side}.format.rate")
+
+        for rate in (None, True, 24000.0):
+            with self.subTest(scope="response", rate=rate), self.assertRaises(RealtimeProtocolError) as raised:
+                _session().validate_response_audio_output({"output": {"format": {"type": "audio/pcm", "rate": rate}}})
+            self.assertEqual(raised.exception.code, "invalid_type")
+            self.assertEqual(raised.exception.param, "response.audio.output.format.rate")
+
+    def test_turn_detection_rejects_manual_and_unavailable_type(self) -> None:
+        session = _session()
+        cases = (
+            None,
+            {"type": "semantic_vad"},
+        )
+        for value in cases:
+            with self.subTest(value=value), self.assertRaises(RealtimeProtocolError):
+                session.apply_update({"audio": {"input": {"turn_detection": value}}})
+
+        manual = _session(capabilities=_capabilities(supports_manual_input=True))
+        self.assertIsNone(
+            manual.apply_update({"audio": {"input": {"turn_detection": None}}})["audio"]["input"]["turn_detection"]
+        )
+
+    def test_server_vad_controls_validate_and_echo_exactly(self) -> None:
+        session = _session()
+        config = {
+            "type": "server_vad",
+            "threshold": 0.625,
+            "prefix_padding_ms": 275,
+            "silence_duration_ms": 640,
+            "create_response": False,
+            "interrupt_response": False,
+        }
+
+        updated = session.apply_update({"audio": {"input": {"turn_detection": config}}})
+
+        self.assertEqual(
+            updated["audio"]["input"]["turn_detection"],
+            {**config, "idle_timeout_ms": None},
+        )
+        config["threshold"] = 0.1
+        self.assertEqual(session.public_view()["audio"]["input"]["turn_detection"]["threshold"], 0.625)
+
+    def test_server_vad_controls_reject_invalid_types_values_and_cross_mode_fields(self) -> None:
+        cases = (
+            ("threshold", True, "invalid_type"),
+            ("threshold", "0.5", "invalid_type"),
+            ("threshold", -0.1, "invalid_value"),
+            ("threshold", 1.1, "invalid_value"),
+            ("threshold", float("nan"), "invalid_value"),
+            ("threshold", float("inf"), "invalid_value"),
+            ("prefix_padding_ms", True, "invalid_type"),
+            ("prefix_padding_ms", 1.5, "invalid_type"),
+            ("prefix_padding_ms", -1, "invalid_value"),
+            ("silence_duration_ms", True, "invalid_type"),
+            ("silence_duration_ms", 1.5, "invalid_type"),
+            ("silence_duration_ms", -1, "invalid_value"),
+            ("create_response", 1, "invalid_type"),
+            ("interrupt_response", 0, "invalid_type"),
+        )
+        for name, value, code in cases:
+            with self.subTest(name=name, value=value), self.assertRaises(RealtimeProtocolError) as raised:
+                _session().apply_update({"audio": {"input": {"turn_detection": {"type": "server_vad", name: value}}}})
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.param, f"session.audio.input.turn_detection.{name}")
+
+        with self.assertRaises(RealtimeProtocolError) as cross_mode:
+            _session().apply_update(
+                {"audio": {"input": {"turn_detection": {"type": "server_vad", "eagerness": "auto"}}}}
+            )
+        self.assertEqual(cross_mode.exception.code, "unknown_parameter")
+        self.assertEqual(cross_mode.exception.param, "session.audio.input.turn_detection.eagerness")
+
+    def test_server_vad_idle_timeout_is_supported_nullable_and_positive(self) -> None:
+        param = "session.audio.input.turn_detection.idle_timeout_ms"
+
+        session = _session()
+        for value in (None, 1, 5_000, 30_000, 300_000):
+            with self.subTest(value=value):
+                updated = session.apply_update(
                     {
-                        "type": "function",
-                        "name": "get_weather",
-                        "description": "Weather",
-                        "parameters": {"type": "object", "properties": {}},
+                        "audio": {
+                            "input": {
+                                "turn_detection": {
+                                    "type": "server_vad",
+                                    "idle_timeout_ms": value,
+                                }
+                            }
+                        }
                     }
-                ]
+                )
+                self.assertEqual(updated["audio"]["input"]["turn_detection"]["idle_timeout_ms"], value)
+
+        for value, code in (
+            (True, "invalid_type"),
+            (5_000.0, "invalid_type"),
+            (0, "invalid_value"),
+            (-1, "invalid_value"),
+        ):
+            with self.subTest(value=value), self.assertRaises(RealtimeProtocolError) as raised:
+                _session().apply_update(
+                    {
+                        "audio": {
+                            "input": {
+                                "turn_detection": {
+                                    "type": "server_vad",
+                                    "idle_timeout_ms": value,
+                                }
+                            }
+                        }
+                    }
+                )
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.param, param)
+
+        without_idle_timeout = _capabilities(
+            turn_detection_options=frozenset(SERVER_VAD_DEFAULTS) - {"idle_timeout_ms"}
+        )
+        with self.assertRaises(RealtimeProtocolError) as unsupported:
+            _session(capabilities=without_idle_timeout).apply_update(
+                {
+                    "audio": {
+                        "input": {
+                            "turn_detection": {
+                                "type": "server_vad",
+                                "idle_timeout_ms": 10_000,
+                            }
+                        }
+                    }
+                }
+            )
+        self.assertEqual(unsupported.exception.code, "unsupported_capability")
+        self.assertEqual(unsupported.exception.param, param)
+
+    def test_partial_server_vad_update_preserves_effective_defaults(self) -> None:
+        updated = _session().apply_update(
+            {
+                "audio": {
+                    "input": {
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.65,
+                        }
+                    }
+                }
             }
         )
-        self.assertNotIn("client_tools", omitted)
-        self.assertNotIn("client_tools", empty)
-        self.assertNotIn("client_tools", populated)
-        self.assertEqual(empty["prompt_key"], DEFAULT_PROMPT_KEY)
-        self.assertEqual(populated["prompt_key"], DEFAULT_PROMPT_KEY)
 
-    def test_accepts_transcription_selector_as_noop(self) -> None:
-        flat = map_session_update_to_flat_config({"audio": {"input": {"transcription": {"model": "whisper-1"}}}})
-        self.assertNotIn("input_audio_transcription", flat)
-
-    def test_null_input_audio_transcription_ok(self) -> None:
-        flat = map_session_update_to_flat_config({"input_audio_transcription": None})
-        self.assertEqual(flat["pipeline_mode"], DEFAULT_PIPELINE_MODE)
-
-    def test_server_vad_is_the_only_turn_mode(self) -> None:
-        map_session_update_to_flat_config({"turn_detection": {"type": "server_vad"}})
-        with self.assertRaisesRegex(ValueError, "push-to-talk"):
-            map_session_update_to_flat_config({"turn_detection": None})
-        with self.assertRaisesRegex(ValueError, "server_vad"):
-            map_session_update_to_flat_config({"turn_detection": {"type": "semantic_vad"}})
-        with self.assertRaisesRegex(ValueError, "tuning is not supported"):
-            map_session_update_to_flat_config({"turn_detection": {"type": "server_vad", "threshold": 0.5}})
-
-    def test_temperature_maps_to_llm_temperature(self) -> None:
-        flat = map_session_update_to_flat_config({"temperature": 0.8})
-        self.assertEqual(flat["temperature"], 0.8)
-
-    def test_rejects_invalid_temperature(self) -> None:
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"temperature": "hot"})
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"temperature": -1})
-
-    def test_rejects_text_only_modalities(self) -> None:
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"output_modalities": ["text"]})
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"modalities": ["text"]})
-
-    def test_audio_and_text_modalities_ok(self) -> None:
-        flat = map_session_update_to_flat_config(
-            {"output_modalities": ["audio", "text"], "modalities": ["text", "audio"]}
-        )
-        self.assertEqual(flat["pipeline_mode"], DEFAULT_PIPELINE_MODE)
-
-    def test_tool_choice_string_and_realtime_object(self) -> None:
-        self.assertEqual(map_session_update_to_flat_config({"tool_choice": "auto"})["tool_choice"], "auto")
         self.assertEqual(
-            map_session_update_to_flat_config({"tool_choice": {"type": "function", "name": "get_weather"}})[
-                "tool_choice"
-            ],
-            {"type": "function", "function": {"name": "get_weather"}},
-        )
-        self.assertEqual(
-            map_session_update_to_flat_config(
-                {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
-            )["tool_choice"],
-            {"type": "function", "function": {"name": "get_weather"}},
+            updated["audio"]["input"]["turn_detection"],
+            {**SERVER_VAD_DEFAULTS, "threshold": 0.65},
         )
 
-    def test_rejects_invalid_tool_choice(self) -> None:
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"tool_choice": "sometimes"})
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"tool_choice": {"type": "function"}})
-
-
-class RealtimeSessionApplyTests(unittest.TestCase):
-    def test_apply_update_reflects_sanitized_nvidia(self) -> None:
-        session = RealtimeSession()
-        public = session.apply_update(
-            {
-                "instructions": "Hello",
-                "nvidia": {"pipeline_mode": "generic-assistant", "llm_id": "cloud-nim:x"},
-            },
-            sanitized_flat={
-                "pipeline_mode": "generic-assistant",
-                "llm_id": "cloud-nim:x",
-                "model_id": "hydrated-model",
-                "prompt_key": DEFAULT_PROMPT_KEY,
-                "prompt_content": "Hello",
-            },
+    def test_semantic_vad_accepts_auto_and_response_controls_only(self) -> None:
+        capabilities = _capabilities(
+            turn_detection_types=frozenset({"semantic_vad"}),
+            default_turn_detection_type="semantic_vad",
         )
-        self.assertEqual(public["instructions"], "Hello")
-        self.assertEqual(public["nvidia"]["pipeline_mode"], "generic-assistant")
-        self.assertEqual(public["nvidia"]["model_id"], "hydrated-model")
-        self.assertEqual(public["nvidia"]["prompt_key"], DEFAULT_PROMPT_KEY)
+        session = _session(capabilities=capabilities)
+        config = {
+            "type": "semantic_vad",
+            "eagerness": "auto",
+            "create_response": False,
+            "interrupt_response": False,
+        }
+        updated = session.apply_update({"audio": {"input": {"turn_detection": config}}})
+        self.assertEqual(updated["audio"]["input"]["turn_detection"], config)
 
-    def test_apply_update_strips_example_specific_nvidia_keys(self) -> None:
-        session = RealtimeSession()
-        public = session.apply_update(
-            {
-                "nvidia": {
-                    "pipeline_mode": "frontend-backend-agent",
-                    "thinker_llm_id": "cloud-nim:x",
+        for eagerness, code in (
+            ("low", "unsupported_capability"),
+            ("medium", "unsupported_capability"),
+            (1, "invalid_type"),
+        ):
+            with self.subTest(eagerness=eagerness), self.assertRaises(RealtimeProtocolError) as raised:
+                session.apply_update(
+                    {
+                        "audio": {
+                            "input": {
+                                "turn_detection": {
+                                    "type": "semantic_vad",
+                                    "eagerness": eagerness,
+                                }
+                            }
+                        }
+                    }
+                )
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.param, "session.audio.input.turn_detection.eagerness")
+
+        with self.assertRaises(RealtimeProtocolError) as cross_mode:
+            session.apply_update(
+                {
+                    "audio": {
+                        "input": {
+                            "turn_detection": {
+                                "type": "semantic_vad",
+                                "threshold": 0.5,
+                            }
+                        }
+                    }
                 }
-            },
-            sanitized_flat={"pipeline_mode": "frontend-backend-agent"},
-        )
-        self.assertEqual(public["nvidia"]["pipeline_mode"], "frontend-backend-agent")
-        self.assertNotIn("thinker_llm_id", public["nvidia"])
+            )
+        self.assertEqual(cross_mode.exception.code, "unknown_parameter")
+        self.assertEqual(cross_mode.exception.param, "session.audio.input.turn_detection.threshold")
 
-    def test_public_nvidia_omits_service_endpoints(self) -> None:
-        session = RealtimeSession()
-        public = session.apply_update(
-            {"nvidia": {"pipeline_mode": "generic-assistant"}},
-            sanitized_flat={
-                "pipeline_mode": "generic-assistant",
-                "prompt_key": DEFAULT_PROMPT_KEY,
-                "base_url": "https://internal.example/v1",
-                "asr_server": "asr.internal:443",
-                "tts_server": "tts.internal:443",
-                "asr_function_id": "asr-fn",
-                "tts_function_id": "tts-fn",
-                "llm_id": "cloud-nim:nemotron-lightning",
-            },
+    def test_turn_detection_response_controls_are_capability_gated_by_value(self) -> None:
+        capabilities = _capabilities(
+            turn_detection_create_response_values=frozenset({True}),
+            turn_detection_interrupt_response_values=frozenset({True}),
         )
-        nvidia = public["nvidia"]
-        self.assertEqual(nvidia["llm_id"], "cloud-nim:nemotron-lightning")
-        for key in ("base_url", "asr_server", "tts_server", "asr_function_id", "tts_function_id"):
-            self.assertNotIn(key, nvidia)
-
-    def test_public_nvidia_includes_server_tool_metadata(self) -> None:
-        session = RealtimeSession()
-        public = session.apply_update(
-            {},
-            sanitized_flat={
-                "pipeline_mode": "generic-assistant",
-                "prompt_key": DEFAULT_PROMPT_KEY,
-                "server_tools": ["get_weather", "set_memory"],
-            },
-        )
-        self.assertEqual(public["tools"], [])
-        self.assertEqual(public["nvidia"]["server_tools"], ["get_weather", "set_memory"])
-
-    def test_apply_update_canonicalizes_legacy_audio_fields(self) -> None:
-        session = RealtimeSession()
-        public = session.apply_update(
+        session = _session(capabilities=capabilities)
+        accepted = session.apply_update(
             {
-                "input_audio_format": {"type": "audio/pcm", "rate": 16000},
-                "output_audio_format": {"type": "audio/pcm", "rate": 48000},
-                "input_audio_transcription": {"model": "whisper-1"},
-                "turn_detection": {"type": "server_vad"},
-            },
-            sanitized_flat={
-                "pipeline_mode": "generic-assistant",
-                "prompt_key": DEFAULT_PROMPT_KEY,
-            },
+                "audio": {
+                    "input": {
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "create_response": True,
+                            "interrupt_response": True,
+                        }
+                    }
+                }
+            }
         )
-        self.assertEqual(public["audio"]["input"]["format"]["rate"], 16000)
-        self.assertEqual(public["audio"]["output"]["format"]["rate"], 48000)
-        self.assertEqual(
-            public["audio"]["input"]["transcription"],
-            {"model": "whisper-1"},
+        self.assertTrue(accepted["audio"]["input"]["turn_detection"]["create_response"])
+
+        for name in ("create_response", "interrupt_response"):
+            with self.subTest(name=name), self.assertRaises(RealtimeProtocolError) as raised:
+                session.apply_update({"audio": {"input": {"turn_detection": {"type": "server_vad", name: False}}}})
+            self.assertEqual(raised.exception.code, "unsupported_capability")
+            self.assertEqual(raised.exception.param, f"session.audio.input.turn_detection.{name}")
+
+    def test_transcription_selectors_require_exact_backend_capabilities(self) -> None:
+        session = _session(input_transcription_model="nvidia-asr")
+        same = session.apply_update({"audio": {"input": {"transcription": {"model": "nvidia-asr"}}}})
+        self.assertEqual(same["audio"]["input"]["transcription"], {"model": "nvidia-asr"})
+
+        with self.assertRaises(RealtimeProtocolError) as changed:
+            session.apply_update({"audio": {"input": {"transcription": {"model": "whisper-1"}}}})
+        self.assertEqual(changed.exception.code, "unsupported_capability")
+
+        configurable = _session(
+            capabilities=_capabilities(
+                input_transcription_models=frozenset({"whisper-1"}),
+                input_transcription_language_aliases=(("en", "en-US"), ("en-us", "en-US")),
+            )
         )
-        self.assertEqual(
-            public["audio"]["input"]["turn_detection"],
-            {"type": "server_vad"},
+        updated = configurable.apply_update(
+            {"audio": {"input": {"transcription": {"model": "whisper-1", "language": "en"}}}}
+        )
+        self.assertEqual(updated["audio"]["input"]["transcription"]["model"], "whisper-1")
+        self.assertEqual(updated["audio"]["input"]["transcription"]["language"], "en-US")
+
+        with self.assertRaises(RealtimeProtocolError) as unsupported_language:
+            configurable.apply_update({"audio": {"input": {"transcription": {"model": "whisper-1", "language": "es"}}}})
+        self.assertEqual(unsupported_language.exception.code, "unsupported_capability")
+
+    def test_current_transcription_options_are_recognized_and_fail_explicitly(self) -> None:
+        session = _session(input_transcription_model="nvidia-asr")
+        cases = (
+            ("delay", "low"),
+            ("keywords", ["NVIDIA", "Nemotron"]),
+            ("languages", ["en", "hi"]),
         )
 
-    def test_rejects_bool_and_truncated_max_output_tokens(self) -> None:
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"max_output_tokens": True})
-        with self.assertRaises(ValueError):
-            map_session_update_to_flat_config({"max_output_tokens": 2.9})
+        for name, value in cases:
+            param = f"session.audio.input.transcription.{name}"
+            with self.subTest(name=name), self.assertRaises(RealtimeProtocolError) as raised:
+                session.apply_update(
+                    {
+                        "audio": {
+                            "input": {
+                                "transcription": {
+                                    "model": "nvidia-asr",
+                                    name: value,
+                                }
+                            }
+                        }
+                    }
+                )
+            self.assertEqual(raised.exception.code, "unsupported_capability")
+            self.assertEqual(raised.exception.param, param)
+
+        invalid_cases = (
+            ("delay", 1, "invalid_type"),
+            ("delay", "fastest", "invalid_value"),
+            ("keywords", "NVIDIA", "invalid_type"),
+            ("keywords", [""], "invalid_value"),
+            ("languages", [1], "invalid_value"),
+        )
+        for name, value, code in invalid_cases:
+            with self.subTest(name=name, value=value), self.assertRaises(RealtimeProtocolError) as raised:
+                session.apply_update(
+                    {
+                        "audio": {
+                            "input": {
+                                "transcription": {
+                                    "model": "nvidia-asr",
+                                    name: value,
+                                }
+                            }
+                        }
+                    }
+                )
+            self.assertEqual(raised.exception.code, code)
+
+    def test_optional_ga_features_fail_with_explicit_capability_errors(self) -> None:
+        cases = (
+            {"prompt": {"id": "pmpt_123"}},
+            {"reasoning": {"effort": "medium"}},
+            {"include": ["item.input_audio_transcription.logprobs"]},
+            {"tracing": {"workflow_name": "voice"}},
+            {"truncation": "auto"},
+        )
+        for patch in cases:
+            with self.subTest(patch=patch), self.assertRaises(RealtimeProtocolError) as raised:
+                _session().apply_update(patch)
+            self.assertEqual(raised.exception.code, "unsupported_capability")
+
+    def test_truncation_defaults_to_auto_and_validates_retention_ratio(self) -> None:
+        session = _session(capabilities=_capabilities(truncation=True))
+
+        self.assertEqual(session.public_view()["truncation"], "auto")
+        updated = session.apply_update(
+            {
+                "truncation": {
+                    "type": "retention_ratio",
+                    "retention_ratio": 0.8,
+                    "token_limits": {"post_instructions": 2048},
+                }
+            }
+        )
+        self.assertEqual(
+            updated["truncation"],
+            {
+                "type": "retention_ratio",
+                "retention_ratio": 0.8,
+                "token_limits": {"post_instructions": 2048},
+            },
+        )
+        self.assertEqual(session.apply_update({"truncation": "disabled"})["truncation"], "disabled")
+        self.assertEqual(
+            session.apply_update(
+                {"truncation": {"type": "retention_ratio", "retention_ratio": 0.8, "token_limits": {}}}
+            )["truncation"]["token_limits"],
+            {},
+        )
+
+        for value, code, param in (
+            ("oldest", "invalid_value", "session.truncation"),
+            (
+                {"type": "retention_ratio", "retention_ratio": 1.1},
+                "invalid_value",
+                "session.truncation.retention_ratio",
+            ),
+            (
+                {"type": "retention_ratio", "retention_ratio": True},
+                "invalid_type",
+                "session.truncation.retention_ratio",
+            ),
+            (
+                {"type": "retention_ratio", "retention_ratio": 0.8, "token_limits": {"post_instructions": 0}},
+                "invalid_value",
+                "session.truncation.token_limits.post_instructions",
+            ),
+            (
+                {"type": "retention_ratio", "retention_ratio": 0.8, "token_limits": {"post_instructions": None}},
+                "invalid_type",
+                "session.truncation.token_limits.post_instructions",
+            ),
+        ):
+            with self.subTest(value=value), self.assertRaises(RealtimeProtocolError) as raised:
+                session.apply_update({"truncation": value})
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.param, param)
+
+    def test_nullable_optional_ga_fields_accept_exact_no_ops(self) -> None:
+        session = _session()
+
+        updated = session.apply_update({"prompt": None, "tracing": None})
+
+        self.assertIsNone(updated["prompt"])
+        self.assertNotIn("tracing", updated)
+        with self.assertRaises(RealtimeProtocolError) as prompt_error:
+            session.apply_update({"prompt": {"id": "pmpt_123"}})
+        self.assertEqual(prompt_error.exception.code, "unsupported_capability")
+        with self.assertRaises(RealtimeProtocolError) as tracing_error:
+            session.apply_update({"tracing": "auto"})
+        self.assertEqual(tracing_error.exception.code, "unsupported_capability")
+
+    def test_voice_locks_after_output_audio_starts(self) -> None:
+        capabilities = _capabilities(voices=frozenset({VOICE, SECOND_VOICE}))
+        session = _session(capabilities=capabilities)
+        self.assertEqual(
+            session.apply_update({"audio": {"output": {"voice": SECOND_VOICE}}})["audio"]["output"]["voice"],
+            SECOND_VOICE,
+        )
+
+        session.begin_response("resp_1")
+        session.mark_output_audio_started("resp_1")
+        session.finish_response("resp_1")
+        with self.assertRaises(RealtimeProtocolError) as raised:
+            session.apply_update({"audio": {"output": {"voice": VOICE}}})
+        self.assertEqual(raised.exception.code, "immutable_field")
+
+    def test_output_speed_requires_backend_support_and_response_boundary(self) -> None:
+        with self.assertRaises(RealtimeProtocolError) as unsupported:
+            _session().apply_update({"audio": {"output": {"speed": 1.25}}})
+        self.assertEqual(unsupported.exception.code, "unsupported_capability")
+
+        session = _session(capabilities=_capabilities(supports_output_speed=True))
+        self.assertEqual(
+            session.apply_update({"audio": {"output": {"speed": 1.25}}})["audio"]["output"]["speed"],
+            1.25,
+        )
+        session.begin_response("resp_1")
+        with self.assertRaises(RealtimeProtocolError) as active:
+            session.apply_update({"audio": {"output": {"speed": 1.0}}})
+        self.assertEqual(active.exception.code, "immutable_field")
+
+
+class RealtimeSessionControllerTests(unittest.TestCase):
+    def test_created_events_and_public_nvidia_view_are_canonical(self) -> None:
+        runtime = {
+            "pipeline_mode": "generic-assistant",
+            "model_id": MODEL,
+            "tts_voice_id": VOICE,
+            "llm_id": "cloud-nim:nemotron-lightning",
+            "base_url": "https://internal.example/v1",
+            "asr_server": "asr.internal:443",
+            "tts_server": "tts.internal:443",
+            "asr_function_id": "asr-private-function",
+            "tts_function_id": "tts-private-function",
+        }
+        controller = RealtimeSessionController(
+            model=MODEL,
+            voice=VOICE,
+            runtime_config=runtime,
+            server_tools=["get_weather"],
+            delegate_tools=["call_backend"],
+            capabilities=_capabilities(),
+        )
+
+        created = controller.created_events()
+        self.assertEqual([event["type"] for event in created], [SERVER_SESSION_CREATED, SERVER_CONVERSATION_CREATED])
+        public = created[0]["session"]
+        self.assertEqual(public["nvidia"]["pipeline_mode"], "generic-assistant")
+        self.assertEqual(public["nvidia"]["server_tools"], ["get_weather"])
+        self.assertEqual(public["nvidia"]["delegate_tools"], ["call_backend"])
+        for key in (
+            "base_url",
+            "asr_server",
+            "tts_server",
+            "asr_function_id",
+            "tts_function_id",
+        ):
+            self.assertNotIn(key, public["nvidia"])
+
+    def test_controller_applies_standard_updates_without_mutating_runtime_routing(self) -> None:
+        runtime = {"pipeline_mode": "generic-assistant", "model_id": MODEL, "tts_voice_id": VOICE}
+        controller = RealtimeSessionController(
+            model=MODEL,
+            voice=VOICE,
+            runtime_config=runtime,
+            capabilities=_capabilities(),
+        )
+
+        event = controller.apply_session_update({"instructions": "New instructions", "output_modalities": ["text"]})
+
+        self.assertEqual(event["type"], SERVER_SESSION_UPDATED)
+        self.assertEqual(event["session"]["instructions"], "New instructions")
+        self.assertEqual(event["session"]["output_modalities"], ["text"])
+        self.assertEqual(controller.runtime_config, runtime)
+
+    def test_turn_detection_accessors_expose_defaults_and_detached_initial_config(self) -> None:
+        controller = RealtimeSessionController(
+            model=MODEL,
+            voice=VOICE,
+            runtime_config={"pipeline_mode": "generic-assistant"},
+            capabilities=_capabilities(),
+        )
+        self.assertEqual(controller.turn_detection_config, SERVER_VAD_DEFAULTS)
+        self.assertTrue(controller.automatic_response_enabled)
+        self.assertTrue(controller.interrupt_response_enabled)
+        self.assertEqual(controller.server_vad_prefix_padding_ms, 300)
+
+        controller.apply_session_update(
+            {
+                "audio": {
+                    "input": {
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.7,
+                            "prefix_padding_ms": 125,
+                            "silence_duration_ms": 450,
+                            "create_response": False,
+                            "interrupt_response": False,
+                        }
+                    }
+                }
+            }
+        )
+        config = controller.turn_detection_config
+        assert config is not None
+        config["prefix_padding_ms"] = 999
+        self.assertEqual(controller.server_vad_prefix_padding_ms, 125)
+        self.assertFalse(controller.automatic_response_enabled)
+        self.assertFalse(controller.interrupt_response_enabled)
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
-    def test_subprotocol_does_not_echo_api_key_token(self) -> None:
-        from types import SimpleNamespace
-
-        ws = SimpleNamespace(
+    def test_only_canonical_realtime_subprotocol_is_negotiated(self) -> None:
+        beta_only = SimpleNamespace(
             headers={"sec-websocket-protocol": "openai-insecure-api-key.sk-secret,openai-beta.realtime-v1"}
         )
-        self.assertIsNone(_select_realtime_subprotocol(ws))  # type: ignore[arg-type]
-        ws2 = SimpleNamespace(headers={"sec-websocket-protocol": "openai-insecure-api-key.sk-secret,realtime"})
-        self.assertEqual(_select_realtime_subprotocol(ws2), "realtime")  # type: ignore[arg-type]
+        canonical = SimpleNamespace(headers={"sec-websocket-protocol": "openai-insecure-api-key.sk-secret,realtime"})
 
-    def test_beta_event_dialect_is_detected_from_browser_subprotocols(self) -> None:
-        from types import SimpleNamespace
+        self.assertIsNone(_select_realtime_subprotocol(beta_only))  # type: ignore[arg-type]
+        self.assertEqual(_select_realtime_subprotocol(canonical), "realtime")  # type: ignore[arg-type]
 
-        beta = SimpleNamespace(
-            headers={"sec-websocket-protocol": ("realtime,openai-insecure-api-key.null,openai-beta.realtime-v1")}
+    async def test_session_lifetime_covers_pipeline_handoff_and_closes_cleanly(self) -> None:
+        pipeline_started = False
+
+        async def start_bot(ws: Any, config: dict[str, Any], controller: RealtimeSessionController) -> None:  # noqa: ARG001
+            nonlocal pipeline_started
+            pipeline_started = True
+            await asyncio.Event().wait()
+
+        ws = FakeWebSocket([json.dumps({"type": "response.create"})])
+
+        await handle_realtime_websocket(
+            ws,
+            sanitize_session_config=_sanitize_runtime,
+            start_bot=start_bot,
+            session_max_duration_secs=0.01,
         )
-        ga = SimpleNamespace(headers={"sec-websocket-protocol": "realtime"})
-        self.assertTrue(_prefers_beta_event_names(beta))  # type: ignore[arg-type]
-        self.assertFalse(_prefers_beta_event_names(ga))  # type: ignore[arg-type]
 
-    async def test_transport_emits_only_requested_event_dialect(self) -> None:
-        canonical = {"type": "response.output_audio.delta", "delta": "AA=="}
-        beta_alias = {"type": "response.audio.delta", "delta": "AA=="}
+        self.assertTrue(pipeline_started)
+        self.assertTrue(ws.closed)
+        self.assertEqual(ws.close_code, 1000)
+        self.assertEqual(ws.close_reason, "realtime session expired")
 
-        ga_ws = FakeWebSocket([])
-        ga_ws.headers["sec-websocket-protocol"] = "realtime"
-        ga_transport = create_realtime_transport(ga_ws)  # type: ignore[arg-type]
-        ga_emit = ga_transport._realtime_serializer.emit  # type: ignore[attr-defined]
-        await ga_emit(canonical)
-        await ga_emit(beta_alias)
-        self.assertEqual([event["type"] for event in ga_ws.sent], ["response.output_audio.delta"])
+    async def test_invalid_json_returns_structured_error_after_created_events(self) -> None:
+        ws = FakeWebSocket(["{not-json"])
 
-        beta_ws = FakeWebSocket([])
-        beta_ws.headers["sec-websocket-protocol"] = "openai-beta.realtime-v1"
-        beta_transport = create_realtime_transport(beta_ws)  # type: ignore[arg-type]
-        beta_emit = beta_transport._realtime_serializer.emit  # type: ignore[attr-defined]
-        await beta_emit(canonical)
-        await beta_emit(beta_alias)
-        self.assertEqual([event["type"] for event in beta_ws.sent], ["response.audio.delta"])
+        await handle_realtime_websocket(ws, sanitize_session_config=_sanitize_runtime)  # type: ignore[arg-type]
 
-    async def test_session_created_then_updated(self) -> None:
+        self.assertEqual(ws.sent[0]["type"], SERVER_SESSION_CREATED)
+        self.assertEqual(ws.sent[1]["type"], SERVER_CONVERSATION_CREATED)
+        self.assertEqual(ws.sent[2]["type"], SERVER_ERROR)
+        self.assertEqual(ws.sent[2]["error"]["code"], "invalid_json")
+
+    async def test_initial_event_envelope_rejects_unknown_root_fields_and_allows_retry(self) -> None:
         ws = FakeWebSocket(
             [
                 json.dumps(
                     {
                         "type": "session.update",
-                        "event_id": "client_1",
-                        "session": {
-                            "instructions": "Speak briefly.",
-                            "nvidia": {
-                                "pipeline_mode": "generic-assistant",
-                                "llm_id": "cloud-nim:nemotron-lightning",
-                            },
-                        },
+                        "event_id": "bad_root",
+                        "session": {"type": "realtime"},
+                        "unexpected": True,
                     }
-                )
+                ),
+                json.dumps({"type": "session.update", "session": {"type": "realtime"}}),
             ]
         )
 
-        def sanitize(data: dict, fallback_example_key: str = "") -> dict:
-            out = dict(data)
-            out.setdefault("pipeline_mode", "generic-assistant")
-            out["model_id"] = "from-sanitize"
-            out["prompt_key"] = out.get("prompt_key") or DEFAULT_PROMPT_KEY
-            return out
+        await handle_realtime_websocket(ws, sanitize_session_config=_sanitize_runtime)
 
-        with patch("realtime.gateway.resolve_realtime_tts_voice", return_value=None):
-            await handle_realtime_websocket(ws, sanitize_session_config=sanitize)
+        self.assertEqual(ws.sent[2]["type"], SERVER_ERROR)
+        self.assertEqual(ws.sent[2]["error"]["code"], "unknown_parameter")
+        self.assertEqual(ws.sent[2]["error"]["param"], "unexpected")
+        self.assertEqual(ws.sent[2]["error"]["event_id"], "bad_root")
+        self.assertEqual(ws.sent[3]["type"], SERVER_SESSION_UPDATED)
 
-        self.assertTrue(ws.accepted)
-        self.assertGreaterEqual(len(ws.sent), 2)
-        self.assertEqual(ws.sent[0]["type"], SERVER_SESSION_CREATED)
-        self.assertIn("session", ws.sent[0])
-        self.assertEqual(ws.sent[0]["session"]["nvidia"]["pipeline_mode"], "generic-assistant")
-
-        self.assertEqual(ws.sent[1]["type"], SERVER_SESSION_UPDATED)
-        self.assertEqual(ws.sent[1]["session"]["instructions"], "Speak briefly.")
-        self.assertEqual(ws.sent[1]["session"]["nvidia"]["llm_id"], "cloud-nim:nemotron-lightning")
-        self.assertEqual(ws.sent[1]["session"]["nvidia"]["model_id"], "from-sanitize")
-
-    async def test_unsupported_event_returns_error(self) -> None:
+    async def test_initial_event_id_length_is_bounded_and_retryable(self) -> None:
         ws = FakeWebSocket(
             [
                 json.dumps(
                     {
-                        "type": "input_audio_buffer.append",
-                        "event_id": "client_audio",
-                        "audio": "AAAA",
+                        "type": "session.update",
+                        "event_id": "x" * 513,
+                        "session": {"type": "realtime"},
                     }
-                )
+                ),
+                json.dumps({"type": "session.update", "session": {"type": "realtime"}}),
             ]
         )
 
-        await handle_realtime_websocket(ws, sanitize_session_config=lambda data, **_: dict(data))
+        await handle_realtime_websocket(ws, sanitize_session_config=_sanitize_runtime)
 
-        self.assertEqual(ws.sent[0]["type"], SERVER_SESSION_CREATED)
-        self.assertEqual(ws.sent[1]["type"], SERVER_ERROR)
-        self.assertEqual(ws.sent[1]["error"]["code"], "unsupported_event")
-        self.assertEqual(ws.sent[1]["error"]["event_id"], "client_audio")
+        self.assertEqual(ws.sent[2]["type"], SERVER_ERROR)
+        self.assertEqual(ws.sent[2]["error"]["code"], "invalid_value")
+        self.assertEqual(ws.sent[2]["error"]["param"], "event_id")
+        self.assertNotIn("event_id", ws.sent[2]["error"])
+        self.assertEqual(ws.sent[3]["type"], SERVER_SESSION_UPDATED)
 
-    async def test_invalid_json_returns_error(self) -> None:
-        ws = FakeWebSocket(["{not-json"])
-        await handle_realtime_websocket(ws, sanitize_session_config=lambda data, **_: dict(data))
-        self.assertEqual(ws.sent[1]["type"], SERVER_ERROR)
-        self.assertEqual(ws.sent[1]["error"]["code"], "invalid_json")
+    async def test_pre_ga_session_field_is_rejected_without_handoff(self) -> None:
+        started = False
 
+        async def start_bot(ws: Any, config: dict[str, Any], controller: RealtimeSessionController) -> None:  # noqa: ARG001
+            nonlocal started
+            started = True
 
-class LiveSessionUpdateFieldTests(unittest.TestCase):
-    def test_voice_is_live_and_turn_detection_is_immutable(self) -> None:
-        current = {
-            "audio": {
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": 24000},
-                    "turn_detection": {"type": "server_vad"},
-                }
-            }
-        }
-        self.assertEqual(
-            unsupported_live_session_fields(
-                {
-                    "voice": "Magpie-Multilingual.EN-US.Aria",
-                    "audio": {
-                        "input": {
-                            "format": {"type": "audio/pcm", "rate": 24000},
-                            "turn_detection": {"type": "server_vad"},
-                        },
-                        "output": {"voice": "Magpie-Multilingual.EN-US.Aria"},
-                    },
-                },
-                current=current,
-            ),
-            [],
-        )
-        bad = unsupported_live_session_fields(
-            {"turn_detection": None},
-            current=current,
-        )
-        self.assertIn("turn_detection", bad)
-
-    def test_echoed_agent_fields_allowed_when_unchanged(self) -> None:
-        current = {
-            "instructions": "Be brief.",
-            "tools": [{"type": "function", "name": "get_weather"}],
-            "temperature": 0.8,
-            "nvidia": {"pipeline_mode": "generic-assistant"},
-            "audio": {"input": {"turn_detection": {"type": "server_vad"}}},
-        }
-        self.assertEqual(
-            unsupported_live_session_fields(
-                {
-                    "instructions": "Be brief.",
-                    "tools": [{"type": "function", "name": "get_weather"}],
-                    "temperature": 0.8,
-                    "turn_detection": {"type": "server_vad"},
-                    "nvidia": {"pipeline_mode": "generic-assistant"},
-                },
-                current=current,
-            ),
-            [],
+        ws = FakeWebSocket(
+            [json.dumps({"type": "session.update", "event_id": "pre_ga_1", "session": {"voice": VOICE}})]
         )
 
-    def test_new_non_live_field_rejected_when_absent(self) -> None:
-        bad = unsupported_live_session_fields(
-            {"temperature": 0.8},
-            current={"instructions": "Be brief."},
-        )
-        self.assertIn("temperature", bad)
-
-    def test_changed_instructions_tools_nvidia_rejected(self) -> None:
-        current = {
-            "instructions": "old",
-            "tools": [],
-            "nvidia": {"pipeline_mode": "generic-assistant"},
-        }
-        bad = unsupported_live_session_fields(
-            {
-                "instructions": "new",
-                "tools": [{"type": "function", "name": "get_weather"}],
-                "nvidia": {"pipeline_mode": "omni-assistant"},
-            },
-            current=current,
-        )
-        self.assertEqual(set(bad), {"instructions", "tools", "nvidia.pipeline_mode"})
-
-    def test_non_null_transcription_is_accepted_noop(self) -> None:
-        bad = unsupported_live_session_fields(
-            {"audio": {"input": {"transcription": {"model": "whisper-1"}}}},
-            current={},
-        )
-        self.assertEqual(bad, [])
-
-    def test_null_transcription_allowed(self) -> None:
-        self.assertEqual(
-            unsupported_live_session_fields(
-                {"audio": {"input": {"transcription": None}}},
-                current={},
-            ),
-            [],
+        await handle_realtime_websocket(
+            ws,  # type: ignore[arg-type]
+            sanitize_session_config=_sanitize_runtime,
+            start_bot=start_bot,
         )
 
+        self.assertFalse(started)
+        error = ws.sent[2]
+        self.assertEqual(error["type"], SERVER_ERROR)
+        self.assertEqual(error["error"]["code"], "unknown_parameter")
+        self.assertEqual(error["error"]["param"], "session.voice")
+        self.assertEqual(error["error"]["event_id"], "pre_ga_1")
 
-class SanitizeIntegrationTests(unittest.TestCase):
-    """Exercise mapping through the real catalog sanitize path (no server import)."""
-
-    def test_sanitize_with_generic_catalog(self) -> None:
-        from pathlib import Path
-
-        import examples_registry
-        from utils import clear_service_context, filter_session_config, set_service_context
-
-        flat = map_session_update_to_flat_config(
-            {
-                "instructions": "Be helpful.",
-                "nvidia": {"pipeline_mode": "generic-assistant"},
-            }
+    async def test_nvidia_routing_is_immutable_and_retryable(self) -> None:
+        ws = FakeWebSocket(
+            [
+                json.dumps(
+                    {
+                        "type": "session.update",
+                        "event_id": "bad_route",
+                        "session": {"nvidia": {"model_id": "attacker-controlled-model"}},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "session.update",
+                        "event_id": "good_route",
+                        "session": {"nvidia": {"model_id": MODEL}},
+                    }
+                ),
+            ]
         )
-        example = examples_registry.find("generic-assistant")
-        if not flat.get("prompt_key") and not flat.get("prompt_content"):
-            prompt_key = examples_registry.prompt_default_key(example["key"])
-            if prompt_key:
-                flat["prompt_key"] = prompt_key
-        set_service_context(Path("src/examples/generic"), example.get("slots") or None)
-        try:
-            sanitized = filter_session_config(flat)
-            self.assertEqual(sanitized.get("pipeline_mode"), "generic-assistant")
-            self.assertEqual(sanitized.get("prompt_content"), "Be helpful.")
-            self.assertNotEqual(sanitized.get("system_prompt"), "Be helpful.")
-        finally:
-            clear_service_context()
+
+        await handle_realtime_websocket(ws, sanitize_session_config=_sanitize_runtime)  # type: ignore[arg-type]
+
+        self.assertEqual(ws.sent[2]["type"], SERVER_ERROR)
+        self.assertEqual(ws.sent[2]["error"]["code"], "immutable_field")
+        self.assertEqual(ws.sent[2]["error"]["event_id"], "bad_route")
+        self.assertEqual(ws.sent[3]["type"], SERVER_SESSION_UPDATED)
 
 
 if __name__ == "__main__":

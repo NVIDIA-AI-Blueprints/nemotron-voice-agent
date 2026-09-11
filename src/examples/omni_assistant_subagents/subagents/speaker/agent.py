@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import aclosing
 from typing import Any
 
 from loguru import logger
@@ -20,6 +21,9 @@ from pipecat.services.llm_service import LLMService
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
     NvidiaOmniLLMService,
     NvidiaOmniSettings,
+    RealtimeResponseReservationHook,
+    RealtimeResponseReservationReleaseHook,
+    RealtimeResponseSnapshotHook,
     text_message_part,
 )
 from examples.omni_assistant_subagents.subagents.speaker.action_envelope import (
@@ -38,7 +42,8 @@ from examples.omni_assistant_subagents.subagents.speaker.action_envelope import 
 from examples.omni_assistant_subagents.subagents.speaker.json_stream import JsonStringFieldStreamer
 from examples.omni_assistant_subagents.subagents.speaker.repeat_guard import RepeatGuard, is_affirmation
 from examples.shared.json_parsing import extract_json_object
-from utils import parse_env_float, parse_env_int
+from examples.shared.pipeline_utils import build_pipeline_params
+from utils import parse_env_float
 
 _CAPTURE_ESCALATION_COOLDOWN = 3
 _ACTION_CORRECTION_MAX_TOKENS = 2048
@@ -166,18 +171,111 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
             An async iterator whose visible content is only the envelope's
             spoken ``response`` field.
         """
+        from realtime.frames import RealtimeResponseLLMContext
+
         stream = await super().get_chat_completions(context)
-        return self._stream_action_envelope(stream)
+        return self._stream_action_envelope(
+            stream,
+            validate_before_release=isinstance(context, RealtimeResponseLLMContext),
+        )
 
     async def _stream_action_envelope(
-        self, stream: AsyncIterator[ChatCompletionChunk]
+        self,
+        stream: AsyncIterator[ChatCompletionChunk],
+        *,
+        validate_before_release: bool | None = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
-        """Speak the ``response`` field as it streams, then own the parsed turn.
+        """Expose the response field using the lifecycle required by the protocol."""
+        if validate_before_release is None:
+            validate_before_release = getattr(self, "_realtime_response_snapshot_hook", None) is not None
+        envelope_stream = (
+            self._validated_action_envelope(stream)
+            if validate_before_release
+            else self._streaming_action_envelope(stream)
+        )
+        async for chunk in envelope_stream:
+            yield chunk
 
-        The envelope declares ``turn_action`` before ``response``, so ownership is
-        known by the time there is anything to say. If it is not, nothing is
-        streamed and the fully parsed envelope decides what the Speaker says.
+    async def _validated_action_envelope(
+        self,
+        stream: AsyncIterator[ChatCompletionChunk],
+    ) -> AsyncIterator[ChatCompletionChunk]:
+        """Buffer Realtime speech until the complete action is validated.
+
+        Fields after ``response`` can still contradict the declared owner or
+        prove that a requested attachment is unavailable.  Returning any raw
+        response delta would make provisional text observable to the Realtime
+        client, where it cannot be retracted.
+
+        Stop at the provider's terminal chunk before resolving the envelope.
+        The wrapped NVIDIA stream publishes its ordered completion-reason frame
+        only when iteration resumes, so validated text remains ahead of that
+        terminal and ``response.done`` cannot overtake response content.
         """
+        transcript_field = JsonStringFieldStreamer("transcript")
+        transcript_text = ""
+        raw_content = ""
+        transcript_emitted = False
+        self._repeat.reset()
+
+        async with aclosing(stream.__aiter__()) as iterator:
+            terminal_seen = False
+            async for chunk in iterator:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                content = delta.content if delta is not None else None
+                if content:
+                    raw_content += content
+                    if not transcript_field.done:
+                        transcript_text += transcript_field.feed(content)
+                        if transcript_field.done and transcript_text.strip() and self.current_turn_has_user_audio():
+                            transcript_emitted = True
+                            await self._emit_user_transcript(transcript_text.strip())
+                    # Keep metadata chunks flowing, but never expose raw JSON or
+                    # an unvalidated response field to the downstream text path.
+                    delta.content = None
+                yield chunk
+                if chunk.choices and chunk.choices[0].finish_reason is not None:
+                    terminal_seen = True
+                    break
+
+            if not terminal_seen:
+                raise ValueError("Speaker Omni stream ended without a provider terminal")
+
+            logger.debug(f"Speaker Omni envelope: {raw_content}")
+            result = self._parse_turn_result(raw_content)
+            # Repeat ownership affects whether the transport queues a Thinker job,
+            # so detect it before ``_resolve_turn`` dispatches the validated action.
+            # Structurally unsafe envelopes may be replaced by correction; never
+            # classify their discarded response as the owned reply.
+            repeat_filler = (
+                self._repeat.bridge_filler(result.response) if not result.payload.get("_action_fallback") else None
+            )
+            final = await self._resolve_turn(result)
+            logger.info(
+                "Speaker Omni turn: "
+                f"live_view={(self._live_view() or '<none wired>')!r}, "
+                f"heard={(final.transcript or transcript_text.strip())!r}, "
+                f"action={normalize_turn_action(final.payload.get('turn_action'))}, "
+                f"resolved={final.response.strip()!r}"
+            )
+            if final.transcript and not transcript_emitted:
+                await self._emit_user_transcript(final.transcript)
+            if repeat_filler is not None and final is result:
+                logger.info(f"Speaker Omni suppressed a verbatim repeat; bridging with filler={repeat_filler!r}")
+                await self._push_llm_text(repeat_filler)
+            else:
+                await self._speak_response(final.response)
+
+            # Drain usage-only chunks so the wrapped stream publishes its
+            # completion reason after the validated text above.
+            async for chunk in iterator:
+                yield chunk
+
+    async def _streaming_action_envelope(
+        self,
+        stream: AsyncIterator[ChatCompletionChunk],
+    ) -> AsyncIterator[ChatCompletionChunk]:
+        """Preserve the low-latency RTVI response-field streaming contract."""
         transcript_field = JsonStringFieldStreamer("transcript")
         action_field = JsonStringFieldStreamer("turn_action")
         response_field = JsonStringFieldStreamer("response")
@@ -287,6 +385,10 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         """
         return LLMService.service_metadata_frame(self)
 
+    def _has_external_audio_transcript_producer(self) -> bool:
+        """Declare the JSON envelope's transcript field as the audio producer."""
+        return True
+
     async def _emit_user_transcript(self, transcript: str) -> None:
         """Write the spoken turn into the Speaker's own context, then report it.
 
@@ -296,6 +398,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         """
         if self._context is not None:
             self._context.add_message({"role": "user", "content": transcript})
+        self._transcript_emitted = True
         await super()._emit_user_transcript(transcript)
 
     def _parse_turn_result(self, raw_content: str) -> SpeakerTurnResult:
@@ -385,11 +488,25 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         reason = str(result.payload.get("_action_recovery", "invalid or contradictory action envelope"))
         instruction = action_correction_instruction(result, reason=reason)
         try:
-            raw_correction = await self.run_inference(
-                self._context,
-                max_tokens=_ACTION_CORRECTION_MAX_TOKENS,
-                system_instruction=instruction,
-            )
+            if getattr(self, "_realtime_response_snapshot_hook", None) is None:
+                raw_correction = await self.run_inference(
+                    self._context,
+                    max_tokens=_ACTION_CORRECTION_MAX_TOKENS,
+                    system_instruction=instruction,
+                )
+            else:
+                correction = await self.run_multimodal_inference(
+                    self._context,
+                    max_tokens=_ACTION_CORRECTION_MAX_TOKENS,
+                    system_instruction=instruction,
+                )
+                if correction.finish_reason != "stop":
+                    finish_reason = correction.finish_reason
+                    logger.warning(
+                        f"Speaker Omni rejected incomplete action correction: finish_reason={finish_reason!r}"
+                    )
+                    return None
+                raw_correction = correction.text
         except Exception as exc:
             logger.warning(f"Speaker Omni action correction request failed: {exc}")
             return None
@@ -522,6 +639,7 @@ class SpeakerOmniAgent(PipelineWorker):
         api_key: str,
         base_url: str,
         model_id: str,
+        max_tokens: int | None,
         audio_response_instruction: str,
         extra_params: dict[str, Any] | None = None,
         media_analysis_prompt_handler: Callable[[str, str, str, str], Awaitable[None]] | None = None,
@@ -530,6 +648,9 @@ class SpeakerOmniAgent(PipelineWorker):
         thinking_handler: Callable[[str, str, str], Awaitable[None]] | None = None,
         highres_capture_handler: Callable[[str], Awaitable[None]] | None = None,
         visual_status_provider: Callable[[], str] | None = None,
+        pre_speech_buffer_secs: float = 0.2,
+        max_user_audio_secs: float | None = None,
+        enable_metrics: bool = False,
     ) -> None:
         """Initialize the bridged Speaker Omni agent.
 
@@ -537,6 +658,7 @@ class SpeakerOmniAgent(PipelineWorker):
         transcript (the speaker must not convert it a second time).
         """
         omni = SubagentsSpeakerOmniService(
+            name="NemotronOmniLLM",
             api_key=api_key,
             base_url=base_url,
             context=context,
@@ -547,11 +669,13 @@ class SpeakerOmniAgent(PipelineWorker):
             extra={"response_format": {"type": "json_object"}, **dict(extra_params or {})},
             settings=NvidiaOmniSettings(
                 model=model_id,
-                max_tokens=parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
+                **({"max_tokens": max_tokens} if max_tokens is not None else {}),
                 temperature=parse_env_float("OMNI_TEMPERATURE", 0.7, min_value=0.0),
                 top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
                 emit_transcriptions=False,
                 min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
+                **({"max_user_audio_secs": max_user_audio_secs} if max_user_audio_secs is not None else {}),
+                pre_speech_buffer_secs=pre_speech_buffer_secs,
             ),
             media_analysis_prompt_handler=media_analysis_prompt_handler,
             uploaded_attachment_available=uploaded_attachment_available,
@@ -561,10 +685,34 @@ class SpeakerOmniAgent(PipelineWorker):
             visual_status_provider=visual_status_provider,
             audio_response_instruction=audio_response_instruction,
         )
+        self._omni = omni
         super().__init__(
             Pipeline([omni]),
+            params=(
+                build_pipeline_params(
+                    enable_metrics=True,
+                    enable_usage_metrics=True,
+                    send_initial_empty_metrics=False,
+                )
+                if enable_metrics
+                else None
+            ),
             name=name or self.AGENT_NAME,
             active=True,
             bridged=(),
             enable_rtvi=False,
+        )
+
+    def bind_realtime_response_snapshot(
+        self,
+        hook: RealtimeResponseSnapshotHook,
+        *,
+        reserve_audio_response: RealtimeResponseReservationHook | None = None,
+        release_audio_response: RealtimeResponseReservationReleaseHook | None = None,
+    ) -> None:
+        """Bind service-originated turns to the transport worker's Realtime state."""
+        self._omni.bind_realtime_response_snapshot(
+            hook,
+            reserve_audio_response=reserve_audio_response,
+            release_audio_response=release_audio_response,
         )

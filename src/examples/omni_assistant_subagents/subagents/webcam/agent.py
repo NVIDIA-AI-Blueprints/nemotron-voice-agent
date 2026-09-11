@@ -239,6 +239,9 @@ class WebcamAgent(BaseWorker):
             temperature=self._temperature,
             stream=False,
         )
+        if result.finish_reason != "stop":
+            logger.warning(f"Ignoring incomplete WebcamAgent response: finish_reason={result.finish_reason!r}")
+            return "", normalize_visual_control({}), ""
         raw = result.text.strip()
         payload = extract_json_object(raw)
         if not payload:

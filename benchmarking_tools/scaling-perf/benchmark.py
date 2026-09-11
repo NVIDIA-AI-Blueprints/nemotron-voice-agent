@@ -26,9 +26,11 @@ The flow per turn:
   6. Server-side timing breakdowns arrive as RTVI ``message`` frames on the
      same WebSocket; they're parsed alongside the audio.
 
-When the metric window (``--metrics-start-time`` → +``--test-duration``)
-expires, the client closes the connection, writes its result JSON to
-``--result-path``, and exits.
+The wall-clock interval (``--metrics-start-time`` → +``--test-duration``)
+is a turn-admission window: eligibility is latched between turns, so a turn
+that starts while collection is enabled is recorded as a whole. After the
+interval expires and any admitted turn finishes, the client closes the
+connection, writes its result JSON to ``--result-path``, and exits.
 
 Concurrency is **not handled here.** ``simulate_concurrency.sh`` spawns N
 parallel copies with synchronized ``--metrics-start-time`` /
@@ -54,10 +56,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import copy
 import datetime as dt
+import hashlib
 import io
 import json
 import math
+import re
 import signal
 import ssl
 import struct
@@ -65,7 +70,7 @@ import sys
 import time
 import wave
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -79,17 +84,43 @@ BOT_INTRO_TIMEOUT = 5
 END_OF_RESPONSE_TIMEOUT = 3.0
 HARD_DEADLINE_BUFFER = 60
 TURN_RESPONSE_TIMEOUT = 10.0
+REALTIME_TOOL_COMPLETION_TIMEOUT = 120.0
+REALTIME_SESSION_INIT_TIMEOUT = 60.0
 SERVER_METRIC_KEYS = (
     "llm_ttft",
     "tts_ttfb",
     "asr_ttfb",
     "server_e2e",
     "vad_smart_turn",
+    "smart_turn_inference",
     "llm_processing_time",
     "llm_tokens_per_sec",
 )
+REALTIME_RESPONSE_METRIC_KEYS = (
+    "response_lifecycle",
+    "response_total_tokens",
+    "response_input_tokens",
+    "response_output_tokens",
+    "response_audio_bytes",
+)
 
 _SHUTDOWN_REQUESTED = False
+
+
+class BenchmarkAggregationError(ValueError):
+    """A malformed or internally inconsistent scaling result set."""
+
+
+def _validate_finite_numbers(value: Any, label: str) -> None:
+    """Reject non-finite JSON numbers before they can poison aggregates."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise BenchmarkAggregationError(f"{label} contains a non-finite number")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _validate_finite_numbers(child, f"{label}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _validate_finite_numbers(child, f"{label}[{index}]")
 
 
 def _signal_handler(signum, frame):
@@ -174,14 +205,14 @@ class ClientResult:
             output directory name).
         average_latency: Mean of *valid* response latencies (above the reverse
             barge-in threshold), or ``None`` when no valid turn completed
-            inside the metric window. Used by the aggregator for headline
+            with collection enabled at turn start. Used by the aggregator for headline
             averages and p95.
         individual_latencies: One entry per timed turn (seconds), including
             barge-in latencies. Useful for post-hoc analysis.
         valid_latencies: Subset of ``individual_latencies`` >=
             ``reverse_barge_in_threshold``; what averages and p95 are computed
             over.
-        num_turns: Total timed turns recorded during the metric window
+        num_turns: Total timed turns admitted during the collection interval
             (``len(individual_latencies)``).
         num_valid_turns: ``len(valid_latencies)``. The aggregator uses
             ``num_valid_turns > 0`` as the per-client success gate.
@@ -189,17 +220,26 @@ class ClientResult:
             ``--turn-response-timeout`` after input audio finished and were
             abandoned without recording a latency.
         reverse_barge_ins_count: Turns counted as reverse barge-ins
-            (latency below the threshold) inside the metric window.
+            (latency below the threshold) among admitted turns.
         glitch_detected: ``True`` when at least one output buffer underrun
             was seen during a timed turn.
         reverse_barge_in_threshold: Echoed-back configuration value (seconds).
         turn_response_timeout: Echoed-back configuration value (seconds).
-        metrics_start_time: Unix epoch when the metric window opened.
-        test_duration: Configured length of the metric window (seconds).
+        realtime_tool_timeout: Realtime-only deadline for a correlated
+            function-call output; ``None`` for RTVI.
+        metrics_start_time: Unix epoch after which the next turn enables collection.
+        test_duration: Configured length of the turn-admission interval (seconds).
         server_metrics: ``{"samples": {...}, "average": {...}, "sample_counts": {...}}``
             for each ``SERVER_METRIC_KEYS`` entry.
         rtvi_messages: Every RTVI message received during the session,
             preserved for offline post-mortem analysis.
+        protocol: Explicit wire protocol selected for this client.
+        protocol_events: Sanitized protocol event trace. Realtime audio payloads
+            are represented by sizes rather than embedded base64 data.
+        event_correlations: Client-event to server-ack/resource correlations.
+        response_transcripts: Per-turn output transcript and response IDs.
+        response_status_counts: Terminal response counts keyed by status.
+        tool_calls: Realtime function-call correlation records.
         timestamp: ISO-8601 wall-clock time when the result was written.
         error: Human-readable failure reason, or ``None`` on success.
     """
@@ -215,12 +255,20 @@ class ClientResult:
     glitch_detected: bool
     reverse_barge_in_threshold: float
     turn_response_timeout: float
+    realtime_tool_timeout: float | None
     metrics_start_time: float | None
     test_duration: float
     server_metrics: dict
     rtvi_messages: list[dict[str, Any]]
+    protocol: str
+    protocol_events: list[dict[str, Any]]
+    event_correlations: list[dict[str, Any]]
+    response_transcripts: list[dict[str, Any]]
+    response_status_counts: dict[str, int]
+    tool_calls: list[dict[str, Any]]
     timestamp: str
     error: str | None = None
+    run_config: dict[str, Any] = field(default_factory=dict)
 
 
 type FirstBotFrame = tuple[bytes | None, dt.datetime | None]
@@ -296,6 +344,30 @@ class PerfClient:
     @property
     def uri(self) -> str:
         return f"wss://{self.host}:{self.port}/api/ws"
+
+    def _hard_deadline_seconds(self) -> float:
+        """Allow an admitted RTVI turn to finish after the measurement window."""
+        if self.session_end_time is not None:
+            admission_end = self.session_end_time
+        elif self.metrics_start_time is not None:
+            admission_end = self.metrics_start_time + self.test_duration
+        else:
+            admission_end = time.time() + self.test_duration
+
+        max_input_seconds = 0.0
+        for path in self.audio_files:
+            try:
+                with wave.open(str(path), "rb") as wav_file:
+                    sample_rate = wav_file.getframerate()
+                    if sample_rate > 0:
+                        max_input_seconds = max(max_input_seconds, wav_file.getnframes() / sample_rate)
+            except (OSError, EOFError, wave.Error):
+                continue
+
+        turn_tail = max_input_seconds + self.turn_response_timeout + END_OF_RESPONSE_TIMEOUT + 10
+        connection_tail = WS_CONNECT_TIMEOUT + BOT_INTRO_TIMEOUT + 10
+        safety_tail = max(HARD_DEADLINE_BUFFER, turn_tail, connection_tail)
+        return max(admission_end - time.time(), 0.0) + safety_tail
 
     async def _process_server_message(self, message: dict) -> None:
         if not isinstance(message, dict):
@@ -662,15 +734,7 @@ class PerfClient:
         self.silence_event = asyncio.Event()
         self.silence_event.set()
 
-        fallback_deadline = self.test_duration + HARD_DEADLINE_BUFFER
-        if self.session_end_time:
-            remaining = self.session_end_time - time.time()
-            hard_deadline = max(remaining + 10, 30) if remaining > 0 else 30
-        elif self.metrics_start_time:
-            remaining = (self.metrics_start_time + self.test_duration + HARD_DEADLINE_BUFFER) - time.time()
-            hard_deadline = max(remaining, 60) if remaining > 0 else fallback_deadline
-        else:
-            hard_deadline = fallback_deadline
+        hard_deadline = self._hard_deadline_seconds()
 
         error = None
         try:
@@ -736,6 +800,7 @@ class PerfClient:
             glitch_detected=self.glitch_detected,
             reverse_barge_in_threshold=self.reverse_barge_in_threshold,
             turn_response_timeout=self.turn_response_timeout,
+            realtime_tool_timeout=None,
             metrics_start_time=self.metrics_start_time,
             test_duration=self.test_duration,
             server_metrics={
@@ -744,6 +809,12 @@ class PerfClient:
                 "sample_counts": server_metric_counts,
             },
             rtvi_messages=self.rtvi_messages,
+            protocol="rtvi",
+            protocol_events=[],
+            event_correlations=[],
+            response_transcripts=[],
+            response_status_counts={},
+            tool_calls=[],
             timestamp=dt.datetime.now().isoformat(),
             error=error,
         )
@@ -761,6 +832,7 @@ class PerfClient:
                 ("asr_ttfb", round3(server_metric_average.get("asr_ttfb"))),
                 ("server_e2e", round3(server_metric_average.get("server_e2e"))),
                 ("vad_smart_turn", round3(server_metric_average.get("vad_smart_turn"))),
+                ("smart_turn_inference", round3(server_metric_average.get("smart_turn_inference"))),
                 ("llm_processing_time", round3(server_metric_average.get("llm_processing_time"))),
                 ("llm_tokens_per_sec", round3(server_metric_average.get("llm_tokens_per_sec"))),
             ],
@@ -785,6 +857,47 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
     return result_path, logger_path, audio_output_path
 
 
+def _run_config(args: argparse.Namespace) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "protocol": args.protocol,
+        "host": args.host,
+        "port": int(args.port),
+        "metrics_start_time": float(args.metrics_start_time),
+        "session_end_time": float(args.session_end_time),
+        "test_duration": float(args.test_duration),
+        "reverse_barge_in_threshold": float(args.reverse_barge_in_threshold),
+        "turn_response_timeout": float(args.turn_response_timeout),
+    }
+    if args.protocol == "openai-realtime":
+        instructions = args.realtime_instructions.encode("utf-8")
+        config["realtime"] = {
+            "scheme": args.realtime_scheme,
+            "path": args.realtime_path,
+            "model": args.realtime_model,
+            "voice": args.realtime_voice,
+            "instructions_sha256": hashlib.sha256(instructions).hexdigest(),
+            "input_mode": args.realtime_input_mode,
+            "text_input_sha256": [
+                hashlib.sha256(value.encode("utf-8")).hexdigest() for value in args.realtime_text_inputs
+            ],
+            "output_modality": args.realtime_output_modality,
+            "turn_mode": args.realtime_turn_mode,
+            "vad_silence_ms": int(args.realtime_vad_silence_ms),
+            "tool_timeout": float(args.realtime_tool_timeout),
+            "client_handler_timeout": getattr(args, "realtime_client_handler_timeout", None),
+            "max_tool_rounds": int(args.realtime_max_tool_rounds),
+            "session_init_timeout": float(args.realtime_session_timeout),
+            "tls_verification": args.realtime_scheme == "wss" and not args.realtime_insecure,
+            "ca_file_sha256": getattr(args, "realtime_ca_file_sha256", None),
+            "client_tools_config_sha256": getattr(args, "realtime_client_tools_config_sha256", None),
+            "client_tool_names": getattr(args, "realtime_client_tool_names", []),
+            "mcp_server_labels": getattr(args, "realtime_mcp_server_labels", []),
+            "tool_choice": copy.deepcopy(getattr(args, "realtime_client_tool_choice", None)),
+            "parallel_tool_calls": getattr(args, "realtime_parallel_tool_calls", None),
+        }
+    return config
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     script_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(
@@ -792,6 +905,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", default="localhost", help="WebSocket host")
     parser.add_argument("--port", type=int, default=7860, help="WebSocket port")
+    parser.add_argument(
+        "--protocol",
+        choices=("rtvi", "openai-realtime"),
+        default="rtvi",
+        help="Wire protocol to benchmark (default: rtvi)",
+    )
     parser.add_argument(
         "--dataset-dir",
         type=Path,
@@ -809,14 +928,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--metrics-start-time",
         type=float,
-        help="Unix epoch seconds when metric collection should begin (defaults to now+start_delay)",
+        help="Unix epoch after which the next turn enables collection (defaults to now+start_delay)",
     )
     parser.add_argument(
         "--session-end-time",
         type=float,
         help="Unix epoch seconds when this client should stop (defaults to metrics_start+test_duration)",
     )
-    parser.add_argument("--test-duration", type=float, default=300.0, help="Metric collection window in seconds")
+    parser.add_argument(
+        "--test-duration",
+        type=float,
+        default=300.0,
+        help="Wall-clock turn-admission interval in seconds",
+    )
     parser.add_argument(
         "--reverse-barge-in-threshold",
         type=float,
@@ -832,9 +956,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=TURN_RESPONSE_TIMEOUT,
         help=(
-            "Per-turn timeout (seconds) waiting for the bot's first audio frame "
-            "after the input audio file finishes sending. On timeout the turn "
-            "is recorded as a failed_turn and the loop moves on to the next turn."
+            "Per-turn timeout (seconds) waiting for the bot's first audio or text output "
+            "after the turn input finishes sending. RTVI continues after a failed turn; "
+            "Realtime stops that session to preserve event/response correlation."
         ),
     )
     parser.add_argument("--result-path", type=Path, help="Write client result JSON here")
@@ -846,6 +970,106 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="save_audio",
         action="store_false",
         help="Disable writing the default per-client output WAV",
+    )
+
+    realtime = parser.add_argument_group("OpenAI Realtime protocol")
+    realtime.add_argument(
+        "--realtime-scheme",
+        choices=("ws", "wss"),
+        default="wss",
+        help="Explicit Realtime WebSocket transport scheme (default: wss)",
+    )
+    realtime.add_argument("--realtime-path", default="/v1/realtime", help="Canonical Realtime WebSocket path")
+    realtime.add_argument(
+        "--realtime-model",
+        default="",
+        help="Optional immutable model query parameter sent during WebSocket connection",
+    )
+    realtime.add_argument(
+        "--realtime-voice",
+        default="",
+        help="Optional audio.output.voice sent in the nested session.update",
+    )
+    realtime.add_argument(
+        "--realtime-instructions",
+        default="",
+        help="Optional session instructions sent in session.update",
+    )
+    realtime.add_argument(
+        "--realtime-input-mode",
+        choices=("audio", "text"),
+        default="audio",
+        help="Realtime turn input: stream dataset WAVs or submit input_text items (default: audio)",
+    )
+    realtime.add_argument(
+        "--realtime-text-input",
+        dest="realtime_text_inputs",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="Text prompt used in text input mode; repeat to cycle prompts across turns",
+    )
+    realtime.add_argument(
+        "--realtime-output-modality",
+        choices=("audio", "text"),
+        default="audio",
+        help="Exactly one Realtime output modality (default: audio)",
+    )
+    realtime.add_argument(
+        "--realtime-turn-mode",
+        choices=("automatic", "manual"),
+        default="automatic",
+        help="automatic uses the server-advertised VAD mode; manual sends input commit + response.create",
+    )
+    realtime.add_argument(
+        "--realtime-vad-silence-ms",
+        type=int,
+        default=800,
+        help="PCM silence appended after speech in automatic turn-detection mode (default: 800 ms)",
+    )
+    realtime.add_argument(
+        "--realtime-api-key-env",
+        default="",
+        help="Optional environment variable containing a Bearer token; empty sends no Authorization header",
+    )
+    realtime.add_argument(
+        "--realtime-ca-file",
+        type=Path,
+        help="Optional PEM CA bundle for verified wss connections",
+    )
+    realtime.add_argument(
+        "--realtime-insecure",
+        action="store_true",
+        help="Explicitly disable certificate and hostname verification for wss",
+    )
+    realtime.add_argument(
+        "--realtime-client-tools-config",
+        type=Path,
+        help=("Strict JSON file defining native Realtime function/MCP tools and exact-name function handlers"),
+    )
+    realtime.add_argument(
+        "--realtime-tool-timeout",
+        type=float,
+        default=REALTIME_TOOL_COMPLETION_TIMEOUT,
+        help=(
+            "Overall correlated tool/output deadline. Scripted handlers reserve an early-send margin of "
+            "10%%, capped at 10 seconds (default: 120; effective handler budget: 110)"
+        ),
+    )
+    realtime.add_argument(
+        "--realtime-max-tool-rounds",
+        type=int,
+        default=4,
+        help="Maximum function-call response rounds admitted per turn (default: 4)",
+    )
+    realtime.add_argument(
+        "--realtime-session-timeout",
+        type=float,
+        default=REALTIME_SESSION_INIT_TIMEOUT,
+        help=(
+            "Seconds to wait for each required Realtime session.created, conversation.created, and "
+            "session.updated event; separate from the TCP/WebSocket open timeout (default: 60)"
+        ),
     )
 
     # Aggregation modes — used by simulate_concurrency.sh after a run completes.
@@ -870,15 +1094,56 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 async def async_main(args: argparse.Namespace) -> int:
     args.output_dir = args.output_dir.resolve()
-    args.dataset_dir = args.dataset_dir.resolve()
-    if not args.dataset_dir.is_dir():
-        print(f"Dataset directory not found: {args.dataset_dir}", file=sys.stderr)
-        return 2
+    needs_audio_dataset = args.protocol == "rtvi" or args.realtime_input_mode == "audio"
+    audio_files: list[Path] = []
+    if needs_audio_dataset:
+        args.dataset_dir = args.dataset_dir.resolve()
+        if not args.dataset_dir.is_dir():
+            print(f"Dataset directory not found: {args.dataset_dir}", file=sys.stderr)
+            return 2
+        audio_files = sorted(p for p in args.dataset_dir.iterdir() if p.suffix.lower() == ".wav")
+        if not audio_files:
+            print(f"No .wav files found in {args.dataset_dir}", file=sys.stderr)
+            return 2
+    if args.protocol == "openai-realtime" and args.realtime_input_mode == "text":
+        if not args.realtime_text_inputs:
+            print("Text input mode requires at least one --realtime-text-input", file=sys.stderr)
+            return 2
+        if any(not value.strip() for value in args.realtime_text_inputs):
+            print("--realtime-text-input values must not be empty or whitespace", file=sys.stderr)
+            return 2
 
-    audio_files = sorted(p for p in args.dataset_dir.iterdir() if p.suffix.lower() == ".wav")
-    if not audio_files:
-        print(f"No .wav files found in {args.dataset_dir}", file=sys.stderr)
-        return 2
+    client_tools_config = None
+    args.realtime_ca_file_sha256 = None
+    args.realtime_client_tools_config_sha256 = None
+    args.realtime_client_tool_names = []
+    args.realtime_mcp_server_labels = []
+    args.realtime_client_tool_choice = None
+    args.realtime_parallel_tool_calls = None
+    args.realtime_client_handler_timeout = None
+    if args.protocol == "openai-realtime":
+        from openai_realtime_client import RealtimeClientError, load_client_tools_config
+
+        try:
+            if args.realtime_ca_file is not None:
+                args.realtime_ca_file = args.realtime_ca_file.resolve()
+                ca_bytes = args.realtime_ca_file.read_bytes()
+                args.realtime_ca_file_sha256 = hashlib.sha256(ca_bytes).hexdigest()
+            if args.realtime_client_tools_config is not None:
+                args.realtime_client_tools_config = args.realtime_client_tools_config.resolve()
+                client_tools_config = load_client_tools_config(args.realtime_client_tools_config)
+                args.realtime_client_tools_config_sha256 = client_tools_config.sha256
+                args.realtime_client_tool_names = sorted(
+                    tool["name"] for tool in client_tools_config.tools if tool["type"] == "function"
+                )
+                args.realtime_mcp_server_labels = sorted(
+                    tool["server_label"] for tool in client_tools_config.tools if tool["type"] == "mcp"
+                )
+                args.realtime_client_tool_choice = copy.deepcopy(client_tools_config.tool_choice)
+                args.realtime_parallel_tool_calls = client_tools_config.parallel_tool_calls
+        except (OSError, RealtimeClientError) as exc:
+            print(f"Invalid OpenAI Realtime client configuration: {exc}", file=sys.stderr)
+            return 2
 
     if not args.stream_id:
         args.stream_id = f"client_1_{str(time.time_ns())[:13]}"
@@ -891,30 +1156,96 @@ async def async_main(args: argparse.Namespace) -> int:
     result_path, logger_path, audio_output_path = _resolve_paths(args)
 
     logger = RunLogger(logger_path)
-    client = PerfClient(
-        stream_id=args.stream_id,
-        host=args.host,
-        port=int(args.port),
-        audio_files=audio_files,
-        start_delay=float(args.start_delay),
-        metrics_start_time=float(args.metrics_start_time),
-        session_end_time=float(args.session_end_time),
-        test_duration=float(args.test_duration),
-        reverse_barge_in_threshold=float(args.reverse_barge_in_threshold),
-        turn_response_timeout=float(args.turn_response_timeout),
-        audio_output_path=audio_output_path,
-        logger=logger,
-    )
-    result = await client.run()
+    common_client_args = {
+        "stream_id": args.stream_id,
+        "host": args.host,
+        "port": int(args.port),
+        "audio_files": audio_files,
+        "start_delay": float(args.start_delay),
+        "metrics_start_time": float(args.metrics_start_time),
+        "session_end_time": float(args.session_end_time),
+        "test_duration": float(args.test_duration),
+        "reverse_barge_in_threshold": float(args.reverse_barge_in_threshold),
+        "turn_response_timeout": float(args.turn_response_timeout),
+        "audio_output_path": audio_output_path,
+        "logger": logger,
+    }
+    if args.protocol == "rtvi":
+        result = await PerfClient(**common_client_args).run()
+    else:
+        from openai_realtime_client import OpenAIRealtimePerfClient
+
+        try:
+            realtime_client = OpenAIRealtimePerfClient(
+                **common_client_args,
+                scheme=args.realtime_scheme,
+                path=args.realtime_path,
+                insecure=bool(args.realtime_insecure),
+                ca_file=args.realtime_ca_file,
+                model=args.realtime_model,
+                voice=args.realtime_voice,
+                instructions=args.realtime_instructions,
+                input_mode=args.realtime_input_mode,
+                text_inputs=args.realtime_text_inputs,
+                output_modality=args.realtime_output_modality,
+                turn_mode=args.realtime_turn_mode,
+                vad_silence_ms=int(args.realtime_vad_silence_ms),
+                api_key_env=args.realtime_api_key_env,
+                tool_completion_timeout=float(args.realtime_tool_timeout),
+                max_tool_rounds=int(args.realtime_max_tool_rounds),
+                client_tools_config=client_tools_config,
+                session_init_timeout=float(args.realtime_session_timeout),
+                server_metric_keys=SERVER_METRIC_KEYS,
+                shutdown_requested=lambda: _SHUTDOWN_REQUESTED,
+            )
+        except ValueError as exc:
+            print(f"Invalid OpenAI Realtime client configuration: {exc}", file=sys.stderr)
+            return 2
+        outcome = await realtime_client.run()
+        args.realtime_client_handler_timeout = realtime_client.client_tool_handler_timeout
+        server_metric_average = {key: average_or_none(values) for key, values in outcome.server_metric_samples.items()}
+        result = ClientResult(
+            stream_id=args.stream_id,
+            average_latency=average_or_none(outcome.valid_latency_values),
+            individual_latencies=outcome.latency_values,
+            valid_latencies=outcome.valid_latency_values,
+            num_turns=len(outcome.latency_values),
+            num_valid_turns=len(outcome.valid_latency_values),
+            failed_turns=outcome.failed_turns,
+            reverse_barge_ins_count=outcome.reverse_barge_ins_count,
+            glitch_detected=outcome.glitch_detected,
+            reverse_barge_in_threshold=float(args.reverse_barge_in_threshold),
+            turn_response_timeout=float(args.turn_response_timeout),
+            realtime_tool_timeout=float(args.realtime_tool_timeout),
+            metrics_start_time=float(args.metrics_start_time),
+            test_duration=float(args.test_duration),
+            server_metrics={
+                "samples": outcome.server_metric_samples,
+                "average": server_metric_average,
+                "sample_counts": {key: len(values) for key, values in outcome.server_metric_samples.items()},
+            },
+            rtvi_messages=[],
+            protocol="openai-realtime",
+            protocol_events=outcome.protocol_events,
+            event_correlations=outcome.event_correlations,
+            response_transcripts=outcome.response_transcripts,
+            response_status_counts=outcome.response_status_counts,
+            tool_calls=outcome.tool_calls,
+            timestamp=dt.datetime.now().isoformat(),
+            error=outcome.error,
+        )
+    result.run_config = _run_config(args)
+    result_payload = asdict(result)
+    _validate_finite_numbers(result_payload, "client benchmark result")
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+    result_path.write_text(json.dumps(result_payload, indent=2, allow_nan=False), encoding="utf-8")
     print(
-        f"client={args.stream_id} turns={result.num_turns} "
+        f"client={args.stream_id} protocol={result.protocol} turns={result.num_turns} "
         f"avg_latency={round3(result.average_latency)}s "
         f"glitch={result.glitch_detected} "
         f"result={result_path}"
     )
-    return 0
+    return 0 if _benchmark_result_is_accepted(result) else 1
 
 
 # ---------------------------------------------------------------------------
@@ -935,12 +1266,26 @@ _SUITE_HEADERS = (
     "ASR TTFB",
     "Server E2E",
     "VAD+Smart Turn",
+    "Smart Turn Inference",
     "LLM Proc Time",
     "LLM Tok/s",
     "Glitches",
 )
 
 _CLIENT_HEADERS = ("Client", *_SUITE_HEADERS[1:])
+_REALTIME_RESPONSE_HEADERS = (
+    "Response Lifecycle",
+    "Response Total Tokens",
+    "Response Input Tokens",
+    "Response Output Tokens",
+    "Response Audio Bytes",
+)
+_REALTIME_RESPONSE_ROW_KEYS = REALTIME_RESPONSE_METRIC_KEYS
+
+
+def _with_realtime_response_headers(headers: tuple[str, ...]) -> tuple[str, ...]:
+    """Insert Realtime-only response metrics before the existing glitch column."""
+    return (*headers[:-1], *_REALTIME_RESPONSE_HEADERS, headers[-1])
 
 
 def _calculate_p95(values: list[float]) -> float | None:
@@ -966,8 +1311,12 @@ def _client_valid_turns(client: dict) -> int:
     return 0
 
 
-def _client_has_valid_response(client: dict) -> bool:
+def _client_has_response_signal(client: dict) -> bool:
     return client.get("average_latency") is not None and _client_valid_turns(client) > 0
+
+
+def _client_has_valid_response(client: dict) -> bool:
+    return not _client_has_runtime_error(client) and _client_has_response_signal(client)
 
 
 def _is_hard_deadline_client(client: dict) -> bool:
@@ -988,7 +1337,7 @@ def _client_has_core_server_metric(client: dict) -> bool:
 
 
 def _client_has_runtime_error(client: dict) -> bool:
-    return bool(client.get("error")) and not _is_hard_deadline_client(client)
+    return bool(client.get("error"))
 
 
 def _client_is_failed(client: dict) -> bool:
@@ -1003,7 +1352,35 @@ def _client_is_successful(client: dict) -> bool:
     return not _client_is_failed(client) and _client_has_valid_response(client)
 
 
+def _benchmark_result_is_accepted(result: ClientResult) -> bool:
+    """Return whether one worker completed at least one valid measured turn."""
+    return not result.error and result.num_valid_turns > 0
+
+
+def _aggregate_results_are_accepted(results: dict[str, Any]) -> bool:
+    """Return whether every configured worker completed a valid measured turn."""
+    configured = _client_int(results, "configured_clients")
+    successful = _client_int(results, "successful_clients")
+    failed = _client_int(results, "failed_clients")
+    no_response = _client_int(results, "no_response_clients")
+    return configured > 0 and successful == configured and failed == 0 and no_response == 0
+
+
+def _suite_results_are_accepted(rows: list[dict[str, Any]]) -> bool:
+    """Return whether a suite contains only fully successful concrete runs."""
+    client_rows = [row for row in rows if row.get("client") != "AVERAGE"]
+    return bool(client_rows) and all(
+        int(row.get("configured_streams") or 0) > 0
+        and int(row.get("successful_streams") or 0) == int(row.get("configured_streams") or 0)
+        and int(row.get("failed_streams") or 0) == 0
+        and int(row.get("no_response_streams") or 0) == 0
+        for row in client_rows
+    )
+
+
 def _client_valid_latency_values(client: dict) -> list[float]:
+    if _client_has_runtime_error(client):
+        return []
     values = client.get("valid_latencies")
     if isinstance(values, list):
         out = []
@@ -1099,13 +1476,123 @@ def _format_table_lines(headers: Iterable[str], rows: list[list[str]]) -> list[s
     return out
 
 
+_STREAM_DIR_PATTERN = re.compile(r"client_([1-9][0-9]*)_([A-Za-z0-9][A-Za-z0-9_.-]*)\Z")
+
+
+def _load_run_clients(
+    run_dir: Path,
+    num_clients: int | None,
+) -> tuple[list[dict[str, Any]], int, list[int], dict[str, Any] | None]:
+    if num_clients is not None and num_clients <= 0:
+        raise BenchmarkAggregationError("--num-clients must be greater than zero")
+
+    client_dirs = sorted(path for path in run_dir.iterdir() if path.is_dir() and path.name.startswith("client_"))
+    if not client_dirs:
+        if num_clients is None:
+            raise BenchmarkAggregationError(f"No client_* worker directories found in {run_dir}")
+        return [], num_clients, list(range(1, num_clients + 1)), None
+
+    parsed_dirs: list[tuple[int, Path]] = []
+    seen_ordinals: set[int] = set()
+    for client_dir in client_dirs:
+        match = _STREAM_DIR_PATTERN.fullmatch(client_dir.name)
+        if match is None:
+            raise BenchmarkAggregationError(f"Unexpected client directory name: {client_dir.name!r}")
+        ordinal = int(match.group(1))
+        if ordinal in seen_ordinals:
+            raise BenchmarkAggregationError(f"Duplicate worker ordinal {ordinal} in {run_dir}")
+        seen_ordinals.add(ordinal)
+        parsed_dirs.append((ordinal, client_dir))
+
+    configured_clients = num_clients if num_clients is not None else len(client_dirs)
+    unexpected_ordinals = sorted(ordinal for ordinal in seen_ordinals if ordinal > configured_clients)
+    if unexpected_ordinals:
+        raise BenchmarkAggregationError(
+            f"Worker ordinals outside configured range 1..{configured_clients}: {unexpected_ordinals}"
+        )
+
+    direct_client_dirs = {client_dir.resolve() for _ordinal, client_dir in parsed_dirs}
+    for result_path in run_dir.rglob("result_*.json"):
+        if result_path.parent.resolve() not in direct_client_dirs:
+            raise BenchmarkAggregationError(f"Unexpected result file outside a direct client directory: {result_path}")
+
+    clients: list[dict[str, Any]] = []
+    seen_stream_ids: set[str] = set()
+    result_ordinals: set[int] = set()
+    common_config: dict[str, Any] | None = None
+    for ordinal, client_dir in parsed_dirs:
+        result_files = sorted(client_dir.glob("*.json"))
+        expected_result = client_dir / f"result_{client_dir.name}.json"
+        unexpected_result_files = [path for path in result_files if path != expected_result]
+        if unexpected_result_files:
+            raise BenchmarkAggregationError(
+                f"Unexpected result filename(s) for {client_dir.name}: "
+                f"{[path.name for path in unexpected_result_files]}"
+            )
+        if len(result_files) > 1:
+            raise BenchmarkAggregationError(f"More than one result file found for {client_dir.name}")
+        if not result_files:
+            continue
+
+        try:
+            payload = json.loads(expected_result.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BenchmarkAggregationError(f"Could not read {expected_result}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise BenchmarkAggregationError(f"{expected_result} must contain a JSON object")
+        _validate_finite_numbers(payload, str(expected_result))
+        stream_id = payload.get("stream_id")
+        if not isinstance(stream_id, str) or not stream_id:
+            raise BenchmarkAggregationError(f"{expected_result} has no valid stream_id")
+        if stream_id != client_dir.name:
+            raise BenchmarkAggregationError(
+                f"Result stream_id {stream_id!r} does not match parent directory {client_dir.name!r}"
+            )
+        if stream_id in seen_stream_ids:
+            raise BenchmarkAggregationError(f"Duplicate stream_id {stream_id!r}")
+        seen_stream_ids.add(stream_id)
+        result_ordinals.add(ordinal)
+
+        protocol = payload.get("protocol")
+        if protocol not in {"rtvi", "openai-realtime"}:
+            raise BenchmarkAggregationError(f"{stream_id} has unsupported protocol {protocol!r}")
+        run_config = payload.get("run_config")
+        if not isinstance(run_config, dict) or not run_config:
+            raise BenchmarkAggregationError(f"{stream_id} is missing the canonical run_config")
+        if run_config.get("protocol") != protocol:
+            raise BenchmarkAggregationError(f"{stream_id} protocol disagrees with run_config.protocol")
+        for field_name in (
+            "metrics_start_time",
+            "test_duration",
+            "reverse_barge_in_threshold",
+            "turn_response_timeout",
+        ):
+            if payload.get(field_name) != run_config.get(field_name):
+                raise BenchmarkAggregationError(f"{stream_id} {field_name} disagrees with run_config")
+        if protocol == "openai-realtime" and payload.get("realtime_tool_timeout") != (
+            run_config.get("realtime") or {}
+        ).get("tool_timeout"):
+            raise BenchmarkAggregationError(f"{stream_id} realtime tool timeout disagrees with run_config")
+        if protocol == "rtvi" and payload.get("realtime_tool_timeout") is not None:
+            raise BenchmarkAggregationError(f"{stream_id} RTVI result must not set realtime_tool_timeout")
+        if common_config is None:
+            common_config = copy.deepcopy(run_config)
+        elif run_config != common_config:
+            differing = sorted(
+                key for key in set(common_config) | set(run_config) if common_config.get(key) != run_config.get(key)
+            )
+            raise BenchmarkAggregationError(
+                f"Mixed worker configuration in {run_dir}; {stream_id} differs in {differing}"
+            )
+        clients.append(payload)
+
+    missing_ordinals = sorted(set(range(1, configured_clients + 1)) - result_ordinals)
+    return clients, configured_clients, missing_ordinals, common_config
+
+
 def _aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
     """Collapse all client_*/result_*.json into a benchmark_summary.json."""
-    result_files = sorted(run_dir.glob("client_*/result_*.json"))
-    clients: list[dict] = [json.loads(p.read_text(encoding="utf-8")) for p in result_files]
-
-    if num_clients is None:
-        num_clients = len(clients)
+    clients, num_clients, missing_ordinals, run_config = _load_run_clients(run_dir, num_clients)
 
     hard_deadline = [c for c in clients if _is_hard_deadline_client(c)]
 
@@ -1113,31 +1600,40 @@ def _aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
     # * failure: real client/runtime error or missing result file,
     # * no response: client stayed alive but completed no valid in-window turn,
     # * success: at least one valid completed turn and no real runtime error.
-    # Hard deadlines remain diagnostics; they only affect the top-level bucket
-    # when the client also has a real runtime error or no valid turn.
-    latency_clients = [c for c in clients if _client_has_valid_response(c)]
+    # Hard deadlines remain a diagnostic subtype of failure; no non-zero worker
+    # contributes to the successful latency or server-metric cohort.
+    successful = [client for client in clients if _client_is_successful(client)]
+    runtime_errors = [client for client in clients if _client_is_failed(client)]
+    no_response = [client for client in clients if _client_is_no_response(client)]
+    if len(successful) + len(runtime_errors) + len(no_response) != len(clients):
+        raise BenchmarkAggregationError("Actual client results did not partition into exclusive outcome buckets")
+
+    latency_clients = successful
     latency_columns = _average_latency_columns(latency_clients)
 
     barge_in_only = [c for c in clients if _client_valid_turns(c) == 0 and _client_int(c, "num_turns") > 0]
-    hard_deadline_with_valid_response = [c for c in hard_deadline if _client_has_valid_response(c)]
-    hard_deadline_without_valid_response = [c for c in hard_deadline if not _client_has_valid_response(c)]
-    runtime_errors = [c for c in clients if _client_has_runtime_error(c)]
-    no_response = [c for c in clients if _client_is_no_response(c)]
+    hard_deadline_with_valid_response = [c for c in hard_deadline if _client_has_response_signal(c)]
+    hard_deadline_without_valid_response = [c for c in hard_deadline if not _client_has_response_signal(c)]
     metric_only_no_response = [
         c for c in no_response if not _client_has_valid_response(c) and _client_has_core_server_metric(c)
     ]
     failed_client_ids = {str(c.get("stream_id")) for c in runtime_errors if c.get("stream_id")}
-    missing_clients = max(0, num_clients - len(clients))
+    missing_clients = len(missing_ordinals)
     failed_clients = len(failed_client_ids) + missing_clients
-    successful_clients = max(0, num_clients - failed_clients - len(no_response))
+    successful_clients = len(successful)
+    if successful_clients + failed_clients + len(no_response) != num_clients:
+        raise BenchmarkAggregationError("Configured client count does not match actual and missing outcome buckets")
 
     hard_deadline_with_success_signal = hard_deadline_with_valid_response
     hard_deadline_without_success_signal = hard_deadline_without_valid_response
 
     server_avg: dict[str, float | None] = {}
     server_counts: dict[str, int] = {}
-    for key in SERVER_METRIC_KEYS:
-        avg, total = _weighted_avg(clients, key)
+    aggregate_metric_keys = SERVER_METRIC_KEYS
+    if run_config is not None and run_config.get("protocol") == "openai-realtime":
+        aggregate_metric_keys = (*aggregate_metric_keys, *REALTIME_RESPONSE_METRIC_KEYS)
+    for key in aggregate_metric_keys:
+        avg, total = _weighted_avg(latency_clients, key)
         server_avg[key] = avg
         server_counts[key] = total
 
@@ -1145,10 +1641,13 @@ def _aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
         "timestamp": dt.datetime.now().isoformat(),
         "config": {
             "num_clients": num_clients,
-            "test_duration": (clients[0].get("test_duration") if clients else None),
-            "metrics_start_time": (clients[0].get("metrics_start_time") if clients else None),
-            "reverse_barge_in_threshold": (clients[0].get("reverse_barge_in_threshold") if clients else None),
-            "turn_response_timeout": (clients[0].get("turn_response_timeout") if clients else None),
+            "protocol": run_config.get("protocol") if run_config else None,
+            "test_duration": run_config.get("test_duration") if run_config else None,
+            "metrics_start_time": run_config.get("metrics_start_time") if run_config else None,
+            "reverse_barge_in_threshold": (run_config.get("reverse_barge_in_threshold") if run_config else None),
+            "turn_response_timeout": run_config.get("turn_response_timeout") if run_config else None,
+            "realtime_tool_timeout": ((run_config.get("realtime") or {}).get("tool_timeout") if run_config else None),
+            "run_config": run_config,
             "concurrency_mode": "process-per-client",
         },
         "results": {
@@ -1157,23 +1656,24 @@ def _aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
             "failed_clients": failed_clients,
             "failed_client_ids": sorted(failed_client_ids),
             "runtime_error_clients": len(runtime_errors),
-            "runtime_error_client_ids": [c["stream_id"] for c in runtime_errors],
+            "runtime_error_client_ids": sorted(c["stream_id"] for c in runtime_errors),
             "missing_clients": missing_clients,
+            "missing_client_ordinals": missing_ordinals,
             "latency_sample_clients": len(latency_clients),
             "metric_only_success_clients": 0,
             "metric_only_no_response_clients": len(metric_only_no_response),
             "barge_in_only_clients": len(barge_in_only),
             "no_response_clients": len(no_response),
-            "no_response_client_ids": [c["stream_id"] for c in no_response],
+            "no_response_client_ids": sorted(c["stream_id"] for c in no_response),
             "hard_deadline_clients": len(hard_deadline),
             "hard_deadline_with_valid_response_clients": len(hard_deadline_with_valid_response),
             "hard_deadline_with_success_signal_clients": len(hard_deadline_with_success_signal),
             "hard_deadline_successful_clients": len(hard_deadline_with_success_signal),
             "hard_deadline_no_success_signal_clients": len(hard_deadline_without_success_signal),
             "hard_deadline_no_valid_response_clients": len(hard_deadline_without_valid_response),
-            "hard_deadline_client_ids": [c["stream_id"] for c in hard_deadline],
+            "hard_deadline_client_ids": sorted(c["stream_id"] for c in hard_deadline),
             "hard_deadline_no_valid_response_client_ids": [
-                c["stream_id"] for c in hard_deadline_without_valid_response
+                c["stream_id"] for c in sorted(hard_deadline_without_valid_response, key=_client_sort_key)
             ],
             "total_turns": sum(_client_int(c, "num_turns") for c in clients),
             "total_valid_turns": sum(_client_valid_turns(c) for c in latency_clients),
@@ -1193,28 +1693,29 @@ def _aggregate_run_dir(run_dir: Path, num_clients: int | None) -> Path:
                 "total_clients": len(clients),
                 "clients_with_errors": len(runtime_errors),
                 "runtime_error_clients": len(runtime_errors),
-                "runtime_error_client_ids": [c["stream_id"] for c in runtime_errors],
+                "runtime_error_client_ids": sorted(c["stream_id"] for c in runtime_errors),
                 "hard_deadline_clients": len(hard_deadline),
                 "hard_deadline_successful_clients": len(hard_deadline_with_success_signal),
                 "hard_deadline_with_success_signal_clients": len(hard_deadline_with_success_signal),
                 "hard_deadline_no_success_signal_clients": len(hard_deadline_without_success_signal),
                 "hard_deadline_no_valid_response_clients": len(hard_deadline_without_valid_response),
-                "hard_deadline_client_ids": [c["stream_id"] for c in hard_deadline],
+                "hard_deadline_client_ids": sorted(c["stream_id"] for c in hard_deadline),
                 "client_error_counts": {c["stream_id"]: 1 for c in clients if c.get("error")},
             },
         },
         "clients": clients,
     }
+    _validate_finite_numbers(summary, "aggregated benchmark summary")
 
     out = run_dir / "benchmark_summary.json"
-    out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    out.write_text(json.dumps(summary, indent=2, allow_nan=False), encoding="utf-8")
     return out
 
 
 def _row_from_summary(summary: dict[str, Any], num_clients: int) -> dict[str, Any]:
     r = summary["results"]
     sa = r["server_metrics"]["average"]
-    return {
+    row = {
         "parallel_streams": num_clients,
         "successful_streams": r["successful_clients"],
         "configured_streams": r["configured_clients"],
@@ -1229,10 +1730,14 @@ def _row_from_summary(summary: dict[str, Any], num_clients: int) -> dict[str, An
         "asr_ttfb": sa.get("asr_ttfb"),
         "server_e2e": sa.get("server_e2e"),
         "vad_smart_turn": sa.get("vad_smart_turn"),
+        "smart_turn_inference": sa.get("smart_turn_inference"),
         "llm_processing_time": sa.get("llm_processing_time"),
         "llm_tokens_per_sec": sa.get("llm_tokens_per_sec"),
         "audio_glitches": r["glitch_detection"]["clients_with_glitches"],
     }
+    if (summary.get("config") or {}).get("protocol") == "openai-realtime":
+        row.update({key: sa.get(key) for key in REALTIME_RESPONSE_METRIC_KEYS})
+    return row
 
 
 def _client_row_from_result(client: dict[str, Any]) -> dict[str, Any]:
@@ -1240,7 +1745,7 @@ def _client_row_from_result(client: dict[str, Any]) -> dict[str, Any]:
     no_response = _client_is_no_response(client)
     successful = _client_is_successful(client)
     latency_summary = _client_latency_summary(client)
-    return {
+    row = {
         "client": str(client.get("stream_id") or "(unknown)"),
         "successful_streams": 1 if successful else 0,
         "configured_streams": 1,
@@ -1252,24 +1757,35 @@ def _client_row_from_result(client: dict[str, Any]) -> dict[str, Any]:
         "asr_ttfb": _client_server_metric_average(client, "asr_ttfb"),
         "server_e2e": _client_server_metric_average(client, "server_e2e"),
         "vad_smart_turn": _client_server_metric_average(client, "vad_smart_turn"),
+        "smart_turn_inference": _client_server_metric_average(client, "smart_turn_inference"),
         "llm_processing_time": _client_server_metric_average(client, "llm_processing_time"),
         "llm_tokens_per_sec": _client_server_metric_average(client, "llm_tokens_per_sec"),
         "audio_glitches": 1 if client.get("glitch_detected") else 0,
     }
+    if client.get("protocol") == "openai-realtime":
+        row.update({key: _client_server_metric_average(client, key) for key in REALTIME_RESPONSE_METRIC_KEYS})
+    return row
 
 
 def _client_rows_from_summary(summary: dict[str, Any], num_clients: int) -> list[dict[str, Any]]:
     rows = [_client_row_from_result(client) for client in sorted(summary.get("clients", []), key=_client_sort_key)]
     average = _row_from_summary(summary, num_clients)
     average["client"] = "AVERAGE"
-    latency_columns = _average_latency_columns(summary.get("clients", []))
+    latency_columns = _average_latency_columns(
+        client for client in summary.get("clients", []) if _client_has_valid_response(client)
+    )
     average.update(latency_columns)
     rows.append(average)
     return rows
 
 
-def _metric_row_to_strings(row: dict[str, Any], label_key: str) -> list[str]:
-    return [
+def _metric_row_to_strings(
+    row: dict[str, Any],
+    label_key: str,
+    *,
+    include_realtime_metrics: bool = False,
+) -> list[str]:
+    values = [
         str(row[label_key]),
         f"{row['successful_streams']}/{row['configured_streams']}",
         str(row["failed_streams"]),
@@ -1283,18 +1799,14 @@ def _metric_row_to_strings(row: dict[str, Any], label_key: str) -> list[str]:
         round3(row["asr_ttfb"]),
         round3(row["server_e2e"]),
         round3(row["vad_smart_turn"]),
+        round3(row["smart_turn_inference"]),
         round3(row["llm_processing_time"]),
         round3(row["llm_tokens_per_sec"]),
-        str(row["audio_glitches"]),
     ]
-
-
-def _row_to_strings(row: dict[str, Any]) -> list[str]:
-    return _metric_row_to_strings(row, "parallel_streams")
-
-
-def _client_row_to_strings(row: dict[str, Any]) -> list[str]:
-    return _metric_row_to_strings(row, "client")
+    if include_realtime_metrics:
+        values.extend(round3(row.get(key)) for key in _REALTIME_RESPONSE_ROW_KEYS)
+    values.append(str(row["audio_glitches"]))
+    return values
 
 
 def _aggregate_suite_dir(suite_dir: Path) -> tuple[Path, Path, Path]:
@@ -1306,46 +1818,77 @@ def _aggregate_suite_dir(suite_dir: Path) -> tuple[Path, Path, Path]:
     Single-level layout (one row, taken from the summary at the top level):
         suite_dir/benchmark_summary.json
     """
-    run_dirs = sorted(
-        (p for p in suite_dir.iterdir() if p.is_dir() and p.name.startswith("run_")),
-        key=lambda p: int(p.name.split("_")[1]) if p.name.split("_")[1].isdigit() else 0,
-    )
+    run_pattern = re.compile(r"run_([1-9][0-9]*)_clients\Z")
+    run_candidates = [path for path in suite_dir.iterdir() if path.is_dir() and path.name.startswith("run_")]
+    malformed = sorted(path.name for path in run_candidates if run_pattern.fullmatch(path.name) is None)
+    if malformed:
+        raise BenchmarkAggregationError(f"Unexpected suite run directories: {malformed}")
+    run_dirs = sorted(run_candidates, key=lambda path: int(run_pattern.fullmatch(path.name).group(1)))
 
     rows: list[dict[str, Any]] = []
     headers = _SUITE_HEADERS
-    stringify_row = _row_to_strings
+    row_label_key = "parallel_streams"
+    include_realtime_metrics = False
     if run_dirs:
         for run_dir in run_dirs:
-            try:
-                num_clients = int(run_dir.name.split("_")[1])
-            except (IndexError, ValueError):
-                continue
+            match = run_pattern.fullmatch(run_dir.name)
+            assert match is not None
+            num_clients = int(match.group(1))
             summary_path = run_dir / "benchmark_summary.json"
             if not summary_path.exists():
-                continue
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                raise BenchmarkAggregationError(f"Missing summary for suite run {run_dir.name}")
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise BenchmarkAggregationError(f"Could not read {summary_path}: {exc}") from exc
+            _validate_finite_numbers(summary, str(summary_path))
+            summary_clients = (summary.get("config") or {}).get("num_clients")
+            configured_clients = (summary.get("results") or {}).get("configured_clients")
+            if summary_clients != num_clients or configured_clients != num_clients:
+                raise BenchmarkAggregationError(f"{summary_path} client count does not match directory {run_dir.name}")
+            include_realtime_metrics = include_realtime_metrics or (
+                (summary.get("config") or {}).get("protocol") == "openai-realtime"
+            )
             rows.append(_row_from_summary(summary, num_clients))
     else:
         summary_path = suite_dir / "benchmark_summary.json"
         if summary_path.exists():
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise BenchmarkAggregationError(f"Could not read {summary_path}: {exc}") from exc
+            _validate_finite_numbers(summary, str(summary_path))
             num_clients = int(summary.get("config", {}).get("num_clients") or summary["results"]["configured_clients"])
             rows = _client_rows_from_summary(summary, num_clients)
             headers = _CLIENT_HEADERS
-            stringify_row = _client_row_to_strings
+            row_label_key = "client"
+            include_realtime_metrics = (summary.get("config") or {}).get("protocol") == "openai-realtime"
+        else:
+            raise BenchmarkAggregationError(f"No benchmark_summary.json found in {suite_dir}")
+
+    if include_realtime_metrics:
+        headers = _with_realtime_response_headers(headers)
 
     tsv = suite_dir / "results.tsv"
     txt = suite_dir / "results.txt"
     js = suite_dir / "results.json"
+    _validate_finite_numbers(rows, "aggregated suite results")
 
-    str_rows = [stringify_row(r) for r in rows]
+    str_rows = [
+        _metric_row_to_strings(
+            row,
+            row_label_key,
+            include_realtime_metrics=include_realtime_metrics,
+        )
+        for row in rows
+    ]
     with tsv.open("w", encoding="utf-8") as f:
         f.write("\t".join(headers) + "\n")
         for row in str_rows:
             f.write("\t".join(row) + "\n")
 
     txt.write_text("\n".join(_format_table_lines(headers, str_rows)) + "\n", encoding="utf-8")
-    js.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    js.write_text(json.dumps(rows, indent=2, allow_nan=False), encoding="utf-8")
     return tsv, txt, js
 
 
@@ -1354,7 +1897,11 @@ def _run_aggregate_run(run_dir: Path, num_clients: int | None) -> int:
     if not run_dir.is_dir():
         print(f"--aggregate-run-dir not found: {run_dir}", file=sys.stderr)
         return 2
-    summary_path = _aggregate_run_dir(run_dir, num_clients=num_clients)
+    try:
+        summary_path = _aggregate_run_dir(run_dir, num_clients=num_clients)
+    except BenchmarkAggregationError as exc:
+        print(f"Could not aggregate run: {exc}", file=sys.stderr)
+        return 2
     r = json.loads(summary_path.read_text(encoding="utf-8"))["results"]
     print(
         f"run aggregated: {summary_path}  "
@@ -1364,7 +1911,7 @@ def _run_aggregate_run(run_dir: Path, num_clients: int | None) -> int:
         f"avg_latency={round3(r['aggregate_average_latency'])}s  "
         f"p95={round3(r['p95_client_latency'])}s"
     )
-    return 0
+    return 0 if _aggregate_results_are_accepted(r) else 1
 
 
 def _run_aggregate_suite(suite_dir: Path) -> int:
@@ -1372,12 +1919,17 @@ def _run_aggregate_suite(suite_dir: Path) -> int:
     if not suite_dir.is_dir():
         print(f"--aggregate-suite-dir not found: {suite_dir}", file=sys.stderr)
         return 2
-    tsv, txt, js = _aggregate_suite_dir(suite_dir)
+    try:
+        tsv, txt, js = _aggregate_suite_dir(suite_dir)
+    except (BenchmarkAggregationError, KeyError, TypeError, ValueError) as exc:
+        print(f"Could not aggregate suite: {exc}", file=sys.stderr)
+        return 2
     print(f"suite aggregated: {suite_dir}")
     print(f"  TXT:  {txt}")
     print(f"  TSV:  {tsv}")
     print(f"  JSON: {js}")
-    return 0
+    rows = json.loads(js.read_text(encoding="utf-8"))
+    return 0 if _suite_results_are_accepted(rows) else 1
 
 
 # ---------------------------------------------------------------------------

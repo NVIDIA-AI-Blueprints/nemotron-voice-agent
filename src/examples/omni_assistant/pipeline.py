@@ -33,7 +33,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
-from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
@@ -41,6 +40,7 @@ from pipecat.workers.runner import WorkerRunner
 import examples_registry
 from examples.omni_assistant.audio_only_smart_turn_strategy import AudioOnlySmartTurnStopStrategy
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
+    MAX_FUSED_USER_AUDIO_SECS,
     NvidiaOmniLLMService,
     NvidiaOmniSettings,
 )
@@ -50,14 +50,21 @@ from examples.shared.pipeline_utils import (
     build_pipeline_params,
     build_smart_turn_analyzer,
     build_user_mute_strategies,
+    build_vad_params,
+    build_vad_user_turn_start_strategies,
     create_transport,
+    realtime_vad_prefix_padding_secs,
     register_session_start_handlers,
+    resolve_pipeline_prompt,
+    runner_protocol,
+    select_max_tokens_config,
     with_realtime_observers,
 )
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
     load_ipa_dictionary,
+    load_selected_service_entry,
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
@@ -65,40 +72,54 @@ from utils import (
     parse_env_float,
     parse_env_int,
     parse_json_dict,
-    resolve_prompt,
 )
 
 load_dotenv(override=True)
 
 
-def _build_user_turn_strategies() -> UserTurnStrategies:
+def _build_user_turn_strategies(*, transport=None) -> UserTurnStrategies:
     """Build VAD-start + Smart Turn-stop strategies for Omni audio turns."""
     return UserTurnStrategies(
-        start=[VADUserTurnStartStrategy()],
+        start=build_vad_user_turn_start_strategies(
+            transport=transport,
+            include_transcription=False,
+        ),
         stop=[AudioOnlySmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())],
     )
 
 
-def _build_user_turn_processor() -> UserTurnProcessor:
+def _build_user_turn_processor(*, transport=None) -> UserTurnProcessor:
     """Build an external turn processor for subagent branches that need one."""
-    return UserTurnProcessor(user_turn_strategies=_build_user_turn_strategies())
+    return UserTurnProcessor(user_turn_strategies=_build_user_turn_strategies(transport=transport))
 
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Nemotron Omni cascaded pipeline for one session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
-    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+    is_realtime = runner_protocol(runner_args) == "realtime"
+    if is_realtime:
+        from realtime.transport import (
+            bind_realtime_assistant_context_message,
+            bind_realtime_context,
+            bind_realtime_service_response_snapshots,
+            bind_realtime_tts_service,
+            configure_realtime_client_tools,
+            prepare_realtime_tools,
+            realtime_response_gate_processors,
+        )
 
-    prompt_key, base_system_content = resolve_prompt(
-        __file__,
-        body.get("prompt_content", ""),
-        body.get("prompt_key", ""),
-    )
+    welcome_enabled = not is_realtime and examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+
+    prompt_key, base_system_content = resolve_pipeline_prompt(__file__, body, is_realtime=is_realtime)
     logger.info(f"Starting Nemotron Omni cascaded pipeline (prompt={prompt_key})")
 
-    default_llm = load_service_entry("llm", "")
-    default_tts = load_service_entry("tts", "")
+    default_llm = (
+        load_selected_service_entry("llm", body.get("llm_id")) if is_realtime else load_service_entry("llm", "")
+    )
+    default_tts = (
+        load_selected_service_entry("tts", body.get("tts_id")) if is_realtime else load_service_entry("tts", "")
+    )
 
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
@@ -107,17 +128,31 @@ async def bot(runner_args: RunnerArguments) -> None:
         body.get("extra_params", "") or default_llm.get("extra_params", ""),
         "extra_params",
     )
+    if is_realtime:
+        raw_max_tokens = select_max_tokens_config(
+            body,
+            parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
+            is_realtime=True,
+        )
+        max_tokens = None if raw_max_tokens is None else int(raw_max_tokens)
+    else:
+        max_tokens = parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64)
 
     # Build the conversation context up-front. With emit_transcriptions enabled,
     # Omni reports the user's speech as a TranscriptionFrame, which the user
     # aggregator writes here as it would an STT service's transcript, while the
     # assistant aggregator commits LLMTextFrame output as usual.
-    system_content = base_system_content
-    if system_prompt_override:
-        system_content = f"{base_system_content}\n\n{system_prompt_override}".strip()
-    context = LLMContext([{"role": "system", "content": system_content}])
+    def render_realtime_instructions(instructions: str) -> list[dict]:
+        system_content = instructions
+        if system_prompt_override:
+            system_content = f"{instructions}\n\n{system_prompt_override}".strip()
+        return [{"role": "system", "content": system_content}]
+
+    context = LLMContext(render_realtime_instructions(base_system_content))
 
     emit_transcriptions = parse_env_bool("OMNI_EMIT_TRANSCRIPTIONS", default=True)
+    if is_realtime and body.get("client_tools") and not emit_transcriptions:
+        raise ValueError("Omni Realtime client tools require OMNI_EMIT_TRANSCRIPTIONS=true for audio-turn context")
     omni = NvidiaOmniLLMService(
         # Name carries "llm" so metrics consumers (UI metric-group, perf
         # benchmark) attribute Omni's TTFB/processing/token-usage metrics to the
@@ -129,14 +164,50 @@ async def bot(runner_args: RunnerArguments) -> None:
         extra=extra_params,
         settings=NvidiaOmniSettings(
             model=model_id,
-            max_tokens=parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
+            **({"max_tokens": max_tokens} if max_tokens is not None else {}),
             temperature=parse_env_float("OMNI_TEMPERATURE", 0.6, min_value=0.0),
             top_p=parse_env_float("OMNI_TOP_P", 0.95, min_value=0.0),
             input_modalities=("text", "audio"),
             emit_transcriptions=emit_transcriptions,
             min_user_audio_secs=parse_env_float("OMNI_MIN_USER_AUDIO_SECS", 0.3, min_value=0.0),
+            **(
+                {
+                    "max_user_audio_secs": parse_env_float(
+                        "OMNI_MAX_USER_AUDIO_SECS",
+                        MAX_FUSED_USER_AUDIO_SECS,
+                        min_value=0.0,
+                    )
+                }
+                if is_realtime
+                else {}
+            ),
+            pre_speech_buffer_secs=realtime_vad_prefix_padding_secs(
+                0.2,
+                transport=transport,
+            )
+            if is_realtime
+            else 0.2,
         ),
+        realtime_parallel_tool_calls=(body.get("parallel_tool_calls", True) if is_realtime else None),
     )
+    tools_schema = None
+    tool_choice = body.get("tool_choice", "auto") or "auto"
+    if is_realtime:
+        tools_schema = configure_realtime_client_tools(
+            transport,
+            omni,
+            body.get("client_tools"),
+        )
+        tools_schema, tool_choice = await prepare_realtime_tools(transport, omni)
+    if tools_schema is not None:
+        context.set_tools(tools_schema)
+        context.set_tool_choice(tool_choice)
+    if is_realtime:
+        bind_realtime_context(
+            transport,
+            context,
+            render_instructions=render_realtime_instructions,
+        )
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
@@ -172,6 +243,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
     tts = NvidiaTTSService(**tts_kwargs)
+    if is_realtime:
+        bind_realtime_tts_service(transport, tts)
+        bind_realtime_service_response_snapshots(transport, omni)
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
         f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
@@ -182,18 +256,32 @@ async def bot(runner_args: RunnerArguments) -> None:
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(params=VADParams()),
-            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
-            user_turn_strategies=_build_user_turn_strategies(),
+            vad_analyzer=SileroVADAnalyzer(
+                params=build_vad_params(VADParams(), transport=transport if is_realtime else None)
+            ),
+            user_mute_strategies=build_user_mute_strategies(
+                welcome_enabled,
+                transport=transport if is_realtime else None,
+            ),
+            user_turn_strategies=_build_user_turn_strategies(
+                transport=transport if is_realtime else None,
+            ),
         ),
     )
 
+    @assistant_aggregator.event_handler("on_assistant_turn_stopped")
+    async def on_assistant_turn_stopped(aggregator, message):
+        if is_realtime:
+            bind_realtime_assistant_context_message(transport, message)
+
     audio_recorder = create_audio_recorder()
 
+    response_gate_processors = realtime_response_gate_processors(transport) if is_realtime else []
     pipeline = Pipeline(
         [
             transport.input(),
             user_aggregator,
+            *response_gate_processors,
             omni,
             tts,
             transport.output(),
@@ -321,10 +409,16 @@ async def bot(runner_args: RunnerArguments) -> None:
         params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
+            send_initial_empty_metrics=not is_realtime,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=with_realtime_observers(latency_observer, transport=transport),
+        observers=with_realtime_observers(
+            latency_observer,
+            transport=transport,
+            is_realtime=is_realtime,
+        ),
         enable_tracing=IS_TRACING_ENABLED,
+        enable_rtvi=not is_realtime,
     )
 
     @user_aggregator.event_handler("on_user_turn_stopped")
@@ -376,11 +470,13 @@ async def bot(runner_args: RunnerArguments) -> None:
         )
         logger.info(f"Voice switched -> {voice_id}, language={settings_kwargs.get('language', '(unchanged)')}")
 
-    @task.rtvi.event_handler("on_client_message")
-    async def on_client_message(rtvi, message):
-        payload = message.data if isinstance(message.data, dict) else {}
-        if message.type == "set-voice":
-            await _apply_set_voice(payload)
+    if not is_realtime:
+
+        @task.rtvi.event_handler("on_client_message")
+        async def on_client_message(rtvi, message):
+            payload = message.data if isinstance(message.data, dict) else {}
+            if message.type == "set-voice":
+                await _apply_set_voice(payload)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(task)

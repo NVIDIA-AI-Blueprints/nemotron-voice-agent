@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 import os
+import re
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
@@ -14,7 +16,7 @@ from typing import Any, NamedTuple, TypedDict
 
 import yaml
 
-from utils import is_endpoint_reachable
+from utils import LOCAL_SERVICE_CATALOG_PLATFORMS, is_endpoint_reachable, public_service_entry_fields
 
 
 class ExampleEntry(TypedDict):
@@ -65,6 +67,47 @@ class PromptDefault(TypedDict, total=False):
     builtIn: bool
     tools: list[str]
 
+
+class RealtimeModelSelectors(TypedDict, total=False):
+    """Trusted catalog selectors bound by one public Realtime model id."""
+
+    prompt_key: str
+    llm_id: str
+    thinker_llm_id: str
+    asr_id: str
+    tts_id: str
+
+
+class RealtimeModelProfile(TypedDict):
+    """One validated, server-owned OpenAI Realtime deployment profile."""
+
+    id: str
+    model: str
+    label: str
+    pipeline_mode: str
+    default: bool
+    selectors: RealtimeModelSelectors
+    platform_overrides: dict[str, RealtimeModelSelectors]
+
+
+class RealtimeModelProfileNotAvailable(ValueError):
+    """An exact public Realtime model/profile lookup could not be satisfied."""
+
+    code = "model_not_available"
+    param = "model"
+
+    def __init__(self, model: str | None = None) -> None:
+        """Describe an unavailable exact public model without leaking routes."""
+        self.model = model
+        if isinstance(model, str) and model:
+            message = f"Model {model!r} is not available on this endpoint"
+        else:
+            message = "No Realtime model is available on this endpoint"
+        super().__init__(message)
+
+
+REALTIME_REGISTRY_DEFAULT_SELECTOR = "registry-default"
+REALTIME_SERVICE_PLATFORMS: tuple[str, ...] = ("cloud", *LOCAL_SERVICE_CATALOG_PLATFORMS)
 
 _SRC_ROOT = Path(__file__).resolve().parent
 _REGISTRY_PATH = _SRC_ROOT.parent / "examples_registry.yaml"
@@ -241,15 +284,326 @@ def _example_dir(example: EnrichedExample) -> Path:
     return example_module_file(example).resolve().parent
 
 
+_REALTIME_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+_REALTIME_PROFILE_FIELDS = frozenset({"label", "pipeline_mode", "default", "selectors", "platform_overrides"})
+_REALTIME_SELECTOR_SLOTS: dict[str, tuple[str, str | None]] = {
+    "prompt_key": ("prompt", None),
+    "llm_id": ("llm", "llm"),
+    "thinker_llm_id": ("thinker-llm", "thinker-llm"),
+    "asr_id": ("asr", "asr"),
+    "tts_id": ("tts", "tts"),
+}
+_REALTIME_REQUIRED_SLOT_SELECTORS = {
+    "llm": "llm_id",
+    "thinker-llm": "thinker_llm_id",
+    "asr": "asr_id",
+    "tts": "tts_id",
+}
+_REALTIME_SERVICE_SELECTOR_NAMES = frozenset(_REALTIME_SELECTOR_SLOTS) - {"prompt_key"}
+
+
+def realtime_service_platform(value: str | None = None) -> str:
+    """Return the explicit Realtime deployment catalog platform.
+
+    Compose pins this setting for every recipe. A host-native process defaults
+    deterministically to the cloud catalog; endpoint reachability never affects
+    this selection.
+    """
+    raw = os.getenv("REALTIME_SERVICE_PLATFORM", "") if value is None else value
+    if not isinstance(raw, str):
+        raise RuntimeError("REALTIME_SERVICE_PLATFORM must be a string")
+    platform = raw.strip().lower() or "cloud"
+    if platform not in REALTIME_SERVICE_PLATFORMS:
+        allowed = ", ".join(REALTIME_SERVICE_PLATFORMS)
+        raise RuntimeError(f"REALTIME_SERVICE_PLATFORM must be one of: {allowed}")
+    return platform
+
+
+def _configured_default_service_key(
+    example: EnrichedExample,
+    slot: str,
+    *,
+    model: str,
+    selector_name: str,
+) -> str:
+    configured_defaults = example.get("defaults", {}).get(slot)
+    if (
+        not isinstance(configured_defaults, list)
+        or not configured_defaults
+        or not isinstance(configured_defaults[0], str)
+        or not configured_defaults[0]
+    ):
+        raise RuntimeError(
+            f"Realtime model {model!r} selector {selector_name!r} requires "
+            f"a configured default for pipeline slot {slot!r}"
+        )
+    return configured_defaults[0]
+
+
+def _service_selector_key_for_platform(
+    selector: str,
+    platform: str,
+    *,
+    model: str,
+    selector_name: str,
+) -> str:
+    """Validate selector qualification and return its raw catalog key."""
+    if selector.startswith("cloud-nim:"):
+        key = selector.removeprefix("cloud-nim:")
+        if platform != "cloud" or not key or ":" in key:
+            raise RuntimeError(
+                f"Realtime model {model!r} selector {selector_name!r} is not valid for platform {platform!r}"
+            )
+        return key
+
+    if selector.startswith("self-hosted:"):
+        remainder = selector.removeprefix("self-hosted:")
+        if platform == "cloud" or not remainder:
+            raise RuntimeError(
+                f"Realtime model {model!r} selector {selector_name!r} is not valid for platform {platform!r}"
+            )
+        if ":" not in remainder:
+            return remainder
+        selected_platform, key = remainder.split(":", 1)
+        if (
+            selected_platform not in LOCAL_SERVICE_CATALOG_PLATFORMS
+            or selected_platform != platform
+            or not key
+            or ":" in key
+        ):
+            raise RuntimeError(
+                f"Realtime model {model!r} selector {selector_name!r} is not valid for platform {platform!r}"
+            )
+        return key
+
+    if ":" in selector:
+        raise RuntimeError(
+            f"Realtime model {model!r} selector {selector_name!r} has an invalid catalog id {selector!r}"
+        )
+    return selector
+
+
+def _static_service_entry_exists(example_dir: Path, category: str, platform: str, key: str) -> bool:
+    """Check one exact raw catalog section without endpoint probes."""
+    if platform == "cloud":
+        catalog = _normalize_service_catalog(_load_yaml_mapping(example_dir / "services.cloud.yaml"))
+    else:
+        local = _load_yaml_mapping(example_dir / "services.local.yaml")
+        platform_data = local.get(platform)
+        catalog = _normalize_service_catalog(platform_data) if isinstance(platform_data, dict) else {}
+    section = catalog.get(category, {})
+    return isinstance(section, dict) and isinstance(section.get(key), dict)
+
+
+def _materialize_service_selector(
+    example: EnrichedExample,
+    category: str,
+    slot: str,
+    selector: str,
+    platform: str,
+    *,
+    model: str,
+    selector_name: str,
+) -> str:
+    """Resolve one profile selector to a canonical, platform-qualified id."""
+    if selector == REALTIME_REGISTRY_DEFAULT_SELECTOR:
+        selector = _configured_default_service_key(
+            example,
+            slot,
+            model=model,
+            selector_name=selector_name,
+        )
+    key = _service_selector_key_for_platform(
+        selector,
+        platform,
+        model=model,
+        selector_name=selector_name,
+    )
+    if not _static_service_entry_exists(_example_dir(example), category, platform, key):
+        raise RuntimeError(
+            f"Realtime model {model!r} selector {selector_name!r} does not exist "
+            f"in the {example['key']!r} {platform!r} service catalog"
+        )
+    if platform == "cloud":
+        return f"cloud-nim:{key}"
+    return f"self-hosted:{platform}:{key}"
+
+
+def _validate_realtime_prompt_selector(example: EnrichedExample, prompt_key: str) -> None:
+    """Validate a public prompt selector from the static example catalog."""
+    prompt = _load_yaml_mapping(_example_dir(example) / "prompts.yaml").get(prompt_key)
+    if (
+        not isinstance(prompt, dict)
+        or not isinstance(prompt.get("content"), str)
+        or prompt.get("internal") is True
+        or prompt_key in set(example.get("agent_prompt_keys", []))
+    ):
+        raise RuntimeError(f"Realtime model prompt selector {prompt_key!r} is not public for {example['key']!r}")
+
+
+def _load_realtime_model_profiles(
+    data: dict,
+    examples: dict[str, ExampleEntry],
+) -> dict[str, RealtimeModelProfile]:
+    """Validate the static public Realtime model registry.
+
+    Validation deliberately reads only registry, prompt, and exact platform
+    service-catalog sections. Runtime endpoint reachability cannot affect
+    whether a public model id exists or which service it selects.
+    """
+    raw_profiles = data.get("realtime_models")
+    if not isinstance(raw_profiles, dict) or not raw_profiles:
+        raise RuntimeError("examples_registry.yaml requires a non-empty realtime_models mapping")
+
+    profiles: dict[str, RealtimeModelProfile] = {}
+    default_models: dict[str, list[str]] = {}
+    for raw_model, raw_profile in raw_profiles.items():
+        if not isinstance(raw_model, str) or not _REALTIME_MODEL_ID.fullmatch(raw_model):
+            raise RuntimeError(f"Realtime model id {raw_model!r} is invalid")
+        if not isinstance(raw_profile, dict):
+            raise RuntimeError(f"Realtime model {raw_model!r} must be a mapping")
+        unknown_fields = sorted(set(raw_profile) - _REALTIME_PROFILE_FIELDS)
+        if unknown_fields:
+            raise RuntimeError(f"Realtime model {raw_model!r} has unknown field {unknown_fields[0]!r}")
+
+        label = raw_profile.get("label")
+        pipeline_mode = raw_profile.get("pipeline_mode")
+        is_default = raw_profile.get("default")
+        raw_selectors = raw_profile.get("selectors")
+        raw_platform_overrides = raw_profile.get("platform_overrides", {})
+        if not isinstance(label, str) or not label.strip():
+            raise RuntimeError(f"Realtime model {raw_model!r} requires a non-empty label")
+        if not isinstance(pipeline_mode, str) or pipeline_mode not in examples:
+            raise RuntimeError(f"Realtime model {raw_model!r} references unknown pipeline {pipeline_mode!r}")
+        if not isinstance(is_default, bool):
+            raise RuntimeError(f"Realtime model {raw_model!r} default must be a boolean")
+        if not isinstance(raw_selectors, dict):
+            raise RuntimeError(f"Realtime model {raw_model!r} selectors must be a mapping")
+        if not isinstance(raw_platform_overrides, dict):
+            raise RuntimeError(f"Realtime model {raw_model!r} platform_overrides must be a mapping")
+
+        unknown_selectors = sorted(set(raw_selectors) - _REALTIME_SELECTOR_SLOTS.keys())
+        if unknown_selectors:
+            raise RuntimeError(f"Realtime model {raw_model!r} has unknown selector {unknown_selectors[0]!r}")
+        selectors: RealtimeModelSelectors = {}
+        for selector_name, raw_value in raw_selectors.items():
+            if not isinstance(raw_value, str) or not raw_value.strip() or raw_value != raw_value.strip():
+                raise RuntimeError(
+                    f"Realtime model {raw_model!r} selector {selector_name!r} must be a non-empty trimmed string"
+                )
+            selectors[selector_name] = raw_value  # type: ignore[literal-required]
+
+        platform_overrides: dict[str, RealtimeModelSelectors] = {}
+        for raw_platform, raw_overrides in raw_platform_overrides.items():
+            if not isinstance(raw_platform, str) or raw_platform not in REALTIME_SERVICE_PLATFORMS:
+                raise RuntimeError(f"Realtime model {raw_model!r} has unknown platform override {raw_platform!r}")
+            if not isinstance(raw_overrides, dict) or not raw_overrides:
+                raise RuntimeError(
+                    f"Realtime model {raw_model!r} platform override {raw_platform!r} must be a non-empty mapping"
+                )
+            unknown_overrides = sorted(set(raw_overrides) - _REALTIME_SERVICE_SELECTOR_NAMES)
+            if unknown_overrides:
+                raise RuntimeError(
+                    f"Realtime model {raw_model!r} platform override {raw_platform!r} "
+                    f"has unknown selector {unknown_overrides[0]!r}"
+                )
+            normalized_overrides: RealtimeModelSelectors = {}
+            for selector_name, raw_value in raw_overrides.items():
+                if not isinstance(raw_value, str) or not raw_value.strip() or raw_value != raw_value.strip():
+                    raise RuntimeError(
+                        f"Realtime model {raw_model!r} platform override {raw_platform!r} "
+                        f"selector {selector_name!r} must be a non-empty trimmed string"
+                    )
+                normalized_overrides[selector_name] = raw_value  # type: ignore[literal-required]
+            platform_overrides[raw_platform] = normalized_overrides
+
+        example: EnrichedExample = {
+            **examples[pipeline_mode],
+            "id": pipeline_mode,
+            "key": pipeline_mode,
+        }
+        slots = set(example.get("slots", []))
+        for slot, selector_name in _REALTIME_REQUIRED_SLOT_SELECTORS.items():
+            if slot in slots and selector_name not in selectors:
+                raise RuntimeError(
+                    f"Realtime model {raw_model!r} requires selector {selector_name!r} for slot {slot!r}"
+                )
+        if "prompt_key" not in selectors:
+            raise RuntimeError(f"Realtime model {raw_model!r} requires selector 'prompt_key'")
+
+        for selector_name, selector_value in selectors.items():
+            slot, category = _REALTIME_SELECTOR_SLOTS[selector_name]
+            if slot != "prompt" and slot not in slots:
+                raise RuntimeError(
+                    f"Realtime model {raw_model!r} selector {selector_name!r} is incompatible "
+                    f"with pipeline {pipeline_mode!r}"
+                )
+            if selector_name == "prompt_key":
+                if selector_value == REALTIME_REGISTRY_DEFAULT_SELECTOR:
+                    raise RuntimeError(f"Realtime model {raw_model!r} prompt_key must name an explicit public prompt")
+                _validate_realtime_prompt_selector(example, selector_value)
+                continue
+            if category is None:
+                raise RuntimeError(f"Realtime model {raw_model!r} selector {selector_name!r} has no catalog")
+        for platform, overrides in platform_overrides.items():
+            for selector_name in overrides:
+                slot, _ = _REALTIME_SELECTOR_SLOTS[selector_name]
+                if slot not in slots:
+                    raise RuntimeError(
+                        f"Realtime model {raw_model!r} platform override {platform!r} "
+                        f"selector {selector_name!r} is incompatible with pipeline {pipeline_mode!r}"
+                    )
+
+        for platform in REALTIME_SERVICE_PLATFORMS:
+            overrides = platform_overrides.get(platform, {})
+            for selector_name, base_selector in selectors.items():
+                if selector_name == "prompt_key":
+                    continue
+                slot, category = _REALTIME_SELECTOR_SLOTS[selector_name]
+                if category is None:
+                    raise RuntimeError(f"Realtime model {raw_model!r} selector {selector_name!r} has no catalog")
+                _materialize_service_selector(
+                    example,
+                    category,
+                    slot,
+                    overrides.get(selector_name, base_selector),
+                    platform,
+                    model=raw_model,
+                    selector_name=selector_name,
+                )
+
+        profile: RealtimeModelProfile = {
+            "id": raw_model,
+            "model": raw_model,
+            "label": label.strip(),
+            "pipeline_mode": pipeline_mode,
+            "default": is_default,
+            "selectors": selectors,
+            "platform_overrides": platform_overrides,
+        }
+        profiles[raw_model] = profile
+        if is_default:
+            default_models.setdefault(pipeline_mode, []).append(raw_model)
+
+    realtime_pipelines = {profile["pipeline_mode"] for profile in profiles.values()}
+    for pipeline_mode in realtime_pipelines:
+        defaults = default_models.get(pipeline_mode, [])
+        if len(defaults) != 1:
+            raise RuntimeError(
+                f"Realtime pipeline {pipeline_mode!r} must have exactly one default model; found {len(defaults)}"
+            )
+    return profiles
+
+
 def _service_entry_payload(source: str, key: str, entry: dict) -> ServiceDefault:
-    """Match service API entry shape while preserving every catalog param."""
+    """Match the ordinary client metadata shape without Realtime internals."""
     return {
         "id": f"{source}:{key}",
         "key": key,
         "name": str(entry.get("name") or key),
         "builtIn": True,
         "source": source,
-        **{k: v for k, v in entry.items() if k != "name"},
+        **{k: v for k, v in public_service_entry_fields(entry).items() if k != "name"},
     }
 
 
@@ -498,6 +852,150 @@ def visible_example_keys() -> tuple[str, ...]:
 def visible_transports() -> tuple[str, ...]:
     """Return the transports exposed by the current selection."""
     return _TRANSPORTS
+
+
+@cache
+def realtime_model_profiles() -> dict[str, RealtimeModelProfile]:
+    """Load and validate Realtime profiles only when that API is used."""
+    return _load_realtime_model_profiles(_REGISTRY_DATA, EXAMPLES)
+
+
+def visible_realtime_model_profiles() -> list[RealtimeModelProfile]:
+    """Return detached public profiles whose pipelines are currently visible."""
+    visible_pipelines = set(_SELECTION.example_keys)
+    return [
+        copy.deepcopy(profile)
+        for profile in realtime_model_profiles().values()
+        if profile["pipeline_mode"] in visible_pipelines
+    ]
+
+
+def resolve_realtime_model_profile(
+    model: str | None = None,
+    *,
+    pipeline_mode: str | None = None,
+) -> RealtimeModelProfile:
+    """Resolve one exact visible public model or a pipeline's unique default.
+
+    This lookup never falls back from an explicit model or pipeline value. The
+    exception intentionally carries only the neutral public model contract so
+    an API layer can project it to an OpenAI ``model_not_available`` error.
+    """
+    visible_pipelines = set(_SELECTION.example_keys)
+    requested_pipeline = pipeline_mode if pipeline_mode not in (None, "") else _SELECTION.default_key
+    if not isinstance(requested_pipeline, str) or requested_pipeline not in visible_pipelines:
+        raise RealtimeModelProfileNotAvailable(model)
+
+    if model not in (None, ""):
+        if not isinstance(model, str):
+            raise RealtimeModelProfileNotAvailable(None)
+        profile = realtime_model_profiles().get(model)
+        if (
+            profile is None
+            or profile["pipeline_mode"] not in visible_pipelines
+            or (pipeline_mode not in (None, "") and profile["pipeline_mode"] != requested_pipeline)
+        ):
+            raise RealtimeModelProfileNotAvailable(model)
+        return copy.deepcopy(profile)
+
+    matches = [
+        profile
+        for profile in realtime_model_profiles().values()
+        if profile["pipeline_mode"] == requested_pipeline and profile["default"]
+    ]
+    if len(matches) != 1:
+        raise RealtimeModelProfileNotAvailable(None)
+    return copy.deepcopy(matches[0])
+
+
+def default_realtime_model_id(pipeline_mode: str | None = None) -> str:
+    """Return the unique visible default public model id for a pipeline."""
+    return resolve_realtime_model_profile(pipeline_mode=pipeline_mode)["model"]
+
+
+def canonicalize_realtime_service_selector(
+    pipeline_mode: str,
+    selector_name: str,
+    selector: str,
+    platform: str | None = None,
+) -> str:
+    """Validate one trusted override and return its exact catalog ID.
+
+    Raw catalog keys and ``self-hosted:<key>`` service API IDs are resolved only
+    within the explicit deployment platform. Already-canonical IDs remain
+    stable, while source/platform mismatches and unknown entries fail closed.
+    """
+    selected_platform = realtime_service_platform(platform)
+    if not isinstance(pipeline_mode, str) or pipeline_mode not in EXAMPLES:
+        raise RuntimeError(f"Unknown Realtime pipeline {pipeline_mode!r}")
+    if selector_name not in _REALTIME_SERVICE_SELECTOR_NAMES:
+        raise RuntimeError(f"Unknown Realtime service selector {selector_name!r}")
+    if not isinstance(selector, str) or not selector.strip() or selector != selector.strip():
+        raise RuntimeError(f"Realtime service selector {selector_name!r} must be a non-empty trimmed string")
+
+    example = _lookup_by_key(pipeline_mode)
+    slot, category = _REALTIME_SELECTOR_SLOTS[selector_name]
+    if slot not in set(example.get("slots", [])) or category is None:
+        raise RuntimeError(
+            f"Realtime service selector {selector_name!r} is incompatible with pipeline {pipeline_mode!r}"
+        )
+    return _materialize_service_selector(
+        example,
+        category,
+        slot,
+        selector,
+        selected_platform,
+        model=pipeline_mode,
+        selector_name=selector_name,
+    )
+
+
+def materialize_realtime_profile_selectors(
+    profile: RealtimeModelProfile,
+    platform: str | None = None,
+) -> RealtimeModelSelectors:
+    """Resolve a profile to deterministic, source-qualified catalog IDs.
+
+    ``registry-default`` means exactly the first key declared for that slot in
+    ``examples_registry.yaml``. It never means the first reachable or otherwise
+    available entry. Local IDs also include the recipe section so every worker
+    hydrates the same raw catalog entry.
+    """
+    selected_platform = realtime_service_platform(platform)
+    model = profile.get("model")
+    pipeline_mode = profile.get("pipeline_mode")
+    selectors = profile.get("selectors")
+    platform_overrides = profile.get("platform_overrides", {})
+    if (
+        not isinstance(model, str)
+        or not isinstance(pipeline_mode, str)
+        or pipeline_mode not in EXAMPLES
+        or not isinstance(selectors, dict)
+        or not isinstance(platform_overrides, dict)
+    ):
+        raise RuntimeError("Realtime model profile is not valid")
+
+    raw_overrides = platform_overrides.get(selected_platform, {})
+    if not isinstance(raw_overrides, dict) or any(name not in selectors for name in raw_overrides):
+        raise RuntimeError(f"Realtime model {model!r} has invalid platform overrides")
+
+    materialized: RealtimeModelSelectors = {}
+    for selector_name, base_selector in selectors.items():
+        if not isinstance(base_selector, str):
+            raise RuntimeError(f"Realtime model {model!r} selector {selector_name!r} is not valid")
+        if selector_name == "prompt_key":
+            materialized[selector_name] = base_selector  # type: ignore[literal-required]
+            continue
+        selected = raw_overrides.get(selector_name, base_selector)
+        if not isinstance(selected, str):
+            raise RuntimeError(f"Realtime model {model!r} selector {selector_name!r} is not valid")
+        materialized[selector_name] = canonicalize_realtime_service_selector(  # type: ignore[literal-required]
+            pipeline_mode,
+            selector_name,
+            selected,
+            selected_platform,
+        )
+    return materialized
 
 
 def _enrich(example_id: str, entry: ExampleEntry) -> EnrichedExample:

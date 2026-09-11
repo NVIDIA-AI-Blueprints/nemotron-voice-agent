@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import yaml
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frame_processor import FrameDirection
 
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
     NvidiaOmniInferenceResult,
@@ -27,6 +28,8 @@ from examples.omni_assistant_subagents.subagents.speaker.action_envelope import 
 from examples.omni_assistant_subagents.subagents.speaker.agent import SubagentsSpeakerOmniService
 from examples.omni_assistant_subagents.subagents.speaker.repeat_guard import BRIDGE_FILLERS, RepeatGuard
 from examples.omni_assistant_subagents.subagents.thinker.agent import ThinkerWorker
+from examples.shared.frames import USER_TRANSCRIPT_TURN_FRAME_ID_METADATA
+from realtime.frames import RealtimeResponseLLMContext
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_PATH = PROJECT_ROOT / "src/examples/omni_assistant_subagents/prompts.yaml"
@@ -240,7 +243,7 @@ class PromptFragmentTests(unittest.TestCase):
 class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
     """The envelope parser layered over the service's reasoning-filtered stream."""
 
-    def _service(self) -> SubagentsSpeakerOmniService:
+    def _service(self, *, realtime: bool = False) -> SubagentsSpeakerOmniService:
         service = object.__new__(SubagentsSpeakerOmniService)
         service._media_analysis_prompt_handler = AsyncMock()
         service._uploaded_attachment_available = lambda: True
@@ -252,7 +255,8 @@ class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
         service._capture_cooldown = 0
         service._context = None
         service._active_turn_parts = AUDIO_TURN_PARTS
-        service.run_inference = AsyncMock()
+        service._realtime_response_snapshot_hook = AsyncMock() if realtime else None
+        service.run_multimodal_inference = AsyncMock()
         service.push_frame = AsyncMock()
         self.transcripts: list[str] = []
         self.spoken: list[str] = []
@@ -266,99 +270,106 @@ class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
         step = max(len(raw) // pieces, 1)
         return [raw[i : i + step] for i in range(0, len(raw), step)]
 
-    async def _drain(self, service, envelope: dict) -> str:
-        async def stream():
-            for piece in self._chunks(envelope):
-                yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece))])
-
-        visible = ""
-        async for chunk in service._stream_action_envelope(stream()):
-            visible += chunk.choices[0].delta.content or ""
-        return visible
-
-    async def test_response_field_streams_and_transcript_is_emitted(self) -> None:
-        service = self._service()
-        visible = await self._drain(
-            service,
-            {
-                "transcript": "Count one to five",
-                "turn_action": "respond",
-                "response": "One, two, three, four, five.",
-                "selected_input_source": "none",
-                "media_analysis_action": "none",
-                "media_analysis_prompt": "",
-                "highres_query": "",
-            },
-        )
-
-        self.assertEqual(visible, "One, two, three, four, five.")
-        self.assertEqual(self.transcripts, ["Count one to five"])
-        # Already streamed, so the parsed envelope must not repeat it.
-        self.assertEqual(self.spoken, [])
-
-    async def test_streamed_repeat_is_replaced_before_reaching_tts(self) -> None:
-        service = self._service()
-        envelope = {
-            "transcript": "White",
-            "turn_action": "respond",
-            "response": "Could you confirm what color the comb is?",
-            "selected_input_source": "none",
-            "media_analysis_action": "none",
-            "media_analysis_prompt": "",
-            "highres_query": "",
-        }
-
-        first = await self._drain(service, envelope)
-        repeated = await self._drain(service, envelope)
-
-        self.assertEqual(first, envelope["response"])
-        self.assertIn(repeated, BRIDGE_FILLERS)
-        self.assertNotIn(envelope["response"], repeated)
-        service._thinking_handler.assert_awaited_once_with("White", "high", "repetition")
-
-    async def test_invalid_action_withholds_streamed_text(self) -> None:
-        service = self._service()
-        visible = await self._drain(
-            service,
-            {
-                "transcript": "Count one to five",
-                "turn_action": "delegate",
-                "response": "One, two, three, four, five.",
-                "selected_input_source": "none",
-                "media_analysis_action": "none",
-                "media_analysis_prompt": "",
-                "highres_query": "",
-            },
-        )
-
-        self.assertEqual(visible, "")
-        self.assertEqual(self.transcripts, ["Count one to five"])
-        # Nothing reached TTS mid-stream, so the resolved envelope speaks instead.
-        self.assertEqual(self.spoken, ["One, two, three, four, five."])
-
-    async def test_reply_is_only_a_repeat_on_a_later_turn(self) -> None:
-        service = self._service()
-        service._repeat = RepeatGuard()
+    @staticmethod
+    def _envelope(**overrides) -> dict:
         envelope = {
             "transcript": "Count one to five",
-            "turn_action": "delegate",
+            "turn_action": "respond",
             "response": "One, two, three, four, five.",
             "selected_input_source": "none",
             "media_analysis_action": "none",
             "media_analysis_prompt": "",
             "highres_query": "",
         }
-        await self._drain(service, envelope)
+        return {**envelope, **overrides}
+
+    async def _drain(self, service, envelope: dict) -> str:
+        async def stream():
+            chunks = self._chunks(envelope)
+            for index, piece in enumerate(chunks):
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content=piece),
+                            finish_reason="stop" if index == len(chunks) - 1 else None,
+                        )
+                    ]
+                )
+
+        visible = ""
+        async for chunk in service._stream_action_envelope(stream()):
+            visible += chunk.choices[0].delta.content or ""
+        return visible
+
+    async def test_realtime_validated_text_precedes_provider_terminal_publication(self) -> None:
+        service = self._service(realtime=True)
+        events: list[str] = []
+        service._push_llm_text = AsyncMock(side_effect=lambda text: events.append(f"text:{text}"))
+        raw = json.dumps(self._envelope())
+
+        async def stream():
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content=raw),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+            events.append("provider-terminal")
+
+        async for _ in service._stream_action_envelope(stream()):
+            pass
+
+        self.assertEqual(events, ["text:One, two, three, four, five.", "provider-terminal"])
+
+    async def test_repeat_is_replaced_for_rtvi_and_realtime(self) -> None:
+        envelope = self._envelope(
+            transcript="White",
+            response="Could you confirm what color the comb is?",
+        )
+        for realtime in (False, True):
+            with self.subTest(realtime=realtime):
+                service = self._service(realtime=realtime)
+                first = await self._drain(service, envelope)
+                repeated = await self._drain(service, envelope)
+
+                if realtime:
+                    self.assertEqual((first, repeated), ("", ""))
+                    self.assertEqual(self.spoken[0], envelope["response"])
+                    self.assertIn(self.spoken[1], BRIDGE_FILLERS)
+                else:
+                    self.assertEqual(first, envelope["response"])
+                    self.assertIn(repeated, BRIDGE_FILLERS)
+                    self.assertNotIn(envelope["response"], repeated)
+                    self.assertEqual(self.spoken, [])
+                service._thinking_handler.assert_awaited_once_with("White", "high", "repetition")
+
+    async def test_invalid_action_withholds_streamed_text(self) -> None:
+        service = self._service()
+        visible = await self._drain(service, self._envelope(turn_action="delegate"))
+
+        self.assertEqual(visible, "")
+        self.assertEqual(self.transcripts, ["Count one to five"])
         self.assertEqual(self.spoken, ["One, two, three, four, five."])
 
-        await self._drain(service, envelope)
+    async def test_rtvi_reply_is_only_a_repeat_on_a_later_turn(self) -> None:
+        service = self._service()
+        service._repeat = RepeatGuard()
+        envelope = self._envelope(turn_action="delegate")
+        first = await self._drain(service, envelope)
+        self.assertEqual(first, "")
+        self.assertEqual(self.spoken, ["One, two, three, four, five."])
 
+        repeated = await self._drain(service, envelope)
+
+        self.assertEqual(repeated, "")
         self.assertEqual(len(self.spoken), 2)
         self.assertIn(self.spoken[1], BRIDGE_FILLERS)
 
-    async def test_streamed_deltas_reach_tts_with_word_spacing_intact(self) -> None:
-        """Token deltas must not be trimmed: the space before a word rides on its delta."""
-        service = self._service()
+    async def test_buffered_response_reaches_tts_with_word_spacing_intact(self) -> None:
+        """Validation must preserve spaces carried at token boundaries."""
+        service = self._service(realtime=True)
         response_pieces = ["I'm", " doing", " great,", " thank", " you!", " How", " can", " I", " help?"]
         pieces = [
             '{"transcript": "How are you?", "turn_action": "respond", "response": "',
@@ -368,76 +379,160 @@ class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         async def stream():
-            for piece in pieces:
-                yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece))])
+            for index, piece in enumerate(pieces):
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content=piece),
+                            finish_reason="stop" if index == len(pieces) - 1 else None,
+                        )
+                    ]
+                )
 
         del service._push_llm_text  # the real push path, not the collector installed by _service()
         spoken: list[str] = []
         with patch.object(NvidiaOmniLLMService, "_push_llm_text", AsyncMock(side_effect=spoken.append)):
-            # Mirrors the base OpenAI service loop, which pushes each delta on its own.
             async for chunk in service._stream_action_envelope(stream()):
                 content = chunk.choices[0].delta.content
                 if content:
                     await service._push_llm_text(content)
 
-        self.assertEqual("".join(spoken), "I'm doing great, thank you! How can I help?")
+        self.assertEqual(spoken, ["I'm doing great, thank you! How can I help?"])
 
-    async def test_envelope_json_never_leaks_into_speech(self) -> None:
+    async def test_rtvi_streamed_deltas_keep_word_spacing_intact(self) -> None:
         service = self._service()
+        pieces = [
+            '{"transcript": "How are you?", "turn_action": "respond", "response": "',
+            "I'm",
+            " doing",
+            " great,",
+            " thank",
+            " you!",
+            " How",
+            " can",
+            " I",
+            " help?",
+            '", "selected_input_source": "none", "media_analysis_action": "none", '
+            '"media_analysis_prompt": "", "highres_query": ""}',
+        ]
+
+        async def stream():
+            for piece in pieces:
+                yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=piece))])
+
+        visible = ""
+        async for chunk in service._stream_action_envelope(stream()):
+            visible += chunk.choices[0].delta.content or ""
+
+        self.assertEqual(visible, "I'm doing great, thank you! How can I help?")
+        self.assertEqual(self.spoken, [])
+
+    async def test_envelope_json_never_leaks_into_rtvi_or_realtime_speech(self) -> None:
+        envelope = self._envelope(
+            transcript="Look at the photo",
+            turn_action="analyze_attachment",
+            response="Sure, let me look at it.",
+            selected_input_source="uploaded_attachment",
+            media_analysis_action="new",
+            media_analysis_prompt="describe the photo",
+        )
+        for realtime, expected_visible, expected_spoken in (
+            (False, envelope["response"], []),
+            (True, "", [envelope["response"]]),
+        ):
+            with self.subTest(realtime=realtime):
+                service = self._service(realtime=realtime)
+                visible = await self._drain(service, envelope)
+
+                for token in ("turn_action", "selected_input_source", "{", "}"):
+                    self.assertNotIn(token, visible)
+                self.assertEqual(visible, expected_visible)
+                self.assertEqual(self.spoken, expected_spoken)
+                service._media_analysis_prompt_handler.assert_awaited_once()
+
+    async def test_missing_attachment_never_releases_provisional_acknowledgment(self) -> None:
+        service = self._service(realtime=True)
+        service._uploaded_attachment_available = lambda: False
+        service._attachment_pending = lambda: False
+
         visible = await self._drain(
             service,
-            {
-                "transcript": "Look at the photo",
-                "turn_action": "analyze_attachment",
-                "response": "Sure, let me look at it.",
-                "selected_input_source": "uploaded_attachment",
-                "media_analysis_action": "new",
-                "media_analysis_prompt": "describe the photo",
-                "highres_query": "",
-            },
+            self._envelope(
+                transcript="Describe the uploaded image",
+                turn_action="analyze_attachment",
+                response="Analyzing the uploaded image now.",
+                selected_input_source="uploaded_attachment",
+                media_analysis_action="new",
+                media_analysis_prompt="Describe the uploaded image",
+            ),
         )
 
-        for token in ("turn_action", "selected_input_source", "{", "}"):
-            self.assertNotIn(token, visible)
-        self.assertEqual(visible, "Sure, let me look at it.")
-        service._media_analysis_prompt_handler.assert_awaited_once()
+        self.assertEqual(visible, "")
+        self.assertEqual(self.spoken, ["Please upload or attach the media first, then I can take a look."])
+        self.assertNotIn("Analyzing", "".join(self.spoken))
+        service._media_analysis_prompt_handler.assert_not_awaited()
 
     async def test_transcript_claimed_without_user_audio_never_enters_the_conversation(self) -> None:
         """A text turn has no speech, so a reported transcript is an echo, not something said."""
-        service = self._service()
-        service._active_turn_parts = None
-        visible = await self._drain(
-            service,
-            {
-                "transcript": "You are correcting your own structurally invalid Speaker output.",
-                "turn_action": "respond",
-                "response": "Hi there! I'm your NVIDIA voice assistant.",
-                "selected_input_source": "none",
-                "media_analysis_action": "none",
-                "media_analysis_prompt": "",
-                "highres_query": "",
-            },
-        )
+        for realtime in (False, True):
+            with self.subTest(realtime=realtime):
+                service = self._service(realtime=realtime)
+                service._active_turn_parts = None
+                visible = await self._drain(
+                    service,
+                    self._envelope(
+                        transcript="You are correcting your own structurally invalid Speaker output.",
+                        response="Hi there! I'm your NVIDIA voice assistant.",
+                    ),
+                )
 
-        self.assertEqual(visible, "Hi there! I'm your NVIDIA voice assistant.")
-        self.assertEqual(self.transcripts, [])
+                expected = "Hi there! I'm your NVIDIA voice assistant."
+                self.assertEqual(visible, "" if realtime else expected)
+                self.assertEqual(self.spoken, [expected] if realtime else [])
+                self.assertEqual(self.transcripts, [])
 
     async def test_audio_turn_still_reports_its_transcript(self) -> None:
-        service = self._service()
-        await self._drain(
-            service,
-            {
-                "transcript": "Count one to five",
-                "turn_action": "respond",
-                "response": "One, two, three, four, five.",
-                "selected_input_source": "none",
-                "media_analysis_action": "none",
-                "media_analysis_prompt": "",
-                "highres_query": "",
-            },
-        )
+        for realtime in (False, True):
+            with self.subTest(realtime=realtime):
+                service = self._service(realtime=realtime)
+                await self._drain(service, self._envelope())
 
-        self.assertEqual(self.transcripts, ["Count one to five"])
+                self.assertEqual(self.transcripts, ["Count one to five"])
+
+    async def test_context_type_selects_rtvi_streaming_or_realtime_validation(self) -> None:
+        envelope = self._envelope()
+
+        for context, expected_visible, expected_spoken in (
+            (LLMContext([]), envelope["response"], []),
+            (RealtimeResponseLLMContext([]), "", [envelope["response"]]),
+        ):
+            with self.subTest(context_type=type(context).__name__):
+                service = self._service()
+
+                async def source_stream():
+                    chunks = self._chunks(envelope)
+                    for index, piece in enumerate(chunks):
+                        yield SimpleNamespace(
+                            choices=[
+                                SimpleNamespace(
+                                    delta=SimpleNamespace(content=piece),
+                                    finish_reason="stop" if index == len(chunks) - 1 else None,
+                                )
+                            ]
+                        )
+
+                with patch.object(
+                    NvidiaOmniLLMService,
+                    "get_chat_completions",
+                    AsyncMock(return_value=source_stream()),
+                ):
+                    stream = await service.get_chat_completions(context)
+                    visible = ""
+                    async for chunk in stream:
+                        visible += chunk.choices[0].delta.content or ""
+
+                self.assertEqual(visible, expected_visible)
+                self.assertEqual(self.spoken, expected_spoken)
 
 
 class EnvelopeContractDeliveryTests(unittest.TestCase):
@@ -526,6 +621,8 @@ class SpeakerHistoryOwnershipTests(unittest.IsolatedAsyncioTestCase):
         service._name = "SpeakerOmni"
         service._context = LLMContext([{"role": "system", "content": "identity"}])
         service._answered_transcript = ""
+        service._active_transcript_turn_frame_id = 1234
+        service._transcript_emitted = False
         service.push_frame = AsyncMock()
         return service
 
@@ -539,6 +636,9 @@ class SpeakerHistoryOwnershipTests(unittest.IsolatedAsyncioTestCase):
             [("system", "identity"), ("user", "count one to five")],
         )
         service.push_frame.assert_awaited_once()
+        frame, direction = service.push_frame.await_args.args
+        self.assertEqual(frame.metadata[USER_TRANSCRIPT_TURN_FRAME_ID_METADATA], 1234)
+        self.assertEqual(direction, FrameDirection.UPSTREAM)
 
     def test_the_speaker_is_not_announced_as_a_realtime_service(self) -> None:
         # The transport worker's assistant aggregator, which sees every frame
@@ -559,7 +659,9 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
         service._capture_cooldown = 0
         service._context = None
         service._active_turn_parts = AUDIO_TURN_PARTS
+        service._realtime_response_snapshot_hook = AsyncMock()
         service.run_inference = AsyncMock()
+        service.run_multimodal_inference = AsyncMock()
         service.push_frame = AsyncMock()
         return service
 
@@ -596,6 +698,39 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unsafe_envelope_gets_exactly_one_successful_speaker_correction(self) -> None:
         service = self._service()
+        service.run_multimodal_inference = AsyncMock(
+            return_value=NvidiaOmniInferenceResult(
+                text=json.dumps(
+                    {
+                        "transcript": "Count one to five",
+                        "turn_action": "respond",
+                        "response": "One, two, three, four, five.",
+                        "selected_input_source": "none",
+                        "media_analysis_action": "none",
+                        "media_analysis_prompt": "",
+                        "highres_query": "",
+                        "webcam_focus": "",
+                    }
+                ),
+                finish_reason="stop",
+            )
+        )
+        corrected = await service._resolve_turn(self._unsafe_result())
+
+        service.run_multimodal_inference.assert_awaited_once()
+        self.assertIsNotNone(corrected)
+        self.assertEqual(corrected.payload["turn_action"], "respond")
+        self.assertEqual(corrected.response, "One, two, three, four, five.")
+        self.assertEqual(service.push_frame.await_count, 0)
+        # Held until the next turn starts, so it is never compared against itself.
+        self.assertEqual(service._repeat._pending, "one two three four five")
+        service._repeat.reset()
+        self.assertIn("one two three four five", service._repeat._recent)
+        service._thinking_handler.assert_not_awaited()
+
+    async def test_rtvi_correction_preserves_unstructured_inference_contract(self) -> None:
+        service = self._service()
+        service._realtime_response_snapshot_hook = None
         service.run_inference = AsyncMock(
             return_value=json.dumps(
                 {
@@ -610,33 +745,30 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
+
         corrected = await service._resolve_turn(self._unsafe_result())
 
         service.run_inference.assert_awaited_once()
-        self.assertIsNotNone(corrected)
-        self.assertEqual(corrected.payload["turn_action"], "respond")
+        service.run_multimodal_inference.assert_not_awaited()
         self.assertEqual(corrected.response, "One, two, three, four, five.")
-        self.assertEqual(service.push_frame.await_count, 0)
-        # Held until the next turn starts, so it is never compared against itself.
-        self.assertEqual(service._repeat._pending, "one two three four five")
-        service._repeat.reset()
-        self.assertIn("one two three four five", service._repeat._recent)
-        service._thinking_handler.assert_not_awaited()
 
     async def test_failed_correction_falls_back_to_thinker_without_retrying(self) -> None:
         service = self._service()
-        service.run_inference = AsyncMock(
-            return_value=json.dumps(
-                {
-                    "transcript": "Count one to five",
-                    "turn_action": "respond",
-                    "response": "I will do that.",
-                    "selected_input_source": "uploaded_attachment",
-                    "media_analysis_action": "new",
-                    "media_analysis_prompt": "",
-                    "highres_query": "",
-                    "webcam_focus": "",
-                }
+        service.run_multimodal_inference = AsyncMock(
+            return_value=NvidiaOmniInferenceResult(
+                text=json.dumps(
+                    {
+                        "transcript": "Count one to five",
+                        "turn_action": "respond",
+                        "response": "I will do that.",
+                        "selected_input_source": "uploaded_attachment",
+                        "media_analysis_action": "new",
+                        "media_analysis_prompt": "",
+                        "highres_query": "",
+                        "webcam_focus": "",
+                    }
+                ),
+                finish_reason="stop",
             )
         )
         corrected = await service._resolve_turn(self._unsafe_result())
@@ -644,7 +776,7 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(corrected)
         self.assertEqual(corrected.payload["turn_action"], "think")
         self.assertEqual(corrected.response, "Let me think that through carefully.")
-        service.run_inference.assert_awaited_once()
+        service.run_multimodal_inference.assert_awaited_once()
         self.assertEqual(service.push_frame.await_count, 0)
         service._thinking_handler.assert_awaited_once_with(
             "Count one to five",
@@ -656,18 +788,21 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_think_correction_is_rejected_and_defers_to_thinker(self) -> None:
         service = self._service()
-        service.run_inference = AsyncMock(
-            return_value=json.dumps(
-                {
-                    "transcript": "Count one to five",
-                    "turn_action": "think",
-                    "response": "Let me think about that.",
-                    "selected_input_source": "none",
-                    "media_analysis_action": "none",
-                    "media_analysis_prompt": "",
-                    "highres_query": "",
-                    "webcam_focus": "",
-                }
+        service.run_multimodal_inference = AsyncMock(
+            return_value=NvidiaOmniInferenceResult(
+                text=json.dumps(
+                    {
+                        "transcript": "Count one to five",
+                        "turn_action": "think",
+                        "response": "Let me think about that.",
+                        "selected_input_source": "none",
+                        "media_analysis_action": "none",
+                        "media_analysis_prompt": "",
+                        "highres_query": "",
+                        "webcam_focus": "",
+                    }
+                ),
+                finish_reason="stop",
             )
         )
         corrected = await service._resolve_turn(self._unsafe_result())
@@ -675,7 +810,7 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(corrected)
         self.assertEqual(corrected.payload["turn_action"], "think")
         self.assertEqual(corrected.response, "Let me think that through carefully.")
-        service.run_inference.assert_awaited_once()
+        service.run_multimodal_inference.assert_awaited_once()
         service._thinking_handler.assert_awaited_once()
 
     async def test_legitimate_attachment_acknowledgment_dispatches_exactly_once(self) -> None:
@@ -738,7 +873,7 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
         service._media_analysis_prompt_handler.assert_not_awaited()
         service._thinking_handler.assert_not_awaited()
         service._highres_capture_handler.assert_not_awaited()
-        service.run_inference.assert_not_awaited()
+        service.run_multimodal_inference.assert_not_awaited()
 
 
 class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
@@ -772,7 +907,7 @@ class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
             finish_reason="stop",
         )
 
-        answer, reasoning = await worker._think(
+        answer, reasoning, finish_reason = await worker._think(
             "",
             "Count one to five",
             "",
@@ -783,6 +918,7 @@ class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "One, two, three, four, five.")
         self.assertEqual(reasoning, "Counted the requested sequence.")
+        self.assertEqual(finish_reason, "stop")
         worker._omni.run_multimodal_inference.assert_awaited_once()
         kwargs = worker._omni.run_multimodal_inference.await_args.kwargs
         self.assertEqual(kwargs["max_tokens"], 16384)

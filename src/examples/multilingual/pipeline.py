@@ -27,10 +27,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
-from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
+from pipecat.services.nvidia.llm import NvidiaLLMService as PipecatNvidiaLLMService
+from pipecat.services.nvidia.llm import NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
-from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
@@ -49,12 +49,20 @@ from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
+    bind_realtime_automatic_response_provenance,
     build_context_messages,
     build_pipeline_params,
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
+    build_vad_params,
+    build_vad_user_turn_start_strategies,
     create_transport,
+    manual_realtime_user_aggregator_params,
     register_session_start_handlers,
+    resolve_pipeline_prompt,
+    runner_protocol,
+    select_max_tokens_config,
+    uses_server_vad_turn_detection,
     with_realtime_observers,
 )
 from examples.shared.prewarm import (
@@ -68,16 +76,15 @@ from utils import (
     is_nvcf,
     load_ipa_dictionary,
     load_prompt_catalog,
+    load_selected_service_entry,
     load_service_entry,
     load_service_entry_by_id,
     normalize_lang_code,
     nvidia_api_key,
-    parse_env_bool,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
     render_prompt_addon,
-    resolve_prompt,
 )
 
 load_dotenv(override=True)
@@ -91,25 +98,48 @@ def _is_eval_transport(runner_args: RunnerArguments) -> bool:
     return cli_transport == "eval" or isinstance(runner_args, EvalRunnerArguments)
 
 
-def _build_multilingual_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
+def _build_multilingual_user_aggregator_params(
+    welcome_enabled: bool,
+    *,
+    transport=None,
+) -> LLMUserAggregatorParams:
     """Use VAD-only turn starts so interim ASR text does not start a user turn."""
-    if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
+    if transport is not None:
+        manual = manual_realtime_user_aggregator_params(
+            welcome_enabled,
+            transport=transport,
+        )
+        if manual is not None:
+            return manual
+    start_strategies = build_vad_user_turn_start_strategies(
+        transport=transport,
+        include_transcription=False,
+    )
+    if not uses_server_vad_turn_detection(transport=transport):
+        stop_strategies = bind_realtime_automatic_response_provenance(
+            build_smart_turn_stop_strategies(),
+            transport=transport,
+        )
         return LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
+            vad_analyzer=SileroVADAnalyzer(params=build_vad_params(VADParams(stop_secs=0.2), transport=transport)),
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled, transport=transport),
             user_turn_strategies=UserTurnStrategies(
-                start=[VADUserTurnStartStrategy()],
-                stop=build_smart_turn_stop_strategies(),
+                start=start_strategies,
+                stop=stop_strategies,
             ),
         )
 
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
+    stop_strategies = bind_realtime_automatic_response_provenance(
+        [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
+        transport=transport,
+    )
     return LLMUserAggregatorParams(
-        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=build_user_mute_strategies(welcome_enabled),
+        vad_analyzer=SileroVADAnalyzer(params=build_vad_params(VADParams(stop_secs=stop_secs), transport=transport)),
+        user_mute_strategies=build_user_mute_strategies(welcome_enabled, transport=transport),
         user_turn_strategies=UserTurnStrategies(
-            start=[VADUserTurnStartStrategy()],
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
+            start=start_strategies,
+            stop=stop_strategies,
         ),
     )
 
@@ -117,6 +147,7 @@ def _build_multilingual_user_aggregator_params(welcome_enabled: bool) -> LLMUser
 async def _prepare_session_language_codes(
     runner_args: RunnerArguments,
     *,
+    include_tts: bool = True,
     tts_server: str,
     tts_voice: str,
     tts_function_id: str,
@@ -131,11 +162,13 @@ async def _prepare_session_language_codes(
         logger.info("Skipping ASR/TTS service prewarm for eval transport startup")
         return ""
 
-    prewarm_tasks = [
-        asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id),
-        asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model),
-    ]
+    prewarm_tasks = [asyncio.to_thread(prewarm_asr, asr_server, asr_model, asr_function_id)]
+    if include_tts:
+        prewarm_tasks.append(asyncio.to_thread(prewarm_tts, tts_server, tts_voice, tts_function_id, tts_model))
     await asyncio.gather(*prewarm_tasks)
+    if not include_tts:
+        return ""
+
     language_catalog_kwargs = {
         "asr_server": asr_server,
         "asr_model": asr_model,
@@ -146,6 +179,11 @@ async def _prepare_session_language_codes(
     if llm_supported_languages is not None:
         language_catalog_kwargs["llm_supported_languages"] = llm_supported_languages
     return get_lang_codes(**language_catalog_kwargs)
+
+
+def _should_prepare_tts_catalog(*, is_realtime: bool, output_modalities: object) -> bool:
+    """Return whether startup may discover a voice for the default output mode."""
+    return not is_realtime or output_modalities != ["text"]
 
 
 def _resolve_llm_supported_languages(body: dict, default_llm: dict):
@@ -167,16 +205,35 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the multilingual NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
-    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
-    prompt_key, base_system_content = resolve_prompt(
-        __file__,
-        body.get("prompt_content", ""),
-        body.get("prompt_key", ""),
+    is_realtime = runner_protocol(runner_args) == "realtime"
+    if is_realtime:
+        from examples.shared.nvidia_llm import NvidiaLLMService as RealtimeNvidiaLLMService
+        from realtime.transport import (
+            bind_realtime_assistant_context_message,
+            bind_realtime_context,
+            bind_realtime_deferred_service_responses,
+            bind_realtime_tts_service,
+            configure_realtime_client_tools,
+            prepare_realtime_tools,
+            realtime_response_gate_processors,
+        )
+
+    prepare_tts = _should_prepare_tts_catalog(
+        is_realtime=is_realtime,
+        output_modalities=body.get("output_modalities"),
     )
+    welcome_enabled = not is_realtime and examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+    prompt_key, base_system_content = resolve_pipeline_prompt(__file__, body, is_realtime=is_realtime)
     logger.info(f"Starting multilingual cascaded pipeline (prompt={prompt_key})")
-    default_llm = load_service_entry("llm", "")
-    default_tts = load_service_entry("tts", "")
-    default_asr = load_service_entry("asr", "")
+    selected_llm_id = str(body.get("llm_id", "") or "")
+    default_llm = load_selected_service_entry("llm", selected_llm_id) if is_realtime else load_service_entry("llm", "")
+    llm_profile = default_llm
+    default_tts = (
+        load_selected_service_entry("tts", body.get("tts_id")) if is_realtime else load_service_entry("tts", "")
+    )
+    default_asr = (
+        load_selected_service_entry("asr", body.get("asr_id")) if is_realtime else load_service_entry("asr", "")
+    )
     llm_supported_languages = _resolve_llm_supported_languages(body, default_llm)
 
     # --- ASR ---
@@ -205,7 +262,12 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if fixed_session_language:
         asr_kwargs["settings"] = NvidiaSTTSettings(language=fixed_session_language)
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
+    if is_realtime:
+        from realtime.asr import RealtimeNvidiaSTTService
+
+        stt = RealtimeNvidiaSTTService(**asr_kwargs, stop_history=400)
+    else:
+        stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={fixed_session_language}"
@@ -221,6 +283,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_model = body.get("tts_model", "") or default_tts.get("model", "")
     lang_codes = await _prepare_session_language_codes(
         runner_args,
+        include_tts=prepare_tts,
         tts_server=tts_server,
         tts_voice=tts_voice,
         tts_function_id=tts_function_id,
@@ -257,11 +320,37 @@ async def bot(runner_args: RunnerArguments) -> None:
         llm_settings.extra = base_extra
     if llm_temperature is not None:
         llm_settings.temperature = llm_temperature
-    llm = NvidiaLLMService(
-        api_key=nvidia_api_key(),
-        base_url=base_url,
-        settings=llm_settings,
-    )
+    if is_realtime:
+        max_tokens = select_max_tokens_config(
+            body,
+            default_llm.get("max_tokens", ""),
+            is_realtime=True,
+        )
+        if max_tokens not in ("", None):
+            llm_settings.max_tokens = int(max_tokens)
+        llm = RealtimeNvidiaLLMService(
+            api_key=nvidia_api_key(),
+            base_url=base_url,
+            settings=llm_settings,
+            forced_tool_call_stops=llm_profile.get("forced_tool_call_stops"),
+            realtime_parallel_tool_calls=body.get("parallel_tool_calls", True),
+            realtime_model_max_output_tokens=body.get("realtime_model_max_output_tokens"),
+        )
+    else:
+        llm = PipecatNvidiaLLMService(
+            api_key=nvidia_api_key(),
+            base_url=base_url,
+            settings=llm_settings,
+        )
+    tools_schema = None
+    tool_choice = body.get("tool_choice", "auto") or "auto"
+    if is_realtime:
+        tools_schema = configure_realtime_client_tools(
+            transport,
+            llm,
+            body.get("client_tools"),
+        )
+        tools_schema, tool_choice = await prepare_realtime_tools(transport, llm)
 
     summary_extra = with_reasoning(base_extra, True)
     summary_llm_settings = NvidiaLLMSettings(model=model_id)
@@ -269,7 +358,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         summary_llm_settings.extra = summary_extra
     if llm_temperature is not None:
         summary_llm_settings.temperature = llm_temperature
-    summary_llm = NvidiaLLMService(
+    summary_llm = PipecatNvidiaLLMService(
         api_key=nvidia_api_key(),
         base_url=base_url,
         settings=summary_llm_settings,
@@ -286,16 +375,17 @@ async def bot(runner_args: RunnerArguments) -> None:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     if fixed_session_language:
         tts_settings_kwargs["language"] = fixed_session_language
-        resolved_voice = resolve_voice_for_language(
-            fixed_session_language,
-            tts_voice,
-            server=tts_server,
-            function_id=tts_function_id,
-            model=tts_model,
-        )
-        if resolved_voice:
-            tts_voice = resolved_voice
-            tts_settings_kwargs["voice"] = resolved_voice
+        if prepare_tts:
+            resolved_voice = resolve_voice_for_language(
+                fixed_session_language,
+                tts_voice,
+                server=tts_server,
+                function_id=tts_function_id,
+                model=tts_model,
+            )
+            if resolved_voice:
+                tts_voice = resolved_voice
+                tts_settings_kwargs["voice"] = resolved_voice
 
     tts_kwargs: dict = {
         "api_key": nvidia_api_key(),
@@ -313,6 +403,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
     tts = NvidiaTTSService(**tts_kwargs)
+    if is_realtime:
+        bind_realtime_tts_service(transport, tts)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
@@ -325,35 +417,59 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- Context ---
     prompt_catalog = load_prompt_catalog(__file__)
-    base_system_content = render_prompt_addon(
-        base_system_content,
-        prompt_catalog,
-        FIXED_SESSION_LANGUAGE_ADDON_KEY,
-        {"fixed_language_name": describe_language(fixed_session_language)},
-    )
 
-    messages = build_context_messages(base_system_content, system_prompt)
-    context = LLMContext(messages)
+    def render_realtime_instructions(instructions: str) -> list[dict]:
+        decorated = render_prompt_addon(
+            instructions,
+            prompt_catalog,
+            FIXED_SESSION_LANGUAGE_ADDON_KEY,
+            {"fixed_language_name": describe_language(fixed_session_language)},
+        )
+        return build_context_messages(decorated, system_prompt)
+
+    messages = render_realtime_instructions(base_system_content)
+    if tools_schema is not None:
+        context = LLMContext(messages, tools=tools_schema, tool_choice=tool_choice)
+    else:
+        context = LLMContext(messages)
+    if is_realtime:
+        bind_realtime_context(
+            transport,
+            context,
+            render_instructions=render_realtime_instructions,
+        )
+        bind_realtime_deferred_service_responses(transport, llm)
     preserve_prompt_messages = len(messages)
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=_build_multilingual_user_aggregator_params(welcome_enabled),
+        user_params=_build_multilingual_user_aggregator_params(
+            welcome_enabled,
+            transport=transport if is_realtime else None,
+        ),
     )
-    logger.info(
-        f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
-        f"preserve_prompt_messages={preserve_prompt_messages}"
-    )
+    if is_realtime:
+        logger.info("Chat history summarization disabled: Realtime conversation history remains canonical")
+    else:
+        logger.info(
+            f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
+            f"preserve_prompt_messages={preserve_prompt_messages}"
+        )
 
-    reminder_processor = PerTurnReminderProcessor(build_reminder(fixed_session_language))
+    reminder_processor = PerTurnReminderProcessor(
+        build_reminder(fixed_session_language),
+        realtime=is_realtime,
+    )
 
     audio_recorder = create_audio_recorder()
 
+    response_gate_processors = realtime_response_gate_processors(transport) if is_realtime else []
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
             user_aggregator,
+            *response_gate_processors,
             reminder_processor,
             llm,
             tts,
@@ -368,6 +484,12 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):
+        if is_realtime:
+            bind_realtime_assistant_context_message(transport, message)
+        # Realtime item edits and deletes address this canonical context. Its
+        # provider-only snapshot owns any native token-budget truncation.
+        if is_realtime:
+            return
         async with summary_lock:
             await apply_pinned_prompt_summary(
                 context=context,
@@ -425,10 +547,16 @@ async def bot(runner_args: RunnerArguments) -> None:
         params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
+            send_initial_empty_metrics=not is_realtime,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=with_realtime_observers(latency_observer, transport=transport),
+        observers=with_realtime_observers(
+            latency_observer,
+            transport=transport,
+            is_realtime=is_realtime,
+        ),
         enable_tracing=IS_TRACING_ENABLED,
+        enable_rtvi=not is_realtime,
     )
 
     @user_aggregator.event_handler("on_user_turn_stopped")
@@ -437,6 +565,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(
                 data={
                     "type": "user-turn-finalized",
+                    **({"turn_frame_id": getattr(strategy, "turn_frame_id", None)} if is_realtime else {}),
                     "timestamp": getattr(message, "timestamp", None),
                     "transcript": getattr(message, "content", None),
                     "user_id": getattr(message, "user_id", None),
@@ -463,24 +592,26 @@ async def bot(runner_args: RunnerArguments) -> None:
         logger.info("Client disconnected")
         await task.cancel()
 
-    @task.rtvi.event_handler("on_client_message")
-    async def on_client_message(rtvi, message):
-        payload = message.data if isinstance(message.data, dict) else {}
-        if message.type == "set-voice":
-            voice_id = payload.get("voice_id", "")
-            language = payload.get("language", "")
-            if not voice_id:
-                return
-            settings_kwargs: dict = {"voice": voice_id}
-            if language:
-                settings_kwargs["language"] = normalize_lang_code(language)
-            await task.queue_frame(
-                TTSUpdateSettingsFrame(
-                    delta=NvidiaTTSSettings(**settings_kwargs),
-                    service=tts,
+    if not is_realtime:
+
+        @task.rtvi.event_handler("on_client_message")
+        async def on_client_message(rtvi, message):
+            payload = message.data if isinstance(message.data, dict) else {}
+            if message.type == "set-voice":
+                voice_id = payload.get("voice_id", "")
+                language = payload.get("language", "")
+                if not voice_id:
+                    return
+                settings_kwargs: dict = {"voice": voice_id}
+                if language:
+                    settings_kwargs["language"] = normalize_lang_code(language)
+                await task.queue_frame(
+                    TTSUpdateSettingsFrame(
+                        delta=NvidiaTTSSettings(**settings_kwargs),
+                        service=tts,
+                    )
                 )
-            )
-            logger.info(f"Voice switched → {voice_id}, language={settings_kwargs.get('language', '(unchanged)')}")
+                logger.info(f"Voice switched → {voice_id}, language={settings_kwargs.get('language', '(unchanged)')}")
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(task)

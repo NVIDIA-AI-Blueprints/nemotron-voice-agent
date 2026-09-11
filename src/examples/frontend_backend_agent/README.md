@@ -6,6 +6,10 @@ The frontend LLM is the only user-facing LLM and exposes `call_backend` plus `ca
 
 The airline backend agent is the reference backend, but the architecture is reusable: treat the frontend LLM as a generic conversational layer in front of another backend agent that exposes compatible call/cancel behavior. Booking is intentionally gated, so the user must search flights first and select one returned flight before the backend agent can continue booking.
 
+The OpenAI Realtime WebSocket can run this complete server-owned system or
+expose client-owned delegation functions. Refer to [Configure
+Tools](../../../docs/how-to/use-realtime-gateway.md#configure-tools).
+
 ![Frontend/Backend Agent architecture](images/frontend-backend-agent-architecture.png)
 
 The diagram shows the full runtime path. User audio enters through the WebRTC/WebSocket transport, audio input processing produces a user transcript for the frontend LLM, the frontend LLM sends rephrased task requirements to the backend agent, and backend results return to the frontend LLM before audio output is synthesized and played back.

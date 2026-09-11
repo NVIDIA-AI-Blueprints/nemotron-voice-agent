@@ -5,7 +5,12 @@ description = "End-to-end voice agent blueprint powered by NVIDIA Nemotron ASR, 
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.7.0",
+    "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai,mcp]==1.7.0",
+    "numpy>=2.0.0",
+    "soxr>=1.0.0",
+    "jsonschema>=4.26.0",
+    "referencing>=0.37.0",
+    "regex>=2026.7.19",
     "python-dotenv>=1.2.2",
     "loguru>=0.7.3",
     "pyyaml>=6.0.3",

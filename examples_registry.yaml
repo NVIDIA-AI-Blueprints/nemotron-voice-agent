@@ -20,6 +20,75 @@ selection: all
 # Override at runtime via the ``TRANSPORT_SELECTION`` environment variable.
 transports: all
 
+# Stable public model ids for the OpenAI Realtime API. Each model selects one
+# complete, server-owned pipeline profile; endpoint URLs and credentials remain
+# in the example-local service catalogs. Exactly one profile is the default for
+# each pipeline. Additional authenticated NVIDIA selectors may refine these
+# catalog selections when a client secret is minted.
+realtime_models:
+  nvidia/nemotron-realtime:
+    label: Nemotron Realtime
+    pipeline_mode: generic-assistant
+    default: true
+    selectors:
+      prompt_key: generic_assistant
+      llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-client-tools:
+    label: Nemotron Realtime Client Tools
+    pipeline_mode: generic-assistant
+    default: false
+    selectors:
+      prompt_key: generic_assistant_without_tools
+      llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-multilingual:
+    label: Nemotron Realtime Multilingual
+    pipeline_mode: multilingual-assistant
+    default: true
+    selectors:
+      prompt_key: multilingual_voice_assistant
+      llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+    platform_overrides:
+      cloud:
+        # Nemotron Streaming Multilingual is local-only. NVCF exposes Parakeet.
+        asr_id: parakeet-rnnt
+
+  nvidia/nemotron-realtime-omni:
+    label: Nemotron Realtime Omni
+    pipeline_mode: omni-assistant
+    default: true
+    selectors:
+      prompt_key: generic_omni_assistant
+      llm_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-omni-subagents:
+    label: Nemotron Realtime Omni Subagents
+    pipeline_mode: omni-assistant-subagents
+    default: true
+    selectors:
+      prompt_key: generic_omni_assistant
+      llm_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-frontend-backend:
+    label: Nemotron Realtime Frontend Backend
+    pipeline_mode: frontend-backend-agent
+    default: true
+    selectors:
+      prompt_key: talker
+      llm_id: registry-default
+      thinker_llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+
 examples:
   generic-assistant:
     label: Generic Assistant

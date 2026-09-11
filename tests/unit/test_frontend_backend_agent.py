@@ -23,7 +23,7 @@ from examples.frontend_backend_agent.airline.state import MAX_LIFECYCLE_EVENTS, 
 from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
 from examples.frontend_backend_agent.airline.tools import CALL_BACKEND_TOOL, CANCEL_BACKEND_TOOL
 from examples.frontend_backend_agent.airline.transform import _server_booking_to_record, _server_flight_to_option
-from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
+from examples.frontend_backend_agent.src.planner import THINKER_PLAN_SCHEMA, NvidiaThinkerPlanner
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload
 from examples.frontend_backend_agent.src.runtime_context import runtime_today
 from examples.frontend_backend_agent.src.tool_handlers import (
@@ -265,18 +265,35 @@ class _FrameCapturingLLM:
 class _InferenceCapturingLLM:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
+        self.raw_calls = 0
+        self.structured_calls = 0
+        self.structured_request: dict[str, Any] = {}
 
-    async def run_inference(self, context, max_tokens=None) -> str:
+    async def run_inference(self, context, *, max_tokens=None) -> str:
+        self.raw_calls += 1
         self.messages = list(context.get_messages())
-        return json.dumps(
-            {
-                "tool": "response_hint",
-                "reason": "unsupported_request",
-                "action": "answer_directly",
-                "context": "general",
-                "response_text": "I can help with flights.",
-            }
+        return (
+            "<think>private reasoning</think>\n"
+            '```json\n{"tool":"response_hint","reason":"unsupported_request",'
+            '"action":"answer_directly","context":"general",'
+            '"response_text":"I can help with flights."}\n```'
         )
+
+    async def run_structured_inference(self, context, *, schema, schema_name, max_tokens=None) -> dict[str, Any]:
+        self.structured_calls += 1
+        self.messages = list(context.get_messages())
+        self.structured_request = {
+            "schema": schema,
+            "schema_name": schema_name,
+            "max_tokens": max_tokens,
+        }
+        return {
+            "tool": "response_hint",
+            "reason": "unsupported_request",
+            "action": "answer_directly",
+            "context": "general",
+            "response_text": "I can help with flights.",
+        }
 
 
 class _CancellingAfterStartLLM(_FrameCapturingLLM):
@@ -449,13 +466,20 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         planner = NvidiaThinkerPlanner(
             llm=llm,
             system_prompt="You are a planner.",
+            structured_output=True,
         )
         today = date(2026, 4, 30)
         tomorrow = today + timedelta(days=1)
 
         with patch.dict("os.environ", {"FRONTEND_BACKEND_AGENT_TODAY": today.isoformat()}):
-            await planner.plan(query="Search flights tomorrow", slots={}, state={})
+            plan = await planner.plan(query="Search flights tomorrow", slots={}, state={})
 
+        self.assertEqual(llm.structured_calls, 1)
+        self.assertEqual(llm.raw_calls, 0)
+        self.assertEqual(plan["tool"], "response_hint")
+        self.assertIs(llm.structured_request["schema"], THINKER_PLAN_SCHEMA)
+        self.assertEqual(llm.structured_request["schema_name"], "airline_plan")
+        self.assertEqual(llm.structured_request["max_tokens"], 4096)
         self.assertIn(f"Today is {today.isoformat()}.", llm.messages[0]["content"])
         self.assertIn(f"Tomorrow is {tomorrow.isoformat()}.", llm.messages[0]["content"])
         user_payload = json.loads(llm.messages[1]["content"])
@@ -463,6 +487,17 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
             user_payload["runtime_context"],
             {"today": today.isoformat(), "tomorrow": tomorrow.isoformat()},
         )
+
+    async def test_thinker_planner_rtvi_default_uses_tolerant_json_parser(self) -> None:
+        llm = _InferenceCapturingLLM()
+        planner = NvidiaThinkerPlanner(llm=llm, system_prompt="You are a planner.")
+
+        plan = await planner.plan(query="Explain what you can do", slots={}, state={})
+
+        self.assertEqual(llm.raw_calls, 1)
+        self.assertEqual(llm.structured_calls, 0)
+        self.assertEqual(plan["tool"], "response_hint")
+        self.assertEqual(plan["response_text"], "I can help with flights.")
 
     async def test_thinker_started_is_internal_only_while_response_hint_is_speakable(self) -> None:
         thinker = _make_thinker()

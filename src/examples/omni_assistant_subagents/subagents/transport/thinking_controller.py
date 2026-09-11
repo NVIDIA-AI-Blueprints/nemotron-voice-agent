@@ -20,14 +20,20 @@ from typing import Any
 
 from loguru import logger
 from pipecat.bus.messages import BusJobResponseMessage
-from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
+from pipecat.frames.frames import Frame, LLMTextFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 
 from examples.omni_assistant_subagents.subagents.thinker import THINKING_TASK_NAME, ThinkerWorker
+from examples.shared.frames import (
+    LLMProviderCompletionReasonFrame,
+    require_llm_provider_finish_reason,
+)
 
 _MAX_THINKER_TURNS = 40
 _MAX_THINKER_CONVERSATION_CHARS = 8000
+
+ResponseEmitter = Callable[[tuple[Frame, ...]], Awaitable[bool]]
 
 
 class ThinkingController:
@@ -39,12 +45,16 @@ class ThinkingController:
         context: LLMContext,
         request_job: Callable[..., Awaitable[str]],
         queue_frame: Callable[[Any], Awaitable[None]],
+        emit_response: ResponseEmitter,
         followup_delay_secs: float,
+        realtime_mode: bool = False,
     ) -> None:
         """Initialize deliberate-thinking dispatch state for one session."""
         self._context = context
         self._request_job = request_job
         self._queue_frame = queue_frame
+        self._emit_response = emit_response
+        self._realtime_mode = realtime_mode
         self._followup_delay_secs = followup_delay_secs
         self._pending: dict[str, str] | None = None
         self._active = False
@@ -117,12 +127,24 @@ class ThinkingController:
         if not answer:
             await self._emit_update(task_id=message.job_id, status="error", detail="Thinking failed.", agent=agent)
             return True
+        finish_reason = None
+        if self._realtime_mode:
+            try:
+                finish_reason = require_llm_provider_finish_reason(response.get("finish_reason"))
+            except ValueError as exc:
+                logger.warning(f"Ignoring Thinker response with invalid provider terminal: {exc}")
+                await self._emit_update(task_id=message.job_id, status="error", detail="Thinking failed.", agent=agent)
+                return True
         await asyncio.sleep(self._followup_delay_secs)
         if generation != self._generation:
             return True
-        await self._queue_frame(LLMFullResponseStartFrame())
-        await self._queue_frame(LLMTextFrame(text=answer))
-        await self._queue_frame(LLMFullResponseEndFrame())
+        response_frames: tuple[Frame, ...] = (
+            LLMTextFrame(text=answer),
+            *((LLMProviderCompletionReasonFrame(finish_reason=finish_reason),) if finish_reason is not None else ()),
+        )
+        emitted = await self._emit_response(response_frames)
+        if not emitted:
+            return True
         await self._emit_update(task_id=message.job_id, status="done", detail=answer, agent=agent, reasoning=reasoning)
         return True
 

@@ -6,7 +6,10 @@
 import asyncio
 from dataclasses import dataclass
 
+from pipecat.metrics.metrics import LLMTokenUsage
+
 from attachment_store import Attachment
+from examples.omni_assistant.nvidia_omni_multimodal_service import NvidiaOmniInferenceResult
 from examples.omni_assistant_subagents.subagents.media_analyzer.agent import (
     _SYSTEM_PROMPT,
     MediaAnalyzerWorker,
@@ -71,3 +74,28 @@ def test_instructions_and_media_share_one_user_turn_with_text_first():
     assert parts[0]["type"] == "text"
     assert _SYSTEM_PROMPT in parts[0]["text"]
     assert parts[1]["type"] != "text"
+
+
+def test_worker_serializes_only_real_inference_metrics_for_the_bus():
+    worker = object.__new__(MediaAnalyzerWorker)
+    worker._model_id = "test-model"
+    result = NvidiaOmniInferenceResult(
+        text='{"tts":"ok","analysis":"ok"}',
+        usage=LLMTokenUsage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        ttfb_seconds=0.25,
+        processing_seconds=1.5,
+    )
+
+    payload = worker._llm_metrics_payload(result)
+
+    assert payload == {
+        "processor": "MediaAnalyzerOmniLLM",
+        "model": "test-model",
+        "ttfb_seconds": 0.25,
+        "processing_seconds": 1.5,
+        "usage": {
+            "prompt_tokens": 20,
+            "completion_tokens": 7,
+            "total_tokens": 27,
+        },
+    }

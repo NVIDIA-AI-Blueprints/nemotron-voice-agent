@@ -1,180 +1,52 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Shared announce / finish sequences for Realtime responses."""
+"""Canonical response lifecycle emission shared by transport and observer."""
 
 from __future__ import annotations
 
-from realtime.conversation import ConversationState, ResponseSnapshot
-from realtime.events import (
-    SERVER_CONTENT_PART_ADDED,
-    SERVER_CONTENT_PART_DONE,
-    SERVER_ITEM_CREATED,
-    SERVER_OUTPUT_AUDIO_DONE,
-    SERVER_OUTPUT_AUDIO_TRANSCRIPT_DONE,
-    SERVER_OUTPUT_ITEM_ADDED,
-    SERVER_OUTPUT_ITEM_DONE,
-    SERVER_RESPONSE_CREATED,
-    SERVER_RESPONSE_DONE,
-    EmitFn,
-    emit_with_aliases,
-    response_created_body,
-    server_event,
-)
+from typing import Literal
+
+from realtime.controller import OutputKind, RealtimeSessionController
+from realtime.events import EmitBatchFn
 
 
-async def announce_response(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
-    """Ensure ``response.created`` + assistant item / content_part are on the wire.
+async def emit_events(emit_batch: EmitBatchFn, events: list[dict]) -> None:
+    """Emit one controller transition as an indivisible ordered batch."""
+    if events:
+        await emit_batch(events)
 
-    Returns ``(response_id, newly_created)``.
+
+async def announce_response(
+    controller: RealtimeSessionController,
+    emit_batch: EmitBatchFn,
+    *,
+    kind: OutputKind | None = None,
+) -> tuple[str, bool]:
+    """Ensure a response and its assistant message are announced once.
+
+    Capture the response owner before publishing. A concurrent interruption may
+    terminalize that response while the WebSocket batch is being written; the
+    completed announcement still belongs to the captured response and must not
+    be reported as an internal lifecycle failure.
     """
-    response_id, created = conversation.begin_response()
-    if created:
-        await emit_with_aliases(
-            emit,
-            server_event(
-                SERVER_RESPONSE_CREATED,
-                response=response_created_body(response_id),
-            ),
-        )
-    if not conversation.output_item_announced:
-        conversation.output_item_announced = True
-        item_id = conversation.assistant_item_id
-        assistant_item = {
-            "id": item_id,
-            "object": "realtime.item",
-            "type": "message",
-            "role": "assistant",
-            "status": "in_progress",
-            "content": [],
-        }
-        await emit_with_aliases(
-            emit,
-            server_event(SERVER_ITEM_CREATED, previous_item_id=None, item=assistant_item),
-        )
-        await emit_with_aliases(
-            emit,
-            server_event(
-                SERVER_OUTPUT_ITEM_ADDED,
-                response_id=response_id,
-                output_index=0,
-                item=assistant_item,
-            ),
-        )
-    if not conversation.content_part_announced:
-        conversation.content_part_announced = True
-        await emit_with_aliases(
-            emit,
-            server_event(
-                SERVER_CONTENT_PART_ADDED,
-                response_id=response_id,
-                item_id=conversation.assistant_item_id,
-                output_index=0,
-                content_index=0,
-                part={"type": "audio", "transcript": ""},
-            ),
-        )
-    return response_id, created
+    was_active = controller.response_in_progress
+    events = controller.ensure_assistant_message(kind)
+    response_id = controller.active_response_id
+    if response_id is None:
+        raise RuntimeError("Realtime controller did not create a response")
+    await emit_events(emit_batch, events)
+    return response_id, not was_active
 
 
 async def finish_response(
-    conversation: ConversationState,
-    emit: EmitFn,
+    controller: RealtimeSessionController,
+    emit_batch: EmitBatchFn,
     *,
-    status: str,
+    status: Literal["completed", "cancelled", "failed", "incomplete"],
+    reason: str | None = None,
 ) -> bool:
-    """Complete the in-flight response, emit the done sequence, then reset the slot.
-
-    Uses a :class:`ResponseSnapshot` so concurrent ``begin_response`` during the
-    await chain cannot corrupt the events being emitted, and ``reset`` is a no-op
-    if a newer generation already owns the slot.
-
-    Returns ``True`` when a finish sequence was emitted.
-    """
-    snap = conversation.complete_response(status)
-    if snap is None:
-        return False
-    await emit_finish_from_snapshot(snap, emit)
-    conversation.reset_response_slot(generation=snap.generation)
-    return True
-
-
-async def emit_finish_from_snapshot(
-    snap: ResponseSnapshot,
-    emit: EmitFn,
-) -> None:
-    """Emit audio/item/response done events for a completed snapshot."""
-    response_id = snap.response_id
-    item_id = snap.item_id
-    transcript = snap.transcript
-    # Item statuses are in_progress|completed|incomplete; cancelled is response-only.
-    item_status = "completed" if snap.status == "completed" else "incomplete"
-
-    if not snap.audio_done_emitted:
-        await emit_with_aliases(
-            emit,
-            server_event(
-                SERVER_OUTPUT_AUDIO_DONE,
-                response_id=response_id,
-                item_id=item_id,
-                output_index=0,
-                content_index=0,
-            ),
-        )
-    if not snap.transcript_done_emitted:
-        await emit_with_aliases(
-            emit,
-            server_event(
-                SERVER_OUTPUT_AUDIO_TRANSCRIPT_DONE,
-                response_id=response_id,
-                item_id=item_id,
-                output_index=0,
-                content_index=0,
-                transcript=transcript,
-            ),
-        )
-    await emit_with_aliases(
-        emit,
-        server_event(
-            SERVER_CONTENT_PART_DONE,
-            response_id=response_id,
-            item_id=item_id,
-            output_index=0,
-            content_index=0,
-            part={"type": "audio", "transcript": transcript},
-        ),
-    )
-    await emit_with_aliases(
-        emit,
-        server_event(
-            SERVER_OUTPUT_ITEM_DONE,
-            response_id=response_id,
-            output_index=0,
-            item={
-                "id": item_id,
-                "type": "message",
-                "role": "assistant",
-                "status": item_status,
-                "content": [{"type": "output_audio", "transcript": transcript}],
-            },
-        ),
-    )
-    await emit_with_aliases(
-        emit,
-        server_event(
-            SERVER_RESPONSE_DONE,
-            response={
-                "id": response_id,
-                "status": snap.status,
-                "output": [
-                    {
-                        "id": item_id,
-                        "type": "message",
-                        "role": "assistant",
-                        "status": item_status,
-                        "content": [{"type": "output_audio", "transcript": transcript}],
-                    }
-                ],
-            },
-        ),
-    )
+    """Emit exactly one terminal sequence for the active response."""
+    events = controller.finish_response(status=status, reason=reason)
+    await emit_events(emit_batch, events)
+    return bool(events)
