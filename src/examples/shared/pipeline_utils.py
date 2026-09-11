@@ -196,7 +196,7 @@ async def apply_pinned_prompt_summary(
     )
 
 
-def create_transport(runner_args: RunnerArguments):
+def create_transport(runner_args: RunnerArguments, *, audio_out_enabled: bool = True):
     """Create a transport from runner arguments (WebRTC, WebSocket, or eval)."""
     from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
 
@@ -206,7 +206,7 @@ def create_transport(runner_args: RunnerArguments):
         return SmallWebRTCTransport(
             params=TransportParams(
                 audio_in_enabled=True,
-                audio_out_enabled=True,
+                audio_out_enabled=audio_out_enabled,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 5),
             ),
             webrtc_connection=runner_args.webrtc_connection,
@@ -220,7 +220,7 @@ def create_transport(runner_args: RunnerArguments):
             params=EvalTransportParams(
                 audio_in_enabled=True,
                 audio_in_sample_rate=16000,
-                audio_out_enabled=True,
+                audio_out_enabled=audio_out_enabled,
                 audio_out_sample_rate=16000,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
                 add_wav_header=False,
@@ -246,7 +246,7 @@ def create_transport(runner_args: RunnerArguments):
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_in_sample_rate=16000,
-            audio_out_enabled=True,
+            audio_out_enabled=audio_out_enabled,
             audio_out_sample_rate=16000,
             audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
             add_wav_header=False,
