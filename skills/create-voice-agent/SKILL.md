@@ -2,6 +2,7 @@
 name: create-voice-agent
 description: Create or refine NVIDIA voice agents with Pipecat or LiveKit. Use for Cascaded or Omni pipelines, speech customization, and cloud or local deployment.
 version: "2.2.0"
+license: CC-BY-4.0 AND Apache-2.0
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [voice-agent, nvidia, nemotron, magpie, pipecat, livekit, nim, vllm, nemo-speech, omni]

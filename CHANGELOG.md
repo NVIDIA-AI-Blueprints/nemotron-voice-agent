@@ -33,6 +33,7 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 - Renamed the Magpie Multilingual Compose services to `magpie-multilingual-tts-service` and `magpie-multilingual-tts-service-perf`.
 - Updated Chatterbox TTS Multilingual NIM to version 1.1.0 and documented its available model profiles.
 - Updated the React UI client to `@pipecat-ai/client-react` 1.8.2 and rendered the conversation transcript directly from Pipecat's `usePipecatConversation()` hook, removing the custom client-side turn reconstruction and timestamp re-anchoring.
+- Relicensed the repository from BSD-2-Clause to a dual CC-BY-4.0 (documentation, skills, assets) and Apache-2.0 (source code) license.
 
 ### Fixed
 

@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 # Base image - OSRB approved Ubuntu base (Bug 4960044)
 FROM nvcr.io/nvidia/base/ubuntu:noble-20260610 AS client-builder

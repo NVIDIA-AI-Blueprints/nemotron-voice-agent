@@ -2,6 +2,7 @@
 name: deploy
 description: Deploy Nemotron Voice Agent using root Compose recipe profiles. Use when deploying or troubleshooting authentication and startup.
 version: "2.2.0"
+license: CC-BY-4.0 AND Apache-2.0
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [deployment, docker-compose, voice-agent, nemotron]
