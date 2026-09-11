@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: Apache-2.0
 #
 # Service-backed Pipecat evals. These use NVIDIA-hosted ASR/LLM/TTS services,
 # an NVIDIA-hosted judge, a local Omni NIM server, and the local booking server.
