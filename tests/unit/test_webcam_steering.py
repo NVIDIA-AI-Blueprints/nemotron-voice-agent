@@ -170,13 +170,36 @@ class WebcamOutputValidationTests(unittest.IsolatedAsyncioTestCase):
         worker._temperature = 0.2
         worker._omni = AsyncMock()
         worker._omni.run_multimodal_inference.return_value = NvidiaOmniInferenceResult(
-            text='{"observation":"holding a camera","focus":"camera","visual_control":{"intent":"none"}}'
+            text='{"observation":"holding a camera","focus":"camera","visual_control":{"intent":"none"}}',
+            finish_reason="stop",
         )
 
         observation, _, focus = await worker._describe(b"mp4", 2, 2.0)
 
         self.assertEqual(observation, "holding a camera")
         self.assertEqual(focus, "camera")
+
+    async def test_incomplete_provider_output_is_rejected_even_when_json_is_valid(self) -> None:
+        for finish_reason in ("", "length"):
+            with self.subTest(finish_reason=finish_reason):
+                worker = object.__new__(WebcamAgent)
+                worker._base_url = "http://localhost:8002/v1"
+                worker._model_id = "test-model"
+                worker._system_prompt = "Return JSON."
+                worker._prompt = "Describe the video."
+                worker._max_tokens = 128
+                worker._temperature = 0.2
+                worker._omni = AsyncMock()
+                worker._omni.run_multimodal_inference.return_value = NvidiaOmniInferenceResult(
+                    text=('{"observation":"partial scene","focus":"object","visual_control":{"intent":"zoom"}}'),
+                    finish_reason=finish_reason,
+                )
+
+                observation, visual_control, focus = await worker._describe(b"mp4", 2, 8.0)
+
+                self.assertEqual(observation, "")
+                self.assertEqual(visual_control["intent"], "none")
+                self.assertEqual(focus, "")
 
     async def test_previous_observation_is_steered_into_the_prompt(self) -> None:
         worker = object.__new__(WebcamAgent)

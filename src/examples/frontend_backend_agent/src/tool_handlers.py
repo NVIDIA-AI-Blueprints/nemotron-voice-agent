@@ -54,8 +54,18 @@ class ThinkerBackend(Protocol):
         """Cancel pending domain work that has no active task."""
 
 
-def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float = 0.8) -> dict[str, Callable]:
-    """Return tool handlers bound to one session-local backend agent."""
+def build_handlers(
+    thinker: ThinkerBackend,
+    *,
+    filler_threshold_seconds: float = 0.8,
+    allow_talker_frames: bool = True,
+) -> dict[str, Callable]:
+    """Return tool handlers bound to one session-local backend agent.
+
+    Realtime sessions disable Talker-authored filler/direct frames because a
+    delegated tool must first close Response A, publish its correlated
+    ``function_call_output``, and only then let the pipeline create Response B.
+    """
     consecutive_planner_errors = 0
 
     async def handle_call_backend(params: FunctionCallParams) -> None:
@@ -106,7 +116,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
 
             async def schedule_thinker_started_filler(event: ThinkerLifecycleEvent) -> None:
                 nonlocal filler_started, filler_task
-                if event.marker != "ThinkerStarted" or not filler_text:
+                if not allow_talker_frames or event.marker != "ThinkerStarted" or not filler_text:
                     return
                 if filler_started or (filler_task is not None and not filler_task.done()):
                     return
@@ -171,7 +181,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
                 return
         else:
             consecutive_planner_errors = 0
-        if _direct_tool_response_enabled() and is_speakable_payload(payload):
+        if allow_talker_frames and _direct_tool_response_enabled() and is_speakable_payload(payload):
             await _emit_talker_response(params.llm, str(payload.get("response_text") or ""))
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
             return
@@ -190,7 +200,7 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
             "context": "cancel_backend",
         }
-        if _direct_tool_response_enabled():
+        if allow_talker_frames and _direct_tool_response_enabled():
             await _emit_talker_response(params.llm, str(payload["response_text"]))
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
             return

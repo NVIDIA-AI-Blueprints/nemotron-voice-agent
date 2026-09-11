@@ -19,17 +19,19 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
+from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy, VADUserTurnStartStrategy
 from pipecat.turns.user_stop import (
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.context.llm_context_summarization import (
     DEFAULT_SUMMARIZATION_PROMPT,
     LLMContextSummarizationUtil,
 )
 
-from utils import parse_env_bool, parse_env_float, parse_env_int
+from utils import parse_env_bool, parse_env_float, parse_env_int, resolve_prompt
 
 # Smart Turn silence fallback default (seconds); override via SMART_TURN_STOP_SECS.
 # Pipecat's stock default is 3.0s.
@@ -64,35 +66,89 @@ def build_smart_turn_stop_strategies(*, wait_for_transcript: bool = True) -> lis
     ]
 
 
-def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
-    """Return the user-mute strategy, or none when there is no welcome message.
+def build_user_mute_strategies(
+    welcome_enabled: bool,
+    *,
+    transport=None,
+) -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
+    """Return the user-mute strategy when the welcome turn produces speech.
 
     ``MuteUntilFirstBotCompleteUserMuteStrategy`` keeps the user muted until the
-    bot finishes its first turn. When the welcome message is off the bot waits
-    for the user, so that first turn never happens and muting would deadlock —
-    return an empty list instead.
+    bot emits ``BotStoppedSpeakingFrame``. When the welcome message is off the
+    bot waits for the user, so that frame never arrives. A Realtime text-output
+    response skips synthesis and likewise emits no bot-speech completion. In
+    either case, installing the strategy would mute microphone turns indefinitely.
     """
     if not welcome_enabled:
         return []
+    if transport is not None:
+        from realtime.transport import realtime_controller
+
+        controller = realtime_controller(transport)
+        if controller is not None and controller.output_kind == "text":
+            return []
     return [MuteUntilFirstBotCompleteUserMuteStrategy()]
 
 
 def runner_protocol(runner_args: RunnerArguments) -> str:
-    """Return the wire protocol for this session (``rtvi`` or ``realtime``)."""
+    """Return the server-owned wire protocol for this session.
+
+    Client request bodies are data, not protocol authority. Only the
+    ``RealtimeSessionController`` installed by the Realtime server route can
+    select that protocol; arbitrary ``protocol`` strings are ignored.
+    """
     body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
-    protocol = str(body.get("protocol") or "").strip().lower()
-    return protocol if protocol else "rtvi"
+    controller = body.get("realtime_controller")
+    if controller is None:
+        return "rtvi"
+
+    from realtime.controller import RealtimeSessionController
+
+    return "realtime" if isinstance(controller, RealtimeSessionController) else "rtvi"
 
 
-def with_realtime_observers(*observers, transport=None) -> list:
+def select_max_tokens_config(body: dict, default: object, *, is_realtime: bool) -> object:
+    """Select a pipeline token limit without undoing Realtime ``inf``.
+
+    The Realtime gateway projects the native ``"inf"`` value to ``None`` so
+    the provider request omits both completion-token fields.  A normal
+    ``body.get(...) or default`` expression would turn that intentional null
+    back into the example catalog's finite cap.  Outside Realtime, retain the
+    existing empty-value fallback behavior.
+    """
+    if is_realtime and "max_tokens" in body:
+        selected = body["max_tokens"]
+        return None if selected == "inf" else selected
+    return body.get("max_tokens", "") or default
+
+
+def resolve_pipeline_prompt(module_file, body: dict, *, is_realtime: bool) -> tuple[str, str]:
+    """Resolve exact Realtime instructions or the ordinary catalog prompt."""
+    if is_realtime and body.get("_realtime_instructions_explicit") is True:
+        prompt_content = body.get("prompt_content")
+        if not isinstance(prompt_content, str):
+            raise ValueError("Explicit Realtime instructions must be a string")
+        return "custom", prompt_content
+    return resolve_prompt(
+        module_file,
+        body.get("prompt_content", ""),
+        body.get("prompt_key", ""),
+    )
+
+
+def with_realtime_observers(*observers, transport=None, is_realtime: bool) -> list:
     """Append the Realtime lifecycle observer when the transport speaks Realtime.
 
     Example::
 
-        observers=with_realtime_observers(latency_observer, transport=transport)
+        observers=with_realtime_observers(
+            latency_observer,
+            transport=transport,
+            is_realtime=is_realtime,
+        )
     """
     out = list(observers)
-    if transport is None:
+    if not is_realtime or transport is None:
         return out
     from realtime.transport import realtime_lifecycle_observer
 
@@ -119,11 +175,13 @@ def register_session_start_handlers(
     Both share the same optional ``on_start`` + welcome intro path. Set
     ``intro_tool_choice`` for a one-off greeting context without changing the
     shared context's tool behavior for subsequent user turns. When welcome is
-    off, skip the intro and (on Realtime) open the client text gate.
+    off, skip the intro. Realtime never creates a response merely because the
+    WebSocket connected; it waits for the first client event or user turn.
     """
-    from pipecat.frames.frames import LLMContextFrame, LLMRunFrame
+    from pipecat.frames.frames import LLMConfigureOutputFrame, LLMContextFrame, LLMRunFrame
 
     started = False
+    is_realtime = runner_protocol(runner_args) == "realtime"
 
     async def _start_session(source: str) -> None:
         nonlocal started
@@ -131,10 +189,17 @@ def register_session_start_handlers(
             return
         started = True
         logger.info(f"Client session start via {source}")
+        if is_realtime:
+            from realtime.transport import realtime_controller
+
+            controller = realtime_controller(transport)
+            if controller is None:
+                raise RuntimeError("Realtime transport is missing its session controller")
+            await task.queue_frames([LLMConfigureOutputFrame(skip_tts=controller.output_kind == "text")])
         if on_start is not None:
             await on_start()
-        if not welcome_enabled:
-            logger.info("Welcome message disabled; waiting for the user to speak first")
+        if is_realtime or not welcome_enabled:
+            logger.info("Waiting for the first client event or user turn")
             return
         context.add_message({"role": "user", "content": intro_prompt})
         if intro_tool_choice is None:
@@ -148,12 +213,7 @@ def register_session_start_handlers(
             run_frame = LLMContextFrame(context=intro_context)
         await task.queue_frames([run_frame])
 
-    if runner_protocol(runner_args) == "realtime":
-        if not welcome_enabled:
-            serializer = getattr(transport, "_realtime_serializer", None)
-            conversation = getattr(serializer, "conversation", None)
-            if conversation is not None:
-                conversation.open_client_text()
+    if is_realtime:
 
         @transport.event_handler("on_client_connected")
         async def _on_realtime_connected(transport_obj, client):  # noqa: ARG001
@@ -166,21 +226,182 @@ def register_session_start_handlers(
             await _start_session("rtvi-client-ready")
 
 
-def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
+def manual_realtime_user_aggregator_params(
+    welcome_enabled: bool,
+    *,
+    transport,
+) -> LLMUserAggregatorParams | None:
+    """Build external turn control for client-committed Realtime audio."""
+    from realtime.transport import (
+        realtime_input_transcription_publication_timeout_secs,
+        realtime_manual_user_turn_strategies,
+    )
+
+    strategies = realtime_manual_user_turn_strategies(transport)
+    if strategies is None:
+        return None
+    return LLMUserAggregatorParams(
+        vad_analyzer=None,
+        user_mute_strategies=build_user_mute_strategies(welcome_enabled, transport=transport),
+        user_turn_strategies=strategies,
+        user_turn_stop_timeout=realtime_input_transcription_publication_timeout_secs(),
+    )
+
+
+def realtime_turn_detection_config(*, transport=None) -> dict | None:
+    """Return the negotiated Realtime turn configuration, if applicable."""
+    if transport is None:
+        return None
+    from realtime.transport import realtime_controller
+
+    controller = realtime_controller(transport)
+    return controller.turn_detection_config if controller is not None else None
+
+
+def realtime_turn_detection_type(*, transport=None) -> str | None:
+    """Return the negotiated Realtime turn detector type."""
+    config = realtime_turn_detection_config(transport=transport)
+    value = config.get("type") if config is not None else None
+    return value if value in {"semantic_vad", "server_vad"} else None
+
+
+def uses_server_vad_turn_detection(*, transport=None) -> bool:
+    """Select server VAD from the Realtime session or the supported RTVI setting."""
+    config = realtime_turn_detection_config(transport=transport)
+    if config is not None:
+        return config.get("type") == "server_vad"
+    return parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False)
+
+
+def build_vad_params(defaults: VADParams, *, transport=None) -> VADParams:
+    """Apply exact negotiated server-VAD analyzer controls to defaults."""
+    config = realtime_turn_detection_config(transport=transport)
+    if config is None or config.get("type") != "server_vad":
+        return defaults
+    return VADParams(
+        confidence=float(config.get("threshold", defaults.confidence)),
+        start_secs=defaults.start_secs,
+        stop_secs=float(config.get("silence_duration_ms", defaults.stop_secs * 1000)) / 1000,
+        min_volume=defaults.min_volume,
+    )
+
+
+def build_silero_vad_analyzer(defaults: VADParams, *, transport=None) -> SileroVADAnalyzer:
+    """Build stock Silero for RTVI and state-safe Silero for Realtime."""
+    params = build_vad_params(defaults, transport=transport)
+    if realtime_turn_detection_config(transport=transport) is None:
+        return SileroVADAnalyzer(params=params)
+    from realtime.vad import RealtimeSileroVADAnalyzer
+
+    return RealtimeSileroVADAnalyzer(params=params)
+
+
+def realtime_vad_prefix_padding_secs(default_secs: float, *, transport=None) -> float:
+    """Use negotiated server-VAD prefix audio for fused speech buffering."""
+    if transport is None:
+        return default_secs
+    from realtime.transport import realtime_controller
+
+    controller = realtime_controller(transport)
+    if controller is None or controller.turn_detection_type != "server_vad":
+        return default_secs
+    return controller.server_vad_prefix_padding_ms / 1000
+
+
+def build_vad_user_turn_start_strategies(
+    *,
+    transport=None,
+    include_transcription: bool,
+) -> list:
+    """Build VAD-backed start strategies with the negotiated interruption policy."""
+    config = realtime_turn_detection_config(transport=transport)
+    interrupt_response = config is None or config.get("interrupt_response", True) is True
+    strategies = [VADUserTurnStartStrategy(enable_interruptions=interrupt_response)]
+    if include_transcription:
+        strategies.append(TranscriptionUserTurnStartStrategy(enable_interruptions=interrupt_response))
+    return strategies
+
+
+def bind_realtime_automatic_response_provenance(
+    strategies: list[BaseUserTurnStopStrategy],
+    *,
+    transport=None,
+) -> list[BaseUserTurnStopStrategy]:
+    """Bind typed VAD/user-turn provenance before Pipecat registers its handler."""
+    if transport is not None:
+        from realtime.transport import bind_realtime_automatic_response_provenance as bind_provenance
+
+        bind_provenance(transport, strategies)
+    return strategies
+
+
+def build_user_aggregator_params(
+    welcome_enabled: bool,
+    *,
+    transport=None,
+) -> LLMUserAggregatorParams:
     """Return user-turn configuration, defaulting to Pipecat smart turn."""
-    if not parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False):
+    if transport is not None:
+        manual = manual_realtime_user_aggregator_params(
+            welcome_enabled,
+            transport=transport,
+        )
+        if manual is not None:
+            return manual
+    start_strategies = build_vad_user_turn_start_strategies(
+        transport=transport,
+        # Realtime's input-edge VAD owns native ASR stream creation. A
+        # transcription cannot precede that typed boundary, so advertising a
+        # transcription-only start fallback would be unreachable.
+        include_transcription=realtime_turn_detection_config(transport=transport) is None,
+    )
+    if not uses_server_vad_turn_detection(transport=transport):
+        if realtime_turn_detection_config(transport=transport) is not None:
+            from realtime.turns import RealtimeSemanticTurnStopStrategy
+
+            semantic_stop_strategies: list[BaseUserTurnStopStrategy] = [
+                RealtimeSemanticTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())
+            ]
+        else:
+            semantic_stop_strategies = build_smart_turn_stop_strategies()
+        stop_strategies = bind_realtime_automatic_response_provenance(
+            semantic_stop_strategies,
+            transport=transport,
+        )
         return LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            user_mute_strategies=build_user_mute_strategies(welcome_enabled),
-            user_turn_strategies=UserTurnStrategies(stop=build_smart_turn_stop_strategies()),
+            vad_analyzer=(
+                None
+                if realtime_turn_detection_config(transport=transport) is not None
+                else SileroVADAnalyzer(params=VADParams(stop_secs=0.2))
+            ),
+            user_mute_strategies=build_user_mute_strategies(welcome_enabled, transport=transport),
+            user_turn_strategies=UserTurnStrategies(
+                start=start_strategies,
+                stop=stop_strategies,
+            ),
         )
 
+    if realtime_turn_detection_config(transport=transport) is not None:
+        from realtime.turns import RealtimeServerVADTurnStopStrategy
+
+        server_stop_strategies: list[BaseUserTurnStopStrategy] = [RealtimeServerVADTurnStopStrategy()]
+    else:
+        server_stop_strategies = [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)]
     stop_secs = parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
+    stop_strategies = bind_realtime_automatic_response_provenance(
+        server_stop_strategies,
+        transport=transport,
+    )
     return LLMUserAggregatorParams(
-        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs)),
-        user_mute_strategies=build_user_mute_strategies(welcome_enabled),
+        vad_analyzer=(
+            None
+            if realtime_turn_detection_config(transport=transport) is not None
+            else SileroVADAnalyzer(params=VADParams(stop_secs=stop_secs))
+        ),
+        user_mute_strategies=build_user_mute_strategies(welcome_enabled, transport=transport),
         user_turn_strategies=UserTurnStrategies(
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)],
+            start=start_strategies,
+            stop=stop_strategies,
         ),
     )
 
@@ -345,14 +566,15 @@ def create_transport(runner_args: RunnerArguments):
 
     body = runner_args.body if isinstance(getattr(runner_args, "body", None), dict) else {}
     if runner_protocol(runner_args) == "realtime":
+        from realtime.controller import RealtimeSessionController
         from realtime.transport import create_realtime_transport
 
+        controller = body.get("realtime_controller")
+        if not isinstance(controller, RealtimeSessionController):
+            raise TypeError("Realtime runner body requires a RealtimeSessionController")
         return create_realtime_transport(
             websocket,
-            session_view=body.get("realtime_session_view")
-            if isinstance(body.get("realtime_session_view"), dict)
-            else None,
-            runtime_config=body,
+            controller=controller,
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer

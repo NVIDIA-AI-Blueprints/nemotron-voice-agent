@@ -6,6 +6,7 @@
 from examples.omni_assistant_subagents.subagents.media_analyzer.agent import (
     MEDIA_ANALYSIS_RUNNING_PREFIX,
     MEDIA_ANALYSIS_TASK_NAME,
+    MEDIA_ANALYZER_LLM_METRICS_PROCESSOR,
     SPEAKER_STATE_PREFIXES,
     MediaAnalyzerWorker,
 )
@@ -13,6 +14,7 @@ from examples.omni_assistant_subagents.subagents.media_analyzer.agent import (
 __all__ = [
     "MEDIA_ANALYSIS_RUNNING_PREFIX",
     "MEDIA_ANALYSIS_TASK_NAME",
+    "MEDIA_ANALYZER_LLM_METRICS_PROCESSOR",
     "SPEAKER_STATE_PREFIXES",
     "MediaAnalyzerWorker",
 ]

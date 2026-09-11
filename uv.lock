@@ -1025,8 +1025,8 @@ name = "httpcore2"
 version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
-    { name = "truststore" },
+    { name = "h11", marker = "sys_platform != 'emscripten'" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/15/8c/e925b1c92018abb3a1863ce1549d76d2381e334d21d65d4ac8f65dabd78a/httpcore2-2.13.0.tar.gz", hash = "sha256:2adc8be4fb285fbcd6d894298db3b52c177e74b6674eda3a76bd36be3292a3db", size = 67740, upload-time = "2026-09-14T14:18:04.717Z" }
 wheels = [
@@ -1557,6 +1557,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1b/ff/8e7eade68b8a28f7da0ed1085544341b51f9c935dbf6b95c76b7edfea6a0/mcp-2.2.0-py3-none-any.whl", hash = "sha256:bde982589473a060ae145e3406e9a5333fe538c97229ba841f5a7f92be004f81", size = 365656, upload-time = "2026-09-07T16:06:19.711Z" },
 ]
 
+[package.optional-dependencies]
+cli = [
+    { name = "python-dotenv" },
+    { name = "typer" },
+]
+
 [[package]]
 name = "mcp-types"
 version = "2.2.0"
@@ -1739,13 +1745,18 @@ version = "2.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "imageio-ffmpeg" },
+    { name = "jsonschema" },
     { name = "langchain-nvidia-ai-endpoints" },
     { name = "loguru" },
+    { name = "numpy" },
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "pipecat-ai", extra = ["nvidia", "runner", "webrtc", "websocket"] },
+    { name = "pipecat-ai", extra = ["mcp", "nvidia", "runner", "webrtc", "websocket"] },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "referencing" },
+    { name = "regex" },
+    { name = "soxr" },
 ]
 
 [package.dev-dependencies]
@@ -1773,13 +1784,18 @@ eval = [
 [package.metadata]
 requires-dist = [
     { name = "imageio-ffmpeg", specifier = ">=0.5.1" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "langchain-nvidia-ai-endpoints", specifier = ">=1.2.1" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "numpy", specifier = ">=2.0.0" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.40.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.40.0" },
-    { name = "pipecat-ai", extras = ["nvidia", "silero", "runner", "webrtc", "websocket", "openai"], specifier = "==1.11.0" },
+    { name = "pipecat-ai", extras = ["nvidia", "silero", "runner", "webrtc", "websocket", "openai", "mcp"], specifier = "==1.11.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "referencing", specifier = ">=0.37.0" },
+    { name = "regex", specifier = ">=2026.7.19" },
+    { name = "soxr", specifier = ">=1.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -2261,6 +2277,9 @@ evals = [
     { name = "rich" },
     { name = "ruff" },
     { name = "typer" },
+]
+mcp = [
+    { name = "mcp", extra = ["cli"] },
 ]
 nvidia = [
     { name = "nvidia-riva-client" },
