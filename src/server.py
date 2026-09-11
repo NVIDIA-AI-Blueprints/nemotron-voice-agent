@@ -552,7 +552,7 @@ async def _ensure_asr_ready_for_connection(config: dict, example: dict) -> None:
 
 async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
     """Warm up TTS unless the selected pipeline handles it internally."""
-    if config.get("benchmark_text_only") or _should_skip_tts_prewarm(example):
+    if _should_skip_tts_prewarm(example):
         return
 
     tts_server, voice_id, tts_function_id, tts_model = _resolve_tts_selection(

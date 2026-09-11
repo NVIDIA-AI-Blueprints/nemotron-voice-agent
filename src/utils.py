@@ -483,7 +483,6 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "tts_model",
         "tts_synthesis_mode",
         "tts_language_code",
-        "benchmark_text_only",
     }
 )
 
