@@ -6,6 +6,7 @@
 import concurrent.futures
 import json
 import os
+import threading
 from collections.abc import Iterable
 
 from loguru import logger
@@ -15,6 +16,15 @@ from riva.client.proto import riva_asr_pb2
 
 import config_store
 from utils import is_nvcf, normalize_lang_code, nvidia_api_key, parse_env_float
+
+_CATALOG_LOCKS_GUARD = threading.Lock()
+_CATALOG_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _catalog_lock(cache_key: str) -> threading.Lock:
+    """Return one process-local lock for an exact service routing key."""
+    with _CATALOG_LOCKS_GUARD:
+        return _CATALOG_LOCKS.setdefault(cache_key, threading.Lock())
 
 
 def _create_tts_service(
@@ -355,12 +365,14 @@ def get_tts_config(
     model switch), reuse the cached voice list. Call ``prewarm_tts`` only when
     that routing key has not been fetched yet.
     """
-    cached = peek_cached_tts_config(server, voice_id, function_id, model)
-    if cached is not None:
-        # Keep legacy config_store["tts"] in sync for fallback readers.
-        config_store.set("tts", cached)
-        return cached
-    return prewarm_tts(server, voice_id, function_id, model)
+    cache_key = _tts_cache_key(server, function_id, model)
+    with _catalog_lock(cache_key):
+        cached = peek_cached_tts_config(server, voice_id, function_id, model)
+        if cached is not None:
+            # Keep the unqualified RTVI/UI cache synchronized with this result.
+            config_store.set("tts", cached)
+            return cached
+        return prewarm_tts(server, voice_id, function_id, model)
 
 
 _TTS_PREWARM_RPC_TIMEOUT_SECS = parse_env_float("TTS_PREWARM_RPC_TIMEOUT_SECS", 20.0, min_value=1.0)
@@ -447,6 +459,12 @@ def _fetch_asr_config(svc: NvidiaSTTService):
     )
 
 
+def peek_cached_asr_config(server: str, model: str = "", function_id: str = "") -> dict | None:
+    """Return the cached ASR language catalog for an exact routing key."""
+    cached = config_store.get(_asr_cache_key(server, model, function_id))
+    return dict(cached) if isinstance(cached, dict) and cached else None
+
+
 def prewarm_asr(server: str, model: str = "", function_id: str = "") -> dict:
     """Pre-warm an ASR server and cache its supported language codes.
 
@@ -524,13 +542,14 @@ def load_voice_map(
 ) -> dict[str, str]:
     """``{lower_lang_code: first_voice_id}`` from the prewarm cache."""
     tts_config: dict = {}
-    if server or function_id or model:
+    exact_route = bool(server or function_id or model)
+    if exact_route:
         cached = config_store.get(_tts_cache_key(server, function_id, model), {})
         if isinstance(cached, dict):
             tts_config = cached
-    if not tts_config:
-        legacy = config_store.get("tts", {})
-        tts_config = legacy if isinstance(legacy, dict) else {}
+    if not exact_route and not tts_config:
+        default_config = config_store.get("tts", {})
+        tts_config = default_config if isinstance(default_config, dict) else {}
     voices = tts_config.get("voices", [])
     result: dict[str, str] = {}
     for v in voices:
@@ -552,13 +571,14 @@ def resolve_voice_for_language(
     """Pick a TTS voice id for ``language_code`` from the prewarmed catalog."""
     normalized = normalize_lang_code(language_code).lower()
     tts_config: dict = {}
-    if server or function_id or model:
+    exact_route = bool(server or function_id or model)
+    if exact_route:
         cached = config_store.get(_tts_cache_key(server, function_id, model), {})
         if isinstance(cached, dict):
             tts_config = cached
-    if not tts_config:
-        legacy = config_store.get("tts", {})
-        tts_config = legacy if isinstance(legacy, dict) else {}
+    if not exact_route and not tts_config:
+        default_config = config_store.get("tts", {})
+        tts_config = default_config if isinstance(default_config, dict) else {}
     voice_map = load_voice_map(server=server, function_id=function_id, model=model)
     if preferred_voice_id:
         for voice in tts_config.get("voices", []):

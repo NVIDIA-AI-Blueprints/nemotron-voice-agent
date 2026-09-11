@@ -7,23 +7,40 @@ import asyncio
 import unittest
 from collections.abc import Callable
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 from pipecat.frames.frames import (
+    InputAudioRawFrame,
+    LLMConfigureOutputFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     LLMTextFrame,
     LLMThoughtEndFrame,
     LLMThoughtStartFrame,
     LLMThoughtTextFrame,
     TranscriptionFrame,
+    TTSUpdateSettingsFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.nvidia.llm import NvidiaLLMService as PipecatNvidiaLLMService
+from pipecat.turns.user_turn_completion_mixin import UserTurnCompletionLLMServiceMixin
 
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
+    MAX_FUSED_USER_AUDIO_SECS,
     NvidiaOmniLLMService,
     NvidiaOmniSettings,
     _TranscriptResponseExtractor,
     audio_message_part,
+)
+from examples.omni_assistant_subagents.subagents.speaker.agent import SubagentsSpeakerOmniService
+from examples.shared.frames import UserTranscriptProducerEndedFrame
+from realtime.frames import (
+    RealtimeOwnedLLMFullResponseStartFrame,
+    RealtimeResponseContextFrame,
+    RealtimeResponseLLMContext,
+    RealtimeResponseOrigin,
 )
 
 
@@ -32,9 +49,35 @@ def _chunk(content=None, *, tool_calls=None):
     return SimpleNamespace(choices=[SimpleNamespace(delta=delta)], usage=None)
 
 
+def _provider_chunk(content=None, *, finish_reason=None, usage=None):
+    choices = []
+    if content is not None or finish_reason is not None:
+        delta = SimpleNamespace(content=content, reasoning_content=None)
+        choices = [SimpleNamespace(delta=delta, finish_reason=finish_reason)]
+    return SimpleNamespace(choices=choices, usage=usage)
+
+
 async def _stream(*chunks):
     for chunk in chunks:
         yield chunk
+
+
+class _ClosableStream:
+    def __init__(self, *chunks) -> None:
+        self._chunks = iter(chunks)
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def _context(messages):
@@ -55,6 +98,509 @@ class _FakeTurn:
         self.completed = False
         self.args: tuple = ()
         self.kwargs: dict = {}
+
+
+class OmniOutOfPipelineInferenceTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _service(*chunks):
+        service = NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1")
+        service._out_of_band_request_kwargs = Mock(return_value={})
+        response_stream = _ClosableStream(*chunks)
+        create = AsyncMock(return_value=response_stream)
+        service._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        return service, response_stream, create
+
+    async def test_stream_retains_terminal_usage_only_chunk_and_real_timings(self) -> None:
+        usage = SimpleNamespace(
+            prompt_tokens=12,
+            completion_tokens=5,
+            total_tokens=17,
+            prompt_tokens_details=SimpleNamespace(
+                cached_tokens=3,
+                cache_write_tokens=2,
+                audio_tokens=4,
+            ),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=2, audio_tokens=0),
+        )
+        service, response_stream, create = self._service(
+            _provider_chunk("answer", finish_reason="stop"),
+            _provider_chunk(usage=usage),
+        )
+
+        with patch(
+            "examples.omni_assistant.nvidia_omni_multimodal_service.time.monotonic",
+            side_effect=[10.0, 10.4, 11.2],
+        ):
+            result = await service.run_multimodal_inference(LLMContext(messages=[]), stream=True)
+
+        self.assertEqual(result.text, "answer")
+        self.assertAlmostEqual(result.ttfb_seconds, 0.4)
+        self.assertAlmostEqual(result.processing_seconds, 1.2)
+        self.assertEqual(result.usage.prompt_tokens, 12)
+        self.assertEqual(result.usage.completion_tokens, 5)
+        self.assertEqual(result.usage.total_tokens, 17)
+        self.assertEqual(result.usage.cache_read_input_tokens, 3)
+        self.assertEqual(result.usage.cache_creation_input_tokens, 2)
+        self.assertEqual(result.usage.reasoning_tokens, 2)
+        self.assertEqual(result.usage.input_audio_tokens, 4)
+        self.assertEqual(result.usage.output_audio_tokens, 0)
+        self.assertEqual(create.await_args.kwargs["stream_options"], {"include_usage": True})
+        self.assertTrue(response_stream.closed)
+
+    async def test_stream_without_provider_terminal_is_rejected_and_closed(self) -> None:
+        service, response_stream, _ = self._service(_provider_chunk("partial"))
+
+        with self.assertRaisesRegex(ValueError, "without a finish_reason"):
+            await service.run_multimodal_inference(LLMContext(messages=[]), stream=True)
+
+        self.assertTrue(response_stream.closed)
+
+    async def test_stream_rejects_choices_after_terminal_and_closes(self) -> None:
+        service, response_stream, _ = self._service(
+            _provider_chunk("complete", finish_reason="stop"),
+            _provider_chunk("late"),
+        )
+
+        with self.assertRaisesRegex(ValueError, "choices after its terminal chunk"):
+            await service.run_multimodal_inference(LLMContext(messages=[]), stream=True)
+
+        self.assertTrue(response_stream.closed)
+
+
+class OmniOrdinaryPipelineDelegationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_non_realtime_context_uses_pipecats_nvidia_stream_path_unchanged(self) -> None:
+        service = NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1")
+        context = LLMContext([{"role": "user", "content": "hello"}])
+        provider_stream = object()
+
+        with patch.object(
+            PipecatNvidiaLLMService,
+            "get_chat_completions",
+            new=AsyncMock(return_value=provider_stream),
+        ) as stock_get_chat_completions:
+            result = await service.get_chat_completions(context)
+
+        self.assertIs(result, provider_stream)
+        stock_get_chat_completions.assert_awaited_once_with(context)
+
+    async def test_ordinary_transcription_has_no_realtime_producer_terminal(self) -> None:
+        service = NvidiaOmniLLMService(
+            api_key="not-needed",
+            base_url="http://localhost:8000/v1",
+            settings=NvidiaOmniSettings(emit_transcriptions=True),
+        )
+        pushed = AsyncMock()
+        with patch.object(UserTurnCompletionLLMServiceMixin, "push_frame", new=pushed):
+            await service._handle_user_stopped(UserStoppedSpeakingFrame())
+            await service._emit_user_transcript("ordinary transcript")
+
+        self.assertEqual(pushed.await_count, 1)
+        self.assertIsInstance(pushed.await_args.args[0], TranscriptionFrame)
+        self.assertEqual(pushed.await_args.args[0].text, "ordinary transcript")
+
+    async def test_failed_response_start_does_not_emit_unmatched_end_boundary(self) -> None:
+        service = NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1")
+        attempted_frames = []
+
+        async def fail_response_start(_processor, frame, _direction=FrameDirection.DOWNSTREAM) -> None:
+            attempted_frames.append(frame)
+            if isinstance(frame, LLMFullResponseStartFrame):
+                raise RuntimeError("response start failed")
+
+        service.push_error = AsyncMock()
+        service.start_processing_metrics = AsyncMock()
+        service._process_context = AsyncMock()
+        with patch.object(UserTurnCompletionLLMServiceMixin, "push_frame", new=fail_response_start):
+            await service._run_turn(LLMContext([{"role": "user", "content": "hello"}]))
+
+        self.assertEqual([type(frame) for frame in attempted_frames], [LLMFullResponseStartFrame])
+        service.push_error.assert_awaited_once()
+        service.start_processing_metrics.assert_not_awaited()
+        service._process_context.assert_not_awaited()
+
+    async def test_realtime_binding_enables_transcript_producer_terminal(self) -> None:
+        service = NvidiaOmniLLMService(
+            api_key="not-needed",
+            base_url="http://localhost:8000/v1",
+            settings=NvidiaOmniSettings(emit_transcriptions=True),
+        )
+        service.bind_realtime_response_snapshot(AsyncMock())
+        pushed = AsyncMock()
+        stopped = UserStoppedSpeakingFrame()
+        with patch.object(UserTurnCompletionLLMServiceMixin, "push_frame", new=pushed):
+            await service._handle_user_stopped(stopped)
+
+        pushed.assert_awaited_once()
+        terminal = pushed.await_args.args[0]
+        self.assertIsInstance(terminal, UserTranscriptProducerEndedFrame)
+        self.assertEqual(terminal.turn_frame_id, stopped.id)
+        self.assertEqual(terminal.status, "skipped")
+        self.assertEqual(pushed.await_args.args[1], FrameDirection.UPSTREAM)
+
+
+class OmniRealtimeResponseSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    """Fused turns must enter the same immutable Realtime response lifecycle."""
+
+    @staticmethod
+    def _services() -> tuple[NvidiaOmniLLMService, SubagentsSpeakerOmniService]:
+        return (
+            NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1"),
+            SubagentsSpeakerOmniService(
+                api_key="not-needed",
+                base_url="http://localhost:8000/v1",
+                audio_response_instruction="Return the required JSON action envelope.",
+            ),
+        )
+
+    async def test_service_started_turn_applies_snapshot_before_output_for_single_and_speaker(self) -> None:
+        for service in self._services():
+            with self.subTest(service=type(service).__name__):
+                canonical = LLMContext([{"role": "user", "content": "hello"}])
+                snapshot = RealtimeResponseLLMContext(
+                    [{"role": "user", "content": "hello"}],
+                    max_output_tokens=73,
+                    parallel_tool_calls=False,
+                )
+                tts = Mock(name="response-tts")
+                setup = (
+                    LLMConfigureOutputFrame(skip_tts=True),
+                    TTSUpdateSettingsFrame(settings={"voice": "voice-b"}, service=tts),
+                )
+                abort = Mock()
+                activate = AsyncMock(return_value="resp_fused")
+                hook = AsyncMock(return_value=(snapshot, setup, activate, abort))
+                service.bind_realtime_response_snapshot(hook)
+                service.start_processing_metrics = AsyncMock()
+                service.stop_processing_metrics = AsyncMock()
+                seen_contexts: list[RealtimeResponseLLMContext] = []
+                frames = []
+
+                async def process_context(context, _service=service, _seen=seen_contexts) -> None:
+                    _seen.append(context)
+                    self.assertTrue(_service._skip_tts)
+                    await _service.push_frame(LLMTextFrame("response text"))
+
+                async def collect_frame(
+                    _processor,
+                    frame,
+                    _direction=FrameDirection.DOWNSTREAM,
+                    _frames=frames,
+                ) -> None:
+                    _frames.append(frame)
+
+                service._process_context = AsyncMock(side_effect=process_context)
+                with patch.object(UserTurnCompletionLLMServiceMixin, "push_frame", new=collect_frame):
+                    await service._run_turn(canonical)
+
+                hook.assert_awaited_once_with(canonical, None, RealtimeResponseOrigin.SERVICE_INITIATED)
+                activate.assert_awaited_once_with()
+                abort.assert_not_called()
+                self.assertEqual(seen_contexts, [snapshot])
+                self.assertEqual(snapshot.max_output_tokens, 73)
+                self.assertIs(snapshot.parallel_tool_calls, False)
+                self.assertEqual(
+                    [type(frame) for frame in frames],
+                    [
+                        LLMConfigureOutputFrame,
+                        TTSUpdateSettingsFrame,
+                        RealtimeOwnedLLMFullResponseStartFrame,
+                        LLMTextFrame,
+                        LLMFullResponseEndFrame,
+                    ],
+                )
+                self.assertIs(frames[1].service, tts)
+                self.assertTrue(frames[2].skip_tts)
+                self.assertTrue(frames[3].skip_tts)
+                self.assertTrue(frames[4].skip_tts)
+                self.assertIsNone(service._skip_tts)
+                self.assertEqual(canonical.get_messages(), [{"role": "user", "content": "hello"}])
+
+    async def test_cancel_during_response_start_still_emits_matching_end_boundary(self) -> None:
+        service = NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1")
+        canonical = LLMContext([{"role": "user", "content": "hello"}])
+        snapshot = RealtimeResponseLLMContext(list(canonical.get_messages()))
+        abort = Mock()
+        service.bind_realtime_response_snapshot(
+            AsyncMock(return_value=(snapshot, (), AsyncMock(return_value="resp_cancelled"), abort))
+        )
+        frames = []
+
+        async def cancel_at_start(_processor, frame, _direction=FrameDirection.DOWNSTREAM) -> None:
+            frames.append(frame)
+            if isinstance(frame, LLMFullResponseStartFrame):
+                raise asyncio.CancelledError
+
+        with (
+            patch.object(UserTurnCompletionLLMServiceMixin, "push_frame", new=cancel_at_start),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await service._run_turn(canonical)
+
+        self.assertEqual(
+            [type(frame) for frame in frames],
+            [RealtimeOwnedLLMFullResponseStartFrame, LLMFullResponseEndFrame],
+        )
+        abort.assert_not_called()
+
+    async def test_explicit_snapshot_is_not_frozen_twice_or_retained_as_canonical(self) -> None:
+        service = NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1")
+        canonical = LLMContext([{"role": "user", "content": "canonical"}])
+        snapshot = RealtimeResponseLLMContext(
+            [{"role": "user", "content": "explicit"}],
+            max_output_tokens=19,
+            parallel_tool_calls=True,
+        )
+        hook = Mock(side_effect=AssertionError("explicit response was snapshotted twice"))
+        service.bind_realtime_response_snapshot(hook)
+        service._context = canonical
+        service._process_context = AsyncMock()
+        service.start_processing_metrics = AsyncMock()
+        service.stop_processing_metrics = AsyncMock()
+
+        async def discard_frame(_processor, _frame, _direction=FrameDirection.DOWNSTREAM) -> None:
+            return None
+
+        with patch.object(UserTurnCompletionLLMServiceMixin, "push_frame", new=discard_frame):
+            await service._run_turn(snapshot)
+
+        hook.assert_not_called()
+        service._process_context.assert_awaited_once_with(snapshot)
+
+        service._maybe_run_text_turn = AsyncMock()
+        owned = RealtimeResponseContextFrame(
+            context=snapshot,
+            response_id="resp_explicit",
+            canonical_context=canonical,
+        )
+        with patch("pipecat.services.llm_service.LLMService.process_frame", new=AsyncMock()):
+            await service.process_frame(owned, FrameDirection.DOWNSTREAM)
+        self.assertIs(service._context, canonical)
+        service._maybe_run_text_turn.assert_awaited_once_with(snapshot)
+
+
+class OmniAudioBufferBoundTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _service(*, max_secs: float = 0.01, pre_secs: float = 0.0) -> NvidiaOmniLLMService:
+        service = NvidiaOmniLLMService(
+            api_key="not-needed",
+            base_url="http://localhost:8000/v1",
+            settings=NvidiaOmniSettings(
+                emit_transcriptions=True,
+                min_user_audio_secs=0.0,
+                max_user_audio_secs=max_secs,
+                pre_speech_buffer_secs=pre_secs,
+            ),
+        )
+        service.bind_realtime_response_snapshot(
+            AsyncMock(),
+            reserve_audio_response=Mock(),
+            release_audio_response=Mock(),
+        )
+        return service
+
+    async def test_rtvi_does_not_apply_the_realtime_audio_ceiling(self) -> None:
+        service = NvidiaOmniLLMService(
+            api_key="not-needed",
+            base_url="http://localhost:8000/v1",
+            settings=NvidiaOmniSettings(
+                emit_transcriptions=True,
+                min_user_audio_secs=0.0,
+                max_user_audio_secs=0.01,
+                pre_speech_buffer_secs=0.0,
+            ),
+        )
+        await service._handle_user_started()
+        audio = InputAudioRawFrame(audio=b"\x00" * 640, sample_rate=16000, num_channels=1)
+
+        service._handle_audio_frame(audio)
+
+        self.assertFalse(service._audio_buffer_overflowed)
+        self.assertEqual(service._audio_buffer_bytes, 640)
+
+    async def test_cumulative_limit_releases_turn_memory_and_ignores_remainder(self) -> None:
+        service = self._service()
+        service._end_audio_transcript_producer = AsyncMock()
+        await service._handle_user_started()
+        five_ms = InputAudioRawFrame(audio=b"\x00" * 160, sample_rate=16000, num_channels=1)
+
+        service._handle_audio_frame(five_ms)
+        service._handle_audio_frame(five_ms)
+        self.assertEqual(service._audio_buffer_bytes, 320)
+        self.assertEqual(len(service._audio_buffer), 2)
+
+        service._handle_audio_frame(InputAudioRawFrame(audio=b"\x00\x00", sample_rate=16000, num_channels=1))
+        self.assertTrue(service._audio_buffer_overflowed)
+        self.assertEqual(service._audio_buffer_bytes, 0)
+        self.assertEqual(service._audio_buffer, [])
+
+        service._handle_audio_frame(five_ms)
+        self.assertEqual(service._audio_buffer_bytes, 0)
+        self.assertEqual(service._audio_buffer, [])
+
+        stopped = UserStoppedSpeakingFrame()
+        await service._handle_user_stopped(stopped)
+        terminal = service._end_audio_transcript_producer.await_args.args[0]
+        self.assertEqual(terminal.turn_frame_id, stopped.id)
+        self.assertEqual(service._end_audio_transcript_producer.await_args.kwargs["status"], "overflowed")
+        self.assertFalse(service._audio_buffer_overflowed)
+        self.assertIsNone(service._pending_request)
+
+        await service._handle_user_started()
+        service._handle_audio_frame(five_ms)
+        self.assertEqual(service._audio_buffer_bytes, 160)
+        self.assertFalse(service._audio_buffer_overflowed)
+
+    async def test_pre_speech_audio_counts_toward_the_same_cumulative_limit(self) -> None:
+        service = self._service(max_secs=0.01, pre_secs=0.005)
+        five_ms = InputAudioRawFrame(audio=b"\x00" * 160, sample_rate=16000, num_channels=1)
+        service._handle_audio_frame(five_ms)
+        self.assertEqual(service._pre_speech_buffer_bytes, 160)
+
+        await service._handle_user_started()
+        self.assertEqual(service._audio_buffer_bytes, 160)
+        service._handle_audio_frame(five_ms)
+        self.assertEqual(service._audio_buffer_bytes, 320)
+        service._handle_audio_frame(InputAudioRawFrame(audio=b"\x00\x00", sample_rate=16000, num_channels=1))
+
+        self.assertTrue(service._audio_buffer_overflowed)
+        self.assertEqual(service._audio_buffer_bytes, 0)
+        self.assertEqual(service._audio_buffer, [])
+
+    async def test_lower_runtime_limit_drops_an_already_over_limit_turn(self) -> None:
+        service = self._service(max_secs=1.0)
+        await service._handle_user_started()
+        service._handle_audio_frame(InputAudioRawFrame(audio=b"\x00" * 24000, sample_rate=16000, num_channels=1))
+
+        await service._update_settings(NvidiaOmniSettings(max_user_audio_secs=0.5))
+
+        self.assertEqual(service._settings.max_user_audio_secs, 0.5)
+        self.assertTrue(service._audio_buffer_overflowed)
+        self.assertEqual(service._audio_buffer_bytes, 0)
+        self.assertEqual(service._audio_buffer, [])
+
+    def test_audio_duration_settings_are_finite_and_positive_for_every_transport(self) -> None:
+        default_service = NvidiaOmniLLMService(
+            api_key="not-needed",
+            base_url="http://localhost:8000/v1",
+        )
+        self.assertEqual(default_service._settings.max_user_audio_secs, MAX_FUSED_USER_AUDIO_SECS)
+
+        invalid_settings = (
+            NvidiaOmniSettings(max_user_audio_secs=0),
+            NvidiaOmniSettings(max_user_audio_secs=True),
+            NvidiaOmniSettings(max_user_audio_secs=float("nan")),
+            NvidiaOmniSettings(max_user_audio_secs=float("inf")),
+            NvidiaOmniSettings(min_user_audio_secs=-0.1),
+            NvidiaOmniSettings(pre_speech_buffer_secs=-0.1),
+        )
+        for settings in invalid_settings:
+            with self.subTest(settings=settings), self.assertRaises(ValueError):
+                NvidiaOmniLLMService(
+                    api_key="not-needed",
+                    base_url="http://localhost:8000/v1",
+                    settings=settings,
+                )
+
+    def test_realtime_audio_ceiling_is_validated_only_when_realtime_is_bound(self) -> None:
+        realtime_invalid_settings = (
+            NvidiaOmniSettings(max_user_audio_secs=MAX_FUSED_USER_AUDIO_SECS + 1),
+            NvidiaOmniSettings(min_user_audio_secs=2.0, max_user_audio_secs=1.0),
+            NvidiaOmniSettings(pre_speech_buffer_secs=2.0, max_user_audio_secs=1.0),
+        )
+        for settings in realtime_invalid_settings:
+            with self.subTest(settings=settings):
+                service = NvidiaOmniLLMService(
+                    api_key="not-needed",
+                    base_url="http://localhost:8000/v1",
+                    settings=settings,
+                )
+                with self.assertRaises(ValueError):
+                    service.bind_realtime_response_snapshot(AsyncMock())
+                self.assertIsNone(service._realtime_response_snapshot_hook)
+
+
+class OmniRealtimeAudioResponseSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_audio_and_tool_followup_get_distinct_service_snapshots(self) -> None:
+        service = NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1")
+        service.create_task = lambda coro, name=None: asyncio.create_task(coro, name=name)
+        service.start_processing_metrics = AsyncMock()
+        service.stop_processing_metrics = AsyncMock()
+        service.stop_all_metrics = AsyncMock()
+        canonical = LLMContext([{"role": "user", "content": "weather?"}])
+        service._context = canonical
+        response_a = RealtimeResponseLLMContext(
+            list(canonical.get_messages()),
+            max_output_tokens=31,
+            parallel_tool_calls=False,
+        )
+        tool_context = LLMContext(
+            [
+                {"role": "user", "content": "weather?"},
+                {"role": "assistant", "tool_calls": [{"id": "call_1"}]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            ]
+        )
+        response_b = RealtimeResponseLLMContext(
+            list(tool_context.get_messages()),
+            max_output_tokens=47,
+            parallel_tool_calls=True,
+        )
+        hook = AsyncMock(
+            side_effect=[
+                (
+                    response_a,
+                    (LLMConfigureOutputFrame(skip_tts=False),),
+                    AsyncMock(return_value="resp_a"),
+                    Mock(),
+                ),
+                (
+                    response_b,
+                    (LLMConfigureOutputFrame(skip_tts=False),),
+                    AsyncMock(return_value="resp_b"),
+                    Mock(),
+                ),
+            ]
+        )
+        service.bind_realtime_response_snapshot(hook)
+        service._process_context = AsyncMock()
+        service._audio_buffer = [b"\x00" * (service._sample_rate * service._channels * 2)]
+
+        async def discard_frame(_processor, _frame, _direction=FrameDirection.DOWNSTREAM) -> None:
+            return None
+
+        with patch.object(UserTurnCompletionLLMServiceMixin, "push_frame", new=discard_frame):
+            await service._maybe_run_audio_turn(transcript_turn_frame_id=501)
+            await service._pending_request
+            await service._maybe_run_text_turn(tool_context)
+            await service._pending_request
+
+        self.assertEqual(
+            hook.await_args_list,
+            [
+                unittest.mock.call(canonical, None, RealtimeResponseOrigin.AUTOMATIC_USER_TURN),
+                unittest.mock.call(tool_context, None, RealtimeResponseOrigin.INTERNAL_TOOL_CONTINUATION),
+            ],
+        )
+        self.assertEqual(
+            [call.args[0] for call in service._process_context.await_args_list],
+            [response_a, response_b],
+        )
+
+    async def test_short_audio_and_transcript_echo_do_not_reserve_phantom_responses(self) -> None:
+        service = NvidiaOmniLLMService(api_key="not-needed", base_url="http://localhost:8000/v1")
+        hook = Mock()
+        service.bind_realtime_response_snapshot(hook)
+        service._context = LLMContext([{"role": "user", "content": "too short"}])
+        service._audio_buffer = [b"\x00" * 100]
+
+        await service._maybe_run_audio_turn(transcript_turn_frame_id=601)
+        self.assertIsNone(service._pending_request)
+
+        service._answered_transcript = "already answered"
+        echo = LLMContext([{"role": "user", "content": "already answered"}])
+        await service._maybe_run_text_turn(echo)
+        self.assertIsNone(service._pending_request)
+        hook.assert_not_called()
 
 
 class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
@@ -102,14 +648,14 @@ class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_audio_turn_preempts_in_flight_turn(self) -> None:
         self._fill_audio()
-        await self.service._maybe_run_audio_turn()
+        await self.service._maybe_run_audio_turn(transcript_turn_frame_id=101)
         first_task = self.service._pending_request
         self.assertIsNotNone(first_task)
         await self._wait_for(lambda: len(self.turns) == 1)
         self.assertFalse(first_task.done())
 
         self._fill_audio()
-        await self.service._maybe_run_audio_turn()
+        await self.service._maybe_run_audio_turn(transcript_turn_frame_id=102)
         second_task = self.service._pending_request
 
         # The previous turn must be preempted (cancelled), not skipped...
@@ -140,7 +686,7 @@ class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_context_turn_yields_to_in_flight_audio_turn(self) -> None:
         self._fill_audio()
-        await self.service._maybe_run_audio_turn()
+        await self.service._maybe_run_audio_turn(transcript_turn_frame_id=201)
         audio_task = self.service._pending_request
         await self._wait_for(lambda: len(self.turns) == 1)
 
@@ -154,12 +700,12 @@ class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_audio_turn_below_min_duration_does_not_preempt(self) -> None:
         self._fill_audio()
-        await self.service._maybe_run_audio_turn()
+        await self.service._maybe_run_audio_turn(transcript_turn_frame_id=301)
         first_task = self.service._pending_request
         await self._wait_for(lambda: len(self.turns) == 1)
 
         self._fill_audio(seconds=0.05)
-        await self.service._maybe_run_audio_turn()
+        await self.service._maybe_run_audio_turn(transcript_turn_frame_id=302)
 
         self.assertIs(self.service._pending_request, first_task)
         self.assertFalse(first_task.cancelled())
@@ -176,7 +722,7 @@ class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
         self.service._context = None
         self._fill_audio()
 
-        await self.service._maybe_run_audio_turn()
+        await self.service._maybe_run_audio_turn(transcript_turn_frame_id=401)
         await self._wait_for(lambda: len(self.turns) == 1)
 
         self.assertEqual(self.turns[0].args[0].get_messages(), [])

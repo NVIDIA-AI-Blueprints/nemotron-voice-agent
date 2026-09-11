@@ -5,6 +5,7 @@
 
 import ipaddress
 import json
+import math
 import os
 import socket
 import time
@@ -20,6 +21,20 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_FILENAME = "prompts.yaml"
 TOOLS_FILENAME = "tools.yaml"
 _service_context: ContextVar[tuple[Path, tuple[str, ...]] | None] = ContextVar("service_context", default=None)
+
+LOCAL_SERVICE_CATALOG_PLATFORMS: tuple[str, ...] = ("server", "singlegpu")
+REALTIME_PRIVATE_SERVICE_FIELDS: frozenset[str] = frozenset(
+    {
+        "forced_tool_call_stops",
+        "realtime_max_output_tokens",
+        "supports_tokenize",
+    }
+)
+
+
+def public_service_entry_fields(entry: Mapping[str, object]) -> dict[str, object]:
+    """Return service-catalog fields safe for ordinary client metadata APIs."""
+    return {key: value for key, value in entry.items() if key not in REALTIME_PRIVATE_SERVICE_FIELDS}
 
 
 def _services_cloud_path() -> Path:
@@ -429,6 +444,27 @@ def _load_local_services_catalog() -> dict:
     return _rewrite_local_runtime_endpoints(_normalize_services_catalog(merged))
 
 
+def _load_local_services_catalog_for_platform(platform: str) -> dict:
+    """Load one exact local recipe section without endpoint discovery.
+
+    The unqualified local catalog above remains reachability-driven for the UI.
+    Platform-qualified service IDs use this path so Realtime routes are stable
+    across workers and cannot silently select another recipe section.
+    """
+    if platform not in LOCAL_SERVICE_CATALOG_PLATFORMS:
+        return _normalize_services_catalog({})
+    local_path = _services_local_path()
+    if not local_path.is_file():
+        return _normalize_services_catalog({})
+    data = load_yaml_file(local_path)
+    if not isinstance(data, dict):
+        return _normalize_services_catalog({})
+    platform_data = data.get(platform)
+    if not isinstance(platform_data, dict):
+        return _normalize_services_catalog({})
+    return _rewrite_local_runtime_endpoints(_normalize_services_catalog(platform_data))
+
+
 def _load_effective_services_catalog() -> dict:
     """Return the merged catalog combining cloud and reachable local entries.
 
@@ -605,8 +641,11 @@ def filter_session_config(data: dict) -> dict:
 def load_service_entry_by_id(category: str, entry_id: str) -> dict:
     """Look up a built-in catalog entry by category and API id.
 
-    Supports UI ids (``<source>:<key>``) and raw catalog keys for direct
-    clients. Returns ``{}`` for custom or unknown entries.
+    Supports UI ids (``<source>:<key>``), stable local Realtime ids
+    (``self-hosted:<platform>:<key>``), and raw catalog keys for direct clients.
+    Unqualified self-hosted ids retain the UI's reachability-driven behavior;
+    qualified ids read the named raw recipe section without probing endpoints.
+    Returns ``{}`` for custom or unknown entries.
     """
     if not entry_id or entry_id.startswith("custom-"):
         return {}
@@ -617,7 +656,13 @@ def load_service_entry_by_id(category: str, entry_id: str) -> dict:
         if source == "cloud-nim":
             catalog = _load_cloud_services_catalog()
         elif source == "self-hosted":
-            catalog = _load_local_services_catalog()
+            if ":" in key:
+                platform, key = key.split(":", 1)
+                if platform not in LOCAL_SERVICE_CATALOG_PLATFORMS or not key or ":" in key:
+                    return {}
+                catalog = _load_local_services_catalog_for_platform(platform)
+            else:
+                catalog = _load_local_services_catalog()
         else:
             return {}
     else:
@@ -643,6 +688,18 @@ def load_service_entry(category: str, key: str) -> dict:
     return dict(section[default_key]) if default_key in section else {}
 
 
+def load_selected_service_entry(category: str, entry_id: object) -> dict:
+    """Load an explicit service selection, or use discovery only when absent.
+
+    Qualified Realtime model profiles must remain bound to their exact catalog
+    entries. In particular, do not probe unrelated local recipe endpoints after
+    a request already carries a service ID.
+    """
+    if isinstance(entry_id, str) and entry_id:
+        return load_service_entry_by_id(category, entry_id)
+    return load_service_entry(category, "")
+
+
 def _build_services_api_entries(section: dict, category: str, source: str) -> list[dict]:
     """Convert one catalog section into API entries for a source."""
     if not isinstance(section, dict):
@@ -659,7 +716,7 @@ def _build_services_api_entries(section: dict, category: str, source: str) -> li
             "name": val.get("name", key),
             "builtIn": True,
             "source": source,
-            **{k: v for k, v in val.items() if k != "name"},
+            **{k: v for k, v in public_service_entry_fields(val).items() if k != "name"},
             "selected": key == selected_key,
         }
         for key, val in ordered_items
@@ -744,6 +801,8 @@ def parse_env_float(name: str, default: float, min_value: float | None = None) -
     raw = os.getenv(name, str(default))
     try:
         value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError
     except ValueError:
         logger.warning(f"Invalid {name}={raw!r}, falling back to default {default}")
         value = default

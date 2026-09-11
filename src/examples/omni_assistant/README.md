@@ -74,11 +74,16 @@ Environment variables read by [`pipeline.py`](pipeline.py):
 | `OMNI_TEMPERATURE` | `0.6` | Sampling temperature |
 | `OMNI_TOP_P` | `0.95` | Nucleus sampling top-p |
 | `OMNI_MIN_USER_AUDIO_SECS` | `0.3` | Drop turns shorter than this |
+| `OMNI_MAX_USER_AUDIO_SECS` | `60` | Maximum Realtime user-audio duration per turn |
 | `OMNI_EMIT_TRANSCRIPTIONS` | `true` | Ask Omni for `<transcript>`/`<response>` sections so the user's words reach the UI and the conversation history |
 | `TTS_STOP_FRAME_TIMEOUT_S` | `30` | TTS audio-context idle timeout |
 | `AUDIO_OUT_10MS_CHUNKS` | `5` (WebRTC) / `10` (WebSocket) | Outbound audio framing |
 
 For model selection, voices, and shared service-catalog mechanics, see [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure TTS](../../../docs/how-to/configure-tts.md), and [Configure Services](../../../docs/how-to/configure-services.md).
+
+The OpenAI Realtime WebSocket supports text or audio output and client-owned
+functions when `OMNI_EMIT_TRANSCRIPTIONS=true`. Refer to [Use the Realtime
+Gateway](../../../docs/how-to/use-realtime-gateway.md).
 
 ## Tips & best practices
 

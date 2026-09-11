@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from textwrap import dedent
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import examples_registry
 import utils
@@ -17,6 +17,7 @@ from utils import (
     clear_service_context,
     filter_session_config,
     hydrate_config_from_catalog,
+    load_selected_service_entry,
     load_service_entry,
     load_service_entry_by_id,
 )
@@ -29,6 +30,20 @@ class ServiceCatalogHydrationTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         clear_service_context()
+
+    def test_service_selection_uses_exact_id_or_existing_default(self) -> None:
+        selected = {"model_id": "selected-model"}
+        fallback = {"model_id": "default-model"}
+        for entry_id, expected in (("self-hosted:singlegpu:selected", selected), ("", fallback)):
+            with (
+                self.subTest(entry_id=entry_id),
+                patch("utils.load_service_entry_by_id", return_value=selected) as exact_lookup,
+                patch("utils.load_service_entry", return_value=fallback) as default_lookup,
+            ):
+                self.assertEqual(load_selected_service_entry("llm", entry_id), expected)
+
+            self.assertEqual(exact_lookup.mock_calls, [call("llm", entry_id)] if entry_id else [])
+            self.assertEqual(default_lookup.mock_calls, [] if entry_id else [call("llm", "")])
 
     def test_hydrates_selected_builtin_details_from_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -339,6 +354,48 @@ llm:
         finally:
             utils._service_context.reset(token)
         self.assertEqual(selected_lightning["supported_languages"], lightning_languages)
+
+    def test_local_realtime_tokenizer_routes_declare_model_output_caps(self) -> None:
+        expected = {
+            "generic": {"server": 4096, "singlegpu": 2048},
+            "multilingual": {"server": 4096, "singlegpu": 2048},
+            "frontend_backend_agent": {"server": 4096, "singlegpu": 2048},
+        }
+        for example_dir, profile_caps in expected.items():
+            catalog = utils.load_yaml_file(Path(f"src/examples/{example_dir}/services.local.yaml"))
+            for profile, cap in profile_caps.items():
+                with self.subTest(example=example_dir, profile=profile):
+                    talker_entries = catalog[profile]["llm"].values()
+                    self.assertTrue(talker_entries)
+                    for entry in talker_entries:
+                        self.assertIs(entry["supports_tokenize"], True)
+                        self.assertEqual(entry["realtime_max_output_tokens"], cap)
+
+    def test_realtime_routing_fields_stay_out_of_ordinary_service_metadata(self) -> None:
+        private_entry = {
+            "name": "Private-capability LLM",
+            "model_id": "example/model",
+            "supports_tokenize": True,
+            "realtime_max_output_tokens": 2048,
+            "forced_tool_call_stops": ["</tool_call>"],
+        }
+
+        api_entry = utils._build_services_api_entries(
+            {"private": private_entry},
+            "llm",
+            "self-hosted",
+        )[0]
+        default_entry = examples_registry._service_entry_payload(
+            "self-hosted",
+            "private",
+            private_entry,
+        )
+
+        for entry in (api_entry, default_entry):
+            self.assertEqual(entry["model_id"], "example/model")
+            self.assertNotIn("supports_tokenize", entry)
+            self.assertNotIn("realtime_max_output_tokens", entry)
+            self.assertNotIn("forced_tool_call_stops", entry)
 
     def test_multilingual_agent_prompt_keys_are_registry_declared(self) -> None:
         unlocked = examples_registry.Selection(

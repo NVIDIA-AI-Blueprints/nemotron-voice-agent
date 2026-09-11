@@ -11,9 +11,44 @@ from typing import Any, Protocol
 
 from loguru import logger
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.services.nvidia.llm import NvidiaLLMService
 
 from examples.frontend_backend_agent.src.runtime_context import runtime_today
+
+_PLAN_CONTEXTS = ["flight_search", "booking", "pnr_status", "general"]
+_PLAN_TOOLS = ["flight_search", "booking", "pnr_status", "response_hint"]
+_PLAN_CALL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "enum": _PLAN_TOOLS},
+        "params": {"type": "object", "additionalProperties": True},
+        "reason": {"type": "string"},
+        "action": {"type": "string"},
+        "context": {"type": "string", "enum": _PLAN_CONTEXTS},
+        "response_text": {"type": "string"},
+        "params_needed": {"type": "array", "items": {"type": "string"}},
+        "params_resolved": {"type": "object", "additionalProperties": True},
+    },
+    "required": ["tool"],
+    "additionalProperties": False,
+}
+THINKER_PLAN_SCHEMA: dict[str, Any] = {
+    "oneOf": [
+        _PLAN_CALL_SCHEMA,
+        {
+            "type": "object",
+            "properties": {
+                "tool_calls": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": _PLAN_CALL_SCHEMA,
+                },
+                "response_text": {"type": "string"},
+            },
+            "required": ["tool_calls"],
+            "additionalProperties": False,
+        },
+    ]
+}
 
 
 class ThinkerPlanner(Protocol):
@@ -23,15 +58,33 @@ class ThinkerPlanner(Protocol):
         """Return a structured Thinker plan."""
 
 
+class PlannerLLM(Protocol):
+    """Provider operations used by the Thinker planner."""
+
+    async def run_inference(self, context: LLMContext, *, max_tokens: int) -> str:
+        """Return one unstructured completion."""
+
+    async def run_structured_inference(
+        self,
+        context: LLMContext,
+        *,
+        schema: dict[str, Any],
+        schema_name: str,
+        max_tokens: int,
+    ) -> Any:
+        """Return one schema-constrained completion."""
+
+
 class NvidiaThinkerPlanner:
     """Thinker planner backed by Nemotron reasoning."""
 
     def __init__(
         self,
         *,
-        llm: NvidiaLLMService,
+        llm: PlannerLLM,
         system_prompt: str,
         max_tokens: int = 4096,
+        structured_output: bool = False,
     ) -> None:
         """Create an NVIDIA-backed Thinker planner."""
         if not system_prompt.strip():
@@ -39,6 +92,7 @@ class NvidiaThinkerPlanner:
         self._llm = llm
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
+        self._structured_output = structured_output
 
     async def plan(self, *, query: str, slots: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Ask the Thinker LLM for internal tool plan JSON."""
@@ -59,6 +113,17 @@ class NvidiaThinkerPlanner:
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ]
         )
+        if self._structured_output:
+            plan = await self._llm.run_structured_inference(
+                context,
+                schema=THINKER_PLAN_SCHEMA,
+                schema_name="airline_plan",
+                max_tokens=self._max_tokens,
+            )
+            if not isinstance(plan, dict):
+                raise ValueError("Thinker LLM plan must be a JSON object")
+            return plan
+
         raw = await self._llm.run_inference(context, max_tokens=self._max_tokens)
         if not raw:
             raise RuntimeError("Thinker LLM returned an empty plan")

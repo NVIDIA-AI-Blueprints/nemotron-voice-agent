@@ -6,24 +6,34 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+import math
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from loguru import logger
 from pipecat.bus.messages import BusJobResponseMessage
-from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
+from pipecat.frames.frames import Frame, LLMTextFrame, MetricsFrame
+from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData, ProcessingMetricsData, TTFBMetricsData
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 
 from attachment_store import latest_user_attachment, remove_attachment
 from examples.omni_assistant_subagents.subagents.media_analyzer import (
     MEDIA_ANALYSIS_RUNNING_PREFIX,
     MEDIA_ANALYSIS_TASK_NAME,
+    MEDIA_ANALYZER_LLM_METRICS_PROCESSOR,
     MediaAnalyzerWorker,
 )
 from examples.omni_assistant_subagents.subagents.transport.speaker_context import SpeakerContextManager
 from examples.omni_assistant_subagents.subagents.transport.subagent_state_board import SubagentStateBoard
+from examples.shared.frames import (
+    LLMProviderCompletionReasonFrame,
+    LLMProviderFinishReason,
+    require_llm_provider_finish_reason,
+)
 
 _PENDING_ANALYSIS = "PENDING — a freshly uploaded attachment is waiting and has not been analyzed yet"
+
+ResponseEmitter = Callable[[tuple[Frame, ...]], Awaitable[bool]]
 
 
 class MediaAnalysisController:
@@ -37,7 +47,9 @@ class MediaAnalysisController:
         board: SubagentStateBoard,
         request_job: Callable[..., Awaitable[str]],
         queue_frame: Callable[[Any], Awaitable[None]],
+        emit_response: ResponseEmitter,
         followup_delay_secs: float,
+        realtime_mode: bool = False,
     ) -> None:
         """Initialize uploaded-media dispatch state for one session."""
         self._session_id = session_id
@@ -45,6 +57,8 @@ class MediaAnalysisController:
         self._board = board
         self._request_job = request_job
         self._queue_frame = queue_frame
+        self._emit_response = emit_response
+        self._realtime_mode = realtime_mode
         self._followup_delay_secs = followup_delay_secs
         self._pending_transcript = ""
         self._pending_prompt = ""
@@ -241,6 +255,7 @@ class MediaAnalysisController:
         is_patch = bool(response.get("is_patch"))
         reasoning = str(response.get("reasoning") or "").strip()
         query = str(response.get("query") or "").strip()
+        llm_metrics = response.get("llm_metrics")
         attachment = response.get("attachment") if isinstance(response.get("attachment"), dict) else {}
         is_capture = message.job_id in self._capture_task_ids
         self._capture_task_ids.discard(message.job_id)
@@ -249,6 +264,17 @@ class MediaAnalysisController:
             if is_capture and attachment_id:
                 remove_attachment(self._session_id, attachment_id)
             return False
+        finish_reason: LLMProviderFinishReason | None = None
+        if self._realtime_mode:
+            try:
+                finish_reason = require_llm_provider_finish_reason(response.get("finish_reason"))
+            except ValueError as exc:
+                logger.warning(f"Ignoring media analyzer response with invalid provider terminal: {exc}")
+                if is_capture and attachment_id:
+                    remove_attachment(self._session_id, attachment_id)
+                if attachment_id and self._active_attachment_id == attachment_id:
+                    self._active_attachment_id = ""
+                return False
 
         if not is_capture:
             latest = latest_user_attachment(self._session_id)
@@ -270,6 +296,8 @@ class MediaAnalysisController:
                 attachment=attachment,
                 reasoning=reasoning,
                 query=query,
+                llm_metrics=llm_metrics if self._realtime_mode else None,
+                finish_reason=finish_reason,
                 clear_running=not is_capture,
             )
         finally:
@@ -288,6 +316,8 @@ class MediaAnalysisController:
         attachment: dict[str, Any],
         reasoning: str,
         query: str,
+        llm_metrics: Any,
+        finish_reason: LLMProviderFinishReason | None,
         clear_running: bool,
     ) -> None:
         """Speak the analyzer's TTS answer as its own assistant turn.
@@ -299,9 +329,15 @@ class MediaAnalysisController:
         if clear_running:
             self._speaker_context.set_pinned_state(MEDIA_ANALYSIS_RUNNING_PREFIX, "")
         await asyncio.sleep(self._followup_delay_secs)
-        await self._queue_frame(LLMFullResponseStartFrame())
-        await self._queue_frame(LLMTextFrame(text=spoken))
-        await self._queue_frame(LLMFullResponseEndFrame())
+        metrics_frame = _llm_metrics_frame(llm_metrics)
+        response_frames: tuple[Frame, ...] = (
+            *((metrics_frame,) if metrics_frame is not None else ()),
+            LLMTextFrame(text=spoken),
+            *((LLMProviderCompletionReasonFrame(finish_reason=finish_reason),) if finish_reason is not None else ()),
+        )
+        emitted = await self._emit_response(response_frames)
+        if not emitted:
+            return
         await self._queue_frame(
             RTVIServerMessageFrame(
                 data={
@@ -319,3 +355,64 @@ class MediaAnalysisController:
                 }
             )
         )
+
+
+def _llm_metrics_frame(raw: Any) -> MetricsFrame | None:
+    """Build standard Pipecat metrics from trusted worker measurements."""
+    if not isinstance(raw, Mapping):
+        return None
+    processor = str(raw.get("processor") or "").strip()
+    if processor != MEDIA_ANALYZER_LLM_METRICS_PROCESSOR:
+        logger.warning(f"Ignoring media analyzer metrics from unknown processor={processor!r}")
+        return None
+    raw_model = raw.get("model")
+    model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else None
+    data = []
+    ttfb_seconds = _finite_nonnegative(raw.get("ttfb_seconds"))
+    if ttfb_seconds is not None:
+        data.append(TTFBMetricsData(processor=processor, model=model, value=ttfb_seconds))
+    processing_seconds = _finite_nonnegative(raw.get("processing_seconds"))
+    if processing_seconds is not None:
+        data.append(ProcessingMetricsData(processor=processor, model=model, value=processing_seconds))
+    usage = _llm_token_usage(raw.get("usage"))
+    if usage is not None:
+        data.append(LLMUsageMetricsData(processor=processor, model=model, value=usage))
+    return MetricsFrame(data=data) if data else None
+
+
+def _finite_nonnegative(value: Any) -> float | None:
+    """Accept only a real, finite, non-negative measured duration."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) and numeric >= 0 else None
+
+
+def _llm_token_usage(raw: Any) -> LLMTokenUsage | None:
+    """Validate a serialized provider usage record without filling gaps."""
+    if not isinstance(raw, Mapping):
+        return None
+    required = ("prompt_tokens", "completion_tokens", "total_tokens")
+    if any(not _nonnegative_int(raw.get(field)) for field in required):
+        return None
+    values = {field: raw[field] for field in required}
+    for field in (
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "reasoning_tokens",
+        "input_audio_tokens",
+        "output_audio_tokens",
+        "cache_read_input_audio_tokens",
+    ):
+        value = raw.get(field)
+        if value is None:
+            continue
+        if not _nonnegative_int(value):
+            return None
+        values[field] = value
+    return LLMTokenUsage(**values)
+
+
+def _nonnegative_int(value: Any) -> bool:
+    """Return whether a token counter is an integer at least zero."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from loguru import logger
@@ -17,15 +18,21 @@ from pipecat.workers.base_worker import BaseWorker
 
 from attachment_store import Attachment, get_attachment
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
+    NvidiaOmniInferenceResult,
     NvidiaOmniLLMService,
     NvidiaOmniSettings,
     media_message_part,
     text_message_part,
 )
+from examples.shared.frames import (
+    LLMProviderFinishReason,
+    require_llm_provider_finish_reason,
+)
 from examples.shared.json_parsing import extract_json_object
 from utils import parse_env_float, parse_env_int
 
 MEDIA_ANALYSIS_TASK_NAME = "analyze_media"
+MEDIA_ANALYZER_LLM_METRICS_PROCESSOR = "MediaAnalyzerOmniLLM"
 
 MEDIA_ANALYSIS_RUNNING_PREFIX = "An uploaded media analysis task is running asynchronously."
 SPEAKER_STATE_PREFIXES: tuple[str, ...] = (MEDIA_ANALYSIS_RUNNING_PREFIX,)
@@ -81,6 +88,7 @@ class MediaAnalyzerWorker(BaseWorker):
         }
         omni_extra["extra_body"] = extra_body
         self._omni = NvidiaOmniLLMService(
+            name=MEDIA_ANALYZER_LLM_METRICS_PROCESSOR,
             api_key=api_key,
             base_url=base_url,
             extra=omni_extra,
@@ -104,6 +112,8 @@ class MediaAnalyzerWorker(BaseWorker):
         session_id = str(payload.get("session_id") or "").strip()
         attachment_id = str(attachment.get("id") or "").strip()
         tts = analysis = append_patch = reasoning = ""
+        llm_metrics: dict[str, Any] = {}
+        finish_reason: LLMProviderFinishReason = "stop"
 
         await self._emit_update(
             target=requester,
@@ -120,7 +130,7 @@ class MediaAnalyzerWorker(BaseWorker):
             tts = "I could not access the uploaded media for analysis."
         else:
             try:
-                text, reasoning = await self._analyze_attachment(
+                result = await self._analyze_attachment(
                     stored_attachment,
                     query,
                     prior_analysis=prior_analysis,
@@ -128,24 +138,28 @@ class MediaAnalyzerWorker(BaseWorker):
                     task_id=message.job_id,
                     attachment_metadata=attachment,
                 )
-                tts, analysis, append_patch = _parse_analyzer_result(text, is_patch=bool(prior_analysis))
+                finish_reason = require_llm_provider_finish_reason(result.finish_reason)
+                reasoning = result.reasoning
+                llm_metrics = self._llm_metrics_payload(result)
+                tts, analysis, append_patch = _parse_analyzer_result(result.text, is_patch=bool(prior_analysis))
             except Exception as exc:
                 logger.exception(f"Media analyzer Omni request failed: {exc}")
                 tts = "I could not analyze the uploaded media because the analyzer request failed."
 
-        await self.send_job_response(
-            message.job_id,
-            {
-                "tts": tts,
-                "analysis": analysis,
-                "append_patch": append_patch,
-                "is_patch": bool(prior_analysis),
-                "reasoning": reasoning,
-                "query": query,
-                "transcript": transcript,
-                "attachment": attachment,
-            },
-        )
+        response = {
+            "tts": tts,
+            "analysis": analysis,
+            "append_patch": append_patch,
+            "is_patch": bool(prior_analysis),
+            "reasoning": reasoning,
+            "query": query,
+            "transcript": transcript,
+            "attachment": attachment,
+            "finish_reason": finish_reason,
+        }
+        if llm_metrics:
+            response["llm_metrics"] = llm_metrics
+        await self.send_job_response(message.job_id, response)
 
     async def _analyze_attachment(
         self,
@@ -156,8 +170,8 @@ class MediaAnalyzerWorker(BaseWorker):
         requester: str,
         task_id: str,
         attachment_metadata: dict,
-    ) -> tuple[str, str]:
-        """Call the multimodal Omni endpoint for one attachment; return (raw_text, reasoning)."""
+    ) -> NvidiaOmniInferenceResult:
+        """Call the multimodal Omni endpoint and retain its real usage and timing."""
         media_part = media_message_part(attachment.data, modality=attachment.kind, mime_type=attachment.content_type)
         instructions = f"{self._system_prompt}\n\n{_build_user_prompt(prompt, prior_analysis)}"
         user_message = {"role": "user", "content": [text_message_part(instructions), media_part]}
@@ -192,7 +206,24 @@ class MediaAnalyzerWorker(BaseWorker):
         text = result.text.strip()
         reasoning = (result.reasoning or reasoning).strip()
         logger.info(f"Media analyzer Omni answer: answer_chars={len(text)}")
-        return text, reasoning
+        return replace(result, text=text, reasoning=reasoning)
+
+    def _llm_metrics_payload(self, result: NvidiaOmniInferenceResult) -> dict[str, Any]:
+        """Serialize only measurements reported or observed for this inference."""
+        metrics: dict[str, Any] = {}
+        if result.ttfb_seconds is not None:
+            metrics["ttfb_seconds"] = result.ttfb_seconds
+        if result.processing_seconds is not None:
+            metrics["processing_seconds"] = result.processing_seconds
+        if result.usage is not None:
+            metrics["usage"] = result.usage.model_dump(mode="json", exclude_none=True)
+        if not metrics:
+            return {}
+        return {
+            "processor": MEDIA_ANALYZER_LLM_METRICS_PROCESSOR,
+            "model": self._model_id,
+            **metrics,
+        }
 
     async def _emit_update(
         self,

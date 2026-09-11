@@ -12,6 +12,11 @@ This guide covers the **mechanics**: how catalogs are loaded, switched, and exte
 - `services.local.yaml` is grouped into recipe sections (`server` for NIM sidecars, `singlegpu` for vLLM + NeMo-Speech.cpp). The backend merges all sections and exposes only endpoints that are reachable on TCP. Host-native runs work the same way: start the sidecars, then start the app.
 - The same `--profile` works whether you run cloud-only or with local sidecars. Nothing else needs to be set.
 
+OpenAI Realtime routing uses `REALTIME_SERVICE_PLATFORM` to select the `cloud`,
+`server`, or `singlegpu` catalog section. It does not select a section by
+reachability. Refer to [Select a Realtime Model
+Profile](use-realtime-gateway.md#select-a-realtime-model-profile).
+
 ## Switching services in the UI
 
 The Services tab lists all services exposed by the active catalog (cloud and reachable local entries). Click an entry to make it the active selection for that category. Selections persist in browser localStorage. Custom services added through the UI also live in localStorage.
@@ -21,6 +26,9 @@ The Services tab lists all services exposed by the active catalog (cloud and rea
 Each example declares its default service per slot via `defaults` in `examples_registry.yaml`. The pipeline resolves that default at startup, and the UI uses it as the initial selection. Edit `defaults` (and optionally reorder entries in the `services.cloud.yaml` / `services.local.yaml` for visual ordering in the UI) to change defaults.
 
 When the same default key exists in both `services.cloud.yaml` and `services.local.yaml`, the resolver prefers the **self-hosted** variant so that deploying local NIM sidecars automatically promotes them to the active default. No UI click is needed. If the self-hosted endpoint is unreachable at session-start time, the runtime falls back to the cloud variant.
+
+For a Realtime model profile, `registry-default` selects the first declared
+default for that service slot within `REALTIME_SERVICE_PLATFORM`.
 
 > **On-prem note:** self-hosted promotion only applies when the `defaults` key also exists in `services.local.yaml`. A default whose key exists **only** in `services.cloud.yaml` resolves to the cloud model even on an on-prem recipe. Point `defaults` at a local key or pick the model from the Services tab.
 

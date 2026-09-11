@@ -70,6 +70,10 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 
 To change models, voices, prompts, or tool wiring, see [Configure Services](../../../docs/how-to/configure-services.md), [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure ASR](../../../docs/how-to/configure-asr.md), [Configure TTS](../../../docs/how-to/configure-tts.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md).
 
+The OpenAI Realtime WebSocket supports this example with server-owned or
+client-owned function tools. Refer to [Use the Realtime
+Gateway](../../../docs/how-to/use-realtime-gateway.md).
+
 ## Tips & best practices
 
 - **Start from this baseline.** The generic example is intentionally minimal. Add domain logic, custom tools, and deployment-specific service choices on top of it rather than starting from scratch.
