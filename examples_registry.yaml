@@ -79,3 +79,17 @@ examples:
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
     bot: examples.frontend_backend_agent.pipeline:bot
+
+  webex-byova-assistant:
+    label: Cisco Webex BYOVA Assistant
+    slots: [llm, asr, tts]
+    activity_check:
+      first_warning_s: 480
+      second_warning_s: 30
+      warning_completion_timeout_s: 45
+    defaults:
+      prompt: [customer_care]
+      llm: [nemotron-lightning]
+      asr: [nemotron-asr-streaming-english]
+      tts: [magpie-multilingual-tts]
+    bot: examples.webex_byova.pipeline:bot

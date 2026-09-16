@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+# TLS material must be provisioned locally and never committed.
+certs/
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
