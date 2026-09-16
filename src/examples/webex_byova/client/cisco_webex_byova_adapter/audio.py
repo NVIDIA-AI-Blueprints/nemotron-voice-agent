@@ -9,7 +9,7 @@ import audioop
 
 from cisco_webex_byova_adapter.generated import voicevirtualagent_pb2
 
-# Nemotron's cascaded pipeline runs at 16 kHz mono int16 in both directions.
+# Nemotron accepts caller input at 16 kHz. Output frames declare their own rate.
 TARGET_SAMPLE_RATE = 16000
 
 # Webex BYoVA Prompt.audio_content is consumed as 8 kHz mono **G.711 μ-law**
@@ -57,15 +57,25 @@ def normalize_caller_audio(
     return pcm, resample_state
 
 
-def to_byova_audio(audio_16k_pcm16: bytes) -> bytes:
+def to_byova_audio(
+    audio_pcm16: bytes,
+    sample_rate_hz: int = TARGET_SAMPLE_RATE,
+    num_channels: int = 1,
+) -> bytes:
     """Convert Nemotron PCM into the G.711 μ-law payload expected by Webex.
 
-    Input audio is 16 kHz LINEAR16 PCM. Output audio is 8 kHz mono μ-law for
-    ``Prompt.audio_content``.
+    Input is mono LINEAR16 PCM at its declared rate. Output is 8 kHz mono
+    μ-law for ``Prompt.audio_content``.
     """
-    if not audio_16k_pcm16:
-        return audio_16k_pcm16
-    pcm_8k = audio_16k_pcm16
-    if TARGET_SAMPLE_RATE != BYOVA_OUT_SAMPLE_RATE:
-        pcm_8k, _ = audioop.ratecv(audio_16k_pcm16, 2, 1, TARGET_SAMPLE_RATE, BYOVA_OUT_SAMPLE_RATE, None)
+    if not audio_pcm16:
+        return audio_pcm16
+    if not isinstance(sample_rate_hz, int) or sample_rate_hz <= 0:
+        raise ValueError("PCM16 sample rate must be a positive integer")
+    if num_channels != 1:
+        raise ValueError("only mono PCM16 output is supported")
+    if len(audio_pcm16) % 2:
+        raise ValueError("PCM16 audio must contain complete samples")
+    pcm_8k = audio_pcm16
+    if sample_rate_hz != BYOVA_OUT_SAMPLE_RATE:
+        pcm_8k, _ = audioop.ratecv(audio_pcm16, 2, 1, sample_rate_hz, BYOVA_OUT_SAMPLE_RATE, None)
     return audioop.lin2ulaw(pcm_8k, 2)

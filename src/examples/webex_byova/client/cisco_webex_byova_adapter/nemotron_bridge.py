@@ -13,6 +13,7 @@ import os
 import ssl
 import time
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 import websockets
@@ -28,11 +29,27 @@ _TRACE_PATH = os.environ.get("NEMOTRON_BYOVA_ADAPTER_TRACE_FILE", "")
 _PCM16_BYTES_PER_SAMPLE = 2
 _NEMOTRON_INPUT_CHUNK_MS = 32
 _NEMOTRON_INPUT_CHUNK_BYTES = TARGET_SAMPLE_RATE * _NEMOTRON_INPUT_CHUNK_MS // 1000 * _PCM16_BYTES_PER_SAMPLE
-_ADAPTER_VENDOR_CONFIG_KEYS = {
-    "transfer_keywords",
-    "end_session_keywords",
-    "transfer_metadata",
-}
+_ADAPTER_VENDOR_CONFIG_KEYS = {"transfer_metadata"}
+_DTMF_FIELD_LENGTHS = {"phone_number": 10, "date_of_birth": 8}
+_TERMINAL_ACTIONS = {"transfer_to_human", "end_call"}
+
+
+def _dtmf_validation_error(field_name: str, value: str) -> str | None:
+    """Return a caller-facing reason when collected digits are unusable."""
+    expected_length = _DTMF_FIELD_LENGTHS.get(field_name)
+    if expected_length is None:
+        return "that keypad field is not supported"
+    if len(value) != expected_length:
+        return f"it was not exactly {expected_length} digits"
+    if field_name == "phone_number":
+        return None
+    try:
+        parsed = datetime.strptime(value, "%d%m%Y").date()
+    except ValueError:
+        return "it was not a valid date in day month year format"
+    if parsed > date.today() or parsed.year < 1900:
+        return "it was not a valid past date"
+    return None
 
 
 def _trace(message: str) -> None:
@@ -72,22 +89,19 @@ class NemotronSession:
     finalizer_task: asyncio.Task | None = None
     closed: bool = False
     vendor_config: dict[str, Any] = field(default_factory=dict)
-    transcripts: list[str] = field(default_factory=list)
-    user_turns: list[str] = field(default_factory=list)
-    bot_turns: list[str] = field(default_factory=list)
     last_audio_send_monotonic: float = 0.0
     first_audio_send_monotonic: float = 0.0
     # Caller-audio (INPUT) instrumentation: count frames + measure inter-arrival
     # gaps so we can tell streaming-vs-bursty input apart from the adapter side.
     caller_audio_frames: int = 0
     caller_audio_bytes: int = 0
-    last_inbound_activity_monotonic: float = field(default_factory=time.monotonic)
-    response_started: bool = False
     pending_bot_prompt_text: str = ""
     last_spoken_bot_text: str = ""
     bot_speaking: bool = False
-    transfer_requested: bool = False
-    end_session_requested: bool = False
+    terminal_action: str | None = None
+    terminal_reason: str = ""
+    control_transfer_metadata: dict[str, Any] = field(default_factory=dict)
+    pending_dtmf_field: str | None = None
     caller_resample_state: Any = None
 
     async def start(self) -> None:
@@ -127,6 +141,18 @@ class NemotronSession:
         frame = frames_pb2.Frame(message=frames_pb2.MessageFrame(data=json.dumps(payload)))
         await self.websocket.send(frame.SerializeToString())
         _trace("sent client-ready")
+
+    async def _send_client_message(self, message_type: str, data: dict[str, Any]) -> None:
+        if self.websocket is None:
+            raise RuntimeError(f"websocket is not connected for conversation {self.conversation_id}")
+        payload = {
+            "label": "rtvi-ai",
+            "type": message_type,
+            "id": f"{message_type}-{self.conversation_id}-{time.monotonic_ns()}",
+            "data": data,
+        }
+        frame = frames_pb2.Frame(message=frames_pb2.MessageFrame(data=json.dumps(payload)))
+        await self.websocket.send(frame.SerializeToString())
 
     def _parse_vendor_config(self) -> dict[str, Any]:
         if not self.vendor_specific_config.strip():
@@ -181,12 +207,15 @@ class NemotronSession:
             async for message in self.websocket:
                 frame = frames_pb2.Frame.FromString(message)
                 frame_type = frame.WhichOneof("frame")
-                logger.info("Nemotron frame_type=%s conversation_id=%s", frame_type, self.conversation_id)
+                logger.debug("Nemotron frame_type=%s conversation_id=%s", frame_type, self.conversation_id)
                 _trace(f"nemotron frame_type={frame_type}")
-                self.last_inbound_activity_monotonic = time.monotonic()
-                self.response_started = True
                 if frame_type == "audio" and frame.audio.audio:
-                    item = {"kind": "audio", "audio": frame.audio.audio}
+                    item = {
+                        "kind": "audio",
+                        "audio": frame.audio.audio,
+                        "sample_rate": frame.audio.sample_rate,
+                        "num_channels": frame.audio.num_channels,
+                    }
                     if self.pending_bot_prompt_text:
                         # Cisco can surface both audio and transcript text for a
                         # prompt, but Nemotron emits them as separate frames.
@@ -195,10 +224,6 @@ class NemotronSession:
                     await self.outbound_queue.put(item)
                     # A fresh audio chunk resets turn-final detection.
                     self._schedule_final_marker()
-                elif frame_type == "text":
-                    text = getattr(frame.text, "text", "").strip()
-                    if text:
-                        self.transcripts.append(text)
                 elif frame_type == "message":
                     try:
                         message_data = getattr(frame.message, "data", "")
@@ -206,7 +231,6 @@ class NemotronSession:
                         message_data = ""
                     _trace(f"message data={message_data[:300]}")
                     self._handle_message_payload(message_data)
-                    await self.outbound_queue.put({"kind": "message", "message": frame.message})
         except Exception as exc:
             logger.exception("Nemotron websocket reader failed conversation_id=%s", self.conversation_id)
             await self.outbound_queue.put({"kind": "error", "error": str(exc)})
@@ -282,57 +306,124 @@ class NemotronSession:
             self._schedule_final_marker()
             return
 
+        if message_type == "webex-call-control":
+            action = str(payload.get("action", "")).strip()
+            if action in _TERMINAL_ACTIONS:
+                reason = str(payload.get("reason", "")).strip()[:240]
+                metadata = payload.get("metadata")
+                self.request_terminal_action(
+                    action,
+                    reason=reason,
+                    metadata=metadata if isinstance(metadata, dict) else {},
+                )
+            elif action == "request_keypad_input":
+                self.request_keypad_input(str(payload.get("field", "")).strip())
+            return
+
         if not isinstance(data, dict):
             return
 
         text = str(data.get("text", "")).strip()
-        if message_type == "user-llm-text" and text:
-            self.user_turns.append(text)
-            self.transcripts.append(f"User: {text}")
-            if self._matches_any(text, self._transfer_keywords()):
-                self.transfer_requested = True
-            elif self._matches_any(text, self._end_session_keywords()):
-                self.end_session_requested = True
-            return
-
         if message_type == "bot-output" and text and bool(data.get("spoken")) and text != self.last_spoken_bot_text:
             self.last_spoken_bot_text = text
-            self.bot_turns.append(text)
-            self.transcripts.append(f"Assistant: {text}")
             # Attach the next spoken transcript to the next outbound audio
             # chunk so Webex sees aligned prompt text and audio.
             self.pending_bot_prompt_text = text
-            if self._matches_any(text, self._transfer_keywords()):
-                self.transfer_requested = True
-            elif self._matches_any(text, self._end_session_keywords()):
-                self.end_session_requested = True
 
-    def _transfer_keywords(self) -> list[str]:
-        keywords = self.vendor_config.get("transfer_keywords")
-        if isinstance(keywords, list):
-            return [str(item).strip().lower() for item in keywords if str(item).strip()]
-        return [item.strip().lower() for item in self.config.default_transfer_keywords.split(",") if item.strip()]
+    def request_terminal_action(self, action: str, *, reason: str, metadata: dict[str, Any]) -> bool:
+        """Record exactly one LLM-authorized terminal action."""
+        if action not in _TERMINAL_ACTIONS or self.terminal_action is not None:
+            return False
+        self.terminal_action = action
+        self.terminal_reason = reason
+        self.control_transfer_metadata = metadata
+        self.pending_dtmf_field = None
+        logger.info(
+            "Accepted LLM Webex terminal action=%s conversation_id=%s",
+            action,
+            self.conversation_id,
+        )
+        return True
 
-    def _end_session_keywords(self) -> list[str]:
-        keywords = self.vendor_config.get("end_session_keywords")
-        if isinstance(keywords, list):
-            return [str(item).strip().lower() for item in keywords if str(item).strip()]
-        return [item.strip().lower() for item in self.config.default_end_session_keywords.split(",") if item.strip()]
+    def request_keypad_input(self, field_name: str) -> bool:
+        """Arm one supported sensitive DTMF collection."""
+        if self.terminal_action or field_name not in _DTMF_FIELD_LENGTHS:
+            return False
+        if self.pending_dtmf_field not in (None, field_name):
+            return False
+        self.pending_dtmf_field = field_name
+        logger.info(
+            "Armed secure Webex keypad collection field=%s conversation_id=%s",
+            field_name,
+            self.conversation_id,
+        )
+        return True
 
-    @staticmethod
-    def _matches_any(text: str, keywords: list[str]) -> bool:
-        normalized = text.lower()
-        return any(keyword in normalized for keyword in keywords)
+    @property
+    def dtmf_input_length(self) -> int:
+        """Return the exact digit count that also completes collection."""
+        return _DTMF_FIELD_LENGTHS.get(self.pending_dtmf_field or "", 0)
+
+    async def ingest_dtmf(self, digits: list[str]) -> str:
+        """Validate one completed Cisco DTMF interaction and notify the pipeline."""
+        field_name = self.pending_dtmf_field
+        if field_name is None or self.terminal_action:
+            return "ignored"
+        value = "".join(digit for digit in digits if digit.isdigit())
+        if not value:
+            # Cisco completed collection on digit count, so a trailing
+            # terminator can arrive as its own interaction.
+            return "ignored"
+        validation_error = _dtmf_validation_error(field_name, value)
+        if validation_error:
+            await self._send_client_message(
+                "webex-dtmf-error",
+                {"field": field_name, "reason": validation_error},
+            )
+            logger.info(
+                "Rejected secure Webex keypad length field=%s conversation_id=%s",
+                field_name,
+                self.conversation_id,
+            )
+            return "invalid"
+
+        self.pending_dtmf_field = None
+        await self._send_client_message(
+            "webex-dtmf",
+            {"field": field_name, "value": value},
+        )
+        logger.info(
+            "Forwarded completed secure Webex keypad field=%s conversation_id=%s",
+            field_name,
+            self.conversation_id,
+        )
+        return "complete"
+
+    async def retry_dtmf(self, reason: str) -> bool:
+        """Clear partial digits and ask the pipeline to retry the active field."""
+        field_name = self.pending_dtmf_field
+        if field_name is None:
+            return False
+        await self._send_client_message("webex-dtmf-error", {"field": field_name, "reason": reason})
+        logger.info(
+            "Cancelled secure Webex keypad field=%s conversation_id=%s",
+            field_name,
+            self.conversation_id,
+        )
+        return True
 
     def transfer_metadata(self) -> dict[str, Any]:
         """Return transfer metadata for a transfer-to-agent output event."""
         metadata = self.vendor_config.get("transfer_metadata")
-        if isinstance(metadata, dict):
-            return metadata
-        try:
-            return json.loads(self.config.default_transfer_metadata_json)
-        except json.JSONDecodeError:
-            return {"route": "live-agent"}
+        if not isinstance(metadata, dict):
+            try:
+                metadata = json.loads(self.config.default_transfer_metadata_json)
+            except json.JSONDecodeError:
+                metadata = {"route": "live-agent"}
+        merged = {**metadata, **self.control_transfer_metadata}
+        if self.terminal_reason:
+            merged["reason"] = self.terminal_reason
+        return {str(key)[:64]: value for key, value in list(merged.items())[:16]}
 
     def _schedule_final_marker(self) -> None:
         if self.finalizer_task:
@@ -342,21 +433,6 @@ class NemotronSession:
     async def _emit_final_after_idle(self) -> None:
         await asyncio.sleep(self.config.output_idle_timeout_ms / 1000)
         await self.outbound_queue.put({"kind": "final"})
-
-    async def wait_for_response_settle(self) -> None:
-        """Wait for outbound activity to settle before closing the websocket."""
-        start = time.monotonic()
-        while not self.closed:
-            now = time.monotonic()
-            if self.response_started:
-                idle_for = now - self.last_inbound_activity_monotonic
-                if idle_for >= self.config.response_idle_timeout_secs:
-                    _trace(f"response settled idle_for={idle_for:.3f}")
-                    return
-            elif now - start >= self.config.response_settle_timeout_secs:
-                _trace("response settle timeout before outbound activity")
-                return
-            await asyncio.sleep(0.1)
 
     async def close(self) -> None:
         """Close the websocket and background tasks for this session."""

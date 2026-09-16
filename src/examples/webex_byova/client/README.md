@@ -58,21 +58,24 @@ For the full backend + adapter + Cisco sandbox flow, use:
 
 ## Cisco JWS validation
 
-Enable Cisco JWS validation and configure the expected claims before connecting
-the adapter to Cisco:
+Cisco JWS validation is enabled by default. Configure the expected claims
+before connecting the adapter to Cisco:
 
 ```bash
 export ENABLE_CISCO_JWS_VALIDATION=true
 export CISCO_JWT_ISSUER="https://idbroker-b-us.webex.com/idb"
 export CISCO_JWT_AUDIENCE="NemotronVoiceAgent"
 export CISCO_JWT_SUBJECT="callAudioData"
+export CISCO_JWT_NONCE="<current-data-source-nonce>"
+export CISCO_DATASOURCE_URL="<registered-data-source-url>"
+export CISCO_DATASOURCE_SCHEMA_UUID="5397013b-7920-4ffc-807c-e8a3e0a18f43"
+export CISCO_ORG_UUID="<customer-organization-uuid>"
 ```
 
 These are example values from one Cisco setup. The issuer may vary by Webex
-region. Obtain the exact `iss`, `aud`, and optional `sub` values from the
-Cisco-issued JWS claims or Cisco data-source configuration. If validation is
-enabled, `CISCO_JWT_ISSUER` and `CISCO_JWT_AUDIENCE` are required;
-`CISCO_JWT_SUBJECT` is optional.
+region. Obtain the exact values from the Cisco-issued JWS claims and data-source
+configuration. Issuer and audience are required. Subject, nonce, data-source
+URL, schema UUID, and organization UUID are validated whenever configured.
 
 For local-only smoke testing without Cisco TLS, you can explicitly allow
 plaintext:
@@ -91,12 +94,17 @@ ALLOW_PLAINTEXT_ADAPTER=true ./scripts/run_external_adapter.sh
 - Sends caller audio to Nemotron in unpaced chunks of at most 32 ms
 - Converts bot audio from 16 kHz PCM to 8 kHz G.711 for Webex
 - Does not apply adapter-side VAD gating to caller audio
-- Supports keyword-triggered `TRANSFER_TO_AGENT` and `SESSION_END` when
-  transcript text matches the configured keywords
-- Leaves Cisco JWS validation off by default unless
-  `ENABLE_CISCO_JWS_VALIDATION=true`
-- **WARNING:** In production you must enable Cisco JWS validation by setting
-  `ENABLE_CISCO_JWS_VALIDATION=true`
+- Accepts typed LLM control events for `TRANSFER_TO_AGENT` and `SESSION_END`;
+  transcript keywords never trigger terminal actions
+- Requests DTMF-only input with `input_sensitive=true` for secure phone and
+  date-of-birth collection
+- Uses `#` as the terminator and a configurable
+  `DTMF_INTER_DIGIT_TIMEOUT_MS` (default `3000`)
+- Never logs partial or completed keypad values
+- Requires Cisco JWS validation by default; local tests must explicitly set
+  `ENABLE_CISCO_JWS_VALIDATION=false`
+- Verifies backend TLS by default; self-signed local backends must explicitly
+  set `NEMOTRON_INSECURE_TLS=true`
 
 ## Smoke test
 

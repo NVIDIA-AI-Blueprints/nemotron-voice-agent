@@ -31,6 +31,19 @@ logger = logging.getLogger(__name__)
 
 
 _TRACE_PATH = os.environ.get("NEMOTRON_BYOVA_ADAPTER_TRACE_FILE", "")
+_DTMF_SYMBOLS = {
+    byova_common_pb2.DTMF_DIGIT_ZERO: "0",
+    byova_common_pb2.DTMF_DIGIT_ONE: "1",
+    byova_common_pb2.DTMF_DIGIT_TWO: "2",
+    byova_common_pb2.DTMF_DIGIT_THREE: "3",
+    byova_common_pb2.DTMF_DIGIT_FOUR: "4",
+    byova_common_pb2.DTMF_DIGIT_FIVE: "5",
+    byova_common_pb2.DTMF_DIGIT_SIX: "6",
+    byova_common_pb2.DTMF_DIGIT_SEVEN: "7",
+    byova_common_pb2.DTMF_DIGIT_EIGHT: "8",
+    byova_common_pb2.DTMF_DIGIT_NINE: "9",
+    byova_common_pb2.DTMF_DIGIT_POUND: "#",
+}
 
 
 def _trace(message: str) -> None:
@@ -48,18 +61,24 @@ def _new_response(response_type: int) -> voicevirtualagent_pb2.VoiceVAResponse:
 
 
 def _chunk_response_with_audio(
-    audio_16k: bytes,
+    audio_pcm16: bytes,
     text: str = "",
     barge_in: bool = True,
-) -> voicevirtualagent_pb2.VoiceVAResponse:
+    sample_rate_hz: int = 16_000,
+    num_channels: int = 1,
+) -> voicevirtualagent_pb2.VoiceVAResponse | None:
     """Build a CHUNK response carrying bot TTS audio for Webex.
 
-    The input is 16 kHz mono int16 PCM (Nemotron's native rate); we downsample
-    to 8 kHz here so Webex Universal Harness plays it at the right pitch.
+    The input is mono PCM16 at its declared rate; convert it to Webex's 8 kHz
+    mu-law format before constructing the response.
     """
+    audio_mulaw = to_byova_audio(audio_pcm16, sample_rate_hz, num_channels)
+    # Cisco's chunked-audio contract requires 100 bytes through 64 KiB.
+    if len(audio_mulaw) < 100:
+        return None
     response = _new_response(voicevirtualagent_pb2.VoiceVAResponse.CHUNK)
     prompt = voicevirtualagent_pb2.Prompt(
-        audio_content=to_byova_audio(audio_16k),
+        audio_content=audio_mulaw,
         is_barge_in_enabled=barge_in,
     )
     if text:
@@ -102,22 +121,6 @@ def _end_of_input_response() -> voicevirtualagent_pb2.VoiceVAResponse:
     )
 
 
-def _streaming_chunk_response(
-    audio_mulaw: bytes,
-) -> voicevirtualagent_pb2.VoiceVAResponse:
-    """Build a CHUNK response carrying bot audio."""
-    return voicevirtualagent_pb2.VoiceVAResponse(
-        prompts=[
-            voicevirtualagent_pb2.Prompt(
-                audio_content=audio_mulaw,
-                is_barge_in_enabled=True,
-            )
-        ],
-        input_mode=voicevirtualagent_pb2.INPUT_VOICE,
-        response_type=voicevirtualagent_pb2.VoiceVAResponse.CHUNK,
-    )
-
-
 def _empty_final_response() -> voicevirtualagent_pb2.VoiceVAResponse:
     """Build the terminal FINAL response with an empty audio prompt."""
     return voicevirtualagent_pb2.VoiceVAResponse(
@@ -130,6 +133,11 @@ def _empty_final_response() -> voicevirtualagent_pb2.VoiceVAResponse:
         input_mode=voicevirtualagent_pb2.INPUT_VOICE,
         response_type=voicevirtualagent_pb2.VoiceVAResponse.FINAL,
     )
+
+
+def _dtmf_symbols(request: voicevirtualagent_pb2.VoiceVARequest) -> list[str]:
+    """Map supported Cisco DTMF enums without logging sensitive values."""
+    return [symbol for event in request.dtmf_input.dtmf_events if (symbol := _DTMF_SYMBOLS.get(event)) is not None]
 
 
 class _SessionEntry:
@@ -233,6 +241,8 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
             stale: list[tuple[str, _SessionEntry, float]] = []
             async with self._sessions_lock:
                 for cid, entry in list(self._sessions.items()):
+                    if entry.lock.locked():
+                        continue
                     idle_for = now - entry.last_touched
                     if idle_for >= float(self._config.idle_session_timeout_secs):
                         stale.append((cid, entry, idle_for))
@@ -270,7 +280,45 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                         logger.info("Resumed existing session conversation_id=%s", conversation_id)
                         _trace(f"resumed session conversation_id={conversation_id}")
 
-                event_type = request.event_input.event_type
+                request_kind = request.WhichOneof("voice_va_input_type")
+                if request_kind == "dtmf_input":
+                    logger.info(
+                        "Received secure Cisco DTMF batch conversation_id=%s event_count=%d",
+                        conversation_id,
+                        len(request.dtmf_input.dtmf_events),
+                    )
+                elif request_kind == "event_input" and (
+                    request.event_input.event_type == byova_common_pb2.EventInput.START_OF_DTMF
+                ):
+                    logger.info("Received Cisco START_OF_DTMF conversation_id=%s", conversation_id)
+
+                event_type = (
+                    request.event_input.event_type
+                    if request_kind == "event_input"
+                    else byova_common_pb2.EventInput.UNSPECIFIED_INPUT
+                )
+
+                if request_kind == "dtmf_input":
+                    if entry is None:
+                        await context.abort(
+                            grpc.StatusCode.FAILED_PRECONDITION,
+                            "SESSION_START is required before DTMF input",
+                        )
+                    entry.last_touched = time.monotonic()
+                    dtmf_status = await entry.session.ingest_dtmf(_dtmf_symbols(request))
+                    if dtmf_status in {"complete", "invalid"}:
+                        async for chunk in self._drain_bot_turn(entry):
+                            yield chunk
+                        response = self._build_turn_final(entry, include_empty_audio=False)
+                        yield response
+                        terminal_yielded = True
+                        if self._response_is_terminal(response):
+                            removed = await self._remove_session(conversation_id)
+                            if removed is not None:
+                                with contextlib.suppress(Exception):
+                                    await removed.session.close()
+                            return
+                    continue
 
                 if event_type == byova_common_pb2.EventInput.SESSION_START:
                     if entry is None:
@@ -338,6 +386,12 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                     _trace(f"NO_INPUT conversation_id={conversation_id}")
                     if entry is not None:
                         entry.last_touched = time.monotonic()
+                        if await entry.session.retry_dtmf("the keypad timed out"):
+                            async for chunk in self._drain_bot_turn(entry):
+                                yield chunk
+                            yield self._build_turn_final(entry, include_empty_audio=False)
+                            terminal_yielded = True
+                            continue
                     yield _final_turn_response()
                     terminal_yielded = True
                     continue
@@ -425,10 +479,26 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                         nonlocal rpc_recv_frame_n, rpc_recv_bytes, rpc_last_recv_t
                         try:
                             async for req in request_iterator:
-                                if req.event_input.event_type == byova_common_pb2.EventInput.SESSION_END:
+                                req_kind = req.WhichOneof("voice_va_input_type")
+                                if (
+                                    req_kind == "event_input"
+                                    and req.event_input.event_type == byova_common_pb2.EventInput.SESSION_END
+                                ):
                                     _trace(f"mid-turn SESSION_END {cid}")
                                     session_end_received.set()
                                     return
+                                if req_kind == "dtmf_input":
+                                    symbols = _dtmf_symbols(req)
+                                    logger.info(
+                                        (
+                                            "Received mid-stream secure Cisco DTMF batch "
+                                            "conversation_id=%s event_count=%d"
+                                        ),
+                                        cid,
+                                        len(req.dtmf_input.dtmf_events),
+                                    )
+                                    await session.ingest_dtmf(symbols)
+                                    continue
                                 if not req.audio_input.caller_audio:
                                     continue
                                 now = time.monotonic()
@@ -558,6 +628,7 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                                     continue
 
                                 last_activity_t = time.monotonic()
+                                entry.last_touched = last_activity_t
                                 kind = item.get("kind") if isinstance(item, dict) else None
 
                                 if kind == "user_started_speaking":
@@ -606,9 +677,9 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                                             time.monotonic(),
                                             time.monotonic() - entry.last_touched,
                                         )
-                                    mulaw = to_byova_audio(item["audio"])
-                                    if mulaw and len(mulaw) >= 100:
-                                        yield _streaming_chunk_response(mulaw)
+                                    response = self._convert_bridge_item(item)
+                                    if response is not None:
+                                        yield self._apply_next_input_config(response, session)
                                 elif kind == "final":
                                     bot_response_done = True
                                 elif kind == "error":
@@ -659,7 +730,7 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                     break  # turn done
 
             if not terminal_yielded:
-                yield _final_turn_response()
+                yield self._build_turn_final(entry, include_empty_audio=False) if entry else _final_turn_response()
 
         except grpc.aio.AioRpcError:
             raise
@@ -698,12 +769,13 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                         return
                     continue
 
+                entry.last_touched = time.monotonic()
                 kind = item.get("kind") if isinstance(item, dict) else None
                 if kind == "audio":
                     got_audio = True
                     response = self._convert_bridge_item(item)
                     if response is not None:
-                        yield response
+                        yield self._apply_next_input_config(response, session)
                 elif kind == "final":
                     # Ignore stray finals until at least one audio chunk for
                     # this turn has been observed.
@@ -733,13 +805,36 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
     ) -> voicevirtualagent_pb2.VoiceVAResponse:
         response = _empty_final_response() if include_empty_audio else _final_turn_response()
         session = entry.session
-        if session.transfer_requested:
+        if session.terminal_action == "transfer_to_human":
             response.output_events.append(self._transfer_output_event(session.transfer_metadata()))
-        elif session.end_session_requested:
+        elif session.terminal_action == "end_call":
             response.output_events.append(
                 byova_common_pb2.OutputEvent(
                     event_type=byova_common_pb2.OutputEvent.SESSION_END,
                     name="session_ended",
+                )
+            )
+        else:
+            self._apply_next_input_config(response, session)
+        return response
+
+    def _apply_next_input_config(
+        self,
+        response: voicevirtualagent_pb2.VoiceVAResponse,
+        session: NemotronSession,
+    ) -> voicevirtualagent_pb2.VoiceVAResponse:
+        """Configure Cisco to collect the active sensitive field using DTMF only."""
+        if session.pending_dtmf_field and session.terminal_action is None:
+            # Cisco's live connector streams caller audio and emits no DTMF
+            # events in INPUT_VOICE_DTMF, so collection turns stay DTMF-only.
+            response.input_mode = voicevirtualagent_pb2.INPUT_EVENT_DTMF
+            response.input_sensitive = True
+            # Digit count is the only completion rule. A terminator would sit
+            # outside that count and submit an extra empty interaction.
+            response.input_handling_config.dtmf_config.CopyFrom(
+                byova_common_pb2.DTMFInputConfig(
+                    inter_digit_timeout_msec=self._config.dtmf_inter_digit_timeout_ms,
+                    dtmf_input_length=session.dtmf_input_length,
                 )
             )
         return response
@@ -753,6 +848,8 @@ class VoiceVirtualAgentServicer(voicevirtualagent_pb2_grpc.VoiceVirtualAgentServ
                 bridge_item["audio"],
                 text=bridge_item.get("text", ""),
                 barge_in=True,
+                sample_rate_hz=bridge_item.get("sample_rate", 16_000),
+                num_channels=bridge_item.get("num_channels", 1),
             )
         if kind in ("final", "message"):
             return None

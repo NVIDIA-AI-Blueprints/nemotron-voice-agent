@@ -7,7 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "grpcio>=1.74.0",
     "protobuf>=6.33.6",
-    "pipecat-ai[websocket]==1.1.0",
+    "pipecat-ai[websocket]==1.7.0",
     "PyJWT[crypto]>=2.10.1",
     "python-dotenv>=1.2.2",
     "websockets>=15.0.1",
@@ -29,9 +29,10 @@ override-dependencies = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.6",
-    "pre-commit>=4.0.0",
     "grpcio-tools>=1.74.0",
+    "pre-commit>=4.0.0",
+    "pytest>=9.0.0",
+    "ruff>=0.15.6",
 ]
 
 [tool.ruff]

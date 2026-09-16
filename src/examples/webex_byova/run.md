@@ -46,17 +46,17 @@ supported because the adapter does not use `/api/session-config` or a
 
 ```bash
 UVICORN_WORKERS=4 \
-  docker compose --profile webex-byova-assistant/workstation up -d
+  docker compose --profile webex-byova-assistant/server up -d
 ```
 
 `SILERO_VAD_STOP_SECS` controls how much trailing silence is required after
 speech before the user turn ends; it does not control speech-start detection.
-The BYOVA default is `0.8` seconds. Lower values respond faster, while higher
+The BYOVA default is `0.5` seconds. Lower values respond faster, while higher
 values better tolerate natural pauses:
 
 ```bash
-SILERO_VAD_STOP_SECS=1.0 \
-  docker compose --profile webex-byova-assistant/workstation up -d
+SILERO_VAD_STOP_SECS=0.5 \
+  docker compose --profile webex-byova-assistant/server up -d
 ```
 
 Confirm the backend is healthy before starting the adapter.
@@ -184,7 +184,8 @@ This simulates the Webex Universal Harness and helps confirm that:
 - the adapter accepts gRPC requests
 - the backend session starts successfully
 - bot audio is returned end-to-end
-- transcript keyword matching can produce transfer-to-agent or session-end
+- LLM tool calls can produce transfer-to-agent or session-end events
+- secure DTMF input is forwarded without logging keypad values
 
 ## Notes
 

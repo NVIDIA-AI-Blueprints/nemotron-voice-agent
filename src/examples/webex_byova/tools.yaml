@@ -1,0 +1,47 @@
+transfer_to_human:
+  type: function
+  function:
+    name: transfer_to_human
+    description: >-
+      Transfer the caller to a human only when they explicitly request one,
+      or after the assistant has clearly failed to resolve the request twice.
+    parameters:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Short non-sensitive reason for the transfer.
+        route:
+          type: string
+          enum: [customer_service, billing, technical_support]
+          description: Best destination for the caller.
+      required: [reason, route]
+
+end_call:
+  type: function
+  function:
+    name: end_call
+    description: >-
+      End the call only when the caller explicitly asks to hang up or clearly
+      says goodbye after their request is complete.
+    parameters:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Short non-sensitive reason for ending the call.
+      required: [reason]
+
+request_keypad_input:
+  type: function
+  function:
+    name: request_keypad_input
+    description: >-
+      Securely collect the next required authentication field from the
+      telephone keypad. Call this tool with no arguments before asking for
+      keypad input. The authentication state selects phone number first and
+      date of birth in DDMMYYYY format second.
+    parameters:
+      type: object
+      properties: {}
+      additionalProperties: false

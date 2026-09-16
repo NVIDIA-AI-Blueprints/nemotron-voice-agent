@@ -22,6 +22,9 @@ from cisco_webex_byova_adapter.config import AdapterConfig
 logger = logging.getLogger(__name__)
 
 _JWK_PATH = "/oauth2/v2/keys/verificationjwk"
+_DATASOURCE_URL_CLAIM = "com.cisco.datasource.url"
+_DATASOURCE_SCHEMA_CLAIM = "com.cisco.datasource.schema.uuid"
+_ORG_UUID_CLAIM = "com.cisco.org.uuid"
 
 
 @dataclass(slots=True)
@@ -41,11 +44,14 @@ class CiscoJwsValidator:
 
     async def validate(self, token: str) -> dict[str, Any]:
         """Validate a bearer token and return its decoded claims."""
-        token = token.removeprefix("Bearer ").removeprefix("bearer ").strip()
-        if not token:
-            raise InvalidTokenError("missing authorization token")
+        scheme, separator, token = token.partition(" ")
+        if not separator or scheme.lower() != "bearer" or not token.strip():
+            raise InvalidTokenError("missing bearer token")
+        token = token.strip()
 
         header = jwt.get_unverified_header(token)
+        if header.get("alg") != "RS256":
+            raise InvalidTokenError("only RS256 is accepted")
         issuer = self._config.expected_jwt_issuer.rstrip("/")
         audience = self._config.expected_jwt_audience.strip()
         kid = str(header.get("kid", "")).strip()
@@ -58,6 +64,8 @@ class CiscoJwsValidator:
         jwk = await self._get_key_for_kid(issuer, kid)
         if jwk is None:
             raise InvalidTokenError(f"no public key found for kid={kid}")
+        if jwk.get("kty") != "RSA" or jwk.get("alg") not in (None, "RS256"):
+            raise InvalidTokenError("Cisco key is not valid for RS256")
 
         public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(jwk))
         decoded = jwt.decode(
@@ -66,10 +74,19 @@ class CiscoJwsValidator:
             algorithms=["RS256"],
             audience=audience,
             issuer=issuer,
+            leeway=self._config.auth_clock_skew_secs,
             options={"require": ["exp", "iss", "sub", "aud"]},
         )
-        if self._config.expected_jwt_subject and decoded.get("sub") != self._config.expected_jwt_subject:
-            raise InvalidTokenError("token subject did not match configured Cisco subject")
+        expected_claims = {
+            "sub": self._config.expected_jwt_subject,
+            "jti": self._config.expected_jwt_nonce,
+            _DATASOURCE_URL_CLAIM: self._config.expected_datasource_url,
+            _DATASOURCE_SCHEMA_CLAIM: self._config.expected_schema_uuid,
+            _ORG_UUID_CLAIM: self._config.expected_org_uuid,
+        }
+        for claim, expected in expected_claims.items():
+            if expected and decoded.get(claim) != expected:
+                raise InvalidTokenError(f"{claim} did not match configured value")
         return decoded
 
     async def _get_key_for_kid(self, issuer: str, kid: str) -> dict[str, Any] | None:
