@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 # Download NeMo-Speech.cpp GGUF weights and TTS TN grammars for */single-gpu recipes.
 #
 # Run as your user, never sudo. The script:
