@@ -1,11 +1,18 @@
 # Nemotron Voice Agent
 
+[![License](https://img.shields.io/badge/License-Apache%202.0%20%7C%20CC--BY--4.0-blue)](LICENSE) [![NVIDIA AI Blueprint](https://img.shields.io/badge/NVIDIA-AI%20Blueprint-76B900?logo=nvidia&logoColor=white)](https://build.nvidia.com/) [![Built with Pipecat](https://img.shields.io/badge/Built%20with-Pipecat-4B32C3)](https://github.com/pipecat-ai/pipecat) [![Deploy on Brev](https://img.shields.io/badge/Deploy%20on-Brev-76B900?logo=nvidia&logoColor=white)](https://brev.nvidia.com/launchable/deploy?launchableID=env-3GGgfIXCnso410yatOZD24ufRJ2)
+
+**[Why](#-why-this-blueprint)** • **[Quick Start](#-quick-start)** • **[Examples](#-examples)** • **[Documentation](#-documentation)** • **[News](#-news)** • **[Roadmap](#-roadmap)**
+
+![Nemotron Voice Agent](docs/images/nemotron-voice-agent-hero.gif)
+
 Nemotron Voice Agent Blueprint provides a comprehensive, end-to-end voice agent built with open NVIDIA Nemotron models and NVIDIA NIM for acceleration and scaling. It is designed to guide developers through the creation of a cascaded pipeline, integrating Nemotron ASR, LLM, and TTS, while solving for the complexities of streaming, interruptible conversations. Clone it, swap in your own logic, and deploy a working voice AI prototype in hours.
 
 Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipecat) and leveraging NVIDIA NIM microservices, this example helps teams accelerate the deployment of high-performance voice AI solutions.
 
-## Why this blueprint
+## ✨ Why this blueprint
 
+- **Voice Agent Builder Skill**: quickly scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
 - **Sub-second E2E latency**: sub-second end-to-end latency with support for multiple concurrent streams, designed for production scale.
 - **Fully open models**: Nemotron Streaming and Parakeet ASR, Magpie TTS and Nemotron LLM models. Swap any component, self-host, no lock-in.
 - **Interruption Handling**: Voice Activity Detection (VAD) and End-of-Utterance (EOU) logic to guide the agent on exactly when to start and stop speaking, ensuring a natural conversational flow.
@@ -17,13 +24,38 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 
 ---
 
-## Architecture
+## 📣 News
+
+- **[September 2026] v2.2.0**
+  - Expanded open model support with Nemotron 3.5 Lightning and Nemotron 3 Nano NIM.
+  - Unified local deployment across workstations, DGX Spark, and Jetson Thor.
+  - OpenAI Realtime API compatibility for external voice clients.
+  - Agent Skills for building voice agents with Nemotron.
+
+<details>
+<summary>Previous releases</summary>
+
+- **[July 2026] v2.0.0**
+  - Omni-based example showcasing a single multimodal model replacing the ASR + LLM stages.
+  - Omni subagents example demonstrating multi-agent coordination for audio and video understanding.
+  - Frontend/backend agent example showing how to integrate an existing text-based agentic backend with a voice frontend.
+  - New models: Nemotron 3 Super 120B A12B, Nemotron 3 Nano Omni, Nemotron ASR Streaming (English + Multilingual).
+- **[March 2026] v1.0.0**
+  - Generic cascaded pipeline (Parakeet ASR + LLM + Magpie TTS) with English and multilingual support.
+
+</details>
+
+See the [CHANGELOG](CHANGELOG.md) for the full release history.
+
+---
+
+## 🏗️ Architecture
 
 ![Architecture Diagram](./docs/images/arch.png)
 
 ---
 
-## Models and Services
+## 🧩 Models and Services
 
 | Component | Model | Swap with |
 |-----------|-------|-----------|
@@ -40,7 +72,7 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 
 ---
 
-## Examples
+## 🧪 Examples
 
 Each example showcases a **pattern** for building a voice pipeline. Start from the one closest to your use case and adapt it. Follow each example's own README (linked below) for its architecture, supported recipes, configuration, and tunables.
 
@@ -56,9 +88,9 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 
 ---
 
-## Requirements
+## 📋 Requirements
 
-These are the minimum requirements, and support varies by example and deployment profile. See the [Examples](#examples) table for what runs where, and each example's README plus the [LLM](docs/how-to/configure-llm.md) / [ASR](docs/how-to/configure-asr.md) / [TTS](docs/how-to/configure-tts.md) Services docs for exact models and corresponding VRAM usage.
+These are the minimum requirements, and support varies by example and deployment profile. See the [Examples](#-examples) table for what runs where, and each example's README plus the [LLM](docs/how-to/configure-llm.md) / [ASR](docs/how-to/configure-asr.md) / [TTS](docs/how-to/configure-tts.md) Services docs for exact models and corresponding VRAM usage.
 
 ### Hardware Requirements
 
@@ -79,9 +111,9 @@ Credentials depend on the deployment profile. Do not mix them.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
-Deploy with the bundled **agent skills** (recommended), or follow the manual steps below. In below steps, we deploy the **Generic Assistant on a workstation GPU**. For other examples or deployment profiles, see the [Examples](#examples) table and each example's README. For a Jetson Thor quickstart on the `*/single-gpu` recipes, follow the [Jetson Thor guide](docs/03-jetson-thor.md).
+Deploy with the bundled **agent skills** (recommended), or follow the manual steps below. In below steps, we deploy the **Generic Assistant on a workstation GPU**. For other examples or deployment profiles, see the [Examples](#-examples) table and each example's README. For a Jetson Thor quickstart on the `*/single-gpu` recipes, follow the [Jetson Thor guide](docs/03-jetson-thor.md).
 
 ### With the agent skills
 
@@ -128,7 +160,7 @@ For detailed setup instructions, see the [Getting Started Guide](docs/01-getting
 
 ---
 
-## Agent Skills
+## 🤖 Agent Skills
 
 This repository includes AI agent skills for deployment assistance. Install them for your coding agent with:
 
@@ -136,12 +168,13 @@ This repository includes AI agent skills for deployment assistance. Install them
 npx skills add .
 ```
 
+- [`nemotron-voice-agent-builder`](skills/nemotron-voice-agent-builder/SKILL.md): scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
 - [`nemotron-voice-agent-deploy`](.agents/skills/nemotron-voice-agent-deploy/SKILL.md): recipe-family auth (`NVIDIA_API_KEY` + NGC login for `*/server`, `HF_TOKEN` only for `*/single-gpu`), profile selection, and compose bring-up.
 - [`nemotron-voice-agent-configure-pipeline`](.agents/skills/nemotron-voice-agent-configure-pipeline/SKILL.md): edit `.env`, prompts, and example service catalogs, then re-apply the change.
 
 ---
 
-## Documentation
+## 📖 Documentation
 
 | Type | Guide | Description |
 |------|-------|-------------|
@@ -159,31 +192,17 @@ Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-
 
 ---
 
-## Roadmap
+## 🗺️ Roadmap
 
-**Future releases**
+Planned for future releases:
+
 - LiveKit Agents-based voice agent example.
 - Voice agent integrations for NemoClaw-supported harnesses.
 
-**v2.2.0** (September 2026)
-- Expanded open model support with Nemotron 3.5 Lightning and Nemotron 3 Nano Omni.
-- Unified local deployment across workstations, DGX Spark, and Jetson Thor.
-- OpenAI Realtime API compatibility for external voice clients.
-- Agent Skills for building voice agents with Nemotron.
-
-**v2.0.0** (July 2026)
-- Omni-based example showcasing a single multimodal model replacing the ASR + LLM stages.
-- Omni subagents example demonstrating multi-agent coordination for audio and video understanding.
-- Frontend/backend agent example showing how to integrate an existing text-based agentic backend with a voice frontend.
-- New models: Nemotron 3 Super 120B A12B, Nemotron 3 Nano Omni, Nemotron ASR Streaming (English + Multilingual).
-
-**v1.0.0** (March 2026)
-- Generic cascaded pipeline (Parakeet ASR + LLM + Magpie TTS) with English and multilingual support.
-
-See [CHANGELOG](CHANGELOG.md) for the full release history.
+Recent releases are in [News](#-news); see the [CHANGELOG](CHANGELOG.md) for the full release history.
 
 ---
 
-## License
+## ⚖️ License
 
-This NVIDIA AI BLUEPRINT is dual-licensed: documentation, skills, and assets under CC-BY-4.0, and source code under Apache-2.0. See [LICENSE](LICENSE) for details. This project may download and install additional third-party open source software and containers. Review the license terms of these projects in [third_party_oss_license.txt](third_party_oss_license.txt) before use.
+This NVIDIA AI BLUEPRINT is dual-licensed: documentation, skills, and assets under CC-BY-4.0, and source code under Apache-2.0. See [LICENSE](LICENSE) for details. This project may download and install additional third-party open source software and containers. Review the license terms of these projects in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) before use.
