@@ -13,7 +13,7 @@ from openai.types.chat import ChatCompletionChunk
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
 from pipecat.frames.frames import ErrorFrame, LLMServiceMetadataFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import LLMService
 
@@ -563,6 +563,7 @@ class SpeakerOmniAgent(PipelineWorker):
         )
         super().__init__(
             Pipeline([omni]),
+            processor_unusable_policy=ProcessorUnusablePolicy.END,
             name=name or self.AGENT_NAME,
             active=True,
             bridged=(),

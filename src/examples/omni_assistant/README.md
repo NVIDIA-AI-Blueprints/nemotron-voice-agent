@@ -2,7 +2,7 @@
 
 Cascaded voice pipeline that uses Nemotron 3 Nano Omni as a single model for ASR and the LLM, then hands the text reply to Magpie TTS. Nemotron Omni consumes user audio directly and produces the assistant text that Magpie TTS speaks. This example enables only text and audio inputs. Uploaded media and webcam vision are covered by [`omni-assistant-subagents`](../omni_assistant_subagents/README.md).
 
-The pattern replaces the separate ASR and text LLM stages with one audio-input LLM service while preserving the familiar Pipecat transport, TTS, prompt, and service-catalog flow. It showcases `NvidiaOmniLLMService`, audio-only turn finalization, and a user transcript taken from the Omni response rather than a separate ASR pipeline.
+The pattern replaces the separate ASR and text LLM stages with one audio-input LLM service while preserving the familiar Pipecat transport, TTS, prompt, and service-catalog flow. It showcases `NvidiaOmniLLMService`, audio-only turn finalization with Pipecat's turn analyzer strategy, and a user transcript taken from the Omni response rather than a separate ASR pipeline.
 
 ![Nemotron Omni Assistant architecture](images/omni-assistant-architecture.png)
 
@@ -74,7 +74,6 @@ To run host-native without Docker, set `selection: omni-assistant` in [`examples
 | --- | --- |
 | `pipeline.py` | pipecat entry point for the Omni Assistant example |
 | `nvidia_omni_multimodal_service.py` | `NvidiaOmniLLMService` (upstream-shaped Pipecat `LLMService` for Nemotron Omni) |
-| `audio_only_smart_turn_strategy.py` | smart-turn stop strategy that finalizes turns without an upstream `TranscriptionFrame` |
 | `prompts.yaml` | example-local prompt catalog |
 | `services.cloud.yaml`, `services.local.yaml` | example-local service catalogs for cloud and on-prem deployments |
 

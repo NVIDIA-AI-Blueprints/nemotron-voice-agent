@@ -24,7 +24,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -34,12 +34,12 @@ from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from examples.omni_assistant.audio_only_smart_turn_strategy import AudioOnlySmartTurnStopStrategy
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
     NvidiaOmniLLMService,
     NvidiaOmniSettings,
@@ -75,7 +75,14 @@ def _build_user_turn_strategies() -> UserTurnStrategies:
     """Build VAD-start + Smart Turn-stop strategies for Omni audio turns."""
     return UserTurnStrategies(
         start=[VADUserTurnStartStrategy()],
-        stop=[AudioOnlySmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())],
+        stop=[
+            TurnAnalyzerUserTurnStopStrategy(
+                turn_analyzer=build_smart_turn_analyzer(),
+                # Omni transcribes inside the LLM request, so no upstream STT
+                # transcript exists to release this turn.
+                wait_for_transcript=False,
+            )
+        ],
     )
 
 
@@ -318,6 +325,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     task = PipelineWorker(
         pipeline,
+        processor_unusable_policy=ProcessorUnusablePolicy.END,
         params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,
