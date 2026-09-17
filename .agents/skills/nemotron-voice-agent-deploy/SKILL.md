@@ -1,5 +1,5 @@
 ---
-name: deploy
+name: nemotron-voice-agent-deploy
 description: Deploy Nemotron Voice Agent using root Compose recipe profiles. Use when deploying or troubleshooting authentication and startup.
 version: "2.2.0"
 license: CC-BY-4.0 AND Apache-2.0
@@ -12,12 +12,18 @@ metadata:
 
 `SKILL.md` is the decision tree. Open a reference only for the family you chose. Do not open the others.
 
+## When to Use This Skill
+
+Use this skill to bring up or tear down the Nemotron Voice Agent with a Docker Compose recipe profile — choosing a cloud, `*/server`, or `*/single-gpu` recipe, wiring the right credentials (`NVIDIA_API_KEY` plus an `nvcr.io` login for `*/server`, `HF_TOKEN` for `*/single-gpu`), inspecting host hardware, selecting a recipe, and troubleshooting startup or authentication failures.
+
+Do not use this skill to edit `.env`, prompts, or service catalogs of an already-deployed agent (use `nemotron-voice-agent-configure-pipeline`), to migrate Pipecat versions (use `nemotron-voice-agent-upgrade-pipecat`), or for work unrelated to deploying this blueprint.
+
 ## Rules
 
 - Run commands from the repository root that contains `docker-compose.yml`. Use Docker Compose.
 - Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any recipe. They are not recipes.
 - Preserve existing `.env`. Create it only if missing: `test -f .env || cp .env.example .env`.
-- Use `configure-pipeline` for `.env`, catalog, or prompt changes. Do not write host-specific vLLM flags into `.env`.
+- Use `nemotron-voice-agent-configure-pipeline` for `.env`, catalog, or prompt changes. Do not write host-specific vLLM flags into `.env`.
 - Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU Blackwell workstation load benchmark with a pinned NVFP4 TP2 LLM profile, not a UI deploy. Older hardware requires a compatible TP2 profile. See `benchmarking_tools/scaling-perf/README.md`.
 - Selector modes (`all`, or one `<example>`) are host-native (`uv run`) only. No compose profile.
 - Generic, Multilingual, Omni, and Frontend/Backend `/single-gpu` support compatible workstations, DGX Spark, and Jetson Thor. `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor** (workstation and DGX Spark only). On Thor, that example is cloud-only (`omni-assistant-subagents`). Orin-class Jetson is unsupported (the model does not fit). Do not infer fit from the platform name. Complete memory-fit first. The single-GPU compose files detect product and compute capability. Do not set those by hand.
