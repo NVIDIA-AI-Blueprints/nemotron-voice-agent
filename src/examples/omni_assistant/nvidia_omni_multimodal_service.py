@@ -37,7 +37,8 @@ from typing import Any, Literal, cast, get_args
 
 import httpx
 from loguru import logger
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient, NotGiven
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+from openai import NotGiven as OpenAINotGiven
 from openai.types.chat import ChatCompletionMessageParam
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter, OpenAILLMInvocationParams
 from pipecat.frames.frames import (
@@ -63,8 +64,9 @@ from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMes
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.settings import NOT_GIVEN, _NotGiven, assert_given
+from pipecat.utils.http import TIMEOUT_EXCEPTIONS
 from pipecat.utils.time import time_now_iso8601
+from pipecat.utils.types import NOT_GIVEN, NotGiven, assert_given
 
 InputModality = Literal["text", "audio"]
 MediaModality = Literal["text", "audio", "image", "video"]
@@ -117,11 +119,11 @@ class NvidiaOmniSettings(NvidiaLLMSettings):
             of an utterance is not clipped.
     """
 
-    input_modalities: tuple[InputModality, ...] | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    emit_transcriptions: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    audio_response_instruction: str | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    min_user_audio_secs: float | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    pre_speech_buffer_secs: float | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    input_modalities: tuple[InputModality, ...] | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    emit_transcriptions: bool | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    audio_response_instruction: str | None | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    min_user_audio_secs: float | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    pre_speech_buffer_secs: float | NotGiven = field(default_factory=lambda: NOT_GIVEN)
 
 
 @dataclass(frozen=True)
@@ -480,7 +482,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         params = {
             name: value
             for name, value in super().build_chat_completion_params(params_from_context).items()
-            if not isinstance(value, (NotGiven, _NotGiven))
+            if not isinstance(value, (OpenAINotGiven, NotGiven))
         }
         if self._active_turn_parts:
             messages = list(params.get("messages") or [])
@@ -743,7 +745,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         await self.start_processing_metrics(start_time=metrics_start_time)
         try:
             await self._process_context(context)
-        except httpx.TimeoutException as exc:
+        except TIMEOUT_EXCEPTIONS as exc:
             await self._call_event_handler("on_completion_timeout")
             await self.push_error(error_msg="LLM completion timeout", exception=exc)
         except Exception as exc:
