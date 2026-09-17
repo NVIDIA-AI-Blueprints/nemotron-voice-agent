@@ -18,9 +18,9 @@ from pipecat.frames.frames import (
     LLMMessagesAppendFrame,
     LLMRunFrame,
     OutputAudioRawFrame,
-    StartFrame,
     TTSUpdateSettingsFrame,
 )
+from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.serializers.base_serializer import FrameSerializer
 
 from realtime.audio import (
@@ -139,13 +139,13 @@ class RealtimeFrameSerializer(FrameSerializer):
             return
         await emit_with_aliases(self._emit, event)
 
-    async def setup(self, frame: StartFrame) -> None:
-        """Capture pipeline sample rate from StartFrame when provided."""
-        await super().setup(frame)
-        if getattr(frame, "audio_in_sample_rate", None):
-            self._pipeline_rate = int(frame.audio_in_sample_rate)
-        elif getattr(frame, "audio_out_sample_rate", None):
-            self._pipeline_rate = int(frame.audio_out_sample_rate)
+    async def setup(self, setup: FrameProcessorSetup) -> None:
+        """Capture the pipeline sample rate from Pipecat's setup context."""
+        await super().setup(setup)
+        if setup.audio_in_sample_rate:
+            self._pipeline_rate = int(setup.audio_in_sample_rate)
+        elif setup.audio_out_sample_rate:
+            self._pipeline_rate = int(setup.audio_out_sample_rate)
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         """Serialize outbound audio frames to Realtime JSON text."""

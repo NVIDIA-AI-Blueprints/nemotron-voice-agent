@@ -28,7 +28,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -198,6 +198,7 @@ class OmniTransportAgent(PipelineWorker):
         pipeline = self._build_pipeline(bus=bus, worker_name=resolved_name)
         super().__init__(
             pipeline,
+            processor_unusable_policy=ProcessorUnusablePolicy.END,
             name=resolved_name,
             active=True,
             params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),

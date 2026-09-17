@@ -37,7 +37,7 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 | [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) (default) | ML end-of-utterance detection for natural turn-taking (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) |
 | `SpeechTimeoutUserTurnStopStrategy` | End-of-turn strategy used **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). Ends the turn on a VAD silence timeout instead of the Smart Turn model |
 
-The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so Pipecat's stock Smart Turn stop strategy has no upstream `TranscriptionFrame` to await. They use a custom `AudioOnlySmartTurnStopStrategy` that combines the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) with a `VADUserTurnStartStrategy`. The custom strategy finalizes the turn as soon as the analyzer returns `COMPLETE`.
+The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside the model, so no upstream `TranscriptionFrame` exists when Smart Turn completes. They use Pipecat's `TurnAnalyzerUserTurnStopStrategy` with `wait_for_transcript=False` and a `VADUserTurnStartStrategy`. This setting lets the same [Smart Turn](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) model (`LocalSmartTurnAnalyzerV3`, fallback `stop_secs` default `1.0`, `SMART_TURN_STOP_SECS`) finalize the audio-only turn without waiting for a transcript.
 
 ## Chat History Limit
 

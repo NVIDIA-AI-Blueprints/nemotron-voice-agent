@@ -1005,7 +1005,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[-1][0]["reason"], "tool_error")
         self.assertIn("try again", results[-1][0]["response_text"].lower())
 
-    async def test_cancel_backend_cancels_active_call_and_suppresses_stale_result(self) -> None:
+    async def test_cancel_backend_cancels_active_call_and_settles_result(self) -> None:
         thinker = _make_thinker(tool_delay_seconds=1.0)
         llm = _FrameCapturingLLM()
         call_results = []
@@ -1058,6 +1058,42 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(thinker.state.active_task)
         aborted = [event for event in thinker.state.lifecycle_events if event.marker == "ThinkerAborted"]
         self.assertEqual(len(aborted), 1)
+
+    async def test_call_backend_propagates_pipecat_timeout_cancellation(self) -> None:
+        thinker = _make_thinker(tool_delay_seconds=10.0)
+        llm = _FrameCapturingLLM()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="call_backend",
+            tool_call_id="call_test",
+            arguments={
+                "query": "Search flights from New York to Seattle tomorrow",
+                "origin_airport": "JFK",
+                "dest_airport": "SEA",
+                "date": "2026-05-26",
+            },
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        running_call = asyncio.create_task(
+            build_handlers(thinker, filler_threshold_seconds=10.0)["call_backend"](params)
+        )
+        await asyncio.sleep(0)
+        self.assertIsNotNone(thinker.state.active_task)
+
+        running_call.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await running_call
+
+        self.assertEqual(results, [])
+        self.assertIsNone(thinker.state.active_task)
 
     async def test_cancel_backend_reports_nothing_pending_without_starting_thinker(self) -> None:
         thinker = _make_thinker()

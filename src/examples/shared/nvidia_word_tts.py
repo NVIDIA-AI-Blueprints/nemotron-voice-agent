@@ -68,10 +68,10 @@ from pipecat.services.nvidia.tts import (
     NvidiaTTSSynthesisMode,
     _SynthesisStreamState,
 )
-from pipecat.services.settings import _NotGiven
 from pipecat.services.tts_service import TextAggregationMode, TTSService
 from pipecat.utils.context.aggregated_frame_sequencer import AggregatedFrameSequencer
 from pipecat.utils.tracing.service_decorators import traced_tts
+from pipecat.utils.types import NotGiven
 
 try:
     import riva.client.proto.riva_tts_pb2 as rtts
@@ -134,7 +134,7 @@ class NvidiaWordTTSSettings(NvidiaTTSSettings):
     ``SynthesizeOnline`` response path that surfaces ``meta.words``).
     """
 
-    synthesis_mode: NvidiaTTSSynthesisMode | _NotGiven = field(default_factory=lambda: NvidiaTTSSynthesisMode.STITCHED)
+    synthesis_mode: NvidiaTTSSynthesisMode | NotGiven = field(default_factory=lambda: NvidiaTTSSynthesisMode.STITCHED)
 
 
 @dataclass(frozen=True)
