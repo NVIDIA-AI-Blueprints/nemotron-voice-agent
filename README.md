@@ -12,13 +12,13 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 
 ## ✨ Why this blueprint
 
-- **Voice Agent Builder Skill**: quickly scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
 - **Sub-second E2E latency**: sub-second end-to-end latency with support for multiple concurrent streams, designed for production scale.
 - **Fully open models**: Nemotron Streaming and Parakeet ASR, Magpie TTS and Nemotron LLM models. Swap any component, self-host, no lock-in.
 - **Interruption Handling**: Voice Activity Detection (VAD) and End-of-Utterance (EOU) logic to guide the agent on exactly when to start and stop speaking, ensuring a natural conversational flow.
 - **Multilingual Capabilities**: native support for multiple languages provided by NVIDIA Magpie TTS and Multilingual ASR.
 - **Multimodal Understanding**: reason over speech and vision together, analyzing live camera input and uploaded media (images, documents) within a single conversation, powered by Nemotron Omni.
 - **Multi-Agent and Tool Calling**: orchestrate cooperating agents that invoke external tools and functions for task-oriented workflows, while decoupling reasoning from response generation for lower perceived latency.
+- **Voice Agent Builder Skill**: quickly scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
 - **Edge Support**: deploy anywhere, from cloud and workstation to DGX Spark and edge devices like Jetson Thor, using self-contained deployment recipes.
 - **OpenAI Realtime–compatible gateway**: `WS /v1/realtime` alongside RTVI `/api/ws`. See [Use the Realtime Gateway](docs/how-to/use-realtime-gateway.md).
 
