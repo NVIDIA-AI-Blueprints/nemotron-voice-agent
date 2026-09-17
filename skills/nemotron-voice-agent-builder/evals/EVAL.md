@@ -2,7 +2,7 @@
 
 ## Questions
 
-- Explicit requests that name `create-voice-agent`.
+- Explicit requests that name `nemotron-voice-agent-builder`.
 - Implicit and contextual requests for Cascaded and Omni voice agents.
 - DGX Spark, Jetson Thor, low-concurrency workstation, high-concurrency workstation,
   hybrid, and cloud routing.
