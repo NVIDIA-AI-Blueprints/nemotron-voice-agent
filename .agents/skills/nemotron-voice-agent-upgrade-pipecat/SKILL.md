@@ -1,5 +1,5 @@
 ---
-name: upgrade-pipecat
+name: nemotron-voice-agent-upgrade-pipecat
 description: Upgrade the Nemotron Voice Agent to a new Pipecat (pipecat-ai) version. Reads release notes for every release in range, diffs old vs new, discovers every example pipeline and Pipecat call site, implements changes, then runs multi-agent gap analysis until clean. Generic across Pipecat versions.
 version: "2.2.0"
 license: CC-BY-4.0 AND Apache-2.0
@@ -12,10 +12,16 @@ metadata:
 
 Autonomously migrate this repo to a new `pipecat-ai` version. Repo root is the working directory.
 
+## When to Use This Skill
+
+Use this skill to migrate this repository to a new `pipecat-ai` version — reading the release notes for every release in range, diffing old vs new across the Python (`pyproject.toml`/`uv.lock`) and client (`client/package.json`) surfaces, updating every example pipeline and Pipecat call site in lockstep, and running the gap-analysis loop until validation is clean.
+
+Do not use this skill to deploy the stack (use `nemotron-voice-agent-deploy`), to change `.env`, catalogs, or prompts (use `nemotron-voice-agent-configure-pipeline`), or to bump non-Pipecat dependencies.
+
 ## Invocation
 
 ```text
-/upgrade-pipecat new=<target> [old=<source>]
+/nemotron-voice-agent-upgrade-pipecat new=<target> [old=<source>]
 ```
 
 - **`new`** (required): target `pipecat-ai` version. PyPI version (`1.5.0`), local pipecat checkout path

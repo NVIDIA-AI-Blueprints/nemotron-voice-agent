@@ -1,0 +1,92 @@
+{
+  "skill_name": "nemotron-voice-agent-deploy",
+  "cases": [
+    {
+      "id": "nemotron-voice-agent-deploy-cloud-no-gpu",
+      "prompt": "I have no local GPU. Bring up the generic assistant for the Nemotron Voice Agent using NVIDIA cloud endpoints.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Selects the cloud recipe `generic-assistant` (no `/server` or `/single-gpu`), requires only NVIDIA_API_KEY (NVCF), does not run a docker login to nvcr.io, and starts it with `docker compose --profile generic-assistant up -d`.",
+      "assertions": [
+        "Loaded nemotron-voice-agent-deploy/SKILL.md and only the cloud reference.",
+        "Chose exactly one recipe: the cloud `generic-assistant` profile.",
+        "Required NVIDIA_API_KEY and did not perform an nvcr.io docker login for the cloud recipe.",
+        "Did not use HF_TOKEN."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-server-workstation",
+      "prompt": "Deploy the generic assistant on my workstation GPU with local NIM sidecars.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Selects `generic-assistant/server`, requires NVIDIA_API_KEY plus an nvcr.io docker login before `up`, and brings it up with `docker compose --profile generic-assistant/server up -d`.",
+      "assertions": [
+        "Selected the `generic-assistant/server` recipe.",
+        "Ran the NGC login: docker login nvcr.io with NVIDIA_API_KEY before bringing the stack up.",
+        "Did not mix in HF_TOKEN.",
+        "Ran commands from the repository root that contains docker-compose.yml."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-single-gpu-dgx-spark",
+      "prompt": "Deploy the multilingual assistant on my DGX Spark.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Selects `multilingual-assistant/single-gpu`, requires HF_TOKEN, does not use NVIDIA_API_KEY or an nvcr.io login, and completes the single-GPU memory-fit before bringing it up.",
+      "assertions": [
+        "Selected a `*/single-gpu` recipe for DGX Spark rather than `*/server`.",
+        "Required HF_TOKEN and did not use NVIDIA_API_KEY or nvcr.io login.",
+        "Did not open the server reference for a DGX Spark host."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-subagents-thor-fallback",
+      "prompt": "Bring up omni-assistant-subagents on my Jetson Thor.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Recognizes that omni-assistant-subagents/single-gpu is not supported on Jetson Thor and routes to the cloud recipe `omni-assistant-subagents` instead.",
+      "assertions": [
+        "Identified that omni-assistant-subagents/single-gpu is unsupported on Jetson Thor.",
+        "Routed to the cloud `omni-assistant-subagents` recipe as the supported path.",
+        "Did not fabricate a single-gpu Thor recipe for subagents."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-auth-troubleshoot",
+      "prompt": "My generic-assistant/server deployment fails to pull the NIM sidecar images with a 401 unauthorized. Fix it.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Diagnoses a missing or invalid nvcr.io login and re-runs docker login nvcr.io with a valid NVIDIA_API_KEY that has image access, without switching to HF_TOKEN.",
+      "assertions": [
+        "Attributed the 401 to the nvcr.io login / NVIDIA_API_KEY, not to HF_TOKEN.",
+        "Recommended docker login nvcr.io with a valid NVIDIA_API_KEY.",
+        "Kept the server auth model (did not suggest HF_TOKEN for a `*/server` recipe)."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-negative-configure",
+      "prompt": "Change the default system prompt for the generic assistant and re-apply it.",
+      "expected_skill": null,
+      "expected_output": "The deploy skill does not activate because editing prompts is a configuration change handled by nemotron-voice-agent-configure-pipeline, not a deployment.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-deploy.",
+        "Recognized this as a configuration change, not a deployment."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-negative-upgrade",
+      "prompt": "Upgrade pipecat-ai from 1.7.0 to 1.9.0 across this repository.",
+      "expected_skill": null,
+      "expected_output": "The deploy skill does not activate because a Pipecat version migration is handled by nemotron-voice-agent-upgrade-pipecat.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-deploy.",
+        "Recognized this as a Pipecat upgrade task, not a deployment."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-negative-unrelated",
+      "prompt": "Write a standalone Python script that transcribes a folder of WAV files offline.",
+      "expected_skill": null,
+      "expected_output": "The deploy skill does not activate because offline batch transcription is not a Nemotron Voice Agent Compose deployment.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-deploy.",
+        "Recognized this as offline batch STT unrelated to deploying the voice agent."
+      ]
+    }
+  ]
+}
