@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "pipecat-ai[nvidia,silero,runner,webrtc,websocket,openai]==1.10.0",
-    "openai>=1.74.0,<3",
     "python-dotenv>=1.2.2",
     "loguru>=0.7.3",
     "pyyaml>=6.0.3",
