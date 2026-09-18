@@ -8,7 +8,7 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
     TurnAnalyzerUserTurnStopStrategy,
 )
 
-from examples.shared.stt_finalize_frame import STTFinalizeFrame
+from examples.shared.stt_finalize_frame import STTFinalizeRequestFrame
 
 
 class ForceEouSmartTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
@@ -20,10 +20,10 @@ class ForceEouSmartTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
     window, so that wait can dominate turn latency.
 
     When COMPLETE is reached and a finalized transcript is not already in
-    hand, this strategy pushes :class:`STTFinalizeFrame` upstream once. The
-    NVIDIA STT service turns that into a per-chunk ``force_eou`` flag, which
-    flushes the final transcript. Parent transcript gating (including the 1s
-    STT safety net) is unchanged.
+    hand, this strategy pushes :class:`STTFinalizeRequestFrame` upstream once.
+    An STT service that supports explicit finalization can consume the request;
+    NVIDIA STT turns it into a per-chunk ``force_eou`` flag. Parent transcript
+    gating (including the 1s STT safety net) is unchanged.
     """
 
     def __init__(self, **kwargs):
@@ -40,5 +40,5 @@ class ForceEouSmartTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
         """Flush ASR once on COMPLETE, then wait for the transcript as usual."""
         if self._turn_complete and not self._transcript_finalized and not self._force_eou_requested:
             self._force_eou_requested = True
-            await self.push_frame(STTFinalizeFrame(), FrameDirection.UPSTREAM)
+            await self.push_frame(STTFinalizeRequestFrame(), FrameDirection.UPSTREAM)
         await super()._maybe_trigger_user_turn_stopped()

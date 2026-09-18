@@ -6,12 +6,12 @@
 import unittest
 from unittest.mock import AsyncMock, Mock
 
-from pipecat.frames.frames import TranscriptionFrame, VADUserStartedSpeakingFrame
+from pipecat.frames.frames import ControlFrame, TranscriptionFrame, VADUserStartedSpeakingFrame
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
 
 from examples.shared.force_eou_smart_turn_strategy import ForceEouSmartTurnStopStrategy
-from examples.shared.stt_finalize_frame import STTFinalizeFrame
+from examples.shared.stt_finalize_frame import STTFinalizeRequestFrame
 
 
 class ForceEouSmartTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
@@ -30,7 +30,8 @@ class ForceEouSmartTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
 
         strategy.push_frame.assert_awaited_once()
         frame, direction = strategy.push_frame.await_args.args
-        self.assertIsInstance(frame, STTFinalizeFrame)
+        self.assertIsInstance(frame, STTFinalizeRequestFrame)
+        self.assertIsInstance(frame, ControlFrame)
         self.assertEqual(direction, FrameDirection.UPSTREAM)
         strategy.trigger_user_turn_stopped.assert_not_awaited()
 
@@ -47,7 +48,7 @@ class ForceEouSmartTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
         await strategy._maybe_trigger_user_turn_stopped()
 
         strategy.push_frame.assert_awaited_once()
-        self.assertIsInstance(strategy.push_frame.await_args.args[0], STTFinalizeFrame)
+        self.assertIsInstance(strategy.push_frame.await_args.args[0], STTFinalizeRequestFrame)
 
     async def test_already_finalized_transcript_skips_force_eou_and_stops_turn(self) -> None:
         strategy = self._strategy()

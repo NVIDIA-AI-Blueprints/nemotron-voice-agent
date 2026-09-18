@@ -14,7 +14,7 @@ from pipecat.frames.frames import Frame
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.stt import AudioChunkIterator, NvidiaSTTService
 
-from examples.shared.stt_finalize_frame import STTFinalizeFrame
+from examples.shared.stt_finalize_frame import STTFinalizeRequestFrame
 
 try:
     import riva.client.proto.riva_asr_pb2 as rasr
@@ -41,11 +41,11 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
     Pipecat has no STT-finalize frame. Deepgram / Soniox / Speechmatics flush
     on ``VADUserStoppedSpeakingFrame``, which is too early for Smart Turn
     (VAD stop can be an incomplete pause). Smart Turn instead pushes
-    :class:`STTFinalizeFrame` upstream on COMPLETE.
+    :class:`STTFinalizeRequestFrame` upstream on COMPLETE.
 
     ``STTService.request_finalize()`` only marks TTFB metrics; NVIDIA already
     sets ``TranscriptionFrame.finalized`` from ``is_final``. This subclass
-    reacts only to :class:`STTFinalizeFrame`. Other stop strategies never
+    reacts only to :class:`STTFinalizeRequestFrame`. Other stop strategies never
     push that frame, so ASR still finalizes from 400 ms ``stop_history``.
     """
 
@@ -55,8 +55,8 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
         self._force_eou_silences: deque[bytes] = deque()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Consume ``STTFinalizeFrame``; otherwise use the parent STT path."""
-        if isinstance(frame, STTFinalizeFrame):
+        """Consume finalize requests; otherwise use the parent STT path."""
+        if isinstance(frame, STTFinalizeRequestFrame):
             await self.request_force_eou()
             return
         await super().process_frame(frame, direction)

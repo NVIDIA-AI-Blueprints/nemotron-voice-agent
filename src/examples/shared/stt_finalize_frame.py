@@ -5,16 +5,16 @@
 
 from dataclasses import dataclass
 
-from pipecat.frames.frames import SystemFrame
+from pipecat.frames.frames import ControlFrame
 
 
 @dataclass
-class STTFinalizeFrame(SystemFrame):
-    """Ask the STT service to flush the current utterance immediately.
+class STTFinalizeRequestFrame(ControlFrame):
+    """Ask an upstream STT service to finalize the current utterance.
 
     Pushed upstream by Smart Turn when the audio turn analyzer reports
-    COMPLETE, so NVIDIA ASR can send ``force_eou`` and emit a final
-    transcript without waiting for server-side silence endpointing.
+    COMPLETE. As a control frame, the request remains ordered with queued
+    audio and transcript frames instead of overtaking them.
     """
 
     pass

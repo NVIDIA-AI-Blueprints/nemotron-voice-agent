@@ -17,7 +17,7 @@ from examples.shared.nvidia_force_eou_stt import (
     NvidiaForceEouSTTService,
     build_nvidia_stt_service,
 )
-from examples.shared.stt_finalize_frame import STTFinalizeFrame
+from examples.shared.stt_finalize_frame import STTFinalizeRequestFrame
 
 
 class StopHistoryTests(unittest.TestCase):
@@ -101,7 +101,7 @@ class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
         stt.request_force_eou = AsyncMock()
         stt.push_frame = AsyncMock()
 
-        await stt.process_frame(STTFinalizeFrame(), FrameDirection.UPSTREAM)
+        await stt.process_frame(STTFinalizeRequestFrame(), FrameDirection.UPSTREAM)
 
         stt.request_force_eou.assert_awaited_once()
         stt.push_frame.assert_not_awaited()
