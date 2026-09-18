@@ -222,6 +222,11 @@ def _is_container_runtime() -> bool:
     return os.getenv("APP_RUNTIME", "").strip().lower() == "container"
 
 
+def local_services_enabled() -> bool:
+    """Return whether self-hosted catalog entries should be discovered."""
+    return os.getenv("LOCAL_SERVICES_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
 _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm", 8000): 18000,
     ("nvidia-llm-omni", 8000): 18002,
@@ -393,6 +398,8 @@ def _load_cloud_services_catalog() -> dict:
 
 def _load_local_services_catalog() -> dict:
     """Load local service entries, merging recipe sections by reachability."""
+    if not local_services_enabled():
+        return _normalize_services_catalog({})
     local_path = _services_local_path()
     if not local_path.is_file():
         return _normalize_services_catalog({})

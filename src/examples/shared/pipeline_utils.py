@@ -54,6 +54,10 @@ class VoiceAgentPipelineWorker(PipecatPipelineWorker):
     def __init__(self, pipeline, *, cancel_runner_on_unusable_processor: bool = False, **kwargs) -> None:
         """Initialize a worker with the shared unusable-processor policy."""
         kwargs.setdefault("processor_unusable_policy", ProcessorUnusablePolicy.END)
+        # Cloud speech and multimodal services can take longer than Pipecat's
+        # 20-second default to connect, especially when several bus workers are
+        # warming up together.
+        kwargs.setdefault("setup_timeout_secs", 120.0)
         super().__init__(pipeline, **kwargs)
         self._cancel_runner_on_unusable_processor = cancel_runner_on_unusable_processor
         self._runner_cancel_requested = False

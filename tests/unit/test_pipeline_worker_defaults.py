@@ -23,6 +23,13 @@ class VoiceAgentPipelineWorkerTests(unittest.IsolatedAsyncioTestCase):
         worker = VoiceAgentPipelineWorker(Pipeline([]), enable_rtvi=False)
 
         self.assertIs(worker._processor_unusable_policy, ProcessorUnusablePolicy.END)
+        self.assertEqual(worker._setup_timeout_secs, 120.0)
+
+    def test_explicit_setup_timeout_is_preserved(self) -> None:
+        """Allow specialized workers and tests to choose a tighter timeout."""
+        worker = VoiceAgentPipelineWorker(Pipeline([]), enable_rtvi=False, setup_timeout_secs=7.5)
+
+        self.assertEqual(worker._setup_timeout_secs, 7.5)
 
     async def test_multi_worker_error_cancels_runner_once(self) -> None:
         """Broadcast one runner cancellation when a required processor is unusable."""
