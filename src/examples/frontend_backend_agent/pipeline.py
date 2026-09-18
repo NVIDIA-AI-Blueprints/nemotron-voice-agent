@@ -14,7 +14,6 @@ from loguru import logger
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -37,6 +36,7 @@ from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backen
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
+    VoiceAgentPipelineWorker,
     build_pipeline_params,
     build_user_aggregator_params,
     create_transport,
@@ -305,9 +305,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(data={"type": "user-bot-latency", "latency": round(latency, 3), "first": False})
         )
 
-    task = PipelineWorker(
+    task = VoiceAgentPipelineWorker(
         pipeline,
-        processor_unusable_policy=ProcessorUnusablePolicy.END,
         params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         observers=with_realtime_observers(latency_observer, transport=transport),

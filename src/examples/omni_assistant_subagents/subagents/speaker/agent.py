@@ -13,7 +13,6 @@ from openai.types.chat import ChatCompletionChunk
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
 from pipecat.frames.frames import ErrorFrame, LLMServiceMetadataFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import LLMService
 
@@ -38,6 +37,7 @@ from examples.omni_assistant_subagents.subagents.speaker.action_envelope import 
 from examples.omni_assistant_subagents.subagents.speaker.json_stream import JsonStringFieldStreamer
 from examples.omni_assistant_subagents.subagents.speaker.repeat_guard import RepeatGuard, is_affirmation
 from examples.shared.json_parsing import extract_json_object
+from examples.shared.pipeline_utils import VoiceAgentPipelineWorker
 from utils import parse_env_float, parse_env_int
 
 _CAPTURE_ESCALATION_COOLDOWN = 3
@@ -505,7 +505,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
             )
 
 
-class SpeakerOmniAgent(PipelineWorker):
+class SpeakerOmniAgent(VoiceAgentPipelineWorker):
     """Main conversational agent backed by the upstream-style Omni service.
 
     A bus-bridged ``PipelineWorker`` that receives user frames teed from the transport
@@ -563,7 +563,7 @@ class SpeakerOmniAgent(PipelineWorker):
         )
         super().__init__(
             Pipeline([omni]),
-            processor_unusable_policy=ProcessorUnusablePolicy.END,
+            cancel_runner_on_unusable_processor=True,
             name=name or self.AGENT_NAME,
             active=True,
             bridged=(),
