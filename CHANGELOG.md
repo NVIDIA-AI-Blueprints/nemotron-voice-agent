@@ -10,7 +10,7 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 
 ### Added
 
-- **Nemotron 3.5 Lightning** NIM and vLLM sidecars. Single-GPU recipes automatically select NVFP4, FP8, or BF16 on supported GPUs, with DSpark speculative decoding on DGX Spark and DFlash on Blackwell workstations.
+- **Nemotron 3.5 Lightning** NIM and vLLM sidecars. Single-GPU recipes load the NVFP4 checkpoint on supported GPUs. Blackwell, DGX Spark, and Jetson Thor serve native NVFP4, with DSpark speculative decoding on DGX Spark and DFlash on Blackwell workstations. Hopper and Ada serve the same NVFP4 checkpoint as W4A16 through Marlin.
 - **Nemotron 3 Nano Omni NIM** for the Omni `*/server` recipes.
 - **`*/single-gpu` recipes** running the NeMo-Speech.cpp speech stack next to vLLM on one GPU across all examples.
 - **`scripts/download-nemo-speech-models.sh`** for one-time NeMo-Speech.cpp GGUF setup on single-GPU hosts.
@@ -20,27 +20,35 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 
 ### Changed
 
+- Serve Nemotron 3.5 Lightning NVFP4 as W4A16 through Marlin on Hopper and Ada single-GPU hosts, instead of a BF16 checkpoint with online FP8.
 - Upgraded Pipecat to version 1.7.0.
 - Set **Nemotron 3.5 Lightning** as the default LLM across cascaded examples. Nemotron 3 Super remains available in the service catalogs.
 - Standardized the self-hosted Nemotron 3.5 Lightning served model ID with NVIDIA Cloud across NIM and single-GPU vLLM deployments.
 - Consolidated on-prem deployment recipes under `<example>/server` for scaling-oriented stacks and universal `<example>/single-gpu` for supported one-GPU deployments on workstations, DGX Spark, and Jetson Thor. Renamed `generic-assistant/workstation-perf` to `generic-assistant/server-perf`.
 - Replaced `PLATFORM`-based local service selection with endpoint reachability.
+- Gated the NVIDIA Cloud (NVCF) service catalog on `NVIDIA_API_KEY`, so those entries appear in the UI and pipeline only when a cloud key is set.
 - Updated Nemotron ASR Streaming NIM to version 1.3.1.
 - Updated Parakeet CTC 1.1B ASR NIM to version 1.5.3.
 - Updated Magpie TTS Multilingual NIM to version 1.10.0 and `nvidia-riva-client` to version 2.27.0.
 - Renamed the Magpie Multilingual Compose services to `magpie-multilingual-tts-service` and `magpie-multilingual-tts-service-perf`.
 - Updated Chatterbox TTS Multilingual NIM to version 1.1.0 and documented its available model profiles.
+- Updated the React UI client to `@pipecat-ai/client-react` 1.8.2 and rendered the conversation transcript directly from Pipecat's `usePipecatConversation()` hook, removing the custom client-side turn reconstruction and timestamp re-anchoring.
+- Relicensed the repository from BSD-2-Clause to a dual CC-BY-4.0 and Apache-2.0 license.
 
 ### Fixed
 
 - Cap Omni NIM KV cache (`NIM_KVCACHE_PERCENT` default `0.6`, `NIM_MAX_MODEL_LEN` `32768`) so Magpie TTS can share GPU 0.
-- Emit `user-turn-finalized` from Omni Assistant Subagents and keep the earlier user-turn timestamp in the client so transcripts stay in speaking order.
+- Emit `user-turn-finalized` from Omni Assistant Subagents so the server signals user-turn boundaries.
+- Keep chat transcripts in speaking order by rendering the Pipecat SDK message stream directly instead of merging server- and client-derived timestamps, which could reorder turns under clock skew.
+- Render each bot turn as a single transcript bubble instead of splitting multi-sentence responses into separate messages.
+- Show the negotiated RTVI protocol version in the Session panel instead of the client library version.
 - Resolve shared TTS voice ids (`John`) against the catalog default language so the disabled language dropdown shows `en-US` instead of the alphabetically first locale.
 
 ### Removed
 
 - Platform-specific **`*/workstation`, `*/dgx-spark`, and `*/jetson-thor` recipes** and the Jetson Riva sidecars (`nemotron-speech`, `nemotron-speech-tts`), along with the CUDA MPS helper scripts, CPU-pinning knobs, and `RIVA_*` environment knobs. Use `*/server`, `generic-assistant/server-perf`, or `*/single-gpu` instead.
 - **Nemotron 3 Nano** cascaded LLM catalog entries and its NIM compose file. Use Nemotron 3.5 Lightning instead.
+- **NVIDIA Cloud (NVCF) catalog entries** for Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`) and Parakeet CTC 1.1B (`parakeet-ctc`). Both models remain available self-hosted.
 
 ## [2.1.1] - 2026-08-21
 

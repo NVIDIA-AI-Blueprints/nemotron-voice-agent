@@ -33,7 +33,9 @@ looks exactly like a fix.
 | Smoke fails constructing a service | API-key argument, `extra_body` shape, framework file |
 | Agent runs and stays mute with no error | reasoning parser, request mode, and streamed `content` |
 | Browser does not connect | framework client path, microphone permission, transport |
+| Not enough VRAM to start, or an unexpected OOM | what is already resident, before any model change |
 | User speech is not detected | input audio frames, VAD, end-of-turn |
+| Transcripts arrive only when the session ends | ASR endpointing on the single-GPU speech service |
 | No transcript (cascaded) | streaming ASR endpoint and language |
 | Wrong input or reply language | `models/language-routing.md` |
 | No reply | LLM/Omni endpoint, model id, request error |
@@ -49,42 +51,64 @@ looks exactly like a fix.
   `platforms/readiness.md` before changing model configuration.
 - Authentication or image-pull failure: re-check `preflight.md` credentials. Never print
   a secret.
-- Wrong workstation / DGX NIM LLM profile: rerun `list-model-profiles` and follow
-  `models/llm.md`. Cloud checks model id/API. Jetson Thor checks its vLLM model card and
+- Wrong NIM model profile: Cascaded uses the LLM NIM matrix and profile procedure in
+  `models/llm.md`. Omni uses the VLM NIM sources in
+  `frameworks/omni.md` §Workstation NIM. Rerun `list-model-profiles` from the selected
+  image on the assigned GPU set. Cloud checks model id and API. The single-GPU stack checks
+  its vLLM model card, the quantization variant for the probed compute capability, and the
   serve flags.
-- Wrong workstation / DGX Speech tags: reopen the ASR or TTS matrix and locked `/deploy`
-  page. Jetson Thor checks its Riva `config.sh`.
+- Wrong Speech NIM tags: reopen the ASR or TTS matrix and locked `/deploy` page. The
+  single-GPU stack instead checks the GGUF paths passed to the speech service and the
+  models that actually loaded.
 - Speech service still `starting` or `unhealthy` on first boot: read the logs before
   changing anything. Model download and TensorRT engine building routinely take 15 to 30
   minutes or more, and a restart discards that work. See `platforms/deployment.md` §First
   boot takes much longer. Treat it as a failure only on process exit, a fatal log such as
   CUDA OOM, or stalled progress past the documented window.
-- Speech HTTP ready but deaf or mute: query `GetRivaSpeechRecognitionConfig` or
+- Speech ready but deaf or mute: query `GetRivaSpeechRecognitionConfig` or
   `GetRivaSynthesisConfig` and compare the loaded model, language, and voice with the lock.
   On Speech NIM TTS, also call the voice-list path from its current TTS API reference and
   confirm the locked voice is actually returned. A wrong or near-miss path returns 404 or
   an empty list, which looks like a mute service.
-- OOM on workstation / DGX: stop the failing service. Compare actual per-process GPU use
-  with the budget in `preflight.md`. Verify the LLM loaded the pinned quantization profile,
-  then reduce its documented runtime memory cap or `NIM_MAX_MODEL_LEN`. Confirm TTS uses
-  the smallest approved explicit batch profile. Restart one service at a time through the
+- OOM when the budget said it would fit: something is resident that was not there at probe
+  time. Read `nvidia-smi --query-compute-apps=pid,used_memory,name --format=csv` and
+  `docker ps` first, and identify what holds the memory before changing anything. A stale
+  container from an earlier attempt is the common cause, and stopping that named container
+  is the fix rather than shrinking the model. Follow
+  `preflight.md` §Find out what is holding the memory, and never prune or stop containers
+  the user did not approve.
+- OOM on the NIM path: stop the failing service. Compare actual per-process GPU use with
+  the budget in `preflight.md`. Verify the LLM loaded the pinned quantization profile, then
+  reduce its documented runtime memory cap or `NIM_MAX_MODEL_LEN`. Confirm TTS uses the
+  smallest approved explicit batch profile. Restart one service at a time through the
   memory gate in `platforms/deployment.md`, or move one slot to cloud. Do not silently
   change the approved model.
 - LLM fails with no available KV cache blocks: its cap is too low for that profile. Do not
   reduce it again. Use a smaller Compatible profile, raise the cap only when speech
   reserves still fit, or move a slot to another GPU or cloud.
-- OOM on Jetson Thor: lower `--max-model-len` first, then the memory fraction, and restart
-  vLLM. Follow `platforms/jetson-thor.md`.
-- vLLM will not start on Thor while the host looks like it has memory: compare Linux free
-  memory with available memory. The startup check has been observed to read free memory, so
-  page cache left by downloads and engine builds can block it. Reclaim cache rather than
-  shrinking the model configuration. See `platforms/jetson-thor.md` §Host memory at startup.
-- vLLM on Thor sits silent for a long first boot: look for `nvcc` and `cicc` compile
-  output, which is the NVFP4 kernel compile and not a hang. See `platforms/jetson-thor.md`
-  §First boot compiles kernels.
-- Riva on Thor cannot read its models: assert where `riva_init.sh` actually wrote the
-  repository and whether it is root-owned, then check that the Enterprise variables are all
-  set or all unset. See `platforms/jetson-thor.md` §Model path and credentials.
+- OOM on the single-GPU stack: lower `--max-model-len` first, then the memory fraction, and
+  restart vLLM. Confirm the fraction was derived from the measured speech reserve rather
+  than from free memory at launch. Follow `platforms/single-gpu.md` §Memory.
+- vLLM will not start while the host looks like it has memory: compare Linux free memory
+  with available memory. The startup check has been observed to read free memory, so page
+  cache left by downloads and engine builds can block it. Reclaim cache rather than
+  shrinking the model configuration. See `platforms/single-gpu.md` §Host memory at startup.
+- vLLM sits silent for a long first boot: look for `nvcc` and `cicc` compile output, which
+  is the NVFP4 kernel compile and not a hang. See `platforms/single-gpu.md` §First boot
+  compiles kernels.
+- Speech service exits at startup or reports a missing model: assert the mounted model tree
+  is readable by the container user, and that all three TTS paths and the ASR path resolve
+  inside the container. A tree created by Compose before the download is root-owned. See
+  `platforms/readiness.md` §Speech model tree.
+- Speech service rejects a setting at startup: unknown engine keys are errors on this
+  service, so a mistyped or aliased option is a startup failure rather than a default. Use
+  the canonical dotted option names.
+- Numbers, dates, or currency are spoken literally: the text-normalization grammars are
+  missing, or the container was built without normalization support and logged a warning at
+  startup. See `platforms/single-gpu.md` §One-time speech model setup.
+- Requested TTS locale is refused or silently answered in another language: read the
+  languages `GetRivaSynthesisConfig` advertises. Some are build-time options that are off
+  by default, so the model's language list is an upper bound rather than the served set.
 - Reply text never reaches TTS and no log shows an error: confirm that the serve command
   keeps the reasoning parser required by the locked model card and that the request sets
   `enable_thinking:false`. Reassert non-empty streaming `delta.content` through
@@ -111,6 +135,13 @@ If VAD sees speech but no transcript appears:
 3. confirm the locked profile is streaming
 4. confirm its language matches the request
 
+If transcripts appear only after the session closes, the agent is receiving one final
+result per stream instead of one per utterance. On the single-GPU stack that is ASR
+endpointing left at its default. Enable it, set the end-of-utterance silence threshold, and
+reassert a mid-stream final through `scripts/smoke.sh`. See
+`platforms/single-gpu.md` §Set explicitly. Do not change VAD or turn strategy
+first, because the client-side symptom looks identical.
+
 If a transcript appears but no reply follows, inspect the LLM request and response. Check
 the base URL, exact model id, authentication, and reasoning payload from `models/llm.md`.
 
@@ -131,7 +162,8 @@ phrase, approved score, locked model support, and framework wiring before changi
 ## Omni Pipeline
 
 Confirm the project copied the current upstream
-`nvidia_omni_multimodal_service.py` and instantiates `NvidiaOmniMultimodalService`.
+`nvidia_omni_multimodal_service.py` and instantiates the service class imported by the
+current upstream pipeline, which is currently `NvidiaOmniLLMService`.
 Confirm it also copied `audio_only_smart_turn_strategy.py`. Do not replace either with a
 stock text-only service or transcription-dependent Smart Turn strategy.
 

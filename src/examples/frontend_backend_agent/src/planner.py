@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: Apache-2.0
 
 """LLM planner for the internal Thinker."""
 
@@ -31,7 +31,7 @@ class NvidiaThinkerPlanner:
         *,
         llm: NvidiaLLMService,
         system_prompt: str,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
     ) -> None:
         """Create an NVIDIA-backed Thinker planner."""
         if not system_prompt.strip():

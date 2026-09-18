@@ -1,0 +1,69 @@
+{
+  "skill_name": "nemotron-voice-agent-upgrade-pipecat",
+  "cases": [
+    {
+      "id": "nemotron-voice-agent-upgrade-pipecat-explicit-range",
+      "prompt": "Upgrade pipecat-ai from 1.7.0 to 1.9.0 in this repository.",
+      "expected_skill": "nemotron-voice-agent-upgrade-pipecat",
+      "expected_output": "Reads the pipecat-ai release notes for every release in the 1.7.0..1.9.0 range (and each pipecat* subpackage's notes), scans pyproject.toml/uv.lock and client/package.json, implements the migration per example, and runs the gap-analysis loop until clean.",
+      "assertions": [
+        "Loaded nemotron-voice-agent-upgrade-pipecat/SKILL.md and ran the phases in order.",
+        "Read release notes for every release in the 1.7.0..1.9.0 range before editing.",
+        "Scanned both the Python (pyproject.toml/uv.lock) and client (client/package.json) dependency surfaces.",
+        "Iterated the gap-analysis loop until zero gaps and gated on uv sync, ruff, and pytest."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-upgrade-pipecat-autodetect-old",
+      "prompt": "Move this repo to the latest Pipecat release.",
+      "expected_skill": "nemotron-voice-agent-upgrade-pipecat",
+      "expected_output": "Auto-detects the current pipecat-ai version from pyproject.toml and uv.lock, resolves the latest release from the canonical pipecat releases page, and reads the notes across the range before migrating.",
+      "assertions": [
+        "Auto-detected the current version from pyproject.toml/uv.lock rather than asking.",
+        "Resolved the latest release from the canonical pipecat-ai releases source.",
+        "Did not hardcode assumptions about companion packages."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-upgrade-pipecat-server-client-lockstep",
+      "prompt": "Bump Pipecat and its JavaScript client packages together and keep the RTVI contract intact.",
+      "expected_skill": "nemotron-voice-agent-upgrade-pipecat",
+      "expected_output": "Upgrades the Python pipecat-ai and the @pipecat-ai/* client packages in lockstep, migrates client/src RTVI usage, and gates on npm lint+build alongside the Python validation.",
+      "assertions": [
+        "Upgraded the Python server and @pipecat-ai/* client packages in lockstep for the RTVI contract.",
+        "Discovered the client packages from client/package.json rather than assuming which exist.",
+        "Gated on npm lint+build in addition to the Python checks."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-upgrade-pipecat-negative-deploy",
+      "prompt": "Deploy the omni assistant on a workstation GPU.",
+      "expected_skill": null,
+      "expected_output": "The upgrade-pipecat skill does not activate because bringing up a Compose recipe is handled by nemotron-voice-agent-deploy.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-upgrade-pipecat.",
+        "Recognized this as a deployment task."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-upgrade-pipecat-negative-configure",
+      "prompt": "Change the default TTS voice for the multilingual assistant.",
+      "expected_skill": null,
+      "expected_output": "The upgrade-pipecat skill does not activate because changing a catalog default is a configuration change handled by nemotron-voice-agent-configure-pipeline.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-upgrade-pipecat.",
+        "Recognized this as a configuration change."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-upgrade-pipecat-negative-unrelated",
+      "prompt": "Upgrade numpy to the latest version in this repo.",
+      "expected_skill": null,
+      "expected_output": "The upgrade-pipecat skill does not activate because it is specific to pipecat-ai and its companion packages, not general dependency bumps.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-upgrade-pipecat.",
+        "Recognized numpy is outside the pipecat-ai upgrade scope."
+      ]
+    }
+  ]
+}

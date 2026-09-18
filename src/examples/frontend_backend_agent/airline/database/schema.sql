@@ -1,5 +1,5 @@
--- SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
--- SPDX-License-Identifier: BSD-2-Clause
+-- SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
 
 -- Booking-server SQLite schema.
 -- Applied on startup via ``db.apply_schema``.  Safe to re-run.

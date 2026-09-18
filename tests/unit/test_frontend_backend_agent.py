@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa: D100, D101, D102
 
@@ -254,6 +254,36 @@ class _RaisingThinker:
         return False
 
 
+class _PlannerErrorThinker:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def call(self, query: str, slots: dict[str, Any] | None = None, *, on_started=None) -> dict[str, Any]:
+        self.calls += 1
+        return {
+            "type": "response_hint",
+            "reason": "planner_error",
+            "action": "retry",
+            "response_text": "I could not plan that request. Could you say it again?",
+            "context": "general",
+        }
+
+    def cancel_active(self, reason: str = "new_user_query") -> bool:
+        return False
+
+    def cancel_pending_booking(self) -> bool:
+        return False
+
+
+class _PlannerErrorWithTerminalPathsThinker(_PlannerErrorThinker):
+    async def call(self, query: str, slots: dict[str, Any] | None = None, *, on_started=None) -> dict[str, Any]:
+        if query == "raise":
+            raise RuntimeError("thinker exploded")
+        if query == "abort":
+            raise asyncio.CancelledError
+        return await super().call(query, slots, on_started=on_started)
+
+
 class _FrameCapturingLLM:
     def __init__(self) -> None:
         self.frames = []
@@ -265,9 +295,11 @@ class _FrameCapturingLLM:
 class _InferenceCapturingLLM:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
+        self.max_tokens: int | None = -1
 
     async def run_inference(self, context, max_tokens=None) -> str:
         self.messages = list(context.get_messages())
+        self.max_tokens = max_tokens
         return json.dumps(
             {
                 "tool": "response_hint",
@@ -463,6 +495,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
             user_payload["runtime_context"],
             {"today": today.isoformat(), "tomorrow": tomorrow.isoformat()},
         )
+        self.assertIsNone(llm.max_tokens)
 
     async def test_thinker_started_is_internal_only_while_response_hint_is_speakable(self) -> None:
         thinker = _make_thinker()
@@ -1004,6 +1037,113 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[-1][0]["type"], "response_hint")
         self.assertEqual(results[-1][0]["reason"], "tool_error")
         self.assertIn("try again", results[-1][0]["response_text"].lower())
+
+    async def test_call_backend_rejects_past_iso_date_without_calling_thinker(self) -> None:
+        llm = _FrameCapturingLLM()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="call_backend",
+            tool_call_id="past_date",
+            arguments={"query": "Book a flight from JFK to SEA on September 1, 2026."},
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        with patch.dict("os.environ", {"FRONTEND_BACKEND_AGENT_TODAY": "2026-09-07"}):
+            await build_handlers(_RaisingThinker())["call_backend"](params)
+
+        self.assertEqual(results[-1][0]["reason"], "past_date")
+        self.assertFalse(results[-1][1].run_llm)
+        self.assertEqual(llm.frames[1].text, results[-1][0]["response_text"])
+
+    async def test_call_backend_stops_planner_errors_after_initial_attempt_and_one_retry(self) -> None:
+        thinker = _PlannerErrorThinker()
+        llm = _FrameCapturingLLM()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        handler = build_handlers(thinker)["call_backend"]
+        for attempt in range(2):
+            params = FunctionCallParams(
+                function_name="call_backend",
+                tool_call_id=f"planner_error_{attempt}",
+                arguments={"query": "Search flights from New York to Seattle tomorrow."},
+                llm=llm,
+                pipeline_worker=None,
+                context=None,
+                result_callback=result_callback,
+            )
+            await handler(params)
+
+        self.assertEqual(thinker.calls, 2)
+        self.assertEqual(results[0][0]["reason"], "planner_error")
+        self.assertEqual(results[1][0]["reason"], "planner_error_exhausted")
+        self.assertFalse(results[1][1].run_llm)
+        self.assertEqual(llm.frames[1].text, results[1][0]["response_text"])
+
+    async def test_non_planner_terminal_paths_reset_planner_error_retries(self) -> None:
+        thinker = _PlannerErrorWithTerminalPathsThinker()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        handlers = build_handlers(thinker)
+
+        async def call_backend(query: str | None) -> str:
+            params = FunctionCallParams(
+                function_name="call_backend",
+                tool_call_id=f"call_{len(results)}",
+                arguments={} if query is None else {"query": query},
+                llm=_FrameCapturingLLM(),
+                pipeline_worker=None,
+                context=None,
+                result_callback=result_callback,
+            )
+            await handlers["call_backend"](params)
+            return results[-1][0]["reason"]
+
+        async def assert_first_planner_error() -> None:
+            reason = await call_backend("Search flights from New York to Seattle tomorrow.")
+            self.assertEqual(reason, "planner_error")
+
+        await assert_first_planner_error()
+        self.assertEqual(await call_backend(None), "params_missing")
+        await assert_first_planner_error()
+
+        with patch.dict("os.environ", {"FRONTEND_BACKEND_AGENT_TODAY": "2026-09-07"}):
+            self.assertEqual(
+                await call_backend("Book a flight from JFK to SEA on September 1, 2026."),
+                "past_date",
+            )
+        await assert_first_planner_error()
+
+        self.assertEqual(await call_backend("raise"), "tool_error")
+        await assert_first_planner_error()
+
+        cancel_params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_reset",
+            arguments={},
+            llm=_FrameCapturingLLM(),
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+        await handlers["cancel_backend"](cancel_params)
+        self.assertEqual(results[-1][0]["reason"], "nothing_to_cancel")
+        await assert_first_planner_error()
+
+        self.assertEqual(await call_backend("abort"), "aborted")
+        await assert_first_planner_error()
 
     async def test_cancel_backend_cancels_active_call_and_suppresses_stale_result(self) -> None:
         thinker = _make_thinker(tool_delay_seconds=1.0)

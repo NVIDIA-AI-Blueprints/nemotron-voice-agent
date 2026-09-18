@@ -6,6 +6,18 @@ The pattern replaces the separate ASR and text LLM stages with one audio-input L
 
 ![Nemotron Omni Assistant architecture](images/omni-assistant-architecture.png)
 
+## Default Models
+
+The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+
+| Profile | Audio-input LLM | TTS |
+| --- | --- | --- |
+| Cloud | Nemotron 3 Nano Omni 30B A3B Reasoning | Magpie TTS Multilingual |
+| Server | Nemotron 3 Nano Omni 30B A3B Reasoning NIM | Magpie TTS Multilingual NIM |
+| Single GPU | Nemotron 3 Nano Omni 30B A3B Reasoning through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
+
+Nemotron Omni handles both speech recognition and response generation, so this example does not configure a separate ASR model.
+
 ## Running the example
 
 This example runs with **Cloud**, **Server** (Omni NIM + NIM TTS, recommended for scaling), and universal **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor). The single-gpu profile covers workstations, DGX Spark, and Jetson Thor. See the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites and hardware detail. Run every command from the repository root.

@@ -1,10 +1,16 @@
 # Nemotron Voice Agent
 
+[![License](https://img.shields.io/badge/License-Apache%202.0%20%7C%20CC--BY--4.0-blue)](LICENSE) [![NVIDIA AI Blueprint](https://img.shields.io/badge/NVIDIA-AI%20Blueprint-76B900?logo=nvidia&logoColor=white)](https://build.nvidia.com/) [![Built with Pipecat](https://img.shields.io/badge/Built%20with-Pipecat-4B32C3)](https://github.com/pipecat-ai/pipecat) [![Deploy on Brev](https://img.shields.io/badge/Deploy%20on-Brev-76B900?logo=nvidia&logoColor=white)](https://brev.nvidia.com/launchable/deploy?launchableID=env-3GGgfIXCnso410yatOZD24ufRJ2)
+
+**[Why](#-why-this-blueprint)** • **[Quick Start](#-quick-start)** • **[Examples](#-examples)** • **[Documentation](#-documentation)** • **[News](#-news)** • **[Roadmap](#-roadmap)**
+
+![Nemotron Voice Agent](docs/images/nemotron-voice-agent-hero.gif)
+
 Nemotron Voice Agent Blueprint provides a comprehensive, end-to-end voice agent built with open NVIDIA Nemotron models and NVIDIA NIM for acceleration and scaling. It is designed to guide developers through the creation of a cascaded pipeline, integrating Nemotron ASR, LLM, and TTS, while solving for the complexities of streaming, interruptible conversations. Clone it, swap in your own logic, and deploy a working voice AI prototype in hours.
 
 Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipecat) and leveraging NVIDIA NIM microservices, this example helps teams accelerate the deployment of high-performance voice AI solutions.
 
-## Why this blueprint
+## ✨ Why this blueprint
 
 - **Sub-second E2E latency**: sub-second end-to-end latency with support for multiple concurrent streams, designed for production scale.
 - **Fully open models**: Nemotron Streaming and Parakeet ASR, Magpie TTS and Nemotron LLM models. Swap any component, self-host, no lock-in.
@@ -12,18 +18,44 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 - **Multilingual Capabilities**: native support for multiple languages provided by NVIDIA Magpie TTS and Multilingual ASR.
 - **Multimodal Understanding**: reason over speech and vision together, analyzing live camera input and uploaded media (images, documents) within a single conversation, powered by Nemotron Omni.
 - **Multi-Agent and Tool Calling**: orchestrate cooperating agents that invoke external tools and functions for task-oriented workflows, while decoupling reasoning from response generation for lower perceived latency.
+- **Voice Agent Builder Skill**: quickly scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
 - **Edge Support**: deploy anywhere, from cloud and workstation to DGX Spark and edge devices like Jetson Thor, using self-contained deployment recipes.
 - **OpenAI Realtime–compatible gateway**: `WS /v1/realtime` alongside RTVI `/api/ws`. See [Use the Realtime Gateway](docs/how-to/use-realtime-gateway.md).
 
 ---
 
-## Architecture
+## 📣 News
+
+- **[September 2026] v2.2.0**
+  - Expanded open model support with Nemotron 3.5 Lightning and Nemotron 3 Nano NIM.
+  - Unified local deployment across workstations, DGX Spark, and Jetson Thor.
+  - OpenAI Realtime API compatibility for external voice clients.
+  - Agent Skills for building voice agents with Nemotron.
+
+<details>
+<summary>Previous releases</summary>
+
+- **[July 2026] v2.0.0**
+  - Omni-based example showcasing a single multimodal model replacing the ASR + LLM stages.
+  - Omni subagents example demonstrating multi-agent coordination for audio and video understanding.
+  - Frontend/backend agent example showing how to integrate an existing text-based agentic backend with a voice frontend.
+  - New models: Nemotron 3 Super 120B A12B, Nemotron 3 Nano Omni, Nemotron ASR Streaming (English + Multilingual).
+- **[March 2026] v1.0.0**
+  - Generic cascaded pipeline (Parakeet ASR + LLM + Magpie TTS) with English and multilingual support.
+
+</details>
+
+See the [CHANGELOG](CHANGELOG.md) for the full release history.
+
+---
+
+## 🏗️ Architecture
 
 ![Architecture Diagram](./docs/images/arch.png)
 
 ---
 
-## Models and Services
+## 🧩 Models and Services
 
 | Component | Model | Swap with |
 |-----------|-------|-----------|
@@ -40,7 +72,7 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 
 ---
 
-## Examples
+## 🧪 Examples
 
 Each example showcases a **pattern** for building a voice pipeline. Start from the one closest to your use case and adapt it. Follow each example's own README (linked below) for its architecture, supported recipes, configuration, and tunables.
 
@@ -52,35 +84,36 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 | [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
 | [Frontend/Backend Agent](src/examples/frontend_backend_agent/README.md) | A fast frontend LLM handles the conversation while a specialized backend agent does the work. This is the pattern for giving an **existing text / agentic backend** a real-time conversational experience (the flight-booking agent as the reference backend). | Add voice to an existing text agent / agentic backend with minimal changes. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 
-> **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. The examples can be extended with other hardware configurations or models. Those configurations are not included by default.
+> **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. Each linked example README lists its default models by profile. The examples can be extended with other hardware configurations or models. Those configurations are not included by default.
 
 ---
 
-## Requirements
+## 📋 Requirements
 
-These are the minimum requirements, and support varies by example and deployment profile. See the [Examples](#examples) table for what runs where, and each example's README plus the [LLM](docs/how-to/configure-llm.md) / [ASR](docs/how-to/configure-asr.md) / [TTS](docs/how-to/configure-tts.md) Services docs for exact models and corresponding VRAM usage.
+These are the minimum requirements, and support varies by example and deployment profile. See the [Examples](#-examples) table for what runs where, and each example's README plus the [LLM](docs/how-to/configure-llm.md) / [ASR](docs/how-to/configure-asr.md) / [TTS](docs/how-to/configure-tts.md) Services docs for exact models and corresponding VRAM usage.
 
 ### Hardware Requirements
 
 | Deployment Profile | Hardware | Notes |
 |------|----------|-------|
 | Cloud | CPU only (no GPU) | Model endpoints from NVIDIA cloud APIs (NVCF). |
-| Server | NVIDIA GPU **workstation** (not DGX Spark or Jetson Thor). GPU count and memory depend on the selected models and scale | Scaling-oriented NIM deployment. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
-| Single GPU | 1 workstation GPU, DGX Spark (128 GB unified memory), or Jetson Thor (128 GB unified memory) | Uses the universal `*/single-gpu` recipes. Required memory varies by model and precision. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
+| Server | NVIDIA GPU workstation. GPU count and memory depend on the selected models and scale. | Scaling-oriented NIM deployment. DGX Spark and Jetson Thor are not supported for this profile. Default all-on-one-GPU layout is about 80 GB. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
+| Performance Server | Four-GPU Blackwell workstation | `generic-assistant/server-perf` load benchmark only, not a browser UI session. |
+| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
 
 ### Software Requirements
 
 Credentials depend on the deployment profile. Do not mix them.
 
-- **Cloud and Server**: an **NVIDIA API Key** from [build.nvidia.com](https://build.nvidia.com/). Server additionally needs valid **NVIDIA NGC** credentials to pull NIM container images (see the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
-- **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads only. It does not use `NVIDIA_API_KEY` or `docker login nvcr.io`.
-- **Docker**: With NVIDIA GPU support installed and Docker Compose v2.20 or newer.
+- **Cloud, Server, and Performance Server**: an **NVIDIA API Key** (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server (`*/server`) and Performance Server (`generic-assistant/server-perf`) also need valid **NVIDIA NGC** credentials to pull NIM container images (refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account)) and a `docker login nvcr.io`.
+- **Single GPU**: a **Hugging Face token** (`HF_TOKEN`) for model downloads and NVIDIA driver 580.x or newer for NeMo-Speech.cpp. It does not require `NVIDIA_API_KEY` or authentication with `docker login nvcr.io`.
+- **Docker**: Docker Compose v2.20 or newer. Cloud needs Docker only. Server, Performance Server, and Single GPU also need Docker with NVIDIA GPU support ([NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)).
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
-Deploy with the bundled **agent skills** (recommended), or follow the manual steps below. In below steps, we deploy the **Generic Assistant on a workstation GPU**. For other examples or deployment profiles, see the [Examples](#examples) table and each example's README. For a Jetson Thor quickstart on the `*/single-gpu` recipes, follow the [Jetson Thor guide](docs/03-jetson-thor.md).
+Deploy with the bundled **agent skills** (recommended), or follow the manual steps below. In below steps, we deploy the **Generic Assistant on a workstation GPU**. For other examples or deployment profiles, see the [Examples](#-examples) table and each example's README. For a Jetson Thor quickstart on the `*/single-gpu` recipes, follow the [Jetson Thor guide](docs/03-jetson-thor.md).
 
 ### With the agent skills
 
@@ -100,9 +133,9 @@ npx skills add .
     test -f .env || cp .env.example .env
     ```
 
-2. Set `NVIDIA_API_KEY` in `.env`. Docker Compose passes values from this file into the application and model services.
+2. Set `NVIDIA_API_KEY` in `.env`. This Quick Start uses the Server profile, which requires that key (the same key is required for cloud-only and `generic-assistant/server-perf`). Single-GPU uses `HF_TOKEN` instead. Docker Compose passes values from this file into the application and model services.
 
-3. Log in to the NVIDIA NGC Docker Registry.
+3. Log in to the NVIDIA NGC Docker Registry (required for Server and Performance Server; skip for cloud-only and Single-GPU).
 
     ```bash
     set -a; . ./.env; set +a
@@ -127,7 +160,7 @@ For detailed setup instructions, see the [Getting Started Guide](docs/01-getting
 
 ---
 
-## Agent Skills
+## 🤖 Agent Skills
 
 This repository includes AI agent skills for deployment assistance. Install them for your coding agent with:
 
@@ -135,16 +168,18 @@ This repository includes AI agent skills for deployment assistance. Install them
 npx skills add .
 ```
 
-- [`deploy`](skills/deploy/SKILL.md): recipe-family auth (`NVIDIA_API_KEY` + NGC login for `*/server`, `HF_TOKEN` only for `*/single-gpu`), profile selection, and compose bring-up.
-- [`configure-pipeline`](skills/configure-pipeline/SKILL.md): edit `.env`, prompts, and example service catalogs, then re-apply the change.
+- [`nemotron-voice-agent-builder`](skills/nemotron-voice-agent-builder/SKILL.md): scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
+- [`nemotron-voice-agent-deploy`](.agents/skills/nemotron-voice-agent-deploy/SKILL.md): recipe-family auth (`NVIDIA_API_KEY` + NGC login for `*/server`, `HF_TOKEN` only for `*/single-gpu`), profile selection, and compose bring-up.
+- [`nemotron-voice-agent-configure-pipeline`](.agents/skills/nemotron-voice-agent-configure-pipeline/SKILL.md): edit `.env`, prompts, and example service catalogs, then re-apply the change.
 
 ---
 
-## Documentation
+## 📖 Documentation
 
 | Type | Guide | Description |
 |------|-------|-------------|
 | Tutorial | [Getting Started](docs/01-getting-started.md) | Full deployment: quick start, local GPU, DGX Spark, and the recipe matrix |
+| Launchable | [Brev Launchable](notebooks/brev_launchable.ipynb) | Deploy a `*/server` or `*/single-gpu` profile on a Brev instance. Server profiles require `NVIDIA_API_KEY` and an NGC Docker login. Single-GPU profiles use local vLLM and NeMo-Speech.cpp. Switching profiles restarts application containers while preserving the Brev VM, Jupyter, and caches by default. `RESET_VOLUMES=True` removes Compose-managed named volumes but preserves the host Hugging Face cache. |
 | How-to | [Configuration Guide](docs/02-configuration-guide.md) | Index of all configuration and customization guides |
 | Reference | [LLM](docs/how-to/configure-llm.md) · [ASR](docs/how-to/configure-asr.md) · [TTS](docs/how-to/configure-tts.md) Models | NVIDIA model catalogs, VRAM usage and model configs |
 | How-to | [Jetson Thor](docs/03-jetson-thor.md) | Edge deployment guide for the `*/single-gpu` recipes |
@@ -157,26 +192,17 @@ Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-
 
 ---
 
-## Roadmap
+## 🗺️ Roadmap
 
-**Future releases**
-- Fully open model support using Hugging Face and NeMo (no NIM required).
-- LiveKit Agents-based sample example.
-- Voice Agent skill for iterative development with AI coding agents.
+Planned for future releases:
 
-**v2.0.0** (July 2026)
-- Omni-based example showcasing a single multimodal model replacing the ASR + LLM stages.
-- Omni subagents example demonstrating multi-agent coordination for audio and video understanding.
-- Frontend/backend agent example showing how to integrate an existing text-based agentic backend with a voice frontend.
-- New models: Nemotron 3 Super 120B A12B, Nemotron 3 Nano Omni, Nemotron ASR Streaming (English + Multilingual).
+- LiveKit Agents-based voice agent example.
+- Voice agent integrations for NemoClaw-supported harnesses.
 
-**v1.0.0** (March 2026)
-- Generic cascaded pipeline (Parakeet ASR + LLM + Magpie TTS) with English and multilingual support.
-
-See [CHANGELOG](CHANGELOG.md) for the full release history.
+Recent releases are in [News](#-news); see the [CHANGELOG](CHANGELOG.md) for the full release history.
 
 ---
 
-## License
+## ⚖️ License
 
-This NVIDIA AI BLUEPRINT is licensed under the BSD 2-Clause License. See [LICENSE](LICENSE) for details. This project may download and install additional third-party open source software and containers. Review the license terms of these projects in [third_party_oss_license.txt](third_party_oss_license.txt) before use.
+This NVIDIA AI BLUEPRINT is dual-licensed: documentation, skills, and assets under CC-BY-4.0, and source code under Apache-2.0. See [LICENSE](LICENSE) for details. This project may download and install additional third-party open source software and containers. Review the license terms of these projects in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) before use.
