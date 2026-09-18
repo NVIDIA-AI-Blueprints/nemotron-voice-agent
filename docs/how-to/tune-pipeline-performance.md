@@ -17,7 +17,13 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 1. The user speaks, and ASR emits interim transcripts as audio streams in.
 2. Silero VAD detects a pause in speech.
 3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it is incomplete but silence continues past the Smart Turn stop threshold (default 1.0 s, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
-4. On a completed turn, the transcript goes to the LLM and TTS streams the reply back.
+4. On a completed turn, the cascaded pipeline sends one ordered finalization request if Smart Turn has not processed a finalized transcript. NVIDIA ASR converts the request to `force_eou`.
+5. The finalized transcript goes to the LLM, and TTS streams the reply back.
+
+If Smart Turn has already processed a finalized transcript, it does not send a
+finalization request. Finalized transcripts that arrive after the request retain
+Pipecat's default transcript-gating behavior. New speech or an interim
+transcript invalidates an earlier final for end-of-turn detection.
 
 ### Configuration
 
