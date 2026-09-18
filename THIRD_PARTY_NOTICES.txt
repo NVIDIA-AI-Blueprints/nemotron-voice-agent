@@ -1,3 +1,12 @@
+Nemotron Voice Agent Third-Party Licenses
+=========================================
+
+This file contains third-party license information for open source software
+packages and containers that this project may use, download, or distribute.
+Each entry below names a package and reproduces the license text it is
+distributed under. This notice is not the license for this project itself;
+see the top-level LICENSE file for that.
+
 License for fastapi
 
 /*#########################################################################

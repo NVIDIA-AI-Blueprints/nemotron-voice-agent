@@ -26,6 +26,7 @@ override-dependencies = [
     "uuid-utils>=0.16.0",
     "pillow>=12.3.0",
     "nvidia-riva-client>=2.27.0,<3",
+    "nltk>=3.10.3",
 ]
 
 [dependency-groups]

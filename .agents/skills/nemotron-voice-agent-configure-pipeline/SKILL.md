@@ -1,7 +1,8 @@
 ---
-name: configure-pipeline
+name: nemotron-voice-agent-configure-pipeline
 description: Configure Nemotron Voice Agent runtime using `.env`, example-local `services.{cloud,local}.yaml`, and example-local `prompts.yaml`. Use when changing prompts, tracing, audio knobs, exposed pipelines or transports, or local NIM image overrides.
 version: "2.2.0"
+license: CC-BY-4.0 AND Apache-2.0
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
   tags: [configuration, pipeline, voice-agent, nemotron]
@@ -9,13 +10,19 @@ metadata:
 
 # Configure Nemotron Voice Agent Pipeline
 
+## When to Use This Skill
+
+Use this skill to change the runtime configuration of an already-deployed Nemotron Voice Agent — editing `.env` flags, `examples_registry.yaml`, per-example `services.{cloud,local}.yaml` catalogs, or `prompts.yaml`, then re-applying Compose without rebuilding images. Typical requests: swap a model, edit or add a prompt, toggle tracing or audio knobs, or restrict the exposed examples and transports.
+
+Do not use this skill for initial deployment, profile selection, or auth troubleshooting (use `nemotron-voice-agent-deploy`), for source-code changes to `pipeline.py` or a Pipecat version migration (use `nemotron-voice-agent-upgrade-pipecat`), or for changes that require an image rebuild.
+
 ## Purpose
 
 Edit the runtime configuration of the voice agent (built-in catalogs, prompts, feature flags) and re-apply Compose without rebuilding images.
 
 ## Prerequisites
 
-- An existing deployment created by `deploy`.
+- An existing deployment created by `nemotron-voice-agent-deploy`.
 
 ## Scope
 
@@ -23,7 +30,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 - Limit repository-backed changes to `.env`, `examples_registry.yaml`, example-local `prompts.yaml`, and per-example service catalogs.
 - UI-only prompt or service tests stay in browser localStorage. Redeployment is not required.
 - Exposed UI examples and transports live in `examples_registry.yaml` (`selection` and `transports` fields). Use the `EXAMPLE_SELECTION` env var only to override the registry at runtime, for example for one-off benchmarks.
-- Use `deploy` for initial deployment, profile selection, or auth troubleshooting.
+- Use `nemotron-voice-agent-deploy` for initial deployment, profile selection, or auth troubleshooting.
 
 ## Instructions
 
@@ -40,7 +47,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
    - Every TTS catalog entry must set `synthesis_mode` explicitly. Use `stitched` for Magpie Multilingual and Magpie Zeroshot, and `per_sentence` for Chatterbox.
    - Local catalog endpoints must use Compose service names (`nemotron-asr-streaming-english:50052`, `nemotron-asr-streaming-multilingual:50052`, `parakeet-ctc-asr:50052`, `parakeet-rnnt-asr:50052`, `magpie-multilingual-tts-service:50051`, `magpie-zeroshot-tts-service:50051`, `chatterbox-tts-service:50051`, `nvidia-llm:8000`, `nvidia-llm-vllm:8000`, `nvidia-llm-vllm-omni:8002`, `nemo-speech:50051`, `nemo-speech-multilingual:50051`, `nemo-speech-tts:50051`, `booking-server:8001`). Host-run backends auto-rewrite to the matching `localhost` ports.
    - Alternate local ASR/TTS use Compose profiles (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`, `magpie-zeroshot-tts`) and share ports with the default. Scale the default off, for example with `--scale magpie-multilingual-tts-service=0` or `--scale nemotron-asr-streaming-multilingual=0`. Stop `chatterbox-tts-service` or `magpie-zeroshot-tts-service` before returning to Magpie Multilingual.
-   - A `*/server` recipe that colocates the default ASR, LLM, and TTS on one GPU needs about 80 GB of VRAM. This does not apply to `*/single-gpu` recipes, which use the memory-fit procedure in the `deploy` skill.
+   - A `*/server` recipe that colocates the default ASR, LLM, and TTS on one GPU needs about 80 GB of VRAM. This does not apply to `*/single-gpu` recipes, which use the memory-fit procedure in the `nemotron-voice-agent-deploy` skill.
 
 4. Apply and verify using `references/apply-changes.md`.
 
@@ -56,7 +63,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 **Switch the default LLM to a different cloud model:**
 
-1. Open `examples_registry.yaml` and update the relevant `defaults` entry for the active example. For example, change `llm: [nemotron-lightning]` to `llm: [nemotron-super]`. The catalog key must exist in the active example's `services.cloud.yaml` or `services.local.yaml`.
+1. Open `examples_registry.yaml` and update the relevant `defaults` entry for the active example. For example, change `llm: [nemotron-lightning]` to `llm: [nemotron-lightning-reasoning]`. The catalog key must exist in the active example's `services.cloud.yaml` or `services.local.yaml`.
 2. Compose restart of the example service and refresh browser.
 
 **Add a multilingual persona prompt:**
@@ -68,7 +75,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 ## Limitations
 
-- Does not deploy the stack or change profiles. Use `deploy` for that.
+- Does not deploy the stack or change profiles. Use `nemotron-voice-agent-deploy` for that.
 - `NvidiaWordTTSService` is a source-level opt-in, not an `.env` or service-catalog setting. When word-level input streaming and timestamp-based context commits are requested, change only the service import and constructor in the example's `pipeline.py` as documented in `docs/how-to/configure-tts.md#word-level-input-streaming-and-timestamps`, then restart the example service.
 - Other source customization is out of scope. Dependency or `Dockerfile` changes require an image rebuild (`--build`).
 - UI-only ad-hoc service / prompt overrides (saved in `localStorage`) are intentionally not persisted. This skill writes only to repo files.

@@ -14,7 +14,7 @@ Once, from the repo root, as your user (not sudo):
 bash scripts/download-nemo-speech-models.sh
 ```
 
-The script reads `HF_TOKEN` from `.env`. If `docker compose` already created `models/nemo-speech` as root, the script reclaims ownership automatically.
+The script reads `HF_TOKEN` from `.env` and also downloads Magpie TTS text-normalization grammars from the matching NeMo-Speech.cpp GitHub release. If `docker compose` already created `models/nemo-speech` as root, the script reclaims ownership automatically.
 
 ## Memory Fit
 
@@ -69,7 +69,7 @@ The Lightning Compose matrix selects the following model and precision automatic
 - DGX Spark: NVFP4 with DSpark speculative decoding.
 - Blackwell workstation: NVFP4 with DFlash speculative decoding.
 - Jetson Thor: NVFP4 without a draft model.
-- Ada/Hopper workstation: BF16 checkpoint with online FP8 quantization.
+- Ada/Hopper workstation: NVFP4 checkpoint served as W4A16 via Marlin.
 - Older compute capabilities: unsupported → cloud.
 
 Omni examples use the hardware selection in `docker/docker-compose.nemotron3-omni.yaml`. Omni vLLM health: `curl -f http://localhost:8002/health`.

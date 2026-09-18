@@ -1,7 +1,7 @@
 # Phase 4 — Deploy & Validate
 
 Run the upgraded agent end-to-end to confirm runtime (not just import/test) correctness. Use the repo's
-`deploy` skill for mechanics. Needs a deploy env (host `uv`, or Docker + `NVIDIA_API_KEY`). If unavailable,
+`nemotron-voice-agent-deploy` skill for mechanics. Needs a deploy env (host `uv`, or Docker + `NVIDIA_API_KEY`). If unavailable,
 report DEFERRED with the recipe list left to validate.
 
 ## Step 1 — Pick surface

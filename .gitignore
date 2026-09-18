@@ -62,7 +62,8 @@ data/
 skills/voice-agent-eval/
 
 # Cursor agent skills install target (created by `npx skills add . -a cursor`)
-.agents/
+.agents/*
+!.agents/skills/
 .claude/
 .codex/
 skills-lock.json

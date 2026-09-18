@@ -27,14 +27,18 @@ Start or reuse local model services and wait for readiness exactly as
 `platforms/deployment.md` or the selected platform guide defines. Use the generated Compose
 services and commands in the project README. Move on only after every local slot is ready.
 
-A speech service's first start can sit at `starting` for a long time while it downloads
-models and builds an engine. Read its logs rather than restarting it. See
-`platforms/deployment.md` §First boot takes much longer.
+Expect one long first start, and which service it is depends on the routed stack. A speech
+NIM sits at `starting` while it downloads models and builds an engine
+(`platforms/deployment.md` §First boot takes much longer). On the single-GPU stack the
+speech service starts quickly and vLLM is the slow one, because it compiles kernels
+(`platforms/single-gpu.md` §First boot compiles kernels). Read the logs rather than
+restarting, and treat a long wait on the wrong service as a symptom instead of expected
+behavior.
 
 ## Smoke
 
 Run `scripts/smoke.sh` before the agent starts: on self-hosted or hybrid, once every local
-service is healthy; on cloud, as soon as dependencies are installed, since there are no
+service is healthy, and on cloud as soon as dependencies are installed, since there are no
 local services to wait on. It proves the locked model answers on the streaming endpoint, the
 locked voice speaks and is transcribed back, and the agent's own services construct. Cloud
 and hybrid layouts run it against their configured endpoints. A silent connect failure in the browser is far more

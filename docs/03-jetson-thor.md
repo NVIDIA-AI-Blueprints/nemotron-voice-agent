@@ -37,7 +37,8 @@ the supported configuration on Thor.
     `omni-assistant-subagents/single-gpu` is **not supported** on Jetson Thor. Use cloud `omni-assistant-subagents` for that example, which runs on NVIDIA cloud endpoints and needs `NVIDIA_API_KEY` (not `HF_TOKEN`). The no-`NVIDIA_API_KEY` rule above applies only to the `*/single-gpu` path.
 
 3. Download the NeMo-Speech.cpp model weights. **One-time per machine.** The script
-   fetches the ASR, Magpie TTS, and NanoCodec GGUFs into `models/nemo-speech`:
+   fetches the ASR, Magpie TTS, and NanoCodec GGUFs plus Magpie TTS
+   text-normalization grammars (`tn_configs`) into `models/nemo-speech`:
 
     ```bash
     bash scripts/download-nemo-speech-models.sh

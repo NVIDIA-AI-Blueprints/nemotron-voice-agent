@@ -36,8 +36,8 @@ generated Compose services.
 
 ## Local LLM Wiring
 
-Cascaded only, and it covers any local endpoint, whether that is a NIM or raw vLLM on
-Jetson Thor. Omni follows `frameworks/omni.md`. Two failures here cost a full connect
+Cascaded only, and it covers any local endpoint, whether that is a NIM or raw vLLM on the
+single-GPU stack. Omni follows `frameworks/omni.md`. Two failures here cost a full connect
 cycle each because both look like a model problem, so resolve the exact shapes from the
 MCP before generating. Query it for the NVIDIA LLM service class and import, the local
 base-URL argument, the API-key argument's behaviour, and the settings wrapper that carries
@@ -95,9 +95,9 @@ Full startup and connection steps are in `operations/run.md`.
 
 ## After It Runs
 
-Re-query the MCP before changing any Pipecat API. Workstation / DGX NIM profile changes
-return to **Select a NIM Model Profile** in `models/llm.md`.
-Jetson Thor returns to its model card and platform guide.
+Re-query the MCP before changing any Pipecat API. NIM profile changes return to **Select a
+NIM Model Profile** in `models/llm.md`. The single-GPU stack returns to its model card and
+`platforms/single-gpu.md`.
 
 ## Anti-Patterns
 

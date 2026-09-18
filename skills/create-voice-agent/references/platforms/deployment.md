@@ -7,32 +7,47 @@ Choose the platform path first:
 
 | Host class | Deployment source |
 | --- | --- |
-| `workstation` | current build.nvidia.com instructions for every self-hosted slot |
-| `dgx_spark` | NIM path in `platforms/dgx-spark.md`, after GB10 support verification |
-| `jetson_thor` | vLLM + Riva L4T path in `platforms/jetson-thor.md` (not NIM) |
-| `unsupported_edge` | cloud. Local NIM/vLLM path is unsupported |
+| `workstation`, many users and higher concurrency | NIM path below, from current build.nvidia.com instructions for every self-hosted slot |
+| `workstation`, one user or a few concurrent sessions | vLLM plus NeMo-Speech.cpp in `platforms/single-gpu.md` |
+| `dgx_spark` | vLLM plus NeMo-Speech.cpp in `platforms/dgx-spark.md` and `platforms/single-gpu.md`, not NIM |
+| `jetson_thor` | vLLM plus NeMo-Speech.cpp in `platforms/jetson-thor.md` and `platforms/single-gpu.md`, not NIM |
+| `unsupported_edge` | cloud. No local path is supported |
 | `no_gpu` | cloud |
 
-For workstation and DGX Spark NIM slots, take the image, launch command, ports, and
-environment from the locked model's self-hosted page, then apply the verified profile or
-tags from `models/llm.md`, `models/asr.md`, or `models/tts.md`. Persist the result as the
+`preflight.md` §4 owns the choice between these paths and states the concurrency it
+assumed.
+
+Everything below this line describes the NIM path. For NIM slots, take the image, launch
+command, ports, and environment from the locked model's self-hosted page, then apply the
+verified selection from `models/llm.md` for a Cascaded LLM, `frameworks/omni.md` for
+Omni, or `models/asr.md` and `models/tts.md` for speech. Persist the result as the
 generated `compose.yaml` defined by `output-contract.md`.
 
 ## Source of Truth per Slot
 
+The table below covers cloud and the NIM path. Any slot on the single-GPU stack resolves
+through `platforms/single-gpu.md` §Source of truth instead.
+
 | Slot | Cloud | Self-hosted deploy copy |
 | --- | --- | --- |
-| Cascaded LLM | model page + `/v1/models` | `build.nvidia.com/nvidia/<slug>?nim=self-hosted` |
-| ASR | model page (function id) | `build.nvidia.com/nvidia/<slug>/deploy` + ASR matrix tags |
-| TTS | model page (function id) | `build.nvidia.com/nvidia/<slug>/deploy` + TTS matrix tags |
-| Omni | omni model page | follow `frameworks/omni.md` and that model’s build / HF run docs |
+| Cascaded LLM | model page + `/v1/models` | [Lightning self-hosted](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b?nim=self-hosted) |
+| ASR | model page (function id) | [ASR deploy](https://build.nvidia.com/nvidia/nemotron-asr-streaming/deploy) + ASR matrix tags |
+| TTS | model page (function id) | [TTS deploy](https://build.nvidia.com/nvidia/magpie-tts-multilingual/deploy) + TTS matrix tags |
+| Omni | [Nemotron 3 Omni](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) | the same page plus the [VLM NIM quickstart](https://docs.nvidia.com/nim/vision-language-models/2.0.4-variant/get-started/quickstart.html), [support matrix](https://docs.nvidia.com/nim/vision-language-models/2.0.4-variant/support-matrix.html#nemotron-3-nano-omni-30b-a3b-reasoning), and `frameworks/omni.md` |
 
-Examples: [Lightning self-hosted](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b?nim=self-hosted) ·
-[ASR deploy](https://build.nvidia.com/nvidia/nemotron-asr-streaming/deploy) ·
-[TTS deploy](https://build.nvidia.com/nvidia/magpie-tts-multilingual/deploy).
+For another model in the family, the patterns are
+`build.nvidia.com/nvidia/<slug>?nim=self-hosted` for an LLM and
+`build.nvidia.com/nvidia/<slug>/deploy` for a speech model.
 
-Never invent a `docker run` or image tag from memory. Apply the Speech source precedence
-in `models/catalog.md`.
+Omni self-hosts either way. It has its own NIM for the NIM path and its own published
+checkpoints for the single-GPU stack, so the placement follows the routed stack rather than
+the pipeline shape.
+
+Never invent a `docker run` or image tag from memory, and never assemble one from a slug
+plus a guessed version. The `/deploy` pages return their commands to a fetch. An LLM
+`?nim=self-hosted` panel is rendered in the browser and often does not, so resolve that
+image through `models/llm.md` §Reading these pages in realtime and state where it came
+from. Apply the Speech source precedence in `models/catalog.md`.
 
 ## Cloud
 
@@ -60,7 +75,7 @@ the local Compose commands.
 For LiveKit, configure STT, LLM, and TTS independently through the current plugin APIs.
 Do not assume that selecting one cloud slot moves the full pipeline to cloud.
 
-## Workstation and DGX Spark NIM
+## Workstation NIM
 
 1. Confirm the host clears `preflight.md` §Deployment fit (or move overflowing slots to
    cloud).
@@ -71,8 +86,10 @@ Do not assume that selecting one cloud slot moves the full pipeline to cloud.
 5. Translate each command into the matching service in `compose.yaml` through
    `output-contract.md`.
 6. Overlay locked selection from the slot file:
-   - LLM: pinned Compatible `NIM_MODEL_PROFILE`, max length, exactly one documented
+   - Cascaded LLM: pinned Compatible LLM NIM `NIM_MODEL_PROFILE`, max length, exactly one documented
      runtime memory-control path, and reasoning passthrough from `models/llm.md`
+   - Omni: Compatible VLM NIM profile and VLM NIM controls from
+     `frameworks/omni.md` §Workstation NIM
    - ASR / TTS: streaming `NIM_TAGS_SELECTOR` / `CONTAINER_ID` from the matrix and an
      explicit TTS batch profile
 7. Clear §Shared-GPU memory gate, then start **one Compose service at a time**. Wait
@@ -87,15 +104,17 @@ Do not assume that selecting one cloud slot moves the full pipeline to cloud.
 11. Start the agent only after every local slot is ready and smoke passes
     (`operations/run.md`).
 
-Jetson Thor skips the numbered path above and its shared-GPU memory gate, because
-`platforms/jetson-thor.md` defines the equivalent unified-memory check. §Service health
-checks, §First boot takes much longer, and §Per-slot reuse still apply to it.
+The single-GPU stack skips the numbered path above and this shared-GPU memory gate, because
+`platforms/single-gpu.md` §Start and verify defines the equivalent check and reverses the
+start order. §Per-slot reuse still applies to it. §Service health checks applies except for
+the speech service, which is gRPC only and has no readiness URL. §First boot takes much
+longer describes a speech NIM engine build, which that stack does not perform.
 
 ### Shared-GPU Memory Gate
 
-Do not treat LLM readiness as permission to start speech. This gate covers workstation and
-DGX Spark layouts. Jetson Thor uses the unified-memory check in
-`platforms/jetson-thor.md` §Start and verify instead.
+Do not treat LLM readiness as permission to start speech. This gate covers the workstation
+NIM path. The single-GPU stack measures the speech reserve first instead, through
+`platforms/single-gpu.md` §Start and verify.
 
 Before the first service starts, re-measure free VRAM and confirm the arithmetic in
 `preflight.md` §Deployment fit still passes, with the LLM memory control already present in
@@ -159,6 +178,12 @@ current source when needed, then start that service alone.
 Tell the user which slots will be reused or replaced.
 Never tear down healthy slots to fix one mismatch.
 
+This covers the slots this project owns. Memory held by anything else is a separate
+question, and it is answered before the budget is set, in
+`preflight.md` §Find out what is holding the memory. Bring it up again here only when free
+memory at start time is lower than it was at probe time, which means something new became
+resident. Report what appeared rather than lowering the memory control to fit around it.
+
 ### Why This Order
 
 Intake decides language, framework, and pipeline. After that the deploy is the same ordered
@@ -176,8 +201,13 @@ looked like something else:
 
 ## Scaling Across GPUs
 
-This section covers slot placement on a multi-GPU workstation or DGX system. It does not
-apply to single-GPU DGX Spark or Jetson Thor, and it does not define replica autoscaling.
+This section covers slot placement on a multi-GPU workstation or DGX system running NIM.
+It does not apply to DGX Spark, Jetson Thor, or the single-GPU stack, all of which serve
+one device, and it does not define replica autoscaling.
+
+Splitting slots across GPUs is also what makes a high-concurrency layout possible, because
+each service gets its own memory and its own batch profile. Read this section whenever the
+Deployment row assumes more than a few concurrent sessions and more than one GPU exists.
 
 List GPU UUIDs and current free memory with `nvidia-smi`. Prefer UUIDs for stable
 assignments. Plan from each GPU's free memory, not the sum:
@@ -208,15 +238,17 @@ device. Keep agent endpoint constants aligned with the resulting host ports.
 ## Agent Configuration
 
 - Cloud: use the URLs and function ids in §Cloud.
-- Workstation / DGX: use the host ports mapped from each live deploy page.
-- Jetson Thor: use the vLLM / Riva mappings in `platforms/jetson-thor.md`.
+- Workstation NIM: use the host ports mapped from each live deploy page.
+- Single-GPU stack: use the vLLM and speech mappings in `platforms/single-gpu.md`.
 - Self-hosted speech has empty function ids. Omni has no ASR.
 
 ## Anti-Patterns
 
 - Shipping a remembered image tag, `docker run`, or Compose recipe instead of generating it
   from the locked model's current build.nvidia.com instructions.
-- Applying workstation / DGX NIM instructions to Jetson Thor.
+- Applying NIM instructions to DGX Spark or Jetson Thor.
+- Proposing NIM for a single-user agent, where its scale-out design buys nothing and its
+  footprint costs the whole device.
 - Starting all local NIMs together or assuming fixed ports.
 - Applying the deprecated `NIM_TAGS_SELECTOR` to a generated LLM deployment or
   `NIM_MODEL_PROFILE` to ASR / TTS.
