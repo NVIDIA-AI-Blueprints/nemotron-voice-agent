@@ -74,6 +74,12 @@ These are runtime behavior issues and apply to any deployment, cloud or local.
 |-----------------|-------------|-----------|
 | Background or random noise interrupts the bot mid-reply (false barge-in) and leaves the conversation in a confused state | Silero VAD is detecting ambient noise as the onset of user speech, which barges in and stops the TTS. When no real utterance follows, the turn is left half-finished. The most effective fix is to reduce input noise: use a wired or directional headset mic in a quieter room. If noise still trips it, raise the Silero VAD sensitivity (its confidence and minimum-volume thresholds in `VADParams`) where the pipeline builds the transport. | [Tune Pipeline Performance → Smart Turn Detection](how-to/tune-pipeline-performance.md#smart-turn-detection) · [Configure ASR → Customization](how-to/configure-asr.md#customization) |
 
+## Runtime Service Failures
+
+| Error / symptom | Cause & fix | Reference |
+|-----------------|-------------|-----------|
+| The voice session ends after an ASR, LLM, or TTS error | The service reported that it cannot recover, for example because a provider rejected its API key, model, or voice, or because reconnection attempts were exhausted. The pipeline ends the session gracefully instead of repeatedly sending work to an unusable service. Correct the credential or service configuration, confirm that the local sidecar is healthy, and then start a new session. | [Configure Services](how-to/configure-services.md) |
+
 ## Cloud (NVCF)
 
 The hosted **[build.nvidia.com](https://build.nvidia.com/)** endpoints are for **experimentation and trials only**. For production, and for the most predictable latency and throughput, **self-host the models on-prem** (local NIM / vLLM sidecar).

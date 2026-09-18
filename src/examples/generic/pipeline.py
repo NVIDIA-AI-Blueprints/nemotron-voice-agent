@@ -16,7 +16,6 @@ from loguru import logger
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -34,6 +33,7 @@ from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
+    VoiceAgentPipelineWorker,
     apply_pinned_prompt_summary,
     build_context_messages,
     build_pipeline_params,
@@ -306,7 +306,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         if events:
             logger.info(f"Latency breakdown: {' | '.join(events)}")
 
-    task = PipelineWorker(
+    task = VoiceAgentPipelineWorker(
         pipeline,
         params=build_pipeline_params(
             enable_metrics=True,

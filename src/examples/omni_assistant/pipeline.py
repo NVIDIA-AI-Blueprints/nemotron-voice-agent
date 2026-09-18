@@ -24,7 +24,6 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -39,7 +38,6 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from examples.omni_assistant.audio_only_smart_turn_strategy import AudioOnlySmartTurnStopStrategy
 from examples.omni_assistant.nvidia_omni_multimodal_service import (
     NvidiaOmniLLMService,
     NvidiaOmniSettings,
@@ -47,8 +45,9 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
+    VoiceAgentPipelineWorker,
     build_pipeline_params,
-    build_smart_turn_analyzer,
+    build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
     register_session_start_handlers,
@@ -75,7 +74,7 @@ def _build_user_turn_strategies() -> UserTurnStrategies:
     """Build VAD-start + Smart Turn-stop strategies for Omni audio turns."""
     return UserTurnStrategies(
         start=[VADUserTurnStartStrategy()],
-        stop=[AudioOnlySmartTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())],
+        stop=build_smart_turn_stop_strategies(wait_for_transcript=False),
     )
 
 
@@ -316,7 +315,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         latest_latency_turn_id = ""
         latest_latency_turn_label = ""
 
-    task = PipelineWorker(
+    task = VoiceAgentPipelineWorker(
         pipeline,
         params=build_pipeline_params(
             enable_metrics=True,
