@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 """Download Big Bench Audio from Hugging Face. See README for prerequisites and usage."""
 
 import json

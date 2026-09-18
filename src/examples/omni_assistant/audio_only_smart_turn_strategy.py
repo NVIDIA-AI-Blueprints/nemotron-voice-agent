@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: Apache-2.0
 
 """Audio-only Smart Turn strategy for Omni-style ASR+LLM services."""
 
@@ -36,11 +36,10 @@ class AudioOnlySmartTurnStopStrategy(BaseUserTurnStopStrategy):
         await self._turn_analyzer.cleanup()
         await super().cleanup()
 
-    async def reset(self):
-        """Reset analyzer state for the next user turn."""
-        await super().reset()
+    async def handle_user_turn_stopped(self):
+        """Clear analyzer state after the current user turn ends."""
         self._turn_analyzer.clear()
-        self._vad_user_speaking = False
+        await super().handle_user_turn_stopped()
 
     async def process_frame(self, frame) -> ProcessFrameResult:
         """Process audio and VAD frames to detect end-of-turn."""

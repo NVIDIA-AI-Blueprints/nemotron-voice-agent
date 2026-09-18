@@ -1,5 +1,5 @@
 x-nemotron-asr: &nemotron-asr
-  image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.0
+  image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.1
   user: "0:0"
   ports:
     - "50152:50052"
@@ -29,7 +29,7 @@ x-nemotron-asr: &nemotron-asr
       max-file: "5"
 
 x-nemotron-asr-env: &nemotron-asr-env
-  NGC_API_KEY: ${NVIDIA_API_KEY}
+  NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
   NIM_HTTP_API_PORT: "9001"
   NIM_GRPC_API_PORT: "50052"
 
@@ -37,8 +37,8 @@ services:
   nemotron-asr-streaming-english:
     <<: *nemotron-asr
     profiles:
-      - generic-assistant/workstation
-      - frontend-backend-agent/workstation
+      - generic-assistant/server
+      - frontend-backend-agent/server
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=en-US,mode=str
@@ -50,7 +50,7 @@ services:
   nemotron-asr-streaming-english-perf:
     <<: *nemotron-asr
     profiles:
-      - generic-assistant/workstation-perf
+      - generic-assistant/server-perf
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=en-US,mode=str,batch_size=128
@@ -62,36 +62,11 @@ services:
   nemotron-asr-streaming-multilingual:
     <<: *nemotron-asr
     profiles:
-      - nemotron-asr-streaming-multilingual/workstation
-      - multilingual-assistant/workstation
+      - nemotron-asr-streaming-multilingual/server
+      - multilingual-assistant/server
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=multi,mode=str
-
-  nemotron-asr-streaming-multilingual-dgx-spark:
-    <<: *nemotron-asr
-    profiles:
-      - nemotron-asr-streaming-multilingual/dgx-spark
-      - multilingual-assistant/dgx-spark
-    environment:
-      <<: *nemotron-asr-env
-      NIM_TAGS_SELECTOR: type=multi,mode=str,gpu=dgx_spark,batch_size=32
-    networks:
-      default:
-        aliases:
-          - nemotron-asr-streaming-multilingual
-
-  nemotron-asr-streaming-english-dgx-spark:
-    <<: *nemotron-asr
-    profiles:
-      - generic-assistant/dgx-spark
-    environment:
-      <<: *nemotron-asr-env
-      NIM_TAGS_SELECTOR: mode=str,gpu=dgx_spark,batch_size=32
-    networks:
-      default:
-        aliases:
-          - nemotron-asr-streaming-english
 
 volumes:
   asr_cache:

@@ -22,13 +22,14 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable OpenTelemetry Tracing](how-to/enable-opentelemetry-tracing.md) | Monitor latency and conversation flows with Phoenix or any OTLP backend |
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
+| [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
 
 ## Welcome Message
 
-When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, and Frontend/Backend Agent examples.
+When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, Omni Assistant Subagents, and Frontend/Backend Agent examples.
 
 - **Per example (backend-only):** set `welcome_message: false` on an example in [`examples_registry.yaml`](../examples_registry.yaml). The default is `true` when the key is omitted.
-- **Global override:** set `ENABLE_WELCOME_MESSAGE` in `.env`. When set, `ENABLE_WELCOME_MESSAGE` overrides every example's registry value. For example, the `generic-assistant/workstation-perf` profile uses it to disable the greeting.
+- **Global override:** set `ENABLE_WELCOME_MESSAGE` in `.env`. When set, `ENABLE_WELCOME_MESSAGE` overrides every example's registry value. For example, the `generic-assistant/server-perf` profile uses it to disable the greeting.
 
 ```yaml
 # examples_registry.yaml: keep one example quiet until the user speaks

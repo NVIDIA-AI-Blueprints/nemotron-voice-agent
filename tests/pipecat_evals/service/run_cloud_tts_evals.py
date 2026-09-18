@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: Apache-2.0
 
 """Run cloud-TTS service evals one scenario at a time with retries."""
 
@@ -29,6 +29,17 @@ def _scenario_names(manifest: Path) -> list[str]:
     for item in data.get("suite", []):
         names.extend(str(name) for name in item.get("scenarios", []))
     return names
+
+
+def _selected_scenarios(requested: list[str] | None, manifest: Path) -> list[str]:
+    """Return requested scenarios with workflow-dispatch whitespace removed."""
+    if requested is None:
+        return _scenario_names(manifest)
+
+    scenarios = [scenario.strip() for scenario in requested]
+    if not all(scenarios):
+        raise ValueError("--scenario cannot be blank")
+    return scenarios
 
 
 def _slug(value: str) -> str:
@@ -168,7 +179,11 @@ def main() -> int:
     """Run all requested cloud-TTS eval scenarios and return a process status."""
     args = _parse_args()
     manifest = args.manifest if args.manifest.is_absolute() else ROOT / args.manifest
-    scenarios = args.scenario or _scenario_names(manifest)
+    try:
+        scenarios = _selected_scenarios(args.scenario, manifest)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if not scenarios:
         print(f"No scenarios found in {manifest}", file=sys.stderr)
         return 2
