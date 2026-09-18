@@ -4,8 +4,9 @@ user:
 judge:
   modality: text
   eval:
-    service: ollama
-    model: gemma2:9b
+    service: nvidia-inference-api
+    factory: tests.pipecat_evals.service.nvidia_inference_judge.create_nvidia_inference_judge
+    model: nvidia/google/gemma-4-31b-it
 turns:
   - expect:
       - event: llm_started

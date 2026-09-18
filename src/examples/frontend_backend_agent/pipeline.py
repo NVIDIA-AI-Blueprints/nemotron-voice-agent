@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: Apache-2.0
 
 """Frontend/Backend Agent cascaded pipeline: STT -> Talker LLM -> TTS with one Thinker tool."""
 
@@ -171,15 +171,17 @@ async def bot(runner_args: RunnerArguments) -> None:
     booking_backend_url = _booking_backend_url(default_booking_server)
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
-    thinker_max_tokens = _parse_optional_int(
-        body.get("thinker_max_tokens", "") or default_thinker_llm.get("max_tokens"),
-        4096,
+    thinker_max_tokens_raw = body.get("thinker_max_tokens", "") or default_thinker_llm.get("max_tokens")
+    thinker_max_tokens = (
+        _parse_optional_int(thinker_max_tokens_raw, 4096) if thinker_max_tokens_raw not in (None, "") else None
     )
     thinker_extra_params = parse_json_dict(
         body.get("thinker_extra_params", "") or default_thinker_llm.get("extra_params", ""),
         label="thinker_extra_params",
     )
-    thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id, max_tokens=thinker_max_tokens)
+    thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id)
+    if thinker_max_tokens is not None:
+        thinker_llm_settings.max_tokens = thinker_max_tokens
     if thinker_extra_params:
         thinker_llm_settings.extra = thinker_extra_params
     thinker_llm = NvidiaLLMService(
@@ -335,7 +337,12 @@ async def bot(runner_args: RunnerArguments) -> None:
         task=task,
         context=context,
         runner_args=runner_args,
-        intro_prompt="Please greet the user briefly.",
+        intro_prompt=(
+            "This is an initial direct greeting, not a flight request. Do not call any tools. "
+            "Greet the user briefly as Ava, the G Force Airlines flight-booking assistant. "
+            "Respond directly with spoken text and do not call call_backend or cancel_backend."
+        ),
+        intro_tool_choice="none",
         on_start=_on_session_start,
         welcome_enabled=welcome_enabled,
     )

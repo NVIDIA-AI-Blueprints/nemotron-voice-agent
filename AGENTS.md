@@ -34,11 +34,11 @@ deployment profiles when changing shared behavior.
 - Select exactly one recipe profile for a Docker Compose deployment. Cloud
   profiles use `<example>`; local profiles use `<example>/<hardware>`.
   Observability profiles such as `tracing` and `turn` are overlays.
-- Load `skills/deploy/SKILL.md` for deployment or startup troubleshooting.
-- Load `skills/configure-pipeline/SKILL.md` for changes to `.env`,
+- Load `.agents/skills/nemotron-voice-agent-deploy/SKILL.md` for deployment or startup troubleshooting.
+- Load `.agents/skills/nemotron-voice-agent-configure-pipeline/SKILL.md` for changes to `.env`,
   `examples_registry.yaml`, prompts, service catalogs, transports, tracing, or
   audio settings.
-- Load `skills/upgrade-pipecat/SKILL.md` before changing Pipecat server or
+- Load `.agents/skills/nemotron-voice-agent-upgrade-pipecat/SKILL.md` before changing Pipecat server or
   client dependency versions or migrating Pipecat APIs.
 - Preserve unrelated configuration keys, comments, examples, and deployment
   profiles. Do not infer hardware, credentials, or private-service access.

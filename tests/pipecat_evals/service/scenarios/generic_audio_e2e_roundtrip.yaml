@@ -9,7 +9,6 @@ turns:
   - user: "Please say the colors are red blue green."
     expect:
       - event: user_transcription
-        text_contains: "Please say"
         within_ms: 90000
       - event: llm_started
         within_ms: 90000

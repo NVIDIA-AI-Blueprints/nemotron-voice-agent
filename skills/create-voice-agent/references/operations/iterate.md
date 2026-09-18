@@ -24,7 +24,7 @@ Never overwrite `.env` or read secrets into the response.
 | Domain glossary, boosting, or pronunciation | `domain/speech-customization.md` | show and confirm every changed term |
 | Transport or turn handling | selected framework file + docs MCP | confirm user-visible behavior |
 | Logs or latency metrics | `operations/observability.md` + framework docs MCP | no new intake table |
-| Cloud / self-hosted / GPU placement | `preflight.md` + `platforms/deployment.md` | confirm deployment row |
+| Cloud / self-hosted / GPU placement, or expected concurrency | `preflight.md` + the routed platform guide | confirm deployment row |
 | Cascaded / Omni | `intake.md` + selected framework files | confirm all changed rows |
 | Pipecat / LiveKit | `intake.md` + both framework files | full framework confirmation |
 | Hardware platform | `preflight.md` + routed platform guide | rerun probe and deployment fit |
@@ -44,9 +44,13 @@ anything it changes downstream.
 
 ## Cascading Changes
 
-- LLM swap: workstation / DGX NIM reruns the support matrix and
-  `list-model-profiles`. Cloud rechecks model id/API. Jetson Thor reopens the vLLM model
-  card. Then revisit reasoning and stack fit.
+- Model swap: a Cascaded NIM reruns the LLM NIM matrix and `list-model-profiles`. Omni NIM
+  reruns the VLM NIM sources in `frameworks/omni.md`. Cloud rechecks model id and API. The
+  single-GPU stack reopens the vLLM model card and reconfirms the quantization variant for
+  this GPU. Then revisit reasoning and stack fit.
+- Concurrency change on a workstation: reopen `preflight.md` §4, because it can move the
+  agent between the single-GPU stack and NIM. Confirm the Deployment row before touching
+  anything, since that swap replaces every local service.
 - ASR swap: keep streaming first and recheck language, tags, and deployment fit.
 - TTS or language change: restart TTS when required, then query its voice-discovery API
   again.

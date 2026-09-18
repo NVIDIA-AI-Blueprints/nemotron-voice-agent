@@ -59,8 +59,9 @@ writing constants. Streaming ASR first (`models/asr.md`).
 
 - STT / TTS: NVIDIA plugin from the MCP (`livekit.plugins.nvidia` or current package name).
   Cloud uses NVIDIA endpoints and `NVIDIA_API_KEY`. Self-hosted points `server` (or the
-  current equivalent) at the local NIM started from that model’s build.nvidia.com `/deploy`
-  page (`platforms/deployment.md`).
+  current equivalent) at the local speech endpoint, which is a Speech NIM started from that
+  model’s build.nvidia.com `/deploy` page (`platforms/deployment.md`) or the single
+  NeMo-Speech.cpp gRPC endpoint (`platforms/single-gpu.md`).
 - LLM: use the MCP’s documented way to call the locked Nemotron model id (NVIDIA cloud or
   self-hosted OpenAI-compatible base URL). Do not invent a plugin class from memory.
 
@@ -73,16 +74,17 @@ model string is the served id from `GET /v1/models`, not the catalog slug.
 
 Function ids for cloud speech come from build.nvidia.com, not from `/v1/models`.
 
-On Jetson Thor, follow `platforms/jetson-thor.md`: point both NVIDIA speech plugins at the
-shared Riva gRPC endpoint, leave function ids empty, and point the OpenAI-compatible LLM
-client at vLLM. Resolve the current `server`, SSL, language, and voice arguments from the
-LiveKit docs MCP.
+On the single-GPU stack, follow `platforms/single-gpu.md`. Point both NVIDIA speech plugins
+at the one shared gRPC endpoint, leave function ids empty, and point the OpenAI-compatible
+LLM client at vLLM. Resolve the current `server`, SSL, language, and voice arguments from
+the LiveKit docs MCP, and note that this endpoint is plaintext gRPC, so the plugins must
+not be configured for TLS unless a proxy terminates it.
 
 ## Run Shape
 
-The LiveKit CLI (`lk`) runs the worker. Before handover, confirm it is installed; if not,
-give the current install steps from the LiveKit docs MCP and wait. The worker start command
-depends on it.
+The LiveKit CLI (`lk`) runs the worker. Before handover, confirm it is installed. When it
+is missing, give the current install steps from the LiveKit docs MCP and wait, because the
+worker start command depends on it.
 
 Credentials set → LiveKit CLI available → start self-hosted model services if the deployment
 row needs them → run the worker the way the MCP documents (typically `lk agent dev` on
@@ -108,8 +110,8 @@ are in `operations/run.md`.
 
 ## After It Runs
 
-Re-query the MCP before changing any LiveKit API. For workstation / DGX NIM LLM profile
-changes, return to **Select a NIM Model Profile** in `models/llm.md`. Jetson Thor returns
+Re-query the MCP before changing any LiveKit API. For NIM LLM profile changes, return to
+**Select a NIM Model Profile** in `models/llm.md`. The single-GPU stack returns
 to its model card and platform guide.
 
 ## Anti-Patterns

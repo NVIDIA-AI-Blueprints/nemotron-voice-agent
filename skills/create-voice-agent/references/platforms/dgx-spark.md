@@ -1,53 +1,56 @@
 # DGX Spark
 
-Read when `preflight.md` classifies the target as `dgx_spark`. DGX Spark uses the
-self-hosted NIM workflow in `platforms/deployment.md`, subject to the support matrix for
-the locked model and profile.
+Read when `preflight.md` classifies the target as `dgx_spark`. DGX Spark runs the vLLM plus
+NeMo-Speech.cpp stack in `platforms/single-gpu.md`, which owns the pre-proposal checklist,
+models, flags, setup, budget, and verification. This file covers only what is specific to
+GB10.
 
-## Before Proposing
+DGX Spark does **not** use the workstation NIM path. Do not carry a NIM image, a NIM
+profile, `NIM_TAGS_SELECTOR`, or a speech function id onto this platform.
 
-1. Confirm the machine is DGX Spark / GB10 from DMI and `nvidia-smi`.
-2. Use unified memory reported as available by the probe, not the advertised 128 GB.
-3. Verify every local slot:
-   - LLM: DGX Spark appears in the matching model × precision row in the LLM support
-     matrix. Use that row as the proposal candidate. Run `list-model-profiles` after
-     approval and container readiness to pin the exact Compatible profile.
-   - ASR / TTS: the chosen model and profile support DGX Spark in the Speech matrices.
-4. Build the runtime budget from available unified memory. Reserve the selected speech
-   profiles, OS, framework, CUDA, startup, and engine overhead before assigning the
-   remainder to LLM weights and KV cache. Use exactly one memory-control path from
-   `models/llm.md` §Tight fit.
-5. Mark provisional co-location until `platforms/deployment.md` §Shared-GPU memory gate
-   passes.
-6. If any slot is unsupported or the full layout does not fit, move that slot to NVIDIA
-   cloud and show the hybrid layout in the proposal. Do not substitute a different model
-   silently.
+## Identify the Platform
 
-## Deploy
+Either signal confirms GB10:
 
-When a slot's locked source is a Hugging Face card rather than a NIM page, check that card for
-a DGX Spark container before using its generic install line. Cards in this family have named a
-separate container for DGX Spark and Jetson Thor. Harvest the rest of that card through
-`platforms/jetson-thor.md` §What to take from the card, which applies to any raw vLLM slot.
+- the GPU name reported by `nvidia-smi` contains `NVIDIA GB10`
+- `/sys/class/dmi/id/product_name` contains `DGX_Spark`, matched with the underscore
+  exactly as the file reports it
 
-Follow `platforms/deployment.md` for each approved local slot, including its shared
-GPU memory gate.
+`preflight.md` §2 owns how this ranks against the generic aarch64 rule.
 
-If startup reports low memory, follow the compatible profile's `--max-model-len` guidance
-or move a speech slot to cloud.
+## Prerequisites
 
-## Verify
+- DGX Spark running its current supported software release, including the CUDA and
+  container-runtime components
+- Docker Engine and Docker Compose
+- `HF_TOKEN` with access to the locked Nemotron repository, its draft repository, and the
+  speech model repositories
+- The Hugging Face CLI for the one-time speech model download
+- Disk capacity for the LLM weights, the draft model, the speech GGUFs, and the compiled
+  kernel cache
 
-- LLM readiness succeeds, `/v1/models` serves the approved model, and its exact served id
-  is what the agent uses.
-- ASR configuration matches the lock and accepts a streaming transcription request.
-- TTS configuration matches the lock and returns audio for the approved voice.
-- `scripts/smoke.sh` passes before the agent starts.
-- A full spoken exchange succeeds before handover (`operations/run.md`).
+Resolve the supported release and component versions from the current platform
+documentation rather than from this file.
+
+## What Differs From Jetson Thor
+
+| Aspect | DGX Spark |
+| --- | --- |
+| Speculative decoding | serve the published DGX Spark draft model alongside the NVFP4 target |
+| Pipeline coverage | cascaded and Omni, including an Omni deployment with concurrent subagent pipelines |
+
+Everything else in `platforms/single-gpu.md` applies unchanged, including the NVFP4
+quantization, the speech container, the memory method, and the start order.
+
+The draft model is specific to this platform. Do not reuse the workstation Blackwell draft
+model here, and do not carry the DGX Spark draft onto Jetson Thor.
+
+DGX Spark is aarch64, so confirm an `arm64` image exists for every container the project
+generates, including any TURN service it owns (`networking/remote-webrtc.md` §Coturn).
 
 ## Anti-Patterns
 
-- Assuming every NIM supports GB10 because another model does.
-- Reusing a workstation image or profile without matrix verification.
-- Budgeting against advertised unified memory instead of current available memory.
-- Starting all model services concurrently on first load.
+- Assuming a NIM supports GB10 because another model does.
+- Reusing a workstation image, profile, or draft model without confirming it on the card.
+- Leaving the draft model out of the memory budget.
+- Generating an `amd64`-only image for an aarch64 host.
