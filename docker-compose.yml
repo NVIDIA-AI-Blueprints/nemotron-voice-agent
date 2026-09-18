@@ -101,6 +101,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
+      LOCAL_SERVICES_ENABLED: "false"
 
   generic-assistant-server:
     <<: *app-base
@@ -140,6 +141,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
+      LOCAL_SERVICES_ENABLED: "false"
 
   multilingual-assistant-server:
     <<: *app-base
@@ -164,6 +166,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
+      LOCAL_SERVICES_ENABLED: "false"
 
   omni-assistant-server:
     <<: *app-base
@@ -188,6 +191,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
+      LOCAL_SERVICES_ENABLED: "false"
 
   omni-assistant-subagents-server:
     <<: *app-base
@@ -212,6 +216,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
+      LOCAL_SERVICES_ENABLED: "false"
 
   frontend-backend-agent-server:
     <<: *app-base
