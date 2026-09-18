@@ -19,7 +19,6 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -48,6 +47,7 @@ from examples.multilingual.multilingual_processor import (
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
+    VoiceAgentPipelineWorker,
     apply_pinned_prompt_summary,
     build_context_messages,
     build_pipeline_params,
@@ -420,9 +420,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         if events:
             logger.info(f"Latency breakdown: {' | '.join(events)}")
 
-    task = PipelineWorker(
+    task = VoiceAgentPipelineWorker(
         pipeline,
-        processor_unusable_policy=ProcessorUnusablePolicy.END,
         params=build_pipeline_params(
             enable_metrics=True,
             enable_usage_metrics=True,

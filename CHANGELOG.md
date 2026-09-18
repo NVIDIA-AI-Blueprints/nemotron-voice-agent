@@ -21,7 +21,7 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 ### Changed
 
 - Serve Nemotron 3.5 Lightning NVFP4 as W4A16 through Marlin on Hopper and Ada single-GPU hosts, instead of a BF16 checkpoint with online FP8.
-- Upgraded Pipecat to version 1.7.0.
+- Upgraded Pipecat to version 1.10.0.
 - Set **Nemotron 3.5 Lightning** as the default LLM across cascaded examples. Nemotron 3 Super remains available in the service catalogs.
 - Standardized the self-hosted Nemotron 3.5 Lightning served model ID with NVIDIA Cloud across NIM and single-GPU vLLM deployments.
 - Consolidated on-prem deployment recipes under `<example>/server` for scaling-oriented stacks and universal `<example>/single-gpu` for supported one-GPU deployments on workstations, DGX Spark, and Jetson Thor. Renamed `generic-assistant/workstation-perf` to `generic-assistant/server-perf`.

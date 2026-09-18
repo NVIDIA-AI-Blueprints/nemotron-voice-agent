@@ -19,7 +19,7 @@ class OmniTurnStrategyTests(unittest.TestCase):
         analyzer = Mock()
 
         with patch(
-            "examples.omni_assistant.pipeline.build_smart_turn_analyzer",
+            "examples.shared.pipeline_utils.build_smart_turn_analyzer",
             return_value=analyzer,
         ):
             strategies = _build_user_turn_strategies()
