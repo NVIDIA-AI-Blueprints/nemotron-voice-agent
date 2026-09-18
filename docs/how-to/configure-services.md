@@ -22,6 +22,7 @@ Set one key per recipe family. Do not mix them.
 - Each example owns its catalog at `<example-package>/services.cloud.yaml` (remote / NVCF) and optional `<example-package>/services.local.yaml` (Compose-managed sidecars).
 - The cloud catalog is loaded when `NVIDIA_API_KEY` is set, which is the expected state for cloud-only, `*/server`, and `generic-assistant/server-perf`. Empty, unset, and the Compose placeholder `not-needed` hide NVIDIA Cloud entries from the UI and the pipeline. The entries stay hidden on `*/single-gpu`, which uses `HF_TOKEN` only.
 - The local catalog is merged on top, but only entries whose endpoint is reachable on TCP are exposed in the UI and used by the pipeline.
+- Cloud-only Compose recipes set `LOCAL_SERVICES_ENABLED=false`, so startup does not probe local sidecars that are not part of the recipe. Server, Performance Server, and single-GPU recipes keep local discovery enabled.
 - `services.local.yaml` is grouped into recipe sections (`server` for NIM sidecars, `singlegpu` for vLLM + NeMo-Speech.cpp). The backend merges all sections and exposes only endpoints that are reachable on TCP. Host-native runs work the same way: start the sidecars, then start the app.
 - The same `--profile` works whether you run cloud-only or with local sidecars. Nothing else needs to be set.
 
