@@ -77,6 +77,11 @@ singlegpu:
       base_url: "http://nvidia-llm-vllm:8000/v1"
       system_prompt: ""
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
+    nemotron-lightning-streaming:
+      name: "Nemotron 3.5 Lightning 30B A3B (Streaming Input)"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "ws://nvidia-llm-vllm-streaming:8000/v1/streaming-session"
+      system_prompt: ""
   tts:
     magpie-multilingual-tts:
       name: "Magpie TTS (NeMo-Speech.cpp)"

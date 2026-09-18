@@ -456,8 +456,8 @@ def _local_llm_health_url(base_url: str, model_id: str) -> tuple[str, bool]:
     if not host:
         return "", False
 
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    scheme = parsed.scheme or "http"
+    port = parsed.port or (443 if parsed.scheme in ("https", "wss") else 80)
+    scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme or "http")
     normalized_host = host.strip("[]").lower()
     http_host = _http_host(host)
 
@@ -467,6 +467,8 @@ def _local_llm_health_url(base_url: str, model_id: str) -> tuple[str, bool]:
         return f"{scheme}://nvidia-llm-omni:8000{_NIM_READY_PATH}", False
     if normalized_host == "nvidia-llm-vllm" and port == 8000:
         return f"{scheme}://nvidia-llm-vllm:8000/health", False
+    if normalized_host == "nvidia-llm-vllm-streaming" and port == 8000:
+        return f"{scheme}://nvidia-llm-vllm-streaming:8000/health", False
     if normalized_host == "nvidia-llm-vllm-omni" and port == 8002:
         return f"{scheme}://nvidia-llm-vllm-omni:8002/health", False
 
@@ -476,6 +478,8 @@ def _local_llm_health_url(base_url: str, model_id: str) -> tuple[str, bool]:
         return f"{scheme}://{http_host}:18000{health_path}", False
     if normalized_host in _LOCAL_SERVICE_HOSTS and port == 18002:
         return f"{scheme}://{http_host}:18002{_NIM_READY_PATH}", False
+    if normalized_host in _LOCAL_SERVICE_HOSTS and port == 18003:
+        return f"{scheme}://{http_host}:18003/health", False
     if normalized_host in _LOCAL_SERVICE_HOSTS and port == 8002:
         return f"{scheme}://{http_host}:8002/health", False
 

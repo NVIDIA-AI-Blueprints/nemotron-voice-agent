@@ -21,6 +21,7 @@ services:
     <<: *nemo-speech
     profiles:
       - generic-assistant/single-gpu
+      - generic-assistant/single-gpu-streaming
       - frontend-backend-agent/single-gpu
     command:
       - --asr.model.path=/models/nemotron-speech-streaming-en-0.6b.q8_0.gguf

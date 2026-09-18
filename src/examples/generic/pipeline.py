@@ -29,6 +29,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
+from examples.generic.streaming.pipeline import run_streaming_bot
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
@@ -57,9 +58,20 @@ from utils import (
 
 load_dotenv(override=True)
 CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
+STREAMING_URL_SCHEMES = ("ws://", "wss://")
 
 
 async def bot(runner_args: RunnerArguments) -> None:
+    """Route one session to the streaming-input or chat-completions LLM backend."""
+    body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    base_url = body.get("base_url", "") or load_service_entry("llm", "").get("base_url", "")
+    if base_url.startswith(STREAMING_URL_SCHEMES):
+        await run_streaming_bot(runner_args, example_file=__file__, streaming_url=base_url)
+        return
+    await run_cascaded_bot(runner_args)
+
+
+async def run_cascaded_bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}

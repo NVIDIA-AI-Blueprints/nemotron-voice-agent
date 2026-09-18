@@ -153,6 +153,7 @@ def _rewrite_entry_for_host_runtime(entry: dict) -> dict:
                 value.replace("http://nvidia-llm:8000/v1", "http://localhost:18000/v1")
                 .replace("http://nvidia-llm-omni:8000/v1", "http://localhost:18002/v1")
                 .replace("http://nvidia-llm-vllm:8000/v1", "http://localhost:18000/v1")
+                .replace("ws://nvidia-llm-vllm-streaming:8000/v1", "ws://localhost:18003/v1")
                 .replace("http://nvidia-llm-vllm-omni:8002/v1", "http://localhost:8002/v1")
                 .replace("host.docker.internal", "localhost")
             )

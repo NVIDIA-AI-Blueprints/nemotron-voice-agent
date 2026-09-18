@@ -19,6 +19,8 @@ name: nemotron-voice-agent
 #                             on workstation / server GPUs.
 #   single-gpu                One GPU (workstation, DGX Spark, or Jetson Thor)
 #                             running the NeMo-Speech.cpp speech stack alongside vLLM
+#   single-gpu-streaming      Same as single-gpu, but vLLM serves the StreamingInput
+#                             WebSocket backend instead of chat completions
 #
 # Cloud-only recipes:
 #   docker compose --profile generic-assistant up
@@ -31,6 +33,7 @@ name: nemotron-voice-agent
 #   docker compose --profile generic-assistant/server up
 #   docker compose --profile generic-assistant/server-perf up
 #   docker compose --profile generic-assistant/single-gpu up
+#   docker compose --profile generic-assistant/single-gpu-streaming up
 #   docker compose --profile multilingual-assistant/server up
 #   docker compose --profile multilingual-assistant/single-gpu up
 #   docker compose --profile omni-assistant/server up
@@ -114,6 +117,7 @@ services:
     <<: *app-base
     profiles:
       - generic-assistant/single-gpu
+      - generic-assistant/single-gpu-streaming
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}

@@ -56,9 +56,6 @@ services:
           --served-model-name nvidia/nemotron-3.5-lightning-30b-a3b
           --max-model-len 32768
           --trust-remote-code
-          --enable-auto-tool-choice
-          --tool-call-parser qwen3_coder
-          --reasoning-parser nemotron_v3
           --enable-prefix-caching
           --mamba-backend flashinfer
           --mamba-cache-mode align
@@ -152,11 +149,40 @@ services:
           args+=(--gpu-memory-utilization "$${util}")
         fi
 
-        exec vllm serve "$${model}" "$${args[@]}"
+        if [[ "$${VLLM_SERVE_MODE:-chat}" == "streaming" ]]; then
+          echo "LLM serving mode: vLLM StreamingInput WebSocket"
+          cd /app/src
+          /usr/bin/python3 -m examples.generic.streaming.vllm_patch --apply
+          exec /usr/bin/python3 -m examples.generic.streaming.server --model "$${model}" "$${args[@]}"
+        fi
+
+        echo "LLM serving mode: OpenAI chat completions"
+        exec vllm serve "$${model}" "$${args[@]}" \
+          --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3
     networks:
       default:
         aliases:
           - nvidia-llm-vllm
+
+  nvidia-llm-vllm-lightning-streaming:
+    <<: *vllm-lightning-service
+    profiles:
+      - generic-assistant/single-gpu-streaming
+    environment:
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      VLLM_SERVE_MODE: streaming
+      PYTHONPATH: /app/src
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - llm_cache:/root/.cache/vllm
+      - ../src:/app/src:ro
+    ports:
+      - "${STREAMING_LLM_PORT:-18003}:8000"
+    networks:
+      default:
+        aliases:
+          - nvidia-llm-vllm-streaming
 
   nvidia-llm-vllm-lightning-frontend-backend:
     <<: *vllm-lightning-service
