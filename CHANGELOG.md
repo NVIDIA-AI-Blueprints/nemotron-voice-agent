@@ -15,7 +15,7 @@ This minor release upgrades Pipecat to 1.11.0 and adopts its built-in transcript
 
 ## [2.2.0] - TBD
 
-This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support, universal `*/single-gpu` recipes with the NeMo-Speech.cpp stack, an OpenAI Realtime-compatible WebSocket gateway, and the `create-voice-agent` skill. It consolidates on-prem deployment under `*/server` and `*/single-gpu`, upgrades Pipecat to 1.7.0, and removes the platform-specific recipes and Nemotron 3 Nano cascaded LLM.
+This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support, universal `*/single-gpu` recipes with the NeMo-Speech.cpp stack, an OpenAI Realtime-compatible WebSocket gateway, and the `nemotron-voice-agent-builder` skill. It consolidates on-prem deployment under `*/server` and `*/single-gpu`, upgrades Pipecat to 1.7.0, and removes the platform-specific recipes and Nemotron 3 Nano cascaded LLM.
 
 ### Added
 
@@ -24,7 +24,7 @@ This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support,
 - **`*/single-gpu` recipes** running the NeMo-Speech.cpp speech stack next to vLLM on one GPU across all examples.
 - **`scripts/download-nemo-speech-models.sh`** for one-time NeMo-Speech.cpp GGUF setup on single-GPU hosts.
 - **OpenAI Realtime–compatible WebSocket gateway** (`WS /v1/realtime`) that drives the existing cascaded ASR → LLM → TTS pipelines for OpenAI Realtime–shaped clients, with NVIDIA-only knobs under `session.nvidia`.
-- **`create-voice-agent` agent skill** for scaffolding and refining NVIDIA voice agents (cascaded or Omni) across Pipecat, LiveKit, and custom frameworks.
+- **`nemotron-voice-agent-builder` agent skill** for scaffolding and refining NVIDIA voice agents (cascaded or Omni) across Pipecat and LiveKit.
 - Optional `NvidiaWordTTSService` for Magpie word streaming and timestamp-based context commits.
 
 ### Changed
