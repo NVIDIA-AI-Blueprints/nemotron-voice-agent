@@ -244,9 +244,6 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         self._pre_speech_buffer: list[bytes] = []
         self._sample_rate = 16000
         self._channels = 1
-        # Keep the audio-turn state separate from LLMService's private
-        # ``_user_speaking`` flag. The base service updates its flag before this
-        # class handles the same boundary frame.
         self._audio_user_speaking = False
         self._bot_responding = False
         self._pending_request: asyncio.Task[None] | None = None

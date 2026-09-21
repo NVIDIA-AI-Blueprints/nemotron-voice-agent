@@ -10,9 +10,7 @@ from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.bus.messages import BusCancelMessage
-from pipecat.pipeline.worker import PipelineParams, ProcessorUnusablePolicy
-from pipecat.pipeline.worker import PipelineWorker as PipecatPipelineWorker
+from pipecat.pipeline.worker import PipelineParams
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
@@ -41,44 +39,6 @@ SMART_TURN_FALLBACK_SECS = 1.0
 # Use Magpie's native max for output. Pipecat's default out rate (24000) is rejected.
 PIPELINE_AUDIO_IN_SAMPLE_RATE = 16000
 PIPELINE_AUDIO_OUT_SAMPLE_RATE = 22050
-
-
-class VoiceAgentPipelineWorker(PipecatPipelineWorker):
-    """Pipeline worker with voice-agent lifecycle defaults.
-
-    Unusable processors end their worker gracefully by default. Multi-worker
-    pipelines can additionally cancel the runner so bus-only peers do not keep
-    the session alive after a required service becomes unusable.
-    """
-
-    def __init__(self, pipeline, *, cancel_runner_on_unusable_processor: bool = False, **kwargs) -> None:
-        """Initialize a worker with the shared unusable-processor policy."""
-        kwargs.setdefault("processor_unusable_policy", ProcessorUnusablePolicy.END)
-        # Cloud speech and multimodal services can take longer than Pipecat's
-        # 20-second default to connect, especially when several bus workers are
-        # warming up together.
-        kwargs.setdefault("setup_timeout_secs", 120.0)
-        super().__init__(pipeline, **kwargs)
-        self._cancel_runner_on_unusable_processor = cancel_runner_on_unusable_processor
-        self._runner_cancel_requested = False
-
-        @self.event_handler("on_pipeline_error")
-        async def cancel_runner_on_unusable_processor(worker, frame) -> None:  # noqa: ARG001
-            """Cancel all workers when a required multi-worker processor fails."""
-            processor = frame.processor
-            if (
-                self._cancel_runner_on_unusable_processor
-                and processor
-                and not processor.is_usable
-                and not self._runner_cancel_requested
-            ):
-                self._runner_cancel_requested = True
-                await self.send_bus_message(
-                    BusCancelMessage(
-                        source=self.name,
-                        reason=f"{processor} can no longer do its job",
-                    )
-                )
 
 
 def build_pipeline_params(**kwargs) -> PipelineParams:
@@ -362,7 +322,7 @@ def create_transport(runner_args: RunnerArguments):
         )
 
     if isinstance(runner_args, EvalRunnerArguments):
-        from pipecat.evals.serializer import RTVIEvalSerializer
+        from pipecat.evals.serializer import EvalSerializer
         from pipecat.evals.transport import EvalTransport, EvalTransportParams
 
         return EvalTransport(
@@ -373,7 +333,7 @@ def create_transport(runner_args: RunnerArguments):
                 audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
                 add_wav_header=False,
-                serializer=RTVIEvalSerializer(),
+                serializer=EvalSerializer(),
             ),
             host=runner_args.host,
             port=runner_args.port,

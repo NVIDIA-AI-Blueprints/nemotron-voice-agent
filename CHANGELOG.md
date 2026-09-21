@@ -6,11 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.3.0] - TBD
 
-This minor release upgrades Pipecat to 1.10.0 and adopts its built-in transcript-independent Smart Turn handling for audio-only user turns.
+This minor release upgrades Pipecat to 1.11.0 and adopts its built-in transcript-independent Smart Turn handling for audio-only user turns.
 
 ### Changed
 
-- Upgraded Pipecat to version 1.10.0.
+- Upgraded Pipecat to version 1.11.0.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
 
 ## [2.2.0] - 2026-09-22
