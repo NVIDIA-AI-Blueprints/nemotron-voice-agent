@@ -10,7 +10,9 @@ from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.pipeline.worker import PipelineParams
+from pipecat.bus.messages import BusCancelMessage
+from pipecat.pipeline.worker import PipelineParams, ProcessorUnusablePolicy
+from pipecat.pipeline.worker import PipelineWorker as PipecatPipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
@@ -41,6 +43,44 @@ PIPELINE_AUDIO_IN_SAMPLE_RATE = 16000
 PIPELINE_AUDIO_OUT_SAMPLE_RATE = 22050
 
 
+class VoiceAgentPipelineWorker(PipecatPipelineWorker):
+    """Pipeline worker with voice-agent lifecycle defaults.
+
+    Unusable processors end their worker gracefully by default. Multi-worker
+    pipelines can additionally cancel the runner so bus-only peers do not keep
+    the session alive after a required service becomes unusable.
+    """
+
+    def __init__(self, pipeline, *, cancel_runner_on_unusable_processor: bool = False, **kwargs) -> None:
+        """Initialize a worker with the shared unusable-processor policy."""
+        kwargs.setdefault("processor_unusable_policy", ProcessorUnusablePolicy.END)
+        # Cloud speech and multimodal services can take longer than Pipecat's
+        # 20-second default to connect, especially when several bus workers are
+        # warming up together.
+        kwargs.setdefault("setup_timeout_secs", 120.0)
+        super().__init__(pipeline, **kwargs)
+        self._cancel_runner_on_unusable_processor = cancel_runner_on_unusable_processor
+        self._runner_cancel_requested = False
+
+        @self.event_handler("on_pipeline_error")
+        async def cancel_runner_on_unusable_processor(worker, frame) -> None:  # noqa: ARG001
+            """Cancel all workers when a required multi-worker processor fails."""
+            processor = frame.processor
+            if (
+                self._cancel_runner_on_unusable_processor
+                and processor
+                and not processor.is_usable
+                and not self._runner_cancel_requested
+            ):
+                self._runner_cancel_requested = True
+                await self.send_bus_message(
+                    BusCancelMessage(
+                        source=self.name,
+                        reason=f"{processor} can no longer do its job",
+                    )
+                )
+
+
 def build_pipeline_params(**kwargs) -> PipelineParams:
     """Build PipelineParams with Magpie-safe audio sample rates."""
     kwargs.setdefault("audio_in_sample_rate", PIPELINE_AUDIO_IN_SAMPLE_RATE)
@@ -54,9 +94,14 @@ def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
     return LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=stop_secs))
 
 
-def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]:
-    """Return the default Smart Turn stop strategy used by cascaded pipelines."""
-    return [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())]
+def build_smart_turn_stop_strategies(*, wait_for_transcript: bool = True) -> list[TurnAnalyzerUserTurnStopStrategy]:
+    """Return the shared Smart Turn stop strategy."""
+    return [
+        TurnAnalyzerUserTurnStopStrategy(
+            turn_analyzer=build_smart_turn_analyzer(),
+            wait_for_transcript=wait_for_transcript,
+        )
+    ]
 
 
 def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:

@@ -32,12 +32,12 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineParams
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.workers.runner import WorkerRunner
 
-from examples.shared.pipeline_utils import create_transport
+from examples.shared.pipeline_utils import VoiceAgentPipelineWorker, create_transport
 
 
 class CIEvalResponder(FrameProcessor):
@@ -100,7 +100,7 @@ def _latest_user_text(messages: list[dict]) -> str:
 async def bot(runner_args: RunnerArguments) -> None:
     """Run a service-free bot compatible with Pipecat Eval suites."""
     transport = create_transport(runner_args)
-    worker = PipelineWorker(
+    worker = VoiceAgentPipelineWorker(
         Pipeline([transport.input(), CIEvalResponder(), transport.output()]),
         params=PipelineParams(enable_metrics=False, enable_usage_metrics=False),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,

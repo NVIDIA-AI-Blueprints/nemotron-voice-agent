@@ -37,7 +37,8 @@ from typing import Any, Literal, cast, get_args
 
 import httpx
 from loguru import logger
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient, NotGiven
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+from openai import NotGiven as OpenAINotGiven
 from openai.types.chat import ChatCompletionMessageParam
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter, OpenAILLMInvocationParams
 from pipecat.frames.frames import (
@@ -63,8 +64,9 @@ from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMes
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.settings import NOT_GIVEN, _NotGiven, assert_given
+from pipecat.utils.http import TIMEOUT_EXCEPTIONS
 from pipecat.utils.time import time_now_iso8601
+from pipecat.utils.types import NOT_GIVEN, NotGiven, assert_given
 
 InputModality = Literal["text", "audio"]
 MediaModality = Literal["text", "audio", "image", "video"]
@@ -117,11 +119,11 @@ class NvidiaOmniSettings(NvidiaLLMSettings):
             of an utterance is not clipped.
     """
 
-    input_modalities: tuple[InputModality, ...] | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    emit_transcriptions: bool | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    audio_response_instruction: str | None | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    min_user_audio_secs: float | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
-    pre_speech_buffer_secs: float | _NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    input_modalities: tuple[InputModality, ...] | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    emit_transcriptions: bool | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    audio_response_instruction: str | None | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    min_user_audio_secs: float | NotGiven = field(default_factory=lambda: NOT_GIVEN)
+    pre_speech_buffer_secs: float | NotGiven = field(default_factory=lambda: NOT_GIVEN)
 
 
 @dataclass(frozen=True)
@@ -242,7 +244,10 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         self._pre_speech_buffer: list[bytes] = []
         self._sample_rate = 16000
         self._channels = 1
-        self._user_speaking = False
+        # Keep the audio-turn state separate from LLMService's private
+        # ``_user_speaking`` flag. The base service updates its flag before this
+        # class handles the same boundary frame.
+        self._audio_user_speaking = False
         self._bot_responding = False
         self._pending_request: asyncio.Task[None] | None = None
         self._pending_request_is_audio = False
@@ -350,7 +355,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
             await self.stop_all_metrics()
             await self._cancel_pending_request()
             self._bot_responding = False
-            if not self._user_speaking:
+            if not self._audio_user_speaking:
                 self._audio_buffer = []
                 self._pre_speech_buffer = []
         elif isinstance(frame, BotStartedSpeakingFrame):
@@ -480,7 +485,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         params = {
             name: value
             for name, value in super().build_chat_completion_params(params_from_context).items()
-            if not isinstance(value, (NotGiven, _NotGiven))
+            if not isinstance(value, (OpenAINotGiven, NotGiven))
         }
         if self._active_turn_parts:
             messages = list(params.get("messages") or [])
@@ -536,21 +541,21 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         Interrupting the bot is the turn controller's job, not this service's, so
         this only drops the turn Omni is generating for the previous utterance.
         """
-        if self._user_speaking or not self._modality_enabled("audio"):
+        if self._audio_user_speaking or not self._modality_enabled("audio"):
             return
         if self._bot_responding:
             logger.debug(f"{self}: barge-in detected, dropping the turn being generated")
             await self._cancel_pending_request()
             self._bot_responding = False
-        self._user_speaking = True
+        self._audio_user_speaking = True
         self._audio_buffer = list(self._pre_speech_buffer)
         self._pre_speech_buffer = []
 
     async def _handle_user_stopped(self) -> None:
         """Close the utterance at the end-of-turn boundary and answer it."""
-        if not self._user_speaking:
+        if not self._audio_user_speaking:
             return
-        self._user_speaking = False
+        self._audio_user_speaking = False
         self._last_user_eou_at = time.time()
         await self._maybe_run_audio_turn()
 
@@ -560,7 +565,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         self._channels = frame.num_channels
         if not self._modality_enabled("audio"):
             return
-        if self._user_speaking:
+        if self._audio_user_speaking:
             self._audio_buffer.append(frame.audio)
         else:
             self._append_pre_speech_audio(frame)
@@ -743,7 +748,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         await self.start_processing_metrics(start_time=metrics_start_time)
         try:
             await self._process_context(context)
-        except httpx.TimeoutException as exc:
+        except TIMEOUT_EXCEPTIONS as exc:
             await self._call_event_handler("on_completion_timeout")
             await self.push_error(error_msg="LLM completion timeout", exception=exc)
         except Exception as exc:
@@ -844,7 +849,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         """Drop buffered speech and turn state at session start."""
         self._audio_buffer = []
         self._pre_speech_buffer = []
-        self._user_speaking = False
+        self._audio_user_speaking = False
         self._bot_responding = False
         self._pending_request_is_audio = False
         self._last_user_eou_at = None
