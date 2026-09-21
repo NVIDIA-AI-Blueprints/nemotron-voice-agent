@@ -47,7 +47,7 @@ WORKDIR /app
 # Create legal directory and copy license files
 RUN mkdir -p /app/legal
 COPY LICENSE /app/legal/LICENSE
-COPY third_party_oss_license.txt /app/legal/third_party_oss_license.txt
+COPY THIRD_PARTY_NOTICES.txt /app/legal/THIRD_PARTY_NOTICES.txt
 
 # Download the sources of all Ubuntu packages within the container for legal compliance
 RUN apt-get update && apt-get install -y --no-install-recommends xz-utils dpkg-dev && \
@@ -71,7 +71,7 @@ COPY pyproject.toml uv.lock ./
 # Dependencies
 # Note: Python package source code is available via uv's cache and can be
 # extracted using: uv pip show <package> --files
-# For full source compliance, see /app/legal/third_party_oss_license.txt
+# For full source compliance, see /app/legal/THIRD_PARTY_NOTICES.txt
 RUN uv venv --python python3.12 && . .venv/bin/activate && uv sync --frozen
 
 COPY src/ src/
