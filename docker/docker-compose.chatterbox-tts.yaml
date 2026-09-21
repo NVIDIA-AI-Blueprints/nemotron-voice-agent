@@ -1,27 +1,26 @@
 # Chatterbox TTS Multilingual: alternate to Magpie.
 #
 # Opt-in alternate to Magpie (shared ports 50151/9000. Only one TTS can run):
-#   docker compose --profile <recipe>/workstation --profile chatterbox-tts \
-#     up -d --scale tts-service=0
-#   # same with <recipe>/dgx-spark instead of workstation
+#   docker compose --profile <recipe>/server --profile chatterbox-tts \
+#     up -d --scale magpie-multilingual-tts-service=0
 # Omitting --profile chatterbox-tts leaves Chatterbox running and holding the
 # ports. Stop it before Magpie can bind again:
 #   docker compose --profile chatterbox-tts stop chatterbox-tts-service
-#   docker compose --profile <recipe>/workstation up -d
+#   docker compose --profile <recipe>/server up -d
 # Then pick chatterbox-multilingual-tts (or Magpie) in the Services tab.
 
 services:
   chatterbox-tts-service:
-    image: nvcr.io/nim/nvidia/chatterbox-tts-multilingual:1.0.0
+    image: nvcr.io/nim/nvidia/chatterbox-tts-multilingual:1.1.0
     user: "0:0"
     profiles:
       - chatterbox-tts
     environment:
-      NGC_API_KEY: ${NVIDIA_API_KEY}
+      NGC_API_KEY: ${NVIDIA_API_KEY:-not-needed}
       NIM_HTTP_API_PORT: "9000"
       NIM_GRPC_API_PORT: "50051"
-      # Single profile (~52.5 GB GPU / ~6.4 GB CPU). No batch_size selector.
-      NIM_TAGS_SELECTOR: name=chatterbox-tts-multilingual
+      # Default 1.1.0 profile (~44.61 GiB GPU / ~4.86 GiB host memory).
+      NIM_TAGS_SELECTOR: name=chatterbox-tts-multilingual,batch_size=8
     ports:
       - "50151:50051"
       - "9000:9000"
@@ -40,7 +39,7 @@ services:
       resources:
         reservations:
           devices:
-            # ~52.5 GB VRAM. Edit device_ids if you want a second workstation GPU.
+            # Requires A100 80 GB, H100, L40S, or DGX Spark. Edit device_ids to select the target GPU.
             - driver: nvidia
               device_ids: ['0']
               capabilities: [gpu]

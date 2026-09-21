@@ -1,0 +1,80 @@
+{
+  "skill_name": "nemotron-voice-agent-configure-pipeline",
+  "cases": [
+    {
+      "id": "nemotron-voice-agent-configure-pipeline-swap-llm",
+      "prompt": "Switch the generic assistant's default cloud LLM to nemotron-lightning-reasoning and apply it.",
+      "expected_skill": "nemotron-voice-agent-configure-pipeline",
+      "expected_output": "Updates the generic example's `defaults.llm` in examples_registry.yaml to a catalog key that exists in its services.cloud.yaml, then does a compose restart of the example service (no rebuild).",
+      "assertions": [
+        "Loaded nemotron-voice-agent-configure-pipeline/SKILL.md.",
+        "Edited examples_registry.yaml defaults for the generic example rather than source code.",
+        "Verified the LLM catalog key exists in the active example's services.cloud.yaml.",
+        "Re-applied via compose restart without rebuilding the image."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-configure-pipeline-add-multilingual-prompt",
+      "prompt": "Add a Spanish persona prompt to the multilingual assistant and make it the default.",
+      "expected_skill": "nemotron-voice-agent-configure-pipeline",
+      "expected_output": "Adds the prompt to the multilingual example's prompts.yaml, sets it as defaults.prompt in examples_registry.yaml, confirms the catalog uses multilingual-capable ASR and TTS, then restarts the example service.",
+      "assertions": [
+        "Edited the multilingual example's prompts.yaml and examples_registry.yaml defaults.",
+        "Ensured multilingual-capable ASR and TTS are selected for the persona.",
+        "Restarted the example service and did not rebuild the image."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-configure-pipeline-env-audio-debug",
+      "prompt": "Enable the audio recorder debug setting in .env for the running agent.",
+      "expected_skill": "nemotron-voice-agent-configure-pipeline",
+      "expected_output": "Sets the supported audio-debug flag in .env, preserves unrelated keys and comments, and re-applies Compose so the container restarts and reads the new environment.",
+      "assertions": [
+        "Edited only .env for the feature flag, preserving unrelated keys.",
+        "Re-applied Compose so the container restarts and picks up the change.",
+        "Did not modify source or rebuild the image."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-configure-pipeline-restrict-examples",
+      "prompt": "Only expose the generic and multilingual examples in the UI.",
+      "expected_skill": "nemotron-voice-agent-configure-pipeline",
+      "expected_output": "Updates the `selection` field in examples_registry.yaml to list only the generic and multilingual examples, then restarts the example service.",
+      "assertions": [
+        "Edited examples_registry.yaml `selection` to the two requested examples.",
+        "Preserved the other registry entries and comments.",
+        "Restarted the example service to apply."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-configure-pipeline-negative-deploy",
+      "prompt": "Bring up the stack on my workstation GPU for the first time.",
+      "expected_skill": null,
+      "expected_output": "The configure-pipeline skill does not activate because initial deployment, profile selection, and auth are handled by nemotron-voice-agent-deploy.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-configure-pipeline.",
+        "Recognized this as an initial deployment task."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-configure-pipeline-negative-source",
+      "prompt": "Rewrite pipeline.py to add a new custom Pipecat processor.",
+      "expected_skill": null,
+      "expected_output": "The configure-pipeline skill does not activate because source-code changes to pipeline.py are out of scope; it only edits .env, catalogs, and prompts.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-configure-pipeline.",
+        "Recognized source-level pipeline changes as out of scope for this skill."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-configure-pipeline-negative-upgrade",
+      "prompt": "Migrate the repository to a new Pipecat version.",
+      "expected_skill": null,
+      "expected_output": "The configure-pipeline skill does not activate because a Pipecat version migration is handled by nemotron-voice-agent-upgrade-pipecat.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-configure-pipeline.",
+        "Recognized this as a Pipecat upgrade task."
+      ]
+    }
+  ]
+}

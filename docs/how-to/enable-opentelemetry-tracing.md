@@ -15,7 +15,7 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
 2. Start the stack with the `tracing` overlay added to your recipe profile. This brings up the `phoenix` collector alongside the pipeline app. For example, Generic Cascaded on a workstation:
 
     ```bash
-    docker compose --profile generic-assistant/workstation --profile tracing up -d
+    docker compose --profile generic-assistant/server --profile tracing up -d
     ```
 
     If the stack is already running, the same command recreates the app container with the new settings, so no separate restart is needed. The `phoenix` service (defined in `docker/docker-compose.phoenix.yaml` and included by the root compose file) exposes:

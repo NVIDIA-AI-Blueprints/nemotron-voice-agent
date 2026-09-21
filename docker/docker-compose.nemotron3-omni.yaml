@@ -1,17 +1,16 @@
+# Nemotron 3 Nano Omni. Precision follows the HF model card:
+# NVFP4 on Blackwell / Spark / Thor, FP8 on Hopper / Ada (L40S+), BF16 on Ampere.
+# https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
 services:
   nvidia-llm-vllm-omni:
     profiles:
-      - omni-assistant/workstation
-      - omni-assistant-subagents/workstation
-      - omni-assistant/dgx-spark
-      - omni-assistant-subagents/dgx-spark
-      - omni-assistant/jetson-thor
+      - omni-assistant/single-gpu
+      - omni-assistant-subagents/single-gpu
     container_name: vllm-nemotron-omni
     image: vllm/vllm-openai:v0.20.0-cu130
     pull_policy: if_not_present
     ipc: host
     shm_size: 16GB
-    cpuset: ${VLLM_CPUSET:-}
     env_file:
       - ../.env
     environment:
@@ -29,23 +28,102 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        pip install --no-cache-dir "vllm[audio]==0.20.0" && \
-        vllm serve nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4 \
-          --host 0.0.0.0 \
-          --max-num-seqs 4 \
-          --max-model-len 32768 \
-          --port 8002 \
-          --trust-remote-code \
-          --gpu-memory-utilization 0.5 \
-          --limit-mm-per-prompt '{"video": 999, "image": 999, "audio": 999}' \
-          --media-io-kwargs '{"video": {"fps": 2,  "num_frames": 256}}' \
-          --video-pruning-rate 0.5 \
-          --enable-prefix-caching \
-          --max-num-batched-tokens 8192 \
-          --reasoning-parser nemotron_v3 \
-          --enable-auto-tool-choice \
-          --tool-call-parser qwen3_coder \
+        pip install --no-cache-dir "vllm[audio]==0.20.0"
+
+        args=(
+          --host 0.0.0.0
+          --port 8002
+          --served-model-name nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+          --max-model-len 32768
+          --trust-remote-code
+          --limit-mm-per-prompt '{"video": 999, "image": 999, "audio": 999}'
+          --media-io-kwargs '{"video": {"fps": 2,  "num_frames": 256}}'
+          --video-pruning-rate 0.5
+          --enable-prefix-caching
+          --max-num-batched-tokens 8192
+          --reasoning-parser nemotron_v3
+          --enable-auto-tool-choice
+          --tool-call-parser qwen3_coder
           --reasoning-config '{"reasoning_start_str": "<think>", "reasoning_end_str": "\nI have to finalize the answer now.</think>"}'
+        )
+
+        gpu_name="$$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)"
+        compute_cap="$$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1)"
+        device_model=""
+        dmi_product=""
+        [[ -r /proc/device-tree/model ]] && device_model="$$(tr -d '\0' </proc/device-tree/model)"
+        [[ -r /sys/class/dmi/id/product_name ]] && dmi_product="$$(tr -d '\0' </sys/class/dmi/id/product_name)"
+        compute_major="$${compute_cap%%.*}"
+        compute_minor="$${compute_cap#*.}"
+
+        unified=0
+        max_util=0.90
+        min_vllm_mib=24576
+        if [[ "$${gpu_name}" == *"NVIDIA GB10"* || "$${dmi_product}" == *"DGX_Spark"* ]]; then
+          echo "Omni recipe: DGX Spark / NVFP4"
+          unified=1
+          max_util=0.70
+          model=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
+          args+=(--kv-cache-dtype fp8 --max-num-seqs 8)
+        elif [[ "$${device_model}" == *"Jetson"* && "$${device_model}" == *"Thor"* ]] ||
+             [[ "$${dmi_product}" == *"Jetson"* && "$${dmi_product}" == *"Thor"* ]]; then
+          echo "Omni recipe: Jetson Thor / NVFP4"
+          unified=1
+          max_util=0.70
+          model=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
+          args+=(--kv-cache-dtype fp8 --max-num-seqs 8)
+        elif [[ "$${compute_major}" =~ ^[0-9]+$ ]] && (( compute_major >= 10 )); then
+          echo "Omni recipe: Blackwell workstation / NVFP4"
+          model=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
+          args+=(--kv-cache-dtype fp8)
+        elif [[ "$${compute_major}" == "9" ]] ||
+             [[ "$${compute_major}" == "8" && "$${compute_minor}" =~ ^[0-9]+$ && "$${compute_minor}" -ge 9 ]]; then
+          echo "Omni recipe: Hopper/Ada workstation / FP8"
+          min_vllm_mib=36864
+          model=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8
+          args+=(--kv-cache-dtype fp8)
+        elif [[ "$${compute_major}" == "8" ]]; then
+          echo "Omni recipe: Ampere workstation / BF16"
+          min_vllm_mib=67584
+          model=nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16
+        else
+          echo "Unsupported GPU compute capability: $${compute_cap:-unknown}" >&2
+          exit 1
+        fi
+
+        if (( ! unified )); then
+          args+=(--max-num-seqs 4)
+        fi
+
+        total="$$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
+        free="$$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
+        if ! [[ "$${total}" =~ ^[0-9]+$$ ]]; then
+          total="$$(awk '/MemTotal/ {printf "%d", $$2/1024}' /proc/meminfo)"
+          echo "nvidia-smi total unavailable; using MemTotal $${total}MiB"
+        fi
+        if ! [[ "$${free}" =~ ^[0-9]+$$ ]]; then
+          free="$$(awk '/MemAvailable/ {printf "%d", $$2/1024}' /proc/meminfo)"
+          echo "nvidia-smi free unavailable; using MemAvailable $${free}MiB"
+        fi
+        if (( unified )); then
+          avail_kib="$$(awk '/MemAvailable/ {print $$2}' /proc/meminfo)"
+          avail_mib=$$((avail_kib / 1024))
+          if (( avail_mib < free )); then
+            echo "Unified memory: capping free $${free}MiB to MemAvailable $${avail_mib}MiB"
+            free=$${avail_mib}
+          fi
+        fi
+        headroom="$${VLLM_VRAM_HEADROOM_MIB:-4096}"
+        safe=$$((free > headroom ? free - headroom : 0))
+        if (( safe < min_vllm_mib )); then
+          echo "Not enough free memory for Omni (need >= $${min_vllm_mib}MiB after $${headroom}MiB headroom, free=$${free}MiB)." >&2
+          exit 1
+        fi
+        util="$${VLLM_GPU_MEMORY_UTILIZATION:-$$(awk -v s="$${safe}" -v t="$${total}" -v m="$${max_util}" 'BEGIN { u=s/t; if (u>m+0) u=m+0; printf "%.2f", u }')}"
+        echo "Omni VRAM plan: $${free}MiB free / $${total}MiB total -> --gpu-memory-utilization $${util}"
+        args+=(--gpu-memory-utilization "$${util}")
+
+        exec vllm serve "$${model}" "$${args[@]}"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
       interval: 30s

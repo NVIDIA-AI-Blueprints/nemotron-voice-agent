@@ -1,7 +1,7 @@
 {
   "pipeline_mode": "multilingual-assistant",
   "prompt_key": "multilingual_voice_assistant",
-  "llm_id": "cloud-nim:nemotron-super",
+  "llm_id": "cloud-nim:nemotron-lightning",
   "asr_id": "cloud-nim:nemotron-asr-streaming-multilingual",
   "tts_server": "localhost:50151",
   "tts_voice_id": "Magpie-Multilingual.EN-US.Aria",

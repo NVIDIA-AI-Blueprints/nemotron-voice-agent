@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024–2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 
 import {
   useState,
@@ -318,6 +318,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     if (!selectedExampleKey || defaultSessionLanguageExampleKey.current === selectedExampleKey) return;
     defaultSessionLanguageExampleKey.current = selectedExampleKey;
     setSelectedSessionLanguage(selectedExampleDefaultSessionLanguage || DEFAULT_SESSION_LANGUAGE);
+    setSelectedVoiceId("");
   }, [selectedExample?.key, selectedExampleDefaultSessionLanguage]);
 
   // --- TTS state ---
