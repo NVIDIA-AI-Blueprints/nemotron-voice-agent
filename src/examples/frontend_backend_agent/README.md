@@ -8,6 +8,10 @@ The airline backend agent is the reference backend, but the architecture is reus
 
 The example validates known past travel dates before it invokes the backend agent. It asks the user for a future date without waiting for planning or backend tools. If planning fails, the example limits retries and then returns a terminal user-facing error instead of repeatedly delegating the same request. The initial synthetic greeting runs with tool execution disabled, so it cannot invoke the backend agent; normal tool behavior resumes for user turns.
 
+The OpenAI Realtime WebSocket can run this complete server-owned system or
+expose client-owned delegation functions. Refer to [Configure
+Tools](../../../docs/how-to/use-realtime-gateway.md#configure-tools).
+
 ![Frontend/Backend Agent architecture](images/frontend-backend-agent-architecture.png)
 
 The diagram shows the full runtime path. User audio enters through the WebRTC/WebSocket transport, audio input processing produces a user transcript for the frontend LLM, the frontend LLM sends rephrased task requirements to the backend agent, and backend results return to the frontend LLM before audio output is synthesized and played back.
