@@ -28,6 +28,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator
 from pipecat.processors.audio.vad_processor import VADProcessor
@@ -64,7 +65,7 @@ from examples.omni_assistant_subagents.subagents.transport.webcam_controller imp
 )
 from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.pipeline_utils import VoiceAgentPipelineWorker, build_pipeline_params
+from examples.shared.pipeline_utils import build_pipeline_params
 from examples.shared.subagents import SubagentRegistry
 from tracing import IS_TRACING_ENABLED
 from utils import load_ipa_dictionary, normalize_lang_code, parse_env_float
@@ -73,7 +74,7 @@ from webcam_frame_store import clear_session_webcam_frames
 _ANALYZER_FOLLOWUP_TURN_DELAY_SECS = 2.6
 
 
-class OmniTransportAgent(VoiceAgentPipelineWorker):
+class OmniTransportAgent(PipelineWorker):
     """Owns transport I/O and bridges user frames to Speaker Omni.
 
     A ``PipelineWorker`` whose pipeline carries a mid-pipeline
@@ -197,7 +198,6 @@ class OmniTransportAgent(VoiceAgentPipelineWorker):
         pipeline = self._build_pipeline(bus=bus, worker_name=resolved_name)
         super().__init__(
             pipeline,
-            cancel_runner_on_unusable_processor=True,
             name=resolved_name,
             active=True,
             params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
@@ -205,7 +205,23 @@ class OmniTransportAgent(VoiceAgentPipelineWorker):
             observers=self._build_observers(),
             enable_tracing=IS_TRACING_ENABLED,
             enable_rtvi=True,
+            processor_unusable_policy=ProcessorUnusablePolicy.END,
+            setup_timeout_secs=120.0,
         )
+        self._runner_cancel_requested = False
+
+        @self.event_handler("on_pipeline_error")
+        async def on_pipeline_error(_worker, frame) -> None:
+            processor = frame.processor
+            if processor and not processor.is_usable and not self._runner_cancel_requested:
+                self._runner_cancel_requested = True
+                await self.send_bus_message(
+                    BusCancelMessage(
+                        source=self.name,
+                        reason=f"{processor} can no longer do its job",
+                    )
+                )
+
         self._register_client_handlers()
 
     def _build_pipeline(self, *, bus: WorkerBus, worker_name: str) -> Pipeline:
@@ -309,7 +325,7 @@ class OmniTransportAgent(VoiceAgentPipelineWorker):
                     }
                 )
             )
-            events = breakdown.chronological_events()
+            events = breakdown.turn_contribution_lines()
             if events:
                 logger.info(f"Nemotron Omni subagents latency breakdown: {' | '.join(events)}")
             self._latency_turn_count += 1
@@ -351,7 +367,6 @@ class OmniTransportAgent(VoiceAgentPipelineWorker):
             await self.queue_frame(LLMRunFrame())
 
         if runner_protocol(self._runner_args) == "realtime":
-            # Align with shared register_session_start_handlers: no welcome race window.
             if not welcome_enabled:
                 serializer = getattr(self._transport, "_realtime_serializer", None)
                 conversation = getattr(serializer, "conversation", None)
