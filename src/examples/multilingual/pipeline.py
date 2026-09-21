@@ -19,6 +19,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -47,7 +48,6 @@ from examples.multilingual.multilingual_processor import (
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
-    VoiceAgentPipelineWorker,
     apply_pinned_prompt_summary,
     build_context_messages,
     build_pipeline_params,
@@ -179,7 +179,6 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_asr = load_service_entry("asr", "")
     llm_supported_languages = _resolve_llm_supported_languages(body, default_llm)
 
-    # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
@@ -231,7 +230,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         llm_supported_languages=llm_supported_languages,
     )
 
-    # --- LLM ---
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
@@ -275,7 +273,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         settings=summary_llm_settings,
     )
 
-    # --- TTS ---
     custom_dictionary = load_ipa_dictionary()
     tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
@@ -323,7 +320,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"text_filters=[NemotronSpeechTextFilter]"
     )
 
-    # --- Context ---
     prompt_catalog = load_prompt_catalog(__file__)
     base_system_content = render_prompt_addon(
         base_system_content,
@@ -405,7 +401,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def on_breakdown(observer, breakdown):
-        events = breakdown.chronological_events()
+        events = breakdown.turn_contribution_lines()
         await task.queue_frame(
             RTVIServerMessageFrame(
                 data={
@@ -420,7 +416,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         if events:
             logger.info(f"Latency breakdown: {' | '.join(events)}")
 
-    task = VoiceAgentPipelineWorker(
+    task = PipelineWorker(
         pipeline,
         params=build_pipeline_params(
             enable_metrics=True,
@@ -429,6 +425,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
+        processor_unusable_policy=ProcessorUnusablePolicy.END,
+        setup_timeout_secs=120.0,
     )
 
     @user_aggregator.event_handler("on_user_turn_stopped")
