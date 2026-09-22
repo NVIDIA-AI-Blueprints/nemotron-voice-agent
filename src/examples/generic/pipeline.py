@@ -62,6 +62,16 @@ load_dotenv(override=True)
 CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
 
 
+def _service_uses_tls(service: dict, endpoint: str, *, category: str) -> bool:
+    """Read an explicit generated-catalog TLS decision with legacy fallback."""
+    configured = service.get("use_ssl")
+    if configured is None:
+        return is_nvcf(endpoint)
+    if not isinstance(configured, bool):
+        raise ValueError(f"{category} catalog use_ssl must be a boolean")
+    return configured
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
@@ -98,7 +108,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
-    asr_ssl = is_nvcf(asr_server)
+    asr_ssl = _service_uses_tls(default_asr, asr_server, category="ASR")
     asr_kwargs: dict = {
         "api_key": nvidia_api_key(),
         "server": asr_server,
@@ -231,7 +241,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
-    tts_ssl = is_nvcf(tts_server)
+    tts_ssl = _service_uses_tls(default_tts, tts_server, category="TTS")
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
     tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     raw_tts_function_id = body.get("tts_function_id")

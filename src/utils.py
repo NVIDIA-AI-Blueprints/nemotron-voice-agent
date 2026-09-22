@@ -22,6 +22,15 @@ PROMPTS_FILENAME = "prompts.yaml"
 TOOLS_FILENAME = "tools.yaml"
 _service_context: ContextVar[tuple[Path, tuple[str, ...]] | None] = ContextVar("service_context", default=None)
 
+RUNTIME_CONFIG_DIR_ENV = "NVA_RUNTIME_CONFIG_DIR"
+_RUNTIME_CONFIG_FILENAMES: frozenset[str] = frozenset(
+    {
+        "examples_registry.yaml",
+        "services.cloud.yaml",
+        "services.local.yaml",
+    }
+)
+
 LOCAL_SERVICE_CATALOG_PLATFORMS: tuple[str, ...] = ("server", "singlegpu")
 REALTIME_PRIVATE_SERVICE_FIELDS: frozenset[str] = frozenset(
     {
@@ -37,7 +46,49 @@ def public_service_entry_fields(entry: Mapping[str, object]) -> dict[str, object
     return {key: value for key, value in entry.items() if key not in REALTIME_PRIVATE_SERVICE_FIELDS}
 
 
+def resolve_runtime_config_file(filename: str) -> Path | None:
+    """Resolve one server-owned runtime configuration file, when configured.
+
+    ``NVA_RUNTIME_CONFIG_DIR`` is an atomic startup override used by supervised
+    deployments that materialize a registry and its service catalogs together.
+    The directory and requested file must already exist, be absolute, and
+    resolve beneath the configured directory.  This deliberately fails closed
+    instead of falling back to checked-in catalogs when a runtime bundle is
+    incomplete or misconfigured.
+    """
+    if filename not in _RUNTIME_CONFIG_FILENAMES:
+        raise ValueError(f"Unsupported runtime configuration filename: {filename!r}")
+
+    raw_root = os.getenv(RUNTIME_CONFIG_DIR_ENV, "")
+    if not raw_root:
+        return None
+    if raw_root != raw_root.strip():
+        raise RuntimeError(f"{RUNTIME_CONFIG_DIR_ENV} must not contain leading or trailing whitespace")
+
+    configured_root = Path(raw_root)
+    if not configured_root.is_absolute():
+        raise RuntimeError(f"{RUNTIME_CONFIG_DIR_ENV} must be an absolute directory path")
+    try:
+        runtime_root = configured_root.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"{RUNTIME_CONFIG_DIR_ENV} does not resolve to an existing directory") from exc
+    if not runtime_root.is_dir():
+        raise RuntimeError(f"{RUNTIME_CONFIG_DIR_ENV} must resolve to a directory")
+
+    configured_file = runtime_root / filename
+    try:
+        resolved_file = configured_file.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"Runtime configuration file is missing: {configured_file}") from exc
+    if resolved_file.parent != runtime_root or not resolved_file.is_file():
+        raise RuntimeError(f"Runtime configuration file must be a regular file inside {runtime_root}: {filename}")
+    return resolved_file
+
+
 def _services_cloud_path() -> Path:
+    runtime_path = resolve_runtime_config_file("services.cloud.yaml")
+    if runtime_path is not None:
+        return runtime_path
     context = _service_context.get()
     if context:
         return context[0] / "services.cloud.yaml"
@@ -45,6 +96,9 @@ def _services_cloud_path() -> Path:
 
 
 def _services_local_path() -> Path:
+    runtime_path = resolve_runtime_config_file("services.local.yaml")
+    if runtime_path is not None:
+        return runtime_path
     context = _service_context.get()
     if context:
         return context[0] / "services.local.yaml"

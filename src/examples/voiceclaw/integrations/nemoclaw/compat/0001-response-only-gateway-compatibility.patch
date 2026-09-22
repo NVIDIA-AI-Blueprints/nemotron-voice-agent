@@ -1,0 +1,191 @@
+diff --git a/src/lib/voice-gateway/openclaw-client.test.ts b/src/lib/voice-gateway/openclaw-client.test.ts
+index 7a317189a..0a68a8432 100644
+--- a/src/lib/voice-gateway/openclaw-client.test.ts
++++ b/src/lib/voice-gateway/openclaw-client.test.ts
+@@ -3,0 +4,5 @@
++import { createHash } from "node:crypto";
++import { createServer } from "node:http";
++import type { AddressInfo } from "node:net";
++import type { Duplex } from "node:stream";
++
+@@ -137,0 +143,88 @@ describe("OpenClaw voice gateway client", () => {
++  it("forcibly retires a transport when the peer ignores the close handshake", async () => {
++    const within = async <T>(promise: Promise<T>, stage: string): Promise<T> =>
++      await new Promise<T>((resolve, reject) => {
++        const timer = setTimeout(() => reject(new Error(`timed out while ${stage}`)), 1_000);
++        void promise.then(
++          (value) => {
++            clearTimeout(timer);
++            resolve(value);
++          },
++          (error: unknown) => {
++            clearTimeout(timer);
++            reject(error);
++          },
++        );
++      });
++    const server = createServer();
++    const connection: { peer: Duplex | null } = { peer: null };
++    let opened!: () => void;
++    const open = new Promise<void>((resolve) => {
++      opened = resolve;
++    });
++    server.on("upgrade", (request, socket) => {
++      const key = request.headers["sec-websocket-key"];
++      if (typeof key !== "string") {
++        socket.destroy();
++        return;
++      }
++      const accept = createHash("sha1")
++        .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
++        .digest("base64");
++      connection.peer = socket;
++      socket.on("error", () => undefined);
++      socket.once("data", opened);
++      socket.write(
++        "HTTP/1.1 101 Switching Protocols\r\n" +
++          "Upgrade: websocket\r\n" +
++          "Connection: Upgrade\r\n" +
++          `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
++      );
++    });
++    await new Promise<void>((resolve, reject) => {
++      server.once("error", reject);
++      server.listen(0, "127.0.0.1", resolve);
++    });
++    const port = (server.address() as AddressInfo).port;
++    const client = new OpenClawVoiceClient({
++      gatewayUrl: `ws://127.0.0.1:${port}/ws`,
++      credential: "openclaw-credential-must-not-cross",
++    });
++
++    try {
++      const turn = client.runTurn({
++        sessionKey: "agent:main:nemoclaw-voice:session",
++        idempotencyKey: "generated-turn-id",
++        message: "repository status",
++        onEvent: () => undefined,
++      });
++      await within(
++        Promise.race([
++          open,
++          turn.then((result) => {
++            throw new Error(`turn settled before opening: ${JSON.stringify(result)}`);
++          }),
++        ]),
++        "opening the WebSocket",
++      );
++
++      client.close();
++
++      await expect(within(turn, "settling the turn")).resolves.toEqual({
++        outcome: "failed",
++        reason: "agent_gateway_unavailable",
++      });
++      await within(
++        vi.waitFor(() => expect(connection.peer?.destroyed).toBe(true)),
++        "retiring the transport",
++      );
++    } finally {
++      connection.peer?.destroy();
++      await within(
++        new Promise<void>((resolve, reject) => {
++          server.close((error) => (error ? reject(error) : resolve()));
++        }),
++        "closing the fixture server",
++      );
++    }
++  });
++
+@@ -196,0 +290,14 @@ describe("OpenClaw voice gateway client", () => {
++  it("accepts monotonic OpenClaw status frames before text projection", async () => {
++    const { result, events } = await runTurn(
++      replyHandlers([
++        { seq: 0, state: "status", phase: "start" },
++        { seq: 1, state: "status", phase: "thinking" },
++        { seq: 2, state: "delta", deltaText: "OK" },
++        { seq: 3, state: "final", message: assistantMessage("OK") },
++      ]),
++    );
++
++    expect(result).toEqual({ outcome: "completed" });
++    expect(events).toEqual([{ type: "started" }, { type: "text", text: "OK" }]);
++  });
++
+diff --git a/src/lib/voice-gateway/openclaw-client.ts b/src/lib/voice-gateway/openclaw-client.ts
+index c1f04ab28..833040286 100644
+--- a/src/lib/voice-gateway/openclaw-client.ts
++++ b/src/lib/voice-gateway/openclaw-client.ts
+@@ -4,0 +5,3 @@ import { randomUUID } from "node:crypto";
++import type { Socket } from "node:net";
++
++import { Client, WebSocket, buildConnector } from "undici";
+@@ -67,3 +70,6 @@ function parseNativeChatEvent(frame: Record<string, unknown>): NativeChatEvent |
+-function defaultWebSocketFactory(url: string): WebSocketLike {
+-  if (typeof globalThis.WebSocket !== "function") {
+-    throw new Error("WebSocket support is unavailable.");
++function retireTransport(socket: Socket): void {
++  if (socket.destroyed) return;
++  try {
++    socket.resetAndDestroy();
++  } catch {
++    socket.destroy();
+@@ -71 +77,50 @@ function defaultWebSocketFactory(url: string): WebSocketLike {
+-  return new globalThis.WebSocket(url) as unknown as WebSocketLike;
++}
++
++function defaultWebSocketFactory(url: string): WebSocketLike {
++  // Keep the upgraded TCP socket because a WHATWG WebSocket exposes only a
++  // graceful close handshake. An older peer can leave that handshake in
++  // CLOSING forever, retaining one OpenShell forward slot per committed turn.
++  const endpoint = new URL(url);
++  endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
++  const connector = buildConnector({});
++  let transport: Socket | null = null;
++  let closed = false;
++  const dispatcher = new Client(endpoint.origin, {
++    connect(options, callback) {
++      connector(options, (...result) => {
++        const [, connected] = result;
++        if (connected !== null) {
++          if (closed) retireTransport(connected);
++          else transport = connected;
++        }
++        callback(...result);
++      });
++    },
++  });
++  const socket = new WebSocket(url, { dispatcher });
++  const wrapper: WebSocketLike = {
++    onopen: null,
++    onmessage: null,
++    onerror: null,
++    onclose: null,
++    send(data) {
++      socket.send(data);
++    },
++    close() {
++      if (closed) return;
++      closed = true;
++      const connected = transport;
++      transport = null;
++      if (connected !== null) retireTransport(connected);
++      try {
++        socket.close();
++      } finally {
++        void dispatcher.destroy().catch(() => undefined);
++      }
++    },
++  };
++  socket.onopen = () => wrapper.onopen?.();
++  socket.onmessage = (event) => wrapper.onmessage?.({ data: event.data });
++  socket.onerror = () => wrapper.onerror?.();
++  socket.onclose = () => wrapper.onclose?.();
++  return wrapper;
+@@ -184,0 +240,6 @@ export class OpenClawVoiceClient implements AgentTurnClient {
++      // Current OpenClaw emits monotonic, run-scoped status frames while the
++      // agent is preparing and executing a turn. They carry no user-facing
++      // text and are not terminal, so retain their sequence evidence and wait
++      // for the canonical delta/final projection.
++      if (state === "status") return;
++

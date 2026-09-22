@@ -848,6 +848,7 @@ class RealtimeLifecycleObserver(BaseObserver):
                         self._emit_batch,
                         self._controller.user_transcript_delta(
                             frame.text or "",
+                            includes_inter_frame_spaces=frame.includes_inter_frame_spaces,
                             item_id=transcript_item_id,
                         ),
                     )

@@ -333,6 +333,7 @@ class RealtimeSessionController:
         self._user_turn_stopped = False
         self._pending_user_transcript = _UserTranscriptState(parts=[])
         self._pending_user_interim = ""
+        self._pending_user_interim_includes_inter_frame_spaces = False
         self._user_transcript_publication_enabled: bool | None = None
         self._emitted_user_interims: dict[str, str] = {}
         self._user_audio_duration_seconds: dict[str, float] = {}
@@ -1749,9 +1750,12 @@ class RealtimeSessionController:
     ) -> tuple[str, int]:
         """Allocate an input-audio item and return its speech start position."""
         cursor = self._input_audio_samples if audio_sample_cursor is None else max(0, int(audio_sample_cursor))
+        if new_turn and self._user_item_id is not None and self._user_item_announced:
+            raise RuntimeError("An announced input-audio item must be committed before starting a new turn")
         if sample_rate is not None:
             self._input_sample_rate = max(1, int(sample_rate))
         if new_turn and self._user_item_id is not None:
+            self._emitted_user_interims.pop(self._user_item_id, None)
             self.clear_user_turn()
         if self._user_item_id is None:
             self._user_item_id = new_realtime_id("item")
@@ -1761,6 +1765,7 @@ class RealtimeSessionController:
             self._user_item_announced = False
             self._pending_user_transcript = _UserTranscriptState(parts=[])
             self._pending_user_interim = ""
+            self._pending_user_interim_includes_inter_frame_spaces = False
             self._user_transcript_publication_enabled = self._input_transcription_enabled()
         return self._user_item_id, self._input_ms(self._user_turn_start_sample)
 
@@ -1928,6 +1933,10 @@ class RealtimeSessionController:
             # deliberately not used as this barrier.
             self._pending_user_transcript.finalize_turn()
         transcription_enabled = self._input_transcription_enabled_for_item(item_id)
+        has_unfinalized_interim = bool(
+            transcription_enabled and self._pending_user_interim and not self._pending_user_transcript.failure_ready
+        )
+        transcript_completion_ready = self._pending_user_transcript.completion_ready and not has_unfinalized_interim
         self._committed_user_transcript_publication_enabled[item_id] = transcription_enabled
         transcript = self._pending_user_transcript.text
         events = self.announce_user_item()
@@ -1953,26 +1962,19 @@ class RealtimeSessionController:
                     or "Input audio transcription failed",
                 )
             )
-        elif transcription_enabled and not self._pending_user_transcript.completion_ready:
+        elif transcription_enabled and not transcript_completion_ready:
             self._stopped_user_items.append(item_id)
             self._stopped_user_transcripts[item_id] = self._pending_user_transcript
             self._stopped_user_transcript_publication_enabled[item_id] = transcription_enabled
-        if transcription_enabled and self._pending_user_interim and not self._pending_user_transcript.failure_ready:
-            events.append(
-                build_server_event(
-                    "conversation.item.input_audio_transcription.delta",
+        if has_unfinalized_interim:
+            events.extend(
+                self.user_transcript_delta(
+                    self._pending_user_interim,
+                    includes_inter_frame_spaces=self._pending_user_interim_includes_inter_frame_spaces,
                     item_id=item_id,
-                    content_index=0,
-                    delta=self._pending_user_interim,
                 )
             )
-            if (
-                transcription_enabled
-                and not self._pending_user_transcript.completion_ready
-                and not self._pending_user_transcript.failure_ready
-            ):
-                self._emitted_user_interims[item_id] = self._pending_user_interim
-        if transcription_enabled and self._pending_user_transcript.completion_ready:
+        if transcription_enabled and transcript_completion_ready:
             events.extend(self._complete_user_transcript(item_id, self._pending_user_transcript))
         elif not transcription_enabled:
             self._user_audio_duration_seconds.pop(item_id, None)
@@ -2048,6 +2050,7 @@ class RealtimeSessionController:
             includes_inter_frame_spaces=includes_inter_frame_spaces,
         )
         self._pending_user_interim = ""
+        self._pending_user_interim_includes_inter_frame_spaces = False
         return target_item_id, []
 
     def end_user_transcript_producer(
@@ -2114,6 +2117,7 @@ class RealtimeSessionController:
         self,
         hypothesis: str,
         *,
+        includes_inter_frame_spaces: bool = False,
         item_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Convert full evolving ASR hypotheses into append-only Realtime deltas."""
@@ -2123,29 +2127,77 @@ class RealtimeSessionController:
         if not self._input_transcription_enabled_for_item(target_item_id):
             if target_item_id == self._user_item_id:
                 self._pending_user_interim = ""
+                self._pending_user_interim_includes_inter_frame_spaces = False
             return []
         if not hypothesis.strip():
             if target_item_id == self._user_item_id:
                 self._pending_user_interim = ""
+                self._pending_user_interim_includes_inter_frame_spaces = False
             return []
+        cumulative_hypothesis = self._cumulative_user_transcript_hypothesis(
+            target_item_id,
+            hypothesis,
+            includes_inter_frame_spaces=includes_inter_frame_spaces,
+        )
         if target_item_id in self._stopped_user_transcripts:
-            emitted = self._emitted_user_interims.get(target_item_id, "")
-            if hypothesis.startswith(emitted):
-                delta = hypothesis[len(emitted) :]
-                self._emitted_user_interims[target_item_id] = hypothesis
-                if delta:
-                    return [
-                        build_server_event(
-                            "conversation.item.input_audio_transcription.delta",
-                            item_id=target_item_id,
-                            content_index=0,
-                            delta=delta,
-                        )
-                    ]
-            return []
+            return self._append_user_transcript_hypothesis(target_item_id, cumulative_hypothesis)
         if target_item_id == self._user_item_id:
             self._pending_user_interim = hypothesis
+            self._pending_user_interim_includes_inter_frame_spaces = includes_inter_frame_spaces
+            return self._append_user_transcript_hypothesis(target_item_id, cumulative_hypothesis, announce=True)
         return []
+
+    def _cumulative_user_transcript_hypothesis(
+        self,
+        item_id: str,
+        hypothesis: str,
+        *,
+        includes_inter_frame_spaces: bool,
+    ) -> str:
+        """Offset one segment-local interim by the item's finalized ASR segments."""
+        state = self._stopped_user_transcripts.get(item_id)
+        if state is None and item_id == self._user_item_id:
+            state = self._pending_user_transcript
+        if state is None or not state.parts:
+            return hypothesis
+        return _transcript_text(
+            [
+                *state.parts,
+                TextPartForConcatenation(
+                    text=hypothesis,
+                    includes_inter_part_spaces=includes_inter_frame_spaces,
+                ),
+            ]
+        )
+
+    def _append_user_transcript_hypothesis(
+        self,
+        item_id: str,
+        hypothesis: str,
+        *,
+        announce: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Publish only the append-only suffix of one evolving ASR hypothesis."""
+        emitted = self._emitted_user_interims.get(item_id, "")
+        if not hypothesis.startswith(emitted):
+            # Interim ASR may revise already-published words. Realtime deltas
+            # are append-only, so the authoritative completed event corrects
+            # that provisional text instead of emitting a corrupting suffix.
+            return []
+        delta = hypothesis[len(emitted) :]
+        if not delta:
+            return []
+        events = self.announce_user_item() if announce else []
+        self._emitted_user_interims[item_id] = hypothesis
+        events.append(
+            build_server_event(
+                "conversation.item.input_audio_transcription.delta",
+                item_id=item_id,
+                content_index=0,
+                delta=delta,
+            )
+        )
+        return events
 
     def clear_user_turn(self) -> None:
         """Release transient ASR correlation state after a completed turn."""
@@ -2155,6 +2207,7 @@ class RealtimeSessionController:
         self._user_turn_stopped = False
         self._pending_user_transcript = _UserTranscriptState(parts=[])
         self._pending_user_interim = ""
+        self._pending_user_interim_includes_inter_frame_spaces = False
         self._user_transcript_publication_enabled = None
 
     def retrieve_item_event(self, item_id: str) -> dict[str, Any]:

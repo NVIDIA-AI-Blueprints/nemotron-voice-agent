@@ -1,0 +1,194 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+name: VoiceClaw package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/voiceclaw.yml"
+      - "LICENSE"
+      - "examples_registry.yaml"
+      - "pyproject.toml"
+      - "src/**"
+      - "third_party_oss_license.txt"
+      - "uv.lock"
+  push:
+    branches: [main, develop]
+    paths:
+      - ".github/workflows/voiceclaw.yml"
+      - "LICENSE"
+      - "examples_registry.yaml"
+      - "pyproject.toml"
+      - "src/**"
+      - "third_party_oss_license.txt"
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: Source contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+
+      - name: Install VoiceClaw development environment
+        run: uv sync --project src/examples/voiceclaw --extra server --group dev --frozen
+
+      - name: Lint and format
+        run: |
+          uv run ruff check src tests scripts
+          uv run ruff format --check src tests scripts
+        working-directory: src/examples/voiceclaw
+
+      - name: Run VoiceClaw tests
+        run: uv run --project src/examples/voiceclaw --group dev pytest -q src/examples/voiceclaw/tests
+
+      - name: Check packaged UI JavaScript
+        run: node --check src/examples/voiceclaw/src/voiceclaw/ui/app.js
+
+  wheel:
+    name: Exact wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+
+      - name: Build exact wheel
+        run: uv build src/examples/voiceclaw --wheel --out-dir "${RUNNER_TEMP}/voiceclaw-dist"
+
+      - name: Verify wheel bytes and metadata
+        run: |
+          mapfile -t wheels < <(find "${RUNNER_TEMP}/voiceclaw-dist" -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          wheel="${wheels[0]}"
+          python3 src/examples/voiceclaw/scripts/verify-wheel.py \
+            "${wheel}" \
+            --expect-version 0.1.0 \
+            --expect-revision "${GITHUB_SHA}" \
+            --repository-root "${GITHUB_WORKSPACE}" \
+            > "${RUNNER_TEMP}/voiceclaw-dist/wheel-evidence.json"
+
+      - name: Install and run only the built wheel
+        run: |
+          mapfile -t wheels < <(find "${RUNNER_TEMP}/voiceclaw-dist" -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          wheel="${wheels[0]}"
+          uv venv --python 3.12 "${RUNNER_TEMP}/voiceclaw-wheel-venv"
+          uv pip install --python "${RUNNER_TEMP}/voiceclaw-wheel-venv/bin/python" "${wheel}[server]"
+          cd "${RUNNER_TEMP}"
+          env -u PYTHONPATH "${RUNNER_TEMP}/voiceclaw-wheel-venv/bin/python" -c \
+            'from voiceclaw.ui import read_asset; assert "VoiceClaw" in read_asset("index.html")'
+          env -u PYTHONPATH "${RUNNER_TEMP}/voiceclaw-wheel-venv/bin/voiceclaw" --help
+          env -u PYTHONPATH "${RUNNER_TEMP}/voiceclaw-wheel-venv/bin/voiceclaw-client-secret" --help
+          env -u PYTHONPATH "${RUNNER_TEMP}/voiceclaw-wheel-venv/bin/voiceclaw-runtime" --help
+
+      - name: Upload verified wheel evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voiceclaw-wheel-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/voiceclaw-dist/*.whl
+            ${{ runner.temp }}/voiceclaw-dist/wheel-evidence.json
+          if-no-files-found: error
+
+  image:
+    name: Exact image
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    needs: [source, wheel]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+
+      - name: Install trusted artifact verification environment
+        run: uv sync --project src/examples/voiceclaw --extra server --frozen
+
+      - name: Download exact verified wheel
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: voiceclaw-wheel-${{ github.sha }}
+          path: ${{ runner.temp }}/voiceclaw-wheel
+
+      - name: Build exact image
+        run: |
+          docker build \
+            --build-arg VOICECLAW_VERSION=0.1.0 \
+            --build-arg "VOICECLAW_SOURCE_REVISION=${GITHUB_SHA}" \
+            --build-arg VOICECLAW_SOURCE_URL=https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent \
+            -f src/examples/voiceclaw/Dockerfile \
+            -t "voiceclaw-ci:${GITHUB_SHA}" \
+            .
+
+      - name: Verify exact image contract and startup
+        run: |
+          mkdir -p "${RUNNER_TEMP}/voiceclaw-image"
+          mapfile -t wheels < <(find "${RUNNER_TEMP}/voiceclaw-wheel" -maxdepth 1 -type f -name '*.whl' -print)
+          mapfile -t wheel_evidence < <(find "${RUNNER_TEMP}/voiceclaw-wheel" -maxdepth 1 -type f -name 'wheel-evidence.json' -print)
+          test "${#wheels[@]}" -eq 1
+          test "${#wheel_evidence[@]}" -eq 1
+          uv run --project src/examples/voiceclaw --extra server --frozen \
+            python src/examples/voiceclaw/scripts/verify-image.py \
+            "voiceclaw-ci:${GITHUB_SHA}" \
+            --expect-version 0.1.0 \
+            --expect-revision "${GITHUB_SHA}" \
+            --expect-source https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent \
+            --expect-architecture arm64 \
+            --repository-root "${GITHUB_WORKSPACE}" \
+            --wheel "${wheels[0]}" \
+            --wheel-evidence "${wheel_evidence[0]}" \
+            --smoke --smoke-ui --smoke-realtime --timeout 90 \
+            > "${RUNNER_TEMP}/voiceclaw-image/image-evidence.json"
+
+      - name: Export the verified immutable image
+        run: |
+          python3 src/examples/voiceclaw/scripts/export-image-archive.py \
+            "voiceclaw-ci:${GITHUB_SHA}" \
+            --image-evidence "${RUNNER_TEMP}/voiceclaw-image/image-evidence.json" \
+            --archive "${RUNNER_TEMP}/voiceclaw-image/voiceclaw-${GITHUB_SHA}-linux-arm64.docker.tar" \
+            > "${RUNNER_TEMP}/voiceclaw-image/archive-evidence.json"
+
+      - name: Verify the retained archive as a consumer
+        run: |
+          python3 src/examples/voiceclaw/scripts/export-image-archive.py \
+            --verify-only \
+            --image-evidence "${RUNNER_TEMP}/voiceclaw-image/image-evidence.json" \
+            --archive-evidence "${RUNNER_TEMP}/voiceclaw-image/archive-evidence.json" \
+            --archive "${RUNNER_TEMP}/voiceclaw-image/voiceclaw-${GITHUB_SHA}-linux-arm64.docker.tar"
+
+      - name: Upload verified image archive and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voiceclaw-image-linux-arm64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/voiceclaw-image/voiceclaw-${{ github.sha }}-linux-arm64.docker.tar
+            ${{ runner.temp }}/voiceclaw-image/image-evidence.json
+            ${{ runner.temp }}/voiceclaw-image/archive-evidence.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.env
+.runtime/
+build/
+dist/
+*.egg-info/
+*.db
+*.db-shm
+*.db-wal

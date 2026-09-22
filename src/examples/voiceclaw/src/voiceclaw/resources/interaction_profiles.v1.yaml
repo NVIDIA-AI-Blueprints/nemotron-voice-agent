@@ -1,0 +1,140 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+schema_version: voiceclaw.interaction-profiles.v1
+
+profiles:
+  stateless:
+    session_scope: none
+    work_cardinality: many
+    tools:
+      conversation.respond:
+        operations: []
+        argument_binding: none
+        description: >-
+          Select this route only when the complete useful answer fits in one short spoken reply and needs
+          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
+          a route only; emit no answer or routing reasoning.
+        property_descriptions: {}
+      work.delegate:
+        operations: [work.submit]
+        argument_binding: none
+        description: >-
+          Select the configured target whenever the useful result needs code, an artifact, rich display,
+          structured analysis, research, multiple steps, or any substantial answer. The server supplies
+          the exact finalized turn and correlation.
+        property_descriptions: {}
+      work.cancel:
+        operations: [work.cancel]
+        argument_binding: work_id_required
+        description: Request cancellation of one identified Work item; this does not stop local speech.
+        property_descriptions:
+          work_id: Opaque backend-issued Work identifier from the authoritative projection.
+
+  single_stateful:
+    session_scope: attachment
+    work_cardinality: single
+    tools:
+      conversation.respond:
+        operations: []
+        argument_binding: none
+        description: >-
+          Select this route only when the complete useful answer fits in one short spoken reply and needs
+          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
+          a route only; emit no answer or routing reasoning.
+        property_descriptions: {}
+      work.delegate:
+        operations: [work.submit, work.steer, work.answer_query, work.respond_permission]
+        argument_binding: none
+        description: >-
+          Start or continue the sole active interaction with the current finalized turn. The server
+          resolves new Work, steering, or the sole pending backend query from authoritative state.
+        property_descriptions: {}
+      work.cancel:
+        operations: [work.cancel]
+        argument_binding: none
+        description: Request cancellation of the sole active Work item.
+        property_descriptions: {}
+      work.status:
+        operations: [work.status]
+        argument_binding: none
+        description: Read authoritative status for the sole active Work item.
+        property_descriptions: {}
+
+  conductor:
+    session_scope: attachment
+    work_cardinality: many
+    tools:
+      conversation.respond:
+        operations: []
+        argument_binding: none
+        description: >-
+          Select this route only when the complete useful answer fits in one short spoken reply and needs
+          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
+          a route only; emit no answer or routing reasoning.
+        property_descriptions: {}
+      work.delegate:
+        operations: [work.submit, work.steer]
+        argument_binding: none
+        description: >-
+          Route the exact finalized turn to the configured backend when the server can resolve one
+          unambiguous submit or steer operation from authoritative state.
+        property_descriptions: {}
+      work.answer_agent:
+        operations: [work.answer_query, work.respond_permission]
+        argument_binding: query_id_required
+        description: Route the current finalized user response to one pending backend query.
+        property_descriptions:
+          query_id: Pending backend query identifier from the authoritative projection.
+      work.cancel:
+        operations: [work.cancel]
+        argument_binding: work_id_required
+        description: Request cancellation of one identified Work item; this does not stop local speech.
+        property_descriptions:
+          work_id: Opaque backend-issued Work identifier from the authoritative projection.
+      work.status:
+        operations: [work.status]
+        argument_binding: work_id_optional
+        description: Read one Work item by ID, or the bounded current Work projection when omitted.
+        property_descriptions:
+          work_id: Opaque backend-issued Work identifier from the authoritative projection.
+
+  specialized:
+    session_scope: target
+    work_cardinality: per_target
+    tools:
+      conversation.respond:
+        operations: []
+        argument_binding: none
+        description: >-
+          Select this route only when the complete useful answer fits in one short spoken reply and needs
+          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
+          a route only; emit no answer or routing reasoning.
+        property_descriptions: {}
+      work.delegate:
+        operations: [work.submit, work.steer]
+        argument_binding: target_context_required
+        description: >-
+          Start or continue one configured target interaction. Context must be a bounded target-specific
+          slice, never a cross-target plan or dependency graph.
+        property_descriptions:
+          agent: Stable configured target identifier.
+          context: Relevant finalized user input, constraints, and artifact references only.
+      work.answer_agent:
+        operations: [work.answer_query, work.respond_permission]
+        argument_binding: query_id_required
+        description: Route the current finalized user response to one pending backend query.
+        property_descriptions:
+          query_id: Pending backend query identifier from the authoritative projection.
+      work.cancel:
+        operations: [work.cancel]
+        argument_binding: target_required
+        description: Request cancellation for the selected target interaction.
+        property_descriptions:
+          agent: Stable configured target identifier.
+      work.status:
+        operations: [work.status]
+        argument_binding: target_optional
+        description: Read authoritative status for one target, or the bounded target overview when omitted.
+        property_descriptions:
+          agent: Stable configured target identifier.

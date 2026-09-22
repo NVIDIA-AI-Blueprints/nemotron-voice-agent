@@ -962,6 +962,99 @@ class TranscriptControllerTests(unittest.TestCase):
         self.assertEqual(completed["transcript"], "The local speech pipeline is ready .")
         self.assertEqual(audio_end_ms, 1000)
 
+    def test_interim_deltas_continue_across_finalized_asr_segments(self) -> None:
+        controller = _controller()
+        item_id, _audio_start_ms = controller.begin_user_turn(audio_sample_cursor=0, sample_rate=16_000)
+        events = controller.user_transcript_delta("hello", item_id=item_id)
+        _item_id, first_final_events = controller.set_user_transcript("hello", item_id=item_id)
+        events.extend(first_final_events)
+        events.extend(controller.user_transcript_delta("world", item_id=item_id))
+
+        stopped_item_id, _audio_end_ms, stop_events = controller.stop_user_turn(
+            audio_sample_cursor=16_000,
+            sample_rate=16_000,
+        )
+        events.extend(stop_events)
+        self.assertNotIn(
+            "conversation.item.input_audio_transcription.completed",
+            [event["type"] for event in events],
+        )
+
+        _item_id, second_final_events = controller.set_user_transcript("world", item_id=item_id)
+        events.extend(second_final_events)
+
+        self.assertEqual(stopped_item_id, item_id)
+        self.assertEqual(
+            [event["delta"] for event in events if event["type"].endswith("transcription.delta")],
+            ["hello", " world"],
+        )
+        completed = next(event for event in events if event["type"].endswith("transcription.completed"))
+        self.assertEqual(completed["transcript"], "hello world")
+
+    def test_new_turn_clears_unannounced_transcript_correlation(self) -> None:
+        controller = _controller()
+        abandoned_item_id, _audio_start_ms = controller.begin_user_turn(
+            audio_sample_cursor=0,
+            sample_rate=16_000,
+        )
+        controller.set_user_transcript("discarded", item_id=abandoned_item_id)
+        controller._emitted_user_interims[abandoned_item_id] = "stale cursor"
+
+        next_item_id, _audio_start_ms = controller.begin_user_turn(
+            new_turn=True,
+            audio_sample_cursor=8_000,
+            sample_rate=16_000,
+        )
+
+        self.assertNotEqual(next_item_id, abandoned_item_id)
+        self.assertNotIn(abandoned_item_id, controller._emitted_user_interims)
+        self.assertNotIn(abandoned_item_id, controller.conversation.ordered_item_ids())
+        self.assertEqual(controller._pending_user_transcript.text, "")
+        self.assertEqual(controller._pending_user_interim, "")
+
+    def test_new_turn_refuses_to_abandon_an_announced_input_audio_item(self) -> None:
+        controller = _controller()
+        first_item_id, _audio_start_ms = controller.begin_user_turn(
+            audio_sample_cursor=0,
+            sample_rate=16_000,
+        )
+        events = controller.user_transcript_delta("hello", item_id=first_item_id)
+        self.assertEqual(
+            [event["type"] for event in events],
+            [
+                "conversation.item.added",
+                "conversation.item.input_audio_transcription.delta",
+            ],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "must be committed"):
+            controller.begin_user_turn(
+                new_turn=True,
+                audio_sample_cursor=8_000,
+                sample_rate=8_000,
+            )
+
+        self.assertEqual(controller._user_item_id, first_item_id)
+        self.assertEqual(controller._input_sample_rate, 16_000)
+        self.assertEqual(controller._emitted_user_interims[first_item_id], "hello")
+        self.assertEqual(controller.conversation.item(first_item_id)["status"], "in_progress")
+
+        controller.set_user_transcript("hello", item_id=first_item_id)
+        stopped_item_id, _audio_end_ms, stop_events = controller.stop_user_turn(
+            audio_sample_cursor=8_000,
+            sample_rate=16_000,
+        )
+        self.assertEqual(stopped_item_id, first_item_id)
+        self.assertTrue(any(event["type"].endswith("transcription.completed") for event in stop_events))
+        self.assertNotIn(first_item_id, controller._emitted_user_interims)
+
+        next_item_id, _audio_start_ms = controller.begin_user_turn(
+            new_turn=True,
+            audio_sample_cursor=8_000,
+            sample_rate=16_000,
+        )
+        self.assertNotEqual(next_item_id, first_item_id)
+
     def test_fused_transcript_after_stop_targets_the_exact_item(self) -> None:
         controller = _controller(fused=True)
         item_id, _audio_end_ms, stop_events = controller.stop_user_turn(
@@ -1452,7 +1545,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(observer._pending_input_transcriptions)
         observer.shutdown()
 
-    async def test_cascaded_interim_and_final_transcripts_complete_at_stop(self) -> None:
+    async def test_cascaded_interim_streams_before_stop_and_final_completes_at_stop(self) -> None:
         recorder = _Recorder()
         observer = _observer(recorder, _controller())
         vad_start = VADUserStartedSpeakingFrame()
@@ -1467,6 +1560,19 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
             source=self.source,
             destination=self.destination,
         )
+        self.assertEqual(
+            recorder.types,
+            [
+                "input_audio_buffer.speech_started",
+                "conversation.item.added",
+                "conversation.item.input_audio_transcription.delta",
+            ],
+        )
+        added = recorder.events[1]
+        delta = recorder.events[2]
+        self.assertEqual(added["item"]["status"], "in_progress")
+        self.assertEqual(delta["delta"], "hel")
+        self.assertEqual(delta["item_id"], added["item"]["id"])
         await _push(
             observer,
             _owned_by(
@@ -1476,7 +1582,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
             source=self.source,
             destination=self.destination,
         )
-        self.assertNotIn("conversation.item.created", recorder.types)
+        self.assertNotIn("conversation.item.input_audio_transcription.completed", recorder.types)
         await _push(observer, UserStoppedSpeakingFrame(), source=self.source, destination=self.destination)
 
         completed = next(
@@ -1487,7 +1593,6 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         started = next(event for event in recorder.events if event["type"] == "input_audio_buffer.speech_started")
         stopped = next(event for event in recorder.events if event["type"] == "input_audio_buffer.speech_stopped")
         committed = next(event for event in recorder.events if event["type"] == "input_audio_buffer.committed")
-        added = next(event for event in recorder.events if event["type"] == "conversation.item.added")
         done = next(event for event in recorder.events if event["type"] == "conversation.item.done")
         self.assertEqual(
             {
@@ -1502,10 +1607,19 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(completed["transcript"], "hello")
         self.assertLess(
-            recorder.types.index("input_audio_buffer.committed"), recorder.types.index("conversation.item.added")
+            recorder.types.index("conversation.item.added"),
+            recorder.types.index("conversation.item.input_audio_transcription.delta"),
         )
         self.assertLess(
-            recorder.types.index("conversation.item.added"),
+            recorder.types.index("conversation.item.input_audio_transcription.delta"),
+            recorder.types.index("input_audio_buffer.speech_stopped"),
+        )
+        self.assertLess(
+            recorder.types.index("input_audio_buffer.committed"),
+            recorder.types.index("conversation.item.done"),
+        )
+        self.assertLess(
+            recorder.types.index("conversation.item.done"),
             recorder.types.index("conversation.item.input_audio_transcription.completed"),
         )
         observer.shutdown()
@@ -1542,7 +1656,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("error", recorder.types)
         observer.shutdown()
 
-    async def test_cascaded_interim_at_stop_and_final_after_stop_keep_one_item_owner(self) -> None:
+    async def test_cascaded_interims_stream_before_stop_without_commit_duplication(self) -> None:
         recorder = _Recorder()
         observer = _observer(recorder, _controller())
         vad_start = VADUserStartedSpeakingFrame()
@@ -1557,6 +1671,21 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
             source=self.source,
             destination=self.destination,
         )
+        await _push(
+            observer,
+            _owned_by(
+                InterimTranscriptionFrame(text="after stop", user_id="", timestamp=""),
+                vad_start,
+            ),
+            source=self.source,
+            destination=self.destination,
+        )
+        streamed_deltas = [
+            event["delta"]
+            for event in recorder.events
+            if event["type"] == "conversation.item.input_audio_transcription.delta"
+        ]
+        self.assertEqual(streamed_deltas, ["after", " stop"])
         await _push(
             observer,
             VADUserStoppedSpeakingFrame(),
@@ -1578,9 +1707,9 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         committed = next(event for event in recorder.events if event["type"] == "input_audio_buffer.committed")
         added = next(event for event in recorder.events if event["type"] == "conversation.item.added")
         done = next(event for event in recorder.events if event["type"] == "conversation.item.done")
-        delta = next(
+        deltas = [
             event for event in recorder.events if event["type"] == "conversation.item.input_audio_transcription.delta"
-        )
+        ]
         completed = next(
             event
             for event in recorder.events
@@ -1592,25 +1721,87 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
                 committed["item_id"],
                 added["item"]["id"],
                 done["item"]["id"],
-                delta["item_id"],
+                *(delta["item_id"] for delta in deltas),
                 completed["item_id"],
             },
             {completed["item_id"]},
         )
-        self.assertEqual(delta["delta"], "after")
+        self.assertEqual([event["delta"] for event in deltas], ["after", " stop"])
         self.assertEqual(completed["transcript"], "after stop")
         self.assertLess(
             recorder.types.index("input_audio_buffer.speech_stopped"),
             recorder.types.index("input_audio_buffer.committed"),
         )
         self.assertLess(
-            recorder.types.index("input_audio_buffer.committed"), recorder.types.index("conversation.item.added")
+            recorder.types.index("conversation.item.added"),
+            recorder.types.index("conversation.item.input_audio_transcription.delta"),
         )
-        self.assertLess(recorder.types.index("conversation.item.added"), recorder.types.index("conversation.item.done"))
+        self.assertLess(
+            recorder.types.index("input_audio_buffer.committed"), recorder.types.index("conversation.item.done")
+        )
         self.assertLess(
             recorder.types.index("conversation.item.done"),
             recorder.types.index("conversation.item.input_audio_transcription.completed"),
         )
+        observer.shutdown()
+
+    async def test_cascaded_interim_revision_is_corrected_by_completed_event(self) -> None:
+        recorder = _Recorder()
+        observer = _observer(recorder, _controller())
+        vad_start = VADUserStartedSpeakingFrame()
+        await _push(observer, vad_start, source=self.source, destination=self.destination)
+        await _push(observer, UserStartedSpeakingFrame(), source=self.source, destination=self.destination)
+
+        for hypothesis in ("book a flight", "book a flight to", "book the flight to SFO"):
+            await _push(
+                observer,
+                _owned_by(
+                    InterimTranscriptionFrame(text=hypothesis, user_id="", timestamp=""),
+                    vad_start,
+                ),
+                source=self.source,
+                destination=self.destination,
+            )
+
+        deltas_before_stop = [
+            event["delta"]
+            for event in recorder.events
+            if event["type"] == "conversation.item.input_audio_transcription.delta"
+        ]
+        self.assertEqual(deltas_before_stop, ["book a flight", " to"])
+
+        await _push(observer, UserStoppedSpeakingFrame(), source=self.source, destination=self.destination)
+        self.assertEqual(
+            [
+                event["delta"]
+                for event in recorder.events
+                if event["type"] == "conversation.item.input_audio_transcription.delta"
+            ],
+            deltas_before_stop,
+        )
+        await _push(
+            observer,
+            _owned_by(
+                TranscriptionFrame(text="book the flight to SFO", user_id="", timestamp="", finalized=True),
+                vad_start,
+            ),
+            source=self.source,
+            destination=self.destination,
+        )
+
+        completed = next(
+            event
+            for event in recorder.events
+            if event["type"] == "conversation.item.input_audio_transcription.completed"
+        )
+        deltas_after_stop = [
+            event["delta"]
+            for event in recorder.events
+            if event["type"] == "conversation.item.input_audio_transcription.delta"
+        ]
+        self.assertEqual(deltas_after_stop, deltas_before_stop)
+        self.assertEqual("".join(deltas_after_stop), "book a flight to")
+        self.assertEqual(completed["transcript"], "book the flight to SFO")
         observer.shutdown()
 
     async def test_unowned_transcripts_after_completion_are_ignored_without_carryover(self) -> None:
@@ -3117,6 +3308,8 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
             sample_rate=16_000,
         )
         hidden_events = controller.user_transcript_delta("private interim", item_id=hidden_item_id)
+        self.assertEqual(hidden_events, [])
+        self.assertNotIn(hidden_item_id, controller.conversation.ordered_item_ids())
         _item_id, final_events = controller.set_user_transcript("private final", item_id=hidden_item_id)
         hidden_events.extend(final_events)
         stopped_hidden_item_id, _audio_end_ms, stopped_events = controller.stop_user_turn(

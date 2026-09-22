@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=77,<84"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemotron-voiceclaw"
+version = "0.1.0"
+description = "Framework-neutral realtime voice coordination for agent backends"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "BSD-2-Clause"
+license-files = ["LICENSE"]
+dependencies = [
+    "PyYAML>=6.0.3,<7",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.135,<1",
+    "uvicorn[standard]>=0.42,<1",
+    "websockets>=15,<17",
+]
+
+[project.scripts]
+voiceclaw = "voiceclaw.server:main"
+voiceclaw-client-secret = "voiceclaw.client_secret:main"
+voiceclaw-runtime = "voiceclaw.runtime_cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1",
+    "pytest>=9.1.1,<10",
+    "ruff==0.15.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["voiceclaw*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+voiceclaw = ["py.typed"]
+"voiceclaw.resources" = ["*.yaml"]
+"voiceclaw.ui" = ["*.html", "*.css", "*.js", "*.txt"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "D", "E", "F", "I", "SIM", "UP"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

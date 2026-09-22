@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+name: voiceclaw
+
+services:
+  voiceclaw:
+    build:
+      context: ../../..
+      dockerfile: src/examples/voiceclaw/Dockerfile
+      args:
+        VOICECLAW_VERSION: ${VOICECLAW_VERSION:-0.1.0}
+        VOICECLAW_SOURCE_REVISION: ${VOICECLAW_SOURCE_REVISION:-development}
+        VOICECLAW_SOURCE_URL: ${VOICECLAW_SOURCE_URL:-https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent}
+    image: nemotron-voiceclaw:latest
+    # This developer recipe explicitly opts into the optional UI. The image
+    # itself remains headless unless `--ui` is passed.
+    command: ["serve", "--ui"]
+    # The separately supervised NemoClaw gateway is host-local today.
+    network_mode: host
+    # The root supervisor may drop to its two fixed child identities, but no
+    # child may regain privilege through a setuid/setgid or file-cap binary.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # The packaged NemoClaw profile selects this file. Other backend
+      # profiles ignore it, so they do not require a NemoClaw secret.
+      NEMOCLAW_VOICE_GATEWAY_BEARER_FILE: /run/voiceclaw/operator/secrets/nemoclaw-deployment-bearer
+      VOICECLAW_CONFIG: /run/voiceclaw/config/voiceclaw.yaml
+      VOICECLAW_SERVER_HOST: ${VOICECLAW_SERVER_HOST:-127.0.0.1}
+    group_add:
+      - "${VOICECLAW_FILE_GID:-1000}"
+    volumes:
+      - type: bind
+        source: ${VOICECLAW_CONFIG_FILE_HOST:-./src/voiceclaw/resources/voiceclaw.example.yaml}
+        target: /run/voiceclaw/config/voiceclaw.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      # One reviewed, read-only operator root can contain credentials, TLS,
+      # custom catalogs, and alternate configuration fragments. Contents are
+      # ignored by Git; YAML references use absolute /run/voiceclaw/operator
+      # paths. Empty roots support backend:none and external Realtime profiles.
+      - type: bind
+        source: ${VOICECLAW_OPERATOR_FILES_HOST:-./operator}
+        target: /run/voiceclaw/operator
+        read_only: true
+        bind:
+          create_host_path: false
+      - voiceclaw-state:/var/lib/voiceclaw
+      - voiceclaw-cache:/var/cache/voiceclaw
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+volumes:
+  voiceclaw-state:
+  voiceclaw-cache:

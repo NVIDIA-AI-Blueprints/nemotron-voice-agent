@@ -321,22 +321,40 @@ response:
 ```
 
 For audio, Base64-encode chunks in the session's selected input format and send
-`input_audio_buffer.append`. In automatic mode, VAD commits the turn and can
-create its response. The input lifecycle is:
+`input_audio_buffer.append`. In automatic mode, voice activity detection (VAD)
+commits the turn and can create its response. The first automatic speech
+recognition (ASR) interim result announces an in-progress input-audio
+conversation item and begins publishing live transcript deltas. The input
+lifecycle is:
 
 ```text
 input_audio_buffer.speech_started
+  -> conversation.item.added (before the first interim, if any)
+  -> conversation.item.input_audio_transcription.delta (one or more, if available)
   -> input_audio_buffer.speech_stopped
   -> input_audio_buffer.committed
-  -> conversation.item.added
   -> conversation.item.done
   -> conversation.item.input_audio_transcription.completed | .failed
 ```
+
+If ASR does not provide an interim hypothesis, `conversation.item.added`
+follows `input_audio_buffer.committed` instead. The item is always announced
+before its first transcription event.
 
 Wait for `input_audio_buffer.committed`, not only `speech_stopped`, before
 treating a turn as actionable. When public transcription is enabled, its
 terminal `.completed` or `.failed` event precedes the response events for that
 turn.
+
+Treat each `.delta` event as a provisional live-caption update. ASR hypotheses
+can change while the user speaks, so the terminal `.completed` event contains
+the authoritative transcript and can correct the interim text. Correlate all
+transcription events with `item_id`, and replace the provisional caption with
+the `.completed` transcript instead of assuming that concatenated deltas are
+the final result. Live deltas are append-only. If an upstream interim hypothesis
+revises published text, later deltas can pause for that item. The authoritative
+`conversation.item.input_audio_transcription.completed` event then replaces the
+provisional caption.
 
 On eligible cascaded ASR profiles, `server_vad` commits at the detected speech
 stop and includes the configured `prefix_padding_ms` in that turn's audio.

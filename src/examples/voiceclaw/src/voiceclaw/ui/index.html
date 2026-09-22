@@ -1,0 +1,206 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: BSD-2-Clause
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#080b0b">
+    <meta name="description" content="VoiceClaw realtime voice and backend interaction console">
+    <title>VoiceClaw Console</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./marked.min.js" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#conversation">Skip to conversation</a>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup" aria-label="NVIDIA VoiceClaw">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span class="brand-word">NVIDIA</span>
+          <span class="brand-divider"></span>
+          <span class="product-word">VoiceClaw</span>
+          <span class="preview-chip">Developer preview</span>
+        </div>
+
+        <div class="topbar-actions">
+          <span id="backend-badge" class="backend-badge">
+            <span class="badge-dot"></span>
+            Checking backend gateway
+          </span>
+          <button id="connection-toggle" class="button button-quiet" type="button" aria-expanded="false" aria-controls="connection-panel">
+            Connection
+          </button>
+          <button id="connect-button" class="button button-primary" type="button">Connect</button>
+        </div>
+      </header>
+
+      <section id="connection-panel" class="connection-panel" aria-label="Realtime connection settings" hidden>
+        <div class="connection-copy">
+          <p class="eyebrow">OpenAI Realtime-compatible transport</p>
+          <h2>One socket for voice, text, and application state</h2>
+          <p>VoiceClaw owns this public connection. Backend credentials remain server-side. A reachable gateway is not a durable session attachment; only the server-projected operations below are available.</p>
+        </div>
+        <form id="connection-form" class="connection-form">
+          <label class="field field-wide">
+            <span>WebSocket endpoint</span>
+            <input id="endpoint" name="endpoint" type="url" spellcheck="false" autocomplete="off" readonly>
+          </label>
+          <label class="field">
+            <span>Client secret <small id="auth-requirement">checking deployment policy</small></span>
+            <input id="client-secret" name="clientSecret" type="password" placeholder="ek_…" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="field">
+            <span>Session instructions <small>optional</small></span>
+            <input id="instructions" name="instructions" type="text" placeholder="Be concise and voice-friendly" autocomplete="off">
+          </label>
+          <p id="secret-note" class="secret-note field-wide">
+            Checking whether this deployment requires a browser client secret.
+          </p>
+        </form>
+      </section>
+
+      <main class="workspace">
+        <section id="conversation" class="surface conversation-surface" aria-labelledby="conversation-title">
+          <div class="surface-header conversation-header">
+            <div>
+              <p class="eyebrow">Realtime session</p>
+              <h1 id="conversation-title">Talk naturally. Follow each turn.</h1>
+            </div>
+            <div class="session-state" aria-live="polite">
+              <span id="connection-dot" class="connection-dot"></span>
+              <span id="connection-label">Disconnected</span>
+            </div>
+          </div>
+
+          <div class="signal-strip" aria-label="Live voice activity">
+            <div id="input-signal" class="signal-card" data-state="idle">
+              <span class="signal-icon mic-icon" aria-hidden="true"></span>
+              <span><small>Input</small><strong id="input-state">Ready</strong></span>
+              <span class="signal-pulse" aria-hidden="true"></span>
+            </div>
+            <span class="signal-connector" aria-hidden="true"></span>
+            <div id="model-signal" class="signal-card" data-state="idle">
+              <span class="signal-icon model-icon" aria-hidden="true"></span>
+              <span><small>Frontend model</small><strong id="model-state">Idle</strong></span>
+              <span class="signal-pulse" aria-hidden="true"></span>
+            </div>
+            <span class="signal-connector" aria-hidden="true"></span>
+            <div id="output-signal" class="signal-card" data-state="idle">
+              <span class="signal-icon speaker-icon" aria-hidden="true"></span>
+              <span><small>Output</small><strong id="output-state">Idle</strong></span>
+              <span class="signal-pulse" aria-hidden="true"></span>
+            </div>
+            <div id="speech-queue" class="queue-indicator empty" title="VoiceClaw voice responses waiting to start; excludes the response currently being delivered">
+              <span>Voice replies queued</span><strong id="queue-count" aria-label="0 voice replies queued">0</strong>
+            </div>
+          </div>
+
+          <div id="conversation-log" class="conversation-log" role="log" aria-live="polite" aria-relevant="additions text">
+            <div id="empty-conversation" class="empty-conversation">
+              <span class="empty-orbit" aria-hidden="true"><i></i><i></i><i></i></span>
+              <h2>Your voice session will appear here</h2>
+              <p>Connect, then type or start listening. This timeline contains only what you and VoiceClaw say; delegated work stays in its own panel.</p>
+            </div>
+          </div>
+
+          <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+          <form id="composer" class="composer">
+            <label class="composer-field">
+              <span class="sr-only">Message VoiceClaw</span>
+              <textarea id="message-input" rows="1" placeholder="Ask VoiceClaw to research, plan, or act…" disabled></textarea>
+            </label>
+            <div class="composer-actions">
+              <button id="mute-button" class="icon-button mute-button" type="button" aria-label="Mute assistant audio" aria-pressed="false" disabled>
+                <svg class="speaker-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Zm11.5-1.5v2a3 3 0 0 1 0 5v2a5 5 0 0 0 0-9Zm0-3v2a6 6 0 0 1 0 11v2a8 8 0 0 0 0-15Z"/></svg>
+                <svg class="speaker-off" viewBox="0 0 24 24" aria-hidden="true"><path d="m4.3 3 16.7 16.7-1.3 1.3-3.5-3.5c-.2.1-.5.2-.7.3v-2.1l-2.5-2.5V19l-5-4H4V9h2.8L3 5.3 4.3 3ZM13 5v4.2L9.8 6.1 13 3.5V5Zm2.5 2.5v2a3 3 0 0 1 1.3 3.9l1.5 1.5a5 5 0 0 0-2.8-7.4Zm0-3v2a6 6 0 0 1 4.3 10.6l1.4 1.4a8 8 0 0 0-5.7-14Z"/></svg>
+                <span id="mute-label" class="sr-only">Mute</span>
+              </button>
+              <button id="send-button" class="icon-button send-button" type="submit" aria-label="Send message" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 15-7-4.4 14-3.1-5.3L4 12Zm7.5 1.7L19 5l-9.4 7.1 1.9 1.6Z"/></svg>
+              </button>
+              <button id="talk-button" class="talk-button" type="button" disabled aria-label="Start listening" aria-pressed="false" aria-describedby="composer-help">
+                <span class="talk-rings" aria-hidden="true"></span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V5a3.5 3.5 0 1 0-7 0v6a3.5 3.5 0 0 0 3.5 3.5Zm-1-2.2A1.5 1.5 0 0 1 10.5 11V5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 0 1-2.5 1.3ZM18 10v1a6 6 0 0 1-5 5.9V20h3v2H8v-2h3v-3.1A6 6 0 0 1 6 11v-1h2v1a4 4 0 0 0 8 0v-1h2Z"/></svg>
+                <span id="talk-label">Start listening</span>
+              </button>
+            </div>
+          </form>
+          <p id="composer-help" class="composer-help">Click once to start listening · VoiceClaw will show the negotiated turn behavior after connecting · Mute controls playback only · Enter sends text</p>
+        </section>
+
+        <aside class="operations" aria-label="VoiceClaw interaction state">
+          <section class="surface target-surface" aria-labelledby="target-title">
+            <div class="surface-header compact-header">
+              <div>
+                <p class="eyebrow">Backend route</p>
+                <h2 id="target-title">Configured target</h2>
+              </div>
+              <span id="target-status" class="status-pill neutral">Not checked</span>
+            </div>
+            <div class="target-identity">
+              <span id="target-avatar" class="target-avatar" aria-hidden="true">A</span>
+              <div>
+                <strong id="target-name">Checking backend gateway</strong>
+                <span id="target-reference">No durable attachment advertised</span>
+              </div>
+            </div>
+            <div id="capability-list" class="capability-list" aria-label="Configured route features">
+              <span class="capability muted">Waiting for server-projected route operations</span>
+            </div>
+          </section>
+
+          <section class="surface delegations-surface" aria-labelledby="delegations-title">
+            <div class="surface-header compact-header">
+              <div>
+                <p class="eyebrow">Backend turns</p>
+                <h2 id="delegations-title">Backend turns</h2>
+              </div>
+              <span id="delegation-count" class="status-pill neutral">0 turns</span>
+            </div>
+            <p id="delegations-note" class="delegations-note">Each card is one backend exchange. Context behavior appears after the configured target reports its capabilities.</p>
+            <div id="delegation-empty" class="panel-empty">
+              <span class="panel-empty-icon" aria-hidden="true">◎</span>
+              <p>No delegated turns yet</p>
+              <small>Ask for code, research, planning, file inspection, or another backend task. Its query, lifecycle, and rich result will stay here.</small>
+            </div>
+            <p id="delegation-announcement" class="sr-only" role="status" aria-live="polite"></p>
+            <div id="delegation-list" class="delegation-list"></div>
+          </section>
+
+          <section class="surface activity-surface" aria-labelledby="activity-title">
+            <div class="surface-header compact-header">
+              <div>
+                <p class="eyebrow">Lifecycle</p>
+                <h2 id="activity-title">Activity</h2>
+              </div>
+              <button id="clear-activity" class="text-button" type="button">Clear</button>
+            </div>
+            <ol id="activity-list" class="activity-list" aria-live="polite">
+              <li class="activity-empty">Session events will appear here.</li>
+            </ol>
+          </section>
+
+          <details id="diagnostics" class="surface diagnostics-surface">
+            <summary>
+              <span><span class="eyebrow">Diagnostics</span><strong>OpenAI Realtime-compatible event log</strong></span>
+              <span><strong id="event-count">0</strong> events <i aria-hidden="true"></i></span>
+            </summary>
+            <div class="diagnostics-actions">
+              <span>Newest first · secrets and audio payloads redacted</span>
+              <button id="clear-events" class="text-button" type="button">Clear</button>
+            </div>
+            <ol id="event-log" class="event-log"></ol>
+          </details>
+        </aside>
+      </main>
+    </div>
+  </body>
+</html>

@@ -16,7 +16,13 @@ from typing import Any, NamedTuple, TypedDict
 
 import yaml
 
-from utils import LOCAL_SERVICE_CATALOG_PLATFORMS, is_endpoint_reachable, public_service_entry_fields
+from utils import (
+    LOCAL_SERVICE_CATALOG_PLATFORMS,
+    is_endpoint_reachable,
+    load_prompt_catalog,
+    public_service_entry_fields,
+    resolve_runtime_config_file,
+)
 
 
 class ExampleEntry(TypedDict):
@@ -110,7 +116,7 @@ REALTIME_REGISTRY_DEFAULT_SELECTOR = "registry-default"
 REALTIME_SERVICE_PLATFORMS: tuple[str, ...] = ("cloud", *LOCAL_SERVICE_CATALOG_PLATFORMS)
 
 _SRC_ROOT = Path(__file__).resolve().parent
-_REGISTRY_PATH = _SRC_ROOT.parent / "examples_registry.yaml"
+_REGISTRY_PATH = resolve_runtime_config_file("examples_registry.yaml") or _SRC_ROOT.parent / "examples_registry.yaml"
 
 
 def _load_yaml_registry() -> dict:
@@ -239,7 +245,7 @@ def _first_reachable_variant(variants: list[tuple[str, dict]]) -> tuple[str, dic
 
 def _load_local_service_catalog(example_dir: Path) -> dict[str, dict]:
     """Load local service entries, merging recipe sections by reachability."""
-    data = _load_yaml_mapping(example_dir / "services.local.yaml")
+    data = _load_yaml_mapping(_service_catalog_path(example_dir, "services.local.yaml"))
     variants: dict[str, dict[str, list[tuple[str, dict]]]] = {}
     for platform_name, platform_data in data.items():
         if not isinstance(platform_data, dict):
@@ -274,9 +280,15 @@ def _load_local_service_catalog(example_dir: Path) -> dict[str, dict]:
 def _load_service_catalogs(example_dir: str) -> tuple[dict[str, dict], dict[str, dict]]:
     """Load cloud and local service catalogs for one example directory."""
     base = Path(example_dir)
-    cloud = _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml"))
+    cloud = _normalize_service_catalog(_load_yaml_mapping(_service_catalog_path(base, "services.cloud.yaml")))
     local = _load_local_service_catalog(base)
     return cloud, local
+
+
+def _service_catalog_path(example_dir: Path, filename: str) -> Path:
+    """Return a runtime-owned catalog path or the example-local default."""
+    runtime_path = resolve_runtime_config_file(filename)
+    return runtime_path if runtime_path is not None else example_dir / filename
 
 
 def _example_dir(example: EnrichedExample) -> Path:
@@ -386,9 +398,11 @@ def _service_selector_key_for_platform(
 def _static_service_entry_exists(example_dir: Path, category: str, platform: str, key: str) -> bool:
     """Check one exact raw catalog section without endpoint probes."""
     if platform == "cloud":
-        catalog = _normalize_service_catalog(_load_yaml_mapping(example_dir / "services.cloud.yaml"))
+        catalog = _normalize_service_catalog(
+            _load_yaml_mapping(_service_catalog_path(example_dir, "services.cloud.yaml"))
+        )
     else:
-        local = _load_yaml_mapping(example_dir / "services.local.yaml")
+        local = _load_yaml_mapping(_service_catalog_path(example_dir, "services.local.yaml"))
         platform_data = local.get(platform)
         catalog = _normalize_service_catalog(platform_data) if isinstance(platform_data, dict) else {}
     section = catalog.get(category, {})
@@ -430,8 +444,8 @@ def _materialize_service_selector(
 
 
 def _validate_realtime_prompt_selector(example: EnrichedExample, prompt_key: str) -> None:
-    """Validate a public prompt selector from the static example catalog."""
-    prompt = _load_yaml_mapping(_example_dir(example) / "prompts.yaml").get(prompt_key)
+    """Validate a public prompt selector from the effective prompt catalog."""
+    prompt = load_prompt_catalog(example_module_file(example)).get(prompt_key)
     if (
         not isinstance(prompt, dict)
         or not isinstance(prompt.get("content"), str)
@@ -664,7 +678,7 @@ def _resolve_service_defaults(example: EnrichedExample) -> dict[str, list[Servic
 
 def _resolve_prompt_default(example: EnrichedExample, prompt_key: str) -> PromptDefault:
     """Resolve one default prompt key to its prompt-catalog payload."""
-    catalog = _load_yaml_mapping(_example_dir(example) / "prompts.yaml")
+    catalog = load_prompt_catalog(example_module_file(example))
     entry = catalog.get(prompt_key)
     if not isinstance(entry, dict) or "content" not in entry:
         raise RuntimeError(f"Default prompt {prompt_key!r} for {example['key']} was not found in prompts.yaml")

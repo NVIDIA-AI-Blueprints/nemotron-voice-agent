@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+schema_version: voiceclaw.config.v3
+
+server:
+  # Keep the unauthenticated developer listener host-local by default. The
+  # container accepts an explicit VOICECLAW_SERVER_HOST override for a
+  # controlled LAN demonstration.
+  host: 127.0.0.1
+  port: 7860
+  listener_security: loopback
+  auth_mode: none
+
+frontend_profiles:
+  local_cascade:
+    # The container compiles this provider-neutral profile into NVA's trusted
+    # registry and service catalogs before starting the private Realtime child.
+    kind: bundled_nva
+    public_model: nvidia/voiceclaw
+    realtime_model: nvidia/voiceclaw-cascade
+    platform: singlegpu
+    pipeline_mode: generic-assistant
+    services:
+      llm:
+        id: local-nemotron-lightning
+        name: Nemotron 3.5 Lightning (local vLLM)
+        provider: openai_compatible
+        endpoint: http://127.0.0.1:18000/v1
+        model: nvidia/nemotron-3.5-lightning-30b-a3b
+        temperature: 0.0
+        supports_tokenize: true
+        realtime_max_output_tokens: 2048
+        forced_tool_call_stops: ["</tool_call>"]
+        extra_params:
+          extra_body:
+            chat_template_kwargs:
+              enable_thinking: false
+            repetition_penalty: 1.05
+      asr:
+        id: local-nemotron-asr
+        name: Nemotron Speech Streaming (local)
+        provider: nvidia_grpc
+        endpoint: 127.0.0.1:50051
+        tls: false
+        model: nemotron-speech-streaming-en-0.6b
+      tts:
+        id: local-magpie-tts
+        name: Magpie TTS (local)
+        provider: nvidia_grpc
+        endpoint: 127.0.0.1:50051
+        tls: false
+        model: magpie-tts-multilingual
+        voice: John
+        synthesis_mode: stitched
+    connect_timeout_seconds: 15
+    bootstrap_timeout_seconds: 15
+    max_event_bytes: 16777216
+
+default_frontend: local_cascade
+
+model_contracts:
+  # Frontend role, authority, response-purpose, and response-only result
+  # contracts. Work-tool surfaces are selected separately below.
+  profile: default
+
+# Omit `path` to use the packaged, validated interaction-profile presets. An
+# operator-owned absolute path may supply a schema-compatible reviewed catalog;
+# semantic shapes remain core-owned while prose may be overridden per backend.
+interaction_profiles: {}
+
+backend_profiles:
+  nemoclaw:
+    # Stable adapter identity. The explicit mode below describes the currently
+    # available non-durable connection without coupling configuration to an
+    # implementation class or delivery phase.
+    kind: nemoclaw
+    interaction:
+      # The current compatibility gateway proves only one non-durable submit
+      # operation. Capabilities narrow this preset to work.delegate at runtime.
+      profile: stateless
+      # Trusted deployers may override model-facing copy per backend without
+      # changing executable tool semantics or accepting browser-authored prose.
+      tool_copy: {}
+    credential:
+      # Mount this owner-controlled file into the VoiceClaw container. The
+      # bearer never enters browser state, command arguments, or container env.
+      file: ${NEMOCLAW_VOICE_GATEWAY_BEARER_FILE}
+    settings:
+      # `response_only` is the only mode implemented by today's pinned
+      # NemoClaw gateway. A future durable Agent Session mode will be a
+      # separately validated adapter path, not an alias for this bearer.
+      mode: response_only
+      # Omit endpoint for the local default http://127.0.0.1:18800. A remote
+      # private literal IP requires an https endpoint and private_network policy.
+      endpoint_policy: loopback_only
+      # One wall-clock budget for admission plus the complete NDJSON turn.
+      exchange_deadline_seconds: 125
+      # This response-only target currently caps completions at 4096 tokens.
+      # Keep its complete Markdown result below that provider capacity; this is
+      # independently configurable from VoiceClaw's protocol-wide safety cap.
+      result_display_budget_bytes: 8192
+
+default_backend: nemoclaw
+
+interaction:
+  max_pending_speech: 32
+  context_character_budget: 24000
+  # These bounds control only VoiceClaw's local, non-authoritative projection.
+  # They do not truncate the exact goal sent to the configured backend.
+  request_summary_character_limit: 512
+  retained_request_limit: 8
+  # The realtime frontend classifies each finalized turn using the stable
+  # contract and only the capability-gated tools projected for this session.
+  turn_routing_mode: model
+
+state:
+  kind: sqlite
+  path: /var/lib/voiceclaw/state/state.db

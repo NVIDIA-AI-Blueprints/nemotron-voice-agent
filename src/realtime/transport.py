@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
@@ -36,6 +37,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.llm_service import LLMService
 from pipecat.services.nvidia.tts import NvidiaTTSSettings
 from pipecat.transports.websocket.fastapi import (
+    FastAPIWebsocketOutputTransport,
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
@@ -96,6 +98,66 @@ _INPUT_TRANSCRIPTION_TERMINAL_EVENTS = frozenset(
 )
 _INPUT_TRANSCRIPTION_TIMEOUT_DEFAULT_SECONDS = 8.0
 _INPUT_TRANSCRIPTION_PUBLICATION_GRACE_SECONDS = 1.0
+_AUDIO_OUT_MAX_CATCH_UP_SECONDS_DEFAULT = 0.3
+
+
+class _BoundedCatchUpFastAPIWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
+    """Pace audio while retaining a bounded amount of transient lateness.
+
+    Pipecat normally resets its audio clock to real time whenever one chunk is
+    late. That avoids bursts, but it also prevents an already-buffering client
+    from recovering the audio that was delayed by a short scheduler or network
+    stall. This output edge preserves the prior deadline up to a bounded debt,
+    allowing immediately available chunks to replenish the client buffer before
+    regular real-time pacing resumes.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        max_catch_up_seconds: float,
+        **kwargs: Any,
+    ) -> None:
+        """Create an output edge with a non-negative catch-up window."""
+        super().__init__(*args, **kwargs)
+        self._max_catch_up_seconds = max(0.0, max_catch_up_seconds)
+
+    async def _write_audio_sleep(self) -> None:
+        """Advance the audio clock without discarding bounded pacing debt."""
+        current_time = time.monotonic()
+        if self._send_interval <= 0 or self._next_send_time <= 0:
+            sleep_duration = 0.0
+            next_send_time = current_time + self._send_interval
+        else:
+            bounded_deadline = max(
+                self._next_send_time,
+                current_time - self._max_catch_up_seconds,
+            )
+            sleep_duration = max(0.0, bounded_deadline - current_time)
+            next_send_time = bounded_deadline + self._send_interval
+
+        await asyncio.sleep(sleep_duration)
+        self._next_send_time = next_send_time
+
+
+class _BoundedCatchUpFastAPIWebsocketTransport(FastAPIWebsocketTransport):
+    """FastAPI WebSocket transport using bounded audio catch-up pacing."""
+
+    def __init__(
+        self,
+        *args: Any,
+        audio_out_max_catch_up_seconds: float,
+        **kwargs: Any,
+    ) -> None:
+        """Create the Pipecat transport and replace only its output edge."""
+        super().__init__(*args, **kwargs)
+        self._output = _BoundedCatchUpFastAPIWebsocketOutputTransport(
+            self,
+            self._client,
+            self._params,
+            name=self._output_name,
+            max_catch_up_seconds=audio_out_max_catch_up_seconds,
+        )
 
 
 def realtime_input_transcription_timeout_secs() -> float:
@@ -1880,8 +1942,13 @@ def create_realtime_transport(
     serializer.set_emit(_emit, _emit_batch)
     mcp_runtime = RealtimeMCPRuntime(controller=controller, emit_batch=_emit_batch)
     serializer.set_mcp_runtime(mcp_runtime)
-    transport = FastAPIWebsocketTransport(
+    transport = _BoundedCatchUpFastAPIWebsocketTransport(
         websocket=websocket,
+        audio_out_max_catch_up_seconds=parse_env_float(
+            "AUDIO_OUT_MAX_CATCH_UP_SECONDS",
+            _AUDIO_OUT_MAX_CATCH_UP_SECONDS_DEFAULT,
+            min_value=0.0,
+        ),
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_in_sample_rate=PIPELINE_PCM_RATE,

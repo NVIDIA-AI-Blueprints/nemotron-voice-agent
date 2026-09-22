@@ -31,6 +31,62 @@ class ServiceCatalogHydrationTests(unittest.TestCase):
     def tearDown(self) -> None:
         clear_service_context()
 
+    def test_runtime_config_bundle_overrides_request_context_and_legacy_catalog_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir)
+            (runtime_dir / "examples_registry.yaml").write_text("selection: all\n", encoding="utf-8")
+            (runtime_dir / "services.cloud.yaml").write_text(
+                dedent(
+                    """
+                    llm:
+                      runtime-llm:
+                        name: Runtime LLM
+                        model_id: runtime-model
+                        base_url: https://runtime.example/v1
+                    """
+                ),
+                encoding="utf-8",
+            )
+            (runtime_dir / "services.local.yaml").write_text("{}\n", encoding="utf-8")
+
+            utils.set_service_context(Path("src/examples/multilingual"), ("llm", "asr", "tts"))
+            with patch.dict(
+                os.environ,
+                {
+                    utils.RUNTIME_CONFIG_DIR_ENV: str(runtime_dir),
+                    "SERVICES_CLOUD_PATH": "/ignored/services.cloud.yaml",
+                    "SERVICES_LOCAL_PATH": "/ignored/services.local.yaml",
+                },
+            ):
+                self.assertEqual(utils._services_cloud_path(), (runtime_dir / "services.cloud.yaml").resolve())
+                self.assertEqual(utils._services_local_path(), (runtime_dir / "services.local.yaml").resolve())
+                entry = load_service_entry_by_id("llm", "cloud-nim:runtime-llm")
+
+            self.assertEqual(entry["model_id"], "runtime-model")
+            self.assertEqual(entry["base_url"], "https://runtime.example/v1")
+
+    def test_runtime_config_bundle_fails_closed_when_incomplete_or_relative(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir)
+            (runtime_dir / "examples_registry.yaml").write_text("selection: all\n", encoding="utf-8")
+            (runtime_dir / "services.cloud.yaml").write_text("{}\n", encoding="utf-8")
+
+            with (
+                patch.dict(os.environ, {utils.RUNTIME_CONFIG_DIR_ENV: str(runtime_dir)}),
+                self.assertRaisesRegex(RuntimeError, "services.local.yaml"),
+            ):
+                utils._services_local_path()
+
+        with (
+            patch.dict(os.environ, {utils.RUNTIME_CONFIG_DIR_ENV: "relative/runtime-config"}),
+            self.assertRaisesRegex(RuntimeError, "absolute directory path"),
+        ):
+            utils.resolve_runtime_config_file("examples_registry.yaml")
+
+    def test_runtime_config_resolver_rejects_unknown_filenames(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported runtime configuration filename"):
+            utils.resolve_runtime_config_file("../secrets.yaml")
+
     def test_service_selection_uses_exact_id_or_existing_default(self) -> None:
         selected = {"model_id": "selected-model"}
         fallback = {"model_id": "default-model"}

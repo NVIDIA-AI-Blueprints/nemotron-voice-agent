@@ -8,6 +8,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -50,6 +53,95 @@ class RealtimeModelProfileTests(unittest.TestCase):
 
         self.assertEqual(set(defaults), set(examples_registry.EXAMPLES))
         self.assertTrue(all(len(models) == 1 for models in defaults.values()))
+
+    def test_runtime_bundle_catalog_is_used_for_static_profile_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir)
+            (runtime_dir / "examples_registry.yaml").write_text("selection: all\n", encoding="utf-8")
+            (runtime_dir / "services.cloud.yaml").write_text(
+                "llm:\n  runtime-only:\n    model_id: runtime-model\n",
+                encoding="utf-8",
+            )
+            (runtime_dir / "services.local.yaml").write_text(
+                "server:\n  llm:\n    runtime-only:\n      model_id: runtime-model\n"
+                "singlegpu:\n  llm:\n    runtime-only:\n      model_id: runtime-model\n",
+                encoding="utf-8",
+            )
+            example_dir = Path("src/examples/generic").resolve()
+
+            with patch.dict(os.environ, {"NVA_RUNTIME_CONFIG_DIR": str(runtime_dir)}):
+                self.assertTrue(
+                    examples_registry._static_service_entry_exists(example_dir, "llm", "cloud", "runtime-only")
+                )
+                self.assertTrue(
+                    examples_registry._static_service_entry_exists(example_dir, "llm", "server", "runtime-only")
+                )
+                self.assertFalse(
+                    examples_registry._static_service_entry_exists(example_dir, "llm", "cloud", "nemotron-lightning")
+                )
+
+    def test_runtime_bundle_registry_is_selected_at_process_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir)
+            (runtime_dir / "examples_registry.yaml").write_text(
+                """
+selection: runtime-example
+transports: websocket
+examples:
+  runtime-example:
+    label: Runtime example
+    slots: []
+    capabilities: []
+    agent_prompt_keys: []
+    defaults: {}
+    welcome_message: false
+    bot: examples.generic.pipeline:bot
+""".lstrip(),
+                encoding="utf-8",
+            )
+            (runtime_dir / "services.cloud.yaml").write_text("{}\n", encoding="utf-8")
+            (runtime_dir / "services.local.yaml").write_text("{}\n", encoding="utf-8")
+            environment = os.environ.copy()
+            environment["NVA_RUNTIME_CONFIG_DIR"] = str(runtime_dir)
+            environment["PYTHONPATH"] = str(Path("src").resolve())
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import examples_registry; "
+                    "print(examples_registry._REGISTRY_PATH); "
+                    "print(examples_registry.visible_example_keys())",
+                ],
+                check=False,
+                capture_output=True,
+                env=environment,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [str((runtime_dir / "examples_registry.yaml").resolve()), "('runtime-example',)"],
+            )
+
+    def test_runtime_bundle_rejects_malformed_service_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir)
+            (runtime_dir / "examples_registry.yaml").write_text("selection: all\n", encoding="utf-8")
+            (runtime_dir / "services.cloud.yaml").write_text("llm: [\n", encoding="utf-8")
+            (runtime_dir / "services.local.yaml").write_text("{}\n", encoding="utf-8")
+
+            with (
+                patch.dict(os.environ, {"NVA_RUNTIME_CONFIG_DIR": str(runtime_dir)}),
+                self.assertRaisesRegex(RuntimeError, "Failed to load YAML"),
+            ):
+                examples_registry._static_service_entry_exists(
+                    Path("src/examples/generic").resolve(),
+                    "llm",
+                    "cloud",
+                    "runtime-only",
+                )
 
     def test_generic_full_and_client_tool_profiles_are_distinct_complete_routes(self) -> None:
         full = examples_registry.resolve_realtime_model_profile(_GENERIC_MODEL)
@@ -364,6 +456,59 @@ class RealtimeModelProfileTests(unittest.TestCase):
         ):
             with self.subTest(message=message), self.assertRaisesRegex(RuntimeError, message):
                 self._load(registry)
+
+    def test_prompt_selector_validation_uses_effective_prompt_catalog(self) -> None:
+        registry = self._registry()
+        registry["realtime_models"] = {
+            model: profile
+            for model, profile in registry["realtime_models"].items()
+            if profile["pipeline_mode"] == "generic-assistant"
+        }
+        registry["realtime_models"][_GENERIC_MODEL]["selectors"]["prompt_key"] = "operator_prompt"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prompt_catalog = Path(tmpdir) / "prompts.yaml"
+            prompts = yaml.safe_load(Path("src/examples/generic/prompts.yaml").read_text(encoding="utf-8"))
+            prompts["operator_prompt"] = {"content": "Operator-owned prompt."}
+            prompt_catalog.write_text(yaml.safe_dump(prompts, sort_keys=False), encoding="utf-8")
+            with patch.dict(os.environ, {"PROMPT_FILE_PATH": str(prompt_catalog)}):
+                profiles = self._load(registry)
+                example = {
+                    **examples_registry.EXAMPLES["generic-assistant"],
+                    "id": "generic-assistant",
+                    "key": "generic-assistant",
+                }
+                resolved_prompt = examples_registry._resolve_prompt_default(example, "operator_prompt")
+
+        self.assertEqual(profiles[_GENERIC_MODEL]["selectors"]["prompt_key"], "operator_prompt")
+        self.assertEqual(resolved_prompt["content"], "Operator-owned prompt.")
+
+    def test_effective_prompt_catalog_rejects_missing_or_internal_selector(self) -> None:
+        registry = self._registry()
+        registry["realtime_models"] = {
+            model: profile
+            for model, profile in registry["realtime_models"].items()
+            if profile["pipeline_mode"] == "generic-assistant"
+        }
+        registry["realtime_models"][_GENERIC_MODEL]["selectors"]["prompt_key"] = "operator_prompt"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prompt_catalog = Path(tmpdir) / "prompts.yaml"
+            base_prompts = yaml.safe_load(Path("src/examples/generic/prompts.yaml").read_text(encoding="utf-8"))
+            for operator_prompt in (
+                None,
+                {"content": "Internal only.", "internal": True},
+            ):
+                prompts = copy.deepcopy(base_prompts)
+                if operator_prompt is not None:
+                    prompts["operator_prompt"] = operator_prompt
+                prompt_catalog.write_text(yaml.safe_dump(prompts, sort_keys=False), encoding="utf-8")
+                with (
+                    self.subTest(operator_prompt=operator_prompt),
+                    patch.dict(os.environ, {"PROMPT_FILE_PATH": str(prompt_catalog)}),
+                    self.assertRaisesRegex(RuntimeError, "is not public"),
+                ):
+                    self._load(registry)
 
     def test_registry_default_requires_a_configured_static_service_default(self) -> None:
         missing_default_examples = copy.deepcopy(examples_registry.EXAMPLES)
