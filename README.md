@@ -168,7 +168,7 @@ This repository includes AI agent skills for deployment assistance. Install them
 npx skills add .
 ```
 
-- [`nemotron-voice-agent-builder`](skills/nemotron-voice-agent-builder/SKILL.md): scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
+- [`nemotron-voice-agent-builder`](skills/nemotron-voice-agent-builder/SKILL.md): scaffold, refine, or fix cascaded or Omni voice agents with NVIDIA models using Pipecat or LiveKit.
 - [`nemotron-voice-agent-deploy`](.agents/skills/nemotron-voice-agent-deploy/SKILL.md): recipe-family auth (`NVIDIA_API_KEY` + NGC login for `*/server`, `HF_TOKEN` only for `*/single-gpu`), profile selection, and compose bring-up.
 - [`nemotron-voice-agent-configure-pipeline`](.agents/skills/nemotron-voice-agent-configure-pipeline/SKILL.md): edit `.env`, prompts, and example service catalogs, then re-apply the change.
 
