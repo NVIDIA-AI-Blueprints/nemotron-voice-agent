@@ -36,10 +36,12 @@
 
 ## Notes
 
-Keep the CI dataset small enough for the one-hour NVSkills CI limit. Planning cases verify
-selection and safety. End-to-end cases verify project generation, static checks, unit tests,
-deterministic mock endpoints, generated smoke paths, and accurate handover without requiring
-NVIDIA GPUs, model downloads, external credentials, or long-running services.
+Keep the CI dataset small enough for the one-hour NVSkills CI limit. `evals.json` holds P0
+planning and negative cases that verify selection, routing, and safety. Run end-to-end
+generation, iteration, and failure-recovery cases separately; they verify project
+generation, static checks, unit tests, deterministic mock endpoints, generated smoke paths,
+and accurate handover without requiring NVIDIA GPUs, model downloads, external credentials,
+or long-running services.
 
 Run physical microphone, speaker, GPU, DGX Spark, Jetson Thor, and workstation deployments
 separately. Report those hardware-backed spoken exchanges as extended evidence in
