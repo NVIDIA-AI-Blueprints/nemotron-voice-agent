@@ -600,6 +600,14 @@ llm:
         self.assertEqual(nim["base_url"], "http://localhost:18002/v1")
         self.assertEqual(vllm["base_url"], "http://localhost:8002/v1")
 
+    def test_registry_host_runtime_rewrites_streaming_llm_endpoint(self) -> None:
+        with patch.dict(os.environ, {"APP_RUNTIME": ""}):
+            rewritten = examples_registry._rewrite_entry_for_host_runtime(
+                {"base_url": "ws://nvidia-llm-vllm:8000/v1/streaming-session"}
+            )
+
+        self.assertEqual(rewritten["base_url"], "ws://localhost:18000/v1/streaming-session")
+
     def test_registry_host_runtime_rewrites_magpie_multilingual_tts_endpoint(self) -> None:
         with patch.dict(os.environ, {"APP_RUNTIME": ""}):
             rewritten = examples_registry._rewrite_entry_for_host_runtime(

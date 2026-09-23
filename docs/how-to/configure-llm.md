@@ -22,7 +22,7 @@ Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` /
 
 | Model | Catalog keys |
 |-------|--------------|
-| Nemotron 3.5 Lightning | `nemotron-lightning`, `nemotron-lightning-reasoning` |
+| Nemotron 3.5 Lightning | `nemotron-lightning`, `nemotron-lightning-reasoning`, `nemotron-lightning-streaming` (Generic Assistant single-GPU) |
 | Nemotron 3 Super | `nemotron-super`, `nemotron-super-reasoning` (self-hosted only) |
 | Nemotron 3 Nano Omni | `nemotron-omni-nvfp4` |
 
@@ -90,12 +90,14 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 | **Precision** | Automatic for standard `*/server`. `server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0` | Selected automatically from GPU compute capability | Lightning single-GPU loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve it as W4A16 through Marlin. Native NVFP4 compute still needs Blackwell or later. For NIM on older hardware, choose a compatible profile listed by the image. |
 | **Hardware / scaling (TP)** | Automatic from the visible GPUs for standard `*/server`. Pinned to TP2 for `server-perf` | `--tensor-parallel-size N` | A pinned TP=N profile needs N visible `device_ids`. Merely exposing N GPUs does not guarantee automatic selection will use all of them. |
 | **Context length** | Fixed at `32768` by `NIM_MAX_MODEL_LEN` in the stock Compose files | `--max-model-len` | To change the NIM value, use a Compose override or edit the matching Compose service. Larger context costs more KV-cache VRAM. |
-| **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` | Maximum concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this, for example to `64`–`128`. |
+| **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` (`256` in the Lightning recipe) | Maximum concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this, for example to `64`–`128`. |
 | **Explicit profile** | Automatic for standard `*/server`. Pinned for `server-perf` | n/a | Add `NIM_MODEL_PROFILE=<id-or-description>` to a Compose override to pin a custom profile. |
 
 **Cascaded NIM sizing (`nvidia-llm`).** Weight memory depends on the profile NIM selects. Confirm the selected precision and memory footprint in the startup logs and support matrix. The default `NIM_KVCACHE_PERCENT=0.6` targets one ~80 GB GPU shared with ASR (~15 GB) and TTS (~14 GB). On a smaller supported GPU, move ASR/TTS to a second card (their `device_ids`) and raise `NIM_KVCACHE_PERCENT` only after verifying that the selected LLM profile still fits.
 
 **Lightning vLLM sizing (`nvidia-llm-vllm-lightning`).** The Single-GPU service loads `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` on every supported GPU. Blackwell workstations, DGX Spark, and Jetson Thor serve native NVFP4. Hopper and Ada serve the same checkpoint as W4A16 through Marlin (`--quantization modelopt_fp4`).
+
+**Streaming input (`nemotron-lightning-streaming`).** The Lightning vLLM service also serves a text StreamingInput WebSocket at `ws://nvidia-llm-vllm:8000/v1/streaming-session`, next to chat completions. With this catalog entry, the Generic Assistant prefills every ASR update while the user speaks, so the answer starts from a warm KV cache. Select it in the Services tab or set it as the example's `llm` default in `examples_registry.yaml`.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4, FP8, or BF16 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 

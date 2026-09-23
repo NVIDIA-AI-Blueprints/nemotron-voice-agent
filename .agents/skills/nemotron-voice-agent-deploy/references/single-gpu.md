@@ -72,6 +72,8 @@ The Lightning Compose matrix selects the following model and precision automatic
 - Ada/Hopper workstation: NVFP4 checkpoint served as W4A16 via Marlin.
 - Older compute capabilities: unsupported → cloud.
 
+Lightning vLLM health: `curl -f http://localhost:18000/health`. The same server serves chat completions and the streaming-input WebSocket at `ws://localhost:18000/v1/streaming-session`.
+
 Omni examples use the hardware selection in `docker/docker-compose.nemotron3-omni.yaml`. Omni vLLM health: `curl -f http://localhost:8002/health`.
 
 ## Failures
@@ -85,4 +87,5 @@ sudo sync && sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
 docker compose --profile <recipe> up -d
 ```
 
+- Lightning `max_num_seqs (256) exceeds available Mamba cache blocks` on vLLM startup → `--gpu-memory-utilization` is too **low** for the recipe's 256 sequences. On workstations, raise `VLLM_GPU_MEMORY_UTILIZATION` or unset it so the planner sizes it. DGX Spark and Jetson Thor fix utilization at `0.35`, so lower `--max-num-seqs` with a Compose override instead.
 - Omni `No available memory for the cache blocks` on vLLM startup → `--gpu-memory-utilization` is too **low** (no room for KV cache after weights). Raise it. Do not lower it. True CUDA OOM during load is the opposite: the fraction collides with another process on the same GPU. Lower `--gpu-memory-utilization` or `--max-model-len`, or move TTS off that GPU.
