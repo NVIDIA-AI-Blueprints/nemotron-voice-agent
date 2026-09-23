@@ -7,6 +7,10 @@ Uses pipecat's built-in NVIDIA classes directly:
   - NvidiaSTTService  (Nemotron Streaming ASR)
   - NvidiaLLMService  (NIM-compatible LLM)
   - NvidiaTTSService  (Magpie TTS)
+
+A catalog LLM whose ``base_url`` is ``ws://`` / ``wss://`` swaps in
+NvidiaStreamingLLMService and StreamingLLMUserAggregator, which prefill the
+user's words while they are still speaking.
 """
 
 import asyncio
@@ -19,6 +23,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
+    LLMAssistantAggregator,
     LLMContextAggregatorPair,
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
@@ -33,6 +38,7 @@ from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -45,6 +51,7 @@ from examples.shared.pipeline_utils import (
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
+    is_streaming_llm_url,
     load_ipa_dictionary,
     load_service_entry,
     normalize_lang_code,
@@ -132,7 +139,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"temperature={llm_temperature if llm_temperature is not None else '(default)'}, "
         f"extra_params={extra_params or '(none)'}"
     )
-    llm = NvidiaLLMService(
+    streaming = is_streaming_llm_url(base_url)
+    llm_service = NvidiaStreamingLLMService if streaming else NvidiaLLMService
+    llm = llm_service(
         api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
@@ -207,10 +216,12 @@ async def bot(runner_args: RunnerArguments) -> None:
         context = LLMContext(messages)
     preserve_prompt_messages = len(messages)
 
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=build_user_aggregator_params(welcome_enabled),
-    )
+    user_params = build_user_aggregator_params(welcome_enabled)
+    if streaming:
+        user_aggregator = StreamingLLMUserAggregator(context, params=user_params)
+        assistant_aggregator = LLMAssistantAggregator(context)
+    else:
+        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
         f"preserve_prompt_messages={preserve_prompt_messages}"

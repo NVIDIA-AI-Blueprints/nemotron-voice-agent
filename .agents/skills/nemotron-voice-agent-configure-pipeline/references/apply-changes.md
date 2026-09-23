@@ -15,6 +15,7 @@ The catalog stores Compose DNS endpoints. The backend rewrites them to `localhos
 | --- | --- |
 | `http://nvidia-llm:8000/v1` | `http://localhost:18000/v1` |
 | `http://nvidia-llm-vllm:8000/v1` | `http://localhost:18000/v1` |
+| `ws://nvidia-llm-vllm:8000/v1/streaming-session` | `ws://localhost:18000/v1/streaming-session` |
 | `http://nvidia-llm-omni:8000/v1` | `http://localhost:18002/v1` |
 | `http://nvidia-llm-vllm-omni:8002/v1` | `http://localhost:8002/v1` |
 | `http://booking-server:8001` | `http://localhost:8001` |

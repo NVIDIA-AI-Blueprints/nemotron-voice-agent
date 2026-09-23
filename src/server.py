@@ -456,8 +456,8 @@ def _local_llm_health_url(base_url: str, model_id: str) -> tuple[str, bool]:
     if not host:
         return "", False
 
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    scheme = parsed.scheme or "http"
+    port = parsed.port or (443 if parsed.scheme in ("https", "wss") else 80)
+    scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme or "http")
     normalized_host = host.strip("[]").lower()
     http_host = _http_host(host)
 

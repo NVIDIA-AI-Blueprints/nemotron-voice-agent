@@ -2,7 +2,7 @@
 # The container selects a fixed serving recipe from the host product and GPU
 # compute capability; .env remains limited to secrets and host paths.
 x-vllm-lightning: &vllm-lightning
-  image: vllm/vllm-openai:v0.27.1
+  image: vllm/vllm-openai:v0.29.0
   pull_policy: if_not_present
   shm_size: 16GB
   env_file:
@@ -14,6 +14,7 @@ x-vllm-lightning: &vllm-lightning
   volumes:
     - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     - llm_cache:/root/.cache/vllm
+    - ../src:/app/src:ro
   ulimits:
     nofile:
       soft: 65535
@@ -55,6 +56,7 @@ services:
           --port 8000
           --served-model-name nvidia/nemotron-3.5-lightning-30b-a3b
           --max-model-len 32768
+          --max-num-seqs 256
           --trust-remote-code
           --enable-auto-tool-choice
           --tool-call-parser qwen3_coder
@@ -152,7 +154,8 @@ services:
           args+=(--gpu-memory-utilization "$${util}")
         fi
 
-        exec vllm serve "$${model}" "$${args[@]}"
+        cd /app/src
+        exec python3 -m examples.shared.vllm_streaming_input.server "$${model}" "$${args[@]}"
     networks:
       default:
         aliases:

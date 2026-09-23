@@ -6,11 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.3.0] - TBD
 
-This minor release upgrades Pipecat to 1.11.0 and adopts its built-in transcript-independent Smart Turn handling for audio-only user turns.
+This minor release upgrades Pipecat to 1.11.0, adopts its built-in transcript-independent Smart Turn handling for audio-only user turns, and adds streaming-input prefill for the Generic Assistant on single-GPU hosts.
+
+### Added
+
+- **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the `Nemotron 3.5 Lightning 30B A3B (Streaming Input)` catalog entry streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
 
 ### Changed
 
 - Upgraded Pipecat to version 1.11.0.
+- Single-GPU Lightning recipes pin `vllm/vllm-openai:v0.29.0` and cap `--max-num-seqs` at 256.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
 
 ## [2.2.0] - 2026-09-22

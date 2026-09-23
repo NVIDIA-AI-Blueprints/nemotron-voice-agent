@@ -211,6 +211,11 @@ def is_nvcf(server: str) -> bool:
     return "nvcf.nvidia.com" in server
 
 
+def is_streaming_llm_url(url: str) -> bool:
+    """Return True when an LLM ``base_url`` speaks native StreamingInput over WebSocket."""
+    return url.startswith(("ws://", "wss://"))
+
+
 def _normalize_services_catalog(data: object) -> dict:
     """Normalize a services catalog into ``{category: {key: entry}}``."""
     src = data if isinstance(data, dict) else {}
