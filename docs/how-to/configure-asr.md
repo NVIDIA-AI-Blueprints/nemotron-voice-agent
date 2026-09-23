@@ -82,16 +82,16 @@ For ASR latency and throughput across GPUs and WER for different models, see the
   )
   ```
 
-- **Endpointing (end-of-utterance)**: Riva/NIM ASR decides when the user has stopped speaking from trailing silence, via the endpoint parameters `start_history` / `start_threshold`, `stop_history` / `stop_threshold`. Silence windows are in ms, a multiple of 80, and `-1` keeps the model defaults. Shorter `stop_history` finalizes faster (lower latency, but may clip trailing words). Each example already passes one, `NvidiaSTTService(**asr_kwargs, stop_history=400)` in its `pipeline.py`, so tune endpointing for your use case:
+- **Endpointing (end-of-utterance)**: Riva/NIM ASR decides when the user has stopped speaking from trailing silence, via the endpoint parameters `start_history` / `start_threshold`, `stop_history` / `stop_threshold`. Silence windows are in ms, a multiple of 80, and `-1` keeps the model defaults. Shorter `stop_history` finalizes faster (lower latency, but can clip trailing words). The cascaded examples construct `NvidiaForceEouSTTService` with `stop_history=400`. To customize this value, pass your chosen value in the example pipeline:
 
   ```python
-  stt = NvidiaSTTService(
+  stt = NvidiaForceEouSTTService(
       **asr_kwargs,
-      stop_history=400,  # ms trailing silence before finalizing (repo default. ≥560 favors accuracy)
+      stop_history=400,  # ms trailing silence before ASR endpointing
   )
   ```
 
-  This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing is the lower-level, ASR-side signal. See [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html) for exact semantics, defaults, and the `force_eou` runtime flag.
+  This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing is the lower-level, ASR-side signal. On each `VADUserStoppedSpeakingFrame`, the local subclass sends an 80 ms silence chunk with the NVIDIA runtime configuration `force_eou=true` to finalize all submitted audio. Stock `NvidiaSTTService` response handling emits `TranscriptionFrame(finalized=True)` when NVIDIA returns `is_final`. Pipecat's stock turn analyzer strategy uses that final transcript together with Smart Turn's decision; ASR does not act on the turn analyzer. See [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html) for the endpoint parameter semantics and defaults.
 
 - **Language**: the multilingual example locks each session to a single locale, selectable per connection in the UI (any locale the ASR and TTS both support, default `de-DE`) and fixed for that session. Different sessions can use different languages. The ASR also accepts `language_code: auto` for per-turn detection, but this blueprint does not use it, since a pinned locale is more reliable. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
 - **Catalog config**: a cloud entry sets `server` / `model` / `function_id`, while a local entry points at the Compose sidecar `host:port`. Host-run deployments rewrite sidecar endpoints to `localhost` automatically. See [Configure Services → On-prem catalog](configure-services.md#on-prem-catalog).
