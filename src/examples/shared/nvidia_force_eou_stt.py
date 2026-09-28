@@ -45,10 +45,10 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
             await self.request_force_eou()
 
     def _force_eou_silence(self) -> bytes:
-        """Return an 80 ms PCM silence chunk for the current sample rate."""
+        """Return an 80 ms PCM silence chunk for the configured audio format."""
         sample_rate = self.sample_rate or 16000
         num_samples = max(1, int(sample_rate * FORCE_EOU_SILENCE_SECS))
-        return b"\x00" * (num_samples * 2)
+        return b"\x00" * (num_samples * self._audio_channel_count * 2)
 
     async def request_force_eou(self) -> None:
         """Append silence and tag that same chunk with ``force_eou`` when sent."""
@@ -97,4 +97,5 @@ class NvidiaForceEouSTTService(NvidiaSTTService):
             super()._response_handler(iterator)
         finally:
             asr_service.streaming_response_generator = original
-            self._force_eou_silences.clear()
+            if iterator.closed:
+                self._force_eou_silences.clear()

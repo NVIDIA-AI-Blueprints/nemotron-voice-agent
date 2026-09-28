@@ -53,19 +53,47 @@ class ForceEouStreamingRequestTests(unittest.TestCase):
         self.assertEqual(dict(requests[1].runtime_config), {})
         self.assertEqual(dict(requests[2].runtime_config), {"force_eou": "true"})
 
+    def test_silence_size_includes_configured_audio_channels(self) -> None:
+        stt = NvidiaForceEouSTTService(use_ssl=False, audio_channel_count=2)
+        stt._sample_rate = 16000
+
+        silence = stt._force_eou_silence()
+
+        expected_size = int(16000 * FORCE_EOU_SILENCE_SECS) * 2 * 2
+        self.assertEqual(len(silence), expected_size)
+
     def test_response_handler_discards_stale_force_eou_markers(self) -> None:
         stt = NvidiaForceEouSTTService(use_ssl=False)
         stt._force_eou_silences.append(b"stale")
         stt._asr_service = Mock()
         stt._asr_service.streaming_response_generator = Mock()
         original = stt._asr_service.streaming_response_generator
+        iterator = Mock(spec=AudioChunkIterator)
+        iterator.closed = True
 
         with patch("examples.shared.nvidia_force_eou_stt.NvidiaSTTService._response_handler") as parent:
-            stt._response_handler(Mock(spec=AudioChunkIterator))
+            stt._response_handler(iterator)
 
         parent.assert_called_once()
         self.assertIs(stt._asr_service.streaming_response_generator, original)
         self.assertFalse(stt._force_eou_silences)
+
+    def test_response_handler_preserves_force_eou_markers_for_reconnect(self) -> None:
+        stt = NvidiaForceEouSTTService(use_ssl=False)
+        marker = b"pending"
+        stt._force_eou_silences.append(marker)
+        stt._asr_service = Mock()
+        stt._asr_service.streaming_response_generator = Mock()
+        original = stt._asr_service.streaming_response_generator
+        iterator = Mock(spec=AudioChunkIterator)
+        iterator.closed = False
+
+        with patch("examples.shared.nvidia_force_eou_stt.NvidiaSTTService._response_handler") as parent:
+            stt._response_handler(iterator)
+
+        parent.assert_called_once_with(iterator)
+        self.assertIs(stt._asr_service.streaming_response_generator, original)
+        self.assertEqual(list(stt._force_eou_silences), [marker])
 
 
 class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
