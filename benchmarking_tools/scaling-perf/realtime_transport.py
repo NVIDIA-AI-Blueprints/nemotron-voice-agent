@@ -182,6 +182,8 @@ class RealtimeTransport:
         headers = auth_headers(self.api_key, auth_scheme=self.auth_scheme)
         if headers and not self.url.lower().startswith("wss://"):
             raise RuntimeError("refusing to send a Realtime API key over an unencrypted WebSocket")
+        if headers and not self.verify_tls:
+            raise RuntimeError("refusing to send a Realtime API key when TLS verification is disabled")
         kwargs: dict[str, Any] = {"max_size": None, "open_timeout": self.connect_timeout}
         if headers:
             kwargs["additional_headers"] = headers
