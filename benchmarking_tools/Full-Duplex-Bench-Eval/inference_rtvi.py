@@ -61,6 +61,24 @@ def _truncate_output_at(chunks: list[np.ndarray], timestamps: list[float], cutof
     timestamps[:] = kept_timestamps
 
 
+def _packed_output_end(chunks: list[np.ndarray], timestamps: list[float]) -> int:
+    """Return the sample end after contiguous placement, before duration trimming."""
+    next_expected_time: float | None = None
+    packed_end = 0
+    for chunk, timestamp in zip(chunks, timestamps, strict=True):
+        if len(chunk) == 0:
+            continue
+        chunk_duration = len(chunk) / SAMPLE_RATE
+        start_sample = int(timestamp * SAMPLE_RATE)
+        end_sample = start_sample + len(chunk)
+        if next_expected_time is not None and timestamp - next_expected_time <= chunk_duration * 1.5:
+            start_sample = int(next_expected_time * SAMPLE_RATE)
+            end_sample = start_sample + len(chunk)
+        packed_end = max(packed_end, end_sample)
+        next_expected_time = end_sample / SAMPLE_RATE
+    return packed_end
+
+
 # Example selection and ASR/LLM/TTS come from server configuration.
 MINIMAL_SESSION_BODY: dict[str, str] = {}
 
@@ -403,13 +421,11 @@ class InferenceClient:
         if not output_chunks:
             return np.zeros(target_samples, dtype=np.int16)
         if self._preserve_late_output:
-            target_samples = max(
-                target_samples,
-                max(
-                    int(timestamp * SAMPLE_RATE) + len(chunk)
-                    for chunk, timestamp in zip(output_chunks, chunk_times, strict=True)
-                ),
+            timestamp_end = max(
+                int(timestamp * SAMPLE_RATE) + len(chunk)
+                for chunk, timestamp in zip(output_chunks, chunk_times, strict=True)
             )
+            target_samples = max(target_samples, timestamp_end, _packed_output_end(output_chunks, chunk_times))
         output = np.zeros(target_samples, dtype=np.int16)
 
         next_expected_time: float | None = None
