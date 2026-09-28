@@ -59,7 +59,8 @@ different input or output rates.
 The RTVI client reads the sample rate carried by each server audio frame and
 converts output to the same 16 kHz benchmark format. Both clients also discard
 queued response audio when the server reports that the user has interrupted
-the response.
+the response. Use `--preserve-late-output` only for the Full-Duplex-Bench v1.0
+user-interruption score. That flag keeps bot audio after the input file ends.
 
 Both clients stop output collection after an idle timeout and an absolute
 post-send deadline. Configure these with `--post-audio-idle-timeout` and

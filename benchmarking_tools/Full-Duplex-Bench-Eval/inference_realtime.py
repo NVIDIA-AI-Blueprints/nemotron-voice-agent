@@ -54,6 +54,24 @@ def _truncate_output_at(chunks: list[np.ndarray], timestamps: list[float], cutof
     timestamps[:] = kept_timestamps
 
 
+def _packed_output_end(chunks: list[np.ndarray], timestamps: list[float]) -> int:
+    """Return the sample end after contiguous placement, before duration trimming."""
+    next_expected_time: float | None = None
+    packed_end = 0
+    for chunk, timestamp in zip(chunks, timestamps, strict=True):
+        start = round(timestamp * BENCHMARK_SAMPLE_RATE)
+        chunk_duration = len(chunk) / BENCHMARK_SAMPLE_RATE
+        if next_expected_time is not None and timestamp - next_expected_time <= chunk_duration * 1.5:
+            start = round(next_expected_time * BENCHMARK_SAMPLE_RATE)
+        if start < 0:
+            chunk = chunk[-start:]
+            start = 0
+        end = start + len(chunk)
+        packed_end = max(packed_end, end)
+        next_expected_time = end / BENCHMARK_SAMPLE_RATE
+    return packed_end
+
+
 class _CredentialSafeConnect(WebSocketConnect):
     """Disable redirects when a WebSocket handshake carries credentials."""
 
@@ -353,6 +371,20 @@ class InferenceClient:
 
         return chunks, timestamps
 
+    @staticmethod
+    async def _settle_send_task(send_task: asyncio.Task[None]) -> None:
+        """Cancel and consume a sender task without hiding cancellation of this task."""
+        if not send_task.done():
+            send_task.cancel()
+        try:
+            await send_task
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling() > 0:
+                raise
+        except Exception:
+            pass
+
     def assemble_output(
         self,
         chunks: list[np.ndarray],
@@ -362,13 +394,11 @@ class InferenceClient:
         """Place response chunks on the input timeline and enforce its duration."""
         target_samples = round(input_duration * BENCHMARK_SAMPLE_RATE)
         if self.preserve_late_output and chunks:
-            target_samples = max(
-                target_samples,
-                max(
-                    round(timestamp * BENCHMARK_SAMPLE_RATE) + len(chunk)
-                    for chunk, timestamp in zip(chunks, timestamps, strict=True)
-                ),
+            timestamp_end = max(
+                round(timestamp * BENCHMARK_SAMPLE_RATE) + len(chunk)
+                for chunk, timestamp in zip(chunks, timestamps, strict=True)
             )
+            target_samples = max(target_samples, timestamp_end, _packed_output_end(chunks, timestamps))
         output = np.zeros(target_samples, dtype=np.int16)
         next_expected_time: float | None = None
         for chunk, timestamp in zip(chunks, timestamps, strict=True):
@@ -413,10 +443,7 @@ class InferenceClient:
                 )
                 await send_task
             finally:
-                if not send_task.done():
-                    send_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await send_task
+                await self._settle_send_task(send_task)
 
         output = self.assemble_output(chunks, timestamps, duration)
         sf.write(output_path, output, BENCHMARK_SAMPLE_RATE, subtype="PCM_16")

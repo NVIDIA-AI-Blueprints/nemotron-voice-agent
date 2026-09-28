@@ -223,6 +223,35 @@ class FullDuplexRealtimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(output), 1600)
         np.testing.assert_array_equal(output[1280:], chunk)
 
+    def test_preserve_late_output_keeps_audio_packed_past_early_timestamps(self) -> None:
+        client = self.client(preserve_late_output=True)
+        chunk = np.full(6_400, 1000, dtype=np.int16)
+
+        output = client.assemble_output([chunk, chunk], [0.0, 0.0625], input_duration=0.05)
+
+        self.assertEqual(len(output), 12_800)
+        np.testing.assert_array_equal(output[:6_400], chunk)
+        np.testing.assert_array_equal(output[6_400:], chunk)
+
+    async def test_sender_cleanup_propagates_outer_cancellation(self) -> None:
+        async def cancel_during_cleanup() -> None:
+            send_task = asyncio.create_task(asyncio.sleep(10))
+            current_task = asyncio.current_task()
+            assert current_task is not None
+            current_task.cancel()
+            await realtime.InferenceClient._settle_send_task(send_task)
+
+        task = asyncio.create_task(cancel_during_cleanup())
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+    async def test_sender_cleanup_consumes_its_own_cancellation(self) -> None:
+        send_task = asyncio.create_task(asyncio.sleep(10))
+
+        await realtime.InferenceClient._settle_send_task(send_task)
+
+        self.assertTrue(send_task.cancelled())
+
     async def test_absolute_post_send_deadline_bounds_continuous_audio(self) -> None:
         client = self.client(max_post_send_duration=0)
         encoded = base64.b64encode(b"\x00\x00").decode("ascii")
@@ -344,6 +373,21 @@ class FullDuplexRTVITests(unittest.IsolatedAsyncioTestCase):
         samples = np.concatenate(chunks)
         self.assertNotIn(200, samples)
         self.assertIn(300, samples)
+
+    def test_preserve_late_output_keeps_audio_packed_past_early_timestamps(self) -> None:
+        client = rtvi.InferenceClient(
+            "https://example.test",
+            "wss://example.test",
+            None,
+            preserve_late_output=True,
+        )
+        chunk = np.full(6_400, 1000, dtype=np.int16)
+
+        output = client.assemble_and_trim_output([chunk, chunk], [0.0, 0.0625], 0.05)
+
+        self.assertEqual(len(output), 12_800)
+        np.testing.assert_array_equal(output[:6_400], chunk)
+        np.testing.assert_array_equal(output[6_400:], chunk)
 
     async def test_sender_cleanup_propagates_outer_cancellation(self) -> None:
         async def cancel_during_cleanup() -> None:
