@@ -15,9 +15,20 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 ### How It Works
 
 1. The user speaks, and ASR emits interim transcripts as audio streams in.
-2. Silero VAD detects a pause in speech.
-3. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it is incomplete but silence continues past the Smart Turn stop threshold (default 1.0 s, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
-4. On a completed turn, the transcript goes to the LLM and TTS streams the reply back.
+2. Silero VAD detects a pause in speech. On each `VADUserStoppedSpeakingFrame`, the local NVIDIA STT subclass sends an 80 ms PCM silence chunk when the ASR stream is active. The chunk matches the configured audio channel count and includes the NVIDIA runtime configuration `force_eou=true`. If the ASR stream reconnects before sending the chunk, the subclass preserves its queued `force_eou` marker for the new stream.
+3. When NVIDIA returns `is_final`, stock `NvidiaSTTService` response handling emits `TranscriptionFrame(finalized=True)`.
+4. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it is incomplete but silence continues past the Smart Turn stop threshold (default 1.0 s, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
+5. Pipecat's stock turn analyzer strategy remains responsible for semantic turn closure. A finalized transcript closes a complete turn immediately; the existing STT timeout remains the fallback. The transcript goes to the LLM, and TTS streams the reply back.
+
+The VAD-stop finalization is an early transcript yield; it does not close the
+semantic user turn. If the user resumes speaking, VAD starts a new speech
+segment and repeats the sequence.
+
+NVIDIA `force_eou` finalization requires a supported cache-aware recurrent
+neural network transducer (RNNT) model, such as a Nemotron ASR Streaming
+model. Unsupported models ignore `force_eou` and instead use ASR endpointing.
+The cascaded examples configure `stop_history=400`, which finalizes after
+400 ms of trailing silence.
 
 ### Configuration
 
