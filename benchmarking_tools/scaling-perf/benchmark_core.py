@@ -441,14 +441,17 @@ class PerfClient:
         if frame is None or utterance_start is None:
             try:
                 await self.protocol_client.recover_turn(timeout=self.turn_response_timeout)
+            except ProtocolConnectionClosed:
+                raise
             except Exception as exc:
+                await self.logger.log(f"{self.stream_id} timed-out turn could not be synchronized: {exc}")
                 await self.protocol_client.record_turn_observation(
                     audio_file,
                     marker,
                     self.input_audio_file_end_monotonic,
                     error=f"unable to synchronize timed-out response: {exc}",
                 )
-                raise
+                return wf
             await self.protocol_client.record_turn_observation(
                 audio_file,
                 marker,

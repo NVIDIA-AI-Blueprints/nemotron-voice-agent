@@ -88,6 +88,58 @@ class RealtimeSocketTests(unittest.IsolatedAsyncioTestCase):
 
         connect.assert_not_awaited()
 
+    async def test_rejects_api_key_when_tls_verification_is_disabled(self) -> None:
+        socket = RealtimeTransport("wss://example.test", api_key="secret", verify_tls=False)
+
+        with (
+            patch("realtime_transport.websockets.connect", new_callable=AsyncMock) as connect,
+            self.assertRaisesRegex(RuntimeError, "TLS verification is disabled"),
+        ):
+            await socket.connect()
+
+        connect.assert_not_awaited()
+
+    async def test_failed_cancel_barrier_keeps_later_turns(self) -> None:
+        client = self.perf_client()
+        client.collecting_metrics = True
+        client.turn_response_timeout = 0.01
+        client._send_audio_file = AsyncMock()
+
+        async def hang_recv(timeout: float | None = None) -> None:
+            del timeout
+            await asyncio.Event().wait()
+
+        client.protocol_client.recv_audio = hang_recv
+        client.protocol_client.recover_turn = AsyncMock(side_effect=RuntimeError("barrier failed"))
+        client.protocol_client.record_turn_observation = AsyncMock()
+
+        first = await client._process_conversation_turn(Path("input.wav"), None)
+        second = await client._process_conversation_turn(Path("input.wav"), first)
+
+        self.assertIsNone(second)
+        self.assertEqual(client.failed_turns, 2)
+        self.assertEqual(client.protocol_client.recover_turn.await_count, 2)
+        for call in client.protocol_client.record_turn_observation.await_args_list:
+            self.assertIn("unable to synchronize", call.kwargs["error"])
+
+    async def test_closed_socket_during_cancel_barrier_still_ends_the_client(self) -> None:
+        client = self.perf_client()
+        client.turn_response_timeout = 0.01
+        client._send_audio_file = AsyncMock()
+
+        async def hang_recv(timeout: float | None = None) -> None:
+            del timeout
+            await asyncio.Event().wait()
+
+        client.protocol_client.recv_audio = hang_recv
+        client.protocol_client.recover_turn = AsyncMock(side_effect=ProtocolConnectionClosed)
+        client.protocol_client.record_turn_observation = AsyncMock()
+
+        with self.assertRaises(ProtocolConnectionClosed):
+            await client._process_conversation_turn(Path("input.wav"), None)
+
+        client.protocol_client.record_turn_observation.assert_not_awaited()
+
     async def test_configure_waits_for_session_updated(self) -> None:
         socket = RealtimeTransport("wss://example.test")
         websocket = FakeWebSocket(

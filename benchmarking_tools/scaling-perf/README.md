@@ -77,11 +77,15 @@ export OPENAI_REALTIME_API_KEY=<api-key>
 
 The API key is sent as `Authorization: Bearer <api-key>`. Set
 `OPENAI_REALTIME_AUTH_SCHEME` or use `--auth-scheme` for a different scheme,
-such as `Api-Key`. The client omits the header when no key is provided.
+such as `Api-Key`. The client omits the header when no key is provided. It
+refuses to send a key over `ws://` or when `--insecure` disables TLS
+verification. Use `--insecure` only for a local endpoint that does not require
+a key.
 
 The repository's gateway is available at
 `wss://localhost:7860/v1/realtime`. It uses the development TLS certificate,
-so local runs need `--insecure`:
+so local runs need `--insecure`. Leave `OPENAI_REALTIME_API_KEY` unset for
+this command. The local gateway does not require a key.
 
 ```bash
 uv run python3 benchmark.py \
@@ -230,7 +234,7 @@ wrapper and `benchmark.py` unless the description states otherwise:
 | `--auth-scheme` | `Bearer`; falls back to `OPENAI_REALTIME_AUTH_SCHEME` | Authorization scheme for the Realtime API key. |
 | `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. In Realtime mode, the same value bounds the `session.updated` readiness wait. |
 | `--turn-response-timeout` | RTVI: `10`; Realtime: `45` | Seconds to wait for first response audio after the WAV ends. |
-| `--insecure` | off | Disable TLS certificate verification for Realtime or RTVI. Intended only for local development certificates. |
+| `--insecure` | off | Disable TLS certificate verification for Realtime or RTVI. Intended only for local development certificates. Realtime mode rejects an API key when this flag is set. |
 | `--skip-bot-intro` | off | Skip draining an initial assistant utterance. Use for targets with welcome messages disabled. Mutually exclusive with `--drain-bot-intro`. |
 | `--drain-bot-intro` | on | Wait for and discard an initial assistant utterance before opening the metric window. Mutually exclusive with `--skip-bot-intro`. |
 | `--bot-intro-timeout` | `5` | Seconds to wait for initial bot audio. Increase this for high-latency cloud deployments. |
