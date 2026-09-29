@@ -15,7 +15,6 @@ overrides = [
     { name = "cryptography", specifier = ">=46.0.5" },
     { name = "idna", specifier = ">=3.15" },
     { name = "langchain-core", specifier = ">=1.4.1" },
-    { name = "nltk", specifier = ">=3.10.3" },
     { name = "nvidia-riva-client", specifier = ">=2.27.0,<3" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "protobuf", specifier = ">=6.33.6" },
@@ -551,15 +550,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0a/5b/836516269d4f618efe621661cfb6f9acc57e6f95265db3efaee48a5ffe04/datasets-5.0.1.tar.gz", hash = "sha256:ce22bb851efd7494f08aad33b940803784434f6e77763d00679a0dc45fcf686a", size = 641498, upload-time = "2026-07-28T11:09:12.016Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/44/0b/98fc6eb83333508ca5f44c52b3e287ea8137a0ad582714e2cbc67a02154b/datasets-5.0.1-py3-none-any.whl", hash = "sha256:9fbf73688f8c18f7529b4fe592abd04015f81d1e58001e4bac73ffb2b39d7cc4", size = 559079, upload-time = "2026-07-28T11:09:10.266Z" },
-]
-
-[[package]]
-name = "defusedxml"
-version = "0.7.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69", size = 75520, upload-time = "2021-03-08T10:59:26.269Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
 ]
 
 [[package]]
@@ -1777,7 +1767,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.40.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.40.0" },
-    { name = "pipecat-ai", extras = ["nvidia", "silero", "runner", "webrtc", "websocket", "openai"], specifier = "==1.11.0" },
+    { name = "pipecat-ai", extras = ["nvidia", "silero", "runner", "webrtc", "websocket", "openai"], specifier = "==1.12.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
@@ -1800,23 +1790,7 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.15.6" },
 ]
-eval = [{ name = "pipecat-ai", extras = ["evals"], specifier = "==1.11.0" }]
-
-[[package]]
-name = "nltk"
-version = "3.10.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "defusedxml" },
-    { name = "joblib" },
-    { name = "regex" },
-    { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/e6/fe51d2bb1a3b446f59c5c8165999a9fee208bc346af90a7cbf7657bc0d75/nltk-3.10.3.tar.gz", hash = "sha256:bb9327a461c3811c2fa4900e03840401f2126adfb30c0072827c433bd2444ea4", size = 5137152, upload-time = "2026-08-12T23:46:37.258Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/6d/ebd2af4640b12168fdf0cb74b6118df2f32a2f62ec7e0c06fbfd80706639/nltk-3.10.3-py3-none-any.whl", hash = "sha256:ff9598a8e20518ee0d557745890cc4435b9578489e2dcbc69c4f81fa060caf7c", size = 1798643, upload-time = "2026-08-12T23:44:13.478Z" },
-]
+eval = [{ name = "pipecat-ai", extras = ["evals"], specifier = "==1.12.0" }]
 
 [[package]]
 name = "nodeenv"
@@ -2218,7 +2192,7 @@ wheels = [
 
 [[package]]
 name = "pipecat-ai"
-version = "1.11.0"
+version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -2228,7 +2202,6 @@ dependencies = [
     { name = "loguru" },
     { name = "loudness" },
     { name = "markdown" },
-    { name = "nltk" },
     { name = "num2words" },
     { name = "numba" },
     { name = "numpy" },
@@ -2240,14 +2213,15 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "resampy" },
+    { name = "sentencex" },
     { name = "soundfile" },
     { name = "soxr" },
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/a0/494aa041f79e7a4a878ca6bd8b948fdcea06a318b04d24bd6f04c1799a28/pipecat_ai-1.11.0.tar.gz", hash = "sha256:49e7532a1f035e8884c47448a06d998a1b7f0943d11eae9bc8600a9e749a2a04", size = 12515730, upload-time = "2026-09-18T04:11:10.843Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/82/581985f55ee19ebf4bf3eb219626063c1c6b8e541ee96c9aac5f291f23a7/pipecat_ai-1.12.0.tar.gz", hash = "sha256:0a2d74eb94861ad18e7d795be72e99ebe183c46e063b835fd490359c8004e151", size = 12615988, upload-time = "2026-09-26T01:57:53.958Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/cb/940ed11839a5236bfeca67e629ddd1b67919e20d1ecfdd5804a8132e9c8c/pipecat_ai-1.11.0-py3-none-any.whl", hash = "sha256:0126b81d453687573ddcc26aa29e2c9509e21d8a8bf9b8c266da9de68b6df70d", size = 11822257, upload-time = "2026-09-18T04:11:07.988Z" },
+    { url = "https://files.pythonhosted.org/packages/10/fe/566fd73f43e66ce48b9a7e5dfa9cf79c713184978681708ac5c109c233ee/pipecat_ai-1.12.0-py3-none-any.whl", hash = "sha256:4cd3dc071b7b64da7ac700a26a224b773ae6ef8d6694a4566332d2e5e39ed6d9", size = 11871912, upload-time = "2026-09-26T01:57:50.823Z" },
 ]
 
 [package.optional-dependencies]
@@ -2306,14 +2280,14 @@ wheels = [
 
 [[package]]
 name = "pipecat-ai-prebuilt"
-version = "1.2.1"
+version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi", extra = ["all"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/67/5dc0fe0b1fc2eaefc99261a18b51d7e08dc64d1bcb7a6466c6b21fd1c822/pipecat_ai_prebuilt-1.2.1.tar.gz", hash = "sha256:0105381ebd1d560ff7c260a657b01762d0038038e9dbd22fbcbd766835723ba0", size = 804072, upload-time = "2026-09-16T16:30:15.063Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/06/84/d0f88732469c0ef2a747c0a9da3e054a9815630a913f7dfece2aa9d10ca8/pipecat_ai_prebuilt-1.2.2.tar.gz", hash = "sha256:a0050c198cbe04f2535d9b1eef4ef338812952f3973d92b18856d4d3731aa5dc", size = 804294, upload-time = "2026-09-25T12:09:37.795Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/fc/b62c18080d8165b9ab7c8b6b960d451b71149b53b560670f6fd437ce890e/pipecat_ai_prebuilt-1.2.1-py3-none-any.whl", hash = "sha256:1a7871293bee1b083b4bbe191f10f573051c0467915343e70f2b11b574bc090f", size = 805281, upload-time = "2026-09-16T16:30:13.237Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/a2/e3bd030c733b28c53e09d7cfd70763123c2b85615ea440076647a9c1b949/pipecat_ai_prebuilt-1.2.2-py3-none-any.whl", hash = "sha256:1e1991725cc7f20c92cacba8dc65d64e2e714dd81293ea8074669de7f8f85d17", size = 805332, upload-time = "2026-09-25T12:09:36.269Z" },
 ]
 
 [[package]]
@@ -3111,6 +3085,28 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8b/57/85cac3a8e32370e88fa5fa92812edb6025db7fcbed51452bd56ee1524957/segments-2.4.0.tar.gz", hash = "sha256:bba71f5520ddd54c8aa2f4d765a60618c6862162d6e7356a4a097f2223166f5b", size = 18662, upload-time = "2026-03-07T10:01:28.925Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/60/eef9acce946177f92c9aabf432224d87ab908bafafac516a36ab924199f3/segments-2.4.0-py2.py3-none-any.whl", hash = "sha256:4021dc67f201cc03c864c74c618bdb163b1af629da3040babbaa37d8813f3db0", size = 16321, upload-time = "2026-03-07T10:01:27.885Z" },
+]
+
+[[package]]
+name = "sentencex"
+version = "1.0.31"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/07/7a8b59f575b9085fcfde10b560e5fd0332080bb7d2e418f35334d39fbfe6/sentencex-1.0.31.tar.gz", hash = "sha256:22c5f1de7c03e15fa7ad9f30a5efdc101be0f83d1f29a19d376a09de341cfdd4", size = 214557, upload-time = "2026-09-14T05:08:26.539Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/e0/0449e4f37b3b4b200fa72bd735eff10a1050c1adc8c4de8d05cdc28012b4/sentencex-1.0.31-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:4546cb8b2a6960a5944e0cd643c6ef9a706d572490dc97557b2130b438018819", size = 1095976, upload-time = "2026-09-14T05:07:36.144Z" },
+    { url = "https://files.pythonhosted.org/packages/22/1b/0353d205b0e8fffc92288e0d3ba524109e1cd2ea95ffa05d4eec108311b3/sentencex-1.0.31-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:e2fdac5bb9339cbbfbcbfa9e4b202eb75cddea745158b1f747e33e4c678d0114", size = 1070168, upload-time = "2026-09-14T05:07:37.411Z" },
+    { url = "https://files.pythonhosted.org/packages/71/92/76c0168afb5b0a543101f113025bd17a7f32adade8f2718a87f5d9a9f783/sentencex-1.0.31-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:0ee7991804b0d6df984ee5cdf643cc9ebb963b89b2c6e4d4a51f11c8e7d8fd28", size = 1227148, upload-time = "2026-09-14T05:07:38.827Z" },
+    { url = "https://files.pythonhosted.org/packages/27/c5/066cbf0a297e11ccbd2284334bb1bcf437edaf83f34d16c7e30722e51b0e/sentencex-1.0.31-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:30735c34e217365fe0e0c2bc9c03824187987613547c5cd76a1b484322df60ca", size = 1218099, upload-time = "2026-09-14T05:07:40.188Z" },
+    { url = "https://files.pythonhosted.org/packages/76/04/90dfae5d2de158dac6ea776b102e33a4157198dcb67b1c00ffe5bc79b1ed/sentencex-1.0.31-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:729461669583149e9a2a77aff260fdc769aa40808002aa0e4d991af8837ae0a2", size = 1252053, upload-time = "2026-09-14T05:07:41.518Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/70/620607a07a4639ed72a9af6c07ccbd6f5da0ede5919a0e242473c2dc2d48/sentencex-1.0.31-cp312-cp312-win_amd64.whl", hash = "sha256:6a1cff5480379342c2150723b14be852343d7bc0d397eedad1ad1e7880244f74", size = 929769, upload-time = "2026-09-14T05:07:42.997Z" },
+    { url = "https://files.pythonhosted.org/packages/65/6b/ce0276cbfe1b93f2106a64a076cd88a70e2ff67daa4d9a6bd1c4d5a11301/sentencex-1.0.31-cp313-cp313-android_24_arm64_v8a.whl", hash = "sha256:c884d8df766fa32bac4d6b4bc8654c56dafe411d7048066683359136c8210b79", size = 1182913, upload-time = "2026-09-14T05:07:44.669Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/39/537a1224b205e5b5c766cb4eba70c39320c2e7f8854a1be1564f8a15f807/sentencex-1.0.31-cp313-cp313-android_24_x86_64.whl", hash = "sha256:93f04904e1b73a0ed9bd77981943bc53d96c0450f2b9ced71bb9b3d5a22b5968", size = 1195142, upload-time = "2026-09-14T05:07:46.154Z" },
+    { url = "https://files.pythonhosted.org/packages/30/0b/9077992644433f9c36850a851357852c9306d6b4cd6a87c391a3dfe24a5f/sentencex-1.0.31-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:2507b1453db7a8897392b224aaa9fb4ef4ee7c753ea9ed6482180daf0afbb302", size = 1095823, upload-time = "2026-09-14T05:07:47.524Z" },
+    { url = "https://files.pythonhosted.org/packages/12/6f/640c512d7b34720f7628c6b5cd976c490cca29ae6376e623095fc5348fba/sentencex-1.0.31-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:9b0a4f452e3a47c4cca72e8aa65caf907934ec04661ee18de9aea4e84462b6f0", size = 1070316, upload-time = "2026-09-14T05:07:48.98Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/7b/b0fcdaa6f993d20f1e306fa66027a2c48eaed20ae1bfba4ed827c9d712d4/sentencex-1.0.31-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:54febbd0591e706b74e18d7cd8fa721111662033852fdc6b8cb8cecafe6ffd40", size = 1226706, upload-time = "2026-09-14T05:07:50.773Z" },
+    { url = "https://files.pythonhosted.org/packages/77/bb/912e6b1e739b25acf6ea4350f8613e7d290ff77004b18d40112882ea61ed/sentencex-1.0.31-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e497b27098dde5542e0d42584addb2614554364f9bcf2c3cc85e1c84d5076729", size = 1217691, upload-time = "2026-09-14T05:07:52.28Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/02/d0b2b771ef0c3f5b0489fa5ab929a02c8585a7f8b0d5fed6a39415754d31/sentencex-1.0.31-cp313-cp313-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:c1ea556312123febde1b38db165025cfd6f13711a25031b09d1294bd270e088b", size = 1251557, upload-time = "2026-09-14T05:07:54.056Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/b2/4386ac2afb88545dad1843d09dc06b676a17738296a9487001bcc3f75572/sentencex-1.0.31-cp313-cp313-win_amd64.whl", hash = "sha256:6819f821b69900c072c9cf1879a2115edb43afbfcaf97efc9eaf15b24c70095d", size = 929602, upload-time = "2026-09-14T05:07:55.853Z" },
 ]
 
 [[package]]
