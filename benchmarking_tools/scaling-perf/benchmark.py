@@ -100,19 +100,29 @@ SERVER_METRIC_KEYS = (
     "frontend_tool_selection_processing_time",
     "backend_llm_ttft",
     "backend_llm_processing_time",
+    "backend_llm_dependent_ttft",
+    "backend_llm_dependent_processing_time",
     "backend_tool_call_latency",
     "frontend_final_response_ttft",
     "frontend_final_response_processing_time",
 )
 
+# The generic Frontend/Backend domain runs up to 3 dependent planning rounds.
+# Round 1 is the plan the Talker's filler covers; rounds 2+ extend the same
+# delegated turn, so they are reported separately instead of being averaged
+# into the first-round figure.
 _STAGE_TTFB_METRICS = {
     "frontend_tool_selection_llm": "frontend_tool_selection_ttft",
     "backend_thinker_llm": "backend_llm_ttft",
+    "backend_thinker_step2_llm": "backend_llm_dependent_ttft",
+    "backend_thinker_step3_llm": "backend_llm_dependent_ttft",
     "frontend_final_response_llm": "frontend_final_response_ttft",
 }
 _STAGE_PROCESSING_METRICS = {
     "frontend_tool_selection_llm": "frontend_tool_selection_processing_time",
     "backend_thinker_llm": "backend_llm_processing_time",
+    "backend_thinker_step2_llm": "backend_llm_dependent_processing_time",
+    "backend_thinker_step3_llm": "backend_llm_dependent_processing_time",
     "frontend_final_response_llm": "frontend_final_response_processing_time",
 }
 _STAGE_EVENT_FIELDS = (
@@ -409,6 +419,7 @@ class PerfClient:
         self.server_metric_samples: dict[str, list[float]] = {key: [] for key in SERVER_METRIC_KEYS}
         self.stage_metric_events: list[dict[str, Any]] = []
         self._seen_stage_metric_events: set[tuple[Any, ...]] = set()
+        self._warned_unmapped_stages: set[str] = set()
         self.rtvi_messages: list[dict[str, Any]] = []
         self.running = True
         self.collecting_metrics = False
@@ -490,6 +501,8 @@ class PerfClient:
                 if self._record_stage_metric(stage_key, float(value), item, metric="ttft"):
                     self.server_metric_samples[stage_key].append(float(value))
                 continue
+            if self._is_unmapped_stage(item, processor, float(value), "ttft"):
+                continue
             category = categorize_processor(processor)
             if category == "llm":
                 self.server_metric_samples["llm_ttft"].append(float(value))
@@ -514,6 +527,8 @@ class PerfClient:
                 if self._record_stage_metric("backend_tool_call_latency", float(value), item, metric="latency"):
                     self.server_metric_samples["backend_tool_call_latency"].append(float(value))
                 continue
+            if self._is_unmapped_stage(item, processor, float(value), "processing"):
+                continue
             if categorize_processor(processor) == "llm":
                 processing_time = float(value)
                 self.server_metric_samples["llm_processing_time"].append(processing_time)
@@ -528,6 +543,22 @@ class PerfClient:
             completion_tokens = item.get("completion_tokens")
             if isinstance(completion_tokens, (int, float)):
                 self._pending_llm_completion_tokens.append(float(completion_tokens))
+
+    def _is_unmapped_stage(self, item: dict[str, Any], processor: str, value: float, metric: str) -> bool:
+        """Keep an unrecognized agent stage out of the plain ASR/LLM/TTS buckets.
+
+        Stage metrics carry an additive ``stage`` field. A new server stage this
+        client does not map yet still ends in ``_llm``, so ``categorize_processor``
+        would silently fold it into ``llm_ttft`` / ``llm_processing_time`` and let
+        it consume a pending token sample. Preserve the raw event and skip it.
+        """
+        if not isinstance(item.get("stage"), str):
+            return False
+        self._record_stage_metric("unmapped_stage", value, item, metric=metric)
+        if processor not in self._warned_unmapped_stages:
+            self._warned_unmapped_stages.add(processor)
+            log_error(f"Unmapped agent stage processor {processor!r}; excluded from the plain LLM metrics")
+        return True
 
     def _record_stage_metric(
         self,
@@ -961,6 +992,11 @@ class PerfClient:
                 ),
                 ("backend_llm_ttft", round3(server_metric_average.get("backend_llm_ttft"))),
                 ("backend_llm_processing_time", round3(server_metric_average.get("backend_llm_processing_time"))),
+                ("backend_llm_dependent_ttft", round3(server_metric_average.get("backend_llm_dependent_ttft"))),
+                (
+                    "backend_llm_dependent_processing_time",
+                    round3(server_metric_average.get("backend_llm_dependent_processing_time")),
+                ),
                 ("backend_tool_call_latency", round3(server_metric_average.get("backend_tool_call_latency"))),
                 ("frontend_final_response_ttft", round3(server_metric_average.get("frontend_final_response_ttft"))),
                 (
@@ -1416,6 +1452,8 @@ _SUITE_HEADERS = (
     "Frontend Select Proc",
     "Backend LLM TTFT",
     "Backend LLM Proc",
+    "Backend Dep TTFT",
+    "Backend Dep Proc",
     "Backend Tool Latency",
     "Frontend Final TTFT",
     "Frontend Final Proc",
@@ -1889,6 +1927,8 @@ def _row_from_summary(summary: dict[str, Any], num_clients: int) -> dict[str, An
         "frontend_tool_selection_processing_time": sa.get("frontend_tool_selection_processing_time"),
         "backend_llm_ttft": sa.get("backend_llm_ttft"),
         "backend_llm_processing_time": sa.get("backend_llm_processing_time"),
+        "backend_llm_dependent_ttft": sa.get("backend_llm_dependent_ttft"),
+        "backend_llm_dependent_processing_time": sa.get("backend_llm_dependent_processing_time"),
         "backend_tool_call_latency": sa.get("backend_tool_call_latency"),
         "frontend_final_response_ttft": sa.get("frontend_final_response_ttft"),
         "frontend_final_response_processing_time": sa.get("frontend_final_response_processing_time"),
@@ -1925,6 +1965,10 @@ def _client_row_from_result(client: dict[str, Any]) -> dict[str, Any]:
         ),
         "backend_llm_ttft": _client_server_metric_average(client, "backend_llm_ttft"),
         "backend_llm_processing_time": _client_server_metric_average(client, "backend_llm_processing_time"),
+        "backend_llm_dependent_ttft": _client_server_metric_average(client, "backend_llm_dependent_ttft"),
+        "backend_llm_dependent_processing_time": _client_server_metric_average(
+            client, "backend_llm_dependent_processing_time"
+        ),
         "backend_tool_call_latency": _client_server_metric_average(client, "backend_tool_call_latency"),
         "frontend_final_response_ttft": _client_server_metric_average(client, "frontend_final_response_ttft"),
         "frontend_final_response_processing_time": _client_server_metric_average(
@@ -1976,6 +2020,8 @@ def _metric_row_to_strings(
         round3(row["frontend_tool_selection_processing_time"]),
         round3(row["backend_llm_ttft"]),
         round3(row["backend_llm_processing_time"]),
+        round3(row["backend_llm_dependent_ttft"]),
+        round3(row["backend_llm_dependent_processing_time"]),
         round3(row["backend_tool_call_latency"]),
         round3(row["frontend_final_response_ttft"]),
         round3(row["frontend_final_response_processing_time"]),
