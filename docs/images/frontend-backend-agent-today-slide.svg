@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a4d"/></marker></defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<text x="60" y="60" font-size="38" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">Frontend / Backend Agent — architecture</text>
+<text x="60" y="92" font-size="19" font-weight="normal" fill="#5b6b62" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">One voice pipeline serving one domain. A fast Talker LLM speaks; a hidden Thinker LLM plans; Python validates every plan before a tool runs.</text>
+<rect x="40" y="112" width="1840" height="152" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="62" y="139" font-size="20" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">1 · Session bootstrap</text>
+<text x="1858" y="139" font-size="15" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">runs once per session, before any audio</text>
+<rect x="60.0" y="146" width="348.0" height="108" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="168" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">examples_registry.yaml</text>
+<text x="72" y="188" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">frontend-backend-agent:</text>
+<text x="72" y="205" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">  slots: [llm, thinker-llm,</text>
+<text x="72" y="222" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">          booking-server, asr, tts]</text>
+<text x="72" y="239" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">  defaults: prompt: [talker]</text>
+<rect x="423.0" y="146" width="348.0" height="108" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="435.0" y="168" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">src/server.py</text>
+<text x="435.0" y="188" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">_sanitize_session_config()</text>
+<text x="435.0" y="205" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">binds the example's service catalog</text>
+<text x="435.0" y="222" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">and its prompt catalog per request</text>
+<rect x="786.0" y="146" width="348.0" height="108" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="798.0" y="168" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">pipeline.py :: bot()      410 lines</text>
+<text x="798.0" y="188" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">builds ASR · Talker LLM ·</text>
+<text x="798.0" y="205" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">Thinker LLM · TTS</text>
+<text x="798.0" y="222" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">registers the Talker's two tools</text>
+<rect x="1149.0" y="146" width="348.0" height="108" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1161.0" y="168" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">prompts.yaml</text>
+<text x="1161.0" y="188" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">talker    the spoken persona</text>
+<text x="1161.0" y="205" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">thinker   hidden planner prompt</text>
+<text x="1161.0" y="222" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">lists every internal tool by hand</text>
+<rect x="1512.0" y="146" width="348.0" height="108" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1524.0" y="168" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">services.cloud / services.local</text>
+<text x="1524.0" y="188" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">llm · thinker-llm · booking-server</text>
+<text x="1524.0" y="205" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">asr · tts</text>
+<text x="1524.0" y="222" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">one catalog entry per slot</text>
+<rect x="40" y="280" width="1840" height="140" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="62" y="307" font-size="20" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">2 · Realtime voice path — Pipecat Pipeline</text>
+<text x="1858" y="307" font-size="15" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">the same frames for every turn</text>
+<rect x="60.0" y="314" width="246.0" height="92" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="336" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">transport.input()</text>
+<text x="72" y="356" font-size="13.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">audio in</text>
+<rect x="319.0" y="314" width="246.0" height="92" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="331.0" y="336" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">NvidiaSTTService</text>
+<text x="331.0" y="356" font-size="13.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">Riva ASR</text>
+<rect x="578.0" y="314" width="246.0" height="92" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="590.0" y="336" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">user_aggregator</text>
+<text x="590.0" y="356" font-size="13.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">LLMContext pair</text>
+<rect x="837.0" y="314" width="246.0" height="92" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="849.0" y="336" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">Talker LLM</text>
+<text x="849.0" y="356" font-size="13.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">tools = TOOLS_SCHEMA</text>
+<rect x="1096.0" y="314" width="246.0" height="92" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1108.0" y="336" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">NvidiaTTSService</text>
+<text x="1108.0" y="356" font-size="13.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">speech filter · IPA</text>
+<rect x="1355.0" y="314" width="246.0" height="92" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1367.0" y="336" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">transport.output()</text>
+<text x="1367.0" y="356" font-size="13.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">audio out</text>
+<rect x="1614.0" y="314" width="246.0" height="92" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1626.0" y="336" font-size="14" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">assistant_aggregator</text>
+<text x="1626.0" y="356" font-size="13.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">20-turn window</text>
+<line x1="308.0" y1="360" x2="316.0" y2="360" stroke="#1f7a4d" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="567.0" y1="360" x2="575.0" y2="360" stroke="#1f7a4d" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="826.0" y1="360" x2="834.0" y2="360" stroke="#1f7a4d" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="1085.0" y1="360" x2="1093.0" y2="360" stroke="#1f7a4d" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="1344.0" y1="360" x2="1352.0" y2="360" stroke="#1f7a4d" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="1603.0" y1="360" x2="1611.0" y2="360" stroke="#1f7a4d" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="40" y="436" width="1840" height="128" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="62" y="463" font-size="20" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">3 · Talker tool boundary — src/tool_handlers.py      188 lines</text>
+<text x="1858" y="463" font-size="15" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">the Talker can reach exactly two tools: call_backend · cancel_backend</text>
+<rect x="60.0" y="470" width="435.0" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="492" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">build_handlers(thinker, …)</text>
+<text x="72" y="512" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">filler threshold 0.3 s · timeout_secs 30</text>
+<rect x="515.0" y="470" width="435.0" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="527.0" y="492" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">handle_call_backend</text>
+<text x="527.0" y="512" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">validates the query, splits slots,</text>
+<text x="527.0" y="529" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">awaits thinker.call(query, slots, …)</text>
+<rect x="970.0" y="470" width="435.0" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="982.0" y="492" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">delayed filler task</text>
+<text x="982.0" y="512" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">after 0.3 s speaks the filler_text the</text>
+<text x="982.0" y="529" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">Talker supplied with the tool call</text>
+<rect x="1425.0" y="470" width="435.0" height="82" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1437.0" y="492" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">result → Talker</text>
+<text x="1437.0" y="512" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">payload → params.result_callback()</text>
+<rect x="40" y="580" width="1840" height="372" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="62" y="607" font-size="20" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">4 · The internal Thinker — the airline domain</text>
+<text x="1858" y="607" font-size="15" font-weight="normal" fill="#5b6b62" text-anchor="end" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">wired into pipeline.py by direct import; there is no indirection between them</text>
+<rect x="60.0" y="614" width="435.0" height="156" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="636" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">pipeline.py — where the airline is wired in</text>
+<text x="72" y="656" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">from airline.backend  import HTTPBookingBackend</text>
+<text x="72" y="673" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">from airline.thinker  import ThinkerBackend</text>
+<text x="72" y="690" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">from airline.tools    import TOOLS_SCHEMA</text>
+<text x="72" y="707" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">from src.tts_filter   import …pronunciation…</text>
+<text x="72" y="724" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">THINKER_PROMPT_KEY = "thinker"        line 63</text>
+<text x="72" y="741" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">_booking_backend_url()        lines 370–386</text>
+<text x="72" y="758" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">intro_prompt="Please greet…"        line 338</text>
+<rect x="515.0" y="614" width="435.0" height="156" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="527.0" y="636" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">src/planner.py :: NvidiaThinkerPlanner    105</text>
+<text x="527.0" y="656" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">thinker prompt + session state</text>
+<text x="527.0" y="673" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">        → one strict JSON plan</text>
+<text x="527.0" y="690" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">parse_plan_json() · _strip_thinking()</text>
+<text x="527.0" y="724" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">Python validates the plan;</text>
+<text x="527.0" y="741" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">the model never executes anything</text>
+<rect x="970.0" y="614" width="435.0" height="156" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="982.0" y="636" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airline/thinker.py :: ThinkerBackend      297</text>
+<text x="982.0" y="656" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">call_id · active_task · cancel_active()</text>
+<text x="982.0" y="673" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">_dispatch_tool_call()  if/elif, 4 tools</text>
+<text x="982.0" y="690" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">_READ_ONLY_TOOLS = { pnr_status,</text>
+<text x="982.0" y="707" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">                     response_hint }</text>
+<text x="982.0" y="724" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">read-only calls run concurrently;</text>
+<text x="982.0" y="741" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">mutating calls are serialized</text>
+<text x="982.0" y="758" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">synthetic tool delay 0.1–0.5 s</text>
+<rect x="1425.0" y="614" width="435.0" height="156" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1437.0" y="636" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airline/state.py                           61</text>
+<text x="1437.0" y="656" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">search_context · search_results</text>
+<text x="1437.0" y="673" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">booking_draft</text>
+<text x="1437.0" y="690" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">waiting_for_preferences</text>
+<text x="1437.0" y="707" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">waiting_for_confirmation</text>
+<text x="1437.0" y="741" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">session-local; never shared</text>
+<rect x="60.0" y="790" width="435.0" height="148" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="72" y="812" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">internal Thinker tools</text>
+<text x="72" y="832" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airline/flight_search.py            98</text>
+<text x="72" y="849" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airline/booking_tool.py            222</text>
+<text x="72" y="866" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airline/pnr_status.py               60</text>
+<text x="72" y="900" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">response_hint — the planner's own</text>
+<text x="72" y="917" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">response_text is spoken verbatim</text>
+<rect x="515.0" y="790" width="435.0" height="148" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="527.0" y="812" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airline/backend.py :: HTTPBookingBackend  113</text>
+<text x="527.0" y="832" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">→ airline/database/</text>
+<text x="527.0" y="849" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">     server.py · api.py · schemas.py</text>
+<text x="527.0" y="866" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">     db.py · seed.py · schema.sql</text>
+<text x="527.0" y="883" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">FastAPI service + Postgres</text>
+<text x="527.0" y="900" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">flights · PNRs · seed data</text>
+<rect x="970.0" y="790" width="435.0" height="148" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="982.0" y="812" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airline helpers</text>
+<text x="982.0" y="832" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">plan_parsing.py     69</text>
+<text x="982.0" y="849" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">slot_parsing.py     99</text>
+<text x="982.0" y="866" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">transform.py       183</text>
+<text x="982.0" y="883" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">airports.py         93</text>
+<text x="982.0" y="900" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">branding.py         51</text>
+<rect x="1425.0" y="790" width="435.0" height="148" rx="9" fill="#2e8b57" fill-opacity="0.16" stroke="#1f7a4d" stroke-width="1.7"/>
+<text x="1437.0" y="812" font-size="15" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">shared contracts — src/</text>
+<text x="1437.0" y="832" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">protocol.py          92</text>
+<text x="1437.0" y="849" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">   response_hint() · tool_result()</text>
+<text x="1437.0" y="866" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">   ThinkerLifecycleEvent</text>
+<text x="1437.0" y="883" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">tts_filter.py        59</text>
+<text x="1437.0" y="900" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">   PNR + flight-number speech</text>
+<text x="1437.0" y="917" font-size="14.5" font-weight="normal" fill="#2f3b34" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">runtime_context.py   23</text>
+<line x1="700" y1="566" x2="700" y2="606" stroke="#1f7a4d" stroke-width="2" marker-end="url(#ar)"/>
+<text x="714" y="600" font-size="14" font-weight="bold" fill="#1f7a4d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">thinker.call()</text>
+<rect x="40" y="968" width="1840" height="92" rx="12" fill="#2e8b57" fill-opacity="0.05" stroke="#1f7a4d" stroke-opacity="0.55" stroke-width="1.3"/>
+<text x="62" y="995" font-size="20" font-weight="bold" fill="#14532d" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">Properties of this shape</text>
+<text x="62" y="1015" font-size="14.5" font-weight="normal" fill="#b3261e" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">· pipeline.py names the airline in 4 imports and 4 construction sites. A second domain has no seam to plug into — the pipeline itself would have to be copied.</text>
+<text x="62" y="1034" font-size="14.5" font-weight="normal" fill="#b3261e" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">· One internal tool is defined in three independent places: the _dispatch_tool_call if/elif chain, _READ_ONLY_TOOLS, and the "Available internal tools:" prose in the thinker prompt.</text>
+<text x="62" y="1053" font-size="14.5" font-weight="normal" fill="#b3261e" text-anchor="start" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif" xml:space="preserve">· airline/thinker.py has no overall deadline, no planner deadline and no stale-generation guard: a superseded call can still deliver a late payload.</text>
+</svg>
