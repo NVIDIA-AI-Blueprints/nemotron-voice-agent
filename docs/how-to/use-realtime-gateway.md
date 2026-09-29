@@ -249,30 +249,49 @@ response is non-cacheable and omits private provider and MCP configuration.
 
 ### Test from a Browser
 
-The shared application includes a minimal operator client at
-`https://<server>:7860/realtime-test.html`. It connects to the Generic
-Frontend/Backend profile by default and supports text or microphone turns,
-streamed text or speech output, and a raw event log. Select **Speech**, connect,
-allow microphone access, select **Start microphone**, speak, and then select
-**Stop and send speech**. The page sends 24 kHz mono PCM16 in manual turn mode
-and plays the streamed `response.output_audio.delta` events through the browser.
+The repository includes a minimal local test client at `realtime_test_client/`.
+Start it from the repository root while the server is running:
 
-The page also declares a browser-owned `get_browser_time` function by default.
-Ask it to use the browser tool for the current local time. The page executes the
-function in JavaScript, displays its output, sends a correlated
-`function_call_output`, and requests the final response. Clear **Enable the
-browser-owned get_browser_time tool** before connecting to test without it.
+```bash
+python realtime_test_client/proxy.py
+```
 
-Paste `REALTIME_API_KEY` into the page and select **Connect**. The page uses the
-master key once to request a 10-minute `ek_` client secret, clears the key field,
-and authenticates the WebSocket with only that short-lived secret. The page
-does not persist either credential. This is a deployment test tool; production
-browser applications should mint client secrets on their trusted backend so
-the master key never reaches browser code.
+Then open `http://localhost:8765`. The page connects to the Generic
+Frontend/Backend profile by default and provides **Connect**, **Start mic**,
+**Send text**, and **Clear** controls, a conversation view, the negotiated
+session configuration, and a raw event log. It sends 24 kHz mono PCM16 audio
+and plays streamed `response.output_audio.delta` events.
 
-If the deployment uses the default self-signed TLS certificate, accept the
-browser's certificate warning before testing. Never send credentials over
-unencrypted `ws://` or `http://` connections.
+The client is a proxy rather than a page the server hosts, for two reasons:
+
+- Browsers cannot set an `Authorization` header on a WebSocket.
+- The browser fallback offers an `ek_` client secret as a WebSocket
+  subprotocol. That secret encodes the whole bound session, and the Generic
+  Frontend/Backend session exceeds the client-secret size cap. The gateway
+  rejects it with "The bound Realtime session is too large for a WebSocket
+  client secret." Refer to `_CLIENT_SECRET_MAX_CHARS` in
+  `src/realtime/auth.py`.
+
+The proxy therefore holds `REALTIME_API_KEY` server side and relays a plain
+`ws://` browser connection to the gateway's TLS WebSocket. It also terminates
+the gateway's self-signed certificate, so the browser raises no certificate
+warning. The proxy reads `REALTIME_API_KEY` from the environment, or from the
+repository `.env` file when the variable is not already set.
+
+Configure the proxy with these options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--port` | `8765` | Local port that serves the page and the browser WebSocket |
+| `--upstream` | `wss://localhost:7860` | Realtime gateway to relay to |
+| `--model` | `nvidia/nemotron-realtime-generic-frontend-backend` | Realtime model id to request |
+| `--env-file` | repository `.env` | File to read `REALTIME_API_KEY` from |
+
+This is a local development tool. It holds the master key in the proxy process
+and serves the browser over plain HTTP on the loopback interface. Do not expose
+it beyond localhost, and do not use it as a pattern for a production browser
+application. A production application mints short-lived client secrets on its
+own trusted backend so the master key never reaches browser code.
 
 ## Configure a Session
 
