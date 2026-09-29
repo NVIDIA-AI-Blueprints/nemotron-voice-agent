@@ -67,7 +67,8 @@ from utils import (
     parse_json_dict,
 )
 
-load_dotenv(override=True)
+# Preserve deployment-provided settings when imported by the Realtime gateway.
+load_dotenv(override=False)
 
 CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 20)
 THINKER_TOOL_DELAY_MIN_SECONDS = 0.1

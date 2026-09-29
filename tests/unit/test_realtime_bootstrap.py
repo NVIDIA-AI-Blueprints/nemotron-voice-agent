@@ -8,6 +8,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -457,6 +460,43 @@ class BootstrappedGatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealtimeServerSurfaceTests(unittest.IsolatedAsyncioTestCase):
+    def test_deployment_environment_wins_over_dotenv_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_file = os.path.join(temp_dir, ".env")
+            with open(env_file, "w", encoding="utf-8") as handle:
+                handle.write("REALTIME_SERVICE_PLATFORM=cloud\n")
+            script = """
+import os
+import dotenv
+
+original = dotenv.load_dotenv
+dotenv.load_dotenv = lambda *, override: original(
+    dotenv_path=os.environ["TEST_DOTENV_PATH"],
+    override=override,
+)
+import server  # noqa: F401
+import examples.frontend_backend_agent.pipeline  # noqa: F401
+print(os.environ["REALTIME_SERVICE_PLATFORM"])
+"""
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PYTHONPATH": "src",
+                    "REALTIME_SERVICE_PLATFORM": "server",
+                    "TEST_DOTENV_PATH": env_file,
+                }
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                check=True,
+                capture_output=True,
+                cwd=os.fspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                env=env,
+                text=True,
+            )
+
+        self.assertEqual(completed.stdout.strip().splitlines()[-1], "server")
+
     def test_logical_component_override_is_bound_to_one_catalog_source(self) -> None:
         import server
 

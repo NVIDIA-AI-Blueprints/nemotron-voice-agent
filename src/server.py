@@ -35,7 +35,10 @@ from dotenv import load_dotenv
 
 from utils import parse_env_bool, parse_env_int
 
-load_dotenv(override=True)
+# Deployment-provided environment variables are authoritative. ``.env`` is a
+# local-development defaults file and must never replace Helm/NVCF settings
+# such as REALTIME_SERVICE_PLATFORM inside a running container.
+load_dotenv(override=False)
 
 import argparse
 import asyncio

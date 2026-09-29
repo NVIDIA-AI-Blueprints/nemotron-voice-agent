@@ -55,6 +55,13 @@ Configure these deployment settings in `.env` when needed:
 | `REALTIME_SERVICE_PLATFORM` | Selects the exact `cloud`, `server`, or `singlegpu` catalog section. Host-native runs default to `cloud`; Compose pins the value for each recipe. |
 | `REALTIME_MCP_ALLOWED_SERVER_URLS` | JSON array of exact, trusted Streamable HTTP MCP URLs that the gateway can contact. |
 
+For local development, `.env` supplies defaults for variables that are not
+already present in the process environment. Existing process variables remain
+authoritative. In a container deployment, set values such as
+`REALTIME_SERVICE_PLATFORM` through Docker Compose, Helm, or NVCF instead of
+relying on the image's `.env` file. Restart the application after changing a
+deployment variable.
+
 TLS is enabled by default. Set `PIPELINE_TLS=false` only for an isolated local
 test. When TLS is enabled without explicit certificate paths, the server uses
 a local self-signed certificate.
