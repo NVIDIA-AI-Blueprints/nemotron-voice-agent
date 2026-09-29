@@ -102,8 +102,14 @@ def build_handlers(
     interrupted_speech_consumer: Callable[[], bool] | None = None,
     max_query_chars: int = 4000,
     stage_metrics: StageMetricsCoordinator | None = None,
+    allow_talker_frames: bool = True,
 ) -> dict[str, Callable]:
-    """Return tool handlers bound to one session-local backend agent."""
+    """Return tool handlers bound to one session-local backend agent.
+
+    Realtime sessions suppress pipeline-authored speech frames until the
+    delegated function-call response has closed and the correlated tool output
+    can create its protocol-owned final response.
+    """
     consecutive_planner_errors = 0
     tool_result_mode_default = getattr(thinker, "tool_result_mode_default", "talker")
     talker_result_tools = frozenset(getattr(thinker, "talker_result_tools", ()))
@@ -137,7 +143,11 @@ def build_handlers(
                 ),
                 context="flight_search",
             )
-            await _emit_terminal_payload(params, payload)
+            await _emit_terminal_payload(
+                params,
+                payload,
+                allow_talker_frames=allow_talker_frames,
+            )
             return
         try:
             if filler_policy == "talker_authored":
@@ -156,7 +166,7 @@ def build_handlers(
                     accepted=bool(filler_text),
                     word_count=len(_FILLER_WORD_RE.findall(filler_text)),
                 ).info("Processed Talker-authored filler candidate")
-            if filler_mode != "emit":
+            if filler_mode != "emit" or not allow_talker_frames:
                 filler_text = ""
             slots = {key: value for key, value in arguments.items() if key not in {"query", "intent", "filler_text"}}
             filler_task: asyncio.Task | None = None
@@ -183,6 +193,8 @@ def build_handlers(
                 nonlocal filler_started, filler_task
                 if stage_metrics is not None:
                     await stage_metrics.bind_backend_call(params.tool_call_id, event.call_id)
+                if not allow_talker_frames:
+                    return
                 if event.marker == "IntermediateResponse" and filler_text and not filler_emitted:
                     await _cancel_pending_filler(filler_task)
                     filler_task = None
@@ -230,6 +242,7 @@ def build_handlers(
                 "type": "response_hint",
                 "reason": "tool_error",
                 "action": "retry",
+                "error": str(exc),
                 "response_text": "I could not complete that request right now. Please try again.",
                 "context": "call_backend",
             }
@@ -247,7 +260,11 @@ def build_handlers(
                         ),
                     }
                 )
-                await _emit_terminal_payload(params, terminal_payload)
+                await _emit_terminal_payload(
+                    params,
+                    terminal_payload,
+                    allow_talker_frames=allow_talker_frames,
+                )
                 if stage_metrics is not None:
                     await stage_metrics.cleanup_tool_call(params.tool_call_id)
                 consecutive_planner_errors = 0
@@ -260,6 +277,7 @@ def build_handlers(
             default_mode=tool_result_mode_default,
             talker_result_tools=talker_result_tools,
             stage_metrics=stage_metrics,
+            allow_talker_frames=allow_talker_frames,
         )
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
@@ -287,7 +305,7 @@ def build_handlers(
             "response_text": "Okay, I stopped that." if did_cancel else "There is nothing pending right now.",
             "context": "cancel_backend",
         }
-        if _tool_result_mode(tool_result_mode_default) == "direct":
+        if allow_talker_frames and _tool_result_mode(tool_result_mode_default) == "direct":
             await _emit_talker_response(params.llm, str(payload["response_text"]), append_to_context=False)
             await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
             if stage_metrics is not None:
@@ -314,8 +332,19 @@ async def _emit_talker_response(llm, text: str, *, append_to_context: bool = Tru
             await llm.push_frame(LLMFullResponseEndFrame())
 
 
-async def _emit_terminal_payload(params: FunctionCallParams, payload: dict[str, Any]) -> None:
-    """Speak a validated terminal payload without asking the Talker to reinterpret it."""
+async def _emit_terminal_payload(
+    params: FunctionCallParams,
+    payload: dict[str, Any],
+    *,
+    allow_talker_frames: bool = True,
+) -> None:
+    """Deliver a validated terminal payload through the protocol-safe path."""
+    if not allow_talker_frames:
+        await params.result_callback(
+            _talker_result_projection(payload),
+            properties=FunctionCallResultProperties(run_llm=True),
+        )
+        return
     await _emit_talker_response(params.llm, str(payload.get("response_text") or ""))
     await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
 
@@ -392,6 +421,7 @@ async def _deliver_tool_payload(
     default_mode: object = "talker",
     stage_metrics: StageMetricsCoordinator | None = None,
     talker_result_tools: frozenset[str] = frozenset(),
+    allow_talker_frames: bool = True,
 ) -> None:
     """Deliver one grounded payload through the configured final-response path."""
     if not is_speakable_payload(payload):
@@ -401,6 +431,12 @@ async def _deliver_tool_payload(
         return
     response_text = str(payload.get("response_text") or "")
     _remember_backend_response(params.llm, response_text, payload)
+    if not allow_talker_frames:
+        await params.result_callback(
+            _talker_result_projection(payload),
+            properties=FunctionCallResultProperties(run_llm=True),
+        )
+        return
     if _should_deliver_directly(payload, default_mode=default_mode, talker_result_tools=talker_result_tools):
         await _emit_talker_response(params.llm, response_text, append_to_context=False)
         await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))

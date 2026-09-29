@@ -8,6 +8,10 @@ validates each plan in Python, runs the allowed domain tools, and returns a
 structured result to the Talker. The generic backend can use up to 3 planning
 rounds when later work depends on an earlier tool result.
 
+The OpenAI Realtime WebSocket can run this complete server-owned system or
+expose client-owned delegation functions. Refer to [Configure
+Tools](../../../docs/how-to/use-realtime-gateway.md#configure-tools).
+
 ![Frontend/Backend Agent architecture](images/frontend-backend-agent-architecture.png)
 
 ## Default Models

@@ -7,6 +7,8 @@ server:
       name: "Nemotron 3.5 Lightning 30B A3B"
       model_id: "nvidia/nemotron-3.5-lightning"
       base_url: "http://nvidia-llm:8000/v1"
+      supports_tokenize: true
+      realtime_max_output_tokens: 4096
       system_prompt: ""
       max_tokens: 2048
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
@@ -14,6 +16,8 @@ server:
       name: "Nemotron 3.5 Lightning Fast Talker"
       model_id: "nvidia/nemotron-3.5-lightning"
       base_url: "http://nvidia-llm:8000/v1"
+      supports_tokenize: true
+      realtime_max_output_tokens: 4096
       system_prompt: ""
       max_tokens: 512
       temperature: 0.0
@@ -77,13 +81,18 @@ singlegpu:
       name: "Nemotron 3.5 Lightning 30B A3B"
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
       base_url: "http://nvidia-llm-vllm-frontend-backend:8000/v1"
+      supports_tokenize: true
+      realtime_max_output_tokens: 2048
       system_prompt: ""
       max_tokens: 2048
+      forced_tool_call_stops: ["</tool_call>"]
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
     nemotron-lightning-talker:
       name: "Nemotron 3.5 Lightning Fast Talker"
       model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
       base_url: "http://nvidia-llm-vllm:8000/v1"
+      supports_tokenize: true
+      realtime_max_output_tokens: 2048
       system_prompt: ""
       max_tokens: 512
       temperature: 0.0
@@ -95,6 +104,13 @@ singlegpu:
       base_url: "http://nvidia-llm-vllm-frontend-backend:8000/v1"
       max_tokens: 4096
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"thinking_token_budget":1024,"repetition_penalty":1.05}}'
+    nemotron-super-reasoning:
+      name: "Nemotron 3 Super Reasoning Thinker"
+      model_id: "nvidia/nemotron-3-super-120b-a12b"
+      base_url: "http://nemotron-3-super:8000/v1"
+      max_tokens: 2048
+      temperature: 0.0
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
   booking-server:
     default:
       name: "Booking Server"

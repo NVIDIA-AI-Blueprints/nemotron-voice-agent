@@ -30,6 +30,10 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
     NvidiaOmniSettings,
     text_message_part,
 )
+from examples.shared.frames import (
+    LLMProviderFinishReason,
+    require_llm_provider_finish_reason,
+)
 from utils import parse_env_float, parse_env_int
 
 THINKING_TASK_NAME = "think"
@@ -112,8 +116,9 @@ class ThinkerWorker(BaseWorker):
         )
         answer = ""
         reasoning = ""
+        finish_reason: LLMProviderFinishReason | None = None
         try:
-            answer, reasoning = await self._think(
+            answer, reasoning, finish_reason = await self._think(
                 conversation,
                 transcript,
                 reason,
@@ -125,10 +130,10 @@ class ThinkerWorker(BaseWorker):
             logger.exception(f"Thinker Omni request failed: {exc}")
             answer = ""
 
-        await self.send_job_response(
-            message.job_id,
-            {"response": answer, "reasoning": reasoning},
-        )
+        response: dict[str, Any] = {"response": answer, "reasoning": reasoning}
+        if finish_reason is not None:
+            response["finish_reason"] = finish_reason
+        await self.send_job_response(message.job_id, response)
 
     async def _think(
         self,
@@ -139,7 +144,7 @@ class ThinkerWorker(BaseWorker):
         *,
         requester: str,
         task_id: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, LLMProviderFinishReason]:
         """Call the reasoning-ON Omni endpoint, streaming reasoning and answer tokens to the client."""
         recovery_note = _REASON_NOTES.get(reason, "")
         user_text = (
@@ -190,11 +195,12 @@ class ThinkerWorker(BaseWorker):
         )
         answer = result.text.strip()
         reasoning = (result.reasoning or "").strip()
+        finish_reason = require_llm_provider_finish_reason(result.finish_reason)
         logger.info(
-            f"Thinker Omni answer: answer_chars={len(answer)}, finish_reason={result.finish_reason or 'unknown'}, "
+            f"Thinker Omni answer: answer_chars={len(answer)}, finish_reason={finish_reason}, "
             f"reasoning_chars={len(reasoning)}"
         )
-        return answer, reasoning
+        return answer, reasoning, finish_reason
 
     async def _emit_update(
         self,

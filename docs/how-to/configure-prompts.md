@@ -32,6 +32,11 @@ my_prompt:
     ...
 ```
 
+OpenAI Realtime profiles select a prompt with `selectors.prompt_key` in
+`examples_registry.yaml`. Use `session.instructions` for per-session prompt
+changes. Refer to [Select a Realtime Model
+Profile](use-realtime-gateway.md#select-a-realtime-model-profile).
+
 ## Adding Built-In Prompts via `prompts.yaml`
 
 To make a prompt available as a built-in option for all users of an example, add an entry to that example's `prompts.yaml`, such as [`src/examples/generic/prompts.yaml`](../../src/examples/generic/prompts.yaml). The client loads built-in prompts for the active example. Refresh open browser tabs after editing YAML.
