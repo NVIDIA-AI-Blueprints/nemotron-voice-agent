@@ -208,6 +208,7 @@ def authenticate_realtime_websocket(
     *,
     api_key: str | None = None,
     now: int | None = None,
+    allow_proxy_bearer: bool = False,
 ) -> RealtimeAuthentication:
     """Authenticate a server or browser WebSocket handshake.
 
@@ -220,7 +221,7 @@ def authenticate_realtime_websocket(
 
     bearer = _bearer_credential(headers)
     browser = _browser_subprotocol_credential(headers)
-    if bearer and browser and not _constant_time_equal(bearer, browser):
+    if bearer and browser and not allow_proxy_bearer and not _constant_time_equal(bearer, browser):
         raise RealtimeAuthenticationError("Conflicting Realtime credentials")
     if browser is not None and not browser.startswith(_CLIENT_SECRET_PREFIX):
         raise RealtimeAuthenticationError("Browser WebSocket authentication requires a client secret")
