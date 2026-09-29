@@ -205,5 +205,27 @@ class ClientToolRoundUnderBoundPromptTests(unittest.IsolatedAsyncioTestCase):
             shutdown_realtime_transport(transport)
 
 
+class DelegateToolNameContractTests(unittest.TestCase):
+    """Pin the delegate tool names that out-of-repo clients must filter.
+
+    The gateway publishes delegate calls as ordinary wire ``function_call``
+    items and deliberately does not tell the client which names are
+    server-owned, so every client hardcodes the set. The evaluation harness
+    does this in its endpoint profile. Renaming or adding a delegate tool
+    without updating those clients makes them dispatch it as a benchmark
+    tool, which fails as an unknown tool rather than as a clear contract
+    break. Treat a change here as a breaking wire-contract change.
+    """
+
+    def test_generic_delegate_tool_names_are_exactly_call_and_cancel_backend(self) -> None:
+        from pipecat.adapters.schemas.tools_schema import AdapterType
+
+        from examples.frontend_backend_agent.generic.tools import TOOLS_SCHEMA
+
+        names = {tool["function"]["name"] for tool in TOOLS_SCHEMA.custom_tools[AdapterType.OPENAI]}
+
+        self.assertEqual(names, {"call_backend", "cancel_backend"})
+
+
 if __name__ == "__main__":
     unittest.main()
