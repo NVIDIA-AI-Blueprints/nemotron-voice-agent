@@ -54,10 +54,16 @@ def _validate_dump_dir(dump_dir: Path) -> None:
         ) from None
 
 
-def create_audio_recorder() -> AudioBufferProcessor | None:
+def create_audio_recorder(session_id: str = "") -> AudioBufferProcessor | None:
     """Create an AudioBufferProcessor that saves per-turn audio clips to WAV files.
 
     Returns None if both ASR and TTS dumps are disabled.
+
+    ``session_id`` is accepted for call-site compatibility with the deployment
+    branch, where recordings are keyed by the real session id so consented
+    capture can find them. This branch carries no session-capture module, so the
+    value is unused; keeping the parameter avoids a TypeError from pipelines
+    written against the deployment signature.
     Each session gets a unique stream ID, and each turn gets an incrementing index:
       asr_{stream}_{turn}.wav, tts_{stream}_{turn}.wav
     Caller must await recorder.start_recording() on client connect.

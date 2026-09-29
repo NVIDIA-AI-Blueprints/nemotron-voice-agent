@@ -10,12 +10,18 @@ import unittest
 from contextlib import suppress
 from datetime import date, timedelta
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+)
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import FunctionCallParams
 
-from examples.frontend_backend_agent import pipeline as frontend_backend_pipeline
+import server
+from examples.frontend_backend_agent.airline import domain as airline_domain
 from examples.frontend_backend_agent.airline.airports import spoken_time
 from examples.frontend_backend_agent.airline.database.api import BookingAPI
 from examples.frontend_backend_agent.airline.database.db import apply_schema
@@ -23,7 +29,8 @@ from examples.frontend_backend_agent.airline.state import MAX_LIFECYCLE_EVENTS, 
 from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
 from examples.frontend_backend_agent.airline.tools import CALL_BACKEND_TOOL, CANCEL_BACKEND_TOOL
 from examples.frontend_backend_agent.airline.transform import _server_booking_to_record, _server_flight_to_option
-from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
+from examples.frontend_backend_agent.airline.tts_filter import FrontendBackendAgentPronunciationTextFilter
+from examples.frontend_backend_agent.src.planner import THINKER_PLAN_SCHEMA, NvidiaThinkerPlanner
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload
 from examples.frontend_backend_agent.src.runtime_context import runtime_today
 from examples.frontend_backend_agent.src.tool_handlers import (
@@ -31,7 +38,6 @@ from examples.frontend_backend_agent.src.tool_handlers import (
     _normalize_arguments,
     build_handlers,
 )
-from examples.frontend_backend_agent.src.tts_filter import FrontendBackendAgentPronunciationTextFilter
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 
 
@@ -287,28 +293,49 @@ class _PlannerErrorWithTerminalPathsThinker(_PlannerErrorThinker):
 class _FrameCapturingLLM:
     def __init__(self) -> None:
         self.frames = []
+        self.backend_responses = []
 
     async def push_frame(self, frame, direction=None) -> None:
         self.frames.append(frame)
+
+    def remember_backend_response(self, text: str) -> None:
+        self.backend_responses.append(text)
 
 
 class _InferenceCapturingLLM:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
-        self.max_tokens: int | None = -1
+        self.max_tokens: int | None = None
+        self.raw_calls = 0
+        self.structured_calls = 0
+        self.structured_request: dict[str, Any] = {}
 
-    async def run_inference(self, context, max_tokens=None) -> str:
+    async def run_inference(self, context, *, max_tokens=None) -> str:
+        self.raw_calls += 1
         self.messages = list(context.get_messages())
         self.max_tokens = max_tokens
-        return json.dumps(
-            {
-                "tool": "response_hint",
-                "reason": "unsupported_request",
-                "action": "answer_directly",
-                "context": "general",
-                "response_text": "I can help with flights.",
-            }
+        return (
+            "<think>private reasoning</think>\n"
+            '{"tool":"response_hint","reason":"unsupported_request",'
+            '"action":"answer_directly","context":"general",'
+            '"response_text":"I can help with flights."}'
         )
+
+    async def run_structured_inference(self, context, *, schema, schema_name, max_tokens=None) -> dict[str, Any]:
+        self.structured_calls += 1
+        self.messages = list(context.get_messages())
+        self.structured_request = {
+            "schema": schema,
+            "schema_name": schema_name,
+            "max_tokens": max_tokens,
+        }
+        return {
+            "tool": "response_hint",
+            "reason": "unsupported_request",
+            "action": "answer_directly",
+            "context": "general",
+            "response_text": "I can help with flights.",
+        }
 
 
 class _CancellingAfterStartLLM(_FrameCapturingLLM):
@@ -388,27 +415,58 @@ class FrontendBackendPipelineConfigTests(unittest.TestCase):
             {"BOOKING_BACKEND_URL": "http://custom.example:8001", "APP_RUNTIME": ""},
             clear=True,
         ):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking-server:8001"})
 
         self.assertEqual(url, "http://custom.example:8001")
 
     def test_booking_backend_url_rewrites_docker_hostname_for_host_native(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking-server:8001"})
 
         self.assertEqual(url, "http://localhost:8001")
 
     def test_booking_backend_url_preserves_container_docker_hostname(self) -> None:
         with patch.dict("os.environ", {"APP_RUNTIME": "container"}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking-server:8001"})
 
         self.assertEqual(url, "http://booking-server:8001")
 
     def test_booking_backend_url_preserves_custom_catalog_url(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking.internal:8001"})
+            url = airline_domain.booking_backend_url({"server": "http://booking.internal:8001"})
 
         self.assertEqual(url, "http://booking.internal:8001")
+
+    def test_server_keeps_catalog_prompts_with_the_selected_domain(self) -> None:
+        generic_with_airline_prompt = server._sanitize_session_config(
+            {
+                "pipeline_mode": "generic-frontend-backend-agent",
+                "prompt_key": "talker",
+            }
+        )
+        generic_with_unknown_prompt = server._sanitize_session_config(
+            {
+                "pipeline_mode": "generic-frontend-backend-agent",
+                "prompt_key": "does-not-exist",
+            }
+        )
+        airline_with_generic_prompt = server._sanitize_session_config(
+            {
+                "pipeline_mode": "frontend-backend-agent",
+                "prompt_key": "generic_talker",
+            }
+        )
+        custom = server._sanitize_session_config(
+            {
+                "pipeline_mode": "generic-frontend-backend-agent",
+                "prompt_content": "A repository operator supplied this custom prompt.",
+            }
+        )
+
+        self.assertEqual(generic_with_airline_prompt["prompt_key"], "generic_talker")
+        self.assertEqual(generic_with_unknown_prompt["prompt_key"], "generic_talker")
+        self.assertEqual(airline_with_generic_prompt["prompt_key"], "talker")
+        self.assertEqual(custom["prompt_content"], "A repository operator supplied this custom prompt.")
 
 
 class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
@@ -481,13 +539,20 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         planner = NvidiaThinkerPlanner(
             llm=llm,
             system_prompt="You are a planner.",
+            structured_output=True,
         )
         today = date(2026, 4, 30)
         tomorrow = today + timedelta(days=1)
 
         with patch.dict("os.environ", {"FRONTEND_BACKEND_AGENT_TODAY": today.isoformat()}):
-            await planner.plan(query="Search flights tomorrow", slots={}, state={})
+            plan = await planner.plan(query="Search flights tomorrow", slots={}, state={})
 
+        self.assertEqual(llm.structured_calls, 1)
+        self.assertEqual(llm.raw_calls, 0)
+        self.assertEqual(plan["tool"], "response_hint")
+        self.assertIs(llm.structured_request["schema"], THINKER_PLAN_SCHEMA)
+        self.assertEqual(llm.structured_request["schema_name"], "airline_plan")
+        self.assertEqual(llm.structured_request["max_tokens"], 4096)
         self.assertIn(f"Today is {today.isoformat()}.", llm.messages[0]["content"])
         self.assertIn(f"Tomorrow is {tomorrow.isoformat()}.", llm.messages[0]["content"])
         user_payload = json.loads(llm.messages[1]["content"])
@@ -496,6 +561,17 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
             {"today": today.isoformat(), "tomorrow": tomorrow.isoformat()},
         )
         self.assertIsNone(llm.max_tokens)
+
+    async def test_thinker_planner_rtvi_default_uses_tolerant_json_parser(self) -> None:
+        llm = _InferenceCapturingLLM()
+        planner = NvidiaThinkerPlanner(llm=llm, system_prompt="You are a planner.")
+
+        plan = await planner.plan(query="Explain what you can do", slots={}, state={})
+
+        self.assertEqual(llm.raw_calls, 1)
+        self.assertEqual(llm.structured_calls, 0)
+        self.assertEqual(plan["tool"], "response_hint")
+        self.assertEqual(plan["response_text"], "I can help with flights.")
 
     async def test_thinker_started_is_internal_only_while_response_hint_is_speakable(self) -> None:
         thinker = _make_thinker()
@@ -889,11 +965,49 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(llm.frames[1], LLMTextFrame)
         self.assertEqual(llm.frames[1].text, "I need to check the live booking tools for that.")
         self.assertIsNone(llm.frames[1].skip_tts)
-        self.assertTrue(llm.frames[1].append_to_context)
+        self.assertFalse(llm.frames[1].append_to_context)
         self.assertIsInstance(llm.frames[2], LLMFullResponseEndFrame)
         self.assertEqual(results[-1][0]["type"], "tool_result")
         markers = [event.marker for event in thinker.state.lifecycle_events]
         self.assertEqual(markers, ["ThinkerStarted", "IntermediateResponse", "ThinkerCompleted"])
+
+    async def test_realtime_call_backend_emits_filler_in_owned_deferred_response(self) -> None:
+        thinker = _make_thinker()
+        llm = _FrameCapturingLLM()
+        results = []
+        deferred_emitter = AsyncMock(return_value=True)
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="call_backend",
+            tool_call_id="call_realtime_filler",
+            arguments={
+                "query": "Search flights from New York to Seattle tomorrow",
+                "filler_text": "Let me check those Seattle flights.",
+                "origin_airport": "JFK",
+                "dest_airport": "SEA",
+                "date": "2026-05-26",
+            },
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        await build_handlers(
+            thinker,
+            filler_threshold_seconds=0,
+            filler_policy="talker_authored",
+            allow_talker_frames=False,
+            realtime_filler_emitter=deferred_emitter,
+        )["call_backend"](params)
+
+        deferred_emitter.assert_awaited_once_with("Let me check those Seattle flights.")
+        self.assertEqual(llm.frames, [])
+        self.assertEqual(results[-1][0]["type"], "tool_result")
+        self.assertTrue(results[-1][1].run_llm)
 
     async def test_call_backend_direct_response_emits_talker_text_and_suppresses_llm_rerun(self) -> None:
         thinker = _make_thinker()
@@ -925,9 +1039,16 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(llm.frames[0], LLMFullResponseStartFrame)
         self.assertIsInstance(llm.frames[1], LLMTextFrame)
         self.assertEqual(llm.frames[1].text, results[-1][0]["response_text"])
+        self.assertFalse(llm.frames[1].append_to_context)
         self.assertIsInstance(llm.frames[2], LLMFullResponseEndFrame)
         self.assertEqual(results[-1][0]["type"], "tool_result")
         self.assertFalse(results[-1][1].run_llm)
+        context = LLMContext([])
+        _, assistant_aggregator = LLMContextAggregatorPair(context)
+        for frame in llm.frames:
+            await assistant_aggregator.process_frame(frame, FrameDirection.DOWNSTREAM)
+        self.assertEqual(context.get_messages(), [])
+        self.assertEqual(llm.backend_responses, [results[-1][0]["response_text"]])
 
     async def test_call_backend_ignores_duplicate_started_events_for_filler(self) -> None:
         llm = _FrameCapturingLLM()
@@ -1260,6 +1381,38 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[-1][0]["response_text"], "There is nothing pending right now.")
         self.assertEqual(thinker.state.lifecycle_events, [])
 
+    async def test_cancel_backend_acknowledges_interrupted_bot_speech_without_pending_backend(self) -> None:
+        thinker = _make_thinker()
+        llm = _FrameCapturingLLM()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="cancel_backend",
+            tool_call_id="cancel_test",
+            arguments={},
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        interrupted = True
+
+        def consume_interrupted_speech() -> bool:
+            nonlocal interrupted
+            value = interrupted
+            interrupted = False
+            return value
+
+        await build_handlers(thinker, interrupted_speech_consumer=consume_interrupted_speech)["cancel_backend"](params)
+
+        self.assertEqual(results[-1][0]["reason"], "interrupted_speech")
+        self.assertEqual(results[-1][0]["response_text"], "Okay, I stopped that.")
+        self.assertFalse(interrupted)
+
     async def test_cancel_backend_direct_response_emits_talker_text_and_suppresses_llm_rerun(self) -> None:
         thinker = _make_thinker()
         llm = _FrameCapturingLLM()
@@ -1286,6 +1439,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(llm.frames[1], LLMTextFrame)
         self.assertEqual(llm.frames[1].text, "There is nothing pending right now.")
         self.assertIsInstance(llm.frames[2], LLMFullResponseEndFrame)
+        self.assertFalse(llm.frames[1].append_to_context)
         self.assertEqual(results[-1][0]["context"], "cancel_backend")
         self.assertFalse(results[-1][1].run_llm)
 
@@ -1565,6 +1719,61 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payload["data"]["results"]), 2)
         self.assertEqual(payload["data"]["results"][0]["tool"], "flight_search")
         self.assertEqual(payload["data"]["results"][1]["reason"], "tool_error")
+
+    async def test_hung_airline_planner_returns_timeout_payload(self) -> None:
+        class HungPlanner:
+            async def plan(self, *, query: str, slots: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        thinker = ThinkerBackend(
+            backend=_TestBookingBackend(),
+            planner=HungPlanner(),
+        )
+        thinker._planner_timeout_seconds = 0.01
+
+        payload = await asyncio.wait_for(thinker.call("Search flights"), timeout=0.2)
+
+        self.assertEqual(payload["type"], "response_hint")
+        self.assertEqual(payload["reason"], "timeout")
+        self.assertEqual(payload["action"], "retry")
+        self.assertIsNone(thinker.state.active_task)
+        self.assertIsNone(thinker.state.active_call_id)
+
+    async def test_superseded_airline_call_cannot_deliver_late_payload(self) -> None:
+        class CancellationResistantPlanner:
+            def __init__(self) -> None:
+                self.first_started = asyncio.Event()
+
+            async def plan(
+                self,
+                *,
+                query: str,
+                slots: dict[str, Any],
+                state: dict[str, Any],
+            ) -> dict[str, Any]:
+                if query == "first":
+                    self.first_started.set()
+                    with suppress(asyncio.CancelledError):
+                        await asyncio.sleep(10)
+                return {
+                    "tool": "response_hint",
+                    "reason": "unsupported_request",
+                    "action": "answer_directly",
+                    "context": "general",
+                    "response_text": f"Result for {query}.",
+                }
+
+        planner = CancellationResistantPlanner()
+        thinker = ThinkerBackend(backend=_TestBookingBackend(), planner=planner)
+        first = asyncio.create_task(thinker.call("first"))
+        await asyncio.wait_for(planner.first_started.wait(), timeout=0.2)
+
+        second = await thinker.call("second")
+
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        self.assertEqual(second["response_text"], "Result for second.")
 
     async def test_abort_records_internal_marker_and_does_not_return_speakable_payload(self) -> None:
         thinker = _make_thinker(tool_delay_seconds=1.0)

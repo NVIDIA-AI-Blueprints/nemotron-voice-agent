@@ -92,6 +92,7 @@ x-app-env: &app-env
   APP_RUNTIME: container
   TRANSPORT_SELECTION: ${TRANSPORT_SELECTION:-}
   PIPELINE_TLS: ${PIPELINE_TLS:-true}
+  REALTIME_SERVICE_PLATFORM: cloud
 
 services:
   generic-assistant:
@@ -110,6 +111,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
+      REALTIME_SERVICE_PLATFORM: server
 
   generic-assistant-single-gpu:
     <<: *app-base
@@ -118,6 +120,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
+      REALTIME_SERVICE_PLATFORM: singlegpu
 
   generic-assistant-server-perf:
     <<: *app-base
@@ -126,6 +129,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: generic-assistant
+      REALTIME_SERVICE_PLATFORM: server
       UVICORN_WORKERS: "200"
       PROMPT_FILE_PATH: ${PROMPT_FILE_PATH:-}
       PROMPT_SELECTOR: ${PROMPT_SELECTOR:-}
@@ -150,6 +154,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
+      REALTIME_SERVICE_PLATFORM: server
 
   multilingual-assistant-single-gpu:
     <<: *app-base
@@ -158,6 +163,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
+      REALTIME_SERVICE_PLATFORM: singlegpu
 
   omni-assistant:
     <<: *app-base
@@ -175,6 +181,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
+      REALTIME_SERVICE_PLATFORM: server
 
   omni-assistant-single-gpu:
     <<: *app-base
@@ -183,6 +190,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
+      REALTIME_SERVICE_PLATFORM: singlegpu
 
   omni-assistant-subagents:
     <<: *app-base
@@ -200,6 +208,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
+      REALTIME_SERVICE_PLATFORM: server
 
   omni-assistant-subagents-single-gpu:
     <<: *app-base
@@ -208,6 +217,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
+      REALTIME_SERVICE_PLATFORM: singlegpu
 
   frontend-backend-agent:
     <<: *app-base
@@ -225,6 +235,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
+      REALTIME_SERVICE_PLATFORM: server
 
   frontend-backend-agent-single-gpu:
     <<: *app-base
@@ -234,3 +245,4 @@ services:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       THINKER_TOOL_TIMEOUT_SECONDS: ${THINKER_TOOL_TIMEOUT_SECONDS:-90}
+      REALTIME_SERVICE_PLATFORM: singlegpu

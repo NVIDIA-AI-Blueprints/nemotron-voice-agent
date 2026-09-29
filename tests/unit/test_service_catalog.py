@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from textwrap import dedent
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import examples_registry
 import utils
@@ -17,6 +17,7 @@ from utils import (
     clear_service_context,
     filter_session_config,
     hydrate_config_from_catalog,
+    load_selected_service_entry,
     load_service_entry,
     load_service_entry_by_id,
 )
@@ -32,6 +33,20 @@ class ServiceCatalogHydrationTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._api_key.stop()
         clear_service_context()
+
+    def test_service_selection_uses_exact_id_or_existing_default(self) -> None:
+        selected = {"model_id": "selected-model"}
+        fallback = {"model_id": "default-model"}
+        for entry_id, expected in (("self-hosted:singlegpu:selected", selected), ("", fallback)):
+            with (
+                self.subTest(entry_id=entry_id),
+                patch("utils.load_service_entry_by_id", return_value=selected) as exact_lookup,
+                patch("utils.load_service_entry", return_value=fallback) as default_lookup,
+            ):
+                self.assertEqual(load_selected_service_entry("llm", entry_id), expected)
+
+            self.assertEqual(exact_lookup.mock_calls, [call("llm", entry_id)] if entry_id else [])
+            self.assertEqual(default_lookup.mock_calls, [] if entry_id else [call("llm", "")])
 
     def test_hydrates_selected_builtin_details_from_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -97,10 +112,8 @@ tts:
             self.assertEqual(config["model_id"], "catalog-model")
             self.assertEqual(config["base_url"], "https://catalog.example/v1")
             self.assertEqual(config["system_prompt"], "catalog system")
-            self.assertEqual(
-                config["extra_params"],
-                '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}',
-            )
+            # Explicit client reasoning settings must survive catalog hydration.
+            self.assertEqual(config["extra_params"], "{}")
             self.assertEqual(config["asr_server"], "catalog-asr:443")
             self.assertEqual(config["asr_model"], "catalog-asr-model")
             self.assertEqual(config["asr_function_id"], "catalog-asr-function")
@@ -112,6 +125,49 @@ tts:
             self.assertEqual(config["tts_synthesis_mode"], "stitched")
             self.assertEqual(config["tts_language_code"], "en-US")
             self.assertEqual(config["tts_zero_shot_audio_prompt_file"], "/data/prompts/clone.wav")
+
+    def test_talker_and_thinker_temperatures_hydrate_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cloud_path = Path(tmpdir) / "services.cloud.yaml"
+            cloud_path.write_text(
+                dedent(
+                    """\
+                    llm:
+                      talker:
+                        name: Talker
+                        model_id: talker-model
+                        base_url: https://catalog.example/v1
+                        temperature: 0.2
+                    thinker-llm:
+                      thinker:
+                        name: Thinker
+                        model_id: thinker-model
+                        base_url: https://catalog.example/v1
+                        temperature: 0.0
+                    """
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "llm_id": "cloud-nim:talker",
+                "thinker_llm_id": "cloud-nim:thinker",
+                "temperature": "0.7",
+                "thinker_temperature": "0.9",
+            }
+
+            with patch.dict(
+                os.environ,
+                {
+                    "SERVICES_CLOUD_PATH": str(cloud_path),
+                    "SERVICES_LOCAL_PATH": str(Path(tmpdir) / "missing-services.local.yaml"),
+                },
+            ):
+                hydrate_config_from_catalog(config)
+
+            self.assertEqual(config["model_id"], "talker-model")
+            self.assertEqual(config["thinker_model_id"], "thinker-model")
+            self.assertEqual(config["temperature"], "0.7")
+            self.assertEqual(config["thinker_temperature"], "0.0")
 
     def test_chatterbox_hydrates_per_sentence_even_with_sticky_stitched(self) -> None:
         """UI TTS switches must not keep Magpie's stitched mode on Chatterbox."""
@@ -435,6 +491,52 @@ llm:
             utils._service_context.reset(token)
         self.assertEqual(selected_lightning["supported_languages"], lightning_languages)
 
+    def test_local_realtime_tokenizer_routes_declare_model_output_caps(self) -> None:
+        expected = {
+            "generic": {"server": 4096, "singlegpu": 2048},
+            "multilingual": {"server": 4096, "singlegpu": 2048},
+            "frontend_backend_agent": {"server": 4096, "singlegpu": 2048},
+        }
+        for example_dir, profile_caps in expected.items():
+            catalog = utils.load_yaml_file(Path(f"src/examples/{example_dir}/services.local.yaml"))
+            for profile, cap in profile_caps.items():
+                with self.subTest(example=example_dir, profile=profile):
+                    tokenizer_routes = [
+                        entry
+                        for entry in catalog[profile]["llm"].values()
+                        if not str(entry.get("base_url") or "").startswith(("ws://", "wss://"))
+                    ]
+                    self.assertTrue(tokenizer_routes)
+                    for entry in tokenizer_routes:
+                        self.assertIs(entry["supports_tokenize"], True)
+                        self.assertEqual(entry["realtime_max_output_tokens"], cap)
+
+    def test_realtime_routing_fields_stay_out_of_ordinary_service_metadata(self) -> None:
+        private_entry = {
+            "name": "Private-capability LLM",
+            "model_id": "example/model",
+            "supports_tokenize": True,
+            "realtime_max_output_tokens": 2048,
+            "forced_tool_call_stops": ["</tool_call>"],
+        }
+
+        api_entry = utils._build_services_api_entries(
+            {"private": private_entry},
+            "llm",
+            "self-hosted",
+        )[0]
+        default_entry = examples_registry._service_entry_payload(
+            "self-hosted",
+            "private",
+            private_entry,
+        )
+
+        for entry in (api_entry, default_entry):
+            self.assertEqual(entry["model_id"], "example/model")
+            self.assertNotIn("supports_tokenize", entry)
+            self.assertNotIn("realtime_max_output_tokens", entry)
+            self.assertNotIn("forced_tool_call_stops", entry)
+
     def test_multilingual_agent_prompt_keys_are_registry_declared(self) -> None:
         unlocked = examples_registry.Selection(
             raw="all",
@@ -615,6 +717,30 @@ llm:
             )
 
         self.assertEqual(rewritten["server"], "localhost:50151")
+
+
+class SessionToolsConfigTests(unittest.TestCase):
+    """The additive per-session `tools` selection (default behavior preserved)."""
+
+    def test_tools_list_survives_slot_filtering(self) -> None:
+        # Active slots restrict keys, but `tools` is slot-agnostic (like prompt_key).
+        token = utils._service_context.set((Path("src/examples/generic"), ("llm", "asr", "tts")))
+        try:
+            out = filter_session_config(
+                {
+                    "pipeline_mode": "generic-assistant",
+                    "tools_available": "get_weather,calculate_bmi",
+                    "bogus": "x",
+                }
+            )
+        finally:
+            utils._service_context.reset(token)
+        self.assertEqual(out.get("tools_available"), "get_weather,calculate_bmi")
+        self.assertNotIn("bogus", out)
+
+    def test_absent_tools_preserves_prompt_default(self) -> None:
+        out = filter_session_config({"pipeline_mode": "generic-assistant"})
+        self.assertNotIn("tools_available", out)
 
 
 if __name__ == "__main__":

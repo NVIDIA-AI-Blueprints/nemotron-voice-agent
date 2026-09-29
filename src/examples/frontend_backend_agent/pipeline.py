@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
-from datetime import timedelta
+from collections.abc import Mapping
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -21,19 +22,18 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
-from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
+from pipecat.services.nvidia.llm import NvidiaLLMService as PipecatNvidiaLLMService
+from pipecat.services.nvidia.llm import NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from examples.frontend_backend_agent.airline.backend import HTTPBookingBackend
-from examples.frontend_backend_agent.airline.thinker import ThinkerBackend
-from examples.frontend_backend_agent.airline.tools import TOOLS_SCHEMA
-from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
-from examples.frontend_backend_agent.src.runtime_context import runtime_today
+from examples.frontend_backend_agent.src.barge_in import BargeInState, BargeInTracker
+from examples.frontend_backend_agent.src.domain import DomainBuildContext, resolve_domain_spec
+from examples.frontend_backend_agent.src.reliable_talker import ReliableNvidiaLLMService
+from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
-from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
@@ -41,43 +41,47 @@ from examples.shared.pipeline_utils import (
     build_pipeline_params,
     build_user_aggregator_params,
     create_transport,
+    realtime_vad_prefix_padding_secs,
     register_session_start_handlers,
+    resolve_pipeline_prompt,
+    runner_protocol,
+    select_max_tokens_config,
     with_realtime_observers,
 )
+from examples.shared.tool_call_speech_gate import ToolCallSpeechGate
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
     load_ipa_dictionary,
     load_prompt_catalog,
+    load_selected_service_entry,
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
+    nvidia_speech_api_key,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
-    resolve_prompt,
 )
 
-load_dotenv(override=True)
+# Preserve deployment-provided settings when imported by the Realtime gateway.
+load_dotenv(override=False)
 
 CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 20)
-THINKER_PROMPT_KEY = "thinker"
 THINKER_TOOL_DELAY_MIN_SECONDS = 0.1
 THINKER_TOOL_DELAY_MAX_SECONDS = 0.5
 THINKER_FILLER_THRESHOLD_SECONDS = parse_env_float("THINKER_FILLER_THRESHOLD_SECONDS", 0.3, min_value=0.0)
-THINKER_TOOL_TIMEOUT_SECONDS = parse_env_float("THINKER_TOOL_TIMEOUT_SECONDS", 30.0, min_value=1.0)
+THINKER_TOOL_TIMEOUT_SECONDS = parse_env_float("THINKER_TOOL_TIMEOUT_SECONDS", 45.0, min_value=1.0)
+FRONTEND_BACKEND_VAD_STOP_SECS = parse_env_float("FRONTEND_BACKEND_VAD_STOP_SECS", 0.5, min_value=0.0)
 
 
-def _build_context_messages(base_prompt: str, system_prompt: str = "") -> list[dict]:
+def _build_context_messages(
+    base_prompt: str,
+    system_prompt: str = "",
+    *,
+    runtime_context: str,
+) -> list[dict]:
     """Build initial Talker context messages."""
-    today = runtime_today()
-    runtime_context = (
-        f"\n\nRuntime context:\n"
-        f"- Today is {today.isoformat()}.\n"
-        f"- Tomorrow is {(today + timedelta(days=1)).isoformat()}.\n"
-        "- For travel dates without a year, choose the next upcoming occurrence relative to today.\n"
-        "- Always pass travel dates to call_backend as ISO YYYY-MM-DD when the date is known."
-    )
     base_prompt = f"{base_prompt}{runtime_context}"
     if system_prompt:
         return [
@@ -85,6 +89,32 @@ def _build_context_messages(base_prompt: str, system_prompt: str = "") -> list[d
             {"role": "user", "content": base_prompt},
         ]
     return [{"role": "system", "content": base_prompt}]
+
+
+def _load_prompt_few_shots(prompt_key: str) -> list[dict]:
+    """Load trusted native-call demonstrations without changing session history."""
+    if not prompt_key:
+        return []
+    entry = load_prompt_catalog(__file__).get(prompt_key)
+    raw_messages = entry.get("few_shots") if isinstance(entry, dict) else None
+    if raw_messages is None:
+        return []
+    if not isinstance(raw_messages, list):
+        raise ValueError(f"Prompt {prompt_key!r} few_shots must be a list")
+    messages: list[dict] = []
+    for index, raw_message in enumerate(raw_messages):
+        if not isinstance(raw_message, dict):
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] must be an object")
+        role = raw_message.get("role")
+        if role not in {"user", "assistant", "tool", "developer"}:
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] has unsupported role {role!r}")
+        content = raw_message.get("content")
+        if content is not None and not isinstance(content, str):
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] content must be text or null")
+        if role == "tool" and not isinstance(raw_message.get("tool_call_id"), str):
+            raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] tool message needs tool_call_id")
+        messages.append(copy.deepcopy(raw_message))
+    return messages
 
 
 def _apply_chat_history_sliding_window(
@@ -102,29 +132,109 @@ def _apply_chat_history_sliding_window(
     context.set_messages(messages[:preserve] + messages[preserve:][-chat_history_limit:])
 
 
+def _registry_default_service_key(example_key: str, category: str) -> str:
+    """Return the active example's first configured service key for ``category``."""
+    defaults = examples_registry.find(example_key).get("defaults", {})
+    service_keys = defaults.get(category, []) if isinstance(defaults, dict) else []
+    if isinstance(service_keys, list) and service_keys:
+        return str(service_keys[0])
+    return ""
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Frontend/Backend Agent cascaded pipeline for one session."""
     logger.info("Starting Frontend/Backend Agent cascaded pipeline")
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
-    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+    is_realtime = runner_protocol(runner_args) == "realtime"
+    if is_realtime:
+        from examples.frontend_backend_agent.src.reliable_realtime_talker import (
+            ReliableRealtimeNvidiaLLMService,
+        )
+        from examples.shared.nvidia_llm import NvidiaLLMService as RealtimeThinkerLLMService
+        from examples.shared.tool_runtime import select_trusted_tools, terminal_tool_handler, tool_parameter_schema
+        from realtime.transport import (
+            bind_realtime_assistant_context_message,
+            bind_realtime_context,
+            bind_realtime_deferred_service_responses,
+            bind_realtime_session_prompt_updates,
+            bind_realtime_tts_service,
+            configure_realtime_client_tools,
+            prepare_realtime_tools,
+            realtime_client_tool_executor,
+            realtime_input_audio_processors,
+            realtime_input_transcription_timeout_secs,
+            realtime_response_gate_processors,
+            realtime_tool_result_processors,
+        )
 
-    prompt_key, talker_prompt = resolve_prompt(
-        __file__,
-        body.get("prompt_content", ""),
-        body.get("prompt_key", ""),
-    )
-    thinker_prompt = _load_required_catalog_prompt(THINKER_PROMPT_KEY)
-    default_llm = load_service_entry("llm", "")
-    default_tts = load_service_entry("tts", "")
-    default_asr = load_service_entry("asr", "")
-    default_booking_server = load_service_entry("booking-server", "")
-    default_thinker_llm = load_service_entry("thinker-llm", "")
+    welcome_enabled = not is_realtime and examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+    domain = resolve_domain_spec(body.get("domain_profile", "airline"))
+    task: PipelineWorker | None = None
+
+    async def emit_stage_metric(frame) -> None:
+        if task is not None:
+            await task.queue_frame(frame)
+
+    async def emit_stage_server_event(data: dict) -> None:
+        if task is not None:
+            await task.queue_frame(RTVIServerMessageFrame(data=data))
+
+    stage_metrics = StageMetricsCoordinator(emit_stage_metric, emit_stage_server_event)
+
+    tool_names = tuple(name for name in body.get("tools", ()) if isinstance(name, str))
+    prompt_key, talker_prompt = resolve_pipeline_prompt(__file__, body, is_realtime=is_realtime)
+    raw_client_tools = body.get("client_tools", ()) if is_realtime else ()
+    if not isinstance(raw_client_tools, (list, tuple)) or not all(
+        isinstance(tool, Mapping) for tool in raw_client_tools
+    ):
+        raise ValueError("client_tools must be a list of canonical Realtime function schemas")
+    client_tools = tuple(copy.deepcopy(dict(tool)) for tool in raw_client_tools)
+    client_instructions = str(body.get("prompt_content") or "") if is_realtime else ""
+    # Few-shots are addressed by the key that actually produced ``talker_prompt``.
+    # A Realtime client supplying ``instructions`` resolves ``prompt_key`` to
+    # "custom", which is not a catalog entry, so the trusted native-call
+    # demonstrations would silently vanish for every such session.
+    few_shot_prompt_key = prompt_key
+    realtime_capability_specs = ()
+    realtime_capability_mode = "static"
+    realtime_capability_static_prompt = ""
+    if is_realtime and domain.key == "generic":
+        realtime_capability_specs = tuple(
+            domain.tool_registry[name] for name in tool_names if name in domain.tool_registry
+        )
+        realtime_capability_mode = os.getenv("REALTIME_CAPABILITY_MODE", "static").strip().lower() or "static"
+        realtime_capability_static_prompt = _load_required_catalog_prompt(domain.talker_prompt_key)
+        talker_prompt = realtime_capability_static_prompt
+        few_shot_prompt_key = domain.talker_prompt_key
+    talker_few_shots = _load_prompt_few_shots(few_shot_prompt_key)
+    thinker_prompt_key = str(body.get("thinker_prompt") or domain.thinker_prompt_key)
+    thinker_prompt = _load_required_catalog_prompt(thinker_prompt_key)
+    default_booking_server: dict | None = None
+    if is_realtime:
+        selected_llm_id = str(body.get("llm_id", "") or "")
+        default_llm = load_selected_service_entry("llm", selected_llm_id)
+        default_tts = load_selected_service_entry("tts", body.get("tts_id"))
+        default_asr = load_selected_service_entry("asr", body.get("asr_id"))
+        default_thinker_llm = load_selected_service_entry("thinker-llm", body.get("thinker_llm_id"))
+    else:
+        default_llm = load_service_entry("llm", "")
+        default_tts = load_service_entry("tts", "")
+        default_asr = load_service_entry("asr", "")
+        default_thinker_llm = load_service_entry("thinker-llm", "")
+        default_booking_server = load_service_entry("booking-server", "")
+
+    def domain_service_loader(category: str, key: str) -> dict:
+        if category == "booking-server" and not key and default_booking_server is not None:
+            return copy.deepcopy(default_booking_server)
+        return load_service_entry(category, key)
+
+    llm_profile = default_llm
 
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
-        "api_key": nvidia_api_key(),
+        "api_key": nvidia_speech_api_key(),
         "server": asr_server,
         "use_ssl": asr_ssl,
     }
@@ -138,7 +248,17 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if asr_language_code:
         asr_kwargs["settings"] = NvidiaSTTSettings(language=asr_language_code)
-    stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
+    if is_realtime:
+        from realtime.asr import RealtimeNvidiaSTTService
+
+        stt = RealtimeNvidiaSTTService(
+            **asr_kwargs,
+            stop_history=400,
+            vad_prefix_padding_secs=realtime_vad_prefix_padding_secs(0.0, transport=transport),
+            turn_drain_timeout_secs=realtime_input_transcription_timeout_secs(),
+        )
+    else:
+        stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}"
@@ -147,78 +267,212 @@ async def bot(runner_args: RunnerArguments) -> None:
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
-    talker_max_tokens = _parse_optional_int(body.get("max_tokens", "") or default_llm.get("max_tokens"), 2048)
+    raw_talker_max_tokens = select_max_tokens_config(
+        body,
+        default_llm.get("max_tokens"),
+        is_realtime=is_realtime,
+    )
+    talker_max_tokens = (
+        None if is_realtime and raw_talker_max_tokens is None else _parse_optional_int(raw_talker_max_tokens, 2048)
+    )
+    talker_temperature = _parse_optional_float(body.get("temperature", "") or default_llm.get("temperature"))
     extra_params = parse_json_dict(
         body.get("extra_params", "") or default_llm.get("extra_params", ""),
         label="extra_params",
     )
-    llm_settings = NvidiaLLMSettings(model=model_id, max_tokens=talker_max_tokens)
+    llm_settings = NvidiaLLMSettings(model=model_id)
+    if talker_max_tokens is not None:
+        llm_settings.max_tokens = talker_max_tokens
+    if talker_temperature is not None:
+        llm_settings.temperature = talker_temperature
     if extra_params:
         llm_settings.extra = extra_params
-    talker_llm = NvidiaLLMService(
-        api_key=nvidia_api_key(),
-        base_url=base_url,
-        settings=llm_settings,
-    )
+    talker_cls = ReliableRealtimeNvidiaLLMService if is_realtime else ReliableNvidiaLLMService
+    talker_kwargs: dict = {
+        "api_key": nvidia_api_key(),
+        "base_url": base_url,
+        "settings": llm_settings,
+        "stage_metrics": stage_metrics,
+        "stage_model_name": model_id,
+    }
+    if is_realtime:
+        talker_kwargs.update(
+            {
+                "forced_tool_call_stops": llm_profile.get("forced_tool_call_stops"),
+                "realtime_parallel_tool_calls": body.get("parallel_tool_calls", True),
+                "realtime_model_max_output_tokens": body.get("realtime_model_max_output_tokens"),
+            }
+        )
+    talker_llm = talker_cls(**talker_kwargs)
+    initial_capability_digest = ""
+    if is_realtime and domain.key == "generic":
+        from realtime.capabilities import render_capabilities_for_session
+
+        initial_capability_digest = await render_capabilities_for_session(
+            realtime_capability_specs,
+            client_tools,
+            mode=realtime_capability_mode,
+            llm=talker_llm,
+            instructions=client_instructions,
+            tool_choice=body.get("tool_choice", "auto"),
+            profile=str(body.get("pipeline_mode") or "generic-frontend-backend-agent"),
+        )
+        talker_prompt = f"{realtime_capability_static_prompt}\n\n{initial_capability_digest}"
     logger.info(
         f"Talker LLM: model={model_id}, base_url={base_url}, prompt={prompt_key}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
-        f"max_tokens={talker_max_tokens}, "
+        f"max_tokens={talker_max_tokens if talker_max_tokens is not None else '(provider maximum)'}, "
+        f"temperature={talker_temperature if talker_temperature is not None else '(default)'}, "
         f"extra_params={extra_params or '(none)'}"
     )
 
-    booking_backend_url = _booking_backend_url(default_booking_server)
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
-    thinker_max_tokens_raw = body.get("thinker_max_tokens", "") or default_thinker_llm.get("max_tokens")
-    thinker_max_tokens = (
-        _parse_optional_int(thinker_max_tokens_raw, 4096) if thinker_max_tokens_raw not in (None, "") else None
+    thinker_max_tokens = _parse_optional_int(
+        (os.getenv("GENERIC_THINKER_MAX_TOKENS", "") if domain.key == "generic" else "")
+        or body.get("thinker_max_tokens", "")
+        or default_thinker_llm.get("max_tokens"),
+        4096,
+    )
+    thinker_temperature = _parse_optional_float(
+        body.get("thinker_temperature", "") or default_thinker_llm.get("temperature")
     )
     thinker_extra_params = parse_json_dict(
         body.get("thinker_extra_params", "") or default_thinker_llm.get("extra_params", ""),
         label="thinker_extra_params",
     )
+    generic_reasoning_budget = (
+        _parse_optional_int(os.getenv("GENERIC_THINKER_REASONING_BUDGET", ""), 1024)
+        if domain.key == "generic" and os.getenv("GENERIC_THINKER_REASONING_BUDGET", "").strip()
+        else None
+    )
+    if generic_reasoning_budget is not None:
+        thinker_extra_params = copy.deepcopy(thinker_extra_params)
+        extra_body = thinker_extra_params.setdefault("extra_body", {})
+        if not isinstance(extra_body, dict):
+            raise ValueError("thinker_extra_params.extra_body must be an object")
+        chat_template_kwargs = extra_body.setdefault("chat_template_kwargs", {})
+        if not isinstance(chat_template_kwargs, dict):
+            raise ValueError("thinker_extra_params chat_template_kwargs must be an object")
+        chat_template_kwargs["reasoning_budget"] = generic_reasoning_budget
     thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id)
     if thinker_max_tokens is not None:
         thinker_llm_settings.max_tokens = thinker_max_tokens
+    if thinker_temperature is not None:
+        thinker_llm_settings.temperature = thinker_temperature
     if thinker_extra_params:
         thinker_llm_settings.extra = thinker_extra_params
-    thinker_llm = NvidiaLLMService(
+    thinker_cls = RealtimeThinkerLLMService if is_realtime else PipecatNvidiaLLMService
+    thinker_llm = thinker_cls(
         api_key=nvidia_api_key(),
         base_url=thinker_base_url,
         settings=thinker_llm_settings,
     )
-    thinker_planner = NvidiaThinkerPlanner(
-        llm=thinker_llm,
-        system_prompt=thinker_prompt,
-        max_tokens=thinker_max_tokens,
+
+    client_tool_round_executor = realtime_client_tool_executor(transport) if is_realtime else None
+
+    async def on_internal_tool_started(tool_name: str) -> None:
+        if task is not None:
+            await task.queue_frame(RTVIServerMessageFrame(data={"type": "tool-call", "tool": tool_name}))
+
+    thinker = domain.build_backend(
+        DomainBuildContext(
+            thinker_llm=thinker_llm,
+            thinker_model_name=thinker_model_id,
+            thinker_prompt=thinker_prompt,
+            thinker_max_tokens=thinker_max_tokens,
+            tool_names=tool_names,
+            tool_delay_seconds=THINKER_TOOL_DELAY_MAX_SECONDS,
+            tool_delay_min_seconds=THINKER_TOOL_DELAY_MIN_SECONDS,
+            load_service_entry=domain_service_loader,
+            on_tool_started=on_internal_tool_started,
+            stage_metrics=stage_metrics,
+            client_tools=client_tools,
+            client_instructions=client_instructions,
+            client_tool_executor=client_tool_round_executor,
+        )
     )
-    thinker = ThinkerBackend(
-        backend=HTTPBookingBackend(booking_backend_url),
-        planner=thinker_planner,
-        tool_delay_seconds=THINKER_TOOL_DELAY_MAX_SECONDS,
-        tool_delay_min_seconds=THINKER_TOOL_DELAY_MIN_SECONDS,
-    )
-    logger.info(f"Thinker booking backend: {booking_backend_url}")
+    logger.info(f"Frontend/Backend domain: {domain.key} ({domain.label})")
     logger.info(
         f"Thinker LLM: model={thinker_model_id}, base_url={thinker_base_url}, "
-        f"max_tokens={thinker_max_tokens}, extra_params={thinker_extra_params or '(none)'}"
+        f"max_tokens={thinker_max_tokens}, "
+        f"temperature={thinker_temperature if thinker_temperature is not None else '(default)'}, "
+        f"extra_params={thinker_extra_params or '(none)'}"
     )
     logger.info(f"Thinker tool delay: {THINKER_TOOL_DELAY_MIN_SECONDS:.3f}s-{THINKER_TOOL_DELAY_MAX_SECONDS:.3f}s")
     logger.info(f"Thinker filler threshold: {THINKER_FILLER_THRESHOLD_SECONDS:.3f}s")
     logger.info(f"Thinker tool timeout: {THINKER_TOOL_TIMEOUT_SECONDS:.3f}s")
-    for name, handler in build_handlers(
+    barge_in_state = BargeInState()
+    available_talker_handlers = build_handlers(
         thinker,
         filler_threshold_seconds=THINKER_FILLER_THRESHOLD_SECONDS,
-    ).items():
-        cancel_on_interruption = name != "call_backend"
-        talker_llm.register_function(
-            name,
-            handler,
-            cancel_on_interruption=cancel_on_interruption,
-            timeout_secs=THINKER_TOOL_TIMEOUT_SECONDS,
-        )
+        filler_policy=domain.filler_policy,
+        filler_selector=domain.filler_selector,
+        interrupted_speech_consumer=barge_in_state.consume_interrupted_speech,
+        max_query_chars=domain.max_query_chars,
+        stage_metrics=stage_metrics,
+        allow_talker_frames=not is_realtime,
+        realtime_filler_emitter=(
+            getattr(talker_llm, "emit_realtime_deferred_text", None)
+            if is_realtime and domain.key == "generic"
+            else None
+        ),
+    )
+    if is_realtime:
+        raw_delegate_tools = body.get("delegate_tools", [])
+        if not isinstance(raw_delegate_tools, list) or not all(isinstance(name, str) for name in raw_delegate_tools):
+            raise ValueError("delegate_tools must be a list of trusted function names")
+        active_delegate_tools = list(dict.fromkeys(raw_delegate_tools))
+        missing_delegate_handlers = set(active_delegate_tools) - set(available_talker_handlers)
+        if missing_delegate_handlers:
+            raise ValueError(
+                f"Trusted pipeline tool {sorted(missing_delegate_handlers)[0]!r} has no registered handler"
+            )
+        talker_handlers = {name: available_talker_handlers[name] for name in active_delegate_tools}
+        trusted_tools_schema = select_trusted_tools(domain.talker_tools_schema, active_delegate_tools)
+    else:
+        talker_handlers = available_talker_handlers
+        trusted_tools_schema = domain.talker_tools_schema
+
+    for name, original_handler in talker_handlers.items():
+        if is_realtime:
+            handler = terminal_tool_handler(
+                original_handler,
+                parameters=tool_parameter_schema(trusted_tools_schema, name),
+                timeout_secs=THINKER_TOOL_TIMEOUT_SECONDS,
+            )
+            cancel_on_interruption = False
+            talker_llm.register_function(
+                name,
+                handler,
+                cancel_on_interruption=cancel_on_interruption,
+            )
+        else:
+            cancel_on_interruption = name != "call_backend"
+            talker_llm.register_function(
+                name,
+                original_handler,
+                cancel_on_interruption=cancel_on_interruption,
+                timeout_secs=THINKER_TOOL_TIMEOUT_SECONDS,
+            )
         logger.info(f"Registered Talker tool: {name}, cancel_on_interruption={cancel_on_interruption}")
+    tools_schema = trusted_tools_schema
+    tool_choice = body.get("tool_choice", "auto") or "auto"
+    if is_realtime:
+        # Client-declared schemas are projected for the hidden Thinker/executor
+        # boundary. The Talker keeps exactly the trusted delegate tools.
+        configure_realtime_client_tools(
+            transport,
+            thinker_llm,
+            # ``client_tools`` is held as an immutable tuple here, but the
+            # Realtime canonicaliser accepts only a list.
+            list(client_tools),
+            trusted_tools=trusted_tools_schema,
+            trusted_tool_names=talker_handlers,
+        )
+        await prepare_realtime_tools(transport, thinker_llm)
+        tools_schema = trusted_tools_schema
+        tool_choice = "auto"
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
@@ -232,19 +486,20 @@ async def bot(runner_args: RunnerArguments) -> None:
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
         "zero_shot_audio_prompt_file", ""
     )
-    custom_dictionary = load_ipa_dictionary()
+    custom_dictionary = load_ipa_dictionary(tts_model)
     tts_settings_kwargs: dict = {"voice": tts_voice}
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     tts_kwargs: dict = {
-        "api_key": nvidia_api_key(),
+        "api_key": nvidia_speech_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
         "text_filters": [NemotronSpeechTextFilter()],
-        "text_transforms": [("*", apply_frontend_backend_agent_pronunciation_for_tts)],
         "custom_dictionary": custom_dictionary,
     }
+    if domain.tts_text_transform is not None:
+        tts_kwargs["text_transforms"] = [("*", domain.tts_text_transform)]
     if tts_function_id or tts_model:
         tts_kwargs["model_function_map"] = {
             "function_id": tts_function_id,
@@ -253,6 +508,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
     tts = NvidiaTTSService(**tts_kwargs)
+    if is_realtime:
+        bind_realtime_tts_service(transport, tts)
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
         f"model={tts_model or '(pipecat default)'}, function_id={tts_function_id or '(pipecat default)'}, "
@@ -260,21 +517,79 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}"
     )
 
-    messages = _build_context_messages(talker_prompt, system_prompt)
-    context = LLMContext(messages, tools=TOOLS_SCHEMA, tool_choice="auto")
-    preserve_prompt_messages = len(messages)
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=build_user_aggregator_params(welcome_enabled),
-    )
-    audio_recorder = create_audio_recorder()
+    # --- Context + aggregators ---
+    def render_realtime_instructions(instructions: str) -> list[dict]:
+        rendered = _build_context_messages(
+            instructions,
+            system_prompt,
+            runtime_context=domain.runtime_context(),
+        )
+        rendered.extend(copy.deepcopy(talker_few_shots))
+        return rendered
 
+    prompt_coordinator = None
+    if is_realtime and domain.realtime_prompt_coordinator_factory is not None:
+        prompt_coordinator = domain.realtime_prompt_coordinator_factory(
+            backend=thinker,
+            talker_llm=talker_llm,
+            server_specs=realtime_capability_specs,
+            trusted_tool_names=(*tool_names, *talker_handlers),
+            static_talker_prompt=realtime_capability_static_prompt,
+            initial_capability_digest=initial_capability_digest,
+            initial_instructions=client_instructions,
+            initial_client_tools=client_tools,
+            capability_mode=realtime_capability_mode,
+            render_talker_messages=render_realtime_instructions,
+            profile=str(body.get("pipeline_mode") or "generic-frontend-backend-agent"),
+        )
+
+    messages = render_realtime_instructions(talker_prompt)
+    logger.info(f"Talker native few-shot messages: {len(talker_few_shots)}")
+    if tools_schema is not None:
+        context = LLMContext(messages, tools=tools_schema, tool_choice=tool_choice)
+    else:
+        context = LLMContext(messages)
+    if is_realtime:
+        if prompt_coordinator is not None:
+            bind_realtime_session_prompt_updates(transport, prompt_coordinator)
+        bind_realtime_context(
+            transport,
+            context,
+            render_instructions=render_realtime_instructions,
+        )
+        bind_realtime_deferred_service_responses(transport, talker_llm)
+    preserve_prompt_messages = len(messages)
+    context_aggregator_pair = LLMContextAggregatorPair
+    if is_realtime:
+        from realtime.turns import RealtimeLLMContextAggregatorPair
+
+        context_aggregator_pair = RealtimeLLMContextAggregatorPair
+    user_aggregator, assistant_aggregator = context_aggregator_pair(
+        context,
+        user_params=build_user_aggregator_params(
+            welcome_enabled,
+            transport=transport if is_realtime else None,
+            vad_stop_secs=FRONTEND_BACKEND_VAD_STOP_SECS,
+            interruption_min_words=2 if domain.key == "generic" else None,
+            on_interruption_trigger=(stage_metrics.record_interruption_trigger if domain.key == "generic" else None),
+        ),
+    )
+    audio_recorder = create_audio_recorder(body.get("session_id", ""))
+
+    response_gate_processors = realtime_response_gate_processors(transport) if is_realtime else []
+    tool_result_processors = realtime_tool_result_processors(transport) if is_realtime else []
+    input_audio_processors = realtime_input_audio_processors(transport) if is_realtime else []
     pipeline = Pipeline(
         [
             transport.input(),
+            *input_audio_processors,
+            BargeInTracker(barge_in_state),
             stt,
             user_aggregator,
+            *response_gate_processors,
             talker_llm,
+            *tool_result_processors,
+            ToolCallSpeechGate(),
             tts,
             transport.output(),
             *([audio_recorder] if audio_recorder else []),
@@ -287,6 +602,12 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):
+        if is_realtime:
+            bind_realtime_assistant_context_message(transport, message)
+        # Realtime item edits and deletes address this canonical context. Its
+        # provider-only snapshot owns any native token-budget truncation.
+        if is_realtime:
+            return
         async with summary_lock:
             _apply_chat_history_sliding_window(context, preserve_prompt_messages, CHAT_HISTORY_RECENT_TURNS)
 
@@ -304,14 +625,37 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(data={"type": "user-bot-latency", "latency": round(latency, 3), "first": False})
         )
 
+    @latency_observer.event_handler("on_latency_breakdown")
+    async def on_breakdown(observer, breakdown):
+        await task.queue_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "latency-breakdown",
+                    "vad_smart_turn": round(breakdown.user_turn_secs, 3)
+                    if breakdown.user_turn_secs is not None
+                    else None,
+                    "events": breakdown.turn_contribution_lines(),
+                }
+            )
+        )
+
     task = PipelineWorker(
         pipeline,
-        params=build_pipeline_params(enable_metrics=True, enable_usage_metrics=True),
+        params=build_pipeline_params(
+            enable_metrics=True,
+            enable_usage_metrics=True,
+            send_initial_empty_metrics=not is_realtime,
+        ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=with_realtime_observers(latency_observer, transport=transport),
+        observers=with_realtime_observers(
+            latency_observer,
+            transport=transport,
+            is_realtime=is_realtime,
+        ),
         enable_tracing=IS_TRACING_ENABLED,
         processor_unusable_policy=ProcessorUnusablePolicy.END,
         setup_timeout_secs=120.0,
+        enable_rtvi=not is_realtime,
     )
 
     @user_aggregator.event_handler("on_user_turn_stopped")
@@ -320,6 +664,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(
                 data={
                     "type": "user-turn-finalized",
+                    **({"turn_frame_id": getattr(strategy, "turn_frame_id", None)} if is_realtime else {}),
                     "timestamp": getattr(message, "timestamp", None),
                     "transcript": getattr(message, "content", None),
                     "user_id": getattr(message, "user_id", None),
@@ -336,11 +681,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         task=task,
         context=context,
         runner_args=runner_args,
-        intro_prompt=(
-            "This is an initial direct greeting, not a flight request. Do not call any tools. "
-            "Greet the user briefly as Ava, the G Force Airlines flight-booking assistant. "
-            "Respond directly with spoken text and do not call call_backend or cancel_backend."
-        ),
+        intro_prompt=domain.intro_prompt,
         intro_tool_choice="none",
         on_start=_on_session_start,
         welcome_enabled=welcome_enabled,
@@ -362,35 +703,17 @@ async def bot(runner_args: RunnerArguments) -> None:
         await task.queue_frame(TTSUpdateSettingsFrame(delta=NvidiaTTSSettings(**settings_kwargs), service=tts))
         logger.info(f"Voice switched to {voice_id}, language={settings_kwargs.get('language', '(unchanged)')}")
 
-    @task.rtvi.event_handler("on_client_message")
-    async def on_client_message(rtvi, message):
-        payload = message.data if isinstance(message.data, dict) else {}
-        if message.type == "set-voice":
-            await _apply_set_voice(payload)
+    if not is_realtime:
+
+        @task.rtvi.event_handler("on_client_message")
+        async def on_client_message(rtvi, message):
+            payload = message.data if isinstance(message.data, dict) else {}
+            if message.type == "set-voice":
+                await _apply_set_voice(payload)
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(task)
     await runner.run()
-
-
-def _default_booking_backend_url() -> str:
-    """Return the default booking-server URL for the current runtime."""
-    if os.environ.get("APP_RUNTIME", "").strip().lower() == "container":
-        return "http://booking-server:8001"
-    return "http://localhost:8001"
-
-
-def _booking_backend_url(default_booking_server: dict) -> str:
-    """Resolve the booking-server URL, preserving explicit user overrides."""
-    explicit_url = os.getenv("BOOKING_BACKEND_URL", "").strip()
-    if explicit_url:
-        return explicit_url
-
-    configured_url = str(default_booking_server.get("server") or "").strip()
-    runtime_default = _default_booking_backend_url()
-    if runtime_default == "http://localhost:8001" and configured_url == "http://booking-server:8001":
-        return runtime_default
-    return configured_url or runtime_default
 
 
 def _parse_optional_int(raw: object, default: int) -> int:
@@ -402,6 +725,17 @@ def _parse_optional_int(raw: object, default: int) -> int:
     except (TypeError, ValueError):
         logger.warning(f"Invalid integer config value {raw!r}; using {default}")
         return default
+
+
+def _parse_optional_float(raw: object) -> float | None:
+    """Parse optional floating-point config values."""
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid floating-point config value {raw!r}; using service default")
+        return None
 
 
 def _load_required_catalog_prompt(prompt_key: str) -> str:

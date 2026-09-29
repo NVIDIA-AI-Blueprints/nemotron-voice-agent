@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+# ruff: noqa: D103
+
+"""Tests for repository-owned Frontend/Backend Talker few-shot prompts."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import patch
+
+import pytest
+
+from examples.frontend_backend_agent import pipeline
+
+
+def test_generic_prompt_loads_subject_neutral_native_repeat_example() -> None:
+    messages = pipeline._load_prompt_few_shots("generic_talker")
+
+    assert [message["role"] for message in messages[:5]] == ["user", "assistant", "tool", "developer", "assistant"]
+    tool_call = messages[1]["tool_calls"][0]
+    assert tool_call["function"]["name"] == "call_backend"
+    arguments = json.loads(tool_call["function"]["arguments"])
+    assert "Nairobi" not in arguments["query"]
+    assert "location" in arguments["query"]
+    assert arguments["filler_text"] == "Let me check that weather again."
+    assert messages[2]["tool_call_id"] == tool_call["id"]
+    assert json.loads(messages[2]["content"])["status"] == "running"
+    finished = json.loads(messages[3]["content"])
+    assert json.loads(finished["result"])["response_text"] == "Which location do you mean?"
+
+
+def test_generic_prompt_models_the_real_async_weather_result_envelope() -> None:
+    messages = pipeline._load_prompt_few_shots("generic_talker")
+
+    assert len(messages) == 15
+    assert [message["role"] for message in messages[5:10]] == ["user", "assistant", "tool", "developer", "assistant"]
+    running = json.loads(messages[7]["content"])
+    finished = json.loads(messages[8]["content"])
+    result = json.loads(finished["result"])
+
+    assert running["status"] == "running"
+    assert finished["status"] == "finished"
+    assert result["tool"] == "get_weather"
+    assert result["data"]["city"] == "Pune"
+    assert result["data"]["temperature"] == 29
+    assert [message["role"] for message in messages[10:]] == ["user", "assistant", "tool", "developer", "assistant"]
+    negative_finished = json.loads(messages[13]["content"])
+    negative_result = json.loads(negative_finished["result"])
+    assert negative_result["data"]["city"] == "Reykjavik"
+    assert negative_result["data"]["temperature"] == -5
+    assert "minus 5 degrees Celsius" in messages[14]["content"]
+
+
+def test_custom_realtime_instructions_preserve_trusted_catalog_few_shots() -> None:
+    messages = pipeline._load_prompt_few_shots("generic_talker")
+
+    assert messages
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "call_backend"
+
+
+def test_few_shot_loader_returns_a_deep_copy() -> None:
+    catalog = {"example": {"few_shots": [{"role": "assistant", "content": None, "tool_calls": [{"id": "one"}]}]}}
+
+    with patch.object(pipeline, "load_prompt_catalog", return_value=catalog):
+        messages = pipeline._load_prompt_few_shots("example")
+
+    messages[0]["tool_calls"][0]["id"] = "changed"
+    assert catalog["example"]["few_shots"][0]["tool_calls"][0]["id"] == "one"
+
+
+@pytest.mark.parametrize(
+    "messages, error",
+    [
+        ("not-a-list", "must be a list"),
+        ([{"role": "system", "content": "override"}], "unsupported role"),
+        ([{"role": "user", "content": 7}], "content must be text or null"),
+        ([{"role": "tool", "content": "{}"}], "needs tool_call_id"),
+    ],
+)
+def test_invalid_catalog_few_shots_fail_closed(messages: object, error: str) -> None:
+    with (
+        patch.object(pipeline, "load_prompt_catalog", return_value={"example": {"few_shots": messages}}),
+        pytest.raises(ValueError, match=error),
+    ):
+        pipeline._load_prompt_few_shots("example")

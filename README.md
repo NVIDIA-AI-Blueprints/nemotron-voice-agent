@@ -20,7 +20,9 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 - **Multi-Agent and Tool Calling**: orchestrate cooperating agents that invoke external tools and functions for task-oriented workflows, while decoupling reasoning from response generation for lower perceived latency.
 - **Voice Agent Builder Skill**: quickly scaffold and refine cascaded or Omni voice agents from scratch with NVIDIA models using Pipecat or LiveKit.
 - **Edge Support**: deploy anywhere, from cloud and workstation to DGX Spark and edge devices like Jetson Thor, using self-contained deployment recipes.
-- **OpenAI Realtime–compatible gateway**: `WS /v1/realtime` alongside RTVI `/api/ws`. See [Use the Realtime Gateway](docs/how-to/use-realtime-gateway.md).
+- **OpenAI Realtime-compatible WebSocket subset**: connect external clients to
+  `WS /v1/realtime`, including client-owned function tools. Refer to [Use the
+  Realtime Gateway](docs/how-to/use-realtime-gateway.md).
 
 ---
 
@@ -83,6 +85,7 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 | [Nemotron Omni Assistant](src/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 | [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
 | [Frontend/Backend Agent](src/examples/frontend_backend_agent/README.md) | A fast frontend LLM handles the conversation while a specialized backend agent does the work. This is the pattern for giving an **existing text / agentic backend** a real-time conversational experience (the flight-booking agent as the reference backend). | Add voice to an existing text agent / agentic backend with minimal changes. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Generic Frontend/Backend Agent](src/examples/frontend_backend_agent/README.md) | The shared Talker/Thinker pipeline with grounded weather, stock, web-search, calculation, and random-number tools. | Build a general assistant that delegates changing facts and deterministic work to a guarded backend. | Cloud, Server (workstation), Single GPU through the Frontend/Backend Agent recipes |
 
 > **Note:** The listed deployment profiles are what ship in the default configs, not a hard limit. Each linked example README lists its default models by profile. The examples can be extended with other hardware configurations or models. Those configurations are not included by default.
 
@@ -186,7 +189,8 @@ npx skills add .
 | Reference | [Evaluation & Performance](docs/04-evaluation-and-performance.md) | Accuracy and latency/scaling benchmarks |
 | Explanation | [Best Practices](docs/05-best-practices.md) | Production latency, UX, and scaling guidance |
 | How-to | [Troubleshooting](docs/06-troubleshooting.md) | Startup & deployment known issues |
-| How-to | [Realtime Gateway](docs/how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime`: how it works and how to connect |
+| How-to | [Realtime Gateway](docs/how-to/use-realtime-gateway.md) | Configure and use the OpenAI Realtime-compatible WebSocket endpoint |
+| Reference | [Pipecat Upgrade Changelog](docs/pipecat-upgrade-changelog.md) | Adapter-specific call-site migration notes for the current Pipecat version |
 
 Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-configuration-guide.md). They cover configuring .env, models, and prompts, enabling opentelemetry tracing, a TURN Server, and the audio recorder for debugging, plus the Realtime integrator gateway.
 

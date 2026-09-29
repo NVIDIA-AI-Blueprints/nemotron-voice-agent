@@ -20,6 +20,87 @@ selection: all
 # Override at runtime via the ``TRANSPORT_SELECTION`` environment variable.
 transports: all
 
+# Stable public model ids for the OpenAI Realtime API. Each model selects one
+# complete, server-owned pipeline profile; endpoint URLs and credentials remain
+# in the example-local service catalogs. Exactly one profile is the default for
+# each pipeline. Additional authenticated NVIDIA selectors may refine these
+# catalog selections when a client secret is minted.
+realtime_models:
+  nvidia/nemotron-realtime:
+    label: Nemotron Realtime
+    pipeline_mode: generic-assistant
+    default: true
+    selectors:
+      prompt_key: generic_assistant
+      llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-client-tools:
+    label: Nemotron Realtime Client Tools
+    pipeline_mode: generic-assistant
+    default: false
+    selectors:
+      prompt_key: generic_assistant_without_tools
+      llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-multilingual:
+    label: Nemotron Realtime Multilingual
+    pipeline_mode: multilingual-assistant
+    default: true
+    selectors:
+      prompt_key: multilingual_voice_assistant
+      llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+    platform_overrides:
+      cloud:
+        # Nemotron Streaming Multilingual is local-only. NVCF exposes Parakeet.
+        asr_id: parakeet-rnnt
+
+  nvidia/nemotron-realtime-omni:
+    label: Nemotron Realtime Omni
+    pipeline_mode: omni-assistant
+    default: true
+    selectors:
+      prompt_key: generic_omni_assistant
+      llm_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-omni-subagents:
+    label: Nemotron Realtime Omni Subagents
+    pipeline_mode: omni-assistant-subagents
+    default: true
+    selectors:
+      prompt_key: omni_subagents_assistant
+      llm_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-frontend-backend:
+    label: Nemotron Realtime Frontend Backend
+    pipeline_mode: frontend-backend-agent
+    default: true
+    selectors:
+      prompt_key: talker
+      llm_id: registry-default
+      thinker_llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+
+  nvidia/nemotron-realtime-generic-frontend-backend:
+    label: Nemotron Realtime Generic Frontend/Backend
+    pipeline_mode: generic-frontend-backend-agent
+    default: false
+    selectors:
+      prompt_key: generic_talker
+      thinker_prompt: generic_thinker
+      llm_id: nemotron-lightning-talker
+      thinker_llm_id: nemotron-super-reasoning
+      asr_id: registry-default
+      tts_id: registry-default
+
 examples:
   generic-assistant:
     label: Generic Assistant
@@ -69,13 +150,42 @@ examples:
     bot: examples.omni_assistant_subagents.pipeline:bot
 
   frontend-backend-agent:
-    label: Frontend Backend Agent
+    label: Airline Frontend Backend Agent
+    domain_profile: airline
+    thinker_prompt: thinker
+    agent_prompt_keys:
+      - thinker
+      - generic_talker
+      - generic_thinker
     slots: [llm, thinker-llm, booking-server, asr, tts]
     defaults:
       prompt: [talker]
       llm: [nemotron-lightning]
       thinker-llm: [nemotron-lightning]
       booking-server: [default]
+      asr: [nemotron-asr-streaming-english]
+      tts: [magpie-multilingual-tts]
+    bot: examples.frontend_backend_agent.pipeline:bot
+
+  generic-frontend-backend-agent:
+    label: Generic Frontend Backend Agent
+    domain_profile: generic
+    thinker_prompt: generic_thinker
+    tools:
+      - get_weather
+      - get_stock_price
+      - web_search
+      - calculate_bmi
+      - generate_random_number
+    agent_prompt_keys:
+      - talker
+      - thinker
+      - generic_thinker
+    slots: [llm, thinker-llm, asr, tts]
+    defaults:
+      prompt: [generic_talker]
+      llm: [nemotron-lightning-talker]
+      thinker-llm: [nemotron-super-reasoning]
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
     bot: examples.frontend_backend_agent.pipeline:bot

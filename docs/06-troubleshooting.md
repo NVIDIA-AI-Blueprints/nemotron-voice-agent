@@ -39,6 +39,7 @@ Self-hosted Nemotron-3 models only. Cloud (NVCF) has the parsers enabled server-
 | `HTTP 400: "auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser` | The 2.x LLM NIM versions do not enable the parsers automatically. The stock Compose files already include the required NIM and raw-vLLM flags. Confirm that you are using the matching 2.2.0 Compose file and image, and then pull and recreate the service. If you maintain a custom Compose file, copy the complete parser arguments from the stock service instead of setting `NIM_PASSTHROUGH_ARGS` only in `.env`. | [Configure LLM → Parser and Tool Calling](how-to/configure-llm.md#reasoning-parser--tool-calling-self-hosted) · [`docker-compose.nemotron35-lightning.yaml`](../docker/docker-compose.nemotron35-lightning.yaml) |
 | Reasoning is spoken by TTS / `<think>` leaks into the answer | The reasoning parser is not set. Add `--reasoning-parser nemotron_v3`, which separates reasoning from `content` and keeps reasoning off working. | [Configure LLM → Parser and Tool Calling](how-to/configure-llm.md#reasoning-parser--tool-calling-self-hosted) |
 | Raw vLLM: `nemotron_v3` parser not found, or `MIXED_PRECISION` not supported | The image's vLLM is too old. Cascaded single-GPU recipes pin `vllm/vllm-openai:v0.29.0`. If you still hit the error after a clean pull, bump that pin. | [`docker-compose.nemotron35-lightning.yaml`](../docker/docker-compose.nemotron35-lightning.yaml) |
+| `Generic Thinker returned an empty plan` | Search the application logs for `event=thinker_stream_complete`. The event records the outcome, chunk count, content and reasoning character counts, finish reasons, and token usage without logging prompt, response, or reasoning text. If `content_chars` is zero and the completion reaches its token limit, raise `GENERIC_THINKER_MAX_TOKENS` or adjust `GENERIC_THINKER_REASONING_BUDGET`. The Generic Server and Single GPU profiles default to 2,048 output tokens with a 1,024-token reasoning budget. | [Frontend/Backend Agent → Configure the Shared Pipeline](../src/examples/frontend_backend_agent/README.md#configure-the-shared-pipeline) |
 
 ## ASR (speech-to-text)
 
@@ -72,13 +73,25 @@ These are runtime behavior issues and apply to any deployment, cloud or local.
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
-| Background or random noise interrupts the bot mid-reply (false barge-in) and leaves the conversation in a confused state | Silero VAD is detecting ambient noise as the onset of user speech, which barges in and stops the TTS. When no real utterance follows, the turn is left half-finished. The most effective fix is to reduce input noise: use a wired or directional headset mic in a quieter room. If noise still trips it, raise the Silero VAD sensitivity (its confidence and minimum-volume thresholds in `VADParams`) where the pipeline builds the transport. | [Tune Pipeline Performance → Smart Turn Detection](how-to/tune-pipeline-performance.md#smart-turn-detection) · [Configure ASR → Customization](how-to/configure-asr.md#customization) |
+| Background or random noise interrupts the bot mid-reply (false barge-in) and leaves the conversation in a confused state | A stray interim automatic speech recognition token can start a turn and clear buffered bot audio. The Generic Frontend/Backend Agent requires at least 2 transcribed words while the bot is speaking; normal turns still start with 1 word. Search server logs for `user_interruption_trigger` to inspect the bounded transcript and `word_count` that passed the gate. Smart Turn controls end-of-turn detection and is not the cause of this start-of-turn symptom. Use a wired or directional headset in a quieter room if real background speech still passes the gate. | [Tune Pipeline Performance → Smart Turn Detection](how-to/tune-pipeline-performance.md#smart-turn-detection) · [Configure ASR → Customization](how-to/configure-asr.md#customization) |
 
 ## Runtime Service Failures
 
 | Error / symptom | Cause & fix | Reference |
 |-----------------|-------------|-----------|
 | The voice session ends after an ASR, LLM, or TTS error | The service reported that it cannot recover, for example because a provider rejected its API key, model, or voice, or because reconnection attempts were exhausted. The pipeline ends the session gracefully instead of repeatedly sending work to an unusable service. Correct the credential or service configuration, confirm that the local sidecar is healthy, and then start a new session. | [Configure Services](how-to/configure-services.md) |
+
+## Frontend/Backend Agent Tool Delegation (Realtime)
+
+Applies to the Generic Frontend/Backend Agent behind the OpenAI Realtime
+boundary (`nvidia/nemotron-realtime-generic-frontend-backend` and related
+profiles).
+
+| Error / symptom | Cause & fix | Reference |
+|-----------------|-------------|-----------|
+| The assistant replies "there is nothing pending right now" to an ordinary request, such as "cancel my reservation" | `cancel_backend` withdraws only the assistant's own in-flight delegated work; it is not how the assistant performs a cancellation the user asks for as a task. A prompt or client that conflates the two routes ordinary cancellation requests to `cancel_backend` instead of `call_backend`, which then has no pending work to withdraw. | [Use the Realtime Gateway → Run the Generic Frontend/Backend Profile](how-to/use-realtime-gateway.md#run-the-generic-frontend-backend-profile) |
+| A later turn in the same session fails with `response_in_progress`, or the session appears to hang after a delegated request | Either the Thinker planner or the Talker's completion stream stalled without returning. Both are bounded (`GENERIC_BACKEND_TIMEOUT_SECONDS`, `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS`) and back independently, so a bounded deployment recovers within the deadline. Confirm both env vars are set and that neither exceeds the caller's response deadline. | [Frontend/Backend Agent → Configure the Shared Pipeline](../src/examples/frontend_backend_agent/README.md#configure-the-shared-pipeline) |
+| A delegated tool call intermittently fails with a transient error from the model endpoint (for example "Service temporarily overloaded") | The Thinker planning call retries a bounded number of times (`GENERIC_PLANNER_MAX_ATTEMPTS`, default 2) with a short backoff before the round fails. Raise `GENERIC_PLANNER_MAX_ATTEMPTS` only if the endpoint's overload is transient and brief; a persistently overloaded endpoint needs capacity, not more retries. | [Frontend/Backend Agent → Configure the Shared Pipeline](../src/examples/frontend_backend_agent/README.md#configure-the-shared-pipeline) |
 
 ## Cloud (NVCF)
 

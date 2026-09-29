@@ -9,6 +9,15 @@ llm:
     max_tokens: 2048
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
 
+  nemotron-lightning-talker:
+    name: "Nemotron 3.5 Lightning — Fast Talker"
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+    base_url: "https://integrate.api.nvidia.com/v1"
+    system_prompt: ""
+    max_tokens: 512
+    temperature: 0.0
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
+
 thinker-llm:
   nemotron-lightning:
     name: "Nemotron 3.5 Lightning 30B A3B Thinker"
@@ -16,6 +25,14 @@ thinker-llm:
     base_url: "https://integrate.api.nvidia.com/v1"
     max_tokens: 4096
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
+
+  nemotron-super-reasoning:
+    name: "Nemotron 3 Super — Reasoning Thinker"
+    model_id: "nvidia/nemotron-3-super-120b-a12b"
+    base_url: "https://integrate.api.nvidia.com/v1"
+    max_tokens: 768
+    temperature: 0.0
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":256,"repetition_penalty":1.05}}'
 
 booking-server:
   default:
@@ -28,7 +45,7 @@ tts:
     server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
     model: "magpie-tts-multilingual"
-    function_id: "877104f7-e885-42b9-8de8-f6e4c6303969"
+    function_id: "500bfea0-ba3d-4158-8276-1d04daedfdcd"
     synthesis_mode: stitched
 
   chatterbox-multilingual-tts:
@@ -44,4 +61,4 @@ asr:
     name: "Nemotron ASR Streaming English"
     server: "grpc.nvcf.nvidia.com:443"
     model: "nemotron-asr-streaming"
-    function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
+    function_id: "4155ae85-73e1-4936-b47f-87b9de165651"
