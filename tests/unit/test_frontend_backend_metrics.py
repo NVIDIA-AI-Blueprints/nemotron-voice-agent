@@ -150,6 +150,34 @@ class FrontendBackendStageMetricsTests(unittest.IsolatedAsyncioTestCase):
         orphan_final = await coordinator.start_frontend_final("tool-call-1", "talker")
         self.assertNotEqual(orphan_final.turn_id, initial.turn_id)
 
+    async def test_second_planner_round_and_interruption_evidence_use_existing_channels(self) -> None:
+        frames = []
+        events = []
+
+        async def emit_metric(frame) -> None:
+            frames.append(frame)
+
+        async def emit_event(event: dict) -> None:
+            events.append(event)
+
+        coordinator = StageMetricsCoordinator(emit_metric, emit_event)
+        await coordinator.bind_backend_call("tool-call-2", "backend-call-2")
+        span = await coordinator.start_backend("backend-call-2", model="thinker", attempt=1, planning_round=2)
+        await span.mark_ttft()
+        await span.finish()
+        await coordinator.record_interruption_trigger("wait, check London", 3)
+
+        metrics = [frame.data[0] for frame in frames]
+        self.assertEqual(
+            [metric.processor for metric in metrics],
+            ["backend_thinker_step2_llm", "backend_thinker_step2_llm"],
+        )
+        self.assertEqual(metrics[0].stage, "backend_thinker_step2")
+        self.assertEqual(
+            events[-1],
+            {"type": "user-interruption-trigger", "transcript": "wait, check London", "word_count": 3},
+        )
+
     async def test_streamed_thinker_marks_true_ttft_and_collects_only_visible_content(self) -> None:
         frames = []
 

@@ -11,11 +11,11 @@ llm:
 
   nemotron-lightning-talker:
     name: "Nemotron 3.5 Lightning — Fast Talker"
-    model_id: "nvidia/nemotron-3.5-lightning"
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
     base_url: "https://integrate.api.nvidia.com/v1"
     system_prompt: ""
     max_tokens: 512
-    temperature: 0.2
+    temperature: 0.0
     extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
 
 thinker-llm:
@@ -30,9 +30,9 @@ thinker-llm:
     name: "Nemotron 3 Super — Reasoning Thinker"
     model_id: "nvidia/nemotron-3-super-120b-a12b"
     base_url: "https://integrate.api.nvidia.com/v1"
-    max_tokens: 2048
+    max_tokens: 768
     temperature: 0.0
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":256,"repetition_penalty":1.05}}'
 
 booking-server:
   default:

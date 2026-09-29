@@ -24,18 +24,6 @@ def _runtime_context() -> str:
     )
 
 
-def select_filler(query: str) -> str:
-    """Choose immutable progress speech; never trust model-authored filler."""
-    normalized = query.casefold()
-    if any(word in normalized for word in ("bmi", "calculate", "calculation")):
-        return "Let me work that out."
-    if " and " in normalized and any(
-        word in normalized for word in ("weather", "stock", "price", "news", "search", "latest", "current")
-    ):
-        return "Let me check those details."
-    return "Let me check that."
-
-
 def _build_backend(context: DomainBuildContext) -> GenericThinkerBackend:
     enabled_tools = resolve_enabled_tools(context.tool_names)
     enabled_specs = tuple(TOOLS[name] for name in enabled_tools)
@@ -44,13 +32,17 @@ def _build_backend(context: DomainBuildContext) -> GenericThinkerBackend:
         system_prompt=context.thinker_prompt,
         enabled_tools=enabled_specs,
         max_tokens=context.thinker_max_tokens,
+        stage_metrics=context.stage_metrics,
+        model_name=context.thinker_model_name,
     )
     return GenericThinkerBackend(
         planner=planner,
         tools=TOOLS,
         enabled_tools=enabled_tools,
         overall_timeout_seconds=parse_env_float("GENERIC_BACKEND_TIMEOUT_SECONDS", 40.0, min_value=1.0),
-        planner_timeout_seconds=parse_env_float("GENERIC_PLANNER_TIMEOUT_SECONDS", 15.0, min_value=1.0),
+        planner_timeout_seconds=parse_env_float("GENERIC_PLANNER_TIMEOUT_SECONDS", 6.0, min_value=1.0),
+        on_tool_started=context.on_tool_started,
+        stage_metrics=context.stage_metrics,
     )
 
 
@@ -63,8 +55,7 @@ def create_domain_spec() -> DomainSpec:
         talker_tools_schema=TOOLS_SCHEMA,
         build_backend=_build_backend,
         runtime_context=_runtime_context,
-        filler_selector=select_filler,
-        filler_policy="code_authored",
+        filler_policy="talker_authored",
         tool_registry=TOOLS,
         max_query_chars=2000,
     )

@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -22,7 +23,15 @@ from examples.frontend_backend_agent.generic.result_formatters import (
 )
 from examples.frontend_backend_agent.src.tools import ToolContext, ToolSpec, validate_arguments
 
+if TYPE_CHECKING:
+    from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
+
 MAX_PARALLEL_TOOL_CALLS = 3
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_CORPORATE_DECORATION_WORDS = frozenset(
+    {"company", "corp", "corporation", "inc", "incorporated", "limited", "ltd", "plc", "the"}
+)
+_SOURCE_GROUNDED_PARAMS: dict[str, tuple[str, ...]] = {"get_stock_price": ("company_name",)}
 
 
 @dataclass(slots=True, frozen=True)
@@ -35,6 +44,23 @@ class ValidatedToolCall:
 
 class PlanValidationError(ValueError):
     """A rejected model plan; no tool may execute after this exception."""
+
+
+def _distinctive_words(value: object) -> set[str]:
+    """Return literal subject words without optional corporate decorations."""
+    return set(_WORD_RE.findall(str(value or "").casefold())) - _CORPORATE_DECORATION_WORDS
+
+
+def _source_grounding_missing(call: ValidatedToolCall, source_query: str) -> list[str]:
+    """Reject planner-authored subjects that are absent from the delegated request."""
+    required = _SOURCE_GROUNDED_PARAMS.get(call.name, ())
+    query_words = set(_WORD_RE.findall(source_query.casefold()))
+    missing: list[str] = []
+    for name in required:
+        argument_words = _distinctive_words(call.arguments.get(name))
+        if not argument_words or query_words.isdisjoint(argument_words):
+            missing.append(name)
+    return missing
 
 
 def _raw_calls(plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -79,15 +105,28 @@ async def _execute(
     spec: ToolSpec,
     tool_context: ToolContext,
     on_tool_started: Callable[[str], Awaitable[None]] | None,
+    stage_metrics: StageMetricsCoordinator | None,
+    backend_call_id: str,
+    ordinal: int,
 ) -> dict[str, Any]:
+    span = (
+        await stage_metrics.start_tool(backend_call_id, tool_name=call.name, ordinal=ordinal)
+        if stage_metrics is not None
+        else None
+    )
+    outcome = "success"
     try:
-        if on_tool_started:
+        if on_tool_started and stage_metrics is None:
             await on_tool_started(call.name)
         data = await asyncio.wait_for(spec.run(call.arguments, tool_context), timeout=spec.timeout_s)
+        if str(data.get("status") or "success") not in {"success", "not_found"}:
+            outcome = "error"
         return format_tool_result(spec, call.arguments, data)
     except asyncio.CancelledError:
+        outcome = "cancelled"
         raise
     except TimeoutError:
+        outcome = "timeout"
         logger.warning(f"generic domain tool {call.name} timed out")
         return format_tool_result(
             spec,
@@ -95,14 +134,19 @@ async def _execute(
             {"status": "unavailable", "assistant_should_say": "That check timed out. Would you like me to retry?"},
         )
     except (TypeError, ValueError):
+        outcome = "error"
         return invalid_parameters(call.name)
     except Exception as exc:  # noqa: BLE001 - fail closed at the tool boundary
+        outcome = "error"
         logger.warning(f"generic domain tool {call.name} failed: {type(exc).__name__}")
         return format_tool_result(
             spec,
             call.arguments,
             {"status": "unavailable", "assistant_should_say": "I couldn't complete that check right now."},
         )
+    finally:
+        if stage_metrics is not None and span is not None:
+            await stage_metrics.finish_tool(span, outcome)
 
 
 def _response_hint(
@@ -138,8 +182,13 @@ async def dispatch_plan(
     tools: Mapping[str, ToolSpec],
     enabled_tools: tuple[str, ...],
     *,
+    source_query: str | None = None,
     tool_context: ToolContext | None = None,
     on_tool_started: Callable[[str], Awaitable[None]] | None = None,
+    stage_metrics: StageMetricsCoordinator | None = None,
+    backend_call_id: str = "unbound",
+    accumulated_results: list[dict[str, Any]] | None = None,
+    tool_ordinal_offset: int = 0,
 ) -> dict[str, Any]:
     """Validate atomically, serialize mutating tools, and preserve planner order."""
     enabled = frozenset(enabled_tools)
@@ -160,6 +209,14 @@ async def dispatch_plan(
     # a multi-tool plan prevents all other members from running.
     for call in calls:
         spec = tools[call.name]
+        if source_query is not None:
+            ungrounded = _source_grounding_missing(call, source_query)
+            if ungrounded:
+                logger.warning(
+                    "generic domain rejected planner-authored subject absent from source query: "
+                    f"tool={call.name} params={','.join(ungrounded)}"
+                )
+                return missing_parameters(spec, ungrounded)
         try:
             missing = validate_arguments(spec, call.arguments)
         except (TypeError, ValueError):
@@ -171,7 +228,15 @@ async def dispatch_plan(
     payloads: list[dict[str, Any] | None] = [None] * len(calls)
 
     async def run_one(index: int, call: ValidatedToolCall) -> None:
-        payloads[index] = await _execute(call, tools[call.name], context, on_tool_started)
+        payloads[index] = await _execute(
+            call,
+            tools[call.name],
+            context,
+            on_tool_started,
+            stage_metrics,
+            backend_call_id,
+            tool_ordinal_offset + index,
+        )
 
     async def run_mutating_chain(items: list[tuple[int, ValidatedToolCall]]) -> None:
         for index, call in items:
@@ -189,4 +254,13 @@ async def dispatch_plan(
     await asyncio.gather(*coroutines)
 
     resolved = [payload for payload in payloads if payload is not None]
+    if accumulated_results is not None:
+        accumulated_results.extend(resolved)
     return resolved[0] if len(resolved) == 1 else combine_tool_results(resolved)
+
+
+def combine_accumulated_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return one final payload for all completed planning rounds."""
+    if not results:
+        raise PlanValidationError("planner completed without tool results")
+    return results[0] if len(results) == 1 else combine_tool_results(results)

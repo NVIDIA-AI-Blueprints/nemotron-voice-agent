@@ -42,7 +42,6 @@ from examples.shared.pipeline_utils import (
     with_realtime_observers,
 )
 from examples.shared.tool_call_speech_gate import ToolCallSpeechGate
-from session_capture.capture import mark_pipeline_finished, run_finalize
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -98,7 +97,7 @@ def _load_prompt_few_shots(prompt_key: str, *, custom_prompt: bool) -> list[dict
         if not isinstance(raw_message, dict):
             raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] must be an object")
         role = raw_message.get("role")
-        if role not in {"user", "assistant", "tool"}:
+        if role not in {"user", "assistant", "tool", "developer"}:
             raise ValueError(f"Prompt {prompt_key!r} few_shots[{index}] has unsupported role {role!r}")
         content = raw_message.get("content")
         if content is not None and not isinstance(content, str):
@@ -349,6 +348,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         user_params=build_user_aggregator_params(
             welcome_enabled,
             vad_stop_secs=FRONTEND_BACKEND_VAD_STOP_SECS,
+            interruption_min_words=2 if domain.key == "generic" else None,
+            on_interruption_trigger=(stage_metrics.record_interruption_trigger if domain.key == "generic" else None),
         ),
     )
     audio_recorder = create_audio_recorder(body.get("session_id", ""))
@@ -441,18 +442,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         on_start=_on_session_start,
         welcome_enabled=welcome_enabled,
     )
-
-    @task.event_handler("on_pipeline_finished")
-    async def on_pipeline_finished(task, frame):
-        # Fires only once the CancelFrame queued by task.cancel() (below) has
-        # genuinely reached the end of the pipeline (or timed out) -- i.e. every
-        # processor, including the audio recorder's final turn, has actually
-        # flushed. Finalizing any earlier risks the last turn's WAV missing
-        # from the tarball, plus a late write recreating it after finalize's
-        # own cleanup deletes the session prefix. Offloaded via to_thread: this
-        # does blocking store I/O, tar assembly and, on the winning pod, a
-        # subprocess upload with up to a 300s timeout -- never safe on the loop.
-        await run_finalize(mark_pipeline_finished, body.get("session_id", ""))
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

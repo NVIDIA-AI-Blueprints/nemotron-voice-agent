@@ -87,6 +87,33 @@ SERVER_METRIC_KEYS = (
     "vad_smart_turn",
     "llm_processing_time",
     "llm_tokens_per_sec",
+    "frontend_tool_selection_ttft",
+    "frontend_tool_selection_processing_time",
+    "backend_llm_ttft",
+    "backend_llm_processing_time",
+    "backend_tool_call_latency",
+    "frontend_final_response_ttft",
+    "frontend_final_response_processing_time",
+)
+
+_STAGE_TTFB_METRICS = {
+    "frontend_tool_selection_llm": "frontend_tool_selection_ttft",
+    "backend_thinker_llm": "backend_llm_ttft",
+    "frontend_final_response_llm": "frontend_final_response_ttft",
+}
+_STAGE_PROCESSING_METRICS = {
+    "frontend_tool_selection_llm": "frontend_tool_selection_processing_time",
+    "backend_thinker_llm": "backend_llm_processing_time",
+    "frontend_final_response_llm": "frontend_final_response_processing_time",
+}
+_STAGE_EVENT_FIELDS = (
+    "stage",
+    "turn_id",
+    "invocation_id",
+    "parent_invocation_id",
+    "attempt",
+    "outcome",
+    "tool_name",
 )
 
 _SHUTDOWN_REQUESTED = False
@@ -129,6 +156,27 @@ def categorize_processor(processor: str) -> str:
     if "llm" in name:
         return "llm"
     return ""
+
+
+def _unwrap_rtvi_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap transport ``server-message`` envelopes without losing RTVI data."""
+    current = message
+    for _ in range(3):
+        if current.get("type") != "server-message" or not isinstance(current.get("data"), dict):
+            break
+        current = current["data"]
+    return current
+
+
+def _rtvi_metrics_payload(message: dict[str, Any]) -> dict[str, Any] | None:
+    """Return metrics from either a wire message or an SDK-style event payload."""
+    current = _unwrap_rtvi_message(message)
+    if current.get("type") == "metrics":
+        data = current.get("data")
+        return data if isinstance(data, dict) else current
+    if any(isinstance(current.get(bucket), list) for bucket in ("ttfb", "processing", "tokens")):
+        return current
+    return None
 
 
 class RunLogger:
@@ -285,6 +333,8 @@ class PerfClient:
         self.glitch_detected = False
         self.total_reverse_barge_ins = 0
         self.server_metric_samples: dict[str, list[float]] = {key: [] for key in SERVER_METRIC_KEYS}
+        self.stage_metric_events: list[dict[str, Any]] = []
+        self._seen_stage_metric_events: set[tuple[Any, ...]] = set()
         self.rtvi_messages: list[dict[str, Any]] = []
         self.running = True
         self.collecting_metrics = False
@@ -311,12 +361,8 @@ class PerfClient:
         )
         await self.logger.log(f"{self.stream_id} RTVI message: {json.dumps(message, sort_keys=True)}")
 
-        if message_type == "server-message" and isinstance(message.get("data"), dict):
-            nested_message = message["data"]
-            nested_type = nested_message.get("type")
-            if isinstance(nested_type, str):
-                message = nested_message
-                message_type = nested_type
+        message = _unwrap_rtvi_message(message)
+        message_type = str(message.get("type", "unknown"))
 
         if message_type == "user-bot-latency":
             latency = message.get("latency")
@@ -331,10 +377,7 @@ class PerfClient:
                 self.server_metric_samples["vad_smart_turn"].append(float(vad_smart_turn))
             return
 
-        if message_type != "metrics":
-            return
-
-        metrics = message.get("data", {})
+        metrics = _rtvi_metrics_payload(message)
         if not isinstance(metrics, dict) or not self.collecting_metrics:
             return
 
@@ -344,6 +387,11 @@ class PerfClient:
             value = item.get("value")
             processor = str(item.get("processor", ""))
             if not isinstance(value, (int, float)):
+                continue
+            stage_key = _STAGE_TTFB_METRICS.get(processor)
+            if stage_key:
+                if self._record_stage_metric(stage_key, float(value), item, metric="ttft"):
+                    self.server_metric_samples[stage_key].append(float(value))
                 continue
             category = categorize_processor(processor)
             if category == "llm":
@@ -360,6 +408,15 @@ class PerfClient:
             processor = str(item.get("processor", ""))
             if not isinstance(value, (int, float)):
                 continue
+            stage_key = _STAGE_PROCESSING_METRICS.get(processor)
+            if stage_key:
+                if self._record_stage_metric(stage_key, float(value), item, metric="processing"):
+                    self.server_metric_samples[stage_key].append(float(value))
+                continue
+            if processor.startswith("backend_tool_call."):
+                if self._record_stage_metric("backend_tool_call_latency", float(value), item, metric="latency"):
+                    self.server_metric_samples["backend_tool_call_latency"].append(float(value))
+                continue
             if categorize_processor(processor) == "llm":
                 processing_time = float(value)
                 self.server_metric_samples["llm_processing_time"].append(processing_time)
@@ -374,6 +431,43 @@ class PerfClient:
             completion_tokens = item.get("completion_tokens")
             if isinstance(completion_tokens, (int, float)):
                 self._pending_llm_completion_tokens.append(float(completion_tokens))
+
+    def _record_stage_metric(
+        self,
+        key: str,
+        value: float,
+        item: dict[str, Any],
+        *,
+        metric: str,
+    ) -> bool:
+        """Preserve correlation metadata and suppress a duplicated wire event."""
+        event: dict[str, Any] = {
+            "key": key,
+            "value": value,
+            "metric": metric,
+            "processor": str(item.get("processor", "")),
+        }
+        for field in _STAGE_EVENT_FIELDS:
+            field_value = item.get(field)
+            if field_value is not None:
+                event[field] = field_value
+
+        invocation_id = str(event.get("invocation_id", ""))
+        fingerprint = (
+            key,
+            metric,
+            str(event.get("turn_id", "")),
+            invocation_id,
+            event.get("attempt"),
+            event.get("outcome"),
+            value,
+        )
+        if invocation_id and fingerprint in self._seen_stage_metric_events:
+            return False
+        if invocation_id:
+            self._seen_stage_metric_events.add(fingerprint)
+        self.stage_metric_events.append(event)
+        return True
 
     async def _recv_audio_frame(self, websocket, timeout: float | None = None) -> bytes:
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -742,6 +836,7 @@ class PerfClient:
                 "samples": self.server_metric_samples,
                 "average": server_metric_average,
                 "sample_counts": server_metric_counts,
+                "stage_events": self.stage_metric_events,
             },
             rtvi_messages=self.rtvi_messages,
             timestamp=dt.datetime.now().isoformat(),
@@ -763,6 +858,19 @@ class PerfClient:
                 ("vad_smart_turn", round3(server_metric_average.get("vad_smart_turn"))),
                 ("llm_processing_time", round3(server_metric_average.get("llm_processing_time"))),
                 ("llm_tokens_per_sec", round3(server_metric_average.get("llm_tokens_per_sec"))),
+                ("frontend_tool_selection_ttft", round3(server_metric_average.get("frontend_tool_selection_ttft"))),
+                (
+                    "frontend_tool_selection_processing_time",
+                    round3(server_metric_average.get("frontend_tool_selection_processing_time")),
+                ),
+                ("backend_llm_ttft", round3(server_metric_average.get("backend_llm_ttft"))),
+                ("backend_llm_processing_time", round3(server_metric_average.get("backend_llm_processing_time"))),
+                ("backend_tool_call_latency", round3(server_metric_average.get("backend_tool_call_latency"))),
+                ("frontend_final_response_ttft", round3(server_metric_average.get("frontend_final_response_ttft"))),
+                (
+                    "frontend_final_response_processing_time",
+                    round3(server_metric_average.get("frontend_final_response_processing_time")),
+                ),
             ],
         )
         return result
@@ -937,6 +1045,13 @@ _SUITE_HEADERS = (
     "VAD+Smart Turn",
     "LLM Proc Time",
     "LLM Tok/s",
+    "Frontend Select TTFT",
+    "Frontend Select Proc",
+    "Backend LLM TTFT",
+    "Backend LLM Proc",
+    "Backend Tool Latency",
+    "Frontend Final TTFT",
+    "Frontend Final Proc",
     "Glitches",
 )
 
@@ -1231,6 +1346,13 @@ def _row_from_summary(summary: dict[str, Any], num_clients: int) -> dict[str, An
         "vad_smart_turn": sa.get("vad_smart_turn"),
         "llm_processing_time": sa.get("llm_processing_time"),
         "llm_tokens_per_sec": sa.get("llm_tokens_per_sec"),
+        "frontend_tool_selection_ttft": sa.get("frontend_tool_selection_ttft"),
+        "frontend_tool_selection_processing_time": sa.get("frontend_tool_selection_processing_time"),
+        "backend_llm_ttft": sa.get("backend_llm_ttft"),
+        "backend_llm_processing_time": sa.get("backend_llm_processing_time"),
+        "backend_tool_call_latency": sa.get("backend_tool_call_latency"),
+        "frontend_final_response_ttft": sa.get("frontend_final_response_ttft"),
+        "frontend_final_response_processing_time": sa.get("frontend_final_response_processing_time"),
         "audio_glitches": r["glitch_detection"]["clients_with_glitches"],
     }
 
@@ -1254,6 +1376,17 @@ def _client_row_from_result(client: dict[str, Any]) -> dict[str, Any]:
         "vad_smart_turn": _client_server_metric_average(client, "vad_smart_turn"),
         "llm_processing_time": _client_server_metric_average(client, "llm_processing_time"),
         "llm_tokens_per_sec": _client_server_metric_average(client, "llm_tokens_per_sec"),
+        "frontend_tool_selection_ttft": _client_server_metric_average(client, "frontend_tool_selection_ttft"),
+        "frontend_tool_selection_processing_time": _client_server_metric_average(
+            client, "frontend_tool_selection_processing_time"
+        ),
+        "backend_llm_ttft": _client_server_metric_average(client, "backend_llm_ttft"),
+        "backend_llm_processing_time": _client_server_metric_average(client, "backend_llm_processing_time"),
+        "backend_tool_call_latency": _client_server_metric_average(client, "backend_tool_call_latency"),
+        "frontend_final_response_ttft": _client_server_metric_average(client, "frontend_final_response_ttft"),
+        "frontend_final_response_processing_time": _client_server_metric_average(
+            client, "frontend_final_response_processing_time"
+        ),
         "audio_glitches": 1 if client.get("glitch_detected") else 0,
     }
 
@@ -1285,6 +1418,13 @@ def _metric_row_to_strings(row: dict[str, Any], label_key: str) -> list[str]:
         round3(row["vad_smart_turn"]),
         round3(row["llm_processing_time"]),
         round3(row["llm_tokens_per_sec"]),
+        round3(row["frontend_tool_selection_ttft"]),
+        round3(row["frontend_tool_selection_processing_time"]),
+        round3(row["backend_llm_ttft"]),
+        round3(row["backend_llm_processing_time"]),
+        round3(row["backend_tool_call_latency"]),
+        round3(row["frontend_final_response_ttft"]),
+        round3(row["frontend_final_response_processing_time"]),
         str(row["audio_glitches"]),
     ]
 

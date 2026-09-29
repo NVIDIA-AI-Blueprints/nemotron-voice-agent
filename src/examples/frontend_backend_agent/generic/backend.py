@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-from examples.frontend_backend_agent.generic.dispatcher import PlanValidationError, dispatch_plan
+from examples.frontend_backend_agent.generic.dispatcher import (
+    PlanValidationError,
+    combine_accumulated_results,
+    dispatch_plan,
+)
 from examples.frontend_backend_agent.generic.planner import GenericPlanner
 from examples.frontend_backend_agent.generic.result_formatters import planner_failure, timeout_failure
 from examples.frontend_backend_agent.generic.state import GenericThinkerSessionState
@@ -26,6 +30,7 @@ if TYPE_CHECKING:
 _PLANNER_MAX_ATTEMPTS = 2
 _PLANNER_RETRY_BACKOFF_SECONDS = 0.2
 _RETRIABLE_PLANNER_EXCEPTIONS = (TimeoutError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
+_MAX_PLANNING_ROUNDS = 3
 
 
 class GenericThinkerBackend:
@@ -34,6 +39,7 @@ class GenericThinkerBackend:
     # Generic formatters already produce grounded, TTS-safe speech; avoid a second
     # Talker pass over Pipecat's asynchronous started/final result envelope.
     tool_result_mode_default = "direct"
+    talker_result_tools = ("get_weather",)
 
     def __init__(
         self,
@@ -42,7 +48,7 @@ class GenericThinkerBackend:
         enabled_tools: tuple[str, ...],
         tools: Mapping[str, ToolSpec],
         overall_timeout_seconds: float = 40.0,
-        planner_timeout_seconds: float = 18.0,
+        planner_timeout_seconds: float = 6.0,
         state: GenericThinkerSessionState | None = None,
         on_tool_started: Callable[[str], Awaitable[None]] | None = None,
         stage_metrics: StageMetricsCoordinator | None = None,
@@ -85,7 +91,7 @@ class GenericThinkerBackend:
         self.state.add_event(started)
         if on_started:
             await on_started(started)
-        task = asyncio.create_task(self._run_call(call_id, clean_query))
+        task = asyncio.create_task(self._run_call(call_id, clean_query, on_progress=on_started))
         self.state.active_task = task
         try:
             payload = await task
@@ -120,14 +126,27 @@ class GenericThinkerBackend:
         """Retain compatibility with older shared-handler test doubles."""
         return self.cancel_pending_work()
 
-    async def _plan_with_retry(self, call_id: str, query: str) -> dict[str, Any]:
+    async def _plan_with_retry(
+        self,
+        call_id: str,
+        query: str,
+        *,
+        planning_round: int,
+        prior_tool_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Retry one transient planner failure inside the existing overall deadline."""
         for attempt in range(1, _PLANNER_MAX_ATTEMPTS + 1):
             try:
                 return await asyncio.wait_for(
                     self._planner.plan(
                         query=query,
-                        state={"active_call_id": call_id, "planner_attempt": attempt},
+                        state={
+                            "active_call_id": call_id,
+                            "planner_attempt": attempt,
+                            "planning_round": planning_round,
+                            "max_planning_rounds": _MAX_PLANNING_ROUNDS,
+                            "prior_tool_results": prior_tool_results,
+                        },
                     ),
                     timeout=self._planner_timeout_seconds,
                 )
@@ -143,29 +162,62 @@ class GenericThinkerBackend:
                 await asyncio.sleep(_PLANNER_RETRY_BACKOFF_SECONDS)
         raise AssertionError("planner retry loop exited unexpectedly")
 
-    async def _run_call(self, call_id: str, query: str) -> dict[str, Any]:
+    async def _run_call(
+        self,
+        call_id: str,
+        query: str,
+        *,
+        on_progress: Callable[[ThinkerLifecycleEvent], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]:
+        accumulated_results: list[dict[str, Any]] = []
         try:
             async with asyncio.timeout(self._overall_timeout_seconds):
-                plan = await self._plan_with_retry(call_id, query)
-                payload = await dispatch_plan(
-                    plan,
-                    self._tools,
-                    self._enabled_tools,
-                    source_query=query,
-                    on_tool_started=self._on_tool_started,
-                    stage_metrics=self._stage_metrics,
-                    backend_call_id=call_id,
-                )
+                for planning_round in range(1, _MAX_PLANNING_ROUNDS + 1):
+                    plan = await self._plan_with_retry(
+                        call_id,
+                        query,
+                        planning_round=planning_round,
+                        prior_tool_results=accumulated_results,
+                    )
+                    if _is_completion_plan(plan):
+                        break
+                    result_count_before_dispatch = len(accumulated_results)
+                    round_payload = await dispatch_plan(
+                        plan,
+                        self._tools,
+                        self._enabled_tools,
+                        source_query=query,
+                        on_tool_started=self._on_tool_started,
+                        stage_metrics=self._stage_metrics,
+                        backend_call_id=call_id,
+                        accumulated_results=accumulated_results,
+                        tool_ordinal_offset=len(accumulated_results),
+                    )
+                    if len(accumulated_results) == result_count_before_dispatch:
+                        accumulated_results.append(round_payload)
+                    if _requests_follow_up(plan) and planning_round < _MAX_PLANNING_ROUNDS:
+                        progress = ThinkerLifecycleEvent(
+                            marker="IntermediateResponse",
+                            call_id=call_id,
+                            query=query,
+                            payload=combine_accumulated_results(accumulated_results),
+                        )
+                        self.state.add_event(progress)
+                        if on_progress is not None:
+                            await on_progress(progress)
+                    if not _requests_follow_up(plan):
+                        break
+                payload = combine_accumulated_results(accumulated_results)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             logger.warning("Generic Thinker exhausted its bounded planner/overall deadline")
-            payload = timeout_failure()
+            payload = combine_accumulated_results(accumulated_results) if accumulated_results else timeout_failure()
         except PlanValidationError:
-            payload = planner_failure()
+            payload = combine_accumulated_results(accumulated_results) if accumulated_results else planner_failure()
         except Exception as exc:  # noqa: BLE001 - planner boundary fails closed
             logger.warning(f"Generic Thinker planning failed: {type(exc).__name__}")
-            payload = planner_failure()
+            payload = combine_accumulated_results(accumulated_results) if accumulated_results else planner_failure()
         self.state.add_event(
             ThinkerLifecycleEvent(marker="IntermediateResponse", call_id=call_id, query=query, payload=payload)
         )
@@ -178,3 +230,13 @@ class GenericThinkerBackend:
 def _task_cancellation_requested() -> bool:
     task = asyncio.current_task()
     return task is not None and task.cancelling() > 0
+
+
+def _requests_follow_up(plan: Mapping[str, Any]) -> bool:
+    """Honor only the Thinker's explicit, bounded request for another planning round."""
+    return plan.get("continue_after_results") is True
+
+
+def _is_completion_plan(plan: Mapping[str, Any]) -> bool:
+    """Treat explicit completion or a plan with no executable call as complete."""
+    return plan.get("complete") is True or ("tool" not in plan and not plan.get("tool_calls"))

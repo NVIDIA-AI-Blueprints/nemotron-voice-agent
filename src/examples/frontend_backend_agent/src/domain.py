@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Literal, Protocol
@@ -39,9 +39,12 @@ class DomainBuildContext:
     tool_delay_seconds: float
     tool_delay_min_seconds: float
     load_service_entry: Callable[[str, str], dict]
+    on_tool_started: Callable[[str], Awaitable[None]] | None = None
+    stage_metrics: Any = None
+    thinker_model_name: str = ""
 
 
-FillerPolicy = Literal["code_authored", "planner_authored"]
+FillerPolicy = Literal["code_authored", "planner_authored", "talker_authored"]
 
 
 @dataclass(slots=True, frozen=True)

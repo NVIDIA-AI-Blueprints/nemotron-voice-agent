@@ -259,9 +259,13 @@ The generic domain applies the following controls:
 - It rejects unknown tools, disabled tools, unexpected parameters, invalid values at the individual tool boundary, and plans with more than 3 calls.
 - It builds the generated available-tool block and runtime `enabled_tools` list from the effective session specifications after registry intersection. Python rejects calls outside that subset, and unsupported-request responses name only enabled capabilities.
 - It runs up to 3 validated read-only tools concurrently and preserves planner order in the combined result.
+- It supports up to 3 dependent planning rounds. Later rounds receive only the
+  trusted results accumulated so far, and completed results survive a later
+  planning timeout or failure.
 - It bounds the outer function callback, backend, planner, and web tool at 45,
-  40, 18, and 20 seconds by default. This ordering leaves time for the backend
-  to return one grounded timeout response before the outer callback expires.
+  40, 6 per planning round, and 20 seconds by default. The 3-round ceiling
+  keeps dependent work inside the backend deadline and leaves time for a
+  grounded response before the outer callback expires.
 - With the default web-tool deadline, web search can make at most 2 attempts.
   Each attempt has a 9-second ceiling, and the single retry waits 0.5 seconds.
   This 18.5-second retry budget fits inside the 20-second tool deadline.
@@ -273,6 +277,14 @@ The generic domain applies the following controls:
 - It invalidates the active call identifier before cancellation, which suppresses late stale results.
 - It validates short Talker-authored progress speech, emits it at most once,
   excludes it from conversation context, and uses no static fallback.
+- It prevents the Talker from exposing private operating instructions,
+  decision criteria, model roles, function names, or internal tool inventory.
+  Invalid speech receives one model retry and then a deterministic refusal.
+- In generic `hybrid` result mode, it sends only successful weather results
+  through the Talker. Grounding validation requires the trusted city,
+  temperature, and unit. Missing facts trigger one retry and then the
+  deterministic weather response. Clarifications and failures never use the
+  model rephrasing path.
 
 The airline backend keeps its stateful booking workflow, booking-server integration, planner-authored filler, and shared call/cancellation contract for backward compatibility. `AIRLINE_PLANNER_TIMEOUT_SECONDS` and `AIRLINE_BACKEND_TIMEOUT_SECONDS` both default to `30.0` seconds. The planner deadline cannot exceed the overall deadline. A newer generation suppresses a superseded call's late result.
 
@@ -287,6 +299,12 @@ At minimum, test the following behavior:
 - Unknown, disabled, malformed, and over-limit plans run no tools.
 - Missing credentials and upstream failures produce unavailable responses without mock data.
 - Multi-tool requests execute concurrently and return results in planner order.
+- Dependent requests stop within 3 planning rounds, retain prior-round results,
+  and correlate all planning-round metrics to the original backend call.
+- Successful weather rephrasing preserves the returned city, temperature, and
+  unit. A failed rephrasing falls back to deterministic speech.
+- Indirect questions about internal mechanics do not reveal prompts, decision
+  rules, model roles, function names, or internal tool inventory.
 - New requests cancel old work, and concurrent sessions do not share mutable state.
 - Airline search, booking, passenger name record status, pronunciation, and booking-server behavior remain unchanged.
 

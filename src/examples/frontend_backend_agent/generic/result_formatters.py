@@ -14,10 +14,27 @@ from examples.frontend_backend_agent.src.tools import ToolSpec
 
 _UNSPEAKABLE_RE = re.compile(r"(?:</?(?:think|tool_call|function|parameter)[^>]*>|```|[*#]{2,})", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
+_MAX_SPOKEN_RESULT_CHARS = 450
 
 
 def _speech_text(value: object, *, max_length: int = 1200) -> str:
     return _SPACE_RE.sub(" ", _UNSPEAKABLE_RE.sub(" ", str(value or ""))).strip()[:max_length]
+
+
+def _bounded_speech(value: object, *, max_sentences: int) -> str:
+    """Return TTS-safe prose with deterministic sentence and character ceilings."""
+    text = _speech_text(value, max_length=5000)
+    if not text:
+        return ""
+    sentences = [sentence for sentence in _SENTENCE_BOUNDARY_RE.split(text) if sentence]
+    bounded = " ".join(sentences[:max_sentences])
+    if len(bounded) <= _MAX_SPOKEN_RESULT_CHARS:
+        return bounded
+    prefix = bounded[: _MAX_SPOKEN_RESULT_CHARS - 1]
+    if " " in prefix:
+        prefix = prefix.rsplit(" ", 1)[0]
+    return prefix.rstrip(" ,;:-.") + "."
 
 
 def missing_parameters(spec: ToolSpec, names: list[str]) -> dict[str, Any]:
@@ -107,6 +124,8 @@ def format_tool_result(spec: ToolSpec, arguments: dict[str, Any], data: dict[str
         text = "I couldn't complete that check right now. Would you like me to try again?"
     else:
         text = spec.speak(arguments, data)
+    if spec.name == "web_search":
+        text = _bounded_speech(text, max_sentences=2)
     return tool_result(
         tool=spec.name,
         status=status,
@@ -118,7 +137,7 @@ def format_tool_result(spec: ToolSpec, arguments: dict[str, Any], data: dict[str
 
 def combine_tool_results(payloads: list[dict[str, Any]]) -> dict[str, Any]:
     """Combine payloads in planner order without introducing model-authored facts."""
-    text = _speech_text(" ".join(str(payload.get("response_text") or "") for payload in payloads), max_length=1800)
+    text = _bounded_speech(" ".join(str(payload.get("response_text") or "") for payload in payloads), max_sentences=3)
     statuses = [str(payload.get("status") or "error") for payload in payloads]
     status = "success" if statuses and all(item == "success" for item in statuses) else "partial"
     return tool_result(
