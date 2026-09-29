@@ -72,6 +72,10 @@ After deploying, validate the session language with the steps in [Testing](#test
 
 TTS voices and supported language codes are discovered at runtime by prewarming the configured TTS service. The UI language selector contains only locales supported by the selected ASR, TTS, and built-in LLM. Changing the LLM refreshes that compatible set. The selected session language is injected into the prompt and pins the ASR and the TTS voice for the whole connection. For Magpie and Chatterbox TTS language coverage, see [Configure TTS](../../../docs/how-to/configure-tts.md#supported-languages).
 
+The OpenAI Realtime WebSocket keeps the selected language fixed for the
+session. Refer to [Use the Realtime
+Gateway](../../../docs/how-to/use-realtime-gateway.md).
+
 | Path | Role |
 | --- | --- |
 | `pipeline.py` | pipecat entry point, multilingual mode always on |

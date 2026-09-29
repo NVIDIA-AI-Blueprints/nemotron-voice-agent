@@ -20,6 +20,8 @@ from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 
+from examples.shared.nvidia_llm import NvidiaLLMService as RealtimeNvidiaLLMService
+
 if TYPE_CHECKING:
     from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator, StageSpan
 
@@ -429,6 +431,10 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
                 return latest
             return ()
         return latest
+
+
+class ReliableRealtimeNvidiaLLMService(ReliableNvidiaLLMService, RealtimeNvidiaLLMService):
+    """Apply the bounded Talker guards to the protocol-aware Realtime service."""
 
 
 def _build_retry_context(context: LLMContext, correction: str = EMPTY_RESPONSE_CORRECTION) -> LLMContext:

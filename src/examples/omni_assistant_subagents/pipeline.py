@@ -27,20 +27,29 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.runner.types import RunnerArguments
 from pipecat.workers.runner import WorkerRunner
 
+from examples.omni_assistant.nvidia_omni_multimodal_service import MAX_FUSED_USER_AUDIO_SECS
 from examples.omni_assistant_subagents.subagents.media_analyzer import MediaAnalyzerWorker
 from examples.omni_assistant_subagents.subagents.speaker import SpeakerOmniAgent
 from examples.omni_assistant_subagents.subagents.thinker import ThinkerWorker
 from examples.omni_assistant_subagents.subagents.transport import OmniTransportAgent
 from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from examples.shared.pipeline_utils import create_transport as _create_transport
+from examples.shared.pipeline_utils import (
+    realtime_vad_prefix_padding_secs,
+    resolve_pipeline_prompt,
+    runner_protocol,
+    select_max_tokens_config,
+)
 from examples.shared.subagents import SubagentRegistry, load_subagent_registry
 from utils import (
     is_nvcf,
     load_prompt_catalog,
+    load_selected_service_entry,
     load_service_entry,
     nvidia_api_key,
+    parse_env_float,
+    parse_env_int,
     parse_json_dict,
-    resolve_prompt,
 )
 
 load_dotenv(override=True)
@@ -94,24 +103,36 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Omni Assistant Subagents pipeline for one session."""
     transport = _create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    is_realtime = runner_protocol(runner_args) == "realtime"
+    if is_realtime:
+        from realtime.transport import (
+            bind_realtime_context,
+            bind_realtime_deferred_service_responses,
+            bind_realtime_service_response_snapshots,
+        )
+
+    if is_realtime and body.get("client_tools"):
+        raise ValueError(
+            "Realtime client tools are not supported by omni-assistant-subagents: "
+            "its Speaker owns a strict JSON action envelope across a separate worker bus"
+        )
     body_session_id = str(body.get("session_id") or "").strip()
     runner_session_id = str(getattr(runner_args, "session_id", "") or "").strip()
     session_id = body_session_id or runner_session_id
     prompt_catalog = load_prompt_catalog(__file__)
 
-    prompt_key, base_system_content = resolve_prompt(
-        __file__,
-        body.get("prompt_content", ""),
-        body.get("prompt_key", ""),
-    )
-    base_system_content = _expand_fragments(base_system_content, prompt_catalog)
+    prompt_key, base_system_content = resolve_pipeline_prompt(__file__, body, is_realtime=is_realtime)
     logger.info(
         f"Starting Nemotron Omni Assistant Subagents pipeline "
         f"(prompt={prompt_key}, agents=transport,speaker,media,webcam,thinker)"
     )
 
-    default_llm = load_service_entry("llm", "")
-    default_tts = load_service_entry("tts", "")
+    default_llm = (
+        load_selected_service_entry("llm", body.get("llm_id")) if is_realtime else load_service_entry("llm", "")
+    )
+    default_tts = (
+        load_selected_service_entry("tts", body.get("tts_id")) if is_realtime else load_service_entry("tts", "")
+    )
 
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
@@ -120,12 +141,30 @@ async def bot(runner_args: RunnerArguments) -> None:
         body.get("extra_params", "") or default_llm.get("extra_params", ""),
         "extra_params",
     )
+    if is_realtime:
+        raw_max_tokens = select_max_tokens_config(
+            body,
+            parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64),
+            is_realtime=True,
+        )
+        max_tokens = None if raw_max_tokens is None else int(raw_max_tokens)
+    else:
+        max_tokens = parse_env_int("OMNI_MAX_TOKENS", 8192, min_value=64)
 
-    system_content = base_system_content
-    if system_prompt_override:
-        system_content = f"{base_system_content}\n\n{system_prompt_override}".strip()
+    def render_realtime_instructions(instructions: str) -> list[dict]:
+        system_content = _expand_fragments(instructions, prompt_catalog)
+        if system_prompt_override:
+            system_content = f"{system_content}\n\n{system_prompt_override}".strip()
+        return [{"role": "system", "content": system_content}]
+
     registry = subagent_registry()
-    context = LLMContext([{"role": "system", "content": system_content}])
+    context = LLMContext(render_realtime_instructions(base_system_content))
+    if is_realtime:
+        bind_realtime_context(
+            transport,
+            context,
+            render_instructions=render_realtime_instructions,
+        )
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
@@ -167,11 +206,14 @@ async def bot(runner_args: RunnerArguments) -> None:
             )
         },
     )
+    if is_realtime:
+        bind_realtime_deferred_service_responses(transport, transport_agent)
     speaker_agent = SpeakerOmniAgent(
         context=context,
         api_key=api_key,
         base_url=base_url,
         model_id=model_id,
+        max_tokens=max_tokens,
         extra_params=extra_params,
         audio_response_instruction=_agent_prompt_content(prompt_catalog, "SpeakerAgent", "audio_response_instruction"),
         media_analysis_prompt_handler=transport_agent.queue_media_analysis_prompt,
@@ -180,7 +222,20 @@ async def bot(runner_args: RunnerArguments) -> None:
         thinking_handler=transport_agent.queue_thinking,
         highres_capture_handler=transport_agent.queue_highres_capture,
         visual_status_provider=transport_agent.current_visual_status,
+        pre_speech_buffer_secs=(realtime_vad_prefix_padding_secs(0.2, transport=transport) if is_realtime else 0.2),
+        max_user_audio_secs=(
+            parse_env_float(
+                "OMNI_MAX_USER_AUDIO_SECS",
+                MAX_FUSED_USER_AUDIO_SECS,
+                min_value=0.0,
+            )
+            if is_realtime
+            else None
+        ),
+        enable_metrics=is_realtime,
     )
+    if is_realtime:
+        bind_realtime_service_response_snapshots(transport, speaker_agent)
     media_analyzer_agent = MediaAnalyzerWorker(
         api_key=api_key,
         base_url=base_url,

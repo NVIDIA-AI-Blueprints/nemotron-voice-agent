@@ -19,6 +19,7 @@ from examples.multilingual.pipeline import (
     _is_eval_transport,
     _prepare_session_language_codes,
     _resolve_llm_supported_languages,
+    _should_prepare_tts_catalog,
 )
 from examples.shared.pipeline_utils import SMART_TURN_FALLBACK_SECS
 
@@ -41,6 +42,21 @@ def _assert_vad_only_start(testcase: unittest.TestCase, strategies) -> None:
 
 
 class MultilingualTurnStrategyTests(unittest.TestCase):
+    def test_realtime_text_skips_startup_tts_catalog_discovery(self) -> None:
+        for is_realtime, output_modalities, expected in (
+            (True, ["text"], False),
+            (True, ["audio"], True),
+            (False, ["text"], True),
+        ):
+            with self.subTest(is_realtime=is_realtime, output_modalities=output_modalities):
+                self.assertEqual(
+                    _should_prepare_tts_catalog(
+                        is_realtime=is_realtime,
+                        output_modalities=output_modalities,
+                    ),
+                    expected,
+                )
+
     def test_unknown_builtin_llm_id_is_rejected(self) -> None:
         with (
             patch("examples.multilingual.pipeline.load_service_entry_by_id", return_value={}),

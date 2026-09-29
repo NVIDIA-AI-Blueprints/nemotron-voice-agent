@@ -13,6 +13,7 @@ at request time only, so the stored context stays clean.
 """
 
 import copy
+from dataclasses import replace
 
 from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -31,10 +32,11 @@ class PerTurnReminderProcessor(FrameProcessor):
     history (and summaries) never contain the reminder text.
     """
 
-    def __init__(self, reminder: str):
+    def __init__(self, reminder: str, *, realtime: bool = False):
         """Build the processor with the reminder text to inject per turn."""
         super().__init__()
         self._reminder = (reminder or "").strip()
+        self._realtime = realtime
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Forward frames; inject the reminder into outbound context frames."""
@@ -47,8 +49,42 @@ class PerTurnReminderProcessor(FrameProcessor):
     def _reminded_frame(self, frame: LLMContextFrame) -> LLMContextFrame:
         source = frame.context
         messages = self._append_reminder(list(source.get_messages()))
-        new_context = LLMContext(messages, tools=source.tools, tool_choice=source.tool_choice)
-        return LLMContextFrame(context=new_context)
+        if self._realtime:
+            from realtime.frames import RealtimeResponseLLMContext
+
+        if self._realtime and isinstance(source, RealtimeResponseLLMContext):
+            new_context = RealtimeResponseLLMContext(
+                messages,
+                tools=source.tools,
+                tool_choice=source.tool_choice,
+                max_output_tokens=source.max_output_tokens,
+                parallel_tool_calls=source.parallel_tool_calls,
+                truncation=source.truncation,
+                preserve_prompt_messages=source.preserve_prompt_messages,
+                response_id=source.response_id,
+                run_owner_id=source.run_owner_id,
+                activation_generation=source.activation_generation,
+            )
+        elif type(source) is LLMContext:
+            new_context = LLMContext(messages, tools=source.tools, tool_choice=source.tool_choice)
+        else:
+            # Preserve extension-owned context state without assuming its
+            # constructor. Rebind the sentinel-sensitive standard properties
+            # from the source after deepcopy so OpenAI NOT_GIVEN keeps identity.
+            new_context = copy.deepcopy(source)
+            new_context.set_messages(messages)
+            new_context.set_tools(source.tools)
+            new_context.set_tool_choice(source.tool_choice)
+        reminded = replace(frame, context=new_context)
+        # Frame routing metadata is init=False in Pipecat's dataclass, so
+        # dataclasses.replace creates a fresh frame ID but cannot carry these
+        # transport annotations automatically.
+        reminded.pts = frame.pts
+        reminded.broadcast_sibling_id = frame.broadcast_sibling_id
+        reminded.metadata = copy.deepcopy(frame.metadata)
+        reminded.transport_source = frame.transport_source
+        reminded.transport_destination = frame.transport_destination
+        return reminded
 
     def _append_reminder(self, messages: list) -> list:
         for i in range(len(messages) - 1, -1, -1):

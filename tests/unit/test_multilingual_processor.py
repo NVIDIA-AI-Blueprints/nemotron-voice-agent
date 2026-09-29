@@ -5,12 +5,17 @@
 
 import unittest
 
+from openai import NOT_GIVEN
+from pipecat.frames.frames import LLMContextFrame
+from pipecat.processors.aggregators.llm_context import LLMContext
+
 from examples.multilingual.multilingual_processor import (
     PerTurnReminderProcessor,
     build_reminder,
     describe_language,
     with_reasoning,
 )
+from realtime.frames import RealtimeResponseContextFrame, RealtimeResponseLLMContext
 
 
 class DescribeLanguageTests(unittest.TestCase):
@@ -45,8 +50,8 @@ class WithReasoningTests(unittest.TestCase):
         self.assertFalse(merged["extra_body"]["chat_template_kwargs"]["enable_thinking"])
 
 
-class PerTurnReminderProcessorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_appends_reminder_to_last_user_message(self) -> None:
+class PerTurnReminderProcessorTests(unittest.TestCase):
+    def test_appends_reminder_to_last_user_message(self) -> None:
         processor = PerTurnReminderProcessor("REMINDER")
         messages = [
             {"role": "system", "content": "sys"},
@@ -56,10 +61,86 @@ class PerTurnReminderProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[-1]["content"], "hello\n\nREMINDER")
         self.assertEqual(result[0]["content"], "sys")
 
-    async def test_appends_user_message_when_none_present(self) -> None:
+    def test_appends_user_message_when_none_present(self) -> None:
         processor = PerTurnReminderProcessor("REMINDER")
         result = processor._append_reminder([{"role": "system", "content": "sys"}])
         self.assertEqual(result[-1], {"role": "user", "content": "REMINDER"})
+
+    def test_preserves_realtime_response_context_and_frame_ownership(self) -> None:
+        processor = PerTurnReminderProcessor("REMINDER", realtime=True)
+        canonical = LLMContext([{"role": "user", "content": "canonical"}])
+        source = RealtimeResponseLLMContext(
+            [{"role": "user", "content": "response input"}],
+            max_output_tokens=64,
+            parallel_tool_calls=False,
+            response_id="resp_123",
+            run_owner_id="run_123",
+            activation_generation=4,
+        )
+        frame = RealtimeResponseContextFrame(
+            context=source,
+            response_id="resp_123",
+            canonical_context=canonical,
+        )
+        frame.pts = 123
+        frame.metadata = {"owner": "realtime"}
+
+        reminded = processor._reminded_frame(frame)
+
+        self.assertIsInstance(reminded, RealtimeResponseContextFrame)
+        self.assertEqual(reminded.response_id, "resp_123")
+        self.assertIs(reminded.canonical_context, canonical)
+        self.assertIsInstance(reminded.context, RealtimeResponseLLMContext)
+        self.assertEqual(reminded.context.max_output_tokens, 64)
+        self.assertIs(reminded.context.parallel_tool_calls, False)
+        self.assertEqual(reminded.context.response_id, "resp_123")
+        self.assertEqual(reminded.context.run_owner_id, "run_123")
+        self.assertEqual(reminded.context.activation_generation, 4)
+        self.assertEqual(reminded.context.get_messages()[-1]["content"], "response input\n\nREMINDER")
+        self.assertEqual(source.get_messages()[-1]["content"], "response input")
+        self.assertEqual(reminded.pts, 123)
+        self.assertEqual(reminded.metadata, {"owner": "realtime"})
+        self.assertIsNot(reminded.metadata, frame.metadata)
+
+    def test_preserves_unowned_realtime_context_controls(self) -> None:
+        processor = PerTurnReminderProcessor("REMINDER", realtime=True)
+        source = RealtimeResponseLLMContext(
+            [{"role": "user", "content": "tool result"}],
+            max_output_tokens="inf",
+            parallel_tool_calls=True,
+            run_owner_id="run_tool_result",
+            activation_generation=7,
+        )
+
+        reminded = processor._reminded_frame(LLMContextFrame(context=source))
+
+        self.assertIs(type(reminded), LLMContextFrame)
+        self.assertIsInstance(reminded.context, RealtimeResponseLLMContext)
+        self.assertEqual(reminded.context.max_output_tokens, "inf")
+        self.assertIs(reminded.context.parallel_tool_calls, True)
+        self.assertEqual(reminded.context.run_owner_id, "run_tool_result")
+        self.assertEqual(reminded.context.activation_generation, 7)
+
+    def test_preserves_arbitrary_context_subtype_without_mutating_source(self) -> None:
+        class ExtendedContext(LLMContext):
+            def __init__(self, messages: list[dict], *, trace_id: str) -> None:
+                super().__init__(messages)
+                self.trace_id = trace_id
+
+        processor = PerTurnReminderProcessor("REMINDER")
+        source = ExtendedContext(
+            [{"role": "user", "content": "extended"}],
+            trace_id="trace-123",
+        )
+
+        reminded = processor._reminded_frame(LLMContextFrame(context=source))
+
+        self.assertIsInstance(reminded.context, ExtendedContext)
+        self.assertEqual(reminded.context.trace_id, "trace-123")
+        self.assertIs(reminded.context.tools, NOT_GIVEN)
+        self.assertIs(reminded.context.tool_choice, NOT_GIVEN)
+        self.assertEqual(reminded.context.get_messages()[-1]["content"], "extended\n\nREMINDER")
+        self.assertEqual(source.get_messages(), [{"role": "user", "content": "extended"}])
 
 
 if __name__ == "__main__":
