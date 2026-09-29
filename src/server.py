@@ -1738,7 +1738,10 @@ def create_app(host: str = "localhost", prompt_file: str = "", *, realtime_only:
         from realtime.protocol import RealtimeProtocolError
 
         try:
-            authentication = authenticate_realtime_websocket(websocket.headers)
+            authentication = authenticate_realtime_websocket(
+                websocket.headers,
+                allow_proxy_bearer=parse_env_bool("REALTIME_ALLOW_PROXY_BEARER", default=False),
+            )
         except RealtimeAuthenticationError:
             await websocket.close(code=1008, reason="realtime authentication failed")
             return

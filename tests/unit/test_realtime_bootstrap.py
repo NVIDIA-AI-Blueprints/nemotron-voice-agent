@@ -200,6 +200,26 @@ class RealtimeClientSecretAuthTests(unittest.TestCase):
                 api_key=_API_KEY,
             )
 
+    def test_trusted_proxy_bearer_can_coexist_with_browser_client_secret(self) -> None:
+        secret = issue_realtime_client_secret(
+            api_key=_API_KEY,
+            session={"type": "realtime", "instructions": "bound"},
+            issued_at=1_000,
+            expires_at=1_600,
+        )
+        authenticated = authenticate_realtime_websocket(
+            {
+                "authorization": "Bearer nvapi-outer-gateway-credential",
+                "sec-websocket-protocol": f"realtime, openai-insecure-api-key.{secret}",
+            },
+            api_key=_API_KEY,
+            now=1_001,
+            allow_proxy_bearer=True,
+        )
+
+        self.assertTrue(authenticated.enabled)
+        self.assertEqual(authenticated.claims.session, {"type": "realtime", "instructions": "bound"})
+
     def test_unconfigured_gateway_preserves_local_development_access(self) -> None:
         result = authenticate_realtime_websocket({}, api_key="")
         self.assertFalse(result.enabled)

@@ -51,6 +51,7 @@ Configure these deployment settings in `.env` when needed:
 | Setting | Purpose |
 | --- | --- |
 | `REALTIME_API_KEY` | Protects the WebSocket and authorizes client-secret creation. Leave it unset only for unauthenticated local development. |
+| `REALTIME_ALLOW_PROXY_BEARER` | Allows a trusted proxy's authenticated outer Bearer credential to coexist with a browser `ek_` client secret. The default is `false`. |
 | `REALTIME_SERVICE_PLATFORM` | Selects the exact `cloud`, `server`, or `singlegpu` catalog section. Host-native runs default to `cloud`; Compose pins the value for each recipe. |
 | `REALTIME_MCP_ALLOWED_SERVER_URLS` | JSON array of exact, trusted Streamable HTTP MCP URLs that the gateway can contact. |
 
@@ -142,6 +143,29 @@ const socket = new WebSocket(
   ["realtime", `openai-insecure-api-key.${clientSecret}`],
 );
 ```
+
+### Use a Trusted Proxy Authorization Boundary
+
+By default, the gateway rejects a WebSocket handshake when `Authorization`
+and the browser subprotocol contain different credentials. This fail-closed
+behavior prevents an untrusted intermediary from replacing either credential.
+
+Set `REALTIME_ALLOW_PROXY_BEARER=true` only when NVIDIA Cloud Functions (NVCF)
+or another trusted reverse proxy authenticates its own outer `Authorization`
+Bearer credential and forwards that header to the application. The browser
+must also send a valid `ek_` client secret through
+`openai-insecure-api-key.<secret>` in `Sec-WebSocket-Protocol`.
+
+In this opt-in mode, the application treats the outer Bearer credential as
+proxy-owned and independently verifies the browser client secret against
+`REALTIME_API_KEY`. An invalid, expired, or missing browser client secret still
+fails authentication. When no browser secret is present, the existing Bearer
+authentication rules still apply.
+
+This setting affects only the WebSocket handshake. It does not change
+`POST /v1/realtime/client_secrets`, which continues to require the exact
+`REALTIME_API_KEY` Bearer credential. Keep the setting disabled when the
+application receives client credentials directly.
 
 The server emits both handshake events when a connection succeeds:
 
