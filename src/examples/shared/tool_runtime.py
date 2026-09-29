@@ -111,6 +111,13 @@ def schema_validating_tool_handler(
     validator = compile_tool_arguments_validator(parameters)
 
     async def _wrapped(params: FunctionCallParams) -> None:
+        normalized_arguments = _normalize_parameterless_arguments(parameters, params.arguments)
+        if normalized_arguments is not params.arguments:
+            logger.info(
+                f"Normalized placeholder arguments for parameterless tool name={params.function_name} "
+                f"call_id={params.tool_call_id}"
+            )
+            params.arguments = normalized_arguments
         failure = tool_argument_validation_failure(validator, params.arguments)
         if failure is not None:
             logger.warning(
@@ -126,6 +133,29 @@ def schema_validating_tool_handler(
         await handler(params)
 
     return _wrapped
+
+
+def _normalize_parameterless_arguments(
+    parameters: Mapping[str, Any],
+    arguments: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Canonicalize one common empty-object model artifact for no-argument tools."""
+    properties = parameters.get("properties")
+    required = parameters.get("required", ())
+    if not (
+        parameters.get("type") == "object"
+        and isinstance(properties, Mapping)
+        and not properties
+        and not required
+        and parameters.get("additionalProperties") is False
+        and isinstance(arguments, Mapping)
+        and len(arguments) == 1
+    ):
+        return arguments
+    key, value = next(iter(arguments.items()))
+    key_is_empty = isinstance(key, str) and not key.strip()
+    value_is_empty = value is None or (isinstance(value, str) and not value.strip())
+    return {} if key_is_empty and value_is_empty else arguments
 
 
 def tool_success(result: Any) -> Any:

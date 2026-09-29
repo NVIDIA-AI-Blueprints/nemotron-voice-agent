@@ -311,14 +311,24 @@ async def run_streamed_inference(
     """Collect an out-of-pipeline streamed response while measuring true TTFT."""
     stream = await _open_out_of_band_stream(llm, context, max_tokens=max_tokens)
     parts: list[str] = []
+    chunk_count = 0
+    content_chars = 0
+    reasoning_chars = 0
+    finish_reasons: set[str] = set()
+    usage_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     outcome: MetricOutcome = "success"
     try:
         async for chunk in stream:
+            chunk_count += 1
             if span is not None and _chunk_has_semantic_token(chunk):
                 await span.mark_ttft()
             content = _chunk_content(chunk)
             if content:
                 parts.append(content)
+                content_chars += len(content)
+            reasoning_chars += _chunk_reasoning_chars(chunk)
+            finish_reasons.update(_chunk_finish_reasons(chunk))
+            _update_usage_tokens(usage_tokens, chunk)
     except asyncio.CancelledError:
         outcome = "cancelled"
         raise
@@ -332,6 +342,15 @@ async def run_streamed_inference(
         if span is not None:
             await span.finish(outcome)
         await _close_stream(stream)
+        logger.bind(
+            event="thinker_stream_complete",
+            outcome=outcome,
+            chunk_count=chunk_count,
+            content_chars=content_chars,
+            reasoning_chars=reasoning_chars,
+            finish_reasons=",".join(sorted(finish_reasons)) or "none",
+            **usage_tokens,
+        ).info("Thinker stream completed")
     return "".join(parts)
 
 
@@ -377,6 +396,37 @@ def _chunk_content(chunk: ChatCompletionChunk) -> str:
     delta = getattr(choices[0], "delta", None) if choices else None
     content = getattr(delta, "content", None) if delta is not None else None
     return content if isinstance(content, str) else ""
+
+
+def _chunk_reasoning_chars(chunk: ChatCompletionChunk) -> int:
+    choices = getattr(chunk, "choices", None)
+    delta = getattr(choices[0], "delta", None) if choices else None
+    if delta is None:
+        return 0
+    return sum(
+        len(value)
+        for value in (getattr(delta, "reasoning_content", None), getattr(delta, "reasoning", None))
+        if isinstance(value, str)
+    )
+
+
+def _chunk_finish_reasons(chunk: ChatCompletionChunk) -> set[str]:
+    reasons: set[str] = set()
+    for choice in getattr(chunk, "choices", None) or ():
+        reason = getattr(choice, "finish_reason", None)
+        if reason is not None:
+            reasons.add(str(reason))
+    return reasons
+
+
+def _update_usage_tokens(usage_tokens: dict[str, int], chunk: ChatCompletionChunk) -> None:
+    usage = getattr(chunk, "usage", None)
+    if usage is None:
+        return
+    for name in usage_tokens:
+        value = getattr(usage, name, None)
+        if isinstance(value, int) and value >= 0:
+            usage_tokens[name] = value
 
 
 async def _close_stream(stream) -> None:

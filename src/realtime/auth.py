@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import time
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -26,6 +27,8 @@ _CLIENT_SECRET_KEY_CONTEXT = b"nemotron-voice-agent/realtime/client-secret/v2"
 _CLIENT_SECRET_ASSOCIATED_DATA = b"nemotron-voice-agent/realtime/client-secret"
 _CLIENT_SECRET_NONCE_BYTES = 12
 _CLIENT_SECRET_MAX_CHARS = 16_384
+_CLIENT_SECRET_MAX_PAYLOAD_BYTES = 256 * 1024
+_CLIENT_SECRET_COMPRESSED_MARKER = b"\x01"
 _CLIENT_SECRET_MIN_LIFETIME_SECONDS = 10
 _CLIENT_SECRET_MAX_LIFETIME_SECONDS = 7_200
 _CLIENT_SECRET_CLOCK_SKEW_SECONDS = 30
@@ -107,9 +110,16 @@ def issue_realtime_client_secret(
         "session": session,
         "v": _CLIENT_SECRET_VERSION,
     }
-    payload = json.dumps(claims, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True).encode(
-        "utf-8"
-    )
+    uncompressed_payload = json.dumps(
+        claims,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if len(uncompressed_payload) > _CLIENT_SECRET_MAX_PAYLOAD_BYTES:
+        raise ValueError("The bound Realtime session is too large for a WebSocket client secret")
+    payload = _CLIENT_SECRET_COMPRESSED_MARKER + zlib.compress(uncompressed_payload, level=9)
     nonce = os.urandom(_CLIENT_SECRET_NONCE_BYTES)
     ciphertext = AESGCM(_encryption_key(api_key)).encrypt(
         nonce,
@@ -149,6 +159,24 @@ def verify_realtime_client_secret(
         )
     except (InvalidTag, ValueError) as exc:
         raise RealtimeAuthenticationError("Invalid Realtime client secret") from exc
+
+    if payload.startswith(_CLIENT_SECRET_COMPRESSED_MARKER):
+        try:
+            decompressor = zlib.decompressobj()
+            decoded = decompressor.decompress(
+                payload[len(_CLIENT_SECRET_COMPRESSED_MARKER) :],
+                _CLIENT_SECRET_MAX_PAYLOAD_BYTES + 1,
+            )
+            if len(decoded) > _CLIENT_SECRET_MAX_PAYLOAD_BYTES or decompressor.unconsumed_tail:
+                raise RealtimeAuthenticationError("Invalid Realtime client secret")
+            decoded += decompressor.flush(_CLIENT_SECRET_MAX_PAYLOAD_BYTES + 1 - len(decoded))
+            if len(decoded) > _CLIENT_SECRET_MAX_PAYLOAD_BYTES or not decompressor.eof or decompressor.unused_data:
+                raise RealtimeAuthenticationError("Invalid Realtime client secret")
+            payload = decoded
+        except zlib.error as exc:
+            raise RealtimeAuthenticationError("Invalid Realtime client secret") from exc
+    elif len(payload) > _CLIENT_SECRET_MAX_PAYLOAD_BYTES:
+        raise RealtimeAuthenticationError("Invalid Realtime client secret")
 
     try:
         claims = json.loads(payload)

@@ -318,16 +318,23 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         ]
         self.assertEqual(
             local_catalog["llm"]["nemotron-lightning-talker"]["model_id"],
-            "nvidia/nemotron-3.5-lightning",
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
         )
-        self.assertEqual(local_catalog["llm"]["nemotron-lightning"]["model_id"], "nvidia/nemotron-3.5-lightning")
+        self.assertEqual(
+            local_catalog["llm"]["nemotron-lightning"]["model_id"],
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+        )
 
         talker_extra = json.loads(talker["extra_params"])["extra_body"]
         thinker_extra = json.loads(thinker["extra_params"])["extra_body"]
+        local_thinker = local_catalog["thinker-llm"]["nemotron-super-reasoning"]
+        local_thinker_extra = json.loads(local_thinker["extra_params"])["extra_body"]
         self.assertFalse(talker_extra["chat_template_kwargs"]["enable_thinking"])
         self.assertTrue(thinker_extra["chat_template_kwargs"]["enable_thinking"])
         self.assertEqual(thinker["max_tokens"], 768)
         self.assertEqual(thinker_extra["reasoning_budget"], 256)
+        self.assertEqual(local_thinker["max_tokens"], 2048)
+        self.assertEqual(local_thinker_extra["reasoning_budget"], 1024)
         self.assertEqual(talker["temperature"], 0.0)
         self.assertEqual(thinker["temperature"], 0.0)
 
@@ -466,7 +473,11 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         # Deployment overrides live in the environment, so the documented
         # defaults are only observable with those names cleared.
         with patch.dict(os.environ, {}, clear=False):
-            for name in ("GENERIC_BACKEND_TIMEOUT_SECONDS", "GENERIC_PLANNER_TIMEOUT_SECONDS"):
+            for name in (
+                "GENERIC_BACKEND_TIMEOUT_SECONDS",
+                "GENERIC_PLANNER_TIMEOUT_SECONDS",
+                "GENERIC_MAX_PLANNING_ROUNDS",
+            ):
                 os.environ.pop(name, None)
             self._assert_generic_default_deadlines()
 
@@ -486,6 +497,7 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
 
         self.assertEqual(backend._overall_timeout_seconds, 40.0)
         self.assertEqual(backend._planner_timeout_seconds, 6.0)
+        self.assertEqual(backend._max_planning_rounds, 8)
         self.assertEqual(backend.tool_result_mode_default, "direct")
         self.assertEqual(TOOLS["web_search"].timeout_s, 20.0)
         retry_budget = (
@@ -911,7 +923,7 @@ class FrontendBackendDomainAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.marker for event in callback_events], ["ThinkerStarted", "IntermediateResponse"])
         self.assertEqual(callback_events[-1].payload["tool"], "get_stock_price")
 
-    async def test_dependent_planning_hard_stops_after_three_rounds(self) -> None:
+    async def test_dependent_planning_hard_stops_after_configured_rounds(self) -> None:
         plans = [
             {
                 "tool": "generate_random_number",
@@ -934,12 +946,14 @@ class FrontendBackendDomainAsyncTests(unittest.IsolatedAsyncioTestCase):
             enabled_tools=("generate_random_number",),
             overall_timeout_seconds=3,
             planner_timeout_seconds=1,
+            max_planning_rounds=4,
         )
         payload = await backend.call("Generate a random number, then repeat if required.")
-        self.assertEqual(len(planner.states), 3)
-        self.assertEqual(service_calls, 3)
-        self.assertEqual(len(payload["data"]["results"]), 3)
-        self.assertEqual(len(planner.plans), 1)
+        self.assertEqual(len(planner.states), 4)
+        self.assertEqual(service_calls, 4)
+        self.assertEqual(len(payload["data"]["results"]), 4)
+        self.assertEqual(planner.states[-1]["max_planning_rounds"], 4)
+        self.assertEqual(len(planner.plans), 0)
 
     async def test_inter_round_progress_emits_talker_filler_once_without_waiting_for_threshold(self) -> None:
         handler = build_handlers(

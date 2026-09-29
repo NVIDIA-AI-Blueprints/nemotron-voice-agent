@@ -188,6 +188,12 @@ schema, or validation failure uses the deterministic digest, so capability
 summarization cannot block the session. Both prompts and the tool validators
 still commit atomically.
 
+After a client-owned tool returns, the generic backend starts another planning
+round by default when `continue_after_results` is absent. This lets the Thinker
+interpret the client result and produce a grounded final response. The Thinker
+can set `continue_after_results: false` only when the client result already
+satisfies the original request.
+
 Keep the user-facing Talker prompt and its hidden Thinker prompt separate. The registry's `agent_prompt_keys` hides internal prompts from the prompt selector. Prompt metadata can describe tools to the catalog, but it does not select generic backend tools. Only explicit session `tools_available` input narrows the registry-owned set; client data can never widen it.
 
 ### Add a Generic Tool
@@ -279,13 +285,14 @@ The generic domain applies the following controls:
 - It rejects unknown tools, disabled tools, unexpected parameters, invalid values at the individual tool boundary, and plans with more than 3 calls.
 - It builds the generated available-tool block and runtime `enabled_tools` list from the effective session specifications after registry intersection. Python rejects calls outside that subset, and unsupported-request responses name only enabled capabilities.
 - It runs up to 3 validated read-only tools concurrently and preserves planner order in the combined result.
-- It supports up to 3 dependent planning rounds. Later rounds receive only the
-  trusted results accumulated so far, and completed results survive a later
-  planning timeout or failure.
+- It supports up to 8 dependent planning rounds by default. Set
+  `GENERIC_MAX_PLANNING_ROUNDS` to change the limit. Later rounds receive only
+  the trusted results accumulated so far, and completed results survive a
+  later planning timeout or failure.
 - It bounds the outer function callback, backend, planner, and web tool at 45,
-  40, 6 per planning round, and 20 seconds by default. The 3-round ceiling
-  keeps dependent work inside the backend deadline and leaves time for a
-  grounded response before the outer callback expires.
+  40, 6 per planning round, and 20 seconds by default. The overall backend
+  deadline still applies when you increase the planning-round limit, leaving
+  time for a grounded response before the outer callback expires.
 - With the default web-tool deadline, web search can make at most 2 attempts.
   Each attempt has a 9-second ceiling, and the single retry waits 0.5 seconds.
   This 18.5-second retry budget fits inside the 20-second tool deadline.
@@ -295,6 +302,13 @@ The generic domain applies the following controls:
 - It creates final spoken text from validated arguments and returned service data.
 - It cancels and replaces an unfinished request when the same session sends newer delegated work.
 - It invalidates the active call identifier before cancellation, which suppresses late stale results.
+- It blocks another internal tool call after a completed backend result. The
+  Talker retries once, then uses the trusted backend response instead of
+  dispatching the invalid call.
+- It narrowly normalizes the provider's known empty placeholder for
+  parameterless internal control tools. For example, `{"":""}` becomes `{}`
+  only when the trusted schema declares no parameters. Meaningful or unexpected
+  arguments remain invalid.
 - It validates short Talker-authored progress speech, emits it at most once,
   excludes it from conversation context, and uses no static fallback.
 - It prevents the Talker from exposing private operating instructions,
@@ -319,8 +333,9 @@ At minimum, test the following behavior:
 - Unknown, disabled, malformed, and over-limit plans run no tools.
 - Missing credentials and upstream failures produce unavailable responses without mock data.
 - Multi-tool requests execute concurrently and return results in planner order.
-- Dependent requests stop within 3 planning rounds, retain prior-round results,
-  and correlate all planning-round metrics to the original backend call.
+- Dependent requests stop within the configured planning-round limit, retain
+  prior-round results, and correlate all planning-round metrics to the original
+  backend call.
 - Successful weather rephrasing preserves the returned city, temperature, and
   unit. A failed rephrasing falls back to deterministic speech.
 - Indirect questions about internal mechanics do not reveal prompts, decision

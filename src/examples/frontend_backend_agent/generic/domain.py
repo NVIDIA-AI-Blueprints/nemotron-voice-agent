@@ -12,7 +12,7 @@ from examples.frontend_backend_agent.generic.client_tools import build_client_to
 from examples.frontend_backend_agent.generic.planner import NvidiaGenericPlanner
 from examples.frontend_backend_agent.generic.tools import TOOLS, TOOLS_SCHEMA, resolve_enabled_tools
 from examples.frontend_backend_agent.src.domain import DomainBuildContext, DomainSpec
-from utils import parse_env_float
+from utils import parse_env_float, parse_env_int
 
 
 def _runtime_context() -> str:
@@ -53,6 +53,7 @@ def _build_backend(context: DomainBuildContext) -> GenericThinkerBackend:
         ),
         overall_timeout_seconds=parse_env_float("GENERIC_BACKEND_TIMEOUT_SECONDS", 40.0, min_value=1.0),
         planner_timeout_seconds=parse_env_float("GENERIC_PLANNER_TIMEOUT_SECONDS", 6.0, min_value=1.0),
+        max_planning_rounds=parse_env_int("GENERIC_MAX_PLANNING_ROUNDS", 8, min_value=1),
         on_tool_started=context.on_tool_started,
         stage_metrics=context.stage_metrics,
     )

@@ -60,7 +60,7 @@ def _is_retriable_planner_error(exc: BaseException) -> bool:
     return False
 
 
-_MAX_PLANNING_ROUNDS = 3
+_DEFAULT_MAX_PLANNING_ROUNDS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +100,7 @@ class GenericThinkerBackend:
         client_tool_timeout_seconds: float = 25.0,
         overall_timeout_seconds: float = 40.0,
         planner_timeout_seconds: float = 6.0,
+        max_planning_rounds: int = _DEFAULT_MAX_PLANNING_ROUNDS,
         state: GenericThinkerSessionState | None = None,
         on_tool_started: Callable[[str], Awaitable[None]] | None = None,
         stage_metrics: StageMetricsCoordinator | None = None,
@@ -114,8 +115,12 @@ class GenericThinkerBackend:
         self._enabled_tools = enabled_tools
         self._overall_timeout_seconds = max(1.0, overall_timeout_seconds)
         self._planner_timeout_seconds = min(max(1.0, planner_timeout_seconds), self._overall_timeout_seconds)
+        self._max_planning_rounds = max(1, max_planning_rounds)
         self._on_tool_started = on_tool_started
         self._stage_metrics = stage_metrics
+        # Session-scoped so a client call that keeps failing stays suppressed across
+        # turns; the frontend re-delegates per turn, and per-call state would reset.
+        self._seen_client_calls: set[str] = set()
         self.state = state or GenericThinkerSessionState()
 
     @property
@@ -254,7 +259,7 @@ class GenericThinkerBackend:
                             "active_call_id": call_id,
                             "planner_attempt": attempt,
                             "planning_round": planning_round,
-                            "max_planning_rounds": _MAX_PLANNING_ROUNDS,
+                            "max_planning_rounds": self._max_planning_rounds,
                             "prior_tool_results": prior_tool_results,
                         },
                     ),
@@ -281,10 +286,10 @@ class GenericThinkerBackend:
         on_progress: Callable[[ThinkerLifecycleEvent], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         accumulated_results: list[dict[str, Any]] = []
-        seen_client_calls: set[str] = set()
+        seen_client_calls = self._seen_client_calls
         try:
             async with asyncio.timeout(self._overall_timeout_seconds):
-                for planning_round in range(1, _MAX_PLANNING_ROUNDS + 1):
+                for planning_round in range(1, self._max_planning_rounds + 1):
                     plan = await self._plan_with_retry(
                         call_id,
                         query,
@@ -311,7 +316,8 @@ class GenericThinkerBackend:
                     )
                     if len(accumulated_results) == result_count_before_dispatch:
                         accumulated_results.append(round_payload)
-                    if _requests_follow_up(plan) and planning_round < _MAX_PLANNING_ROUNDS:
+                    requests_follow_up = _requests_follow_up(plan, self._client_tools)
+                    if requests_follow_up and planning_round < self._max_planning_rounds:
                         progress = ThinkerLifecycleEvent(
                             marker="IntermediateResponse",
                             call_id=call_id,
@@ -321,8 +327,13 @@ class GenericThinkerBackend:
                         self.state.add_event(progress)
                         if on_progress is not None:
                             await on_progress(progress)
-                    if not _requests_follow_up(plan):
+                    if not requests_follow_up:
                         break
+                    if planning_round == self._max_planning_rounds:
+                        logger.warning(
+                            "Generic Thinker reached the configured planning-round limit: "
+                            f"rounds={self._max_planning_rounds}"
+                        )
                 payload = combine_accumulated_results(accumulated_results)
         except asyncio.CancelledError:
             raise
@@ -348,9 +359,23 @@ def _task_cancellation_requested() -> bool:
     return task is not None and task.cancelling() > 0
 
 
-def _requests_follow_up(plan: Mapping[str, Any]) -> bool:
-    """Honor only the Thinker's explicit, bounded request for another planning round."""
-    return plan.get("continue_after_results") is True
+def _requests_follow_up(
+    plan: Mapping[str, Any],
+    client_tools: Mapping[str, ClientToolSpec] | None = None,
+) -> bool:
+    """Continue explicit dependent work and finalize implicit client-tool results."""
+    requested = plan.get("continue_after_results")
+    if requested is not None:
+        return requested is True
+    client_names = frozenset(client_tools or ())
+    if not client_names:
+        return False
+    raw_calls = plan.get("tool_calls")
+    if raw_calls is None and plan.get("tool"):
+        raw_calls = [plan]
+    if not isinstance(raw_calls, list):
+        return False
+    return any(isinstance(call, Mapping) and call.get("tool") in client_names for call in raw_calls)
 
 
 def _is_completion_plan(plan: Mapping[str, Any]) -> bool:

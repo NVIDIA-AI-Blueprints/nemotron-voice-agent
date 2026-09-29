@@ -247,6 +247,33 @@ response contains an `ek_` secret and its `expires_at` time. The expiry limits
 when a connection can open; it does not shorten an established session. The
 response is non-cacheable and omits private provider and MCP configuration.
 
+### Test from a Browser
+
+The shared application includes a minimal operator client at
+`https://<server>:7860/realtime-test.html`. It connects to the Generic
+Frontend/Backend profile by default and supports text or microphone turns,
+streamed text or speech output, and a raw event log. Select **Speech**, connect,
+allow microphone access, select **Start microphone**, speak, and then select
+**Stop and send speech**. The page sends 24 kHz mono PCM16 in manual turn mode
+and plays the streamed `response.output_audio.delta` events through the browser.
+
+The page also declares a browser-owned `get_browser_time` function by default.
+Ask it to use the browser tool for the current local time. The page executes the
+function in JavaScript, displays its output, sends a correlated
+`function_call_output`, and requests the final response. Clear **Enable the
+browser-owned get_browser_time tool** before connecting to test without it.
+
+Paste `REALTIME_API_KEY` into the page and select **Connect**. The page uses the
+master key once to request a 10-minute `ek_` client secret, clears the key field,
+and authenticates the WebSocket with only that short-lived secret. The page
+does not persist either credential. This is a deployment test tool; production
+browser applications should mint client secrets on their trusted backend so
+the master key never reaches browser code.
+
+If the deployment uses the default self-signed TLS certificate, accept the
+browser's certificate warning before testing. Never send credentials over
+unencrypted `ws://` or `http://` connections.
+
 ## Configure a Session
 
 `session.update` is transactional. A rejected update leaves the previous

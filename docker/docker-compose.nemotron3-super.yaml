@@ -9,7 +9,7 @@ services:
       - NGC_API_KEY=${NVIDIA_API_KEY:-not-needed}
       - NIM_HTTP_API_PORT=8000
       - NIM_TAGS_SELECTOR=precision=fp8,tp=2
-      - NIM_PASSTHROUGH_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3
+      - NIM_PASSTHROUGH_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 --max-num-seqs ${LLM_MAX_NUM_SEQS:-128}
     ports:
       - "18001:8000"
     volumes:

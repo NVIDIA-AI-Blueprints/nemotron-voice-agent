@@ -9,6 +9,7 @@ import asyncio
 import concurrent.futures
 import time
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -122,6 +123,55 @@ class ToolSchemaCompilationTests(unittest.TestCase):
 
 
 class TerminalToolHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_parameterless_tool_normalizes_empty_placeholder_argument(self) -> None:
+        received: list[Mapping[str, Any]] = []
+
+        async def handler(params: FunctionCallParams) -> None:
+            received.append(params.arguments)
+            await params.result_callback({"ok": True})
+
+        results: list[tuple[Any, Any]] = []
+        wrapped = terminal_tool_handler(
+            handler,
+            parameters={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+            timeout_secs=1.0,
+        )
+
+        await wrapped(_params({"": ""}, results, name="cancel_backend", call_id="call_cancel"))
+
+        self.assertEqual(received, [{}])
+        self.assertEqual(results, [({"ok": True}, None)])
+
+    async def test_parameterless_tool_rejects_nonempty_unknown_argument(self) -> None:
+        called = False
+
+        async def handler(params: FunctionCallParams) -> None:
+            nonlocal called
+            called = True
+            await params.result_callback({"ok": True})
+
+        results: list[tuple[Any, Any]] = []
+        wrapped = terminal_tool_handler(
+            handler,
+            parameters={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+            timeout_secs=1.0,
+        )
+
+        await wrapped(_params({"reason": "stop"}, results, name="cancel_backend", call_id="call_invalid"))
+
+        self.assertFalse(called)
+        self.assertEqual(results[0][0]["error"]["code"], "invalid_tool_arguments")
+
     async def test_handler_exception_returns_one_sanitized_terminal_failure(self) -> None:
         async def handler(_params: FunctionCallParams) -> None:
             raise RuntimeError("private provider detail")
