@@ -21,6 +21,8 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 
 from examples.shared.nvidia_llm import NvidiaLLMService as RealtimeNvidiaLLMService
+from examples.shared.text_tool_calls import harvest_text_tool_calls
+from utils import parse_env_float
 
 if TYPE_CHECKING:
     from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator, StageSpan
@@ -64,6 +66,12 @@ WEATHER_GROUNDING_CORRECTION = (
 
 
 _MAX_BACKEND_RESPONSES = 8
+#: A Realtime response stays in progress until the Talker stream ends, so an
+#: unresponsive inference endpoint would hold the session open indefinitely and
+#: every later turn would be refused with ``response_in_progress``. Bound each
+#: attempt instead: two attempts still fit inside a 90s client response window,
+#: and a stalled attempt falls through to the deterministic spoken fallback.
+_TALKER_STREAM_TIMEOUT_SECONDS = parse_env_float("GENERIC_TALKER_STREAM_TIMEOUT_SECONDS", 40.0, min_value=1.0)
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
 _EXPLICIT_REPEAT_RE = re.compile(r"\b(?:repeat|refresh|recheck|again|one more time|check again)\b", re.IGNORECASE)
 _INTERNAL_MECHANICS_RE = re.compile(
@@ -285,7 +293,7 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
                 attempt=1,
                 reason=first_invalid_reason,
                 outcome="retrying",
-            ).warning("Talker produced an invalid response; retrying once")
+            ).warning(f"Talker produced an invalid response; retrying once (reason={first_invalid_reason})")
             retry_context = _build_retry_context(context, _direct_correction(first_invalid_reason))
             retry_stream = await self._start_completion_stream(retry_context)
             retry_chunks = await _collect_stream(retry_stream, self._observe_stage_chunk)
@@ -305,7 +313,10 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
                 first_reason=first_invalid_reason,
                 terminal_reason=retry_invalid_reason,
                 outcome="fallback",
-            ).error("Talker response remained invalid after retry; emitting deterministic spoken fallback")
+            ).error(
+                "Talker response remained invalid after retry; emitting deterministic spoken fallback "
+                f"(first={first_invalid_reason}, terminal={retry_invalid_reason})"
+            )
             await self._push_llm_text(fallback)
             return
 
@@ -348,7 +359,10 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
             first_reason=first_invalid_reason,
             terminal_reason=retry_invalid_reason,
             outcome="fallback",
-        ).error("Talker response remained invalid after retry; emitting deterministic spoken fallback")
+        ).error(
+            "Talker response remained invalid after retry; emitting deterministic spoken fallback "
+            f"(first={first_invalid_reason}, terminal={retry_invalid_reason})"
+        )
         await self._push_llm_text(_terminal_fallback(first_invalid_reason, retry_invalid_reason))
 
     async def _observe_stage_chunk(self, chunk: ChatCompletionChunk) -> None:
@@ -778,13 +792,25 @@ async def _collect_stream(
 ) -> list[ChatCompletionChunk]:
     chunks: list[ChatCompletionChunk] = []
     try:
-        async for chunk in stream:
-            if observer is not None:
-                await observer(chunk)
-            chunks.append(chunk)
+        async with asyncio.timeout(_TALKER_STREAM_TIMEOUT_SECONDS):
+            async for chunk in stream:
+                if observer is not None:
+                    await observer(chunk)
+                chunks.append(chunk)
+    except TimeoutError:
+        # A truncated completion cannot be emitted safely: it may cut speech
+        # mid-sentence or carry half a tool call. Drop it and let the caller's
+        # bounded retry and spoken fallback own the turn.
+        logger.warning(
+            f"Talker stream exceeded {_TALKER_STREAM_TIMEOUT_SECONDS:.1f}s after "
+            f"{len(chunks)} chunk(s); discarding the partial completion"
+        )
+        chunks = []
     finally:
         await _close_stream(stream)
-    return chunks
+    # Endpoints without a Nemotron tool-call parser stream the call as text; a
+    # harvested call must look native before validation and dispatch see it.
+    return harvest_text_tool_calls(chunks)
 
 
 async def _close_stream(stream: AsyncIterator[ChatCompletionChunk]) -> None:

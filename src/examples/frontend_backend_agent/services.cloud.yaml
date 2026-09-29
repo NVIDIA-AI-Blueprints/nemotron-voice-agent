@@ -45,7 +45,7 @@ tts:
     server: "grpc.nvcf.nvidia.com:443"
     voice_id: "Magpie-Multilingual.EN-US.Aria"
     model: "magpie-tts-multilingual"
-    function_id: "877104f7-e885-42b9-8de8-f6e4c6303969"
+    function_id: "500bfea0-ba3d-4158-8276-1d04daedfdcd"
     synthesis_mode: stitched
 
   chatterbox-multilingual-tts:
@@ -61,4 +61,4 @@ asr:
     name: "Nemotron ASR Streaming English"
     server: "grpc.nvcf.nvidia.com:443"
     model: "nemotron-asr-streaming"
-    function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
+    function_id: "4155ae85-73e1-4936-b47f-87b9de165651"

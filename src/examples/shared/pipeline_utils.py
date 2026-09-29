@@ -432,9 +432,7 @@ def build_user_aggregator_params(
     else:
         server_stop_strategies = [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)]
     stop_secs = (
-        parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0)
-        if vad_stop_secs is None
-        else default_stop_secs
+        parse_env_float("SILERO_VAD_STOP_SECS", 0.5, min_value=0.0) if vad_stop_secs is None else default_stop_secs
     )
     stop_strategies = bind_realtime_automatic_response_provenance(
         server_stop_strategies,

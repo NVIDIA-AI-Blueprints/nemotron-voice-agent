@@ -56,7 +56,14 @@ _DEFAULT_PIPELINE_MODE = "generic-assistant"
 _OPENAI_REALTIME_SESSION_MAX_DURATION_SECS = 60 * 60
 _MCP_ENDPOINT_FIELDS = frozenset({"server_url", "connector_id", "tunnel_id"})
 _SMART_TURN_PIPELINES = frozenset({"omni-assistant", "omni-assistant-subagents"})
-_CONFIGURABLE_CASCADE_PIPELINES = frozenset({"frontend-backend-agent", "generic-assistant", "multilingual-assistant"})
+_CONFIGURABLE_CASCADE_PIPELINES = frozenset(
+    {
+        "frontend-backend-agent",
+        "generic-frontend-backend-agent",
+        "generic-assistant",
+        "multilingual-assistant",
+    }
+)
 
 
 class _ReplayWebSocket:
@@ -311,6 +318,7 @@ def _controller_from_runtime(
         raise ValueError(f"Realtime turn detection is not defined for pipeline_mode {pipeline_mode!r}")
     manual_input_available = bool(transcription_model) and pipeline_mode in {
         "frontend-backend-agent",
+        "generic-frontend-backend-agent",
         "generic-assistant",
         "multilingual-assistant",
     }
@@ -413,7 +421,11 @@ def _session_patch_to_runtime(
     ]
     active_names = {tool["name"] for tool in active_function_tools}
     runtime["server_tools"] = sorted(configured_server_tools & active_names)
-    runtime["delegate_tools"] = sorted(configured_delegate_tools & active_names)
+    # Delegate tools come from the trusted pipeline registry, not from the
+    # client's session. Intersecting them with the advertised names would erase
+    # the Frontend/Backend call_backend contract, which is deliberately hidden
+    # from the Realtime client.
+    runtime["delegate_tools"] = sorted(configured_delegate_tools)
     trusted_names = configured_server_tools | configured_delegate_tools
     runtime["client_tools"] = [tool for tool in active_function_tools if tool["name"] not in trusted_names]
     runtime["parallel_tool_calls"] = bool(session_view.get("parallel_tool_calls", True))

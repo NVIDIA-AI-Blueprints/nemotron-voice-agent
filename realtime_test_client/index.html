@@ -1,0 +1,166 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Realtime test client</title>
+<style>
+ :root{--bg:#111;--fg:#eee;--dim:#888;--ok:#76b900;--warn:#e5a50a;--err:#e04}
+ *{box-sizing:border-box}
+ body{margin:0;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);color:var(--fg)}
+ header{padding:10px 14px;border-bottom:1px solid #333;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ button{background:#222;color:var(--fg);border:1px solid #444;padding:6px 12px;border-radius:4px;cursor:pointer}
+ button:hover:not(:disabled){border-color:var(--ok)} button:disabled{opacity:.4;cursor:default}
+ #dot{width:10px;height:10px;border-radius:50%;background:#555;display:inline-block}
+ main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#333;height:calc(100vh - 53px)}
+ section{background:var(--bg);overflow:auto;padding:10px 14px}
+ h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 8px}
+ .ev{white-space:pre-wrap;word-break:break-word;border-bottom:1px solid #1c1c1c;padding:3px 0}
+ .t{color:var(--ok)} .warnc{color:var(--warn)} .errc{color:var(--err)} .d{color:var(--dim)}
+ .you{color:#6cf} .bot{color:var(--ok)} .tool{color:var(--warn)}
+ textarea{width:100%;background:#0c0c0c;color:var(--fg);border:1px solid #333;border-radius:4px;padding:6px;font:inherit}
+</style>
+<header>
+  <span id="dot"></span>
+  <button id="connect">Connect</button>
+  <button id="mic" disabled>Start mic</button>
+  <button id="text" disabled>Send text</button>
+  <button id="clear">Clear</button>
+  <span class="d" id="status">idle</span>
+</header>
+<main>
+  <section>
+    <h2>Conversation</h2><div id="convo"></div>
+    <h2 style="margin-top:18px">Session config sent on connect</h2>
+    <textarea id="cfg" rows="10"></textarea>
+  </section>
+  <section><h2>Events</h2><div id="log"></div></section>
+</main>
+<script>
+const RATE = 24000;
+const $ = s => document.querySelector(s);
+const log = $('#log'), convo = $('#convo');
+let ws, audioCtx, micStream, micNode, playHead = 0, connected = false;
+
+$('#cfg').value = JSON.stringify({
+  type: "session.update",
+  session: {
+    type: "realtime",
+    instructions: "You are a helpful assistant. Delegate anything needing live data.",
+    audio: {
+      input:  { format: { type: "audio/pcm", rate: RATE }, turn_detection: { type: "semantic_vad" } },
+      output: { format: { type: "audio/pcm", rate: RATE } }
+    }
+  }
+}, null, 2);
+
+function line(where, text, cls) {
+  const d = document.createElement('div');
+  d.className = 'ev ' + (cls || '');
+  d.textContent = text;
+  where.appendChild(d); where.scrollTop = where.scrollHeight;
+}
+const ts = () => new Date().toISOString().substr(11, 12);
+function setStatus(s, colour) { $('#status').textContent = s; $('#dot').style.background = colour || '#555'; }
+
+$('#connect').onclick = () => connected ? ws.close() : connect();
+$('#clear').onclick = () => { log.innerHTML = ''; convo.innerHTML = ''; };
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  setStatus('connecting…', '#e5a50a');
+
+  ws.onopen = () => {
+    connected = true; setStatus('connected', '#76b900');
+    $('#connect').textContent = 'Disconnect'; $('#mic').disabled = false; $('#text').disabled = false;
+    line(log, `${ts()}  → websocket open`, 'd');
+    try { ws.send($('#cfg').value); line(log, `${ts()}  → session.update`, 't'); }
+    catch (e) { line(log, 'bad session JSON: ' + e.message, 'errc'); }
+  };
+
+  ws.onclose = e => {
+    connected = false; stopMic(); setStatus(`closed ${e.code} ${e.reason || ''}`, '#e04');
+    $('#connect').textContent = 'Connect'; $('#mic').disabled = true; $('#text').disabled = true;
+    line(log, `${ts()}  ← closed ${e.code} ${e.reason || ''}`, 'errc');
+  };
+  ws.onerror = () => line(log, `${ts()}  ← socket error`, 'errc');
+
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    const t = m.type || '?';
+
+    if (t === 'response.output_audio.delta' && m.delta) { play(m.delta); return; }   // too chatty to log
+    if (t === 'input_audio_buffer.append') return;
+
+    let cls = 'd';
+    if (t === 'error') cls = 'errc';
+    else if (t.startsWith('session.') || t.startsWith('conversation.')) cls = 't';
+    line(log, `${ts()}  ← ${t}` + (t === 'error' ? '  ' + JSON.stringify(m.error) : ''), cls);
+
+    if (t === 'session.created' || t === 'session.updated') {
+      const s = m.session || {}, nv = s.nvidia || {};
+      line(log, `        model=${s.model}`, 'd');
+      line(log, `        tools=${JSON.stringify((s.tools || []).map(x => x.name))}`, 'd');
+      if (nv.delegate_tools) line(log, `        delegate_tools=${JSON.stringify(nv.delegate_tools)}`, 'd');
+    }
+    if (t === 'conversation.item.input_audio_transcription.completed' && m.transcript)
+      line(convo, 'you  ' + m.transcript, 'you');
+    if (t === 'response.output_audio_transcript.done' && m.transcript)
+      line(convo, 'bot  ' + m.transcript, 'bot');
+    if (t === 'response.output_item.added' && m.item && m.item.type === 'function_call')
+      line(convo, `tool ${m.item.name}(${m.item.arguments || ''})`, 'tool');
+    if (t === 'response.done' && m.response && m.response.status === 'failed')
+      line(convo, 'FAILED ' + JSON.stringify(m.response.status_details || {}), 'errc');
+  };
+}
+
+$('#text').onclick = () => {
+  const s = prompt('Say something to the agent:'); if (!s) return;
+  ws.send(JSON.stringify({ type: 'conversation.item.create',
+    item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: s }] } }));
+  ws.send(JSON.stringify({ type: 'response.create' }));
+  line(convo, 'you  ' + s + '   (text)', 'you');
+};
+
+$('#mic').onclick = () => micNode ? stopMic() : startMic();
+
+async function startMic() {
+  audioCtx = audioCtx || new AudioContext({ sampleRate: RATE });
+  await audioCtx.resume();
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  const src = audioCtx.createMediaStreamSource(micStream);
+  micNode = audioCtx.createScriptProcessor(2048, 1, 1);
+  micNode.onaudioprocess = e => {
+    if (!connected) return;
+    const f = e.inputBuffer.getChannelData(0), pcm = new Int16Array(f.length);
+    for (let i = 0; i < f.length; i++) { const v = Math.max(-1, Math.min(1, f[i])); pcm[i] = v < 0 ? v * 32768 : v * 32767; }
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: b64(pcm.buffer) }));
+  };
+  src.connect(micNode); micNode.connect(audioCtx.destination);
+  $('#mic').textContent = 'Stop mic'; setStatus('listening — just talk, server VAD ends the turn', '#76b900');
+}
+
+function stopMic() {
+  if (micNode) { micNode.disconnect(); micNode.onaudioprocess = null; micNode = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  $('#mic').textContent = 'Start mic';
+}
+
+function b64(buf) {
+  const b = new Uint8Array(buf); let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+function play(b64s) {
+  audioCtx = audioCtx || new AudioContext({ sampleRate: RATE });
+  const bin = atob(b64s), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const pcm = new Int16Array(bytes.buffer), f32 = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 32768;
+  const buf = audioCtx.createBuffer(1, f32.length, RATE);
+  buf.copyToChannel(f32, 0);
+  const node = audioCtx.createBufferSource(); node.buffer = buf; node.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  playHead = Math.max(playHead, now); node.start(playHead); playHead += buf.duration;
+}
+</script>

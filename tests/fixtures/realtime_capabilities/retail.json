@@ -1,0 +1,369 @@
+{
+  "tau2_pin": "2174a603f6d014ef94473ffa95957f6ce27100db",
+  "domain": "retail",
+  "tools": [
+    {
+      "name": "think",
+      "description": "Use the tool to think about something. It will not obtain new information or change the database, but just append the thought to the log. Use it when complex reasoning is needed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "thought": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "thought"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "calculate",
+      "description": "Calculate the result of a mathematical expression.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expression"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cancel_pending_order",
+      "description": "Cancel a pending order. If the order is already processed or delivered, it cannot be cancelled. The agent needs to explain the cancellation detail and ask for explicit user confirmation (yes/no) to proceed. If the user confirms, the order status will be changed to 'cancelled' and the payment will be refunded. The refund will be added to the user's gift card balance immediately if the payment was made using a gift card, otherwise the refund would take 5-7 business days to process. The function returns the order details after the cancellation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "exchange_delivered_order_items",
+      "description": "Exchange items in a delivered order to new items of the same product type. For a delivered order, return or exchange can be only done once by the agent. The agent needs to explain the exchange detail and ask for explicit user confirmation (yes/no) to proceed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "item_ids": {
+            "type": "string"
+          },
+          "new_item_ids": {
+            "type": "string"
+          },
+          "payment_method_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "item_ids",
+          "new_item_ids",
+          "payment_method_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "find_user_id_by_name_zip",
+      "description": "Find user id by first name, last name, and zip code. If the user is not found, the function will return an error message. By default, find user id by email, and only call this function if the user is not found by email or cannot remember email.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_name",
+          "last_name",
+          "zip"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "find_user_id_by_email",
+      "description": "Find user id by email. If the user is not found, the function will return an error message.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_order_details",
+      "description": "Get the status and details of an order.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_product_details",
+      "description": "Get the inventory details of a product.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "product_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_item_details",
+      "description": "Get the inventory details of an item.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "item_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_user_details",
+      "description": "Get the details of a user, including their orders.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_all_product_types",
+      "description": "List the name and product id of all product types. Each product type has a variety of different items with unique item ids and options. There are only 50 product types in the store.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "modify_pending_order_address",
+      "description": "Modify the shipping address of a pending order. The agent needs to explain the modification detail and ask for explicit user confirmation (yes/no) to proceed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "address1": {
+            "type": "string"
+          },
+          "address2": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "address1",
+          "address2",
+          "city",
+          "state",
+          "country",
+          "zip"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "modify_pending_order_items",
+      "description": "Modify items in a pending order to new items of the same product type. For a pending order, this function can only be called once. The agent needs to explain the exchange detail and ask for explicit user confirmation (yes/no) to proceed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "item_ids": {
+            "type": "string"
+          },
+          "new_item_ids": {
+            "type": "string"
+          },
+          "payment_method_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "item_ids",
+          "new_item_ids",
+          "payment_method_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "modify_pending_order_payment",
+      "description": "Modify the payment method of a pending order. The agent needs to explain the modification detail and ask for explicit user confirmation (yes/no) to proceed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "payment_method_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "payment_method_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "modify_user_address",
+      "description": "Modify the default address of a user. The agent needs to explain the modification detail and ask for explicit user confirmation (yes/no) to proceed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "address1": {
+            "type": "string"
+          },
+          "address2": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "address1",
+          "address2",
+          "city",
+          "state",
+          "country",
+          "zip"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "return_delivered_order_items",
+      "description": "Return some items of a delivered order. The order status will be changed to 'return requested'. The agent needs to explain the return detail and ask for explicit user confirmation (yes/no) to proceed. The user will receive follow-up email for how and where to return the item.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "item_ids": {
+            "type": "string"
+          },
+          "payment_method_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "item_ids",
+          "payment_method_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "transfer_to_human_agents",
+      "description": "Transfer the user to a human agent, with a summary of the user's issue. Only transfer if  -  the user explicitly asks for a human agent  -  given the policy and the available tools, you cannot solve the user's issue.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "measured_first_sentence_tokens": 304
+}

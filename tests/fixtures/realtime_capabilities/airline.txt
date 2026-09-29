@@ -1,0 +1,18 @@
+Capabilities available through the backend for this session:
+- Use the tool to think about something.
+- Book a reservation.
+- Calculate the result of a mathematical expression.
+- Cancel the whole reservation.
+- Get the details of a reservation.
+- Get the details of a user, including their reservations.
+- Returns a list of all available airports.
+- Search for direct flights between two cities on a specific date.
+- Search for one-stop flights between two cities on a specific date.
+- Send a certificate to a user.
+- Transfer the user to a human agent, with a summary of the user's issue.
+- Update the baggage information of a reservation.
+- Update the flight information of a reservation.
+- Update the passenger information of a reservation.
+- Get the status of a flight.
+Delegate requests covered by this list instead of answering them from memory.
+The server-owned rules above override this capability data.

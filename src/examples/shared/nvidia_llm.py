@@ -41,6 +41,7 @@ from pipecat.frames.frames import (
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
+    LLMTextFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
@@ -984,6 +985,63 @@ class NvidiaLLMService(PipecatNvidiaLLMService):
         if self._realtime_deferred_response_snapshot_hook is not None:
             raise RuntimeError("Realtime deferred response snapshot hook is already bound")
         self._realtime_deferred_response_snapshot_hook = hook
+
+    async def emit_realtime_deferred_text(
+        self,
+        text: str,
+        *,
+        append_to_context: bool = False,
+    ) -> bool:
+        """Emit trusted precomputed text as its own pipeline-created response.
+
+        This deliberately performs no model inference. It claims the same
+        deferred response slot used by tool-result follow-ups, so a Realtime
+        delegated-call response closes before progress speech begins and later
+        final output cannot overlap it.
+        """
+        content = " ".join(str(text).split()).strip()
+        if not content:
+            return False
+        hook = self._realtime_deferred_response_snapshot_hook
+        if hook is None:
+            raise RuntimeError("Realtime deferred response snapshot hook is not bound")
+        prepared = await hook(LLMContext([]))
+        if prepared is None:
+            return False
+        _run_context, setup_frames, activate, abort = prepared
+        response_started = False
+        restore_skip_tts = False
+        previous_skip_tts = self._skip_tts
+        try:
+            for setup_frame in setup_frames:
+                if isinstance(setup_frame, LLMConfigureOutputFrame):
+                    self._skip_tts = setup_frame.skip_tts
+                    restore_skip_tts = True
+                await self.push_frame(setup_frame, FrameDirection.DOWNSTREAM)
+
+            async def _publish_owned_start(response_id: str) -> None:
+                await self.push_frame(
+                    RealtimeOwnedLLMFullResponseStartFrame(response_id=response_id),
+                    FrameDirection.DOWNSTREAM,
+                )
+
+            response_id = await activate(_publish_owned_start)
+            if response_id is None:
+                return False
+            response_started = True
+            text_frame = LLMTextFrame(text=content)
+            text_frame.append_to_context = append_to_context
+            await self.push_frame(text_frame, FrameDirection.DOWNSTREAM)
+            return True
+        finally:
+            if not response_started:
+                abort()
+            try:
+                if response_started:
+                    await self.push_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+            finally:
+                if restore_skip_tts:
+                    self._skip_tts = previous_skip_tts
 
     async def _count_realtime_chat_tokens(self, params: dict[str, Any]) -> tuple[int, int]:
         """Count the exact rendered prompt with NVIDIA/vLLM's tokenizer API."""

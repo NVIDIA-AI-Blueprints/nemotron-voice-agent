@@ -28,7 +28,6 @@ from pipecat.frames.frames import (
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    LLMMessagesAppendFrame,
     LLMRunFrame,
     LLMTextFrame,
     OutputAudioRawFrame,
@@ -641,6 +640,49 @@ class NvidiaRealtimeRunOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted.run_owner_id, "run_exact")
         self.assertEqual(emitted.activation_generation, 9)
         self.assertEqual(direction, FrameDirection.DOWNSTREAM)
+
+    async def test_precomputed_deferred_text_uses_owned_response_without_model_inference(self) -> None:
+        service = NvidiaLLMService(
+            api_key="test",
+            base_url="http://127.0.0.1:9/v1",
+            settings=NvidiaLLMSettings(model="test-model"),
+        )
+        abort = MagicMock()
+
+        async def activate(on_started) -> str:
+            await on_started("resp_filler")
+            return "resp_filler"
+
+        async def prepare(context: LLMContext):
+            self.assertEqual(context.get_messages(), [])
+            return (
+                RealtimeResponseLLMContext(
+                    [],
+                    run_owner_id="run_filler",
+                    activation_generation=2,
+                ),
+                (LLMConfigureOutputFrame(skip_tts=False),),
+                activate,
+                abort,
+            )
+
+        service.bind_realtime_deferred_response_snapshot(prepare)
+        with patch.object(PipecatNvidiaLLMService, "push_frame", new_callable=AsyncMock) as base_push:
+            emitted = await service.emit_realtime_deferred_text("  Let me check Seattle weather.  ")
+
+        self.assertTrue(emitted)
+        self.assertEqual(base_push.await_count, 4)
+        frames = [call.args[0] for call in base_push.await_args_list]
+        self.assertIsInstance(frames[0], LLMConfigureOutputFrame)
+        self.assertIsInstance(frames[1], RealtimeOwnedLLMFullResponseStartFrame)
+        self.assertEqual(frames[1].response_id, "resp_filler")
+        self.assertIsInstance(frames[2], LLMTextFrame)
+        self.assertEqual(frames[2].text, "Let me check Seattle weather.")
+        self.assertFalse(frames[2].append_to_context)
+        self.assertIsInstance(frames[3], LLMFullResponseEndFrame)
+        service._process_context = AsyncMock()
+        service._process_context.assert_not_called()
+        abort.assert_not_called()
 
     async def test_upstream_tool_followup_is_activated_with_one_owned_start(self) -> None:
         service = NvidiaLLMService(

@@ -103,12 +103,13 @@ def build_handlers(
     max_query_chars: int = 4000,
     stage_metrics: StageMetricsCoordinator | None = None,
     allow_talker_frames: bool = True,
+    realtime_filler_emitter: Callable[[str], Awaitable[bool]] | None = None,
 ) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent.
 
-    Realtime sessions suppress pipeline-authored speech frames until the
-    delegated function-call response has closed and the correlated tool output
-    can create its protocol-owned final response.
+    Realtime sessions suppress unowned Talker frames. When provided, the
+    deferred filler emitter claims a separate pipeline-created response only
+    after the delegated function-call response has closed.
     """
     consecutive_planner_errors = 0
     tool_result_mode_default = getattr(thinker, "tool_result_mode_default", "talker")
@@ -166,7 +167,7 @@ def build_handlers(
                     accepted=bool(filler_text),
                     word_count=len(_FILLER_WORD_RE.findall(filler_text)),
                 ).info("Processed Talker-authored filler candidate")
-            if filler_mode != "emit" or not allow_talker_frames:
+            if filler_mode != "emit" or (not allow_talker_frames and realtime_filler_emitter is None):
                 filler_text = ""
             slots = {key: value for key, value in arguments.items() if key not in {"query", "intent", "filler_text"}}
             filler_task: asyncio.Task | None = None
@@ -178,7 +179,10 @@ def build_handlers(
                 if filler_emitted or not filler_text:
                     return
                 filler_emitted = True
-                await _emit_talker_response(params.llm, filler_text, append_to_context=False)
+                if allow_talker_frames:
+                    await _emit_talker_response(params.llm, filler_text, append_to_context=False)
+                elif realtime_filler_emitter is not None:
+                    await realtime_filler_emitter(filler_text)
 
             async def emit_filler_after_threshold() -> None:
                 try:
@@ -193,8 +197,6 @@ def build_handlers(
                 nonlocal filler_started, filler_task
                 if stage_metrics is not None:
                     await stage_metrics.bind_backend_call(params.tool_call_id, event.call_id)
-                if not allow_talker_frames:
-                    return
                 if event.marker == "IntermediateResponse" and filler_text and not filler_emitted:
                     await _cancel_pending_filler(filler_task)
                     filler_task = None
@@ -214,7 +216,11 @@ def build_handlers(
             try:
                 payload = await thinker.call(query, slots=slots, on_started=schedule_thinker_started_filler)
             finally:
-                await _cancel_pending_filler(filler_task)
+                if filler_emitted and filler_task is not None and not filler_task.done():
+                    with suppress(asyncio.CancelledError):
+                        await filler_task
+                else:
+                    await _cancel_pending_filler(filler_task)
         except asyncio.CancelledError:
             if _task_cancellation_requested():
                 logger.info("call_backend cancelled by Pipecat; allowing it to settle the function call")

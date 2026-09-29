@@ -42,6 +42,9 @@ class DomainBuildContext:
     on_tool_started: Callable[[str], Awaitable[None]] | None = None
     stage_metrics: Any = None
     thinker_model_name: str = ""
+    client_tools: tuple[Mapping[str, Any], ...] = ()
+    client_instructions: str = ""
+    client_tool_executor: Any = None
 
 
 FillerPolicy = Literal["code_authored", "planner_authored", "talker_authored"]
@@ -58,10 +61,16 @@ class DomainSpec:
     build_backend: Callable[[DomainBuildContext], DomainBackend]
     runtime_context: Callable[[], str]
     intro_prompt: str = "Please greet the user briefly."
+    #: Catalog key of the domain's *static* Talker prompt. Realtime clients may
+    #: supply their own ``instructions``, which resolve ``prompt_key`` to
+    #: ``"custom"``; that value is not a catalog entry, so the static layer of
+    #: the composed Talker prompt has to be addressed by this key instead.
+    talker_prompt_key: str = "talker"
     tts_text_transform: Callable[[str], str] | None = None
     filler_selector: Callable[[str], str] | None = None
     filler_policy: FillerPolicy = "code_authored"
     tool_registry: Mapping[str, ToolSpec] = field(default_factory=dict)
+    realtime_prompt_coordinator_factory: Callable[..., Any] | None = None
     max_query_chars: int = 4000
 
 

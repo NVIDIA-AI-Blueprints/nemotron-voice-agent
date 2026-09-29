@@ -1,0 +1,333 @@
+{
+  "tau2_pin": "2174a603f6d014ef94473ffa95957f6ce27100db",
+  "domain": "airline",
+  "tools": [
+    {
+      "name": "think",
+      "description": "Use the tool to think about something. It will not obtain new information or change the database, but just append the thought to the log. Use it when complex reasoning is needed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "thought": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "thought"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "book_reservation",
+      "description": "Book a reservation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "flight_type": {
+            "type": "string"
+          },
+          "cabin": {
+            "type": "string"
+          },
+          "flights": {
+            "type": "string"
+          },
+          "passengers": {
+            "type": "string"
+          },
+          "payment_methods": {
+            "type": "string"
+          },
+          "total_baggages": {
+            "type": "string"
+          },
+          "nonfree_baggages": {
+            "type": "string"
+          },
+          "insurance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "origin",
+          "destination",
+          "flight_type",
+          "cabin",
+          "flights",
+          "passengers",
+          "payment_methods",
+          "total_baggages",
+          "nonfree_baggages",
+          "insurance"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "calculate",
+      "description": "Calculate the result of a mathematical expression.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expression"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cancel_reservation",
+      "description": "Cancel the whole reservation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reservation_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_reservation_details",
+      "description": "Get the details of a reservation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reservation_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_user_details",
+      "description": "Get the details of a user, including their reservations.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_all_airports",
+      "description": "Returns a list of all available airports.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search_direct_flight",
+      "description": "Search for direct flights between two cities on a specific date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "destination",
+          "date"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search_onestop_flight",
+      "description": "Search for one-stop flights between two cities on a specific date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "destination",
+          "date"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "send_certificate",
+      "description": "Send a certificate to a user. Be careful!",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "transfer_to_human_agents",
+      "description": "Transfer the user to a human agent, with a summary of the user's issue. Only transfer if  -  the user explicitly asks for a human agent  -  given the policy and the available tools, you cannot solve the user's issue.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "update_reservation_baggages",
+      "description": "Update the baggage information of a reservation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          },
+          "total_baggages": {
+            "type": "string"
+          },
+          "nonfree_baggages": {
+            "type": "string"
+          },
+          "payment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reservation_id",
+          "total_baggages",
+          "nonfree_baggages",
+          "payment_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "update_reservation_flights",
+      "description": "Update the flight information of a reservation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          },
+          "cabin": {
+            "type": "string"
+          },
+          "flights": {
+            "type": "string"
+          },
+          "payment_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reservation_id",
+          "cabin",
+          "flights",
+          "payment_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "update_reservation_passengers",
+      "description": "Update the passenger information of a reservation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          },
+          "passengers": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reservation_id",
+          "passengers"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_flight_status",
+      "description": "Get the status of a flight.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "flight_number": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flight_number",
+          "date"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "measured_first_sentence_tokens": 256
+}

@@ -73,6 +73,7 @@ class _ClientToolCall:
     name: str
     output_future: asyncio.Future[str | object] | None = None
     deadline_at: float | None = None
+    timeout_secs: float | None = None
     output: str | None = None
     output_received_at: float | None = None
     output_released: bool = False
@@ -475,6 +476,7 @@ class ClientToolBroker:
             call.handler_task = asyncio.current_task()
             loop = asyncio.get_running_loop()
             call.deadline_at = loop.time() + self._output_timeout_secs
+            call.timeout_secs = self._output_timeout_secs
             call.output_future = loop.create_future()
             if call.cancelled:
                 call.output_future.set_result(_CLIENT_TOOL_CANCELLED)
@@ -596,6 +598,92 @@ class ClientToolBroker:
                 call.context_finalized.set()
                 self._retire_call_locked(call_id, call, outcome="failed")
             raise
+
+    async def register_direct_calls(
+        self,
+        calls: tuple[tuple[str, str], ...],
+        *,
+        timeout_secs: float,
+    ) -> None:
+        """Register deterministic pipeline-owned calls before wire publication."""
+        if not math.isfinite(timeout_secs) or timeout_secs <= 0:
+            raise ValueError("Direct client-tool timeout must be a positive finite number")
+        loop = asyncio.get_running_loop()
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("Realtime client tool broker is closed")
+            if len(self._calls) + len(calls) > _MAX_TRACKED_CALLS:
+                raise RuntimeError("Realtime client tool call limit exceeded")
+            if len({call_id for call_id, _name in calls}) != len(calls):
+                raise RuntimeError("Direct client tool call IDs must be unique")
+            for call_id, name in calls:
+                if not call_id or not name:
+                    raise RuntimeError("Direct client tool calls require non-empty names and call IDs")
+                if call_id in self._calls or call_id in self._terminal_calls:
+                    raise RuntimeError(f"Client tool call {call_id!r} cannot be reused")
+            deadline = loop.time() + min(timeout_secs, self._output_timeout_secs)
+            for call_id, name in calls:
+                self._calls[call_id] = _ClientToolCall(
+                    name=name,
+                    output_future=loop.create_future(),
+                    deadline_at=deadline,
+                    timeout_secs=min(timeout_secs, self._output_timeout_secs),
+                    handler_registered=True,
+                    handler_task=asyncio.current_task(),
+                )
+
+    async def wait_direct_output(self, *, call_id: str, name: str) -> str | ClientToolTimeoutResult:
+        """Wait for one deterministic pipeline-owned client call and retire it."""
+        async with self._lock:
+            call = self._calls.get(call_id)
+            if call is None or call.name != name or call.output_future is None or call.deadline_at is None:
+                raise RuntimeError(f"Direct client tool call {call_id!r} is not registered")
+            output_future = call.output_future
+            deadline_at = call.deadline_at
+        try:
+            try:
+                output = await asyncio.wait_for(
+                    asyncio.shield(output_future),
+                    timeout=max(0.0, deadline_at - asyncio.get_running_loop().time()),
+                )
+            except TimeoutError:
+                async with self._lock:
+                    self._mark_timed_out_locked(call)
+                output = _CLIENT_TOOL_TIMED_OUT
+            if output is _CLIENT_TOOL_CANCELLED:
+                raise asyncio.CancelledError
+            if output is _CLIENT_TOOL_TIMED_OUT:
+                result: str | ClientToolTimeoutResult = _timeout_result(
+                    name,
+                    call.timeout_secs or self._output_timeout_secs,
+                )
+            else:
+                assert isinstance(output, str)
+                result = output
+            async with self._lock:
+                self._mark_context_applied_locked(call_id, call)
+            return result
+        except asyncio.CancelledError:
+            async with self._lock:
+                call.cancelled = True
+                if call.output_future is not None and not call.output_future.done():
+                    call.output_future.set_result(_CLIENT_TOOL_CANCELLED)
+                call.context_finalized.set()
+                self._retire_call_locked(call_id, call, outcome="cancelled")
+            raise
+
+    async def cancel_direct_calls(self, call_ids: tuple[str, ...]) -> None:
+        """Cancel a deterministic client-tool round and reject late outputs."""
+        async with self._lock:
+            for call_id in call_ids:
+                call = self._calls.get(call_id)
+                if call is None:
+                    continue
+                call.cancelled = True
+                if call.output_future is not None and not call.output_future.done():
+                    call.output_future.set_result(_CLIENT_TOOL_CANCELLED)
+                call.context_finalized.set()
+                self._retire_call_locked(call_id, call, outcome="cancelled")
 
     async def stage_output(self, *, call_id: str, name: str, output: str) -> None:
         """Reserve one validated client output without waking its handler."""
