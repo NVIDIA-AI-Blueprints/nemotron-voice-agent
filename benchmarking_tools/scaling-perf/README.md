@@ -598,3 +598,32 @@ turn mode supply them:
 Manual Realtime turns do not normally include Pipecat-native `asr_ttfb` or
 `server_e2e` because those measurements start from VAD events. Automatic turns
 can include them. RTVI does not currently populate `smart_turn_inference`.
+
+### Generic Frontend/Backend Agent stages
+
+The Frontend/Backend Agent emits additional RTVI metrics that correlate each
+agent stage of one turn (`stage`, `turn_id`, `invocation_id`,
+`parent_invocation_id`, `attempt`, `outcome`, `tool_name`). These appear only
+when the server is serving that example; on other pipelines the columns read
+`N/A`. The raw per-stage events are preserved in each client's result JSON
+under `server_metrics.stage_events`.
+
+| Metric | Meaning |
+|--------|---------|
+| `frontend_tool_selection_ttft` / `_processing_time` | Talker deciding whether to answer or delegate |
+| `backend_llm_ttft` / `_processing_time` | Thinker's first planning round |
+| `backend_llm_dependent_ttft` / `_processing_time` | Thinker's dependent planning rounds 2 and 3, where a later step needs an earlier tool result. Reported apart from the first round so one multi-round turn does not distort the first-round figure |
+| `backend_tool_call_latency` | One allowlisted tool execution, per `backend_tool_call.<tool>` |
+| `frontend_final_response_ttft` / `_processing_time` | Talker composing the spoken reply from the trusted result |
+
+`llm_ttft`, `llm_processing_time` and `llm_tokens_per_sec` cover only
+processors with no agent stage, so a Frontend/Backend run does not blend the
+Talker and Thinker into the plain LLM figures. A stage this client does not map
+yet is excluded from those plain buckets, logged once, and kept in
+`stage_events` with key `unmapped_stage` rather than being silently counted as
+ordinary LLM time.
+
+> **Selecting the example.** The client connects straight to `/api/ws` and
+> never posts a session configuration, so it measures whichever example the
+> server exposes. Pin it server-side (for example
+> `EXAMPLE_SELECTION=generic-frontend-backend-agent`) before a run.

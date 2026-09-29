@@ -236,8 +236,16 @@ def test_scaling_benchmark_exports_all_recovered_stage_columns() -> None:
         "frontend_tool_selection_processing_time",
         "backend_llm_ttft",
         "backend_llm_processing_time",
+        "backend_llm_dependent_ttft",
+        "backend_llm_dependent_processing_time",
         "backend_tool_call_latency",
         "frontend_final_response_ttft",
         "frontend_final_response_processing_time",
     )
-    assert module.SERVER_METRIC_KEYS[-7:] == expected
+    assert module.SERVER_METRIC_KEYS[-len(expected) :] == expected
+
+    # Every stage column must also reach both report rows and the table writer,
+    # or a recovered metric is collected and then silently dropped.
+    for key in expected:
+        assert key in module._row_from_summary.__code__.co_consts, key
+        assert key in module._client_row_from_result.__code__.co_consts, key
