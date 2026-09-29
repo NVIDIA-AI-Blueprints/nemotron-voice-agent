@@ -1247,6 +1247,21 @@ class RealtimeSessionController:
                     code="unknown_tool",
                     param="response.output",
                 )
+        # Server and delegate calls are the pipeline's own internal mechanics,
+        # never the client's. Publishing their lifecycle would hand a
+        # spec-correct OpenAI Realtime client a function_call it is
+        # contractually required to answer, and the client would then be
+        # rejected with tool_owner_mismatch for doing exactly what the wire
+        # told it to do. Keep every internal side effect below unconditional
+        # -- the conversation item, the call record, and the response-status
+        # bookkeeping all stay correct regardless of wire visibility, because
+        # later code (pending-output accounting, cancellation, the deferred
+        # filler slot, Response B) depends on them -- and gate only what
+        # reaches the client: the response.output_item.* and
+        # response.function_call_arguments.* events, and this item's entry in
+        # response.done's own output array. A client that never learns the
+        # item exists needs no special handling to avoid answering it.
+        wire_visible = owner == "client"
         events = self.ensure_response()
         added = self.conversation.add_item(
             {
@@ -1260,8 +1275,9 @@ class RealtimeSessionController:
         item = added["item"]
         item_id = item["id"]
         response_id = self._require_response_id()
-        self.responses.add_output_item(item_id)
-        self._active_output_ids.append(item_id)
+        if wire_visible:
+            self.responses.add_output_item(item_id)
+            self._active_output_ids.append(item_id)
         self._tool_calls[call_id] = ToolCallRecord(
             call_id=call_id,
             item_id=item_id,
@@ -1271,49 +1287,51 @@ class RealtimeSessionController:
             owner=owner,
             pipeline_name=pipeline_name if projected_client_name is not None else None,
         )
-        events.extend(
-            [
-                added,
-                build_server_event(
-                    "response.output_item.added",
-                    response_id=response_id,
-                    output_index=self._response_output_index(item_id),
-                    item=copy.deepcopy(item),
-                ),
-                build_server_event(
-                    "response.function_call_arguments.delta",
-                    response_id=response_id,
-                    item_id=item_id,
-                    output_index=self._response_output_index(item_id),
-                    call_id=call_id,
-                    delta=arguments_json,
-                ),
-                build_server_event(
-                    "response.function_call_arguments.done",
-                    response_id=response_id,
-                    item_id=item_id,
-                    output_index=self._response_output_index(item_id),
-                    call_id=call_id,
-                    name=name,
-                    arguments=arguments_json,
-                ),
-            ]
-        )
+        if wire_visible:
+            events.extend(
+                [
+                    added,
+                    build_server_event(
+                        "response.output_item.added",
+                        response_id=response_id,
+                        output_index=self._response_output_index(item_id),
+                        item=copy.deepcopy(item),
+                    ),
+                    build_server_event(
+                        "response.function_call_arguments.delta",
+                        response_id=response_id,
+                        item_id=item_id,
+                        output_index=self._response_output_index(item_id),
+                        call_id=call_id,
+                        delta=arguments_json,
+                    ),
+                    build_server_event(
+                        "response.function_call_arguments.done",
+                        response_id=response_id,
+                        item_id=item_id,
+                        output_index=self._response_output_index(item_id),
+                        call_id=call_id,
+                        name=name,
+                        arguments=arguments_json,
+                    ),
+                ]
+            )
         done = self.conversation.complete_item(
             item_id,
             item_patch={"arguments": arguments_json},
         )
-        events.extend(
-            [
-                done,
-                build_server_event(
-                    "response.output_item.done",
-                    response_id=response_id,
-                    output_index=self._response_output_index(item_id),
-                    item=copy.deepcopy(done["item"]),
-                ),
-            ]
-        )
+        if wire_visible:
+            events.extend(
+                [
+                    done,
+                    build_server_event(
+                        "response.output_item.done",
+                        response_id=response_id,
+                        output_index=self._response_output_index(item_id),
+                        item=copy.deepcopy(done["item"]),
+                    ),
+                ]
+            )
         return events
 
     def _start_mcp_call(
@@ -1540,6 +1558,15 @@ class RealtimeSessionController:
         done = self.conversation.terminal_item_done_event(added["item"]["id"])
         record.output_item_id = added["item"]["id"]
         record.completed = True
+        # The conversation item above is the canonical, internal record of
+        # this call's result -- it is what the pipeline's own next completion
+        # sees. Only publish it to the client when the call was the client's
+        # own work; the matching call-start event was never published for a
+        # server or delegate owner, so publishing only its output here would
+        # show the client a function_call_output with no function_call ever
+        # announced for it.
+        if owner != "client":
+            return []
         return [added, done]
 
     def finish_response(

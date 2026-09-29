@@ -433,7 +433,14 @@ class ObserverAudioLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ObserverServerToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    """Verify canonical server-tool events and separate response lifecycles."""
+    """Verify server-tool calls stay off the wire and lifecycles still separate.
+
+    A server-owned call is the pipeline's own internal mechanics, so its
+    function_call, its function_call_output, and any failure it produces are
+    never published. Only the response envelope -- Response A opening and
+    then closing with an empty output array before Response B opens with the
+    answer -- reaches the client.
+    """
 
     def test_non_json_tool_results_become_structured_failures(self) -> None:
         for result in (object(), b"not-json"):
@@ -445,7 +452,18 @@ class ObserverServerToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(json.loads(output)["error"]["code"], "tool_result_serialization_error")
 
-    async def test_parallel_server_results_finish_response_a_before_one_response_b(self) -> None:
+    async def test_parallel_server_results_stay_internal_and_response_a_closes_before_response_b(self) -> None:
+        """Server tool calls never reach the wire, success or failure alike.
+
+        A spec-correct Realtime client must never learn a server-owned call
+        happened at all: not the call, not its arguments, not its result, and
+        not a failure. Everything about it -- the function_call, the
+        function_call_output, and any tool-failure error -- is the pipeline's
+        own internal mechanics. What the client legitimately observes is only
+        the response envelope: Response A opens, then closes with an empty
+        output array, strictly before Response B opens with the answer this
+        internal work produced.
+        """
         recorder = _Recorder()
         controller = _controller(output_kind="text", server_tools=("lookup", "reserve"))
         observer = RealtimeLifecycleObserver(
@@ -499,8 +517,13 @@ class ObserverServerToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ):
             await _push(observer, frame, source=llm, destination=destination)
 
+        # Only the response envelope is client-visible. Neither call, its
+        # arguments, its output, nor the reservation failure ever appear.
         self.assertEqual(recorder.types.count("response.created"), 1)
         self.assertNotIn("function_call_output", [event.get("item", {}).get("type") for event in recorder.events])
+        self.assertNotIn("function_call", [event.get("item", {}).get("type") for event in recorder.events])
+        self.assertNotIn("response.function_call_arguments.done", recorder.types)
+        self.assertNotIn("error", recorder.types)
         response_a_end = LLMFullResponseEndFrame()
         await _push(observer, response_a_end, source=llm, destination=destination)
         await _push(observer, response_a_end, source=output, destination=destination)
@@ -512,28 +535,10 @@ class ObserverServerToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
         response_a_id = created[0]["response"]["id"]
         self.assertEqual(done[0]["response"]["id"], response_a_id)
         self.assertEqual(done[0]["response"]["status"], "completed")
-        self.assertEqual(
-            {(item["call_id"], item["name"]) for item in done[0]["response"]["output"]},
-            {("call-lookup", "lookup"), ("call-reserve", "reserve")},
-        )
-
-        argument_events = [
-            event for event in recorder.events if event["type"] == "response.function_call_arguments.done"
-        ]
-        self.assertEqual({event["call_id"] for event in argument_events}, {"call-lookup", "call-reserve"})
-        self.assertEqual(len(argument_events), 2)
-        output_items = [
-            event["item"]
-            for event in recorder.events
-            if event["type"] == "conversation.item.added"
-            and event.get("item", {}).get("type") == "function_call_output"
-        ]
-        self.assertEqual({item["call_id"] for item in output_items}, {"call-lookup", "call-reserve"})
-        decoded_outputs = {item["call_id"]: json.loads(item["output"]) for item in output_items}
-        self.assertEqual(decoded_outputs["call-lookup"], {"ok": True, "temperature_c": 24})
-        self.assertEqual(decoded_outputs["call-reserve"]["error"]["code"], "seat_unavailable")
-        tool_error = next(event for event in recorder.events if event["type"] == "error")
-        self.assertEqual(tool_error["error"]["code"], "seat_unavailable")
+        # Nothing was ever attached to the response, success or failure alike.
+        self.assertEqual(done[0]["response"]["output"], [])
+        self.assertNotIn("function_call_output", [event.get("item", {}).get("type") for event in recorder.events])
+        self.assertNotIn("error", recorder.types)
 
         response_b_start = _owned_start(controller, "tool-response-b")
         await _push(observer, response_b_start, source=llm, destination=destination)
@@ -558,18 +563,17 @@ class ObserverServerToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
             done[1]["response"]["output"][0]["content"],
             [{"type": "output_text", "text": "The lookup succeeded, but seat 12A is unavailable."}],
         )
-        first_output_index = next(
+        response_a_done_index = next(
             index
             for index, event in enumerate(recorder.events)
-            if event["type"] == "conversation.item.added"
-            and event.get("item", {}).get("type") == "function_call_output"
+            if event["type"] == "response.done" and event["response"]["id"] == response_a_id
         )
         response_b_created_index = next(
             index
             for index, event in enumerate(recorder.events)
             if event["type"] == "response.created" and event["response"]["id"] == response_b_id
         )
-        self.assertLess(first_output_index, response_b_created_index)
+        self.assertLess(response_a_done_index, response_b_created_index)
         observer.shutdown()
 
     async def test_mixed_result_policy_preserves_observer_frame_identity(self) -> None:
@@ -625,13 +629,13 @@ class ObserverServerToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(forwarded, result)
         self.assertFalse(forwarded.properties.run_llm)
+        # The server call's output stays internal even in a round that also
+        # carries a pending client call; nothing with its call_id reaches the
+        # wire, and the policy's own frame-identity and continuation-
+        # suppression behavior above is what this test actually verifies.
         self.assertEqual(
-            sum(
-                event.get("item", {}).get("type") == "function_call_output"
-                and event.get("item", {}).get("call_id") == "call-server"
-                for event in recorder.events
-            ),
-            2,
+            sum(event.get("item", {}).get("call_id") == "call-server" for event in recorder.events),
+            0,
         )
         self.assertFalse(
             any(event.get("error", {}).get("code") == "duplicate_tool_output" for event in recorder.events)

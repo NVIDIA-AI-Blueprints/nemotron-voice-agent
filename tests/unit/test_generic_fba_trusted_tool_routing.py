@@ -24,6 +24,7 @@ from realtime_helpers import FakeWebSocket
 from realtime.controller import RealtimeSessionController
 from realtime.frames import RealtimeClientToolOutputFrame
 from realtime.gateway import _session_patch_to_runtime
+from realtime.protocol import RealtimeProtocolError
 from realtime.session import RealtimeSessionCapabilities
 from realtime.transport import (
     bind_realtime_context,
@@ -225,6 +226,90 @@ class DelegateToolNameContractTests(unittest.TestCase):
         names = {tool["function"]["name"] for tool in TOOLS_SCHEMA.custom_tools[AdapterType.OPENAI]}
 
         self.assertEqual(names, {"call_backend", "cancel_backend"})
+
+
+class DelegateCallWireContractTests(unittest.TestCase):
+    """Pin what a Realtime client actually observes for a delegate call.
+
+    A delegate call is the pipeline's own internal mechanics, so a client
+    following the OpenAI Realtime contract needs zero special handling to
+    avoid it: no function_call ever announces it, no field hints it exists,
+    and Response A -- the delegate's own response lifecycle -- closes with an
+    empty output array. Only the response envelope (created, then done) is
+    observable, and it is indistinguishable from a response that produced no
+    output for any other reason.
+
+    These tests exist so that contract is discoverable in this repository and
+    cannot change silently. If the gateway ever starts publishing trusted
+    calls, or marking them, update these tests and
+    docs/how-to/use-realtime-gateway.md together.
+    """
+
+    def _delegate_call_events(self) -> list[dict]:
+        controller = _controller()
+        return controller.start_function_call(
+            call_id="call-1",
+            name="call_backend",
+            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+        )
+
+    def test_a_delegate_call_never_announces_a_function_call(self) -> None:
+        events = self._delegate_call_events()
+        types = [event.get("type") for event in events]
+
+        self.assertNotIn("response.output_item.added", types)
+        self.assertNotIn("response.function_call_arguments.delta", types)
+        self.assertNotIn("response.function_call_arguments.done", types)
+        self.assertNotIn("response.output_item.done", types)
+        # The response envelope is all that is left, and it carries nothing
+        # that names the call, its arguments, or its owner.
+        self.assertEqual(types, ["response.created"])
+
+    def test_no_published_field_identifies_the_call_or_its_owner(self) -> None:
+        payload = json.dumps(self._delegate_call_events())
+
+        for marker in ("delegate", "server_owned", "owner", "trusted", "call_backend", "call-1"):
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, payload)
+
+    def test_response_a_closes_with_an_empty_output_array(self) -> None:
+        controller = _controller()
+        controller.start_function_call(
+            call_id="call-1",
+            name="call_backend",
+            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+        )
+
+        events = controller.finish_response(status="completed")
+        done = next(event for event in events if event["type"] == "response.done")
+
+        self.assertEqual(done["response"]["output"], [])
+
+    def test_the_delegate_result_is_never_published_either(self) -> None:
+        controller = _controller()
+        controller.start_function_call(
+            call_id="call-1",
+            name="call_backend",
+            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+        )
+        controller.finish_response(status="completed")
+
+        events = controller.add_function_output(call_id="call-1", output='{"status":"confirmed"}', owner="delegate")
+
+        self.assertEqual(events, [])
+
+    def test_answering_a_delegate_call_is_still_rejected(self) -> None:
+        controller = _controller()
+        controller.start_function_call(
+            call_id="call-1",
+            name="call_backend",
+            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+        )
+
+        with self.assertRaises(RealtimeProtocolError) as raised:
+            controller.add_function_output(call_id="call-1", output="{}", owner="client")
+
+        self.assertEqual(raised.exception.code, "tool_owner_mismatch")
 
 
 if __name__ == "__main__":

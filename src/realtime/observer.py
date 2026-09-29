@@ -1952,7 +1952,15 @@ class RealtimeLifecycleObserver(BaseObserver):
                 ).to_event()
             ]
         failure = serialization_failure or _tool_failure(frame.result)
-        if failure is not None:
+        if failure is not None and record.owner == "client":
+            # A server or delegate tool's name and failure are the pipeline's
+            # own internal mechanics, not something the client declared or can
+            # act on -- surfacing them here would leak the tool's existence
+            # through the one path client-visibility gating does not already
+            # cover, and after a delegate failure the Talker's own retry and
+            # grounded-fallback speech is what actually informs the user. The
+            # failure is already logged server-side; keep client-visible tool
+            # failures exactly as they were for the caller's own tools.
             code, message = failure
             events.append(
                 error_event(

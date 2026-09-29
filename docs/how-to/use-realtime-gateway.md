@@ -490,8 +490,8 @@ delegation. Function names do not have special routing semantics.
 | Owner | Execution boundary |
 | --- | --- |
 | Client | The client declares and executes a function, returns `function_call_output`, and requests the final response. |
-| Server | A trusted prompt catalog declares a registered Pipecat handler that the pipeline executes. |
-| Delegate | A trusted server function sends work to another agent or backend and returns the result to the user-facing LLM. |
+| Server | A trusted prompt catalog declares a registered Pipecat handler that the pipeline executes internally. |
+| Delegate | A trusted server function sends work to another agent or backend and returns the result to the user-facing LLM, entirely inside the pipeline. |
 | MCP | The client declares a remote server; the gateway performs discovery and execution, while the client handles approval. |
 
 An effective tool set can mix trusted functions, uniquely named client
@@ -499,18 +499,35 @@ functions, and MCP servers. A client cannot redefine a trusted function name.
 The application must bind each client-owned name to its handler by exact name,
 not by a prefix, description, or regular expression.
 
-A trusted server or delegate function uses 2 response lifecycles. Response A
-contains the function call, and the pipeline publishes its correlated
-server-owned output. The gateway then starts Response B for the final answer
-with a different response ID. The client observes both lifecycles and does not
-send `function_call_output` for the trusted call.
+A server or delegate call is the pipeline's own internal mechanics, and it
+never reaches the client. No `function_call` item ever announces it, no
+published field names it or its owner, and the response it runs inside closes
+with an empty output array -- indistinguishable on the wire from a response
+that legitimately produced nothing. The pipeline still executes the call,
+applies its result to the model's own context, and can speak a short
+acknowledgement from it ahead of the grounded final answer, but none of that
+requires the client to do anything. A standard OpenAI Realtime client needs no
+special handling to avoid answering a call it never sees, and no configuration
+naming the trusted tools to filter them out.
+
+For the Generic Frontend/Backend profile the trusted names are `call_backend`
+and `cancel_backend`. That set is pinned by `DelegateToolNameContractTests`,
+and the fact that neither the call nor its result ever reaches the wire is
+pinned by `DelegateCallWireContractTests`, both in
+`tests/unit/test_generic_fba_trusted_tool_routing.py`, and by
+`ObserverServerToolLifecycleTests` in
+`tests/unit/test_realtime_observer_lifecycle.py`. Treat a change to any of
+them as a breaking wire-contract change.
 
 ### Run a Client-Owned Function
 
-Declare a client-owned function in an initial or live session update. The
-Generic Frontend/Backend profile accepts instruction, tool, and tool-choice
-changes while connected. It prepares the matching Thinker policy and Talker
-capability prompt before it commits the session update:
+A client-owned call still uses the ordinary two-response shape: the response
+that carries the call (call it Response A here), and a later response with a
+different response ID that carries the answer (Response B). Declare a
+client-owned function in an initial or live session update. The Generic
+Frontend/Backend profile accepts instruction, tool, and tool-choice changes
+while connected. It prepares the matching Thinker policy and Talker capability
+prompt before it commits the session update:
 
 ```json
 {
@@ -587,7 +604,7 @@ speech. This profile applies the following ownership boundary:
 - Python validates the complete plan before the first side effect. Server tools
   run in process; client tools suspend the plan and use standard
   `function_call_output` events.
-- Independent client calls from one planning round share one Response A. The
+- Independent client calls from one planning round share one response. The
   backend waits up to `GENERIC_CLIENT_TOOL_TIMEOUT_SECONDS`, which defaults to
   25 seconds, before it returns one grounded failure.
 - The backend retains one parked plan per session. Barge-in, cancellation, a
@@ -595,11 +612,15 @@ speech. This profile applies the following ownership boundary:
   stale work.
 
 The Talker supplies a short, query-grounded `filler_text` in its original
-`call_backend` arguments. After Response A closes, the pipeline can emit that
-precomputed text as a separate response without another model inference or a
-new user turn. The final tool result uses a later pipeline-created response.
-A rejected or missing filler remains silent; the runtime never substitutes a
-static phrase.
+`call_backend` arguments. `call_backend` itself never reaches the client, so
+that response closes with an empty output array; only after it closes can the
+pipeline emit the precomputed filler text as its own ordinary response,
+without another model inference or a new user turn. The grounded final answer
+follows as a later, ordinary response. A rejected or missing filler remains
+silent; the runtime never substitutes a static phrase. From the client's point
+of view this is nothing more than an assistant that sometimes speaks twice for
+one user turn -- a brief acknowledgement, then the real answer -- with no
+tool-call machinery visible in between.
 
 The profile regenerates its capability digest whenever
 `session.instructions`, `session.tools`, or `session.tool_choice` changes.
@@ -673,9 +694,10 @@ When approval is required, answer the `mcp_approval_request` item by its ID:
 }
 ```
 
-Wait for Response A and every MCP call to reach a terminal event, then send
-`response.create` for the final answer. Do not send `function_call_output` for
-an MCP call.
+Wait for the response carrying the mcp_call items and every MCP call to reach
+a terminal event, then send `response.create` for the final answer. Do not
+send `function_call_output` for an MCP call. Unlike a server or delegate call,
+an MCP call is always published; the client is the MCP host and owns approval.
 
 The gateway accepts MCP Bearer credentials through `authorization` and other
 string-valued headers through `headers`. It keeps them in private connection
@@ -720,10 +742,13 @@ pipeline, trusted-tool, and gateway lifecycle failures use `server_error`.
 Recoverable request errors keep the socket open. Fatal pipeline or correlation
 failures close it with code `1011`.
 
-Tool exceptions, timeouts, cancellations, and missing results produce a
-correlated terminal result and a Realtime error. An LLM or TTS provider failure
-that owns an active response ends that response instead of leaving the client
-waiting. MCP discovery and calls also emit their native failed terminal events.
+For a client-owned tool, an exception, timeout, cancellation, or missing
+result produces a correlated terminal result and a Realtime error. A server or
+delegate tool's failure is logged server-side instead; it never reaches the
+client, consistent with the rest of that call's lifecycle never reaching the
+client. An LLM or TTS provider failure that owns an active response ends that
+response instead of leaving the client waiting. MCP discovery and calls also
+emit their native failed terminal events.
 
 On cascaded profiles, an ASR failure with no usable transcript emits the
 item-scoped `conversation.item.input_audio_transcription.failed` event when
