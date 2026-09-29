@@ -626,3 +626,55 @@ class RealtimeTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
         strategy.trigger_user_turn_stopped.assert_not_awaited()
         strategy.trigger_user_turn_finalized.assert_awaited_once()
         self.assertIsInstance(strategy.push_frame.await_args.args[0], RealtimeASRTurnReleaseFrame)
+
+
+class AutomaticResponseProvenanceBindingTests(unittest.IsolatedAsyncioTestCase):
+    """Bind the provenance marker the way Pipecat actually invokes it.
+
+    Pipecat calls an event handler as ``handler(strategy, *args)`` and catches
+    whatever the handler raises, logging it inside its own wrapper. A handler
+    whose signature does not match therefore fails silently: nothing crashes,
+    no test fails, and the marker simply never runs. That is exactly what
+    happened here -- every user turn lost its automatic-response provenance
+    while the suite stayed green -- so this test drives the real Pipecat event
+    rather than calling the handler directly.
+    """
+
+    async def _marker_fires(self, strategy) -> bool:
+        from unittest.mock import MagicMock, patch
+
+        from realtime import transport as transport_module
+
+        transport = MagicMock()
+        context = MagicMock()
+        with patch.dict(transport_module._CONTEXTS, {transport: context}, clear=False):
+            transport_module.bind_realtime_automatic_response_provenance(
+                transport,
+                [strategy],
+            )
+            await strategy.trigger_user_turn_inference_triggered()
+        return context.response_gate.register_automatic_response_context.called
+
+    async def test_server_vad_turn_marks_automatic_response_provenance(self) -> None:
+        """The marker must actually run when Pipecat fires the real event."""
+        from realtime.turns import RealtimeServerVADTurnStopStrategy
+
+        self.assertTrue(await self._marker_fires(RealtimeServerVADTurnStopStrategy()))
+
+    async def test_speculation_argument_does_not_break_the_handler(self) -> None:
+        """The event carries a speculation argument; the handler must tolerate it."""
+        from unittest.mock import MagicMock, patch
+
+        from pipecat.turns.user_stop.base_user_turn_stop_strategy import UserTurnSpeculation
+
+        from realtime import transport as transport_module
+        from realtime.turns import RealtimeServerVADTurnStopStrategy
+
+        strategy = RealtimeServerVADTurnStopStrategy()
+        transport = MagicMock()
+        context = MagicMock()
+        with patch.dict(transport_module._CONTEXTS, {transport: context}, clear=False):
+            transport_module.bind_realtime_automatic_response_provenance(transport, [strategy])
+            await strategy.trigger_user_turn_inference_triggered(speculation=UserTurnSpeculation(text="partial turn"))
+
+        self.assertTrue(context.response_gate.register_automatic_response_context.called)

@@ -2476,7 +2476,14 @@ def bind_realtime_automatic_response_provenance(
     if context is None:
         return
 
-    def _mark_automatic_response(_strategy: BaseUserTurnStopStrategy) -> None:
+    def _mark_automatic_response(_strategy: BaseUserTurnStopStrategy, *_event_args: Any) -> None:
+        # Pipecat invokes an event handler as ``handler(strategy, *args)``, and
+        # ``on_user_turn_inference_triggered`` carries a speculation argument.
+        # Binding a one-argument handler raised TypeError on every user turn.
+        # Pipecat catches and logs that inside its handler wrapper, so nothing
+        # crashed and no test failed -- the marker simply never ran, and every
+        # turn lost its automatic-response provenance. Accept whatever the
+        # event carries so a future argument cannot silently disable this again.
         context.response_gate.register_automatic_response_context()
 
     for strategy in strategies:
