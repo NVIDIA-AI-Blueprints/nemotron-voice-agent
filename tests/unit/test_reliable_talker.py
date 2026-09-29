@@ -19,9 +19,13 @@ from examples.frontend_backend_agent.src.reliable_talker import (
     CACHED_RESPONSE_CORRECTION,
     EMPTY_RESPONSE_CORRECTION,
     EMPTY_RESPONSE_FALLBACK,
+    INTERNAL_MECHANICS_CORRECTION,
+    INTERNAL_MECHANICS_FALLBACK,
     REPEAT_SUBJECT_CORRECTION,
     TOOL_RESULT_CORRECTION,
+    WEATHER_GROUNDING_CORRECTION,
     ReliableNvidiaLLMService,
+    _weather_grounding_missing,
 )
 
 
@@ -80,6 +84,28 @@ class ReliableTalkerTests(unittest.IsolatedAsyncioTestCase):
             messages.append({"role": "user", "content": newer_user_text})
         return LLMContext(messages, tools=[], tool_choice="auto")
 
+    @staticmethod
+    def _successful_weather_context() -> LLMContext:
+        result = {
+            "type": "tool_result",
+            "tool": "get_weather",
+            "status": "success",
+            "response_text": "In Pune, it is 29 degrees C with clear skies and 48 percent humidity.",
+            "data": {
+                "city": "Pune",
+                "temperature": 29,
+                "temperature_unit": "C",
+                "condition": "Clear",
+                "humidity_percent": 48,
+                "wind_kph": 9.5,
+            },
+        }
+        messages = [
+            {"role": "user", "content": "Check Pune weather."},
+            async_tool_messages.build_final_result_message("call-weather", json.dumps(result)),
+        ]
+        return LLMContext(messages, tools=[], tool_choice="auto")
+
     async def test_visible_response_does_not_retry(self) -> None:
         talker = _ScriptedTalker([[_chunk(content="Hello there.")]])
 
@@ -99,6 +125,20 @@ class ReliableTalkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(talker.contexts), 1)
         self.assertEqual(talker.fallbacks, [])
 
+    async def test_internal_mechanics_are_blocked_before_direct_speech(self) -> None:
+        talker = _ScriptedTalker(
+            [
+                [_chunk(content="I choose call_backend using my delegate contract.")],
+                [_chunk(content="The backend Thinker then makes a tool call.")],
+            ]
+        )
+
+        chunks = await _collect(talker, LLMContext([{"role": "user", "content": "How do you analyze queries?"}]))
+
+        self.assertEqual(chunks, [])
+        self.assertEqual(talker.contexts[1].get_messages()[-1]["content"], INTERNAL_MECHANICS_CORRECTION)
+        self.assertEqual(talker.fallbacks, [INTERNAL_MECHANICS_FALLBACK])
+
     async def test_empty_response_retries_once_with_ephemeral_correction(self) -> None:
         original_messages = [{"role": "user", "content": "Repeat that weather."}]
         context = LLMContext(original_messages.copy(), tools=[], tool_choice="auto")
@@ -106,7 +146,8 @@ class ReliableTalkerTests(unittest.IsolatedAsyncioTestCase):
 
         chunks = await _collect(talker, context)
 
-        self.assertEqual(len(chunks), 2)
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].choices[0].delta.content, "It is sunny.")
         self.assertEqual(len(talker.contexts), 2)
         self.assertEqual(context.get_messages(), original_messages)
         self.assertEqual(talker.contexts[1].get_messages()[-1]["role"], "system")
@@ -120,7 +161,7 @@ class ReliableTalkerTests(unittest.IsolatedAsyncioTestCase):
 
         chunks = await _collect(talker, LLMContext([{"role": "user", "content": "How about London?"}]))
 
-        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks, [])
         self.assertEqual(len(talker.contexts), 2)
         self.assertEqual(talker.fallbacks, [EMPTY_RESPONSE_FALLBACK])
         self.assertFalse(any(getattr(chunk.choices[0].delta, "tool_calls", None) for chunk in chunks))
@@ -155,6 +196,42 @@ class ReliableTalkerTests(unittest.IsolatedAsyncioTestCase):
         chunks = await _collect(talker, context)
 
         self.assertEqual(chunks, [])
+        self.assertEqual(talker.fallbacks, [trusted])
+
+    async def test_dynamic_weather_preserves_city_temperature_and_unit(self) -> None:
+        context = self._successful_weather_context()
+        talker = _ScriptedTalker([[_chunk(content="Pune is clear at 29 degrees Celsius today.")]])
+        chunks = await _collect(talker, context)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(talker.fallbacks, [])
+
+    def test_dynamic_weather_preserves_temperature_sign(self) -> None:
+        payload = {
+            "type": "tool_result",
+            "tool": "get_weather",
+            "status": "success",
+            "data": {"city": "Oslo", "temperature": -5, "temperature_unit": "C"},
+        }
+
+        self.assertFalse(_weather_grounding_missing(payload, "Oslo is at -5 degrees Celsius."))
+        self.assertFalse(_weather_grounding_missing(payload, "Oslo is at minus 5 degrees Celsius."))
+        self.assertTrue(_weather_grounding_missing(payload, "Oslo is at 5 degrees Celsius."))
+
+    async def test_dynamic_weather_falls_back_after_two_ungrounded_answers(self) -> None:
+        context = self._successful_weather_context()
+        trusted = json.loads(async_tool_messages.parse_message(context.get_messages()[-1]).result)["response_text"]
+        talker = _ScriptedTalker(
+            [
+                [_chunk(content="It is sunny there today.")],
+                [_chunk(content="Pune has clear skies today.")],
+            ]
+        )
+
+        chunks = await _collect(talker, context)
+
+        self.assertEqual(chunks, [])
+        self.assertEqual(talker.contexts[1].get_messages()[-1]["content"], WEATHER_GROUNDING_CORRECTION)
         self.assertEqual(talker.fallbacks, [trusted])
 
     async def test_newer_user_turn_can_delegate_after_finished_result(self) -> None:

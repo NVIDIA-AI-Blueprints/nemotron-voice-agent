@@ -18,7 +18,7 @@ from examples.frontend_backend_agent import pipeline
 def test_generic_prompt_loads_subject_neutral_native_repeat_example() -> None:
     messages = pipeline._load_prompt_few_shots("generic_talker", custom_prompt=False)
 
-    assert [message["role"] for message in messages] == ["user", "assistant", "tool", "assistant"]
+    assert [message["role"] for message in messages[:5]] == ["user", "assistant", "tool", "developer", "assistant"]
     tool_call = messages[1]["tool_calls"][0]
     assert tool_call["function"]["name"] == "call_backend"
     arguments = json.loads(tool_call["function"]["arguments"])
@@ -26,6 +26,31 @@ def test_generic_prompt_loads_subject_neutral_native_repeat_example() -> None:
     assert "location" in arguments["query"]
     assert arguments["filler_text"] == "Let me check that weather again."
     assert messages[2]["tool_call_id"] == tool_call["id"]
+    assert json.loads(messages[2]["content"])["status"] == "running"
+    finished = json.loads(messages[3]["content"])
+    assert json.loads(finished["result"])["response_text"] == "Which location do you mean?"
+
+
+def test_generic_prompt_models_the_real_async_weather_result_envelope() -> None:
+    messages = pipeline._load_prompt_few_shots("generic_talker", custom_prompt=False)
+
+    assert len(messages) == 15
+    assert [message["role"] for message in messages[5:10]] == ["user", "assistant", "tool", "developer", "assistant"]
+    running = json.loads(messages[7]["content"])
+    finished = json.loads(messages[8]["content"])
+    result = json.loads(finished["result"])
+
+    assert running["status"] == "running"
+    assert finished["status"] == "finished"
+    assert result["tool"] == "get_weather"
+    assert result["data"]["city"] == "Pune"
+    assert result["data"]["temperature"] == 29
+    assert [message["role"] for message in messages[10:]] == ["user", "assistant", "tool", "developer", "assistant"]
+    negative_finished = json.loads(messages[13]["content"])
+    negative_result = json.loads(negative_finished["result"])
+    assert negative_result["data"]["city"] == "Reykjavik"
+    assert negative_result["data"]["temperature"] == -5
+    assert "minus 5 degrees Celsius" in messages[14]["content"]
 
 
 def test_custom_prompt_never_inherits_catalog_few_shots() -> None:
