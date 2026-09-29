@@ -516,6 +516,19 @@ def _latest_finished_tool_result(context: LLMContext) -> tuple[str, dict] | None
             continue
         if message.get("role") == "user":
             return None
+        # Realtime client-owned tools are resolved inside the active
+        # ``call_backend`` round and arrive as an ordinary OpenAI tool result,
+        # not as an async-tool developer message. Treat that result as the
+        # current turn's finished payload so its grounded final answer is not
+        # mistaken for a replay of cached backend text.
+        if message.get("role") == "tool":
+            content = message.get("content")
+            try:
+                result = json.loads(content) if isinstance(content, str) else None
+            except json.JSONDecodeError:
+                result = None
+            if isinstance(result, dict) and str(result.get("response_text") or "").strip():
+                return str(message.get("tool_call_id") or ""), result
         parsed = async_tool_messages.parse_message(message)
         if parsed is None or parsed.status != "finished" or not parsed.result:
             continue

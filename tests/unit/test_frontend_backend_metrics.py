@@ -12,6 +12,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 
@@ -87,9 +88,15 @@ class _OutOfBandLLM:
         raise AssertionError("out-of-band Thinker inference must bypass pipeline stream processing")
 
 
-def _chunk(*, content: str | None = None, reasoning_content: str | None = None):
+def _chunk(
+    *,
+    content: str | None = None,
+    reasoning_content: str | None = None,
+    finish_reason: str | None = None,
+    usage: object | None = None,
+):
     delta = SimpleNamespace(content=content, reasoning_content=reasoning_content, reasoning=None, tool_calls=None)
-    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)], usage=usage)
 
 
 class FrontendBackendStageMetricsTests(unittest.IsolatedAsyncioTestCase):
@@ -221,6 +228,30 @@ class FrontendBackendStageMetricsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(llm.completions.params)
         self.assertTrue(llm.completions.params["stream"])
         self.assertEqual(llm.completions.params["max_completion_tokens"], 256)
+
+    async def test_stream_completion_logs_only_bounded_diagnostics(self) -> None:
+        usage = SimpleNamespace(prompt_tokens=20, completion_tokens=12, total_tokens=32)
+        stream = _TestStream(
+            [
+                _chunk(reasoning_content="private reasoning", usage=usage),
+                _chunk(content='{"complete":true}', finish_reason="stop", usage=usage),
+            ]
+        )
+        llm = _StreamingLLM(stream)
+        context = LLMContext([{"role": "user", "content": "Plan this request."}])
+
+        with patch("examples.frontend_backend_agent.src.stage_metrics.logger") as mocked_logger:
+            result = await run_streamed_inference(llm, context, None)
+
+        self.assertEqual(result, '{"complete":true}')
+        diagnostics = mocked_logger.bind.call_args.kwargs
+        self.assertEqual(diagnostics["event"], "thinker_stream_complete")
+        self.assertEqual(diagnostics["chunk_count"], 2)
+        self.assertEqual(diagnostics["content_chars"], 17)
+        self.assertEqual(diagnostics["reasoning_chars"], 17)
+        self.assertEqual(diagnostics["finish_reasons"], "stop")
+        self.assertEqual(diagnostics["completion_tokens"], 12)
+        self.assertNotIn("private reasoning", str(diagnostics))
 
 
 def test_scaling_benchmark_exports_all_recovered_stage_columns() -> None:

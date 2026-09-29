@@ -9,16 +9,19 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from realtime_helpers import FakeWebSocket
 
+from examples.frontend_backend_agent.generic.backend import GenericThinkerBackend
 from examples.frontend_backend_agent.generic.client_tools import (
+    format_client_result,
     build_client_tool_specs,
     client_call_fingerprint,
 )
@@ -124,6 +127,72 @@ class DirectClientToolBrokerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealtimeClientToolRoundContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_backend_completes_four_round_client_tool_workflow(self) -> None:
+        tool_names = (
+            "get_user_details",
+            "get_reservation_details",
+            "search_direct_flight",
+            "update_reservation_flights",
+        )
+        client_tools = build_client_tool_specs(
+            tuple(
+                {
+                    "type": "function",
+                    "name": name,
+                    "description": f"Run {name}.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                        "additionalProperties": False,
+                    },
+                }
+                for name in tool_names
+            )
+        )
+        plans = [
+            {"tool": name, "params": {"value": str(index)}}
+            for index, name in enumerate(tool_names, start=1)
+        ] + [{"complete": True}]
+
+        class SequencedPlanner:
+            def __init__(self) -> None:
+                self.states: list[dict] = []
+
+            async def plan(self, *, query: str, state: dict) -> dict:
+                del query
+                self.states.append(copy.deepcopy(state))
+                return plans.pop(0)
+
+        planner = SequencedPlanner()
+        wire_rounds: list[tuple[tuple[str, dict], ...]] = []
+
+        async def execute(calls, _timeout):
+            wire_rounds.append(calls)
+            return [{"ok": True, "round": len(wire_rounds)} for _call in calls]
+
+        backend = GenericThinkerBackend(
+            planner=planner,
+            tools={},
+            enabled_tools=tool_names,
+            client_tools=client_tools,
+            client_tool_executor=execute,
+            overall_timeout_seconds=3,
+            planner_timeout_seconds=1,
+            max_planning_rounds=8,
+        )
+
+        payload = await backend.call("Change the reservation after looking up every prerequisite.")
+
+        self.assertEqual([round_calls[0][0] for round_calls in wire_rounds], list(tool_names))
+        self.assertEqual(len(planner.states), 5)
+        self.assertEqual([state["planning_round"] for state in planner.states], [1, 2, 3, 4, 5])
+        self.assertEqual(len(planner.states[-1]["prior_tool_results"]), 4)
+        self.assertEqual(
+            [result["tool"] for result in payload["data"]["results"]],
+            list(tool_names),
+        )
+
     async def test_pipeline_created_round_surfaces_and_resumes_through_wire_output(self) -> None:
         websocket = FakeWebSocket([])
         voice = "Magpie-Multilingual.EN-US.Aria"
@@ -425,6 +494,97 @@ class GenericClientToolDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(called)
         self.assertEqual(payload["status"], "unavailable")
         self.assertIn("repeated tool request", payload["response_text"])
+
+
+class JsonEncodedClientResultTests(unittest.TestCase):
+    """A JSON-encoded envelope must be classified by its contents, not its type."""
+
+    _TAU_ERROR = (
+        '{"call_id": "call_1", "error": {"category": "benchmark_error", '
+        '"message": "Error: User era_of_Garcia_1177 not found"}, "output": null}'
+    )
+
+    def test_json_encoded_error_envelope_is_not_reported_as_success(self) -> None:
+        payload = format_client_result("get_user_details", {"user_id": "x"}, self._TAU_ERROR)
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertIn("not found", payload["response_text"])
+
+    def test_json_encoded_ok_false_is_an_error(self) -> None:
+        payload = format_client_result("lookup", {}, '{"ok": false, "detail": "nope"}')
+
+        self.assertEqual(payload["status"], "error")
+
+    def test_json_encoded_success_stays_successful(self) -> None:
+        payload = format_client_result("lookup", {}, '{"user_id": "aarav_garcia_1177"}')
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["data"]["result"], {"user_id": "aarav_garcia_1177"})
+
+    def test_mapping_and_json_string_envelopes_agree(self) -> None:
+        as_mapping = format_client_result("lookup", {}, {"error": {"message": "boom"}})
+        as_json = format_client_result("lookup", {}, '{"error": {"message": "boom"}}')
+
+        self.assertEqual(as_mapping["status"], as_json["status"])
+
+    def test_non_json_output_keeps_its_legacy_classification(self) -> None:
+        self.assertEqual(format_client_result("lookup", {}, "Reservation confirmed")["status"], "success")
+        self.assertEqual(format_client_result("lookup", {}, "Error: not found")["status"], "error")
+        self.assertEqual(format_client_result("lookup", {}, "{not json")["status"], "success")
+        self.assertEqual(format_client_result("lookup", {}, "   ")["status"], "error")
+
+
+class JsonEncodedFailureSuppressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_json_encoded_failure_keeps_the_call_suppressed(self) -> None:
+        """A JSON-encoded failure must retain its fingerprint, not clear it."""
+        specs = build_client_tool_specs((_client_schema(),))
+        arguments = {"record_id": "one"}
+        seen: set[str] = set()
+
+        async def execute(_calls, _timeout):
+            return ['{"call_id": "c1", "error": {"message": "Error: not found"}, "output": null}']
+
+        payload = await dispatch_plan(
+            {"tool": "lookup", "params": arguments},
+            {},
+            ("lookup",),
+            client_tools=specs,
+            client_tool_executor=execute,
+            seen_client_calls=seen,
+        )
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(seen, {client_call_fingerprint("lookup", arguments)})
+
+
+class SessionScopedClientSuppressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_suppression_state_is_shared_across_backend_calls(self) -> None:
+        """The frontend re-delegates per turn; suppression must outlive one call."""
+        backend = GenericThinkerBackend(
+            planner=SimpleNamespace(),
+            enabled_tools=(),
+            tools={},
+            client_tools=build_client_tool_specs((_client_schema(),)),
+        )
+        captured: list[set[str]] = []
+
+        async def fake_plan(*_args, **_kwargs):
+            return {"tool": "none", "params": {}}
+
+        async def fake_dispatch(*_args, **kwargs):
+            captured.append(kwargs["seen_client_calls"])
+            return {"tool": "none", "status": "success"}
+
+        with (
+            patch.object(GenericThinkerBackend, "_plan_with_retry", fake_plan),
+            patch("examples.frontend_backend_agent.generic.backend.dispatch_plan", fake_dispatch),
+        ):
+            await backend._run_call("call-1", "first query")
+            await backend._run_call("call-2", "second query")
+
+        self.assertEqual(len(captured), 2)
+        self.assertIs(captured[0], captured[1])
+        self.assertIs(captured[0], backend._seen_client_calls)
 
 
 if __name__ == "__main__":

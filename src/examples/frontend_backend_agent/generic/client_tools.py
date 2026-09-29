@@ -78,25 +78,37 @@ def client_call_fingerprint(name: str, arguments: Mapping[str, Any]) -> str:
     return f"{name}\0{encoded_arguments}"
 
 
+def _classify_mapping_result(output: Mapping[str, Any]) -> tuple[str, str]:
+    """Classify one structured client-tool envelope into a status and speech message."""
+    error = output.get("error")
+    if isinstance(error, Mapping):
+        return "unavailable", str(error.get("message") or "The client tool did not return a usable result.")
+    if isinstance(error, str) and error.strip():
+        return "unavailable", error.strip()
+    if output.get("ok", True) is False:
+        return "error", json.dumps(output, ensure_ascii=False, allow_nan=False, sort_keys=True)
+    return "success", json.dumps(output, ensure_ascii=False, allow_nan=False, sort_keys=True)
+
+
 def format_client_result(name: str, arguments: dict[str, Any], output: str | dict[str, Any]) -> dict[str, Any]:
     """Turn an opaque client output into one grounded, bounded agent payload."""
+    raw_result: Any
     if isinstance(output, dict):
-        error = output.get("error")
-        if isinstance(error, Mapping):
-            status = "unavailable"
-            message = str(error.get("message") or "The client tool did not return a usable result.")
-        else:
-            status = "success" if output.get("ok", True) is not False else "error"
-            message = json.dumps(output, ensure_ascii=False, allow_nan=False, sort_keys=True)
-        raw_result: Any = output
+        raw_result = output
+        status, message = _classify_mapping_result(output)
     else:
         stripped = output.strip()
-        status = "error" if stripped.casefold().startswith("error:") else "success"
-        message = stripped
         try:
             raw_result = json.loads(stripped)
         except json.JSONDecodeError:
             raw_result = stripped
+        if isinstance(raw_result, Mapping):
+            # Client transports often hand back a JSON-encoded envelope. Classify it
+            # by its parsed contents so an error payload is never read as success.
+            status, message = _classify_mapping_result(raw_result)
+        else:
+            status = "error" if stripped.casefold().startswith("error:") else "success"
+            message = stripped
     speech = _SPACE_RE.sub(" ", message).strip()
     if len(speech) > _MAX_CLIENT_RESULT_SPEECH_CHARS:
         speech = speech[: _MAX_CLIENT_RESULT_SPEECH_CHARS - 1].rsplit(" ", 1)[0].rstrip(" ,;:-.") + "."

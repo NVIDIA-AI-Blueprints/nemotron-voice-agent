@@ -34,8 +34,9 @@ def _chunk(*, content: str | None = None, tool_calls: list | None = None):
     return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
 
 
-def _tool_chunk(query: str):
-    function = SimpleNamespace(name="call_backend", arguments=json.dumps({"query": query}))
+def _tool_chunk(query: str = "", *, name: str = "call_backend", arguments: dict | None = None):
+    payload = {"query": query} if arguments is None else arguments
+    function = SimpleNamespace(name=name, arguments=json.dumps(payload))
     return _chunk(tool_calls=[SimpleNamespace(index=0, function=function)])
 
 
@@ -104,6 +105,27 @@ class ReliableTalkerTests(unittest.IsolatedAsyncioTestCase):
             {"role": "user", "content": "Check Pune weather."},
             async_tool_messages.build_final_result_message("call-weather", json.dumps(result)),
         ]
+        return LLMContext(messages, tools=[], tool_choice="auto")
+
+    @staticmethod
+    def _direct_finished_result_context(
+        *,
+        response_text: str = "The browser time is 4:47 PM in Asia/Calcutta.",
+        newer_user_text: str | None = None,
+    ) -> LLMContext:
+        result = {
+            "type": "tool_result",
+            "tool": "get_browser_time",
+            "status": "success",
+            "response_text": response_text,
+        }
+        messages = [
+            {"role": "user", "content": "What is my browser time?"},
+            {"role": "assistant", "content": None, "tool_calls": []},
+            {"role": "tool", "tool_call_id": "call-time", "content": json.dumps(result)},
+        ]
+        if newer_user_text is not None:
+            messages.append({"role": "user", "content": newer_user_text})
         return LLMContext(messages, tools=[], tool_choice="auto")
 
     async def test_visible_response_does_not_retry(self) -> None:
@@ -197,6 +219,46 @@ class ReliableTalkerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(chunks, [])
         self.assertEqual(talker.fallbacks, [trusted])
+
+    async def test_realtime_client_tool_result_is_not_misclassified_as_cached_replay(self) -> None:
+        trusted = "The browser time is 4:47 PM in Asia/Calcutta."
+        context = self._direct_finished_result_context(response_text=trusted)
+        talker = _ScriptedTalker([[_chunk(content=trusted)]])
+        talker.remember_backend_response(trusted)
+
+        chunks = await _collect(talker, context)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].choices[0].delta.content, trusted)
+        self.assertEqual(len(talker.contexts), 1)
+        self.assertEqual(talker.fallbacks, [])
+
+    async def test_realtime_client_tool_result_blocks_malformed_cancel_redelegation(self) -> None:
+        trusted = "The browser time is 4:47 PM in Asia/Calcutta."
+        context = self._direct_finished_result_context(response_text=trusted)
+        talker = _ScriptedTalker(
+            [
+                [_tool_chunk(name="cancel_backend", arguments={"": ""})],
+                [_chunk(content=trusted)],
+            ]
+        )
+
+        chunks = await _collect(talker, context)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].choices[0].delta.content, trusted)
+        self.assertEqual(talker.contexts[1].get_messages()[-1]["content"], TOOL_RESULT_CORRECTION)
+        self.assertFalse(any(getattr(chunk.choices[0].delta, "tool_calls", None) for chunk in chunks))
+
+    async def test_newer_user_turn_supersedes_realtime_client_tool_result(self) -> None:
+        context = self._direct_finished_result_context(newer_user_text="What is two plus two?")
+        talker = _ScriptedTalker([[_chunk(content="Four.")]])
+        talker.remember_backend_response("The browser time is 4:47 PM in Asia/Calcutta.")
+
+        chunks = await _collect(talker, context)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].choices[0].delta.content, "Four.")
 
     async def test_dynamic_weather_preserves_city_temperature_and_unit(self) -> None:
         context = self._successful_weather_context()

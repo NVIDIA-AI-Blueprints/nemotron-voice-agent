@@ -5,8 +5,9 @@ The Frontend/Backend Agent is one shared Pipecat voice pipeline with replaceable
 The agent is not a ReAct agent. The Talker can call only `call_backend` and
 `cancel_backend`. A session-local backend asks the Thinker for bounded plans,
 validates each plan in Python, runs the allowed domain tools, and returns a
-structured result to the Talker. The generic backend can use up to 3 planning
-rounds when later work depends on an earlier tool result.
+structured result to the Talker. The generic backend can use up to 8 planning
+rounds by default when later work depends on an earlier tool result. You can
+change this limit without changing the planner implementation.
 
 The OpenAI Realtime WebSocket can run this complete server-owned system or
 expose client-owned delegation functions. Select
@@ -32,7 +33,12 @@ The `frontend-backend-agent` (airline) defaults in [`examples_registry.yaml`](..
 | Server | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Nemotron 3.5 Lightning 30B A3B NIM with reasoning enabled | Magpie TTS Multilingual NIM |
 | Single GPU | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Nemotron 3.5 Lightning 30B A3B through vLLM with reasoning enabled | Magpie TTS Multilingual through NeMo-Speech.cpp |
 
-The Talker and Thinker use the same model weights with different runtime settings. The Talker disables reasoning for lower latency. The Cloud and Server Thinkers enable reasoning with a 1,024-token budget. The Single GPU Thinker runs on its dedicated Model Runner V1 service with `thinking_token_budget=1024` and `max_tokens=4096`.
+The Talker and Thinker use different runtime settings. The Talker disables
+reasoning for lower latency. The Generic Server and Single GPU profiles give
+the Nemotron 3 Super Thinker a 1,024-token reasoning budget and allow up to
+2,048 output tokens. The Generic Cloud profile uses a 256-token reasoning
+budget and allows up to 768 output tokens. The Airline Thinker uses its own
+catalog settings.
 
 ## Request Flow
 
@@ -42,7 +48,7 @@ Each request follows the same path for every domain:
 2. The Talker answers stable conversational requests directly or calls `call_backend` with a self-contained request.
 3. The session-local backend asks the Thinker for a plan. The selected registry entry controls the hidden Thinker prompt and the generic domain's maximum internal-tool allowlist. A browser session can narrow that tool set.
 4. The generic planner appends a generated tool-contract block for only the effective session tools. The airline domain keeps its existing prompt-owned contracts. Domain code validates each plan before dispatch.
-5. The backend runs the approved tools. For dependent generic work, it gives the Thinker the accumulated trusted results and allows another planning round. The backend stops after 3 rounds, when the Thinker signals completion, or when the plan does not request another round.
+5. The backend runs the approved tools. For dependent generic work, it gives the Thinker the accumulated trusted results and allows another planning round. The backend stops after the configured round limit, when the Thinker signals completion, when the plan does not request another round, or when the overall backend deadline expires.
 6. The generic backend combines results from every completed round in execution order. If a later round times out or fails, it returns the results already gathered instead of discarding them. It otherwise returns a structured `response_hint` or `tool_result`. The generic domain also generates user-facing capability text from the enabled tool specifications.
 7. The runtime either speaks trusted `response_text` directly or asks the Talker for a concise reply. Text-to-speech (TTS) then produces audio.
 8. `cancel_backend` or a newer superseding request cancels pending work and prevents stale results from reaching the conversation.
@@ -60,6 +66,14 @@ turn contains a substantive replacement request, the Talker answers or delegates
 that replacement instead of cancelling it. “There is nothing pending right now”
 is reserved for a cancellation turn with no active backend, pending work, or
 interrupted bot speech.
+
+The runtime also treats a model-authored internal tool call after a completed
+backend result as invalid. It retries the Talker once, then uses the trusted
+backend response instead of dispatching the invalid call. For a parameterless
+internal control tool, the runtime normalizes the provider's known empty
+placeholder serialization, such as `{"":""}`, to `{}`. This normalization
+applies only when the trusted schema declares no parameters. The runtime still
+rejects meaningful or unexpected arguments.
 
 For the generic domain, bot-speech interruption requires at least 2 transcribed
 words. Pipecat's bot-aware `MinWordsUserTurnStartStrategy` still starts a normal
@@ -226,7 +240,8 @@ The following environment variables bound shared and domain-specific orchestrati
 | `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE` | Disabled | Legacy switch that forces direct mode only when the explicit result-mode variable is absent |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delays progress speech until delegated work remains active past the threshold |
 | `THINKER_TOOL_TIMEOUT_SECONDS` | `45.0` | Bounds the shared Talker-to-backend function handler |
-| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `6.0` | Bounds each generic Thinker planning round; the backend permits at most 3 rounds |
+| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `6.0` | Bounds each generic Thinker planning round |
+| `GENERIC_MAX_PLANNING_ROUNDS` | `8` | Limits dependent generic planning rounds; increasing this value does not extend the overall backend deadline |
 | `GENERIC_BACKEND_TIMEOUT_SECONDS` | `40.0` | Bounds the generic planner and tool execution together |
 | `GENERIC_CLIENT_TOOL_TIMEOUT_SECONDS` | `25.0` | Bounds one parked Realtime client-tool batch before the backend returns a grounded failure |
 | `GENERIC_WEB_SEARCH_TIMEOUT_SECONDS` | `20.0` | Bounds the complete web-search tool execution inside the backend deadline |
@@ -274,19 +289,25 @@ blocks the backend; there is no static fallback.
 
 The `generic-frontend-backend-agent` registry entry enables all 5 built-in generic tools. To expose a subset, create or edit a trusted registry entry. Client session data and Talker prompt metadata do not widen that set.
 
-The generic backend permits at most 3 planning rounds within the existing
-40-second overall deadline. Each later planning request includes the trusted
-results accumulated from earlier rounds. The Thinker requests another round
-with `continue_after_results: true`. A `complete: true` plan, an empty
-`tool_calls` list, or a plan without a follow-up request ends the loop.
+The generic backend permits at most 8 planning rounds by default within the
+existing 40-second overall deadline. Set `GENERIC_MAX_PLANNING_ROUNDS` to
+change the limit. Each later planning request includes the trusted results
+accumulated from earlier rounds. The Thinker requests another round with
+`continue_after_results: true`. A client-owned tool call also continues by
+default when the field is absent, which lets the Thinker turn the returned
+client result into a grounded final response. It can set
+`continue_after_results: false` when that result already satisfies the request.
+A `complete: true` plan, an empty `tool_calls` list, a plan without a follow-up
+request, or the overall deadline ends the loop.
 
 Before a follow-up round, the backend emits an `IntermediateResponse`
 lifecycle event. If the initial Talker-authored filler has not played yet, this
 event plays it once. Multi-round work does not invent or repeat static filler.
 
-Real-Time Voice Interaction (RTVI) metrics expose the later planning rounds as
-`backend_thinker_step2_llm` and `backend_thinker_step3_llm`. Each processor
-stays correlated with the same backend call and user turn.
+Real-Time Voice Interaction (RTVI) metrics expose later planning rounds as
+`backend_thinker_step2_llm`, `backend_thinker_step3_llm`, and the corresponding
+higher-numbered steps. Each processor stays correlated with the same backend
+call and user turn.
 
 Successful weather speech includes returned humidity and wind speed when those
 fields are available. Deterministic weather speech and the guarded Talker
@@ -308,10 +329,11 @@ response.
 For model and catalog settings, refer to [Configure LLM](../../../docs/how-to/configure-llm.md) and [Configure Services](../../../docs/how-to/configure-services.md). For prompt behavior, tool subsets, and domain extension, refer to [Configure Frontend/Backend Agent Domains](../../../docs/how-to/configure-frontend-backend-domains.md).
 
 The built-in generic profile keeps Nemotron 3 Super reasoning enabled for the
-Thinker at temperature `0.0`. Its server and cloud catalog entries bound each
-plan to 768 output tokens and a 256-token reasoning budget. These limits reduce
-synchronized planner saturation while preserving model-based planning and
-Python plan validation.
+Thinker at temperature `0.0`. The Server and Single GPU catalog entries bound
+each plan to 2,048 output tokens with a 1,024-token reasoning budget. The Cloud
+entry keeps the lower 768-output-token and 256-reasoning-token limits. You can
+override the completion and reasoning limits with
+`GENERIC_THINKER_MAX_TOKENS` and `GENERIC_THINKER_REASONING_BUDGET`.
 
 ## Domain Contract
 
@@ -399,11 +421,18 @@ The pipeline enforces the following boundaries:
 - The generic generated tool-contract block and user-facing capability sentence contain only enabled tool specifications.
 - Generic tool plans are validated atomically before any tool runs. Unknown tools, disabled tools, unexpected parameters, and more than 3 calls fail closed.
 - Up to 3 validated generic read-only tools can run concurrently. Results return in planner order.
-- The generic backend permits at most 3 dependent planning rounds. It passes
-  only accumulated trusted tool results into later rounds and preserves
-  results from completed rounds if later planning fails.
+- The generic backend permits 8 dependent planning rounds by default. You can
+  configure the limit with `GENERIC_MAX_PLANNING_ROUNDS`. It passes only
+  accumulated trusted tool results into later rounds and preserves results from
+  completed rounds if later planning fails.
 - A backend instance and its state belong to one voice session. A new delegated request cancels and replaces unfinished work in that session.
 - Cancellation invalidates the active call identifier, so a late result cannot become the current response.
+- A model-authored internal tool call after a completed backend result cannot
+  execute. The runtime retries once, then returns trusted backend speech.
+- Parameterless internal control tools accept only an empty argument object or
+  a known empty placeholder such as `{"":""}`. This normalization applies
+  only to a trusted schema with no parameters. Other unexpected arguments
+  remain invalid.
 - The generic Talker cancels work only after an explicit withdrawal. Status words such as "complete" or "done" do not cancel work by themselves.
 - WebSocket barge-in clears buffered browser audio through the client media manager. The server records speech-only interruption separately from backend cancellation.
 - Generic bot-speech interruption requires at least 2 transcribed words. A

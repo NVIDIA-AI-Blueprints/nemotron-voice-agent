@@ -135,6 +135,37 @@ class RealtimeClientSecretAuthTests(unittest.TestCase):
             session,
         )
 
+    def test_large_repetitive_session_is_compressed_and_round_trips(self) -> None:
+        session = {
+            "type": "realtime",
+            "instructions": "Use the trusted tools when needed. " * 800,
+            "tools": [
+                {
+                    "type": "function",
+                    "name": f"tool_{index}",
+                    "description": "A trusted function with a detailed description. " * 20,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
+                }
+                for index in range(20)
+            ],
+        }
+
+        secret = issue_realtime_client_secret(
+            api_key=_API_KEY,
+            session=session,
+            issued_at=1_000,
+            expires_at=1_600,
+        )
+
+        self.assertLess(len(secret), 16_384)
+        self.assertEqual(
+            verify_realtime_client_secret(secret, api_key=_API_KEY, now=1_001).session,
+            session,
+        )
+
     def test_expired_tampered_and_wrong_deployment_secrets_fail_closed(self) -> None:
         secret = issue_realtime_client_secret(
             api_key=_API_KEY,
