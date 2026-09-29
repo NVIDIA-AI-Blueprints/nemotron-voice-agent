@@ -20,7 +20,6 @@ from loguru import logger
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.frames.frames import FunctionCallResultProperties
 from pipecat.services.llm_service import FunctionCallParams, LLMService
-from pipecat.utils.async_tool_cancellation import CANCEL_ASYNC_TOOL_NAME
 
 from realtime.protocol import RealtimeProtocolError
 
@@ -379,7 +378,7 @@ class RealtimeClientToolProjection:
 
     def _provider_reserved_names(self) -> set[str]:
         """Read names owned by Pipecat/provider internals at the projection edge."""
-        reserved = {CANCEL_ASYNC_TOOL_NAME}
+        reserved: set[str] = set()
         llm = self._llm
         if llm is None:
             return reserved

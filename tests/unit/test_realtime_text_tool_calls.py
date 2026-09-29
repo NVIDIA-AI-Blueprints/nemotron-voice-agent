@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from collections.abc import AsyncIterator
 
 from openai.types.chat.chat_completion_chunk import (
     ChatCompletionChunk,
@@ -20,6 +21,7 @@ from openai.types.chat.chat_completion_chunk import (
 )
 from openai.types.completion_usage import CompletionUsage
 
+from examples.frontend_backend_agent.src.reliable_talker import _collect_stream
 from examples.shared.text_tool_calls import harvest_text_tool_calls, parse_text_tool_calls
 
 XML_CALL = (
@@ -52,6 +54,11 @@ def _chunk(content=None, tool_calls=None, usage=None):
 def _streamed(text: str) -> list[ChatCompletionChunk]:
     """Split ``text`` across chunks the way a streaming endpoint would."""
     return [_chunk(content=piece) for piece in (text[i : i + 7] for i in range(0, len(text), 7))]
+
+
+async def _async_stream(chunks: list[ChatCompletionChunk]) -> AsyncIterator[ChatCompletionChunk]:
+    for chunk in chunks:
+        yield chunk
 
 
 class ParseTextToolCallsTests(unittest.TestCase):
@@ -105,7 +112,25 @@ class HarvestTextToolCallsTests(unittest.TestCase):
             },
         )
         self.assertIsNone(harvested[0].choices[0].delta.content)
-        self.assertEqual(harvested[0].choices[0].finish_reason, "tool_calls")
+        self.assertIsNone(harvested[0].choices[0].finish_reason)
+        self.assertEqual(harvested[1].choices[0].finish_reason, "tool_calls")
+
+    def test_emits_one_delta_per_parsed_call_before_the_terminal(self):
+        second_call = XML_CALL.replace("call_backend", "cancel_backend").replace(
+            "Get the details of reservation ABC123.",
+            "Cancel reservation ABC123.",
+        )
+
+        harvested = harvest_text_tool_calls(_streamed(XML_CALL + second_call))
+        call_chunks = harvested[:-1]
+
+        self.assertEqual(len(call_chunks), 2)
+        self.assertTrue(all(len(chunk.choices[0].delta.tool_calls) == 1 for chunk in call_chunks))
+        self.assertEqual(
+            [chunk.choices[0].delta.tool_calls[0].function.name for chunk in call_chunks],
+            ["call_backend", "cancel_backend"],
+        )
+        self.assertEqual(harvested[-1].choices[0].finish_reason, "tool_calls")
 
     def test_leaves_structured_tool_calls_untouched(self):
         native = [
@@ -133,6 +158,23 @@ class HarvestTextToolCallsTests(unittest.TestCase):
 
     def test_handles_an_empty_stream(self):
         self.assertEqual(harvest_text_tool_calls([]), [])
+
+
+class CollectTextToolCallsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_synthesized_call_is_observed_once_after_harvesting(self):
+        observed: list[ChatCompletionChunk] = []
+
+        async def observe(chunk: ChatCompletionChunk) -> None:
+            observed.append(chunk)
+
+        harvested = await _collect_stream(_async_stream(_streamed(XML_CALL)), observe)
+        synthesized = [chunk for chunk in observed if chunk.choices[0].delta.tool_calls]
+
+        self.assertEqual(len(synthesized), 1)
+        self.assertEqual(
+            synthesized[0].choices[0].delta.tool_calls[0].id,
+            harvested[0].choices[0].delta.tool_calls[0].id,
+        )
 
 
 if __name__ == "__main__":

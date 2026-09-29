@@ -155,7 +155,7 @@ class MultilingualTokenConfigurationTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(pipeline, "load_selected_service_entry", return_value={}),
                 patch.object(pipeline, "validate_llm_session_language"),
                 patch.object(pipeline, "_prepare_session_language_codes", new=AsyncMock(return_value="")),
-                patch.object(pipeline, "NvidiaSTTService"),
+                patch.object(pipeline, "NvidiaForceEouSTTService"),
                 patch.object(llm_owner, llm_name, side_effect=stop_at_primary_llm),
                 self.assertRaises(ConstructionObserved),
             ):

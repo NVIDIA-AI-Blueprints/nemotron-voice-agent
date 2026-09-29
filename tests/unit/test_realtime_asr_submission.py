@@ -13,7 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pipecat.frames.frames import CancelFrame, EndFrame, Frame, InputAudioRawFrame, StartFrame, TranscriptionFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor, FrameProcessorSetup
 from pipecat.services.stt_service import STTService
 from riva.client.proto import riva_asr_pb2 as rasr
 
@@ -88,6 +88,27 @@ class _DirectFrameRecorder(FrameProcessor):
 
 class RealtimeASRSubmissionTests(unittest.IsolatedAsyncioTestCase):
     """Verify native request, ownership, cancellation, and shutdown invariants."""
+
+    async def test_setup_initializes_native_client_without_shared_stream_tasks(self) -> None:
+        """Initialize only turn-scoped NVIDIA resources during processor setup."""
+        service = RealtimeNvidiaSTTService(server="localhost:50051", use_ssl=False)
+        setup = MagicMock(spec=FrameProcessorSetup)
+        setup.audio_in_sample_rate = 16_000
+        recognition_config = rasr.StreamingRecognitionConfig()
+
+        with (
+            patch.object(STTService, "setup", AsyncMock()) as base_setup,
+            patch.object(service, "_initialize_client") as initialize_client,
+            patch.object(service, "_create_recognition_config", return_value=recognition_config),
+        ):
+            await service.setup(setup)
+
+        base_setup.assert_awaited_once_with(service, setup)
+        initialize_client.assert_called_once_with()
+        self.assertIs(service._config, recognition_config)
+        self.assertIsNone(service._audio_iterator)
+        self.assertIsNone(service._thread_task)
+        self.assertIsNone(service._keepalive_task)
 
     def test_native_provider_deadline_precedes_publication_watchdog(self) -> None:
         """Reserve deterministic time for terminal publication after provider expiry."""

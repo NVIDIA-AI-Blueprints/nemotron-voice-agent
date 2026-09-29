@@ -20,7 +20,6 @@ from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 
-from examples.shared.nvidia_llm import NvidiaLLMService as RealtimeNvidiaLLMService
 from examples.shared.text_tool_calls import harvest_text_tool_calls
 from utils import parse_env_float
 
@@ -69,9 +68,10 @@ _MAX_BACKEND_RESPONSES = 8
 #: A Realtime response stays in progress until the Talker stream ends, so an
 #: unresponsive inference endpoint would hold the session open indefinitely and
 #: every later turn would be refused with ``response_in_progress``. Bound each
-#: attempt instead: two attempts still fit inside a 90s client response window,
-#: and a stalled attempt falls through to the deterministic spoken fallback.
-_TALKER_STREAM_TIMEOUT_SECONDS = parse_env_float("GENERIC_TALKER_STREAM_TIMEOUT_SECONDS", 40.0, min_value=1.0)
+#: attempt instead: two 15s attempts plus the 40s bounded backend still leave
+#: headroom inside a 90s client response window. A stalled attempt falls
+#: through to the deterministic spoken fallback.
+_TALKER_STREAM_TIMEOUT_SECONDS = parse_env_float("GENERIC_TALKER_STREAM_TIMEOUT_SECONDS", 15.0, min_value=1.0)
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
 _EXPLICIT_REPEAT_RE = re.compile(r"\b(?:repeat|refresh|recheck|again|one more time|check again)\b", re.IGNORECASE)
 _INTERNAL_MECHANICS_RE = re.compile(
@@ -447,10 +447,6 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
         return latest
 
 
-class ReliableRealtimeNvidiaLLMService(ReliableNvidiaLLMService, RealtimeNvidiaLLMService):
-    """Apply the bounded Talker guards to the protocol-aware Realtime service."""
-
-
 def _build_retry_context(context: LLMContext, correction: str = EMPTY_RESPONSE_CORRECTION) -> LLMContext:
     """Clone context and append an ephemeral correction without mutating history."""
     messages = copy.deepcopy(context.get_messages())
@@ -823,7 +819,12 @@ async def _collect_stream(
         await _close_stream(stream)
     # Endpoints without a Nemotron tool-call parser stream the call as text; a
     # harvested call must look native before validation and dispatch see it.
-    return harvest_text_tool_calls(chunks)
+    harvested = harvest_text_tool_calls(chunks)
+    if observer is not None and harvested is not chunks:
+        for chunk in harvested:
+            if _chunk_has_native_tool_call(chunk):
+                await observer(chunk)
+    return harvested
 
 
 async def _close_stream(stream: AsyncIterator[ChatCompletionChunk]) -> None:

@@ -5,9 +5,9 @@
 
 import unittest
 
-from openai import NOT_GIVEN
 from pipecat.frames.frames import LLMContextFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.utils.types import NOT_GIVEN
 
 from examples.multilingual.multilingual_processor import (
     PerTurnReminderProcessor,

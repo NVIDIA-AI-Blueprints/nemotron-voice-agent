@@ -50,7 +50,8 @@ from pipecat.services.nvidia.llm import (
     NvidiaLLMService as PipecatNvidiaLLMService,
 )
 from pipecat.services.nvidia.llm import NvidiaLLMSettings
-from pipecat.services.settings import NOT_GIVEN, assert_given, is_given
+from pipecat.utils.http import TIMEOUT_EXCEPTIONS
+from pipecat.utils.types import NOT_GIVEN, assert_given, is_given
 
 from examples.shared.frames import (
     LLMProviderCompletionReasonFrame,
@@ -1146,7 +1147,7 @@ class NvidiaLLMService(PipecatNvidiaLLMService):
             await self._process_context(run_context)
         except asyncio.CancelledError:
             raise
-        except httpx.TimeoutException as exc:
+        except TIMEOUT_EXCEPTIONS as exc:
             await self._call_event_handler("on_completion_timeout")
             await self.push_error(error_msg="LLM completion timeout", exception=exc)
         except Exception as exc:

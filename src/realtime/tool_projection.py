@@ -8,8 +8,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from openai import NOT_GIVEN
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
+from pipecat.utils.types import NOT_GIVEN
 
 
 def project_function_tools(tools: list[dict[str, Any]]) -> ToolsSchema | Any:

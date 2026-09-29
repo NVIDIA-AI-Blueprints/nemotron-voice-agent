@@ -1208,7 +1208,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
             enforce_realtime_audio_ceiling=self._enforce_max_user_audio_secs,
         )
         changed = await super()._update_settings(delta)
-        if "max_user_audio_secs" in changed and self._user_speaking and self._enforce_max_user_audio_secs:
+        if "max_user_audio_secs" in changed and self._audio_user_speaking and self._enforce_max_user_audio_secs:
             max_bytes = self._max_user_audio_bytes(self._sample_rate, self._channels)
             if self._audio_buffer_bytes > max_bytes:
                 self._drop_overflowing_audio_buffer()

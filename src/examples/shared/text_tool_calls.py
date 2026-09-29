@@ -138,12 +138,32 @@ def harvest_text_tool_calls(chunks: list[ChatCompletionChunk]) -> list[ChatCompl
         for index, (name, arguments) in enumerate(calls)
     ]
     template = next((chunk for chunk in chunks if getattr(chunk, "choices", None)), chunks[-1])
-    harvested = template.model_copy(
+    harvested = [
+        template.model_copy(
+            update={
+                "choices": [
+                    Choice(
+                        index=0,
+                        delta=ChoiceDelta(
+                            role="assistant" if index == 0 else None,
+                            content=None,
+                            tool_calls=[tool_call],
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                "usage": None,
+            },
+            deep=True,
+        )
+        for index, tool_call in enumerate(tool_calls)
+    ]
+    terminal = template.model_copy(
         update={
             "choices": [
                 Choice(
                     index=0,
-                    delta=ChoiceDelta(role="assistant", content=None, tool_calls=tool_calls),
+                    delta=ChoiceDelta(role=None, content=None, tool_calls=None),
                     finish_reason="tool_calls",
                 )
             ],
@@ -153,4 +173,4 @@ def harvest_text_tool_calls(chunks: list[ChatCompletionChunk]) -> list[ChatCompl
     )
     # Preserve trailing usage-only chunks so token metrics survive the rewrite.
     trailing = [chunk for chunk in chunks if getattr(chunk, "usage", None) is not None]
-    return [harvested, *trailing]
+    return [*harvested, terminal, *trailing]

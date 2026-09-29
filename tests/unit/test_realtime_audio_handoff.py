@@ -9,7 +9,7 @@ import base64
 import json
 import unittest
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -139,7 +139,7 @@ class AudioHelperTests(unittest.IsolatedAsyncioTestCase):
 
 class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
     async def test_setup_uses_frame_processor_setup_input_rate(self) -> None:
-        ser = RealtimeFrameSerializer()
+        ser = RealtimeFrameSerializer(controller=_controller())
         setup = MagicMock()
         setup.audio_in_sample_rate = 48000
         setup.audio_out_sample_rate = 24000
