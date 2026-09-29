@@ -611,8 +611,9 @@ generic_talker:
       follow-up question after the safe answer.
 
     You have exactly two functions:
-    - call_backend(query, filler_text): delegate supported current-data, search, BMI, or random-number work.
-    - cancel_backend(): cancel in-progress delegated work.
+    - call_backend(query, filler_text): delegate any request the listed session capabilities cover, including
+      current-data, search, and calculation work.
+    - cancel_backend(): withdraw your own in-flight delegated work, never a cancellation the user requests.
 
     Choose exactly one mode for each user turn:
 
@@ -649,6 +650,10 @@ generic_talker:
     cancel, never mind, forget that, ignore the request, or otherwise withdraws pending work.
     Require an explicit withdrawal of work. Words such as complete, completed, done, finished, or stop that
     merely describe a status or quoted message are not cancellation by themselves.
+    CANCEL withdraws your own pending delegated work. It is never how you carry out a cancellation the user
+    is asking for as a task. "Cancel my reservation", "cancel my order", and "cancel my subscription" are
+    ordinary requests: delegate them with call_backend.
+    Only choose CANCEL while delegated work is actually in flight.
     If the same turn interrupts speech and includes a substantive replacement question or request, handle the
     replacement in DIRECT or DELEGATE mode instead of calling cancel_backend. The runtime already stops the
     obsolete speech; do not answer only the word "stop" and discard the replacement request.

@@ -176,6 +176,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._response_gate: Any | None = None
         self._llm_context: Any | None = None
         self._instructions_renderer: Callable[[str], list[dict[str, Any]]] | None = None
+        self._session_prompt_update_owner: Any | None = None
         self._context_messages_by_item_id: dict[str, dict[str, Any]] = {}
         self._context_cleared_item_ids: set[str] = set()
         self._context_applied_events: dict[str, asyncio.Event] = {}
@@ -224,6 +225,33 @@ class RealtimeFrameSerializer(FrameSerializer):
     def set_mcp_runtime(self, runtime: RealtimeMCPRuntime) -> None:
         """Bind the connection-owned native MCP host."""
         self._mcp_runtime = runtime
+
+    def set_session_prompt_update_owner(self, owner: Any) -> None:
+        """Bind an adapter-owned atomic Talker/Thinker prompt coordinator."""
+        required = (
+            "prepare_session_update",
+            "snapshot_session_update",
+            "commit_session_update",
+            "restore_session_update",
+            "session_instruction_context",
+            "render_session_instructions",
+            "render_response_instructions",
+            "current_talker_prompt_messages",
+        )
+        if not all(hasattr(owner, name) for name in required):
+            raise TypeError("Realtime session prompt owner is incomplete")
+        if self._session_prompt_update_owner is not None and self._session_prompt_update_owner is not owner:
+            raise RuntimeError("Realtime session prompt owner cannot be rebound")
+        self._session_prompt_update_owner = owner
+        if self._response_gate is not None and self._llm_context is not None:
+            self._response_gate.bind_context(
+                self._llm_context,
+                instructions_renderer=owner.render_response_instructions,
+                session_instructions=self._controller.session.public_view()["instructions"],
+                canonical_prompt_messages=owner.current_talker_prompt_messages,
+                instruction_context=owner.session_instruction_context,
+                instruction_renderer=owner.render_session_instructions,
+            )
 
     def set_idle_timeout(self, idle_timeout: RealtimeServerVADIdleTimeout) -> None:
         """Bind the connection-owned server-VAD idle timeout coordinator."""
@@ -286,10 +314,16 @@ class RealtimeFrameSerializer(FrameSerializer):
     def bind_response_gate(self, response_gate: Any) -> None:
         """Bind response coordination without claiming pipeline placement."""
         if self._llm_context is not None:
+            owner = self._session_prompt_update_owner
             response_gate.bind_context(
                 self._llm_context,
-                instructions_renderer=self._instructions_renderer,
+                instructions_renderer=(
+                    owner.render_response_instructions if owner is not None else self._instructions_renderer
+                ),
                 session_instructions=self._controller.session.public_view()["instructions"],
+                canonical_prompt_messages=(owner.current_talker_prompt_messages if owner is not None else None),
+                instruction_context=(owner.session_instruction_context if owner is not None else None),
+                instruction_renderer=(owner.render_session_instructions if owner is not None else None),
             )
         response_gate.set_client_tool_output_handler(self._finalize_client_tool_output)
         response_gate.set_conversation_append_handler(self._finalize_conversation_append)
@@ -338,10 +372,16 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._llm_context = context
         self._instructions_renderer = instructions_renderer
         if self._response_gate is not None:
+            owner = self._session_prompt_update_owner
             self._response_gate.bind_context(
                 context,
-                instructions_renderer=instructions_renderer,
+                instructions_renderer=(
+                    owner.render_response_instructions if owner is not None else instructions_renderer
+                ),
                 session_instructions=self._controller.session.public_view()["instructions"],
+                canonical_prompt_messages=(owner.current_talker_prompt_messages if owner is not None else None),
+                instruction_context=(owner.session_instruction_context if owner is not None else None),
+                instruction_renderer=(owner.render_session_instructions if owner is not None else None),
             )
 
     def bind_latest_assistant_context_message(self) -> bool:
@@ -806,6 +846,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                     param_prefix="session",
                 )
         prepared_tools = None
+        prepared_prompt_update = None
         rendered_instructions: list[dict[str, Any]] | None = None
         preparation_id: str | None = None
         if tools_changed or tool_choice_changed or instructions_changed:
@@ -840,7 +881,16 @@ class RealtimeFrameSerializer(FrameSerializer):
             preparation_id = new_realtime_id("request")
             await self._response_gate.reserve_session_tool_preparation(preparation_id)
             try:
-                if instructions_changed:
+                if self._session_prompt_update_owner is not None and (
+                    instructions_changed or tools_changed or tool_choice_changed
+                ):
+                    prepared_prompt_update = await self._session_prompt_update_owner.prepare_session_update(
+                        instructions=candidate["instructions"],
+                        tools=candidate.get("tools", []),
+                        tool_choice=candidate.get("tool_choice", "auto"),
+                    )
+                    rendered_instructions = copy.deepcopy(list(prepared_prompt_update.talker_prompt_messages))
+                elif instructions_changed:
                     rendered_instructions = self._response_gate.prepare_session_instructions(candidate["instructions"])
                 if tools_changed or tool_choice_changed:
                     prepared_tools = await self._mcp_runtime.prepare_session_update(
@@ -870,6 +920,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         prepared_tools_resolved = prepared_tools is None
         controller_snapshot = None
         context_snapshot: _SessionContextState | None = None
+        prompt_owner_snapshot = None
         transaction_committed = False
         transition_input_pcm = b""
         try:
@@ -948,9 +999,13 @@ class RealtimeFrameSerializer(FrameSerializer):
                     instructions_changed=rendered_instructions is not None,
                     tools_changed=prepared_tools is not None,
                 )
+                if prepared_prompt_update is not None:
+                    prompt_owner_snapshot = self._session_prompt_update_owner.snapshot_session_update()
                 if rendered_instructions is not None:
                     self._response_gate.commit_session_instructions(rendered_instructions)
-                if prepared_tools is not None:
+                if prepared_prompt_update is not None:
+                    self._session_prompt_update_owner.commit_session_update(prepared_prompt_update)
+                if prepared_tools is not None and self._session_prompt_update_owner is None:
                     self._llm_context.set_tools(projected_pipeline_tools)
                     self._llm_context.set_tool_choice(copy.deepcopy(prepared_tools.pipeline_tool_choice))
                 self._controller.apply_session_update(patch)
@@ -997,6 +1052,11 @@ class RealtimeFrameSerializer(FrameSerializer):
                     except Exception as exc:
                         rollback_failures.append(exc)
                 rollback_failures.extend(self._restore_session_context(context_snapshot))
+                if prompt_owner_snapshot is not None:
+                    try:
+                        self._session_prompt_update_owner.restore_session_update(prompt_owner_snapshot)
+                    except Exception as exc:
+                        rollback_failures.append(exc)
                 if prepared_tools is not None and not prepared_tools_resolved:
                     try:
                         self._mcp_runtime.rollback_session_update(prepared_tools)
@@ -1154,7 +1214,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         effective_response_tool_choice = copy.deepcopy(
             response_tool_choice if response_tool_choice is not None else session_view.get("tool_choice", "auto")
         )
-        pending_calls = self._controller.pending_tool_call_ids()
+        pending_calls = self._controller.pending_client_tool_call_ids()
         pending_context = (
             self._client_tool_broker.pending_context_call_ids() if self._client_tool_broker is not None else ()
         )
@@ -1251,6 +1311,13 @@ class RealtimeFrameSerializer(FrameSerializer):
                     projected_response_tool_choice = prepared_response_tools.pipeline_tool_choice
                     response_mcp_pipeline_names = prepared_response_tools.mcp_pipeline_names
                     response_client_tool_bindings = prepared_response_tools.client_tool_bindings
+                if self._session_prompt_update_owner is not None:
+                    # The Generic Frontend/Backend adapter exposes public client
+                    # tools only to its hidden Thinker and client executor. Keep
+                    # the Talker's per-response request on the canonical trusted
+                    # call_backend/cancel_backend schema.
+                    pipeline_response_tools = None
+                    projected_response_tool_choice = None
             if preparation_id is not None:
                 # MCP discovery and other response preparation can yield while
                 # a fused audio turn claims the same response slot. Recheck at
@@ -2410,7 +2477,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                         code="tool_call_not_active",
                         param="response",
                     )
-            pending_calls = self._controller.pending_tool_call_ids()
+            pending_calls = self._controller.pending_client_tool_call_ids()
             if pending_calls:
                 raise RealtimeProtocolError(
                     message=f"Function call {pending_calls[0]!r} requires a correlated output before response.create",

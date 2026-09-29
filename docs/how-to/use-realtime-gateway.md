@@ -85,7 +85,8 @@ The repository defines these profiles:
 | `nvidia/nemotron-realtime-multilingual` | Multilingual cascaded pipeline |
 | `nvidia/nemotron-realtime-omni` | Direct Omni pipeline with optional client-owned functions |
 | `nvidia/nemotron-realtime-omni-subagents` | Omni multi-agent pipeline without client-defined functions |
-| `nvidia/nemotron-realtime-frontend-backend` | Frontend/Backend Agent with trusted delegation functions |
+| `nvidia/nemotron-realtime-frontend-backend` | Airline Frontend/Backend Agent with trusted delegation functions |
+| `nvidia/nemotron-realtime-generic-frontend-backend` | Generic Frontend/Backend Agent with server and client tools planned by its hidden Thinker |
 
 Select a model in the WebSocket URL:
 
@@ -113,8 +114,10 @@ within `REALTIME_SERVICE_PLATFORM`. It does not probe endpoints or switch to a
 different platform. Use `platform_overrides` when a profile needs a different
 catalog key on one platform.
 
-Use standard `session.instructions` to customize agent behavior. A live
-session update cannot change the selected model profile or its service route.
+Use standard `session.instructions` to customize agent behavior. The Generic
+Frontend/Backend profile can update its instructions, tools, and tool choice
+while connected. A live session update cannot change the selected model profile
+or its service route.
 
 ## Authenticate and Connect
 
@@ -427,7 +430,10 @@ send `function_call_output` for the trusted call.
 
 ### Run a Client-Owned Function
 
-Declare a client-owned function in an initial or live session update:
+Declare a client-owned function in an initial or live session update. The
+Generic Frontend/Backend profile accepts instruction, tool, and tool-choice
+changes while connected. It prepares the matching Thinker policy and Talker
+capability prompt before it commits the session update:
 
 ```json
 {
@@ -479,6 +485,62 @@ applies to the next user turn.
 The client-tool deadline defaults to 120 seconds. A timeout produces a
 structured failure and keeps the connection available for a recovery response.
 Tool-call state does not survive disconnection.
+
+### Run the Generic Frontend/Backend Profile
+
+Use `nvidia/nemotron-realtime-generic-frontend-backend` when the client owns
+domain functions but the server must retain bounded planning and grounded
+speech. This profile applies the following ownership boundary:
+
+- The Lightning Talker sees only `call_backend` and `cancel_backend`. This
+  remains true for its canonical context, live session updates, and each
+  response-scoped context.
+- The Talker receives a bounded capability digest with descriptions, but no
+  client function identifiers or argument schemas. It is deterministic by
+  default; model mode uses that same Lightning instance.
+- The Super Thinker receives `session.instructions` verbatim as a distinct
+  system message. Its trusted planner rules and complete server/client tool
+  contract remain in a separate server-owned system message.
+- Python validates the complete plan before the first side effect. Server tools
+  run in process; client tools suspend the plan and use standard
+  `function_call_output` events.
+- Independent client calls from one planning round share one Response A. The
+  backend waits up to `GENERIC_CLIENT_TOOL_TIMEOUT_SECONDS`, which defaults to
+  25 seconds, before it returns one grounded failure.
+- The backend retains one parked plan per session. Barge-in, cancellation, a
+  newer generation, a late result, or a repeated failed call cannot revive
+  stale work.
+
+The Talker supplies a short, query-grounded `filler_text` in its original
+`call_backend` arguments. After Response A closes, the pipeline can emit that
+precomputed text as a separate response without another model inference or a
+new user turn. The final tool result uses a later pipeline-created response.
+A rejected or missing filler remains silent; the runtime never substitutes a
+static phrase.
+
+The profile regenerates its capability digest whenever
+`session.instructions`, `session.tools`, or `session.tool_choice` changes.
+`REALTIME_CAPABILITY_MODE=static`, the default, renders it immediately from the
+effective tool catalog and makes no additional model call. Set the mode to
+`model` to ask the same Nemotron Lightning instance for schema-constrained
+summaries with reasoning disabled, temperature zero, a 350-token output ceiling,
+and a 30-second deadline. Model mode caches validated output in a bounded
+process cache and, when configured, Redis for 24 hours. The cache key covers the
+effective instructions, server and client tools, tool choice, profile, and
+summary schema version.
+
+Python uses exact names to validate completeness, but omits those identifiers
+from the rendered Talker digest. It rejects omissions, renamed or invented
+tools, policy text, and internal model details. A cache, timeout, provider,
+schema, or validation failure
+degrades to the deterministic digest; it never prevents session startup or a
+live policy update. The Thinker instruction, Talker digest, and tool validators
+still commit together.
+
+Do not interpret this source implementation as a qualified deployment. The
+32,768-token model context and reduced sequence limits in the dedicated Viking
+evaluation values must pass model-startup, live Realtime, and benchmark gates
+before promotion.
 
 ### Run Long-Running Delegation
 

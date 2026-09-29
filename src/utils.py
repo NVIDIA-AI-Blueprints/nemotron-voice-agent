@@ -846,6 +846,18 @@ def nvidia_api_key(default: str = "not-needed") -> str:
     return key or default
 
 
+def nvidia_speech_api_key(default: str = "not-needed") -> str:
+    """Return the credential for NVIDIA speech services (ASR and TTS).
+
+    NVCF function invocation and the Inference Hub LLM catalog are separate
+    credential domains; one key is not guaranteed to work for both. Set
+    ``NVIDIA_SPEECH_API_KEY`` when the speech functions need their own key.
+    Falls back to ``NVIDIA_API_KEY`` so single-key deployments are unchanged.
+    """
+    key = (os.getenv("NVIDIA_SPEECH_API_KEY") or "").strip()
+    return key or nvidia_api_key(default)
+
+
 def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:
     """Parse an integer environment variable with safe fallback and optional minimum."""
     raw = os.getenv(name, str(default))
@@ -882,7 +894,7 @@ def parse_env_bool(name: str, default: bool = False) -> bool:
     return raw.lower() == "true" if raw else default
 
 
-def load_ipa_dictionary() -> dict | None:
+def load_ipa_dictionary(model_name: str | None = None) -> dict | None:
     """Load a word-to-IPA pronunciation dictionary for ``NvidiaTTSService``.
 
     Reads ``TTS_IPA_FILE_PATH`` and parses JSON or YAML into a flat
@@ -890,6 +902,14 @@ def load_ipa_dictionary() -> dict | None:
     Returns ``None`` when unset, missing, malformed, or empty so callers can
     pass the result straight into ``custom_dictionary=``.
     """
+    # Only Magpie accepts a custom pronunciation dictionary; sending one to
+    # another voice (Chatterbox) is rejected by the service. Callers that do not
+    # know the model pass nothing and keep the previous behaviour.
+    normalized_model = (model_name or "").strip().lower()
+    if normalized_model and "magpie" not in normalized_model:
+        logger.info(f"Skipping TTS IPA dictionary for unsupported model: {model_name}")
+        return None
+
     raw_path = os.getenv("TTS_IPA_FILE_PATH", "").strip()
     if not raw_path:
         return None

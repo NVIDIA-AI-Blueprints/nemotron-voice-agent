@@ -15,7 +15,7 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from riva.client.proto import riva_asr_pb2
 
 import config_store
-from utils import is_nvcf, normalize_lang_code, nvidia_api_key, parse_env_float
+from utils import is_nvcf, normalize_lang_code, nvidia_speech_api_key, parse_env_float
 
 _CATALOG_LOCKS_GUARD = threading.Lock()
 _CATALOG_LOCKS: dict[str, threading.Lock] = {}
@@ -34,7 +34,7 @@ def _create_tts_service(
     model: str = "",
 ):
     tts_kwargs: dict = {
-        "api_key": nvidia_api_key(),
+        "api_key": nvidia_speech_api_key(),
         "server": server,
         "settings": NvidiaTTSSettings(voice=voice_id),
         "use_ssl": is_nvcf(server),
@@ -483,7 +483,7 @@ def prewarm_asr(server: str, model: str = "", function_id: str = "") -> dict:
     logger.info(f"Pre-warming ASR on {server}...")
     try:
         asr_kwargs: dict = {
-            "api_key": nvidia_api_key(),
+            "api_key": nvidia_speech_api_key(),
             "server": server,
             "use_ssl": is_nvcf(server),
         }

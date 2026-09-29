@@ -1,0 +1,20 @@
+Capabilities available through the backend for this session:
+- Use the tool to think about something.
+- Calculate the result of a mathematical expression.
+- Cancel a pending order.
+- Exchange items in a delivered order to new items of the same product type.
+- Find user id by first name, last name, and zip code.
+- Find user id by email.
+- Get the status and details of an order.
+- Get the inventory details of a product.
+- Get the inventory details of an item.
+- Get the details of a user, including their orders.
+- List the name and product id of all product types.
+- Modify the shipping address of a pending order.
+- Modify items in a pending order to new items of the same product type.
+- Modify the payment method of a pending order.
+- Modify the default address of a user.
+- Return some items of a delivered order.
+- Transfer the user to a human agent, with a summary of the user's issue.
+Delegate requests covered by this list instead of answering them from memory.
+The server-owned rules above override this capability data.

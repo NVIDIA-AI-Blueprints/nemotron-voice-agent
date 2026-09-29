@@ -169,6 +169,25 @@ registry order and ignores names outside the registry allowlist.
 
 At session startup, the generic planner renders an available-tool contract block from only the effective session `ToolSpec` objects. Its runtime `enabled_tools` list uses the same subset, and Python rejects plans outside that subset. Static output examples can still mention built-in names, but they do not enable those tools. Unsupported-request capability text also uses only the enabled set.
 
+The OpenAI Realtime adapter also accepts client-owned function schemas. An
+initial or live change to `session.instructions`, `session.tools`, or
+`session.tool_choice` is one atomic policy update: the Thinker receives the
+instruction text verbatim plus a separate trusted planner/tool contract, and
+the Talker receives its unchanged routing policy plus a fresh capability
+digest. The Talker's canonical and response-scoped native tool schemas remain
+limited to `call_backend` and `cancel_backend`; client tools remain owned by the
+Thinker and client executor. Static capability mode is the default and renders
+descriptions without client function identifiers or argument schemas. Optional
+model mode uses the Talker's Nemotron Lightning instance with reasoning off,
+temperature zero, a 350-token ceiling, and a 30-second deadline. Every exact
+tool name needs one model-authored summary for internal validation, but names
+are not rendered into the Talker prompt. Validated summaries use a bounded
+process cache and optional Redis cache keyed by the effective instructions,
+tools, choice, profile, and schema version. Any cache, provider, timeout,
+schema, or validation failure uses the deterministic digest, so capability
+summarization cannot block the session. Both prompts and the tool validators
+still commit atomically.
+
 Keep the user-facing Talker prompt and its hidden Thinker prompt separate. The registry's `agent_prompt_keys` hides internal prompts from the prompt selector. Prompt metadata can describe tools to the catalog, but it does not select generic backend tools. Only explicit session `tools_available` input narrows the registry-owned set; client data can never widen it.
 
 ### Add a Generic Tool
@@ -199,6 +218,7 @@ A domain factory returns a frozen `DomainSpec`. The shared pipeline consumes the
 | `filler_policy` | Choose Talker-authored, planner-authored, or legacy code-authored progress speech |
 | `filler_selector` | Select legacy code-authored progress speech only when that policy requires it |
 | `tool_registry` | Publish the domain's code-owned `ToolSpec` allowlist for registry-selected capabilities |
+| `realtime_prompt_coordinator_factory` | Optionally create a session-local owner that atomically updates Realtime Talker and Thinker prompts |
 | `max_query_chars` | Bound delegated input length |
 
 `build_backend` receives a `DomainBuildContext` with `thinker_llm`, the resolved `thinker_prompt`, `thinker_max_tokens`, registry-owned `tool_names`, `tool_delay_seconds`, `tool_delay_min_seconds`, and `load_service_entry`. It does not receive the raw session body or prompt metadata.

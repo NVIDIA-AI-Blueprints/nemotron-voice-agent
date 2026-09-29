@@ -50,6 +50,7 @@ import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated
@@ -138,7 +139,14 @@ _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 _MAX_REALTIME_CLIENT_SECRET_REQUEST_BYTES = 256 * 1024
-_REALTIME_TRUNCATION_PIPELINES = frozenset({"frontend-backend-agent", "generic-assistant", "multilingual-assistant"})
+_REALTIME_TRUNCATION_PIPELINES = frozenset(
+    {
+        "frontend-backend-agent",
+        "generic-frontend-backend-agent",
+        "generic-assistant",
+        "multilingual-assistant",
+    }
+)
 _MULTI_WORKER_SESSION_CONFIG_MESSAGE = (
     "Session-config based WebRTC and WebSocket flows are disabled when "
     "UVICORN_WORKERS is greater than 1. Use a single worker, sticky routing, "
@@ -1055,6 +1063,12 @@ def _as_realtime_tool_schema(tool: dict) -> dict | None:
 
 
 def _resolve_realtime_server_tools(config: dict, fallback_example_key: str) -> list[str]:
+    selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
+    if selected["key"] in _REALTIME_DELEGATE_TOOL_MODULES:
+        # The Talker holds only call_backend/cancel_backend. A Frontend/Backend
+        # prompt's ``tools_available`` is the hidden planner's internal allowlist,
+        # never an advertised server tool, and has no OpenAI schema to publish.
+        return []
     _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
     prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
     if not isinstance(prompt, dict):
@@ -1077,11 +1091,22 @@ def _resolve_realtime_server_tool_schemas(config: dict, fallback_example_key: st
     return schemas
 
 
+#: Frontend/Backend pipelines expose exactly two Talker-visible delegate tools.
+#: The value is the module owning that domain's call/cancel contracts.
+_REALTIME_DELEGATE_TOOL_MODULES: dict[str, str] = {
+    "frontend-backend-agent": "examples.frontend_backend_agent.airline.tools",
+    "generic-frontend-backend-agent": "examples.frontend_backend_agent.generic.tools",
+}
+
+
 def _resolve_realtime_delegate_tool_schemas(config: dict, fallback_example_key: str) -> list[dict]:
     selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
-    if selected["key"] != "frontend-backend-agent":
+    module_path = _REALTIME_DELEGATE_TOOL_MODULES.get(selected["key"])
+    if module_path is None:
         return []
-    from examples.frontend_backend_agent.airline.tools import CALL_BACKEND_TOOL, CANCEL_BACKEND_TOOL
+    module = import_module(module_path)
+    CALL_BACKEND_TOOL = module.CALL_BACKEND_TOOL
+    CANCEL_BACKEND_TOOL = module.CANCEL_BACKEND_TOOL
 
     return [
         schema

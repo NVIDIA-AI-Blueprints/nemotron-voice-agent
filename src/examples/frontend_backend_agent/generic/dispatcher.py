@@ -13,6 +13,13 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from examples.frontend_backend_agent.generic.client_tools import (
+    ClientToolRoundExecutor,
+    ClientToolSpec,
+    client_call_fingerprint,
+    format_client_result,
+    validate_client_arguments,
+)
 from examples.frontend_backend_agent.generic.result_formatters import (
     combine_tool_results,
     disabled_tool,
@@ -80,12 +87,14 @@ def validate_plan(
     plan: dict[str, Any],
     tools: Mapping[str, ToolSpec],
     enabled_tools: frozenset[str],
+    client_tools: Mapping[str, ClientToolSpec] | None = None,
 ) -> list[ValidatedToolCall]:
     """Validate the whole plan before allowing any external side effect."""
     calls: list[ValidatedToolCall] = []
+    client_tools = client_tools or {}
     for raw in _raw_calls(plan):
         name = str(raw.get("tool") or "").strip()
-        if name not in tools:
+        if name not in tools and name not in client_tools:
             raise PlanValidationError(f"unknown tool: {name}")
         if name not in enabled_tools:
             raise PlanValidationError(f"disabled tool: {name}")
@@ -94,7 +103,7 @@ def validate_plan(
             arguments = {}
         if not isinstance(arguments, dict):
             raise PlanValidationError(f"invalid params for {name}")
-        if set(arguments) - set(tools[name].params):
+        if name in tools and set(arguments) - set(tools[name].params):
             raise PlanValidationError(f"unexpected params for {name}")
         calls.append(ValidatedToolCall(name=name, arguments=dict(arguments)))
     return calls
@@ -189,14 +198,19 @@ async def dispatch_plan(
     backend_call_id: str = "unbound",
     accumulated_results: list[dict[str, Any]] | None = None,
     tool_ordinal_offset: int = 0,
+    client_tools: Mapping[str, ClientToolSpec] | None = None,
+    client_tool_executor: ClientToolRoundExecutor | None = None,
+    client_tool_timeout_seconds: float = 25.0,
+    seen_client_calls: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate atomically, serialize mutating tools, and preserve planner order."""
     enabled = frozenset(enabled_tools)
+    client_tools = client_tools or {}
     enabled_specs = tuple(tools[name] for name in enabled_tools if name in tools)
     if plan.get("tool") == "response_hint" and not plan.get("tool_calls"):
         return _response_hint(plan, tools, enabled_tools)
     try:
-        calls = validate_plan(plan, tools, enabled)
+        calls = validate_plan(plan, tools, enabled, client_tools)
     except PlanValidationError as exc:
         message = str(exc)
         logger.warning(f"generic domain plan rejected: {message}")
@@ -207,7 +221,34 @@ async def dispatch_plan(
         return unsupported_request(enabled_specs)
     # Preflight every call before the first side effect. A malformed member of
     # a multi-tool plan prevents all other members from running.
+    pending_client_fingerprints: list[str] = []
     for call in calls:
+        if call.name in client_tools:
+            validation_error = validate_client_arguments(client_tools[call.name], call.arguments)
+            if validation_error is not None:
+                logger.warning(f"client-owned tool arguments rejected: tool={call.name}")
+                return invalid_parameters(call.name)
+            fingerprint = client_call_fingerprint(call.name, call.arguments)
+            if (seen_client_calls is not None and fingerprint in seen_client_calls) or (
+                fingerprint in pending_client_fingerprints
+            ):
+                if seen_client_calls is not None:
+                    seen_client_calls.update(pending_client_fingerprints)
+                    seen_client_calls.add(fingerprint)
+                logger.warning(f"duplicate client-owned tool call suppressed: tool={call.name}")
+                return format_client_result(
+                    call.name,
+                    call.arguments,
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "duplicate_client_tool_call",
+                            "message": "I stopped a repeated tool request that had not produced a successful result.",
+                        },
+                    },
+                )
+            pending_client_fingerprints.append(fingerprint)
+            continue
         spec = tools[call.name]
         if source_query is not None:
             ungrounded = _source_grounding_missing(call, source_query)
@@ -238,19 +279,98 @@ async def dispatch_plan(
             tool_ordinal_offset + index,
         )
 
-    async def run_mutating_chain(items: list[tuple[int, ValidatedToolCall]]) -> None:
-        for index, call in items:
-            await run_one(index, call)
+    async def run_client_batch(items: list[tuple[int, ValidatedToolCall]]) -> None:
+        spans: list[Any] = []
+        try:
+            for index, call in items:
+                if on_tool_started is not None and stage_metrics is None:
+                    await on_tool_started(call.name)
+                span = (
+                    await stage_metrics.start_tool(
+                        backend_call_id,
+                        tool_name=call.name,
+                        ordinal=tool_ordinal_offset + index,
+                    )
+                    if stage_metrics is not None
+                    else None
+                )
+                spans.append(span)
+            if client_tool_executor is None:
+                outputs: list[str | dict[str, Any]] = [
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "client_tool_runtime_unavailable",
+                            "message": "That client capability is unavailable for this session.",
+                        },
+                    }
+                    for _item in items
+                ]
+            else:
+                outputs = await client_tool_executor(
+                    tuple((call.name, call.arguments) for _index, call in items),
+                    client_tool_timeout_seconds,
+                )
+                if len(outputs) != len(items):
+                    raise RuntimeError("Client tool executor returned the wrong result cardinality")
+            for (index, call), output in zip(items, outputs, strict=True):
+                payloads[index] = format_client_result(call.name, call.arguments, output)
+                fingerprint = client_call_fingerprint(call.name, call.arguments)
+                if seen_client_calls is not None:
+                    if str(payloads[index].get("status")) == "success":
+                        seen_client_calls.discard(fingerprint)
+                    else:
+                        seen_client_calls.add(fingerprint)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"client-owned tool round failed: {type(exc).__name__}: {exc}")
+            for index, call in items:
+                payloads[index] = format_client_result(
+                    call.name,
+                    call.arguments,
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "client_tool_error",
+                            "message": "I couldn't complete that client tool request right now.",
+                        },
+                    },
+                )
+                if seen_client_calls is not None:
+                    seen_client_calls.add(client_call_fingerprint(call.name, call.arguments))
+        finally:
+            if stage_metrics is not None:
+                for span, (index, _call) in zip(spans, items, strict=False):
+                    if span is not None:
+                        outcome = (
+                            "success"
+                            if payloads[index] is not None and payloads[index].get("status") == "success"
+                            else "error"
+                        )
+                        await stage_metrics.finish_tool(span, outcome)
 
     mutating: list[tuple[int, ValidatedToolCall]] = []
+    client_items: list[tuple[int, ValidatedToolCall]] = []
     coroutines: list[Awaitable[None]] = []
     for index, call in enumerate(calls):
-        if tools[call.name].mutates:
+        if call.name in client_tools:
+            client_items.append((index, call))
+        elif tools[call.name].mutates:
             mutating.append((index, call))
         else:
             coroutines.append(run_one(index, call))
     if mutating:
-        coroutines.append(run_mutating_chain(mutating))
+
+        async def run_mutating_chain() -> None:
+            for index, call in mutating:
+                await run_one(index, call)
+
+        coroutines.append(run_mutating_chain())
+    if client_items:
+        if seen_client_calls is not None:
+            seen_client_calls.update(pending_client_fingerprints)
+        coroutines.append(run_client_batch(client_items))
     await asyncio.gather(*coroutines)
 
     resolved = [payload for payload in payloads if payload is not None]

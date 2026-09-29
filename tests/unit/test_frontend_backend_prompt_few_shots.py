@@ -16,7 +16,7 @@ from examples.frontend_backend_agent import pipeline
 
 
 def test_generic_prompt_loads_subject_neutral_native_repeat_example() -> None:
-    messages = pipeline._load_prompt_few_shots("generic_talker", custom_prompt=False)
+    messages = pipeline._load_prompt_few_shots("generic_talker")
 
     assert [message["role"] for message in messages[:5]] == ["user", "assistant", "tool", "developer", "assistant"]
     tool_call = messages[1]["tool_calls"][0]
@@ -32,7 +32,7 @@ def test_generic_prompt_loads_subject_neutral_native_repeat_example() -> None:
 
 
 def test_generic_prompt_models_the_real_async_weather_result_envelope() -> None:
-    messages = pipeline._load_prompt_few_shots("generic_talker", custom_prompt=False)
+    messages = pipeline._load_prompt_few_shots("generic_talker")
 
     assert len(messages) == 15
     assert [message["role"] for message in messages[5:10]] == ["user", "assistant", "tool", "developer", "assistant"]
@@ -53,16 +53,18 @@ def test_generic_prompt_models_the_real_async_weather_result_envelope() -> None:
     assert "minus 5 degrees Celsius" in messages[14]["content"]
 
 
-def test_custom_prompt_never_inherits_catalog_few_shots() -> None:
-    with patch.object(pipeline, "load_prompt_catalog", side_effect=AssertionError("catalog must not be read")):
-        assert pipeline._load_prompt_few_shots("generic_talker", custom_prompt=True) == []
+def test_custom_realtime_instructions_preserve_trusted_catalog_few_shots() -> None:
+    messages = pipeline._load_prompt_few_shots("generic_talker")
+
+    assert messages
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "call_backend"
 
 
 def test_few_shot_loader_returns_a_deep_copy() -> None:
     catalog = {"example": {"few_shots": [{"role": "assistant", "content": None, "tool_calls": [{"id": "one"}]}]}}
 
     with patch.object(pipeline, "load_prompt_catalog", return_value=catalog):
-        messages = pipeline._load_prompt_few_shots("example", custom_prompt=False)
+        messages = pipeline._load_prompt_few_shots("example")
 
     messages[0]["tool_calls"][0]["id"] = "changed"
     assert catalog["example"]["few_shots"][0]["tool_calls"][0]["id"] == "one"
@@ -82,4 +84,4 @@ def test_invalid_catalog_few_shots_fail_closed(messages: object, error: str) -> 
         patch.object(pipeline, "load_prompt_catalog", return_value={"example": {"few_shots": messages}}),
         pytest.raises(ValueError, match=error),
     ):
-        pipeline._load_prompt_few_shots("example", custom_prompt=False)
+        pipeline._load_prompt_few_shots("example")

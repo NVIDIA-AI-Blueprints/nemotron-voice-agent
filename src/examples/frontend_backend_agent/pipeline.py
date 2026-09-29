@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
+from collections.abc import Mapping
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -59,6 +61,7 @@ from utils import (
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
+    nvidia_speech_api_key,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
@@ -90,9 +93,9 @@ def _build_context_messages(
     return [{"role": "system", "content": base_prompt}]
 
 
-def _load_prompt_few_shots(prompt_key: str, *, custom_prompt: bool) -> list[dict]:
+def _load_prompt_few_shots(prompt_key: str) -> list[dict]:
     """Load trusted native-call demonstrations without changing session history."""
-    if custom_prompt or not prompt_key:
+    if not prompt_key:
         return []
     entry = load_prompt_catalog(__file__).get(prompt_key)
     raw_messages = entry.get("few_shots") if isinstance(entry, dict) else None
@@ -153,9 +156,11 @@ async def bot(runner_args: RunnerArguments) -> None:
             bind_realtime_assistant_context_message,
             bind_realtime_context,
             bind_realtime_deferred_service_responses,
+            bind_realtime_session_prompt_updates,
             bind_realtime_tts_service,
             configure_realtime_client_tools,
             prepare_realtime_tools,
+            realtime_client_tool_executor,
             realtime_input_audio_processors,
             realtime_input_transcription_timeout_secs,
             realtime_response_gate_processors,
@@ -176,14 +181,34 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     stage_metrics = StageMetricsCoordinator(emit_stage_metric, emit_stage_server_event)
 
+    tool_names = tuple(name for name in body.get("tools", ()) if isinstance(name, str))
     prompt_key, talker_prompt = resolve_pipeline_prompt(__file__, body, is_realtime=is_realtime)
-    talker_few_shots = _load_prompt_few_shots(
-        prompt_key,
-        custom_prompt=bool(body.get("prompt_content")),
-    )
+    raw_client_tools = body.get("client_tools", ()) if is_realtime else ()
+    if not isinstance(raw_client_tools, (list, tuple)) or not all(
+        isinstance(tool, Mapping) for tool in raw_client_tools
+    ):
+        raise ValueError("client_tools must be a list of canonical Realtime function schemas")
+    client_tools = tuple(copy.deepcopy(dict(tool)) for tool in raw_client_tools)
+    client_instructions = str(body.get("prompt_content") or "") if is_realtime else ""
+    # Few-shots are addressed by the key that actually produced ``talker_prompt``.
+    # A Realtime client supplying ``instructions`` resolves ``prompt_key`` to
+    # "custom", which is not a catalog entry, so the trusted native-call
+    # demonstrations would silently vanish for every such session.
+    few_shot_prompt_key = prompt_key
+    realtime_capability_specs = ()
+    realtime_capability_mode = "static"
+    realtime_capability_static_prompt = ""
+    if is_realtime and domain.key == "generic":
+        realtime_capability_specs = tuple(
+            domain.tool_registry[name] for name in tool_names if name in domain.tool_registry
+        )
+        realtime_capability_mode = os.getenv("REALTIME_CAPABILITY_MODE", "static").strip().lower() or "static"
+        realtime_capability_static_prompt = _load_required_catalog_prompt(domain.talker_prompt_key)
+        talker_prompt = realtime_capability_static_prompt
+        few_shot_prompt_key = domain.talker_prompt_key
+    talker_few_shots = _load_prompt_few_shots(few_shot_prompt_key)
     thinker_prompt_key = str(body.get("thinker_prompt") or domain.thinker_prompt_key)
     thinker_prompt = _load_required_catalog_prompt(thinker_prompt_key)
-    tool_names = tuple(name for name in body.get("tools", ()) if isinstance(name, str))
     pipeline_mode = str(body.get("pipeline_mode", ""))
     if is_realtime:
         selected_llm_id = str(body.get("llm_id", "") or "")
@@ -204,7 +229,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
-        "api_key": nvidia_api_key(),
+        "api_key": nvidia_speech_api_key(),
         "server": asr_server,
         "use_ssl": asr_ssl,
     }
@@ -274,6 +299,20 @@ async def bot(runner_args: RunnerArguments) -> None:
             }
         )
     talker_llm = talker_cls(**talker_kwargs)
+    initial_capability_digest = ""
+    if is_realtime and domain.key == "generic":
+        from realtime.capabilities import render_capabilities_for_session
+
+        initial_capability_digest = await render_capabilities_for_session(
+            realtime_capability_specs,
+            client_tools,
+            mode=realtime_capability_mode,
+            llm=talker_llm,
+            instructions=client_instructions,
+            tool_choice=body.get("tool_choice", "auto"),
+            profile=str(body.get("pipeline_mode") or "generic-frontend-backend-agent"),
+        )
+        talker_prompt = f"{realtime_capability_static_prompt}\n\n{initial_capability_digest}"
     logger.info(
         f"Talker LLM: model={model_id}, base_url={base_url}, prompt={prompt_key}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
@@ -285,7 +324,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
     thinker_max_tokens = _parse_optional_int(
-        body.get("thinker_max_tokens", "") or default_thinker_llm.get("max_tokens"),
+        (os.getenv("GENERIC_THINKER_MAX_TOKENS", "") if domain.key == "generic" else "")
+        or body.get("thinker_max_tokens", "")
+        or default_thinker_llm.get("max_tokens"),
         4096,
     )
     thinker_temperature = _parse_optional_float(
@@ -295,6 +336,20 @@ async def bot(runner_args: RunnerArguments) -> None:
         body.get("thinker_extra_params", "") or default_thinker_llm.get("extra_params", ""),
         label="thinker_extra_params",
     )
+    generic_reasoning_budget = (
+        _parse_optional_int(os.getenv("GENERIC_THINKER_REASONING_BUDGET", ""), 1024)
+        if domain.key == "generic" and os.getenv("GENERIC_THINKER_REASONING_BUDGET", "").strip()
+        else None
+    )
+    if generic_reasoning_budget is not None:
+        thinker_extra_params = copy.deepcopy(thinker_extra_params)
+        extra_body = thinker_extra_params.setdefault("extra_body", {})
+        if not isinstance(extra_body, dict):
+            raise ValueError("thinker_extra_params.extra_body must be an object")
+        chat_template_kwargs = extra_body.setdefault("chat_template_kwargs", {})
+        if not isinstance(chat_template_kwargs, dict):
+            raise ValueError("thinker_extra_params chat_template_kwargs must be an object")
+        chat_template_kwargs["reasoning_budget"] = generic_reasoning_budget
     thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id)
     if thinker_max_tokens is not None:
         thinker_llm_settings.max_tokens = thinker_max_tokens
@@ -308,6 +363,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         base_url=thinker_base_url,
         settings=thinker_llm_settings,
     )
+
+    client_tool_round_executor = realtime_client_tool_executor(transport) if is_realtime else None
 
     async def on_internal_tool_started(tool_name: str) -> None:
         if task is not None:
@@ -325,6 +382,9 @@ async def bot(runner_args: RunnerArguments) -> None:
             load_service_entry=load_service_entry,
             on_tool_started=on_internal_tool_started,
             stage_metrics=stage_metrics,
+            client_tools=client_tools,
+            client_instructions=client_instructions,
+            client_tool_executor=client_tool_round_executor,
         )
     )
     logger.info(f"Frontend/Backend domain: {domain.key} ({domain.label})")
@@ -347,6 +407,11 @@ async def bot(runner_args: RunnerArguments) -> None:
         max_query_chars=domain.max_query_chars,
         stage_metrics=stage_metrics,
         allow_talker_frames=not is_realtime,
+        realtime_filler_emitter=(
+            getattr(talker_llm, "emit_realtime_deferred_text", None)
+            if is_realtime and domain.key == "generic"
+            else None
+        ),
     )
     if is_realtime:
         raw_delegate_tools = body.get("delegate_tools", [])
@@ -389,14 +454,20 @@ async def bot(runner_args: RunnerArguments) -> None:
     tools_schema = trusted_tools_schema
     tool_choice = body.get("tool_choice", "auto") or "auto"
     if is_realtime:
-        tools_schema = configure_realtime_client_tools(
+        # Client-declared schemas are projected for the hidden Thinker/executor
+        # boundary. The Talker keeps exactly the trusted delegate tools.
+        configure_realtime_client_tools(
             transport,
-            talker_llm,
-            body.get("client_tools"),
+            thinker_llm,
+            # ``client_tools`` is held as an immutable tuple here, but the
+            # Realtime canonicaliser accepts only a list.
+            list(client_tools),
             trusted_tools=trusted_tools_schema,
             trusted_tool_names=talker_handlers,
         )
-        tools_schema, tool_choice = await prepare_realtime_tools(transport, talker_llm)
+        await prepare_realtime_tools(transport, thinker_llm)
+        tools_schema = trusted_tools_schema
+        tool_choice = "auto"
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
@@ -415,7 +486,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     if tts_synthesis_mode:
         tts_settings_kwargs["synthesis_mode"] = tts_synthesis_mode
     tts_kwargs: dict = {
-        "api_key": nvidia_api_key(),
+        "api_key": nvidia_speech_api_key(),
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
@@ -451,6 +522,22 @@ async def bot(runner_args: RunnerArguments) -> None:
         rendered.extend(copy.deepcopy(talker_few_shots))
         return rendered
 
+    prompt_coordinator = None
+    if is_realtime and domain.realtime_prompt_coordinator_factory is not None:
+        prompt_coordinator = domain.realtime_prompt_coordinator_factory(
+            backend=thinker,
+            talker_llm=talker_llm,
+            server_specs=realtime_capability_specs,
+            trusted_tool_names=(*tool_names, *talker_handlers),
+            static_talker_prompt=realtime_capability_static_prompt,
+            initial_capability_digest=initial_capability_digest,
+            initial_instructions=client_instructions,
+            initial_client_tools=client_tools,
+            capability_mode=realtime_capability_mode,
+            render_talker_messages=render_realtime_instructions,
+            profile=str(body.get("pipeline_mode") or "generic-frontend-backend-agent"),
+        )
+
     messages = render_realtime_instructions(talker_prompt)
     logger.info(f"Talker native few-shot messages: {len(talker_few_shots)}")
     if tools_schema is not None:
@@ -458,6 +545,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     else:
         context = LLMContext(messages)
     if is_realtime:
+        if prompt_coordinator is not None:
+            bind_realtime_session_prompt_updates(transport, prompt_coordinator)
         bind_realtime_context(
             transport,
             context,

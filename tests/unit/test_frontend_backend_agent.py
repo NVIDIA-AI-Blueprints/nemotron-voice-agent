@@ -10,7 +10,7 @@ import unittest
 from contextlib import suppress
 from datetime import date, timedelta
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -970,6 +970,44 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[-1][0]["type"], "tool_result")
         markers = [event.marker for event in thinker.state.lifecycle_events]
         self.assertEqual(markers, ["ThinkerStarted", "IntermediateResponse", "ThinkerCompleted"])
+
+    async def test_realtime_call_backend_emits_filler_in_owned_deferred_response(self) -> None:
+        thinker = _make_thinker()
+        llm = _FrameCapturingLLM()
+        results = []
+        deferred_emitter = AsyncMock(return_value=True)
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="call_backend",
+            tool_call_id="call_realtime_filler",
+            arguments={
+                "query": "Search flights from New York to Seattle tomorrow",
+                "filler_text": "Let me check those Seattle flights.",
+                "origin_airport": "JFK",
+                "dest_airport": "SEA",
+                "date": "2026-05-26",
+            },
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        await build_handlers(
+            thinker,
+            filler_threshold_seconds=0,
+            filler_policy="talker_authored",
+            allow_talker_frames=False,
+            realtime_filler_emitter=deferred_emitter,
+        )["call_backend"](params)
+
+        deferred_emitter.assert_awaited_once_with("Let me check those Seattle flights.")
+        self.assertEqual(llm.frames, [])
+        self.assertEqual(results[-1][0]["type"], "tool_result")
+        self.assertTrue(results[-1][1].run_llm)
 
     async def test_call_backend_direct_response_emits_talker_text_and_suppresses_llm_rerun(self) -> None:
         thinker = _make_thinker()

@@ -654,6 +654,19 @@ class RealtimeSessionController:
             if isinstance(tool, dict) and tool.get("type") == "function" and isinstance(tool.get("name"), str)
         ) - (self.server_tools | self.delegate_tools)
 
+    def pipeline_name_for_client_tool(self, public_name: str) -> str | None:
+        """Return the active provider projection for one public client tool."""
+        if public_name not in self.client_tool_names():
+            return None
+        matches = [
+            pipeline_name
+            for pipeline_name, bound_public_name in self._session_client_tool_bindings.items()
+            if bound_public_name == public_name
+        ]
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
     def register_mcp_tool_binding(self, *, pipeline_name: str, server_label: str, name: str) -> bool:
         """Register an internal LLM name and report whether it was newly added."""
         if not all(isinstance(value, str) and value for value in (pipeline_name, server_label, name)):
@@ -765,6 +778,19 @@ class RealtimeSessionController:
         """Return model calls that do not yet have a correlated terminal output."""
         return tuple(
             call_id for call_id, record in self._tool_calls.items() if not record.completed and not record.retired
+        )
+
+    def pending_client_tool_call_ids(self) -> tuple[str, ...]:
+        """Return pending calls the Realtime client itself still owes an output for.
+
+        Server- and delegate-owned calls resolve inside the trusted runtime, and
+        the client is rejected if it tries to answer one. Blocking the client on
+        them would make an in-flight Frontend/Backend delegation unrecoverable.
+        """
+        return tuple(
+            call_id
+            for call_id, record in self._tool_calls.items()
+            if not record.completed and not record.retired and record.owner == "client"
         )
 
     def start_response(
@@ -1195,7 +1221,12 @@ class RealtimeSessionController:
         active_tool_names = {
             tool["name"] for tool in effective_tools if isinstance(tool, dict) and isinstance(tool.get("name"), str)
         }
-        if name not in active_tool_names:
+        # Server- and delegate-owned tools come from the trusted runtime registry
+        # rather than the client-facing session, so they are never required to
+        # appear in the advertised tool set. Gating them on it would reject the
+        # Frontend/Backend delegate contract, whose tools are deliberately hidden
+        # from the Realtime client.
+        if name not in (self.server_tools | self.delegate_tools) and name not in active_tool_names:
             raise RealtimeProtocolError(
                 message=f"Model requested inactive or unknown tool {name!r}",
                 code="unknown_tool",

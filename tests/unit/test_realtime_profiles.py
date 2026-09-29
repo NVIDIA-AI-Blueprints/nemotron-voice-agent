@@ -69,9 +69,11 @@ class RealtimeModelProfileTests(unittest.TestCase):
         profiles = examples_registry.realtime_model_profiles()
         for model, profile in profiles.items():
             for selector_name, selector_value in profile["selectors"].items():
-                if selector_name in {"prompt_key", "thinker_prompt"}:
-                    self.assertNotEqual(selector_value, examples_registry.REALTIME_REGISTRY_DEFAULT_SELECTOR)
-                elif model == _GENERIC_FBA_MODEL and selector_name in {"llm_id", "thinker_llm_id"}:
+                if (
+                    selector_name in {"prompt_key", "thinker_prompt"}
+                    or model == _GENERIC_FBA_MODEL
+                    and selector_name in {"llm_id", "thinker_llm_id"}
+                ):
                     self.assertNotEqual(selector_value, examples_registry.REALTIME_REGISTRY_DEFAULT_SELECTOR)
                 else:
                     self.assertEqual(selector_value, examples_registry.REALTIME_REGISTRY_DEFAULT_SELECTOR)

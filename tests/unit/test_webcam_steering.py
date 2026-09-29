@@ -203,6 +203,7 @@ class WebcamOutputValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("LAST NOTE", user_text)
         self.assertIn("white bottle", user_text)
         self.assertIn("it is GONE", user_text)
+
     async def test_incomplete_provider_output_is_rejected_even_when_json_is_valid(self) -> None:
         for finish_reason in ("", "length"):
             with self.subTest(finish_reason=finish_reason):
