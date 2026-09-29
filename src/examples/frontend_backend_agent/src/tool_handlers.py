@@ -30,6 +30,10 @@ _NAMED_DATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _MAX_PLANNER_ERROR_ATTEMPTS = 2
+#: Bound on the client-tool facts handed to the Talker to compose from.
+#: Large enough for an ordinary record, small enough that an unexpectedly
+#: large one cannot crowd out the prompt.
+_MAX_CLIENT_FACT_CHARS = 2_000
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
@@ -465,12 +469,24 @@ def _tool_result_mode(default_mode: object = "talker") -> str:
     return normalized_default if normalized_default in {"direct", "hybrid", "talker"} else "talker"
 
 
+def _payload_is_client_owned(payload: dict[str, Any]) -> bool:
+    data = payload.get("data")
+    return isinstance(data, dict) and data.get("owner") == "client"
+
+
 def _should_deliver_directly(
     payload: dict[str, Any],
     *,
     default_mode: object = "talker",
     talker_result_tools: frozenset[str] = frozenset(),
 ) -> bool:
+    # A client-owned result is whatever the caller's own tool returned, in
+    # whatever shape it chose. Direct delivery speaks response_text as-is,
+    # which is safe only for results this repository composes itself. Route
+    # these through the Talker in every mode so a sentence is written for
+    # them, rather than a serialized record being read out.
+    if _payload_is_client_owned(payload):
+        return False
     mode = _tool_result_mode(default_mode)
     if mode == "direct":
         return True
@@ -511,7 +527,22 @@ def _talker_result_projection(payload: dict[str, Any]) -> dict[str, Any]:
             "wind_kph",
         }
         projected["data"] = {key: result[key] for key in weather_keys if key in result}
+    elif _payload_is_client_owned(payload) and result is not None:
+        # A client tool's schema is declared per session, so there is no key
+        # whitelist to apply as there is for weather. Give the Talker a
+        # bounded rendering to compose a sentence from: it needs the facts,
+        # and the bound keeps an unexpectedly large record from filling the
+        # prompt. The Talker writes the sentence; this is never spoken as-is.
+        projected["data"] = _bounded_client_facts(result)
     return projected
+
+
+def _bounded_client_facts(result: Any) -> Any:
+    """Return a size-bounded rendering of one client tool's result."""
+    rendered = json.dumps(result, ensure_ascii=False, allow_nan=False, default=str, sort_keys=True)
+    if len(rendered) <= _MAX_CLIENT_FACT_CHARS:
+        return result
+    return {"truncated": True, "preview": rendered[:_MAX_CLIENT_FACT_CHARS]}
 
 
 def _talker_filler_mode() -> str:

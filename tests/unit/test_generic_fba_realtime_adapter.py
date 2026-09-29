@@ -526,6 +526,38 @@ class JsonEncodedClientResultTests(unittest.TestCase):
 
         self.assertEqual(as_mapping["status"], as_json["status"])
 
+    def test_a_structured_result_is_never_spoken_verbatim(self) -> None:
+        """A client tool returns data, not a sentence; speaking it leaks records.
+
+        Observed live: a reservation lookup was read out field by field,
+        including a passenger name and date of birth belonging to someone
+        other than the caller. The record must reach the Talker to compose
+        from, and never the speaker unchanged.
+        """
+        record = {
+            "reservation_id": "EHGLP3",
+            "user_id": "emma_kim_9957",
+            "passengers": [{"first_name": "Evelyn", "last_name": "Taylor", "dob": "1965-01-16"}],
+        }
+
+        payload = format_client_result("get_reservation_details", {"reservation_id": "EHGLP3"}, record)
+
+        self.assertEqual(payload["status"], "success")
+        for secret in ("Evelyn", "Taylor", "1965-01-16", "emma_kim_9957"):
+            with self.subTest(value=secret):
+                self.assertNotIn(secret, payload["response_text"])
+        self.assertEqual(payload["data"]["result"], record)
+
+    def test_a_client_result_is_never_delivered_directly(self) -> None:
+        """Direct delivery speaks response_text as-is, so client data must not use it."""
+        from examples.frontend_backend_agent.src.tool_handlers import _should_deliver_directly
+
+        payload = format_client_result("get_reservation_details", {}, {"reservation_id": "EHGLP3"})
+
+        for mode in ("direct", "hybrid", "talker"):
+            with self.subTest(mode=mode):
+                self.assertFalse(_should_deliver_directly(payload, default_mode=mode))
+
     def test_non_json_output_keeps_its_legacy_classification(self) -> None:
         self.assertEqual(format_client_result("lookup", {}, "Reservation confirmed")["status"], "success")
         self.assertEqual(format_client_result("lookup", {}, "Error: not found")["status"], "error")

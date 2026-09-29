@@ -78,21 +78,29 @@ def client_call_fingerprint(name: str, arguments: Mapping[str, Any]) -> str:
     return f"{name}\0{encoded_arguments}"
 
 
-def _classify_mapping_result(output: Mapping[str, Any]) -> tuple[str, str]:
-    """Classify one structured client-tool envelope into a status and speech message."""
+def _classify_mapping_result(output: Mapping[str, Any]) -> tuple[str, str | None]:
+    """Classify one structured client-tool envelope into a status and speech message.
+
+    A message comes back only when the envelope carries a human-readable one.
+    A structured payload yields ``None``: its fields are the tool's data, not a
+    sentence. Serializing them into speech is exactly how a client tool's raw
+    records reach the speaker verbatim, personal details included. The data
+    stays in the payload for the Talker to compose from instead.
+    """
     error = output.get("error")
     if isinstance(error, Mapping):
         return "unavailable", str(error.get("message") or "The client tool did not return a usable result.")
     if isinstance(error, str) and error.strip():
         return "unavailable", error.strip()
     if output.get("ok", True) is False:
-        return "error", json.dumps(output, ensure_ascii=False, allow_nan=False, sort_keys=True)
-    return "success", json.dumps(output, ensure_ascii=False, allow_nan=False, sort_keys=True)
+        return "error", None
+    return "success", None
 
 
 def format_client_result(name: str, arguments: dict[str, Any], output: str | dict[str, Any]) -> dict[str, Any]:
     """Turn an opaque client output into one grounded, bounded agent payload."""
     raw_result: Any
+    message: str | None
     if isinstance(output, dict):
         raw_result = output
         status, message = _classify_mapping_result(output)
@@ -106,15 +114,23 @@ def format_client_result(name: str, arguments: dict[str, Any], output: str | dic
             # Client transports often hand back a JSON-encoded envelope. Classify it
             # by its parsed contents so an error payload is never read as success.
             status, message = _classify_mapping_result(raw_result)
+        elif isinstance(raw_result, (list, tuple)):
+            # A bare array is data for the same reason a mapping is.
+            status, message = "success", None
         else:
             status = "error" if stripped.casefold().startswith("error:") else "success"
             message = stripped
-    speech = _SPACE_RE.sub(" ", message).strip()
-    if len(speech) > _MAX_CLIENT_RESULT_SPEECH_CHARS:
-        speech = speech[: _MAX_CLIENT_RESULT_SPEECH_CHARS - 1].rsplit(" ", 1)[0].rstrip(" ,;:-.") + "."
-    if not speech:
-        speech = "The client tool returned an empty result."
-        status = "error"
+    if message is None:
+        # Structured data carries no sentence. Say only that the result
+        # arrived; the Talker speaks the facts from the payload's data.
+        speech = f"I have the {name} result." if status == "success" else f"The {name} result came back unusable."
+    else:
+        speech = _SPACE_RE.sub(" ", message).strip()
+        if len(speech) > _MAX_CLIENT_RESULT_SPEECH_CHARS:
+            speech = speech[: _MAX_CLIENT_RESULT_SPEECH_CHARS - 1].rsplit(" ", 1)[0].rstrip(" ,;:-.") + "."
+        if not speech:
+            speech = "The client tool returned an empty result."
+            status = "error"
     return tool_result(
         tool=name,
         status=status,
