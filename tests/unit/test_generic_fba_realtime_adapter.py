@@ -21,9 +21,9 @@ from realtime_helpers import FakeWebSocket
 
 from examples.frontend_backend_agent.generic.backend import GenericThinkerBackend
 from examples.frontend_backend_agent.generic.client_tools import (
-    format_client_result,
     build_client_tool_specs,
     client_call_fingerprint,
+    format_client_result,
 )
 from examples.frontend_backend_agent.generic.dispatcher import dispatch_plan
 from examples.frontend_backend_agent.generic.tools import TOOLS_SCHEMA
@@ -150,10 +150,9 @@ class RealtimeClientToolRoundContractTests(unittest.IsolatedAsyncioTestCase):
                 for name in tool_names
             )
         )
-        plans = [
-            {"tool": name, "params": {"value": str(index)}}
-            for index, name in enumerate(tool_names, start=1)
-        ] + [{"complete": True}]
+        plans = [{"tool": name, "params": {"value": str(index)}} for index, name in enumerate(tool_names, start=1)] + [
+            {"complete": True}
+        ]
 
         class SequencedPlanner:
             def __init__(self) -> None:

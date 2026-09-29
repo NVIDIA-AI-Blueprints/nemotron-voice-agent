@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
-from pipecat.utils.async_tool_cancellation import CANCEL_ASYNC_TOOL_NAME
 
 from realtime.client_tools import RealtimeClientToolProjection
 from realtime.controller import RealtimeSessionController
@@ -20,12 +19,15 @@ from realtime.mcp import RealtimeMCPRuntime
 from realtime.protocol import RealtimeProtocolError
 from realtime.session import RealtimeSessionCapabilities
 
+CANCEL_ASYNC_TOOL_NAME = "cancel_background_job"
+
 MODEL = "nvidia/nemotron-realtime"
 VOICE = "Magpie-Multilingual.EN-US.Aria"
 
 
 class _FakeLLM:
     def __init__(self) -> None:
+        self._functions: dict[str, object] = {CANCEL_ASYNC_TOOL_NAME: object()}
         self.handlers: dict[str | None, Any] = {}
         self.options: dict[str | None, dict[str, Any]] = {}
 

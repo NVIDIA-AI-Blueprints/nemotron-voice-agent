@@ -382,7 +382,7 @@ class MCPConfigurationAndHappyPathTests(unittest.IsolatedAsyncioTestCase):
         private_name = prepared.pipeline_tools[1]["name"]
         self.assertNotEqual(private_name, TOOL_NAME)
         self.assertTrue(private_name.startswith("mcp_echo_"))
-        self.assertEqual(prepared.pipeline_tools[1]["parameters"], _advertised_tools()[0].inputSchema)
+        self.assertEqual(prepared.pipeline_tools[1]["parameters"], _advertised_tools()[0].input_schema)
         self.assertEqual(prepared.mcp_pipeline_names, frozenset({private_name}))
         handler, cancel_on_interruption = llm._functions[private_name]
         self.assertEqual(handler, runtime.handle_tool_call)

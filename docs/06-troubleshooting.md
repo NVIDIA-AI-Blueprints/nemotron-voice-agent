@@ -81,6 +81,18 @@ These are runtime behavior issues and apply to any deployment, cloud or local.
 |-----------------|-------------|-----------|
 | The voice session ends after an ASR, LLM, or TTS error | The service reported that it cannot recover, for example because a provider rejected its API key, model, or voice, or because reconnection attempts were exhausted. The pipeline ends the session gracefully instead of repeatedly sending work to an unusable service. Correct the credential or service configuration, confirm that the local sidecar is healthy, and then start a new session. | [Configure Services](how-to/configure-services.md) |
 
+## Frontend/Backend Agent Tool Delegation (Realtime)
+
+Applies to the Generic Frontend/Backend Agent behind the OpenAI Realtime
+boundary (`nvidia/nemotron-realtime-generic-frontend-backend` and related
+profiles).
+
+| Error / symptom | Cause & fix | Reference |
+|-----------------|-------------|-----------|
+| The assistant replies "there is nothing pending right now" to an ordinary request, such as "cancel my reservation" | `cancel_backend` withdraws only the assistant's own in-flight delegated work; it is not how the assistant performs a cancellation the user asks for as a task. A prompt or client that conflates the two routes ordinary cancellation requests to `cancel_backend` instead of `call_backend`, which then has no pending work to withdraw. | [Use the Realtime Gateway → Run the Generic Frontend/Backend Profile](how-to/use-realtime-gateway.md#run-the-generic-frontend-backend-profile) |
+| A later turn in the same session fails with `response_in_progress`, or the session appears to hang after a delegated request | Either the Thinker planner or the Talker's completion stream stalled without returning. Both are bounded (`GENERIC_BACKEND_TIMEOUT_SECONDS`, `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS`) and back independently, so a bounded deployment recovers within the deadline. Confirm both env vars are set and that neither exceeds the caller's response deadline. | [Frontend/Backend Agent → Configure the Shared Pipeline](../src/examples/frontend_backend_agent/README.md#configure-the-shared-pipeline) |
+| A delegated tool call intermittently fails with a transient error from the model endpoint (for example "Service temporarily overloaded") | The Thinker planning call retries a bounded number of times (`GENERIC_PLANNER_MAX_ATTEMPTS`, default 2) with a short backoff before the round fails. Raise `GENERIC_PLANNER_MAX_ATTEMPTS` only if the endpoint's overload is transient and brief; a persistently overloaded endpoint needs capacity, not more retries. | [Frontend/Backend Agent → Configure the Shared Pipeline](../src/examples/frontend_backend_agent/README.md#configure-the-shared-pipeline) |
+
 ## Cloud (NVCF)
 
 The hosted **[build.nvidia.com](https://build.nvidia.com/)** endpoints are for **experimentation and trials only**. For production, and for the most predictable latency and throughput, **self-host the models on-prem** (local NIM / vLLM sidecar).

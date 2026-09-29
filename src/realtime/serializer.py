@@ -21,7 +21,6 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     LLMRunFrame,
     OutputAudioRawFrame,
-    TTSUpdateSettingsFrame,
 )
 from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.serializers.base_serializer import FrameSerializer

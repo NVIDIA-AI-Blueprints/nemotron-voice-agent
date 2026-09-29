@@ -501,9 +501,13 @@ llm:
             catalog = utils.load_yaml_file(Path(f"src/examples/{example_dir}/services.local.yaml"))
             for profile, cap in profile_caps.items():
                 with self.subTest(example=example_dir, profile=profile):
-                    talker_entries = catalog[profile]["llm"].values()
-                    self.assertTrue(talker_entries)
-                    for entry in talker_entries:
+                    tokenizer_routes = [
+                        entry
+                        for entry in catalog[profile]["llm"].values()
+                        if not str(entry.get("base_url") or "").startswith(("ws://", "wss://"))
+                    ]
+                    self.assertTrue(tokenizer_routes)
+                    for entry in tokenizer_routes:
                         self.assertIs(entry["supports_tokenize"], True)
                         self.assertEqual(entry["realtime_max_output_tokens"], cap)
 

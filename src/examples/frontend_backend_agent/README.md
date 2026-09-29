@@ -240,7 +240,10 @@ The following environment variables bound shared and domain-specific orchestrati
 | `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE` | Disabled | Legacy switch that forces direct mode only when the explicit result-mode variable is absent |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delays progress speech until delegated work remains active past the threshold |
 | `THINKER_TOOL_TIMEOUT_SECONDS` | `45.0` | Bounds the shared Talker-to-backend function handler |
+| `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` | `15.0` | Bounds one Generic Talker completion stream. An invalid or stalled stream retries once, so the Talker spends at most twice this value producing a given utterance |
 | `GENERIC_PLANNER_TIMEOUT_SECONDS` | `6.0` | Bounds each generic Thinker planning round |
+| `GENERIC_PLANNER_MAX_ATTEMPTS` | `2` | Retries a transient Thinker planning failure (for example, a temporarily overloaded model endpoint) this many times before the backend deadline fails the round |
+| `GENERIC_PLANNER_RETRY_BACKOFF_SECONDS` | `0.2` | Base delay before a retried planning attempt; doubles with each further attempt |
 | `GENERIC_MAX_PLANNING_ROUNDS` | `8` | Limits dependent generic planning rounds; increasing this value does not extend the overall backend deadline |
 | `GENERIC_BACKEND_TIMEOUT_SECONDS` | `40.0` | Bounds the generic planner and tool execution together |
 | `GENERIC_CLIENT_TOOL_TIMEOUT_SECONDS` | `25.0` | Bounds one parked Realtime client-tool batch before the backend returns a grounded failure |
@@ -250,6 +253,22 @@ The following environment variables bound shared and domain-specific orchestrati
 | `REALTIME_CAPABILITY_MODE` | `static` | Uses an immediate deterministic capability digest. `model` enables cached Lightning-generated summaries with deterministic fallback. |
 | `AIRLINE_PLANNER_TIMEOUT_SECONDS` | `30.0` | Bounds airline Thinker planning; capped at the overall airline deadline |
 | `AIRLINE_BACKEND_TIMEOUT_SECONDS` | `30.0` | Bounds airline planning and tool execution together |
+
+The Generic domain's turn latency is bounded, not just individually timed. A
+turn that delegates work runs the backend deadline and a Talker completion
+stream sequentially: up to `GENERIC_BACKEND_TIMEOUT_SECONDS` (`40.0`) seconds
+for the Thinker to plan and execute tools, then up to twice
+`GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` (`15.0`) seconds, or 30 seconds, for
+the Talker to speak the grounded result if its first completion stream is
+invalid or stalls. That is at most 70 seconds end to end, leaving headroom
+inside the 90-second `response_timeout_s` that downstream evaluation
+harnesses such as tau2-bench commonly configure. `GENERIC_MAX_PLANNING_ROUNDS`
+does not add to this budget: every round shares the single
+`GENERIC_BACKEND_TIMEOUT_SECONDS` deadline rather than each getting its own.
+Raising `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` or
+`GENERIC_BACKEND_TIMEOUT_SECONDS` narrows or removes that headroom; keep the
+sum of `GENERIC_BACKEND_TIMEOUT_SECONDS` and twice
+`GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` under the caller's response deadline.
 
 For Generic Realtime sessions, every changed `session.instructions`,
 `session.tools`, or `session.tool_choice` value refreshes both model boundaries.

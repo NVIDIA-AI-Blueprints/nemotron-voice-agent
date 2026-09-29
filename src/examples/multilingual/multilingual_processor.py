@@ -70,7 +70,7 @@ class PerTurnReminderProcessor(FrameProcessor):
         else:
             # Preserve extension-owned context state without assuming its
             # constructor. Rebind the sentinel-sensitive standard properties
-            # from the source after deepcopy so OpenAI NOT_GIVEN keeps identity.
+            # from the source after deepcopy so Pipecat NOT_GIVEN keeps identity.
             new_context = copy.deepcopy(source)
             new_context.set_messages(messages)
             new_context.set_tools(source.tools)

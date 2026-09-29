@@ -25,7 +25,7 @@ from pipecat.frames.frames import (
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor, FrameProcessorSetup
 
 from realtime.audio import MAX_PENDING_INPUT_SECONDS
 
@@ -167,6 +167,12 @@ class RealtimeVADInputProcessor(FrameProcessor):
         self._controller_ready = False
         self._controller_cleaned = False
 
+    async def setup(self, setup: FrameProcessorSetup) -> None:
+        """Initialize the processor and its Pipecat 1.11 VAD controller."""
+        await super().setup(setup)
+        await self._vad_controller.setup(setup)
+        self._controller_ready = True
+
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Analyze downstream PCM before forwarding it and its boundaries."""
         if (
@@ -184,9 +190,6 @@ class RealtimeVADInputProcessor(FrameProcessor):
             self._pending_start = None
             self._pending_stop = None
             await self.push_frame(frame, direction)
-            if not self._controller_ready:
-                await self._vad_controller.setup(self.task_manager)
-                self._controller_ready = True
             await self._vad_controller.process_frame(frame)
             self._vad_window_samples = int(self._vad_analyzer.num_frames_required())
             if self._vad_window_samples <= 0:

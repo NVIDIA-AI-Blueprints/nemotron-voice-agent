@@ -10,13 +10,14 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams, VADState
+from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
     InputAudioRawFrame,
-    SpeechControlParamsFrame,
     StartFrame,
     VADParamsUpdateFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor, FrameProcessorSetup
+from pipecat.utils.asyncio.task_manager import TaskManager
 
 from realtime.vad import (
     RealtimeVADConfigurationFrame,
@@ -70,7 +71,14 @@ class RealtimeVADInputProcessorTests(unittest.IsolatedAsyncioTestCase):
     """Verify exact Realtime VAD packetization and boundary ordering."""
 
     async def _start_processor(self, processor: RealtimeVADInputProcessor) -> None:
-        processor._task_manager = MagicMock()
+        await processor.setup(
+            FrameProcessorSetup(
+                clock=SystemClock(),
+                task_manager=TaskManager(),
+                pipeline_worker=MagicMock(),
+                audio_in_sample_rate=16_000,
+            )
+        )
         with (
             patch.object(FrameProcessor, "process_frame", AsyncMock()),
             patch.object(processor, "push_frame", AsyncMock()),
@@ -180,7 +188,14 @@ class RealtimeVADInputProcessorTests(unittest.IsolatedAsyncioTestCase):
         """Initialize VAD after StartFrame and propagate runtime VAD updates."""
         analyzer = _ScriptedVADAnalyzer([])
         processor = RealtimeVADInputProcessor(cast(VADAnalyzer, analyzer))
-        processor._task_manager = MagicMock()
+        await processor.setup(
+            FrameProcessorSetup(
+                clock=SystemClock(),
+                task_manager=TaskManager(),
+                pipeline_worker=MagicMock(),
+                audio_in_sample_rate=16_000,
+            )
+        )
         pushed: list[tuple[FrameDirection, object]] = []
 
         async def record(output, direction=FrameDirection.DOWNSTREAM) -> None:
@@ -197,12 +212,9 @@ class RealtimeVADInputProcessorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(pushed[0][1], StartFrame)
         self.assertEqual(pushed[0][0], FrameDirection.DOWNSTREAM)
-        initial_metadata = pushed[1:3]
-        self.assertTrue(all(isinstance(frame, SpeechControlParamsFrame) for _, frame in initial_metadata))
-        self.assertEqual(
-            [direction for direction, _ in initial_metadata],
-            [FrameDirection.DOWNSTREAM, FrameDirection.UPSTREAM],
-        )
+        initial_config = cast(RealtimeVADConfigurationFrame, pushed[1][1])
+        self.assertIsInstance(initial_config, RealtimeVADConfigurationFrame)
+        self.assertEqual(pushed[1][0], FrameDirection.DOWNSTREAM)
         self.assertEqual(analyzer.sample_rate, 16_000)
         self.assertIs(analyzer.params, updated)
         self.assertIs(pushed[-2][1], update)

@@ -574,7 +574,13 @@ class RealtimeTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
             observed.append(stopped_by.turn_frame_id)
 
         task_manager = TaskManager()
-        await controller.setup(task_manager)
+        await controller.setup(
+            FrameProcessorSetup(
+                clock=SystemClock(),
+                task_manager=task_manager,
+                pipeline_worker=MagicMock(),
+            )
+        )
         try:
             start = RealtimeManualUserStartedSpeakingFrame(audio_sample_cursor=0, sample_rate=16_000)
             stop = RealtimeManualUserStoppedSpeakingFrame(audio_sample_cursor=1, sample_rate=16_000)

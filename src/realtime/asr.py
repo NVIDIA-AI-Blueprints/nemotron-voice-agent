@@ -24,12 +24,12 @@ from pipecat.frames.frames import (
     StartFrame,
     TranscriptionFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
 from pipecat.services.nvidia.stt import NvidiaSTTService
-from pipecat.services.settings import assert_given
 from pipecat.services.stt_service import STTService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
+from pipecat.utils.types import assert_given
 from riva.client.proto import riva_asr_pb2 as rasr
 from riva.client.proto import riva_common_pb2 as rcommon
 
@@ -261,17 +261,21 @@ class RealtimeNvidiaSTTService(NvidiaSTTService):
         self._realtime_stream_sequence = 0
         self._realtime_shutting_down = False
 
-    async def start(self, frame: StartFrame) -> None:
-        """Initialize NVIDIA configuration without opening a shared stream."""
-        await STTService.start(self, frame)
+    async def setup(self, setup: FrameProcessorSetup) -> None:
+        """Initialize NVIDIA configuration without the shared streaming task."""
+        await STTService.setup(self, setup)
         self._initialize_client()
         self._config = self._create_recognition_config()
+        logger.debug(f"Initialized RealtimeNvidiaSTTService with model: {self._settings.model}")
+
+    async def start(self, frame: StartFrame) -> None:
+        """Reset turn-scoped state without opening a shared stream."""
+        await STTService.start(self, frame)
         self._realtime_prefix_samples = round(self._realtime_vad_prefix_padding_secs * self.sample_rate)
         self._realtime_audio_cursor = 0
         self._realtime_pre_roll_start = 0
         self._realtime_pre_roll.clear()
         self._realtime_shutting_down = False
-        logger.debug(f"Initialized RealtimeNvidiaSTTService with model: {self._settings.model}")
 
     async def stop(self, frame: EndFrame) -> None:
         """Cancel native turn streams and flush STT usage."""

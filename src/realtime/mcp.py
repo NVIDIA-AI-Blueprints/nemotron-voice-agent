@@ -29,7 +29,7 @@ import httpx
 from loguru import logger
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, Tool
 from pipecat.frames.frames import FunctionCallResultProperties
 from pipecat.services.llm_service import FunctionCallParams, LLMService
@@ -646,7 +646,7 @@ def _mcp_error(exc: BaseException) -> dict[str, Any]:
             "code": exc.response.status_code,
             "message": "The MCP server returned an HTTP error",
         }
-    if isinstance(exc, McpError):
+    if isinstance(exc, MCPError):
         raw_error = getattr(exc, "error", None)
         code = getattr(raw_error, "code", -32603)
         message = getattr(raw_error, "message", None) or "The MCP server returned a protocol error"
@@ -1183,7 +1183,7 @@ class RealtimeMCPRuntime:
                     {
                         "name": tool.name,
                         "description": tool.description,
-                        "input_schema": copy.deepcopy(tool.inputSchema),
+                        "input_schema": copy.deepcopy(tool.input_schema),
                         **({"annotations": _tool_annotations(tool)} if _tool_annotations(tool) is not None else {}),
                     }
                     for tool in selected
@@ -1262,7 +1262,7 @@ class RealtimeMCPRuntime:
         _validate_advertised_tool_names(selected, server_label=label)
         prepared: list[tuple[Tool, dict[str, Any], str, dict[str, Any] | None, bool, str]] = []
         for tool in selected:
-            schema = copy.deepcopy(tool.inputSchema)
+            schema = copy.deepcopy(tool.input_schema)
             try:
                 compile_tool_arguments_validator(schema)
             except ValueError as exc:
@@ -1616,7 +1616,7 @@ class RealtimeMCPRuntime:
                 raise
             max_bytes = parse_env_int("REALTIME_MCP_MAX_OUTPUT_BYTES", 262_144, min_value=1024)
             output = _serialize_call_result(raw_result, max_bytes=max_bytes)
-            if raw_result.isError:
+            if raw_result.is_error:
                 # Realtime clients are the MCP host/application and retain the
                 # exact native result. The model receives the same failure
                 # content through MCP's separate, recursively redacted view.

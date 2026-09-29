@@ -208,6 +208,8 @@ class TtsSynthesisWarmupTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertTrue(second)
         create_service.assert_called_once_with("tts.example:443", "voice", "fid", "model")
+
+
 class RealtimeCatalogCapabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_initial_voice_patch_is_rejected_before_deferred_discovery(self) -> None:
         def sanitize(data: dict[str, Any], **_: Any) -> dict[str, Any]:

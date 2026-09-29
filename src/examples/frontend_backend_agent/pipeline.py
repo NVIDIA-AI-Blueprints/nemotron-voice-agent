@@ -31,10 +31,7 @@ from pipecat.workers.runner import WorkerRunner
 import examples_registry
 from examples.frontend_backend_agent.src.barge_in import BargeInState, BargeInTracker
 from examples.frontend_backend_agent.src.domain import DomainBuildContext, resolve_domain_spec
-from examples.frontend_backend_agent.src.reliable_talker import (
-    ReliableNvidiaLLMService,
-    ReliableRealtimeNvidiaLLMService,
-)
+from examples.frontend_backend_agent.src.reliable_talker import ReliableNvidiaLLMService
 from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.shared.audio_recorder import create_audio_recorder
@@ -151,6 +148,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     is_realtime = runner_protocol(runner_args) == "realtime"
     if is_realtime:
+        from examples.frontend_backend_agent.src.reliable_realtime_talker import (
+            ReliableRealtimeNvidiaLLMService,
+        )
         from examples.shared.nvidia_llm import NvidiaLLMService as RealtimeThinkerLLMService
         from examples.shared.tool_runtime import select_trusted_tools, terminal_tool_handler, tool_parameter_schema
         from realtime.transport import (
@@ -210,7 +210,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     talker_few_shots = _load_prompt_few_shots(few_shot_prompt_key)
     thinker_prompt_key = str(body.get("thinker_prompt") or domain.thinker_prompt_key)
     thinker_prompt = _load_required_catalog_prompt(thinker_prompt_key)
-    pipeline_mode = str(body.get("pipeline_mode", ""))
+    default_booking_server: dict | None = None
     if is_realtime:
         selected_llm_id = str(body.get("llm_id", "") or "")
         default_llm = load_selected_service_entry("llm", selected_llm_id)
@@ -218,13 +218,17 @@ async def bot(runner_args: RunnerArguments) -> None:
         default_asr = load_selected_service_entry("asr", body.get("asr_id"))
         default_thinker_llm = load_selected_service_entry("thinker-llm", body.get("thinker_llm_id"))
     else:
-        default_llm = load_service_entry("llm", _registry_default_service_key(pipeline_mode, "llm"))
-        default_tts = load_service_entry("tts", _registry_default_service_key(pipeline_mode, "tts"))
-        default_asr = load_service_entry("asr", _registry_default_service_key(pipeline_mode, "asr"))
-        default_thinker_llm = load_service_entry(
-            "thinker-llm",
-            _registry_default_service_key(pipeline_mode, "thinker-llm"),
-        )
+        default_llm = load_service_entry("llm", "")
+        default_tts = load_service_entry("tts", "")
+        default_asr = load_service_entry("asr", "")
+        default_thinker_llm = load_service_entry("thinker-llm", "")
+        default_booking_server = load_service_entry("booking-server", "")
+
+    def domain_service_loader(category: str, key: str) -> dict:
+        if category == "booking-server" and not key and default_booking_server is not None:
+            return copy.deepcopy(default_booking_server)
+        return load_service_entry(category, key)
+
     llm_profile = default_llm
 
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
@@ -380,7 +384,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             tool_names=tool_names,
             tool_delay_seconds=THINKER_TOOL_DELAY_MAX_SECONDS,
             tool_delay_min_seconds=THINKER_TOOL_DELAY_MIN_SECONDS,
-            load_service_entry=load_service_entry,
+            load_service_entry=domain_service_loader,
             on_tool_started=on_internal_tool_started,
             stage_metrics=stage_metrics,
             client_tools=client_tools,
@@ -630,7 +634,7 @@ async def bot(runner_args: RunnerArguments) -> None:
                     "vad_smart_turn": round(breakdown.user_turn_secs, 3)
                     if breakdown.user_turn_secs is not None
                     else None,
-                    "events": breakdown.chronological_events(),
+                    "events": breakdown.turn_contribution_lines(),
                 }
             )
         )

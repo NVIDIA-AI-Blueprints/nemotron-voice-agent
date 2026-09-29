@@ -553,6 +553,12 @@ speech. This profile applies the following ownership boundary:
 - The Lightning Talker sees only `call_backend` and `cancel_backend`. This
   remains true for its canonical context, live session updates, and each
   response-scoped context.
+- `cancel_backend` withdraws only this assistant's own in-flight delegated
+  request, for example when the user says stop, never mind, or ignore that
+  while a `call_backend` call is still running. It never performs a
+  cancellation the user asks for as a task, such as cancelling an order,
+  booking, or reservation; the Talker sends requests like that to
+  `call_backend` like any other domain request.
 - The Talker receives a bounded capability digest with descriptions, but no
   client function identifiers or argument schemas. It is deterministic by
   default; model mode uses that same Lightning instance.

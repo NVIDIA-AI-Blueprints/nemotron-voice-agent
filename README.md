@@ -190,6 +190,7 @@ npx skills add .
 | Explanation | [Best Practices](docs/05-best-practices.md) | Production latency, UX, and scaling guidance |
 | How-to | [Troubleshooting](docs/06-troubleshooting.md) | Startup & deployment known issues |
 | How-to | [Realtime Gateway](docs/how-to/use-realtime-gateway.md) | Configure and use the OpenAI Realtime-compatible WebSocket endpoint |
+| Reference | [Pipecat Upgrade Changelog](docs/pipecat-upgrade-changelog.md) | Adapter-specific call-site migration notes for the current Pipecat version |
 
 Step-by-step **how-to guides** are indexed in the [Configuration Guide](docs/02-configuration-guide.md). They cover configuring .env, models, and prompts, enabling opentelemetry tracing, a TURN Server, and the audio recorder for debugging, plus the Realtime integrator gateway.
 

@@ -123,7 +123,7 @@ class PipelineRuntimeIsolationTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(pipeline, "create_transport", return_value=object()),
                     patch.object(pipeline, "load_service_entry", default_loader),
                     patch.object(pipeline, "load_selected_service_entry", exact_loader),
-                    patch.object(pipeline, "NvidiaSTTService", side_effect=ConstructionObserved),
+                    patch.object(pipeline, "NvidiaForceEouSTTService", side_effect=ConstructionObserved),
                     self.assertRaises(ConstructionObserved),
                 ):
                     await pipeline.bot(runner_args)

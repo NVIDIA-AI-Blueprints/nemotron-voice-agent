@@ -17,7 +17,6 @@ from weakref import WeakKeyDictionary
 
 from fastapi import WebSocketDisconnect
 from loguru import logger
-from openai import NOT_GIVEN
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.frames.frames import (
     Frame,
@@ -42,6 +41,7 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat.turns.user_start.external_user_turn_start_strategy import ExternalUserTurnStartStrategy
 from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.utils.types import NOT_GIVEN
 
 from realtime.audio import PIPELINE_OUTPUT_PCM_RATE, PIPELINE_PCM_RATE
 from realtime.client_tools import ClientToolBroker

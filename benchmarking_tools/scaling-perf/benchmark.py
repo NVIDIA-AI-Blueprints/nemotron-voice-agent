@@ -575,10 +575,10 @@ class PerfClient:
             "metric": metric,
             "processor": str(item.get("processor", "")),
         }
-        for field in _STAGE_EVENT_FIELDS:
-            field_value = item.get(field)
+        for event_field in _STAGE_EVENT_FIELDS:
+            field_value = item.get(event_field)
             if field_value is not None:
-                event[field] = field_value
+                event[event_field] = field_value
 
         invocation_id = str(event.get("invocation_id", ""))
         fingerprint = (

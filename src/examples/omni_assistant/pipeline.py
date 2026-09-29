@@ -46,8 +46,8 @@ from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     build_pipeline_params,
-    build_smart_turn_stop_strategies,
     build_silero_vad_analyzer,
+    build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     build_vad_user_turn_start_strategies,
     create_transport,

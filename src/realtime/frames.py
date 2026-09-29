@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Literal
 
-from openai import NOT_GIVEN
 from pipecat.frames.frames import (
     ControlFrame,
     DataFrame,
@@ -23,6 +22,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
+from pipecat.utils.types import NOT_GIVEN
 
 if TYPE_CHECKING:
     from realtime.response_config import RealtimeResponseInput
@@ -347,7 +347,7 @@ class RealtimeClientToolOutputFrame(ControlFrame, UninterruptibleFrame):
     previous_item_id_supplied: bool = False
 
 
-@dataclass
+@dataclass(kw_only=True)
 class RealtimeResponseContextFrame(LLMContextFrame):
     """Run one response with an isolated context while retaining its owner.
 
