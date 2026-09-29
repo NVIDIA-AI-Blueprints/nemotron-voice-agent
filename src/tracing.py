@@ -14,7 +14,10 @@ import os
 from dotenv import load_dotenv
 from loguru import logger
 
-load_dotenv(override=True)
+# Deployment-provided environment variables are authoritative. ``.env`` is a
+# local-development defaults file and must not replace Helm/NVCF settings when
+# tracing is imported lazily with an example pipeline.
+load_dotenv(override=False)
 
 IS_TRACING_ENABLED: bool = os.getenv("ENABLE_TRACING", "").lower() == "true"
 
