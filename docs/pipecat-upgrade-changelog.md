@@ -162,9 +162,9 @@ This migration was validated against:
 - The full unit suite (`uv run pytest tests/ -v`)
 - A container build and health check with
   `EXAMPLE_SELECTION=generic-frontend-backend-agent`
-- `scripts/tau_realtime_smoke.py` in the `voice-agent-evaluation` repository,
-  which exercises the client-tool round trip, delegate-tool ownership, and
-  the timeout budget above against a live Realtime session
+- A single-task Tau airline run from the `voice-agent-evaluation` repository,
+  which exercises the client-tool round trip, delegate-tool ownership, and the
+  timeout budget above against a live Realtime session
 
 Record actual pass/fail evidence for each in the pull request's Documentation
 Writer Review receipt and commit history rather than treating this page as
