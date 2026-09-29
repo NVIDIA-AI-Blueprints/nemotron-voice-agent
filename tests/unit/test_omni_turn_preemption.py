@@ -514,6 +514,24 @@ class OmniRequestBuildingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent["max_tokens"], 2048)
         self.assertNotIn("max_completion_tokens", sent)
 
+    def _capture_requests(self) -> dict:
+        sent: dict = {}
+
+        async def fake_create(**kwargs):
+            sent.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
+
+        self.service._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+        return sent
+
+    async def test_run_inference_forwards_a_response_schema(self) -> None:
+        sent = self._capture_requests()
+        schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+
+        await self.service.run_inference(LLMContext([{"role": "user", "content": "hi"}]), response_schema=schema)
+
+        self.assertEqual(sent["response_format"]["json_schema"]["schema"], schema)
+
     async def test_no_token_limit_is_sent_unless_one_is_configured(self) -> None:
         params = self.service.build_chat_completion_params({"messages": []})
 

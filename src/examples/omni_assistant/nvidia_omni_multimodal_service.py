@@ -788,6 +788,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         context: LLMContext,
         max_tokens: int | None = None,
         system_instruction: str | None = None,
+        response_schema: dict[str, Any] | None = None,
     ) -> str | None:
         """Run a one-shot completion without attaching the active audio turn.
 
@@ -795,12 +796,13 @@ class NvidiaOmniLLMService(NvidiaLLMService):
             context: The LLM context containing conversation history.
             max_tokens: Optional override for the generated token limit.
             system_instruction: Optional system instruction for this inference.
+            response_schema: Optional JSON schema the reply must follow.
 
         Returns:
             The model's response text, or ``None`` when nothing was generated.
         """
         with self._without_active_turn():
-            return await super().run_inference(context, max_tokens, system_instruction)
+            return await super().run_inference(context, max_tokens, system_instruction, response_schema=response_schema)
 
     def current_turn_has_user_audio(self) -> bool:
         """Whether the request being generated carries the user's speech.
