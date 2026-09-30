@@ -52,7 +52,12 @@ def _build_backend(context: DomainBuildContext) -> GenericThinkerBackend:
             min_value=1.0,
         ),
         overall_timeout_seconds=parse_env_float("GENERIC_BACKEND_TIMEOUT_SECONDS", 40.0, min_value=1.0),
-        planner_timeout_seconds=parse_env_float("GENERIC_PLANNER_TIMEOUT_SECONDS", 6.0, min_value=1.0),
+        # A plan that must act, rather than look up, spends far more of the
+        # reasoning budget: measured round-two plans ran 5-8s where a lookup
+        # ran under one. Six seconds sat inside that spread, so every acting
+        # turn timed out twice and fell back to failure speech. Two attempts at
+        # ten still fit the forty-second overall budget with room for a round.
+        planner_timeout_seconds=parse_env_float("GENERIC_PLANNER_TIMEOUT_SECONDS", 10.0, min_value=1.0),
         max_planning_rounds=parse_env_int("GENERIC_MAX_PLANNING_ROUNDS", 8, min_value=1),
         on_tool_started=context.on_tool_started,
         stage_metrics=context.stage_metrics,

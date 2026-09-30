@@ -25,6 +25,7 @@ from pipecat.frames.frames import LLMTextFrame
 import examples_registry
 import server
 from examples.frontend_backend_agent import pipeline as shared_pipeline
+from examples.frontend_backend_agent.generic import backend as backend_module
 from examples.frontend_backend_agent.generic import dispatcher, services
 from examples.frontend_backend_agent.generic.backend import GenericThinkerBackend
 from examples.frontend_backend_agent.generic.planner import NvidiaGenericPlanner
@@ -496,7 +497,7 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(backend._overall_timeout_seconds, 40.0)
-        self.assertEqual(backend._planner_timeout_seconds, 6.0)
+        self.assertEqual(backend._planner_timeout_seconds, 10.0)
         self.assertEqual(backend._max_planning_rounds, 8)
         self.assertEqual(backend.tool_result_mode_default, "direct")
         self.assertEqual(TOOLS["web_search"].timeout_s, 20.0)
@@ -507,6 +508,13 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         self.assertLess(retry_budget, TOOLS["web_search"].timeout_s)
         self.assertGreater(45.0, backend._overall_timeout_seconds)
         self.assertGreater(backend._overall_timeout_seconds, backend._planner_timeout_seconds)
+        # A timed-out planner is retried with a fresh full deadline, so the
+        # overall budget has to absorb every attempt and still leave room for a
+        # dependent round; otherwise one stalled plan consumes the whole turn.
+        self.assertGreater(
+            backend._overall_timeout_seconds,
+            backend._planner_timeout_seconds * backend_module._PLANNER_MAX_ATTEMPTS,
+        )
         self.assertGreater(backend._overall_timeout_seconds, TOOLS["web_search"].timeout_s)
 
     def test_prompts_have_separate_grounding_and_json_contracts(self) -> None:
