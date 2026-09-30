@@ -24,6 +24,7 @@ from examples.frontend_backend_agent.generic.client_tools import (
     build_client_tool_specs,
     client_call_fingerprint,
     format_client_result,
+    normalize_client_arguments,
 )
 from examples.frontend_backend_agent.generic.dispatcher import dispatch_plan
 from examples.frontend_backend_agent.generic.tools import TOOLS_SCHEMA
@@ -620,3 +621,69 @@ class SessionScopedClientSuppressionTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpokenIdentifierRepairTests(unittest.TestCase):
+    """A dictated identifier is restyled to the caller's own example shape."""
+
+    @staticmethod
+    def _spec() -> object:
+        specs = build_client_tool_specs(
+            (
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Look a record up.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {"type": "string", "description": "The user ID, such as 'sara_doe_496'."},
+                            "reservation_id": {
+                                "type": "string",
+                                "description": "The reservation ID, such as '8JX2WO'.",
+                            },
+                            "first_name": {"type": "string", "description": "Passenger's first name"},
+                            "dob": {"type": "string", "description": "Date of birth in YYYY-MM-DD format"},
+                        },
+                    },
+                },
+            )
+        )
+        return specs["lookup"]
+
+    def test_dictated_digits_become_the_number_they_name(self) -> None:
+        repaired, changed = normalize_client_arguments(self._spec(), {"user_id": "Omar_davis_three_eight_one_seven"})
+
+        self.assertEqual(repaired["user_id"], "omar_davis_3817")
+        self.assertEqual(changed, ["user_id"])
+
+    def test_case_alone_is_corrected_to_the_example(self) -> None:
+        repaired, changed = normalize_client_arguments(self._spec(), {"user_id": "Omar_Rossi_1241"})
+
+        self.assertEqual(repaired["user_id"], "omar_rossi_1241")
+        self.assertEqual(changed, ["user_id"])
+
+    def test_an_uppercase_example_drives_an_uppercase_repair(self) -> None:
+        repaired, _ = normalize_client_arguments(self._spec(), {"reservation_id": "zfa04y"})
+
+        self.assertEqual(repaired["reservation_id"], "ZFA04Y")
+
+    def test_a_value_already_in_shape_is_left_alone(self) -> None:
+        repaired, changed = normalize_client_arguments(self._spec(), {"user_id": "sara_doe_496"})
+
+        self.assertEqual(repaired["user_id"], "sara_doe_496")
+        self.assertEqual(changed, [])
+
+    def test_personal_details_are_never_restyled(self) -> None:
+        original = {"first_name": "Omar", "dob": "1965-01-16"}
+
+        repaired, changed = normalize_client_arguments(self._spec(), original)
+
+        self.assertEqual(repaired, original)
+        self.assertEqual(changed, [])
+
+    def test_a_value_that_cannot_reach_the_shape_is_left_alone(self) -> None:
+        repaired, changed = normalize_client_arguments(self._spec(), {"user_id": "not an identifier at all"})
+
+        self.assertEqual(repaired["user_id"], "not an identifier at all")
+        self.assertEqual(changed, [])

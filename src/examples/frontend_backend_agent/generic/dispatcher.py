@@ -18,6 +18,7 @@ from examples.frontend_backend_agent.generic.client_tools import (
     ClientToolSpec,
     client_call_fingerprint,
     format_client_result,
+    normalize_client_arguments,
     validate_client_arguments,
 )
 from examples.frontend_backend_agent.generic.result_formatters import (
@@ -222,8 +223,13 @@ async def dispatch_plan(
     # Preflight every call before the first side effect. A malformed member of
     # a multi-tool plan prevents all other members from running.
     pending_client_fingerprints: list[str] = []
-    for call in calls:
+    for index, call in enumerate(calls):
         if call.name in client_tools:
+            repaired, restyled = normalize_client_arguments(client_tools[call.name], call.arguments)
+            if restyled:
+                logger.info(f"spoken identifier restyled for client tool: tool={call.name} fields={','.join(restyled)}")
+                call = ValidatedToolCall(name=call.name, arguments=repaired)
+                calls[index] = call
             validation_error = validate_client_arguments(client_tools[call.name], call.arguments)
             if validation_error is not None:
                 logger.warning(f"client-owned tool arguments rejected: tool={call.name}")

@@ -950,6 +950,15 @@ generic_thinker:
       and params_needed containing only missing schema field names.
     - response_text must be one brief question and contain no factual answer.
 
+    Spoken-identifier rule:
+    - A caller reads an identifier aloud, so the transcript spells it out. Emit the value in the exact
+      form the parameter's own schema example shows, never the form it was dictated in.
+    - Read spoken digit words as digits: "three eight one seven" is 3817, "double four" is 44, "oh" is 0.
+    - Match the example's letter case exactly: an example like sara_doe_496 is lowercase; an example like
+      8JX2WO is uppercase with no separators.
+    - A required field may belong to another enabled tool when the caller's policy must be satisfied
+      first, such as an identity to verify before an action may run. Name that field; never invent one.
+
     Multi-tool rule:
     - Use tool_calls only for two or three independent supported checks. Maximum three calls.
     - Preserve user order, do not duplicate calls, and make each call independently complete.
