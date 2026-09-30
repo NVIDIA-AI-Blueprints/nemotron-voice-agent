@@ -503,7 +503,7 @@ def _payload_outcome(payload: dict[str, Any]) -> str:
         status = str(payload.get("status") or "error")
         return "success" if status == "success" else "partial" if status == "partial" else "failure"
     reason = str(payload.get("reason") or "")
-    if reason in {"params_missing", "params_invalid"}:
+    if reason in {"params_missing", "params_invalid", "confirmation_needed"}:
         return "needs_input"
     if reason in {"aborted", "cancelled"}:
         return "cancelled"
@@ -512,7 +512,20 @@ def _payload_outcome(payload: dict[str, Any]) -> str:
 
 def _talker_result_projection(payload: dict[str, Any]) -> dict[str, Any]:
     """Expose the trusted spoken contract plus a bounded weather fact projection."""
-    allowed = {"type", "tool", "status", "response_text", "reason", "action", "context", "params_needed"}
+    allowed = {
+        "type",
+        "tool",
+        "status",
+        "response_text",
+        "reason",
+        "action",
+        "context",
+        "params_needed",
+        # The action awaiting consent. The caller's policy requires its details
+        # be stated back, and the Talker is the component trusted to phrase a
+        # client-owned payload.
+        "params_resolved",
+    }
     projected = {key: value for key, value in payload.items() if key in allowed}
     data = payload.get("data")
     result = data.get("result") if isinstance(data, dict) else None

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from examples.frontend_backend_agent.src.protocol import is_speakable_payload, response_hint, tool_result
@@ -50,6 +50,42 @@ def missing_parameters(spec: ToolSpec, names: list[str]) -> dict[str, Any]:
     )
 
 
+def missing_client_parameters(tool: str, labels: Sequence[str], names: Sequence[str]) -> dict[str, Any]:
+    """Return a deterministic clarification for a client-owned tool's missing fields.
+
+    Labels come from the caller's declared schema, never from the planner's own
+    sentence, so the spoken words stay trusted even though the tool is not ours.
+    """
+    readable = list(labels)
+    requested = readable[0] if len(readable) == 1 else f"{', '.join(readable[:-1])} and {readable[-1]}"
+    return response_hint(
+        reason="params_missing",
+        action="req_params",
+        params_needed=list(names),
+        response_text=f"Please tell me {requested}.",
+        context=tool,
+    )
+
+
+def confirmation_request(tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+    """Ask for consent before one validated action runs.
+
+    The sentence is built from the tool's own name, never from the planner and
+    never from the argument values: those can carry a passenger's name or date
+    of birth, which has no business being read out to ask a yes-or-no question.
+    They travel as structured data so the Talker can state the specifics it is
+    already trusted to phrase.
+    """
+    action = tool.replace("_", " ").strip() or "that action"
+    return response_hint(
+        reason="confirmation_needed",
+        action="req_confirmation",
+        params_resolved=dict(arguments),
+        response_text=f"Just to confirm, should I go ahead and {action}?",
+        context=tool,
+    )
+
+
 def nothing_further() -> dict[str, Any]:
     """Close a turn that needed no tool, without claiming a failure."""
     return response_hint(
@@ -57,6 +93,16 @@ def nothing_further() -> dict[str, Any]:
         action="answer_directly",
         response_text="Nothing further was needed for that.",
         context="general",
+    )
+
+
+def unspecified_clarification(tool: str) -> dict[str, Any]:
+    """Ask for more detail when a client schema names no field we can speak."""
+    return response_hint(
+        reason="params_missing",
+        action="req_params",
+        response_text="I need a little more information to do that. What details should I use?",
+        context=tool,
     )
 
 
@@ -80,11 +126,17 @@ def disabled_tool(tool: str) -> dict[str, Any]:
     )
 
 
-def unsupported_request(specs: Sequence[ToolSpec]) -> dict[str, Any]:
-    """Describe only the capabilities enabled for this session."""
-    capabilities = [spec.capability for spec in specs if spec.capability]
+def unsupported_request(specs: Sequence[ToolSpec], *, suppress_capabilities: bool = False) -> dict[str, Any]:
+    """Describe only the capabilities enabled for this session.
+
+    A session whose real tools are client-owned has no server capability worth
+    naming: listing the built-in ones would advertise weather and BMI on, say,
+    an airline call. Suppress the list there and let the Talker, which holds the
+    caller's own instructions, phrase the refusal in its domain.
+    """
+    capabilities = [] if suppress_capabilities else [spec.capability for spec in specs if spec.capability]
     if not capabilities:
-        text = "No live-data or calculation capabilities are enabled for this session."
+        text = "That isn't something I can do in this session."
     elif len(capabilities) == 1:
         text = f"I can {capabilities[0]}."
     elif len(capabilities) == 2:

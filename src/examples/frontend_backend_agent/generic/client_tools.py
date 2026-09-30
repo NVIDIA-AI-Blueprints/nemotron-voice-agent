@@ -23,6 +23,8 @@ ClientToolRoundExecutor = Callable[
 
 _SPACE_RE = re.compile(r"\s+")
 _MAX_CLIENT_RESULT_SPEECH_CHARS = 450
+_MAX_CLIENT_PARAMETER_LABEL_CHARS = 48
+_UNSPEAKABLE_LABEL_RE = re.compile(r"(?:</?(?:think|tool_call|function|parameter)[^>]*>|```|[*#]{2,})", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +150,37 @@ def normalize_client_arguments(spec: ClientToolSpec, arguments: Mapping[str, Any
             repaired[name] = candidate
             changed.append(name)
     return repaired, changed
+
+
+def client_parameter_labels(spec: ClientToolSpec) -> dict[str, str]:
+    """Return spoken labels for one client tool's declared parameters.
+
+    The caller declares this schema, so its field names and titles are the only
+    trusted source of words for a clarification question. A planner-authored
+    sentence never reaches speech; the dispatcher asks only for names present
+    here, and this mapping supplies how each one is said.
+    """
+    properties = spec.parameters.get("properties")
+    if not isinstance(properties, Mapping):
+        # A schema built from $ref/allOf carries no top-level properties. Fall
+        # back to the required list so a clarification is still possible, and
+        # let the caller degrade rather than lose the turn when neither exists.
+        required = spec.parameters.get("required")
+        names = [str(item) for item in required] if isinstance(required, list) else []
+        return {name: _parameter_label(name, None) for name in names}
+    return {str(name): _parameter_label(str(name), schema) for name, schema in properties.items()}
+
+
+def _parameter_label(name: str, schema: object) -> str:
+    """Return one bounded spoken label for a declared client parameter."""
+    title = schema.get("title") if isinstance(schema, Mapping) else None
+    if isinstance(title, str):
+        # A title is client-authored. Bound and strip it like any other text
+        # that reaches the speaker; never let it carry markup or a paragraph.
+        readable = _SPACE_RE.sub(" ", _UNSPEAKABLE_LABEL_RE.sub(" ", title)).strip().lower()
+        if 0 < len(readable) <= _MAX_CLIENT_PARAMETER_LABEL_CHARS:
+            return readable
+    return name.replace("_", " ")
 
 
 def client_call_fingerprint(name: str, arguments: Mapping[str, Any]) -> str:

@@ -17,16 +17,20 @@ from examples.frontend_backend_agent.generic.client_tools import (
     ClientToolRoundExecutor,
     ClientToolSpec,
     client_call_fingerprint,
+    client_parameter_labels,
     format_client_result,
     normalize_client_arguments,
     validate_client_arguments,
 )
 from examples.frontend_backend_agent.generic.result_formatters import (
     combine_tool_results,
+    confirmation_request,
     disabled_tool,
     format_tool_result,
     invalid_parameters,
+    missing_client_parameters,
     missing_parameters,
+    unspecified_clarification,
     unsupported_request,
 )
 from examples.frontend_backend_agent.src.tools import ToolContext, ToolSpec, validate_arguments
@@ -159,31 +163,120 @@ async def _execute(
             await stage_metrics.finish_tool(span, outcome)
 
 
+def _enabled_client_parameter_labels(
+    client_tools: Mapping[str, ClientToolSpec],
+    enabled: frozenset[str],
+) -> dict[str, str]:
+    """Return every parameter this session's enabled client tools declare."""
+    labels: dict[str, str] = {}
+    for name, spec in client_tools.items():
+        if name in enabled:
+            labels.update(client_parameter_labels(spec))
+    return labels
+
+
+def _confirmation_arguments(
+    plan: dict[str, Any],
+    tools: Mapping[str, ToolSpec],
+    client_tools: Mapping[str, ClientToolSpec],
+    context: str,
+) -> dict[str, Any]:
+    """Validate a proposed action exactly as if it were about to execute.
+
+    The confirmation names a real call, so it is held to the same argument
+    contract as one. Nothing here is spoken; the caller-facing sentence is
+    rendered from the tool's own name.
+    """
+    arguments = plan.get("params")
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        raise PlanValidationError("invalid confirmation arguments")
+    if context in client_tools:
+        if validate_client_arguments(client_tools[context], arguments) is not None:
+            raise PlanValidationError("invalid confirmation arguments")
+        return dict(arguments)
+    spec = tools[context]
+    if set(arguments) - set(spec.params):
+        raise PlanValidationError("invalid confirmation arguments")
+    try:
+        validate_arguments(spec, arguments)
+    except (TypeError, ValueError) as exc:
+        raise PlanValidationError("invalid confirmation arguments") from exc
+    return dict(arguments)
+
+
 def _response_hint(
     plan: dict[str, Any],
     tools: Mapping[str, ToolSpec],
     enabled_tools: tuple[str, ...],
+    client_tools: Mapping[str, ClientToolSpec] | None = None,
 ) -> dict[str, Any]:
-    """Convert only the closed response-hint vocabulary into deterministic speech."""
+    """Convert only the closed response-hint vocabulary into deterministic speech.
+
+    A client-owned tool is a first-class member of this vocabulary. The caller
+    declares its schema, so its field names are as trustworthy a source of
+    spoken words as our own registry. Resolving a hint against the server
+    registry alone rejects every clarification a client tool could ever need,
+    which silently costs the whole turn.
+    """
     enabled = frozenset(enabled_tools)
+    client_tools = client_tools or {}
     reason = str(plan.get("reason") or "")
     context = str(plan.get("context") or "")
     if reason == "params_missing":
         requested = plan.get("params_needed")
-        spec = tools.get(context)
-        if spec is None or not isinstance(requested, list) or not requested:
+        if not isinstance(requested, list) or not requested:
             raise PlanValidationError("invalid missing-parameter hint")
         names = list(dict.fromkeys(str(item) for item in requested))
-        required = {name for name, param in spec.params.items() if param.required}
-        if len(names) > 4 or any(name not in required for name in names):
+        if len(names) > 4:
             raise PlanValidationError("invalid missing-parameter fields")
-        return missing_parameters(spec, names)
+        # Dispatch on the registry that owns the context, never as a fallback
+        # chain: a server tool whose fields are wrong must keep reporting that,
+        # not decay into the weaker "unknown context" message.
+        spec = tools.get(context)
+        if spec is not None:
+            required = {name for name, param in spec.params.items() if param.required}
+            if any(name not in required for name in names):
+                raise PlanValidationError("invalid missing-parameter fields")
+            return missing_parameters(spec, names)
+        client_spec = client_tools.get(context)
+        if client_spec is not None:
+            # A caller's policy can require something before the intended tool
+            # may run at all -- an identity to verify, a prior lookup. That
+            # field belongs to a different declared tool, so resolving it
+            # against the target's schema alone rejects the question and costs
+            # the turn. Accept any field this session's enabled tools declare;
+            # the spoken words still come from a schema, never from the plan.
+            allowed = _enabled_client_parameter_labels(client_tools, enabled)
+            allowed.update(client_parameter_labels(client_spec))
+            if not allowed:
+                return unspecified_clarification(context)
+            if any(name not in allowed for name in names):
+                raise PlanValidationError("invalid missing-parameter fields")
+            return missing_client_parameters(context, [allowed[name] for name in names], names)
+        raise PlanValidationError("invalid missing-parameter hint")
+    if reason == "confirmation_needed":
+        # A caller's policy can require explicit consent before its own tool
+        # changes anything. The planner names the call it intends to make and
+        # we ask about it; it never authors the question. Scoped to sessions
+        # that declare their own tools, so the built-in domains keep the
+        # narrower vocabulary they were written against.
+        if not client_tools:
+            raise PlanValidationError("unknown response hint")
+        if context not in enabled or (context not in tools and context not in client_tools):
+            raise PlanValidationError("invalid confirmation hint")
+        arguments = _confirmation_arguments(plan, tools, client_tools, context)
+        return confirmation_request(context, arguments)
     if reason == "tool_disabled":
-        if context not in tools or context in enabled:
+        if (context not in tools and context not in client_tools) or context in enabled:
             raise PlanValidationError("invalid disabled-tool hint")
         return disabled_tool(context)
     if reason == "unsupported_request" and context in {"", "general"}:
-        return unsupported_request(tuple(tools[name] for name in enabled_tools if name in tools))
+        return unsupported_request(
+            tuple(tools[name] for name in enabled_tools if name in tools),
+            suppress_capabilities=bool(client_tools),
+        )
     raise PlanValidationError("unknown response hint")
 
 
@@ -209,7 +302,14 @@ async def dispatch_plan(
     client_tools = client_tools or {}
     enabled_specs = tuple(tools[name] for name in enabled_tools if name in tools)
     if plan.get("tool") == "response_hint" and not plan.get("tool_calls"):
-        return _response_hint(plan, tools, enabled_tools)
+        try:
+            return _response_hint(plan, tools, enabled_tools, client_tools)
+        except PlanValidationError as exc:
+            # Keep the dispatcher the single place that reports a rejected plan.
+            # This rejection used to surface only as generic planner failure
+            # speech, with nothing in the log to say which rule fired.
+            logger.warning(f"generic domain response hint rejected: {exc}")
+            raise
     try:
         calls = validate_plan(plan, tools, enabled, client_tools)
     except PlanValidationError as exc:
@@ -219,7 +319,7 @@ async def dispatch_plan(
             return disabled_tool(message.split(":", 1)[1].strip())
         raise
     if not calls:
-        return unsupported_request(enabled_specs)
+        return unsupported_request(enabled_specs, suppress_capabilities=bool(client_tools))
     # Preflight every call before the first side effect. A malformed member of
     # a multi-tool plan prevents all other members from running.
     pending_client_fingerprints: list[str] = []
