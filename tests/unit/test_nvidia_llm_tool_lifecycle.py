@@ -206,6 +206,42 @@ class StreamedToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await _collect_provider_stream(*chunks, parallel_tool_calls=parallel_tool_calls)
             self.assertEqual(str(raised.exception), expected_error)
 
+    async def test_empty_delta_usage_chunk_after_terminal_is_forwarded(self) -> None:
+        usage_tail = ChatCompletionChunk.model_validate(
+            {
+                "id": "chatcmpl_stream",
+                "created": 1,
+                "model": "test-model",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11},
+            }
+        )
+
+        chunks = await _collect_provider_stream(
+            _stream_chunk({"role": "assistant", "content": "Hello"}),
+            _stream_chunk({}, finish_reason="stop"),
+            usage_tail,
+        )
+
+        self.assertEqual(_contents(chunks), ["Hello"])
+        self.assertEqual([chunk.usage.total_tokens for chunk in chunks if chunk.usage], [11])
+
+    async def test_output_after_terminal_is_rejected(self) -> None:
+        cases = (
+            ("content", _stream_chunk({"content": "late"})),
+            ("second terminal", _stream_chunk({}, finish_reason="stop")),
+        )
+
+        for label, late_chunk in cases:
+            with self.subTest(label=label), self.assertRaises(ValueError) as raised:
+                await _collect_provider_stream(
+                    _stream_chunk({"content": "Hello"}),
+                    _stream_chunk({}, finish_reason="stop"),
+                    late_chunk,
+                )
+            self.assertEqual(str(raised.exception), "Provider stream emitted choices after its terminal chunk")
+
     async def test_formatting_only_prefix_is_not_published_for_a_tool_only_response(self) -> None:
         chunks = await _collect_stream(
             _stream_chunk({"role": "assistant", "content": "\n\u2003"}),

@@ -937,6 +937,19 @@ def _structured_extra_body(params: Mapping[str, Any]) -> dict[str, Any]:
     return extra_body
 
 
+def _is_empty_choices_chunk(chunk: ChatCompletionChunk) -> bool:
+    """Return whether every choice carries no delta payload and no finish_reason.
+
+    Some OpenAI-compatible gateways (for example LiteLLM-based ones) attach the
+    trailing usage report to ``choices=[{"index": 0, "delta": {}}]`` instead of
+    ``choices=[]``. Such a chunk carries no model output after the terminal.
+    """
+    return all(
+        choice.finish_reason is None and (choice.delta is None or not choice.delta.model_dump(exclude_none=True))
+        for choice in chunk.choices
+    )
+
+
 class NvidiaLLMService(PipecatNvidiaLLMService):
     """Use complete typed responses when the request requires a tool call.
 
@@ -1209,7 +1222,7 @@ class NvidiaLLMService(PipecatNvidiaLLMService):
         async with aclosing(stream):
             async for chunk in stream:
                 finish_reason = chunk.choices[0].finish_reason if chunk.choices else None
-                if terminal_reason is not None and chunk.choices:
+                if terminal_reason is not None and chunk.choices and not _is_empty_choices_chunk(chunk):
                     raise ValueError("Provider stream emitted choices after its terminal chunk")
                 yield chunk
                 if finish_reason is not None:
