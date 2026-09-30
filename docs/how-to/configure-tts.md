@@ -157,6 +157,26 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes through the catalog fi
 
 Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode through the registry-default fallback in the pipeline.
 
+### Audio Context Timeout
+
+Pipecat's `NvidiaTTSService` closes a reply's audio context when no audio arrives within `stop_frame_timeout_s`. The Pipecat default is 3 seconds. Under concurrent load, the first Magpie audio for a reply can arrive later than that. The reply then produces no audio, and Realtime clients receive `tts_provider_error`.
+
+The following examples read the `TTS_STOP_FRAME_TIMEOUT_S` environment variable and pass it as `stop_frame_timeout_s`:
+
+| Example | Default | Source |
+|---------|---------|--------|
+| Generic Assistant | `15` | [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py) |
+| Omni Assistant | `30` | [`src/examples/omni_assistant/pipeline.py`](../../src/examples/omni_assistant/pipeline.py) |
+| Omni Assistant with Subagents | `30` | [`src/examples/omni_assistant_subagents/subagents/transport/agent.py`](../../src/examples/omni_assistant_subagents/subagents/transport/agent.py) |
+
+The Multilingual and Frontend/Backend Agent examples do not read this variable and use the Pipecat default. To override the timeout, set the value in seconds in `.env`:
+
+```bash
+TTS_STOP_FRAME_TIMEOUT_S=20
+```
+
+The minimum is 5 seconds. A lower value is raised to 5, and a non-numeric value falls back to the example default. Both cases log a warning. Magpie ends each synthesis stream explicitly, so a longer timeout does not delay normal reply completion.
+
 ### Word-Level Input Streaming and Timestamps
 
 > **NIM only.** `NvidiaWordTTSService` supports Magpie served by NVIDIA NIM. It does not support the GGML/GGUF-based NeMo-Speech.cpp backend used by `*/single-gpu` profiles.
