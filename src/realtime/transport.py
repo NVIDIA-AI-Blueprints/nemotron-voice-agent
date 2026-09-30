@@ -2342,7 +2342,7 @@ def bind_realtime_automatic_response_provenance(
     if context is None:
         return
 
-    def _mark_automatic_response(_strategy: BaseUserTurnStopStrategy) -> None:
+    def _mark_automatic_response(_strategy: BaseUserTurnStopStrategy, _speculation: Any = None) -> None:
         context.response_gate.register_automatic_response_context()
 
     for strategy in strategies:
