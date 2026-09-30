@@ -79,6 +79,12 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 | `tools.py` | builds a filtered `ToolsSchema` from `tools.yaml` for the tool names a prompt requests, skipping entries without a matching handler |
 | `services.cloud.yaml`, `services.local.yaml` | example-local service catalogs |
 
+The following environment variable tunes TTS behavior in [`pipeline.py`](pipeline.py):
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `TTS_STOP_FRAME_TIMEOUT_S` | `15` | TTS audio-context idle timeout in seconds. Minimum is `5`. Refer to [Audio Context Timeout](../../../docs/how-to/configure-tts.md#audio-context-timeout) |
+
 To change models, voices, prompts, or tool wiring, see [Configure Services](../../../docs/how-to/configure-services.md), [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure ASR](../../../docs/how-to/configure-asr.md), [Configure TTS](../../../docs/how-to/configure-tts.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md).
 
 The OpenAI Realtime WebSocket supports this example with server-owned or
