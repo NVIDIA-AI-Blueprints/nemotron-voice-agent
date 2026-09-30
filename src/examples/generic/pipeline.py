@@ -174,6 +174,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             base_url=base_url,
             settings=llm_settings,
             forced_tool_call_stops=llm_profile.get("forced_tool_call_stops"),
+            realtime_max_identical_tool_calls=llm_profile.get("realtime_max_identical_tool_calls"),
+            realtime_max_tool_calls_per_turn=llm_profile.get("realtime_max_tool_calls_per_turn"),
             realtime_parallel_tool_calls=body.get("parallel_tool_calls", True),
             realtime_model_max_output_tokens=body.get("realtime_model_max_output_tokens"),
         )
