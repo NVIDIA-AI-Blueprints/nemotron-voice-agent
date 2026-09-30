@@ -191,7 +191,7 @@ class MediaAnalyzerWorker(BaseWorker):
         )
         text = result.text.strip()
         reasoning = (result.reasoning or reasoning).strip()
-        logger.info(f"Media analyzer Omni answer: answer_chars={len(text)}")
+        logger.info(f"Media analyzer Omni answer: answer_chars={len(text)}, finish_reason={result.finish_reason}")
         return text, reasoning
 
     async def _emit_update(

@@ -10,13 +10,26 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 
 ### Added
 
-- **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the `Nemotron 3.5 Lightning 30B A3B (Streaming Input)` catalog entry streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
+- **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the **Streaming Input** toggle on the Lightning service card streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
+- One root `services.yaml` for every example, selected by `SERVICE_RECIPE`, and editable LLM parameters such as reasoning and temperature in the Services tab.
+- Services tab controls for TTS and ASR: **Synthesis Mode** on Magpie TTS entries and **Punctuation** on the single-GPU NeMo-Speech.cpp ASR entries.
 
 ### Changed
 
 - Upgraded Pipecat to version 1.12.0.
-- Single-GPU Lightning recipes pin `vllm/vllm-openai:v0.29.0` and cap `--max-num-seqs` at 256.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
+- UI selections (example, transport, services, prompt) no longer persist in browser localStorage. They survive disconnect and reconnect, and a page refresh resets them to the server defaults. Custom services and prompts stay saved.
+
+### Fixed
+
+- Host-native runs reach Nemotron 3 Super on its published port `18001`.
+- The Frontend/Backend Agent Thinker honors the Max Tokens setting.
+
+### Removed
+
+- `LOCAL_SERVICES_ENABLED`, `SERVICES_CLOUD_PATH`, `SERVICES_LOCAL_PATH`, and the `*-reasoning` catalog entries. Use `SERVICE_RECIPE` and the Reasoning setting instead.
+- The per-example `services.cloud.yaml` and `services.local.yaml` files, and the `slots` field and `defaults.llm`, `defaults.asr`, and `defaults.tts` keys in `examples_registry.yaml`. List each example's services under `services` instead. The first available key is the default.
+- The `nemotron-voice-agent-configure-pipeline` skill. `nemotron-voice-agent-deploy` now covers configuration changes.
 
 ## [2.2.0] - 2026-09-22
 

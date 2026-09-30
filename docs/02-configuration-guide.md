@@ -1,6 +1,6 @@
 # Configuration Guide
 
-This is the index of everything you can configure in the Nemotron Voice Agent. Configuration lives in a small set of example-local files plus root `.env` settings, and the sections below index each area. For how the catalog files (`services.cloud.yaml` / `services.local.yaml`) work, see [Configure Services](how-to/configure-services.md).
+This is the index of everything you can configure in the Nemotron Voice Agent. Configuration lives in a small set of root YAML files (`examples_registry.yaml`, `services.yaml`, `settings.yaml`), example-local prompts, and root `.env` settings. The sections below index each area. For how the service catalog works, see [Configure Services](how-to/configure-services.md).
 
 ## Model Service
 

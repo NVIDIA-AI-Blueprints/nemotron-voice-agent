@@ -39,14 +39,6 @@ export function writeLSJson(key: string, value: unknown): void {
   }
 }
 
-export function removeLSKey(key: string): void {
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    // ignore
-  }
-}
-
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

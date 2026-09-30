@@ -12,16 +12,33 @@ from functools import cache
 from pathlib import Path
 from typing import Any, NamedTuple, TypedDict
 
-import yaml
+from utils import (
+    SERVICE_CATEGORIES,
+    load_prompt_catalog,
+    load_yaml_file,
+    nvidia_cloud_available,
+    parse_env_bool,
+    service_api_entry,
+    service_catalog_sources,
+    service_recipe,
+)
 
-from utils import is_endpoint_reachable, local_services_enabled, nvidia_cloud_available
+
+class ActivityCheckConfig(TypedDict, total=False):
+    """Per-example settings for proactive inactivity checks."""
+
+    first_warning_s: float
+    second_warning_s: float
+    warning_completion_timeout_s: float
 
 
 class ExampleEntry(TypedDict):
     """Raw registry entry for one example."""
 
     label: str
-    slots: list[str]
+    services: dict[str, list[str]]
+    settings: dict[str, dict[str, dict[str, Any]]]
+    categories: dict[str, str]
     capabilities: list[str]
     agent_prompt_keys: list[str]
     activity_check: ActivityCheckConfig | None
@@ -35,24 +52,6 @@ class EnrichedExample(ExampleEntry):
 
     id: str
     key: str
-
-
-class ActivityCheckConfig(TypedDict, total=False):
-    """Per-example settings for proactive inactivity checks."""
-
-    first_warning_s: float
-    second_warning_s: float
-    warning_completion_timeout_s: float
-
-
-class ServiceDefault(TypedDict, total=False):
-    """Resolved default service entry from an example's service catalog."""
-
-    id: str
-    key: str
-    name: str
-    builtIn: bool
-    source: str
 
 
 class PromptDefault(TypedDict, total=False):
@@ -70,22 +69,9 @@ _SRC_ROOT = Path(__file__).resolve().parent
 _REGISTRY_PATH = _SRC_ROOT.parent / "examples_registry.yaml"
 
 
-def _load_yaml_registry() -> dict:
-    """Load the registry YAML, failing loudly because startup depends on it."""
-    try:
-        data = yaml.safe_load(_REGISTRY_PATH.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise RuntimeError(f"Failed to load examples registry from {_REGISTRY_PATH}") from exc
-    if not isinstance(data, dict):
-        raise RuntimeError(f"Examples registry root must be a mapping: {_REGISTRY_PATH}")
-    return data
-
-
 def _split_bot_spec(spec: str) -> tuple[str, str]:
-    if ":" not in spec:
-        raise RuntimeError(f"Example bot must be 'module.path:attr' (got {spec!r})")
-    module_path, attr = spec.split(":", 1)
-    if not module_path or not attr:
+    module_path, separator, attr = spec.partition(":")
+    if not (separator and module_path and attr):
         raise RuntimeError(f"Example bot must be 'module.path:attr' (got {spec!r})")
     return module_path, attr
 
@@ -119,212 +105,32 @@ def example_module_file(example: EnrichedExample) -> Path:
     raise RuntimeError(f"Example {example['key']!r} bot module was not found: {example['bot']!r}")
 
 
-def _load_yaml_mapping(path: Path) -> dict:
-    """Load a YAML mapping from ``path``; return empty mapping when absent."""
-    if not path.is_file():
-        return {}
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise RuntimeError(f"Failed to load YAML from {path}") from exc
-    return data if isinstance(data, dict) else {}
-
-
-def _normalize_service_catalog(data: dict) -> dict[str, dict]:
-    """Normalize a service catalog into ``{category: {key: entry}}``."""
-    return {str(category): dict(section) for category, section in data.items() if isinstance(section, dict)}
-
-
-def _entry_endpoint(entry: dict) -> str:
-    return str(entry.get("server") or entry.get("base_url") or "")
-
-
-def _rewrite_entry_for_host_runtime(entry: dict) -> dict:
-    """Convert Compose endpoints to host-accessible endpoints outside Docker."""
-    if os.getenv("APP_RUNTIME", "").strip().lower() == "container":
-        return dict(entry)
-    out = dict(entry)
-    for field in ("base_url", "server"):
-        value = out.get(field)
-        if not isinstance(value, str):
-            continue
-        if field == "base_url":
-            out[field] = (
-                value.replace("http://nvidia-llm:8000/v1", "http://localhost:18000/v1")
-                .replace("http://nvidia-llm-omni:8000/v1", "http://localhost:18002/v1")
-                .replace("http://nvidia-llm-vllm:8000/v1", "http://localhost:18000/v1")
-                .replace("ws://nvidia-llm-vllm:8000/v1", "ws://localhost:18000/v1")
-                .replace("http://nvidia-llm-vllm-omni:8002/v1", "http://localhost:8002/v1")
-                .replace("host.docker.internal", "localhost")
-            )
-        else:
-            out[field] = (
-                value.replace("magpie-zeroshot-tts-service:50051", "localhost:50151")
-                .replace("chatterbox-tts-service:50051", "localhost:50151")
-                .replace("magpie-multilingual-tts-service:50051", "localhost:50151")
-                .replace("nemotron-asr-streaming-english:50052", "localhost:50152")
-                .replace("nemotron-asr-streaming-multilingual:50052", "localhost:50152")
-                .replace("parakeet-ctc-asr:50052", "localhost:50152")
-                .replace("parakeet-rnnt-asr:50052", "localhost:50152")
-                .replace("nemo-speech:50051", "localhost:50051")
-                .replace("nemo-speech-multilingual:50051", "localhost:50051")
-                .replace("nemo-speech-tts:50051", "localhost:50051")
-                .replace("booking-server:8001", "localhost:8001")
-                .replace("host.docker.internal", "localhost")
-            )
-    return out
-
-
-def _rewrite_catalog_for_host_runtime(catalog: dict[str, dict]) -> dict[str, dict]:
-    """Rewrite every local service endpoint for host-native metadata responses."""
-    if os.getenv("APP_RUNTIME", "").strip().lower() == "container":
-        return catalog
-    return {
-        category: {
-            key: _rewrite_entry_for_host_runtime(entry) if isinstance(entry, dict) else entry
-            for key, entry in section.items()
-        }
-        for category, section in catalog.items()
-    }
-
-
-def _first_reachable_variant(variants: list[tuple[str, dict]]) -> tuple[str, dict] | None:
-    for platform_name, entry in variants:
-        if is_endpoint_reachable(_entry_endpoint(_rewrite_entry_for_host_runtime(entry))):
-            return platform_name, entry
-    return None
-
-
-def _load_local_service_catalog(example_dir: Path) -> dict[str, dict]:
-    """Load local service entries, merging recipe sections by reachability."""
-    if not local_services_enabled():
-        return {}
-    data = _load_yaml_mapping(example_dir / "services.local.yaml")
-    variants: dict[str, dict[str, list[tuple[str, dict]]]] = {}
-    for platform_name, platform_data in data.items():
-        if not isinstance(platform_data, dict):
-            continue
-        for category, section in platform_data.items():
-            if not isinstance(section, dict):
-                continue
-            category_variants = variants.setdefault(str(category), {})
-            for key, entry in section.items():
-                if not isinstance(entry, dict):
-                    continue
-                category_variants.setdefault(str(key), []).append((str(platform_name), dict(entry)))
-
-    merged: dict[str, dict] = {}
-    for category, section in variants.items():
-        target = merged.setdefault(category, {})
-        for service_key, entries in section.items():
-            first_entry = entries[0][1]
-            if all(entry == first_entry for _, entry in entries):
-                target[service_key] = first_entry
-                continue
-            # Keep the plain key resolvable even when nothing is reachable, so
-            # defaults can still fall back to cloud instead of failing lookup.
-            active_platform, active_entry = _first_reachable_variant(entries) or entries[0]
-            target[service_key] = active_entry
-            for platform_name, entry in entries:
-                if platform_name != active_platform:
-                    target[f"{service_key}-{platform_name}"] = entry
-    return _rewrite_catalog_for_host_runtime(merged)
-
-
-def _load_service_catalogs(example_dir: str) -> tuple[dict[str, dict], dict[str, dict]]:
-    """Load cloud and local service catalogs for one example directory."""
-    base = Path(example_dir)
-    cloud = (
-        _normalize_service_catalog(_load_yaml_mapping(base / "services.cloud.yaml")) if nvidia_cloud_available() else {}
-    )
-    local = _load_local_service_catalog(base)
-    return cloud, local
-
-
-def _example_dir(example: EnrichedExample) -> Path:
-    """Return the package directory for an example's bot module."""
-    return example_module_file(example).resolve().parent
-
-
-def _service_entry_payload(source: str, key: str, entry: dict) -> ServiceDefault:
-    """Match service API entry shape while preserving every catalog param."""
-    return {
-        "id": f"{source}:{key}",
-        "key": key,
-        "name": str(entry.get("name") or key),
-        "builtIn": True,
-        "source": source,
-        **{k: v for k, v in entry.items() if k != "name"},
-    }
-
-
-def _first_reachable_service_entry(section: dict) -> tuple[str, dict] | None:
-    """Return the first reachable entry in a normalized service section."""
-    for key, entry in section.items():
-        if isinstance(entry, dict) and is_endpoint_reachable(_entry_endpoint(entry)):
-            return str(key), entry
-    return None
-
-
-def _resolve_service_default(example: EnrichedExample, category: str, service_id: str) -> ServiceDefault:
-    """Resolve one default service id to its full service-catalog payload.
-
-    Prefers the self-hosted variant when it exists and is reachable, matching
-    the runtime ``/api/services`` precedence where reachable local entries are
-    used for on-prem recipes. Falls back to cloud when no local endpoint is
-    available and NVIDIA Cloud is enabled, which keeps cloud-only recipe
-    defaults usable.
-    """
-    cloud, local = _load_service_catalogs(str(_example_dir(example)))
-    local_section = local.get(category, {})
-    local_entry = local_section.get(service_id) if isinstance(local_section, dict) else None
-    if isinstance(local_entry, dict) and is_endpoint_reachable(_entry_endpoint(local_entry)):
-        return _service_entry_payload("self-hosted", service_id, local_entry)
-    if isinstance(local_entry, dict) and isinstance(local_section, dict):
-        reachable_local = _first_reachable_service_entry(local_section)
-        if reachable_local is not None:
-            local_key, entry = reachable_local
-            return _service_entry_payload("self-hosted", local_key, entry)
-
-    cloud_section = cloud.get(category, {})
-    if isinstance(cloud_section, dict):
-        cloud_entry = cloud_section.get(service_id)
-        if isinstance(cloud_entry, dict):
-            return _service_entry_payload("cloud-nim", service_id, cloud_entry)
-        if isinstance(local_entry, dict):
-            for fallback_key, fallback_entry in cloud_section.items():
-                if isinstance(fallback_entry, dict):
-                    return _service_entry_payload("cloud-nim", fallback_key, fallback_entry)
-
-    if isinstance(local_entry, dict):
-        return _service_entry_payload("self-hosted", service_id, local_entry)
-
-    if not nvidia_cloud_available():
-        raise RuntimeError(
-            f"Default service {service_id!r} for {example['key']} / {category!r} "
-            "has no self-hosted entry in services.local.yaml and the NVIDIA Cloud "
-            "catalog is disabled because NVIDIA_API_KEY is missing or unavailable "
-            "(unset, empty, or the 'not-needed' placeholder). Set NVIDIA_API_KEY to a "
-            "real key to use the cloud default, or add a self-hosted entry."
+def _resolve_service_defaults(example: EnrichedExample) -> dict[str, list[dict]]:
+    """Return the first available catalog entry per slot, self-hosted before NVIDIA Cloud."""
+    sources = service_catalog_sources(example)
+    defaults: dict[str, list[dict]] = {}
+    for slot in example["services"]:
+        found = next(
+            ((source, key, entry) for source, catalog in sources for key, entry in catalog.get(slot, {}).items()),
+            None,
         )
-    raise RuntimeError(
-        f"Default service {service_id!r} for {example['key']} / {category!r} "
-        "was not found in services.cloud.yaml or services.local.yaml"
-    )
+        if found is None:
+            recipe = service_recipe()
+            hint = (
+                " Start the self-hosted sidecars, set SERVICE_RECIPE, or set a real NVIDIA_API_KEY for NVIDIA Cloud."
+                if recipe in ("auto", "cloud") and not nvidia_cloud_available()
+                else ""
+            )
+            raise RuntimeError(
+                f"No {slot!r} service for {example['key']} in services.yaml for SERVICE_RECIPE={recipe!r}; "
+                f"checked {example['services'][slot]}.{hint}"
+            )
+        defaults[slot] = [service_api_entry(*found)]
+    return defaults
 
 
-def _resolve_service_defaults(example: EnrichedExample) -> dict[str, list[ServiceDefault]]:
-    """Hydrate example default service ids from the example's service catalog."""
-    return {
-        category: [_resolve_service_default(example, category, service_id) for service_id in service_ids]
-        for category, service_ids in example["defaults"].items()
-        if category not in ("prompt", "default_session_language") and isinstance(service_ids, list)
-    }
-
-
-def _resolve_prompt_default(example: EnrichedExample, prompt_key: str) -> PromptDefault:
+def _resolve_prompt_default(example: EnrichedExample, catalog: dict, prompt_key: str) -> PromptDefault:
     """Resolve one default prompt key to its prompt-catalog payload."""
-    catalog = _load_yaml_mapping(_example_dir(example) / "prompts.yaml")
     entry = catalog.get(prompt_key)
     if not isinstance(entry, dict) or "content" not in entry:
         raise RuntimeError(f"Default prompt {prompt_key!r} for {example['key']} was not found in prompts.yaml")
@@ -339,8 +145,12 @@ def _resolve_prompt_default(example: EnrichedExample, prompt_key: str) -> Prompt
 
 
 def _resolve_prompt_defaults(example: EnrichedExample) -> list[PromptDefault]:
-    """Hydrate default prompt ids from the example's prompt catalog."""
-    return [_resolve_prompt_default(example, prompt_key) for prompt_key in example["defaults"].get("prompt", [])]
+    """Hydrate default prompt ids from the ``prompts.yaml`` beside the example's bot module."""
+    prompt_keys = example["defaults"].get("prompt", [])
+    if not prompt_keys:
+        return []
+    catalog = load_prompt_catalog(example_module_file(example))
+    return [_resolve_prompt_default(example, catalog, prompt_key) for prompt_key in prompt_keys]
 
 
 def prompt_default_key(example_key: str = "", *, ignore_lock: bool = False) -> str | None:
@@ -350,9 +160,13 @@ def prompt_default_key(example_key: str = "", *, ignore_lock: bool = False) -> s
     return prompt_keys[0] if prompt_keys else None
 
 
+def _session_language(example: EnrichedExample) -> str:
+    return str(example["defaults"].get("default_session_language") or "")
+
+
 def default_session_language(example_key: str = "") -> str:
     """Return the registry-declared fixed session language for an example."""
-    return str(find(example_key)["defaults"].get("default_session_language") or "")
+    return _session_language(find(example_key))
 
 
 def welcome_message_enabled(example_key: str = "") -> bool:
@@ -363,10 +177,7 @@ def welcome_message_enabled(example_key: str = "") -> bool:
     compose profile), otherwise the per-example ``welcome_message`` registry value
     applies (default ``True``).
     """
-    override = os.getenv("ENABLE_WELCOME_MESSAGE", "").strip()
-    if override:
-        return override.lower() == "true"
-    return bool(find(example_key).get("welcome_message", True))
+    return parse_env_bool("ENABLE_WELCOME_MESSAGE", default=find(example_key)["welcome_message"])
 
 
 def agent_prompt_keys(example_key: str = "") -> frozenset[str]:
@@ -374,66 +185,114 @@ def agent_prompt_keys(example_key: str = "") -> frozenset[str]:
     return frozenset(find(example_key).get("agent_prompt_keys", []))
 
 
+def _is_str_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _parse_str_list(example_id: str, field: str, value: Any) -> list[str]:
+    if not _is_str_list(value):
+        raise RuntimeError(f"Example {example_id!r} {field} must be a list of strings")
+    return list(value)
+
+
+def _parse_services(example_id: str, entry: dict) -> dict[str, list[str]]:
+    services = entry.get("services", {})
+    if not isinstance(services, dict) or not all(_is_str_list(keys) and keys for keys in services.values()):
+        raise RuntimeError(f"Example {example_id!r} services must map each slot to a non-empty list of keys")
+    return {str(slot): list(keys) for slot, keys in services.items()}
+
+
+def _parse_settings(example_id: str, entry: dict, services: dict[str, list[str]]) -> dict:
+    settings = entry.get("settings", {})
+    if not isinstance(settings, dict) or not all(
+        slot in services
+        and isinstance(per_service, dict)
+        and all(key in services[slot] and isinstance(values, dict) for key, values in per_service.items())
+        for slot, per_service in settings.items()
+    ):
+        raise RuntimeError(f"Example {example_id!r} settings must map a slot to its service keys to setting defaults")
+    return {
+        str(slot): {str(key): dict(values) for key, values in per_service.items()}
+        for slot, per_service in settings.items()
+    }
+
+
+def _parse_categories(example_id: str, entry: dict, services: dict[str, list[str]]) -> dict[str, str]:
+    categories = entry.get("categories", {})
+    if not isinstance(categories, dict) or not all(
+        slot in services and category in SERVICE_CATEGORIES for slot, category in categories.items()
+    ):
+        raise RuntimeError(
+            f"Example {example_id!r} categories must map a slot listed under services to one of "
+            f"{', '.join(SERVICE_CATEGORIES)}"
+        )
+    return {str(slot): str(category) for slot, category in categories.items()}
+
+
+def _parse_activity_check(example_id: str, entry: dict) -> ActivityCheckConfig | None:
+    activity_check = entry.get("activity_check")
+    if activity_check is None:
+        return None
+    if not isinstance(activity_check, dict):
+        raise RuntimeError(f"Example {example_id!r} activity_check must be a mapping")
+    parsed: ActivityCheckConfig = {}
+    for key in ("first_warning_s", "second_warning_s", "warning_completion_timeout_s"):
+        value = activity_check.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+            raise RuntimeError(f"Example {example_id!r} activity_check.{key} must be a positive number")
+        parsed[key] = float(value)
+    return parsed
+
+
+def _parse_defaults(example_id: str, entry: dict) -> dict[str, list[str] | str]:
+    defaults = entry.get("defaults", {})
+    if not isinstance(defaults, dict):
+        raise RuntimeError(f"Example {example_id!r} defaults must be a mapping")
+    parsed: dict[str, list[str] | str] = {}
+    for field, value in defaults.items():
+        if field == "default_session_language":
+            if not isinstance(value, str):
+                raise RuntimeError(f"Example {example_id!r} defaults[{field!r}] must be a string")
+            parsed[field] = value.strip()
+        elif field == "prompt":
+            parsed[field] = _parse_str_list(example_id, "defaults['prompt']", value)
+        else:
+            raise RuntimeError(
+                f"Example {example_id!r} defaults[{field!r}] is not supported; list services under 'services'"
+            )
+    return parsed
+
+
+def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"Example {example_id!r} must be a mapping")
+    label = str(entry.get("label") or "").strip()
+    bot_spec = str(entry.get("bot") or "").strip()
+    if not label or not bot_spec:
+        raise RuntimeError(f"Example {example_id!r} requires label and bot")
+    welcome_message = entry.get("welcome_message", True)
+    if not isinstance(welcome_message, bool):
+        raise RuntimeError(f"Example {example_id!r} welcome_message must be a boolean")
+    services = _parse_services(example_id, entry)
+    return {
+        "label": label,
+        "services": services,
+        "settings": _parse_settings(example_id, entry, services),
+        "categories": _parse_categories(example_id, entry, services),
+        "capabilities": _parse_str_list(example_id, "capabilities", entry.get("capabilities", [])),
+        "agent_prompt_keys": _parse_str_list(example_id, "agent_prompt_keys", entry.get("agent_prompt_keys", [])),
+        "activity_check": _parse_activity_check(example_id, entry),
+        "defaults": _parse_defaults(example_id, entry),
+        "welcome_message": welcome_message,
+        "bot": bot_spec,
+    }
+
+
 def _load_examples(data: dict) -> dict[str, ExampleEntry]:
     raw_examples = data.get("examples")
     if not isinstance(raw_examples, dict):
         raise RuntimeError("examples_registry.yaml requires an examples mapping")
-
-    examples: dict[str, ExampleEntry] = {}
-    for example_id, entry in raw_examples.items():
-        if not isinstance(entry, dict):
-            raise RuntimeError(f"Example {example_id!r} must be a mapping")
-        label = str(entry.get("label") or "").strip()
-        bot_spec = str(entry.get("bot") or "").strip()
-        slots = entry.get("slots", [])
-        capabilities = entry.get("capabilities", [])
-        agent_prompt_keys = entry.get("agent_prompt_keys", [])
-        activity_check = entry.get("activity_check")
-        defaults = entry.get("defaults", {})
-        if not label or not bot_spec:
-            raise RuntimeError(f"Example {example_id!r} requires label and bot")
-        if not isinstance(slots, list) or not all(isinstance(slot, str) for slot in slots):
-            raise RuntimeError(f"Example {example_id!r} slots must be a list of strings")
-        if not isinstance(capabilities, list) or not all(isinstance(capability, str) for capability in capabilities):
-            raise RuntimeError(f"Example {example_id!r} capabilities must be a list of strings")
-        if not isinstance(agent_prompt_keys, list) or not all(isinstance(key, str) for key in agent_prompt_keys):
-            raise RuntimeError(f"Example {example_id!r} agent_prompt_keys must be a list of strings")
-        if activity_check is not None and not isinstance(activity_check, dict):
-            raise RuntimeError(f"Example {example_id!r} activity_check must be a mapping")
-        welcome_message = entry.get("welcome_message", True)
-        if not isinstance(welcome_message, bool):
-            raise RuntimeError(f"Example {example_id!r} welcome_message must be a boolean")
-        if not isinstance(defaults, dict):
-            raise RuntimeError(f"Example {example_id!r} defaults must be a mapping")
-        normalized_defaults: dict[str, list[str] | str] = {}
-        for slot, service_ids in defaults.items():
-            if slot == "default_session_language":
-                if not isinstance(service_ids, str):
-                    raise RuntimeError(f"Example {example_id!r} defaults[{slot!r}] must be a string")
-                normalized_defaults[str(slot)] = service_ids.strip()
-                continue
-            if not isinstance(service_ids, list) or not all(isinstance(service_id, str) for service_id in service_ids):
-                raise RuntimeError(f"Example {example_id!r} defaults[{slot!r}] must be a list of strings")
-            normalized_defaults[str(slot)] = list(service_ids)
-        normalized_activity_check: ActivityCheckConfig | None = None
-        if activity_check is not None:
-            normalized_activity_check = {}
-            for key in ("first_warning_s", "second_warning_s", "warning_completion_timeout_s"):
-                value = activity_check.get(key)
-                if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
-                    raise RuntimeError(f"Example {example_id!r} activity_check.{key} must be a positive number")
-                normalized_activity_check[key] = float(value)
-        examples[str(example_id)] = {
-            "label": label,
-            "slots": list(slots),
-            "capabilities": list(capabilities),
-            "agent_prompt_keys": list(agent_prompt_keys),
-            "activity_check": normalized_activity_check,
-            "defaults": normalized_defaults,
-            "welcome_message": welcome_message,
-            "bot": bot_spec,
-        }
-    return examples
+    return {str(example_id): _parse_example(str(example_id), entry) for example_id, entry in raw_examples.items()}
 
 
 class Selection(NamedTuple):
@@ -488,7 +347,7 @@ def _parse_transports(raw: str) -> tuple[str, ...]:
     raise RuntimeError(f"transports {cleaned!r} must be 'all' or one of {_SUPPORTED_TRANSPORTS}")
 
 
-_REGISTRY_DATA = _load_yaml_registry()
+_REGISTRY_DATA = load_yaml_file(_REGISTRY_PATH, required=True)
 EXAMPLES = _load_examples(_REGISTRY_DATA)
 _SELECTION = _parse_selection(
     os.getenv("EXAMPLE_SELECTION", "").strip() or str(_REGISTRY_DATA.get("selection") or ""),
@@ -514,14 +373,9 @@ def visible_transports() -> tuple[str, ...]:
     return _TRANSPORTS
 
 
-def _enrich(example_id: str, entry: ExampleEntry) -> EnrichedExample:
-    """Project a registry entry into a flat dict with an ``id`` and wire ``key`` (both the example id)."""
-    return {**entry, "id": example_id, "key": example_id}
-
-
 def _lookup_by_key(key: str) -> EnrichedExample:
-    """Return the :class:`EnrichedExample` for the example id ``key``; raises on miss."""
-    return _enrich(key, EXAMPLES[key])
+    """Return the registry entry for example id ``key`` with ``id`` and wire ``key`` set; raises on miss."""
+    return {**EXAMPLES[key], "id": key, "key": key}
 
 
 def find(value: str = "", *, ignore_lock: bool = False) -> EnrichedExample:
@@ -545,7 +399,7 @@ def find(value: str = "", *, ignore_lock: bool = False) -> EnrichedExample:
 
 
 def metadata(example: EnrichedExample) -> dict:
-    """Strip internal fields (``bot`` spec) for client payloads."""
+    """Return the client payload for an example, with its service and prompt defaults resolved."""
     defaults = _resolve_service_defaults(example)
     prompt_defaults = _resolve_prompt_defaults(example)
     if prompt_defaults:
@@ -554,9 +408,9 @@ def metadata(example: EnrichedExample) -> dict:
         "id": example["id"],
         "key": example["key"],
         "label": example["label"],
-        "slots": example["slots"],
+        "slots": list(example["services"]),
         "capabilities": example["capabilities"],
-        "default_session_language": str(example["defaults"].get("default_session_language") or ""),
+        "default_session_language": _session_language(example),
         "defaults": defaults,
     }
 

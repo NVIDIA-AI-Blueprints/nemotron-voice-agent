@@ -52,6 +52,10 @@ services:
       - --tts.voice-name=John
       - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
       - --bind=0.0.0.0:50051
+    networks:
+      default:
+        aliases:
+          - nemo-speech
 
   nemo-speech-tts:
     <<: *nemo-speech
@@ -67,3 +71,7 @@ services:
       - --tts.voice-name=John
       - --tts.threads=${NEMO_SPEECH_TTS_THREADS:-8}
       - --bind=0.0.0.0:50051
+    networks:
+      default:
+        aliases:
+          - nemo-speech

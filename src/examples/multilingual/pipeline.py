@@ -193,6 +193,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
     asr_model = body.get("asr_model", "") or default_asr.get("model", "")
     asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
+    asr_automatic_punctuation = str(body.get("asr_automatic_punctuation", "true")).lower() != "false"
     if not asr_language_code or asr_language_code.strip().lower() == "auto":
         registry_language = examples_registry.default_session_language(body.get("pipeline_mode", ""))
         asr_language_code = registry_language or DEFAULT_SESSION_LANGUAGE
@@ -203,12 +204,13 @@ async def bot(runner_args: RunnerArguments) -> None:
             "function_id": asr_function_id,
             "model_name": asr_model or "custom-asr",
         }
+    asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if fixed_session_language:
-        asr_kwargs["settings"] = NvidiaSTTSettings(language=fixed_session_language)
+        asr_kwargs["settings"].language = fixed_session_language
     stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
-        f"language={fixed_session_language}"
+        f"language={fixed_session_language}, punctuation={asr_automatic_punctuation}"
     )
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")

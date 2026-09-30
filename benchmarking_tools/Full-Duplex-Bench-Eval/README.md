@@ -1,6 +1,6 @@
 # Full-Duplex-Bench eval
 
-Batch client for [Full-Duplex-Bench](https://github.com/DanielLin94144/Full-Duplex-Bench) v1, v1.5: streams WAVs to the voice agent over WebSocket and writes reply audio. Configure the server (`.env` and the selected example's `services.cloud.yaml` / `services.local.yaml`), start it, then point this tool at it with `--server-url`.
+Batch client for [Full-Duplex-Bench](https://github.com/DanielLin94144/Full-Duplex-Bench) v1, v1.5: streams WAVs to the voice agent over WebSocket and writes reply audio. Configure the server (`.env` and the root `services.yaml`), start it, then point this tool at it with `--server-url`.
 
 ## Install
 
