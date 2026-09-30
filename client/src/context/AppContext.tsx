@@ -9,20 +9,14 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { useDeployment, useDefaultLLMs, useDefaultPrompts, useDefaultASR, useDefaultTTS, useDefaultTools, type DeploymentOption, type LLMService, type Prompt, type SimpleService, type Tool, type TransportOption, type TransportType } from "../api";
-import { isSelectablePrompt, readLSArray, readLSString, writeLSString, writeLSJson, removeLSKey } from "../utils";
+import { useDeployment, useDefaultLLMs, useDefaultPrompts, useDefaultASR, useDefaultTTS, useDefaultTools, type DeploymentOption, type LLMService, type Prompt, type ServiceSettingValues, type SimpleService, type Tool, type TransportOption, type TransportType } from "../api";
+import { isSelectablePrompt, readLSArray, writeLSJson } from "../utils";
 import { AppContext } from "./app-context";
 
 const ASR_STORAGE = "nvidia-voice-agent-asr-custom";
 const TTS_STORAGE = "nvidia-voice-agent-tts-custom";
 const LLM_STORAGE = "nvidia-voice-agent-llm-custom";
-const ASR_SELECTION_STORAGE = "nvidia-voice-agent-asr-selection";
-const TTS_SELECTION_STORAGE = "nvidia-voice-agent-tts-selection";
-const LLM_SELECTION_STORAGE = "nvidia-voice-agent-llm-selection";
 const PROMPT_STORAGE = "nvidia-voice-agent-prompts-custom";
-const PROMPT_SELECTION = "nvidia-voice-agent-prompt-selection";
-const TRANSPORT_STORAGE = "nvidia-voice-agent-transport";
-const SELECTED_EXAMPLE_STORAGE = "nvidia-voice-agent-selected-example";
 
 /** Fallback session language when an example declares none. */
 export const DEFAULT_SESSION_LANGUAGE = "en-US";
@@ -79,7 +73,6 @@ type ManagedServiceCatalogOptions<T extends ManagedService> = {
   defaultItems: T[];
   loading: boolean;
   customStorageKey: string;
-  selectionStorageKey: string;
   preferredBuiltInId?: string;
 };
 
@@ -87,11 +80,10 @@ function useManagedServiceCatalog<T extends ManagedService>({
   defaultItems,
   loading,
   customStorageKey,
-  selectionStorageKey,
   preferredBuiltInId = "",
 }: ManagedServiceCatalogOptions<T>) {
   const [customItems, setCustomItems] = useState<T[]>(() => readCustomServices<T>(customStorageKey));
-  const [selectedId, setSelectedId] = useState(() => readLSString(selectionStorageKey));
+  const [selectedId, setSelectedId] = useState("");
 
   const items = useMemo(() => [...defaultItems, ...customItems], [defaultItems, customItems]);
 
@@ -100,27 +92,17 @@ function useManagedServiceCatalog<T extends ManagedService>({
     [selectedId, items, loading, preferredBuiltInId],
   );
 
-  const select = useCallback((id: string) => {
-    setSelectedId(id);
-    writeLSString(selectionStorageKey, id);
-  }, [selectionStorageKey]);
-
   const persistCustom = useCallback((next: T[]) => {
     setCustomItems(next);
     writeLSJson(customStorageKey, next);
   }, [customStorageKey]);
 
-  const clearSelection = useCallback(() => {
-    setSelectedId("");
-    removeLSKey(selectionStorageKey);
-  }, [selectionStorageKey]);
-
   const removeCustom = useCallback((id: string) => {
     persistCustom(customItems.filter((item) => item.id !== id));
     if (effectiveSelectedId === id) {
-      clearSelection();
+      setSelectedId("");
     }
-  }, [clearSelection, customItems, effectiveSelectedId, persistCustom]);
+  }, [customItems, effectiveSelectedId, persistCustom]);
 
   const selected = useMemo(
     () => items.find((item) => item.id === effectiveSelectedId),
@@ -132,7 +114,7 @@ function useManagedServiceCatalog<T extends ManagedService>({
     items,
     selected,
     selectedId: effectiveSelectedId,
-    select,
+    select: setSelectedId,
     persistCustom,
     removeCustom,
   };
@@ -163,6 +145,10 @@ export interface AppState {
   updateLLM: (id: string, updates: Partial<Omit<LLMService, "id" | "builtIn">>) => void;
   removeLLM: (id: string) => void;
   selectedLLM: LLMService | undefined;
+  serviceSettings: Record<string, ServiceSettingValues>;
+  setServiceSetting: (settingsKey: string, name: string, value: unknown) => void;
+  streamingInput: Record<string, boolean>;
+  setStreamingInput: (settingsKey: string, enabled: boolean) => void;
 
   asrServices: SimpleService[];
   asrLoading: boolean;
@@ -208,11 +194,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const deploymentOptions = useMemo(() => deployment?.options ?? [], [deployment]);
 
   // --- Selected example state (one source of truth, driven by /api/deployment) ---
-  const [selectedKey, setSelectedKey] = useState<string>(() => readLSString(SELECTED_EXAMPLE_STORAGE));
-  const selectExample = useCallback((key: string) => {
-    setSelectedKey(key);
-    writeLSString(SELECTED_EXAMPLE_STORAGE, key);
-  }, []);
+  const [selectedKey, selectExample] = useState("");
 
   const selectedExample = useMemo<DeploymentOption | undefined>(() => {
     if (!deployment) return undefined;
@@ -228,24 +210,12 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     return deployment?.transports ?? [];
   }, [deployment]);
 
-  const [selectedTransport, setSelectedTransport] = useState<TransportType>(() => {
-    return readLSString(TRANSPORT_STORAGE) === "websocket" ? "websocket" : "webrtc";
-  });
+  const [selectedTransport, setTransport] = useState<TransportType>("webrtc");
 
   const effectiveTransport = useMemo<TransportType>(() => {
     if (availableTransports.some((transport) => transport.id === selectedTransport)) return selectedTransport;
     return availableTransports[0]?.id ?? selectedTransport;
   }, [selectedTransport, availableTransports]);
-
-  useEffect(() => {
-    if (availableTransports.length === 0 || effectiveTransport === selectedTransport) return;
-    writeLSString(TRANSPORT_STORAGE, effectiveTransport);
-  }, [availableTransports, effectiveTransport, selectedTransport]);
-
-  const setTransport = useCallback((t: TransportType) => {
-    setSelectedTransport(t);
-    writeLSString(TRANSPORT_STORAGE, t);
-  }, []);
 
   const [currentSessionId, setCurrentSessionId] = useState("");
 
@@ -265,7 +235,6 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     defaultItems: defaultLLMs,
     loading: llmsLoading,
     customStorageKey: LLM_STORAGE,
-    selectionStorageKey: LLM_SELECTION_STORAGE,
     preferredBuiltInId: getDefaultServiceId(selectedExample, "llm"),
   });
 
@@ -278,6 +247,27 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const updateLLM = useCallback((id: string, updates: Partial<Omit<LLMService, "id" | "builtIn">>) => {
     persistLLMs(customLLMs.map((s) => (s.id === id ? { ...s, ...updates } : s)));
   }, [customLLMs, persistLLMs]);
+
+  const [settingsByExample, setSettingsByExample] = useState<Record<string, Record<string, ServiceSettingValues>>>({});
+  const serviceSettings = useMemo(() => settingsByExample[serviceCatalogKey] ?? {}, [settingsByExample, serviceCatalogKey]);
+  const setServiceSetting = useCallback((settingsKey: string, name: string, value: unknown) => {
+    setSettingsByExample((prev) => {
+      const exampleSettings = prev[serviceCatalogKey] ?? {};
+      const next = { ...exampleSettings[settingsKey] };
+      if (value === undefined) delete next[name];
+      else next[name] = value;
+      return { ...prev, [serviceCatalogKey]: { ...exampleSettings, [settingsKey]: next } };
+    });
+  }, [serviceCatalogKey]);
+
+  const [streamingByExample, setStreamingByExample] = useState<Record<string, Record<string, boolean>>>({});
+  const streamingInput = useMemo(() => streamingByExample[serviceCatalogKey] ?? {}, [streamingByExample, serviceCatalogKey]);
+  const setStreamingInput = useCallback((settingsKey: string, enabled: boolean) => {
+    setStreamingByExample((prev) => ({
+      ...prev,
+      [serviceCatalogKey]: { ...prev[serviceCatalogKey], [settingsKey]: enabled },
+    }));
+  }, [serviceCatalogKey]);
 
   // --- ASR state ---
   const { data: defaultASR = [], isLoading: asrLoading } = useDefaultASR(serviceCatalogKey);
@@ -293,7 +283,6 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     defaultItems: defaultASR,
     loading: asrLoading,
     customStorageKey: ASR_STORAGE,
-    selectionStorageKey: ASR_SELECTION_STORAGE,
     preferredBuiltInId: getDefaultServiceId(selectedExample, "asr"),
   });
 
@@ -335,7 +324,6 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     defaultItems: defaultTTS,
     loading: ttsLoading,
     customStorageKey: TTS_STORAGE,
-    selectionStorageKey: TTS_SELECTION_STORAGE,
     preferredBuiltInId: getDefaultServiceId(selectedExample, "tts"),
   });
 
@@ -357,9 +345,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   // --- Prompt state ---
   const { data: defaultPrompts = [], isLoading: promptsLoading } = useDefaultPrompts(serviceCatalogKey);
   const [customPrompts, setCustomPrompts] = useState<Prompt[]>(() => readLSArray<Prompt>(PROMPT_STORAGE, []).map((p) => ({ ...p, builtIn: false })));
-  const [selectedPromptKey, setSelectedPromptKey] = useState(() => {
-    try { return localStorage.getItem(PROMPT_SELECTION) || ""; } catch { return ""; }
-  });
+  const [selectedPromptKey, setSelectedPromptKey] = useState("");
 
   const prompts = useMemo(() => [...defaultPrompts, ...customPrompts], [defaultPrompts, customPrompts]);
 
@@ -371,11 +357,6 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const persistPrompts = useCallback((next: Prompt[]) => {
     setCustomPrompts(next);
     writeLSJson(PROMPT_STORAGE, next);
-  }, []);
-
-  const selectPrompt = useCallback((key: string) => {
-    setSelectedPromptKey(key);
-    writeLSString(PROMPT_SELECTION, key);
   }, []);
 
   const addPrompt = useCallback((key: string, description: string, content: string): string | null => {
@@ -409,18 +390,20 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     selectedTransport: effectiveTransport, setTransport,
     currentSessionId, setCurrentSessionId,
     llms, llmsLoading, selectedLLMId: effectiveSelectedLLMId, selectLLM, addLLM, updateLLM, removeLLM, selectedLLM,
+    serviceSettings, setServiceSetting, streamingInput, setStreamingInput,
     asrServices, asrLoading, selectedASRId: effectiveSelectedASRId, selectASR, addASR, updateASR, removeASR, selectedASR,
     ttsServices, ttsLoading, selectedTTSId: effectiveSelectedTTSId, selectTTS, addTTS, updateTTS, removeTTS, selectedTTS,
     selectedVoiceId, setSelectedVoiceId,
     selectedSessionLanguage, setSelectedSessionLanguage,
-    prompts, promptsLoading, selectedPromptKey: effectiveSelectedPromptKey, selectPrompt, addPrompt, updatePrompt, removePrompt, selectedPrompt,
+    prompts, promptsLoading, selectedPromptKey: effectiveSelectedPromptKey, selectPrompt: setSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
     tools, toolsLoading,
   }), [selectedExample, selectExample, deploymentOptions, deploymentSelectable, availableTransports, effectiveTransport, setTransport, currentSessionId,
        llms, llmsLoading, effectiveSelectedLLMId, selectLLM, addLLM, updateLLM, removeLLM, selectedLLM,
+       serviceSettings, setServiceSetting, streamingInput, setStreamingInput,
        asrServices, asrLoading, effectiveSelectedASRId, selectASR, addASR, updateASR, removeASR, selectedASR,
        ttsServices, ttsLoading, effectiveSelectedTTSId, selectTTS, addTTS, updateTTS, removeTTS, selectedTTS,
        selectedVoiceId, selectedSessionLanguage, setSelectedSessionLanguage,
-       prompts, promptsLoading, effectiveSelectedPromptKey, selectPrompt, addPrompt, updatePrompt, removePrompt, selectedPrompt,
+       prompts, promptsLoading, effectiveSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
        tools, toolsLoading]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -71,7 +71,9 @@ from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, PIPELI
 from examples.shared.prewarm import build_session_languages, peek_cached_tts_config, prewarm_tts, warmup_tts_synthesis
 from examples.shared.subagents import load_subagent_registry
 from utils import (
+    LOCAL_SPEECH_PORTS,
     PROJECT_ROOT,
+    SELF_HOSTED_SOURCE,
     build_services_api_response,
     default_prompt_key,
     filter_session_config,
@@ -82,7 +84,8 @@ from utils import (
     load_service_entry_by_id,
     load_tools_catalog,
     parse_endpoint,
-    set_active_slots,
+    service_catalog_sources,
+    set_active_services,
     set_service_context,
 )
 from webcam_frame_store import store_webcam_frame, webcam_client_config
@@ -94,29 +97,6 @@ _CONNECT_PREWARM_TIMEOUT_SECS = parse_env_int("CONNECT_PREWARM_TIMEOUT_SECS", 45
 _CONNECT_HEALTH_TIMEOUT_SECS = 5
 _NIM_READY_PATH = "/v1/health/ready"
 _LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
-_SPEECH_READY_ENDPOINTS = {
-    "asr": (
-        (
-            "nemotron-asr-streaming-english",
-            "nemotron-asr-streaming-multilingual",
-            "parakeet-ctc-asr",
-            "parakeet-rnnt-asr",
-        ),
-        50052,
-        50152,
-        9001,
-    ),
-    "tts": (
-        (
-            "magpie-multilingual-tts-service",
-            "chatterbox-tts-service",
-            "magpie-zeroshot-tts-service",
-        ),
-        50051,
-        50151,
-        9000,
-    ),
-}
 _TURN_LISTEN_PORT = 3478
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -233,41 +213,28 @@ def _example_with_module_file(example_key: str = "") -> tuple[dict, Path]:
     return selected, examples_registry.example_module_file(selected)
 
 
-def _activate_example_catalog(module_file: Path, example: dict) -> None:
-    """Use package-local service catalogs and slot filtering for a selected example."""
-    module_dir = Path(module_file).resolve().parent
-    for env_var, candidate in (
-        ("SERVICES_CLOUD_PATH", module_dir / "services.cloud.yaml"),
-        ("SERVICES_LOCAL_PATH", module_dir / "services.local.yaml"),
-    ):
-        os.environ[env_var] = str(candidate)
-    set_active_slots(example.get("slots") or None)
-
-
-def _bind_example_context(module_file: Path, example: dict) -> None:
-    """Bind package-local service catalogs to the current request context."""
-    set_service_context(Path(module_file).resolve().parent, example.get("slots") or None)
-
-
 def _bind_example_context_by_key(example_key: str = "") -> dict:
-    """Bind the package-local service catalog for one request without mutating globals."""
-    example, module_file = _example_with_module_file(example_key)
-    _bind_example_context(module_file, example)
+    """Bind one example's catalog services to the current request without mutating globals."""
+    example = examples_registry.find(example_key)
+    set_service_context(example)
     return example
 
 
 def _activate_example_catalog_by_key(example_key: str = "") -> dict:
-    """Activate the package-local service catalog process-wide for startup defaults."""
-    example, module_file = _example_with_module_file(example_key)
-    _activate_example_catalog(module_file, example)
+    """Activate one example's catalog services process-wide for startup defaults."""
+    example = examples_registry.find(example_key)
+    set_active_services(example)
     return example
 
 
 def _resolve_config(session_id: str = "", fallback_example_key: str = "", **query_params: str) -> dict:
-    """Merge stored session config with query overrides; sanitize and hydrate from YAML."""
-    base = _session_configs.pop(session_id, {}) if session_id else {}
-    base.update({k: v for k, v in query_params.items() if v})
-    return _sanitize_session_config({k: v for k, v in base.items() if v}, fallback_example_key=fallback_example_key)
+    """Return the stored session config, or sanitize and hydrate the query params when none is stored."""
+    stored = _session_configs.pop(session_id, None) if session_id else None
+    if stored is not None:
+        _bind_example_context_by_key(str(stored.get("pipeline_mode", "")) or fallback_example_key)
+        return stored
+    query_config = {k: v for k, v in query_params.items() if v}
+    return _sanitize_session_config(query_config, fallback_example_key=fallback_example_key)
 
 
 def _get_default_tts_selection() -> tuple[str, str, str, str]:
@@ -318,17 +285,14 @@ def _get_default_asr_catalog() -> tuple[str, str, str]:
     )
 
 
-def _get_default_llm_selection() -> tuple[str, str]:
-    default_llm = load_service_entry("llm", "")
-    return (
-        default_llm.get("base_url", "https://integrate.api.nvidia.com/v1"),
-        default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b"),
-    )
+def _get_default_llm_base_url() -> str:
+    return load_service_entry("llm", "").get("base_url", "https://integrate.api.nvidia.com/v1")
 
 
-def _store_session_config(data: dict, fallback_example_key: str = "") -> str:
+def _store_session_config(config: dict) -> str:
+    """Store a sanitized session config and return its session id."""
     session_id = uuid.uuid4().hex[:12]
-    _session_configs[session_id] = _sanitize_session_config(data, fallback_example_key=fallback_example_key)
+    _session_configs[session_id] = config
     return session_id
 
 
@@ -338,7 +302,7 @@ def _session_capability_error(session_id: str, capability: str) -> JSONResponse 
     config = _active_session_configs.get(cleaned_session_id) or _session_configs.get(cleaned_session_id)
     if not cleaned_session_id or config is None:
         return JSONResponse(status_code=404, content={"detail": "session not found"})
-    example = examples_registry.metadata(examples_registry.find(config.get("pipeline_mode", "")))
+    example = examples_registry.find(config.get("pipeline_mode", ""))
     if capability not in set(example.get("capabilities") or []):
         return JSONResponse(status_code=403, content={"detail": f"session does not support {capability}"})
     return None
@@ -401,7 +365,7 @@ def _build_ice_servers(request: Request) -> list[dict]:
 
 def _should_skip_tts_prewarm(example: dict) -> bool:
     """Skip TTS warm-up for examples without a ``tts`` slot."""
-    return "tts" not in (example.get("slots") or [])
+    return "tts" not in example["services"]
 
 
 def _service_host_port(server: str) -> tuple[str, int]:
@@ -436,50 +400,30 @@ def _local_speech_ready_url(label: str, server: str) -> str:
     """Return the NIM HTTP readiness URL for built-in local ASR/TTS endpoints."""
     host, port = _service_host_port(server)
     normalized_host = host.strip("[]").lower()
-    service_hosts, container_port, host_port, http_port = _SPEECH_READY_ENDPOINTS.get(
-        label.lower(),
-        ((), 0, 0, 0),
-    )
-
-    if normalized_host in service_hosts and port == container_port:
-        return f"http://{normalized_host}:{http_port}{_NIM_READY_PATH}"
-    if normalized_host in _LOCAL_SERVICE_HOSTS and port == host_port:
-        return f"http://{_http_host(host)}:{http_port}{_NIM_READY_PATH}"
-
+    for service, ports in LOCAL_SPEECH_PORTS.get(label.lower(), {}).items():
+        if normalized_host == service and port == ports.grpc:
+            return f"http://{normalized_host}:{ports.health}{_NIM_READY_PATH}"
+        if normalized_host in _LOCAL_SERVICE_HOSTS and port == ports.host_grpc:
+            return f"http://{_http_host(host)}:{ports.host_health}{_NIM_READY_PATH}"
     return ""
 
 
-def _local_llm_health_url(base_url: str, model_id: str) -> tuple[str, bool]:
-    """Return (health_url, expects_ready_json) for built-in local LLM endpoints."""
+def _llm_health_url(base_url: str) -> str:
+    """Return the readiness URL of the self-hosted LLM at ``base_url`` from its catalog ``health_path``, or ``""``."""
+    health_path = next(
+        (
+            str(entry["health_path"])
+            for source, catalog in service_catalog_sources()
+            if source == SELF_HOSTED_SOURCE
+            for entry in catalog.get("llm", {}).values()
+            if entry.get("base_url") == base_url and entry.get("health_path")
+        ),
+        "",
+    )
+    if not health_path:
+        return ""
     parsed = urlparse(base_url)
-    host = parsed.hostname or ""
-    if not host:
-        return "", False
-
-    port = parsed.port or (443 if parsed.scheme in ("https", "wss") else 80)
-    scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme or "http")
-    normalized_host = host.strip("[]").lower()
-    http_host = _http_host(host)
-
-    if normalized_host == "nvidia-llm" and port == 8000:
-        return f"{scheme}://nvidia-llm:8000{_NIM_READY_PATH}", False
-    if normalized_host == "nvidia-llm-omni" and port == 8000:
-        return f"{scheme}://nvidia-llm-omni:8000{_NIM_READY_PATH}", False
-    if normalized_host == "nvidia-llm-vllm" and port == 8000:
-        return f"{scheme}://nvidia-llm-vllm:8000/health", False
-    if normalized_host == "nvidia-llm-vllm-omni" and port == 8002:
-        return f"{scheme}://nvidia-llm-vllm-omni:8002/health", False
-
-    if normalized_host in _LOCAL_SERVICE_HOSTS and port == 18000:
-        is_vllm = "30b-a3b" in model_id.lower() or "nvfp4" in model_id.lower()
-        health_path = "/health" if is_vllm else _NIM_READY_PATH
-        return f"{scheme}://{http_host}:18000{health_path}", False
-    if normalized_host in _LOCAL_SERVICE_HOSTS and port == 18002:
-        return f"{scheme}://{http_host}:18002{_NIM_READY_PATH}", False
-    if normalized_host in _LOCAL_SERVICE_HOSTS and port == 8002:
-        return f"{scheme}://{http_host}:8002/health", False
-
-    return "", False
+    return f"{parsed.scheme}://{parsed.netloc}{health_path}"
 
 
 def _check_http_health(label: str, target: str, health_url: str, expects_ready_json: bool = False) -> None:
@@ -527,22 +471,20 @@ async def _run_http_readiness_check(
 
 async def _ensure_llm_ready_for_connection(config: dict, example: dict) -> None:
     """Run a local LLM readiness check before starting the session."""
-    if "llm" not in (example.get("slots") or []):
+    if "llm" not in example["services"]:
         return
 
-    default_base_url, default_model_id = _get_default_llm_selection()
-    base_url = config.get("base_url", "") or default_base_url
-    model_id = config.get("model_id", "") or default_model_id
-    health_url, expects_ready_json = _local_llm_health_url(base_url, model_id)
+    base_url = config.get("base_url", "") or _get_default_llm_base_url()
+    health_url = _llm_health_url(base_url)
     if not health_url:
         return
 
-    await _run_http_readiness_check("LLM", base_url, health_url, expects_ready_json)
+    await _run_http_readiness_check("LLM", base_url, health_url)
 
 
 async def _ensure_asr_ready_for_connection(config: dict, example: dict) -> None:
     """Run an ASR readiness check before starting the session (examples with an ``asr`` slot)."""
-    if "asr" not in (example.get("slots") or []):
+    if "asr" not in example["services"]:
         return
 
     asr_server = config.get("asr_server", "") or _get_default_asr_selection()
@@ -687,7 +629,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         if (failure := await _readiness_check_or_503(config, "session config")) is not None:
             return failure
-        return {"session_id": _store_session_config(config, fallback_example_key=fallback_example_key)}
+        return {"session_id": _store_session_config(config)}
 
     @app.post("/api/start")
     async def start_bot(request: Request):
@@ -700,7 +642,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         if (failure := await _readiness_check_or_503(config, "WebRTC start")) is not None:
             return failure
-        session_id = _store_session_config(config, fallback_example_key=fallback_example_key)
+        session_id = _store_session_config(config)
         return {"webrtcUrl": f"/api/offer?session_id={session_id}"}
 
     @app.post("/api/sessions/{session_id}/attachments")
@@ -1023,7 +965,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         registry = load_subagent_registry(Path(module_file).parent / "subagents.yaml")
         return registry.to_payload()
 
-    # ---- Service catalog (services.cloud.yaml or services.local.yaml) ----
+    # ---- Service catalog (services.yaml) ----
 
     @app.get("/api/services")
     async def get_services(pipeline_mode: str = Query(default="")):

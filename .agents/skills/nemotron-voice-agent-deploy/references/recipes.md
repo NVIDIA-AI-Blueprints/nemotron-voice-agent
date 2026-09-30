@@ -4,28 +4,28 @@ Sidecars are the only per-example difference. Apply the same auth and preflight 
 
 `*/server` and `generic-assistant/server-perf` are **workstation only**. They are not supported on DGX Spark or Jetson Thor. On those hosts use `*/single-gpu` or cloud.
 
-Per-example catalogs at `src/examples/<example>/services.{cloud,local}.yaml` are auto-selected on container startup because the registry resolves the example for the active recipe.
+Every app service sets `SERVICE_RECIPE`. `server` and `single-gpu` pick that section of the root `services.yaml`, and `cloud` uses the `server` entries that declare `nvcf`. `examples_registry.yaml` lists the services each example offers.
 
 | Recipe | App | Sidecars |
 | --- | --- | --- |
-| `generic-assistant` | `generic-assistant` | — |
+| `generic-assistant` | `generic-assistant` | None |
 | `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
 | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` (ASR + TTS) |
-| `multilingual-assistant` | `multilingual-assistant` | — |
+| `multilingual-assistant` | `multilingual-assistant` | None |
 | `multilingual-assistant/server` | `multilingual-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
 | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-multilingual` (multilingual ASR + TTS) |
-| `omni-assistant` | `omni-assistant` | — |
+| `omni-assistant` | `omni-assistant` | None |
 | `omni-assistant/server` | `omni-assistant-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
 | `omni-assistant/single-gpu` | `omni-assistant-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` (TTS only) |
-| `omni-assistant-subagents` | `omni-assistant-subagents` | — |
+| `omni-assistant-subagents` | `omni-assistant-subagents` | None |
 | `omni-assistant-subagents/server` | `omni-assistant-subagents-server` | `nvidia-llm-omni`, `magpie-multilingual-tts-service` |
 | `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` (TTS only). **Not supported on Jetson Thor.** |
 | `frontend-backend-agent` | `frontend-backend-agent` | `booking-server` |
 | `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech` (ASR + TTS) |
 
-`NVIDIA_API_KEY` is required for cloud-only, `*/server`, and `generic-assistant/server-perf`. `HF_TOKEN` is required for `*/single-gpu`. Cloud catalog entries appear only when `NVIDIA_API_KEY` is set. Local catalogs merge by TCP reachability: NIM sidecars (`*/server`) and NeMo-Speech.cpp (`*/single-gpu`) appear when those endpoints are up. Host-native `uv run` uses the same rule.
+`NVIDIA_API_KEY` is required for cloud-only, `*/server`, and `generic-assistant/server-perf`. `HF_TOKEN` is required for `*/single-gpu`. NVIDIA Cloud entries appear only when `NVIDIA_API_KEY` is set. Host-native `uv run` leaves `SERVICE_RECIPE` unset and picks the section whose sidecars are reachable.
 
 UI is `https://<host>:7860/` by default, or `http://<host>:7860/` when `PIPELINE_TLS=false`.
 

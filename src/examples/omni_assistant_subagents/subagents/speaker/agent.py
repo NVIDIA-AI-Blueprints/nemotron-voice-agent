@@ -65,7 +65,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         media_analysis_prompt_handler: Callable[[str, str, str, str], Awaitable[None]] | None = None,
         uploaded_attachment_available: Callable[[], bool] | None = None,
         attachment_pending: Callable[[], bool] | None = None,
-        thinking_handler: Callable[[str, str, str], Awaitable[None]] | None = None,
+        thinking_handler: Callable[[str, str], Awaitable[None]] | None = None,
         highres_capture_handler: Callable[[str], Awaitable[None]] | None = None,
         visual_status_provider: Callable[[], str] | None = None,
         **kwargs,
@@ -492,10 +492,9 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
             )
             return
         reason = "repetition" if repeated else ""
-        effort = "high" if repeated else "medium"
         try:
-            logger.info(f"Speaker Omni escalating to Thinker: reason={reason or 'needs_thinking'}, effort={effort}")
-            await self._thinking_handler(transcript, effort, reason)
+            logger.info(f"Speaker Omni escalating to Thinker: reason={reason or 'needs_thinking'}")
+            await self._thinking_handler(transcript, reason)
         except Exception as exc:
             logger.warning(f"Speaker Omni thinking handler failed: {exc}")
             await self.push_error_frame(
@@ -525,7 +524,7 @@ class SpeakerOmniAgent(PipelineWorker):
         media_analysis_prompt_handler: Callable[[str, str, str, str], Awaitable[None]] | None = None,
         uploaded_attachment_available: Callable[[], bool] | None = None,
         attachment_pending: Callable[[], bool] | None = None,
-        thinking_handler: Callable[[str, str, str], Awaitable[None]] | None = None,
+        thinking_handler: Callable[[str, str], Awaitable[None]] | None = None,
         highres_capture_handler: Callable[[str], Awaitable[None]] | None = None,
         visual_status_provider: Callable[[], str] | None = None,
     ) -> None:

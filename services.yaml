@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Service catalog shared by every example.
+#
+#   server      → NIM sidecars (`*/server`, `*/server-perf` profiles)
+#   single-gpu  → vLLM + NeMo-Speech.cpp (`*/single-gpu` profiles)
+#
+# `SERVICE_RECIPE` selects `cloud`, `server`, or `single-gpu`. When it is unset,
+# the backend uses the self-hosted section whose endpoints are reachable.
+# A `server` entry with an `nvcf` key is also hosted on NVIDIA Cloud: the cloud
+# recipe uses it with `nvcf` fields applied over the entry (`server` defaults to
+# grpc.nvcf.nvidia.com:443 and `base_url` to integrate.api.nvidia.com). Entries
+# without `nvcf` are self-hosted only. When `NVIDIA_API_KEY` is set, local
+# recipes also list the cloud entries.
+#
+# Each example picks the keys it offers under `services` in
+# `examples_registry.yaml`. Compose hostnames are rewritten to localhost for
+# host-native runs.
+
+server:
+  llm:
+    nemotron-lightning:
+      name: "Nemotron 3.5 Lightning 30B A3B"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://nvidia-llm:8000/v1"
+      health_path: "/v1/health/ready"
+      supported_languages: [en, de, es, fr, it, ja]
+      extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
+      settings: nemotron-nim
+      nvcf: {}
+    nemotron-super:
+      name: "Nemotron 3 Super 120B A12B"
+      model_id: "nvidia/nemotron-3-super-120b-a12b"
+      base_url: "http://nemotron-3-super:8000/v1"
+      health_path: "/v1/health/ready"
+      extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
+      settings: nemotron-super
+    nemotron-omni-nvfp4:
+      name: "Nemotron 3 Nano Omni 30B A3B Reasoning"
+      model_id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+      base_url: "http://nvidia-llm-omni:8000/v1"
+      health_path: "/v1/health/ready"
+      extra_params: '{"extra_body":{"top_k":1,"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
+      settings: nemotron-omni-nim
+      nvcf: {}
+  tts:
+    magpie-multilingual-tts:
+      name: "Magpie TTS Multilingual"
+      server: "magpie-multilingual-tts-service:50051"
+      voice_id: "Magpie-Multilingual.EN-US.Aria"
+      model: "magpie-tts-multilingual"
+      settings: magpie-tts
+      nvcf:
+        function_id: "877104f7-e885-42b9-8de8-f6e4c6303969"
+    chatterbox-multilingual-tts:
+      name: "Chatterbox TTS Multilingual"
+      server: "chatterbox-tts-service:50051"
+      voice_id: "Chatterbox-Multilingual.en-US.Male"
+      model: "chatterbox-tts-multilingual"
+      synthesis_mode: per_sentence
+      nvcf:
+        function_id: "ddacc747-1269-4fab-bfd9-8f593dead106"
+    magpie-zeroshot-tts:
+      name: "Magpie TTS Zeroshot"
+      server: "magpie-zeroshot-tts-service:50051"
+      voice_id: "Magpie-ZeroShot-Multilingual.Female"
+      model: "magpie-tts-zeroshot"
+      settings: magpie-tts
+      language_code: en-US
+  asr:
+    nemotron-asr-streaming-english:
+      name: "Nemotron ASR Streaming English"
+      server: "nemotron-asr-streaming-english:50052"
+      model: "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"
+      nvcf:
+        function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
+        model: "nemotron-asr-streaming"
+    nemotron-asr-streaming-multilingual:
+      name: "Nemotron ASR Streaming Multilingual"
+      server: "nemotron-asr-streaming-multilingual:50052"
+      model: "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"
+      language_code: "auto"
+    parakeet-ctc:
+      name: "Parakeet CTC 1.1B"
+      server: "parakeet-ctc-asr:50052"
+      model: "parakeet-ctc-1.1b-asr"
+    parakeet-rnnt:
+      name: "Parakeet 1.1B RNNT Multilingual ASR"
+      server: "parakeet-rnnt-asr:50052"
+      model: "parakeet-1.1b-rnnt-multilingual-asr"
+      nvcf:
+        function_id: "71203149-d3b7-4460-8231-1be2543a1fca"
+
+single-gpu:
+  llm:
+    nemotron-lightning:
+      name: "Nemotron 3.5 Lightning 30B A3B"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://nvidia-llm-vllm:8000/v1"
+      health_path: "/health"
+      streaming_url: "ws://nvidia-llm-vllm:8000/v1/streaming-session"
+      supported_languages: [en, de, es, fr, it, ja]
+      extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
+      settings: nemotron-vllm
+    nemotron-omni-nvfp4:
+      name: "Nemotron 3 Nano Omni 30B A3B Reasoning"
+      model_id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+      base_url: "http://nvidia-llm-vllm-omni:8002/v1"
+      health_path: "/health"
+      extra_params: '{"extra_body":{"top_k":1,"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
+      settings: nemotron-omni-vllm
+  tts:
+    magpie-multilingual-tts:
+      name: "Magpie TTS (NeMo-Speech.cpp)"
+      server: "nemo-speech:50051"
+      voice_id: "John"
+      model: "magpie-tts-multilingual"
+      settings: magpie-tts
+  asr:
+    nemotron-asr-streaming-english:
+      name: "Nemotron Speech Streaming"
+      server: "nemo-speech:50051"
+      model: "nemotron-speech-streaming-en-0.6b"
+      settings: nemo-speech-asr
+    nemotron-asr-streaming-multilingual:
+      name: "Nemotron 3.5 ASR Streaming Multilingual"
+      server: "nemo-speech:50051"
+      model: "nemotron-3.5-asr-streaming-0.6b"
+      settings: nemo-speech-asr
+      language_code: "auto"

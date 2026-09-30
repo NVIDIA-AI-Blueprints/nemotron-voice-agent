@@ -160,7 +160,7 @@ class ThinkingInvalidationTests(unittest.IsolatedAsyncioTestCase):
             queue_frame=queue_frame,
             followup_delay_secs=0,
         )
-        controller.queue("Think about this", effort="medium")
+        controller.queue("Think about this")
         await controller.start_pending()
         queue_frame.reset_mock()
 

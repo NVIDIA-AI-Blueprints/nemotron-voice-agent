@@ -164,7 +164,7 @@ For development and debugging, you can run the server directly:
 
     Host-native runs read [`examples_registry.yaml`](../examples_registry.yaml) at the repository root. Edit the `selection` field to choose what the UI exposes, then start the server normally. The server has no example-selection CLI flag. Pipeline options such as `--prompt-file` remain available.
 
-    By default a host-native server uses the cloud (NVCF) service endpoints when a real `NVIDIA_API_KEY` is set (not empty or `not-needed`). To run against **local on-prem services**, start the matching Compose sidecars first. The catalog merges `services.local.yaml` and exposes only endpoints that are reachable, so NIM (`/server`) or NeMo-Speech.cpp (`/single-gpu`) entries appear automatically.
+    Without reachable local sidecars, a host-native server uses the NVIDIA Cloud (NVCF) service endpoints, which need a real `NVIDIA_API_KEY` (not empty or `not-needed`). To run against **local on-prem services**, start the matching Compose sidecars first, then start the app. The backend detects whether the NIM (`/server`) or NeMo-Speech.cpp (`/single-gpu`) sidecars are reachable and rewrites Compose endpoints to `localhost` automatically. Set `SERVICE_RECIPE=server` or `SERVICE_RECIPE=single-gpu` to pin the section instead.
 
     | `selection` in `examples_registry.yaml` | UI behavior |
     |-----------------------------------------|-------------|

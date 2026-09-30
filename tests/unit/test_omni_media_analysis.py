@@ -7,17 +7,22 @@ import asyncio
 from dataclasses import dataclass
 
 from attachment_store import Attachment
+from examples.omni_assistant_subagents.pipeline import _extra_params_for, subagent_registry
 from examples.omni_assistant_subagents.subagents.media_analyzer.agent import (
     _SYSTEM_PROMPT,
     MediaAnalyzerWorker,
     _build_user_prompt,
 )
+from examples.omni_assistant_subagents.subagents.thinker.agent import ThinkerWorker
+from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
+from utils import _load_settings_profiles
 
 
 @dataclass
 class _FakeResult:
     text: str = '{"tts": "ok", "analysis": "ok"}'
     reasoning: str = ""
+    finish_reason: str = "stop"
 
 
 def _analyze_and_capture() -> list[dict]:
@@ -71,3 +76,30 @@ def test_instructions_and_media_share_one_user_turn_with_text_first():
     assert parts[0]["type"] == "text"
     assert _SYSTEM_PROMPT in parts[0]["text"]
     assert parts[1]["type"] != "text"
+
+
+def _subagent_extra_body(profile: str, key: str) -> dict:
+    entry = {"settings": _load_settings_profiles()[profile]}
+    extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    return _extra_params_for(extra, entry, subagent_registry(), key)["extra_body"]
+
+
+def test_subagent_reasoning_budget_uses_the_vllm_settings_path():
+    assert _subagent_extra_body("nemotron-omni-vllm", MediaAnalyzerWorker.AGENT_NAME)["thinking_token_budget"] == 2048
+    assert _subagent_extra_body("nemotron-omni-vllm", ThinkerWorker.AGENT_NAME)["thinking_token_budget"] == 1024
+
+
+def test_subagent_reasoning_budget_uses_the_nim_settings_path():
+    extra_body = _subagent_extra_body("nemotron-omni-nim", MediaAnalyzerWorker.AGENT_NAME)
+
+    assert extra_body["reasoning_budget"] == 2048
+    assert "thinking_token_budget" not in extra_body
+
+
+def test_subagent_without_a_budget_keeps_extra_params():
+    extra = {"extra_body": {}}
+    registry = subagent_registry()
+
+    assert _extra_params_for(extra, {"settings": {}}, registry, MediaAnalyzerWorker.AGENT_NAME) is extra
+    vllm = {"settings": _load_settings_profiles()["nemotron-omni-vllm"]}
+    assert _extra_params_for(extra, vllm, registry, WebcamAgent.AGENT_NAME) is extra

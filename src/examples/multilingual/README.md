@@ -8,7 +8,7 @@ The pattern uses dedicated ASR, LLM, and TTS services with a plain-text response
 
 ## Default Models
 
-The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+The `services` lists in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../services.yaml):
 
 | Profile | ASR | LLM | TTS |
 | --- | --- | --- | --- |
@@ -16,7 +16,7 @@ The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) reso
 | Server | Nemotron ASR Streaming Multilingual NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
 | Single GPU | Nemotron 3.5 ASR Streaming Multilingual 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Magpie TTS Multilingual through NeMo-Speech.cpp |
 
-The registry declares `nemotron-asr-streaming-multilingual` as the ASR default. When that local service is unreachable, the resolver tries another reachable local ASR before falling back to the cloud catalog. The cloud catalog has no Nemotron ASR Streaming Multilingual entry, so it uses Parakeet 1.1B RNNT Multilingual ASR.
+The registry lists `nemotron-asr-streaming-multilingual` first for ASR, so it is the default on Server and Single GPU. It has no NVIDIA Cloud endpoint, so the Cloud recipe uses the next key, `parakeet-rnnt`.
 
 ## Running the example
 
@@ -76,8 +76,6 @@ TTS voices and supported language codes are discovered at runtime by prewarming 
 | --- | --- |
 | `pipeline.py` | pipecat entry point, multilingual mode always on |
 | `prompts.yaml` | multilingual prompt catalog (`multilingual_voice_assistant`) |
-| `services.cloud.yaml` | cloud service endpoints and defaults |
-| `services.local.yaml` | on-prem service endpoints (server / single GPU), registry default `nemotron-asr-streaming-multilingual` |
 
 ### How it works
 
@@ -90,8 +88,8 @@ TTS voices and supported language codes are discovered at runtime by prewarming 
 
 **Parakeet 1.1B RNNT Multilingual** offers stronger multilingual recognition quality at higher latency (see [Model Selection Notes](#model-selection-notes)). To run it instead of the default Nemotron ASR Streaming Multilingual on-prem:
 
-1. In [`examples_registry.yaml`](../../../examples_registry.yaml), under `multilingual-assistant`, set `defaults.asr: [parakeet-rnnt]`.
-2. Redeploy with the recipe profile plus the Parakeet profile, scaling the Nemotron sidecar off (only one local ASR may bind port `50152`):
+1. In [`examples_registry.yaml`](../../../examples_registry.yaml), under `multilingual-assistant`, set `services.asr: [parakeet-rnnt, nemotron-asr-streaming-multilingual]`.
+2. Redeploy with the recipe profile plus the Parakeet profile. Each ASR sidecar publishes its own host port, so both can run when the GPU has room. Scale the Nemotron sidecar off to free its GPU:
 
    ```bash
    # Server
@@ -129,13 +127,12 @@ Multilingual behavior depends on the ASR model, the LLM, and the selected TTS vo
 | Issue | Cause | What to check |
 |-------|-------|---------------|
 | Bot responds in the wrong language | LLM ignored the fixed session language | Confirm the fixed-session prompt addon and per-turn reminder name the selected language. Try the larger Nemotron 3 Super LLM |
-| Bot slips in foreign words | Quantized small-model sampling artifacts | Lower the LLM `temperature` in `services.*.yaml`, or use a larger LLM |
+| Bot slips in foreign words | Quantized small-model sampling artifacts | Lower the LLM Temperature in the Services tab (or set a `temperature` default under `settings` in `examples_registry.yaml`), or use a larger LLM |
 | Session language is unavailable or startup is rejected | The selected locale is not supported by the active ASR, TTS, or built-in LLM | Select a locale shown in Voice Settings. For built-in LLM support, see [Configure LLM](../../../docs/how-to/configure-llm.md#multilingual-session-languages). |
 | TTS uses the wrong voice or language | Selected session language is not supported by the active TTS service | Check the configured TTS service exposes that language code, or pick a supported language |
 | No voices discovered at startup | TTS prewarm failed | For Cloud, confirm `NVIDIA_API_KEY` in `.env`. For Server, also confirm NGC login and TTS sidecar health with `docker compose ps`. For Single-GPU, confirm that the NeMo-Speech.cpp sidecar is healthy and `models/nemo-speech` contains the downloaded weights. |
 | Bot does not respond to a turn (no transcript) | Nemotron ASR Multilingual can drop a turn in noisy environments | Speak again, reduce background noise, and use a good microphone. See [Configure ASR](../../../docs/how-to/configure-asr.md#choosing-a-multilingual-asr-model) |
 | Weak or awkward replies in some languages (for example Hindi) | Nemotron 3.5 Lightning has weaker conversation quality in a few languages | Use Nemotron 3 Super for better multilingual quality. See [Configure LLM](../../../docs/how-to/configure-llm.md) |
-| Port conflict on the ASR sidecar | Parakeet and Nemotron streaming both bind `50152` | Run only one local ASR. When opting into Parakeet, scale the Nemotron sidecar off (`--scale nemotron-asr-streaming-multilingual=0`) |
 | Random ASR text while silent | Parakeet RNNT noise sensitivity | Expected with the Parakeet opt-in. The default Nemotron ASR is less prone to this. Otherwise reduce room noise and use a good mic |
 
 For ASR, LLM, and TTS model details and general failure modes, see [Configure ASR](../../../docs/how-to/configure-asr.md), [Configure TTS](../../../docs/how-to/configure-tts.md), [Configure LLM](../../../docs/how-to/configure-llm.md), and the [Troubleshooting guide](../../../docs/06-troubleshooting.md).

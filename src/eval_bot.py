@@ -31,8 +31,7 @@ def _select_example(body: dict) -> dict:
 
 
 def _bind_example_context(example: dict) -> None:
-    module_file = examples_registry.example_module_file(example)
-    set_service_context(Path(module_file).resolve().parent, example.get("slots") or None)
+    set_service_context(example)
 
 
 def _session_id_for_eval(body: dict, runner_args: RunnerArguments) -> str:

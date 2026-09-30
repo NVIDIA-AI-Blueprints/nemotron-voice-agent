@@ -18,6 +18,34 @@ export interface LLMService {
   extraParams: string;
   builtIn: boolean;
   source?: BuiltInServiceSource;
+  settings?: ServiceSettingsSchema;
+  streamingUrl?: string;
+}
+
+export interface ServiceSettingSpec {
+  label?: string;
+  type: "bool" | "int" | "float" | "enum";
+  default?: unknown;
+  min?: number;
+  max?: number;
+  options?: string[];
+  requires?: string;
+}
+
+export type ServiceSettingsSchema = Record<string, ServiceSettingSpec>;
+export type ServiceSettingValues = Record<string, unknown>;
+
+export function catalogKey(serviceId: string): string {
+  return serviceId.slice(serviceId.indexOf(":") + 1);
+}
+
+export function serviceSettingsKey(slot: string, serviceId: string): string {
+  return `${slot}:${catalogKey(serviceId)}`;
+}
+
+export function serviceSettingsSchema(entry: Record<string, unknown> | undefined): ServiceSettingsSchema | undefined {
+  const settings = entry?.settings;
+  return settings && typeof settings === "object" && !Array.isArray(settings) ? (settings as ServiceSettingsSchema) : undefined;
 }
 
 export interface Prompt {
@@ -84,6 +112,8 @@ export function useDefaultLLMs(pipelineMode = "") {
         extraParams: String(e.extra_params ?? ""),
         builtIn: true,
         source: normalizeServiceSource(e.source),
+        settings: serviceSettingsSchema(e),
+        streamingUrl: e.streaming_url ? String(e.streaming_url) : undefined,
       })),
   });
 }
@@ -123,6 +153,7 @@ export interface SimpleService {
   languageCode?: string;
   builtIn: boolean;
   source?: BuiltInServiceSource;
+  settings?: ServiceSettingsSchema;
 }
 
 export function useDefaultASR(pipelineMode = "") {
@@ -137,6 +168,7 @@ export function useDefaultASR(pipelineMode = "") {
         functionId: e.function_id ? String(e.function_id) : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
+        settings: serviceSettingsSchema(e),
       })),
   });
 }
@@ -155,6 +187,7 @@ export function useDefaultTTS(pipelineMode = "") {
         languageCode: e.language_code ? String(e.language_code) : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
+        settings: serviceSettingsSchema(e),
       })),
   });
 }

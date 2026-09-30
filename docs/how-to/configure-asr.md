@@ -2,7 +2,7 @@
 
 The cascaded pipeline transcribes user speech with a streaming **ASR** service. (The **Omni** examples handle ASR using the Omni model itself. See [LLM Models](configure-llm.md).) The ASR models are NVIDIA **Parakeet / Nemotron** speech models, served from the cloud (NVIDIA-hosted NVCF endpoints) or self-hosted next to the pipeline as an [**NVIDIA NIM for Speech**](https://docs.nvidia.com/nim/speech/latest/asr/index.html) sidecar.
 
-ASR services are declared per example in `services.cloud.yaml` (remote / NVCF) and `services.local.yaml` (Compose-managed sidecars). This page is the **model reference**: what's available, how to size it, how to customize speech recognition, and known failure modes. For how the catalog is loaded, switched in the UI, and overridden, see [Configure Services](configure-services.md).
+ASR services are declared in the root [`services.yaml`](../../services.yaml), and each example lists the keys it offers in [`examples_registry.yaml`](../../examples_registry.yaml). This page is the **model reference**: what's available, how to size it, how to customize speech recognition, and known failure modes. For how the catalog is loaded, switched in the UI, and overridden, see [Configure Services](configure-services.md).
 
 ## Models
 
@@ -13,7 +13,7 @@ ASR services are declared per example in `services.cloud.yaml` (remote / NVCF) a
 | **Parakeet CTC 1.1B**: English-only ASR, self-hosted only | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-ctc-1_1b-asr/modelcard) |
 | **Parakeet 1.1B RNNT Multilingual**: multilingual ASR (25+ languages)  | [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml) | [model card](https://build.nvidia.com/nvidia/parakeet-1_1b-rnnt-multilingual-asr/modelcard) |
 
-Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.local.yaml`:
+Each model is exposed as a **catalog key** in `services.yaml`:
 
 | Model | Catalog key |
 |-------|-------------|
@@ -22,7 +22,7 @@ Each model is exposed as a **catalog key** in `services.cloud.yaml` / `services.
 | Parakeet CTC 1.1B | `parakeet-ctc` (self-hosted only) |
 | Parakeet 1.1B RNNT Multilingual | `parakeet-rnnt` |
 
-> The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) (`defaults`).
+> The active default per slot is the first available key under the example's `services` in [`examples_registry.yaml`](../../examples_registry.yaml).
 
 ### Choosing a multilingual ASR model
 
@@ -46,7 +46,7 @@ The [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/sup
 - **Parakeet RNNT Indic**: optimized for Indic languages.
 - **Code-switching models**: for mixed-language speech within a single utterance.
 
-To use one of these, configure the NIM endpoint to point to the corresponding model and update the catalog key in `services.cloud.yaml` or `services.local.yaml`.
+To use one of these, configure the NIM endpoint to point to the corresponding model and update the catalog entry in `services.yaml`.
 
 
 
@@ -56,7 +56,7 @@ ASR runs one of three ways, and the repo wires the right one per profile:
 
 - **Cloud (NVCF)**: no local GPU, and the catalog calls `grpc.nvcf.nvidia.com`. The simplest starting point.
 - **NIM for Speech sidecar**: an ASR NIM microservice on the `*/server` profiles, on GPU `0` by default ([`docker-compose.nemotron-asr.yaml`](../../docker/docker-compose.nemotron-asr.yaml), [`docker-compose.parakeet-asr.yaml`](../../docker/docker-compose.parakeet-asr.yaml)).
-- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, one sidecar serves **ASR + TTS together** from local GGUF weights (`nemo-speech` for English, `nemo-speech-multilingual` for the multilingual example, both in `docker-compose.nemo-speech-cpp.yaml`). See [Jetson Thor](../03-jetson-thor.md).
+- **NeMo-Speech.cpp (single GPU, including Jetson Thor)**: on `*/single-gpu`, one sidecar serves **ASR + TTS together** from local GGUF weights (`nemo-speech` for English, `nemo-speech-multilingual` for the multilingual example, both in `docker-compose.nemo-speech-cpp.yaml` and both reachable as `nemo-speech`). See [Jetson Thor](../03-jetson-thor.md).
 
 > Check the **[ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html)** for supported GPUs and VRAM before choosing a model. ASR NIMs require compute capability **≥ 8.0** and **≥ 16 GB** VRAM.
 
@@ -98,15 +98,18 @@ For ASR latency and throughput across GPUs and WER for different models, see the
   Stock `NvidiaSTTService` response handling emits `TranscriptionFrame(finalized=True)` when NVIDIA returns `is_final`. Pipecat's stock turn analyzer strategy uses that final transcript together with Smart Turn's decision; ASR does not act on the turn analyzer. Refer to [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html) for the endpoint parameter semantics and defaults.
 
 - **Language**: the multilingual example locks each session to a single locale, selectable per connection in the UI (any locale the ASR and TTS both support, default `de-DE`) and fixed for that session. Different sessions can use different languages. The ASR also accepts `language_code: auto` for per-turn detection, but this blueprint does not use it, since a pinned locale is more reliable. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
-- **Catalog config**: a cloud entry sets `server` / `model` / `function_id`, while a local entry points at the Compose sidecar `host:port`. Host-run deployments rewrite sidecar endpoints to `localhost` automatically. See [Configure Services → On-prem catalog](configure-services.md#on-prem-catalog).
+- **Punctuation**: the single-GPU NeMo-Speech.cpp entries reference the `nemo-speech-asr` profile in [`settings.yaml`](../../settings.yaml), so their card in the Services tab has a **Punctuation** toggle that defaults to on. NeMo-Speech.cpp ignores `profanity_filter` and does not apply inverse text normalization, so the profile exposes only punctuation.
+- **Catalog config**: a `server` entry points at the Compose sidecar `host:port`, and its `nvcf` key adds the NVIDIA Cloud `function_id` (and `model` when it differs). Host-run deployments rewrite sidecar endpoints to `localhost` automatically. See [Configure Services → Adding a self-hosted service](configure-services.md#adding-a-self-hosted-service).
 
 ```yaml
-asr:
-  my-custom-asr:
-    name: "My Custom ASR"
-    server: "grpc.nvcf.nvidia.com:443"   # cloud. Local entries use the sidecar host:port
-    model: "my-asr-model"
-    function_id: ""
+server:
+  asr:
+    my-custom-asr:
+      name: "My Custom ASR"
+      server: "my-custom-asr:50052"
+      model: "my-asr-model"
+      nvcf:
+        function_id: "<NVCF_FUNCTION_ID>"
 ```
 
 ## Reference

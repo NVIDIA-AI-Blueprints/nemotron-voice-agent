@@ -73,6 +73,8 @@ x-app: &app-base
   volumes:
     - ./src:/app/src:ro
     - ./examples_registry.yaml:/app/examples_registry.yaml:ro
+    - ./services.yaml:/app/services.yaml:ro
+    - ./settings.yaml:/app/settings.yaml:ro
   extra_hosts:
     - "host.docker.internal:host-gateway"
   healthcheck:
@@ -101,7 +103,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
-      LOCAL_SERVICES_ENABLED: "false"
+      SERVICE_RECIPE: cloud
 
   generic-assistant-server:
     <<: *app-base
@@ -109,6 +111,7 @@ services:
       - generic-assistant/server
     environment:
       <<: *app-env
+      SERVICE_RECIPE: server
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
   generic-assistant-single-gpu:
@@ -117,6 +120,7 @@ services:
       - generic-assistant/single-gpu
     environment:
       <<: *app-env
+      SERVICE_RECIPE: single-gpu
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
   generic-assistant-server-perf:
@@ -125,6 +129,7 @@ services:
       - generic-assistant/server-perf
     environment:
       <<: *app-env
+      SERVICE_RECIPE: server
       EXAMPLE_SELECTION: generic-assistant
       UVICORN_WORKERS: "200"
       PROMPT_FILE_PATH: ${PROMPT_FILE_PATH:-}
@@ -141,7 +146,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
-      LOCAL_SERVICES_ENABLED: "false"
+      SERVICE_RECIPE: cloud
 
   multilingual-assistant-server:
     <<: *app-base
@@ -149,6 +154,7 @@ services:
       - multilingual-assistant/server
     environment:
       <<: *app-env
+      SERVICE_RECIPE: server
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
   multilingual-assistant-single-gpu:
@@ -157,6 +163,7 @@ services:
       - multilingual-assistant/single-gpu
     environment:
       <<: *app-env
+      SERVICE_RECIPE: single-gpu
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
   omni-assistant:
@@ -166,7 +173,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
-      LOCAL_SERVICES_ENABLED: "false"
+      SERVICE_RECIPE: cloud
 
   omni-assistant-server:
     <<: *app-base
@@ -174,6 +181,7 @@ services:
       - omni-assistant/server
     environment:
       <<: *app-env
+      SERVICE_RECIPE: server
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
   omni-assistant-single-gpu:
@@ -182,6 +190,7 @@ services:
       - omni-assistant/single-gpu
     environment:
       <<: *app-env
+      SERVICE_RECIPE: single-gpu
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
   omni-assistant-subagents:
@@ -191,7 +200,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
-      LOCAL_SERVICES_ENABLED: "false"
+      SERVICE_RECIPE: cloud
 
   omni-assistant-subagents-server:
     <<: *app-base
@@ -199,6 +208,7 @@ services:
       - omni-assistant-subagents/server
     environment:
       <<: *app-env
+      SERVICE_RECIPE: server
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
   omni-assistant-subagents-single-gpu:
@@ -207,6 +217,7 @@ services:
       - omni-assistant-subagents/single-gpu
     environment:
       <<: *app-env
+      SERVICE_RECIPE: single-gpu
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
   frontend-backend-agent:
@@ -216,7 +227,7 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
-      LOCAL_SERVICES_ENABLED: "false"
+      SERVICE_RECIPE: cloud
 
   frontend-backend-agent-server:
     <<: *app-base
@@ -224,6 +235,7 @@ services:
       - frontend-backend-agent/server
     environment:
       <<: *app-env
+      SERVICE_RECIPE: server
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
 
   frontend-backend-agent-single-gpu:
@@ -232,5 +244,6 @@ services:
       - frontend-backend-agent/single-gpu
     environment:
       <<: *app-env
+      SERVICE_RECIPE: single-gpu
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       THINKER_TOOL_TIMEOUT_SECONDS: ${THINKER_TOOL_TIMEOUT_SECONDS:-90}
