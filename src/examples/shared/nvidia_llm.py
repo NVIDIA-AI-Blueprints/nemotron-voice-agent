@@ -21,8 +21,9 @@ import asyncio
 import copy
 import json
 import math
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import aclosing
+from contextlib import aclosing, suppress
 from contextvars import ContextVar
 from enum import Enum, auto
 from typing import Any
@@ -909,6 +910,116 @@ def _normalize_realtime_empty_tool_request(params: dict[str, Any], context: LLMC
     params.pop("parallel_tool_calls", None)
 
 
+def _validate_tool_loop_limit(value: object, *, label: str) -> int | None:
+    """Accept an optional positive integer tool-loop limit."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{label} must be a positive integer")
+    return value
+
+
+def _tool_call_signature(call: object) -> tuple[str, str] | None:
+    """Return a stable (name, canonical arguments) key for one OpenAI tool call."""
+    if not isinstance(call, Mapping):
+        return None
+    function = call.get("function")
+    if not isinstance(function, Mapping):
+        return None
+    name = function.get("name")
+    if not isinstance(name, str):
+        return None
+    arguments = function.get("arguments")
+    if isinstance(arguments, str):
+        with suppress(ValueError):
+            arguments = json.dumps(json.loads(arguments), sort_keys=True, separators=(",", ":"))
+    else:
+        arguments = json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str)
+    return name, arguments
+
+
+def _tool_calls_since_last_user_message(messages: object) -> list[tuple[str, str] | None]:
+    """Return tool-call signatures issued after the latest user message, oldest first."""
+    if not isinstance(messages, Sequence):
+        return []
+    signatures: list[tuple[str, str] | None] = []
+    for message in reversed(messages):
+        if not isinstance(message, Mapping):
+            continue
+        role = message.get("role")
+        if role == "user":
+            break
+        if role == "assistant":
+            calls = message.get("tool_calls")
+            if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes)):
+                signatures.extend(_tool_call_signature(call) for call in reversed(calls))
+    signatures.reverse()
+    return signatures
+
+
+_TOOL_LOOP_GUARD_INSTRUCTION = (
+    "Tool calls are paused for this reply. Do not call or write out any tool call. "
+    "Reply to the caller now in plain spoken sentences: tell them what the previous tool results showed, "
+    "or ask them for the information you need to continue."
+)
+_RAW_TOOL_CALL_MARKUP = re.compile(r"<tool_call>.*?(?:</tool_call>|\Z)|</tool_call>", re.DOTALL)
+
+
+def _strip_raw_tool_call_markup(text: str) -> str:
+    """Remove tool-call markup that a model wrote as text instead of a structured call."""
+    return _RAW_TOOL_CALL_MARKUP.sub("", text).strip()
+
+
+def _apply_realtime_tool_loop_guard(
+    params: dict[str, Any],
+    *,
+    max_identical_tool_calls: int | None,
+    max_tool_calls_per_turn: int | None,
+) -> str | None:
+    """Withhold tools from one completion after a runaway tool-call sequence.
+
+    Some models keep issuing tool calls without answering the caller, either by
+    repeating an identical call or by chaining many calls after one user turn.
+    When a configured limit is reached since the latest user message, this
+    completion runs with ``tool_choice="none"`` and a trailing system
+    instruction so the model answers from the tool results already in context.
+    Both changes apply to this provider request only; the canonical
+    conversation is unchanged. Tools stay declared, forced tool choices are
+    never overridden, and the next user message resets both counters. Returns
+    the reason when the guard applies.
+    """
+    if max_identical_tool_calls is None and max_tool_calls_per_turn is None:
+        return None
+    tool_choice = params.get("tool_choice", NOT_GIVEN)
+    if tool_choice not in (NOT_GIVEN, OPENAI_NOT_GIVEN, None, "auto"):
+        return None
+    tools = params.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return None
+    signatures = _tool_calls_since_last_user_message(params.get("messages"))
+    if not signatures:
+        return None
+
+    reason = None
+    if max_tool_calls_per_turn is not None and len(signatures) >= max_tool_calls_per_turn:
+        reason = f"{len(signatures)} tool calls since the last user message (limit {max_tool_calls_per_turn})"
+    if max_identical_tool_calls is not None and signatures[-1] is not None:
+        identical = 0
+        for signature in reversed(signatures):
+            if signature != signatures[-1]:
+                break
+            identical += 1
+        if identical >= max_identical_tool_calls:
+            reason = (
+                f"{identical} identical consecutive calls to {signatures[-1][0]!r} (limit {max_identical_tool_calls})"
+            )
+    if reason is not None:
+        params["tool_choice"] = "none"
+        params.pop("parallel_tool_calls", None)
+        params["messages"] = [*params["messages"], {"role": "system", "content": _TOOL_LOOP_GUARD_INSTRUCTION}]
+    return reason
+
+
 def _structured_extra_body(params: Mapping[str, Any]) -> dict[str, Any]:
     """Copy provider parameters and select concise structured-generation mode."""
     configured = params.get("extra_body")
@@ -965,9 +1076,17 @@ class NvidiaLLMService(PipecatNvidiaLLMService):
         forced_tool_call_stops: str | Sequence[str] | None = None,
         realtime_parallel_tool_calls: bool | None = None,
         realtime_model_max_output_tokens: int | None = None,
+        realtime_max_identical_tool_calls: int | None = None,
+        realtime_max_tool_calls_per_turn: int | None = None,
         **kwargs,
     ) -> None:
         """Initialize with optional model-profile forced-tool terminators."""
+        self._realtime_max_identical_tool_calls = _validate_tool_loop_limit(
+            realtime_max_identical_tool_calls, label="realtime_max_identical_tool_calls"
+        )
+        self._realtime_max_tool_calls_per_turn = _validate_tool_loop_limit(
+            realtime_max_tool_calls_per_turn, label="realtime_max_tool_calls_per_turn"
+        )
         if realtime_parallel_tool_calls is not None and not isinstance(realtime_parallel_tool_calls, bool):
             raise ValueError("realtime_parallel_tool_calls must be a boolean")
         if realtime_model_max_output_tokens is not None and (
@@ -1231,6 +1350,44 @@ class NvidiaLLMService(PipecatNvidiaLLMService):
             raise ValueError("Provider stream ended without a finish_reason")
         await self.push_frame(LLMProviderCompletionReasonFrame(finish_reason=terminal_reason))
 
+    async def _tool_loop_guard_text_chunks(self, params: dict[str, Any]) -> AsyncIterator[ChatCompletionChunk]:
+        """Request one complete text reply for a loop-guarded completion.
+
+        With tools withheld, some models still write a tool call out as text.
+        The reply is requested without streaming so that markup can be removed
+        before any of it reaches speech synthesis. A reply that is empty after
+        cleanup is retried once.
+        """
+        params["stream"] = False
+        params.pop("stream_options", None)
+        text = ""
+        completion: ChatCompletion | None = None
+        for attempt in range(2):
+            completion = await self._request_chat_completion(params)
+            if not isinstance(completion, ChatCompletion):
+                raise TypeError("Tool loop guard request did not return a ChatCompletion")
+            if len(completion.choices) != 1:
+                raise ValueError(
+                    f"Tool loop guard completion must contain exactly one choice; received {len(completion.choices)}"
+                )
+            choice = completion.choices[0]
+            if choice.finish_reason in {"length", "content_filter"}:
+                return _incomplete_completion_chunks(completion, choice)
+            text = _strip_raw_tool_call_markup(choice.message.content or "")
+            if text:
+                break
+            logger.warning(f"{self}: Tool loop guard reply contained no speakable text (attempt {attempt + 1} of 2)")
+        assert completion is not None
+
+        async def chunks() -> AsyncIterator[ChatCompletionChunk]:
+            if text:
+                yield _chunk(completion, delta={"role": "assistant", "content": text})
+            yield _chunk(completion, delta={}, finish_reason="stop")
+            if completion.usage is not None:
+                yield _chunk(completion, usage=completion.usage.model_dump(exclude_none=True))
+
+        return chunks()
+
     async def _request_chat_completion(self, params: dict[str, Any]):
         """Send one Chat Completions request with Pipecat's retry policy."""
         if self._retry_on_timeout:
@@ -1365,12 +1522,21 @@ class NvidiaLLMService(PipecatNvidiaLLMService):
             session_parallel_tool_calls=self._realtime_parallel_tool_calls,
         )
         _normalize_realtime_empty_tool_request(params, context)
+        loop_guard_reason = _apply_realtime_tool_loop_guard(
+            params,
+            max_identical_tool_calls=self._realtime_max_identical_tool_calls,
+            max_tool_calls_per_turn=self._realtime_max_tool_calls_per_turn,
+        )
+        if loop_guard_reason is not None:
+            logger.warning(f"{self}: Realtime tool loop guard withheld tools for this completion: {loop_guard_reason}")
         params = await _truncate_realtime_context(
             params,
             context,
             count_tokens=self._count_realtime_chat_tokens,
             model_max_output_tokens=self._realtime_model_max_output_tokens,
         )
+        if loop_guard_reason is not None:
+            return self._with_provider_completion_reason(await self._tool_loop_guard_text_chunks(params))
         forced_choice = _forced_tool_choice(params.get("tool_choice"))
         if forced_choice is None:
             stream_tool_choice = params.get("tool_choice")

@@ -188,6 +188,8 @@ llm:
 
 > The repo ships `repetition_penalty: 1.05` and the appropriate `enable_thinking` per entry. Add `temperature` / `top_p` / `max_tokens` to the same `extra_params` string to default them. Per session, you can override using the UI or session configurations.
 
+For OpenAI Realtime sessions, an LLM entry can also set `realtime_max_identical_tool_calls` and `realtime_max_tool_calls_per_turn` to stop runaway tool-call loops. Both fields are unset by default. Refer to [Bound Model Tool-Call Loops](use-realtime-gateway.md#bound-model-tool-call-loops).
+
 ## Reference
 
 - [Troubleshooting guide](../06-troubleshooting.md): self-hosted startup/runtime failures (tool-parser `HTTP 400`, reasoning leaking into speech, `nemotron_v3` parser not found, CUDA-graph / precision aborts) and cloud rate limits (`HTTP 429`).
