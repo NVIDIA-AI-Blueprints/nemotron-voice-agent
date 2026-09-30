@@ -687,3 +687,53 @@ class SpokenIdentifierRepairTests(unittest.TestCase):
 
         self.assertEqual(repaired["user_id"], "not an identifier at all")
         self.assertEqual(changed, [])
+
+
+class SessionToolMemoryTests(unittest.TestCase):
+    """What a session has already established survives into the next turn."""
+
+    @staticmethod
+    def _backend() -> GenericThinkerBackend:
+        return GenericThinkerBackend(
+            planner=SimpleNamespace(plan=None),
+            tools={},
+            enabled_tools=("lookup",),
+            client_tools=build_client_tool_specs((_client_schema(),)),
+        )
+
+    def test_a_successful_lookup_is_kept_for_later_turns(self) -> None:
+        backend = self._backend()
+
+        backend._remember_session_result(
+            {"type": "tool_result", "tool": "lookup", "status": "success", "data": {"result": {"id": "one"}}}
+        )
+
+        self.assertEqual(len(backend._session_tool_memory), 1)
+        self.assertEqual(backend._session_tool_memory[0]["tool"], "lookup")
+
+    def test_a_failed_lookup_is_not_kept(self) -> None:
+        backend = self._backend()
+
+        backend._remember_session_result({"type": "tool_result", "tool": "lookup", "status": "unavailable"})
+
+        self.assertEqual(backend._session_tool_memory, [])
+
+    def test_a_fresh_read_replaces_the_stale_one(self) -> None:
+        backend = self._backend()
+
+        backend._remember_session_result(
+            {"type": "tool_result", "tool": "lookup", "status": "success", "data": {"result": {"id": "one"}}}
+        )
+        backend._remember_session_result(
+            {"type": "tool_result", "tool": "lookup", "status": "success", "data": {"result": {"id": "two"}}}
+        )
+
+        self.assertEqual(len(backend._session_tool_memory), 1)
+        self.assertEqual(backend._session_tool_memory[0]["data"]["result"]["id"], "two")
+
+    def test_a_server_side_result_is_not_kept(self) -> None:
+        backend = self._backend()
+
+        backend._remember_session_result({"type": "tool_result", "tool": "get_weather", "status": "success"})
+
+        self.assertEqual(backend._session_tool_memory, [])

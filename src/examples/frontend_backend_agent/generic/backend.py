@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ from examples.frontend_backend_agent.generic.dispatcher import (
     dispatch_plan,
 )
 from examples.frontend_backend_agent.generic.planner import GenericPlanner, GenericPlannerSessionUpdate
-from examples.frontend_backend_agent.generic.result_formatters import planner_failure, timeout_failure
+from examples.frontend_backend_agent.generic.result_formatters import nothing_further, planner_failure, timeout_failure
 from examples.frontend_backend_agent.generic.state import GenericThinkerSessionState
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent
 from examples.frontend_backend_agent.src.tools import ToolSpec
@@ -35,6 +36,8 @@ if TYPE_CHECKING:
     from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 
 _PLANNER_MAX_ATTEMPTS = parse_env_int("GENERIC_PLANNER_MAX_ATTEMPTS", 2, min_value=1)
+# How many distinct lookups one session keeps for later turns.
+_SESSION_TOOL_MEMORY_LIMIT = 6
 _PLANNER_RETRY_BACKOFF_SECONDS = parse_env_float("GENERIC_PLANNER_RETRY_BACKOFF_SECONDS", 0.2, min_value=0.0)
 _RETRIABLE_PLANNER_EXCEPTIONS = (TimeoutError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
 #: Shared inference endpoints report transient saturation as a streamed
@@ -121,6 +124,15 @@ class GenericThinkerBackend:
         # Session-scoped so a client call that keeps failing stays suppressed across
         # turns; the frontend re-delegates per turn, and per-call state would reset.
         self._seen_client_calls: set[str] = set()
+        # What this session has already established. A delegation starts with an
+        # empty result list, so without this the planner re-plans its opening
+        # lookup on every user turn -- and once one of those rounds is lost to
+        # the caller speaking over it, the repeat is suppressed as a duplicate
+        # and the conversation can never reach a second step.
+        self._session_tool_memory: list[dict[str, Any]] = []
+        # Superseded plans still running. Held only so the event loop keeps a
+        # strong reference to them until they finish.
+        self._detached: set[asyncio.Task[dict[str, Any]]] = set()
         self.state = state or GenericThinkerSessionState()
 
     @property
@@ -192,14 +204,14 @@ class GenericThinkerBackend:
             return planner_failure()
         previous = self.state.active_task
         if previous is not None and not previous.done():
-            self.cancel_active("superseded")
-            try:
-                await previous
-            except asyncio.CancelledError:
-                if _task_cancellation_requested():
-                    raise
-            except Exception:  # noqa: BLE001 - the superseded result is intentionally discarded
-                pass
+            # Let the superseded plan finish instead of discarding it. A caller
+            # who adds a detail or says "okay" mid-thought used to destroy the
+            # round already in flight, and the next turn began again at step
+            # one -- so a plan that needs a lookup before it can act never got
+            # to act. Its speech is still dropped (a newer turn owns the
+            # microphone); only its work and what it learned survive.
+            self._detached.add(previous)
+            previous.add_done_callback(self._detached.discard)
         call_id = uuid.uuid4().hex[:12]
         self.state.active_call_id = call_id
         started = ThinkerLifecycleEvent(marker="ThinkerStarted", call_id=call_id, query=clean_query)
@@ -250,6 +262,11 @@ class GenericThinkerBackend:
         prior_tool_results: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Retry one transient planner failure inside the existing overall deadline."""
+        _prior_tools = ",".join(str(entry.get("tool")) for entry in prior_tool_results)
+        logger.debug(
+            f"plan-in call={call_id[:8]} round={planning_round} "
+            f"prior={len(prior_tool_results)} tools={_prior_tools} query={query[:160]!r}"
+        )
         for attempt in range(1, _PLANNER_MAX_ATTEMPTS + 1):
             try:
                 return await asyncio.wait_for(
@@ -278,6 +295,46 @@ class GenericThinkerBackend:
                 await asyncio.sleep(backoff)
         raise AssertionError("planner retry loop exited unexpectedly")
 
+    def _settle(self, accumulated_results: list[dict[str, Any]]) -> dict[str, Any]:
+        """Close one delegation without inventing a failure that did not happen.
+
+        A turn can legitimately need no new tool: the caller said "okay", or the
+        session already holds what was asked for. That used to reach an empty
+        combine and surface as "I couldn't complete that request reliably" --
+        a plain untruth, and the most common thing the caller heard.
+        """
+        if accumulated_results:
+            return combine_accumulated_results(accumulated_results)
+        if self._session_tool_memory:
+            return combine_accumulated_results(list(self._session_tool_memory))
+        return nothing_further()
+
+    def _prior_results_for_round(self, accumulated_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Supplement this delegation's own results with what the session already knows.
+
+        Anything this call has fetched wins outright: the carried copy of the
+        same tool is older by definition and must not appear twice.
+        """
+        fetched = {entry.get("tool") for entry in accumulated_results}
+        carried = [entry for entry in self._session_tool_memory if entry.get("tool") not in fetched]
+        return [*carried, *accumulated_results]
+
+    def _remember_session_result(self, payload: Mapping[str, Any]) -> None:
+        """Keep one successful lookup per distinct call for later turns.
+
+        A later call with the same arguments replaces the earlier entry, so a
+        record re-read after it changed supersedes the stale copy rather than
+        joining it.
+        """
+        if payload.get("type") != "tool_result" or str(payload.get("status") or "") != "success":
+            return
+        tool = str(payload.get("tool") or "")
+        if tool not in self._client_tools:
+            return
+        self._session_tool_memory = [entry for entry in self._session_tool_memory if entry.get("tool") != tool]
+        self._session_tool_memory.append(dict(payload))
+        del self._session_tool_memory[:-_SESSION_TOOL_MEMORY_LIMIT]
+
     async def _run_call(
         self,
         call_id: str,
@@ -294,8 +351,10 @@ class GenericThinkerBackend:
                         call_id,
                         query,
                         planning_round=planning_round,
-                        prior_tool_results=accumulated_results,
+                        prior_tool_results=self._prior_results_for_round(accumulated_results),
                     )
+                    _plan_text = json.dumps(plan)[:240]
+                    logger.debug(f"plan-out call={call_id[:8]} round={planning_round} plan={_plan_text}")
                     if _is_completion_plan(plan):
                         break
                     result_count_before_dispatch = len(accumulated_results)
@@ -316,6 +375,7 @@ class GenericThinkerBackend:
                     )
                     if len(accumulated_results) == result_count_before_dispatch:
                         accumulated_results.append(round_payload)
+                    self._remember_session_result(round_payload)
                     requests_follow_up = _requests_follow_up(plan, self._client_tools)
                     if requests_follow_up and planning_round < self._max_planning_rounds:
                         progress = ThinkerLifecycleEvent(
@@ -334,14 +394,18 @@ class GenericThinkerBackend:
                             "Generic Thinker reached the configured planning-round limit: "
                             f"rounds={self._max_planning_rounds}"
                         )
-                payload = combine_accumulated_results(accumulated_results)
+                payload = self._settle(accumulated_results)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             logger.warning("Generic Thinker exhausted its bounded planner/overall deadline")
             payload = combine_accumulated_results(accumulated_results) if accumulated_results else timeout_failure()
-        except PlanValidationError:
-            payload = combine_accumulated_results(accumulated_results) if accumulated_results else planner_failure()
+        except PlanValidationError as exc:
+            # Every other branch here logs. This one did not, so a rejected plan
+            # reached the speaker as "I couldn't complete that request reliably"
+            # with nothing on the server saying which rule rejected it.
+            logger.warning(f"Generic Thinker plan rejected: {exc}")
+            payload = self._settle(accumulated_results)
         except Exception as exc:  # noqa: BLE001 - planner boundary fails closed
             logger.warning(f"Generic Thinker planning failed: {type(exc).__name__}: {exc}")
             payload = combine_accumulated_results(accumulated_results) if accumulated_results else planner_failure()

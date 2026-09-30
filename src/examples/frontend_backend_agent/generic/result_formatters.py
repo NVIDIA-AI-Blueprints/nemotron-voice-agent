@@ -50,6 +50,16 @@ def missing_parameters(spec: ToolSpec, names: list[str]) -> dict[str, Any]:
     )
 
 
+def nothing_further() -> dict[str, Any]:
+    """Close a turn that needed no tool, without claiming a failure."""
+    return response_hint(
+        reason="no_action_needed",
+        action="answer_directly",
+        response_text="Nothing further was needed for that.",
+        context="general",
+    )
+
+
 def invalid_parameters(tool: str) -> dict[str, Any]:
     """Return a safe clarification without relaying validator internals."""
     return response_hint(

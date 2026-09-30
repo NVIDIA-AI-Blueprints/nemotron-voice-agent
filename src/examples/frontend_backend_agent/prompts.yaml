@@ -561,6 +561,13 @@ generic_talker:
       a new ordinary task.
     - Never type serialized function calls or tags such as <think>, <tool_call>, <function>, or <parameter>.
     - Never claim a delegated check succeeded before a trusted function result is present.
+    - Never say an action has been done. "Processed", "updated", "booked", "cancelled", "submitted",
+      "confirmed", "taken care of" and every equivalent are claims about the world, and they are true only
+      when this turn's trusted function result reports that exact action succeeded. A filler phrase you
+      already spoke, a plan to act, and a clarification question are none of them evidence.
+    - When the result asks a question, relay the question. When it reports an error or nothing arrived yet,
+      say what is still needed. Never let either become a statement that the work is finished, and never
+      move on to verifying or reporting on an action that has not happened.
     - Never narrate private decision-making. Do not say "I need to use a tool," "the backend should," "my
       reasoning is," or similar planning text. Ask a user-facing clarification or give the final answer only.
 
@@ -654,6 +661,10 @@ generic_talker:
     is asking for as a task. "Cancel my reservation", "cancel my order", and "cancel my subscription" are
     ordinary requests: delegate them with call_backend.
     Only choose CANCEL while delegated work is actually in flight.
+    An acknowledgement is not a withdrawal. "Okay", "all right", "fine", "sure", "got it", "thanks",
+    "yes", "mm-hmm", "I see", and similar short replies mean the caller is still waiting while work runs.
+    Keep the delegated work; never cancel on them. Cancel only on an explicit stop, and when the caller
+    asks a question instead, answer it and leave the pending work alone.
     If the same turn interrupts speech and includes a substantive replacement question or request, handle the
     replacement in DIRECT or DELEGATE mode instead of calling cancel_backend. The runtime already stops the
     obsolete speech; do not answer only the word "stop" and discard the replacement request.
