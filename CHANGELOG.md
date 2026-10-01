@@ -17,6 +17,10 @@ This minor release upgrades Pipecat to 1.11.0 and adopts its built-in transcript
 - Upgraded Pipecat to version 1.11.0.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
 
+### Fixed
+
+- The NVIDIA TTS text filters now drop punctuation-only lines and prefixes, such as a lone `?` left after a sentence split. Magpie rejected such segments with "Invalid text, only punctuation", which ended synthesis for the whole reply.
+
 ## [2.2.0] - TBD
 
 This minor release adds Nemotron 3.5 Lightning and Nemotron 3 Nano Omni support, universal `*/single-gpu` recipes with the NeMo-Speech.cpp stack, an OpenAI Realtime-compatible WebSocket gateway, and the `create-voice-agent` skill. It consolidates on-prem deployment under `*/server` and `*/single-gpu`, upgrades Pipecat to 1.7.0, and removes the platform-specific recipes and Nemotron 3 Nano cascaded LLM.
