@@ -14,7 +14,7 @@ The diagram shows the full runtime path. User audio enters through the WebRTC/We
 
 ## Default Models
 
-The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+The `services` lists in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../services.yaml):
 
 | Profile | ASR | Talker LLM | Thinker LLM | TTS |
 | --- | --- | --- | --- | --- |

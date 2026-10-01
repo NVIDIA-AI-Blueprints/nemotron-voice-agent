@@ -64,6 +64,9 @@ services:
     profiles:
       - nemotron-asr-streaming-multilingual/server
       - multilingual-assistant/server
+    ports:
+      - "50252:50052"
+      - "9101:9001"
     environment:
       <<: *nemotron-asr-env
       NIM_TAGS_SELECTOR: type=multi,mode=str

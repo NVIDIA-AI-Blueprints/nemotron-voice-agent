@@ -4,16 +4,25 @@
 import { useState } from "react";
 import { useApp } from "../../context/useApp";
 import { useConnectionState } from "../../hooks/useConnectionState";
-import { useServiceCatalog, type LLMService, type SimpleService, type ServiceEntry } from "../../api";
+import {
+  catalogKey,
+  serviceSettingsKey,
+  serviceSettingsSchema,
+  useServiceCatalog,
+  type LLMService,
+  type ServiceEntry,
+  type ServiceSettingsSchema,
+  type SimpleService,
+} from "../../api";
+import { ServiceSettingsControls, SettingRow } from "../ServiceSettingsControls";
+import { Toggle } from "../Toggle";
 
-type SourceGroupedService = { builtIn: boolean; source?: LLMService["source"] };
-
-/* ── Generic simple service row (ASR / TTS) ── */
+/* ── Custom ASR / TTS service row ── */
 
 function SimpleServiceRow({
-  svc, isActive, canRemove, fields, onSelect, onUpdate, onRemove,
+  svc, isActive, fields, onSelect, onUpdate, onRemove,
 }: Readonly<{
-  svc: SimpleService; isActive: boolean; canRemove: boolean;
+  svc: SimpleService; isActive: boolean;
   fields: { label: string; key: keyof SimpleService }[];
   onSelect?: (id: string) => void;
   onUpdate: (id: string, updates: Partial<SimpleService>) => void;
@@ -35,7 +44,7 @@ function SimpleServiceRow({
     setEditing(false);
   };
 
-  if (!svc.builtIn && editing) {
+  if (editing) {
     return (
       <div
         className="svc-row svc-row--editing"
@@ -84,23 +93,18 @@ function SimpleServiceRow({
         {svc.functionId && <span className="svc-row__detail svc-row__sys">function_id: {svc.functionId}</span>}
       </div>
       <div className="svc-row__actions">
-        {isActive && <span className="prompt-card__badge">Active</span>}
-        {!svc.builtIn && (
-          <>
-            <button
-              className="svc-icon-btn"
-              onClick={(event) => {
-                event.stopPropagation();
-                setForm(buildForm());
-                setEditing(true);
-              }}
-              title="Edit"
-            >
-              ✎
-            </button>
-            {canRemove && <button className="svc-icon-btn svc-icon-btn--remove" onClick={(event) => { event.stopPropagation(); onRemove(svc.id); }} title="Remove">−</button>}
-          </>
-        )}
+        <button
+          className="svc-icon-btn"
+          onClick={(event) => {
+            event.stopPropagation();
+            setForm(buildForm());
+            setEditing(true);
+          }}
+          title="Edit"
+        >
+          ✎
+        </button>
+        <button className="svc-icon-btn svc-icon-btn--remove" onClick={(event) => { event.stopPropagation(); onRemove(svc.id); }} title="Remove">−</button>
       </div>
     </div>
   );
@@ -143,9 +147,9 @@ function SimpleAddForm({
   );
 }
 
-/* ── LLM service row (unchanged, richer fields) ── */
+/* ── Custom LLM service row ── */
 
-function LLMServiceRow({ svc, isActive, canRemove, onSelect }: Readonly<{ svc: LLMService; isActive: boolean; canRemove: boolean; onSelect?: (id: string) => void }>) {
+function LLMServiceRow({ svc, isActive, onSelect }: Readonly<{ svc: LLMService; isActive: boolean; onSelect?: (id: string) => void }>) {
   const { updateLLM, removeLLM } = useApp();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(svc.name);
@@ -170,7 +174,7 @@ function LLMServiceRow({ svc, isActive, canRemove, onSelect }: Readonly<{ svc: L
     setEditing(false);
   };
 
-  if (!svc.builtIn && editing) {
+  if (editing) {
     return (
       <div
         className="svc-row svc-row--editing"
@@ -220,44 +224,120 @@ function LLMServiceRow({ svc, isActive, canRemove, onSelect }: Readonly<{ svc: L
         {svc.extraParams && <span className="svc-row__detail svc-row__sys">extra: {svc.extraParams}</span>}
       </div>
       <div className="svc-row__actions">
-        {isActive && <span className="prompt-card__badge">Active</span>}
-        {!svc.builtIn && (
-          <>
-            <button className="svc-icon-btn" onClick={() => { resetForm(); setEditing(true); }} title="Edit">✎</button>
-            {canRemove && <button className="svc-icon-btn svc-icon-btn--remove" onClick={() => removeLLM(svc.id)} title="Remove">−</button>}
-          </>
-        )}
+        <button className="svc-icon-btn" onClick={() => { resetForm(); setEditing(true); }} title="Edit">✎</button>
+        <button className="svc-icon-btn svc-icon-btn--remove" onClick={() => removeLLM(svc.id)} title="Remove">−</button>
       </div>
     </div>
   );
 }
 
-/* ── Read-only row for catalog-owned services ── */
+/* ── Built-in service card ── */
 
-function ReadOnlyServiceRow({ entry, isLocked = false }: Readonly<{ entry: ServiceEntry; isLocked?: boolean }>) {
-  const server = entry.server ? String(entry.server) : "";
-  const baseUrl = entry.base_url ? String(entry.base_url) : "";
-  const modelId = entry.model_id ? String(entry.model_id) : "";
-  const extraParams = entry.extra_params ? String(entry.extra_params) : "";
-  const timeoutSecs = entry.timeout_secs ? String(entry.timeout_secs) : "";
-  const isSelected = entry.selected === true;
+type ServiceVariant = {
+  id: string;
+  source?: LLMService["source"];
+  details: string[];
+  schema?: ServiceSettingsSchema;
+  streamingUrl?: string;
+};
+
+const SOURCE_LABELS: Record<string, string> = { "self-hosted": "Self-hosted", "cloud-nim": "NVIDIA Cloud" };
+
+function BuiltInServiceCard({
+  slot, name, variants, activeId, expanded, streaming, isLocked, onSelect, onToggle, renderSettings,
+}: Readonly<{
+  slot: string;
+  name: string;
+  variants: ServiceVariant[];
+  activeId: string;
+  expanded: boolean;
+  streaming: boolean;
+  isLocked: boolean;
+  onSelect?: (id: string) => void;
+  onToggle: () => void;
+  renderSettings: (variant: ServiceVariant, settingsKey: string) => React.ReactNode;
+}>) {
+  const active = variants.find((variant) => variant.id === activeId);
+  const shown = active ?? variants[0];
+  const canSelect = Boolean(onSelect) && !isLocked;
+  const handleClick = () => {
+    if (!active && canSelect) onSelect?.(shown.id);
+    if (shown.schema) onToggle();
+  };
+
+  const showSettings = expanded && Boolean(shown.schema);
+  const [endpoint, ...details] = shown.details;
+  const shownDetails = [streaming && shown.streamingUrl ? shown.streamingUrl : endpoint, ...details];
   return (
-    <div className={`svc-row${isSelected ? " svc-row--active" : ""}${isLocked ? " svc-row--disabled" : ""}`}>
-      <div className="svc-row__info">
-        <span className="svc-row__name">{entry.name}</span>
-        {server && <span className="svc-row__detail svc-row__url">{server}</span>}
-        {baseUrl && <span className="svc-row__detail svc-row__url">{baseUrl}</span>}
-        {modelId && <span className="svc-row__detail">Model: {modelId}</span>}
-        {extraParams && <span className="svc-row__detail">Extra params: {extraParams}</span>}
-        {timeoutSecs && <span className="svc-row__detail">Timeout: {timeoutSecs}s</span>}
+    <div className={`svc-row svc-row--clickable svc-row--card${active ? " svc-row--active" : ""}`}>
+      <div
+        className="svc-row__header"
+        onClick={handleClick}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            handleClick();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={shown.schema ? expanded : undefined}
+      >
+        <div className="svc-row__info">
+          <span className="svc-row__name">{name}</span>
+          {shownDetails.map((detail, index) => (
+            <span key={detail} className={`svc-row__detail${index === 0 ? " svc-row__url" : ""}`}>{detail}</span>
+          ))}
+        </div>
+        <div className="svc-row__controls">
+          <div className="svc-source" role="group" aria-label="Endpoint">
+            {variants.map((variant) => (
+              <button
+                key={variant.id}
+                className={`svc-source__option${variant.id === shown.id ? " svc-source__option--selected" : ""}`}
+                aria-pressed={variant.id === shown.id}
+                disabled={!canSelect || variants.length === 1}
+                onClick={(event) => { event.stopPropagation(); onSelect?.(variant.id); }}
+              >
+                {SOURCE_LABELS[variant.source ?? ""] ?? variant.source}
+              </button>
+            ))}
+          </div>
+          {shown.schema && (
+            <button
+              className={`svc-icon-btn svc-chevron${expanded ? " svc-chevron--open" : ""}`}
+              onClick={(event) => { event.stopPropagation(); onToggle(); }}
+              title={expanded ? "Hide parameters" : "Show parameters"}
+              aria-expanded={expanded}
+            >
+              ▾
+            </button>
+          )}
+        </div>
       </div>
-      {isSelected && (
-        <div className="svc-row__actions">
-          <span className="prompt-card__badge">Active</span>
+      {showSettings && (
+        <div className="svc-row__section">
+          <p className="prompts-section-label">Parameters</p>
+          {renderSettings(shown, serviceSettingsKey(slot, shown.id))}
         </div>
       )}
     </div>
   );
+}
+
+function groupByCatalogKey<T extends { id: string; name: string }>(items: T[], toVariant: (item: T) => ServiceVariant) {
+  const cards = new Map<string, { name: string; variants: ServiceVariant[] }>();
+  for (const item of items) {
+    const key = catalogKey(item.id);
+    const card = cards.get(key) ?? { name: item.name, variants: [] };
+    card.variants.push(toVariant(item));
+    cards.set(key, card);
+  }
+  return [...cards.entries()].map(([key, card]) => ({ key, ...card }));
+}
+
+function compact(values: Array<string | undefined>): string[] {
+  return values.filter((value): value is string => Boolean(value));
 }
 
 /* ── Section wrapper ── */
@@ -276,26 +356,13 @@ function ServiceSection({ title, children, onAdd }: Readonly<{ title: string; ch
   );
 }
 
-function ServiceSourceGroup({ title, children }: Readonly<{ title: string; children: React.ReactNode }>) {
+function CustomServicesGroup({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <div className="svc-group">
-      <div className="svc-group__label">{title}</div>
+      <div className="svc-group__label">Custom</div>
       <div className="svc-list">{children}</div>
     </div>
   );
-}
-
-function groupServicesBySource<T extends SourceGroupedService>(items: T[]) {
-  const groups: Array<{ key: string; title: string; items: T[] }> = [];
-  const selfHosted = items.filter((item) => item.builtIn && item.source === "self-hosted");
-  const cloud = items.filter((item) => item.builtIn && item.source === "cloud-nim");
-  const custom = items.filter((item) => !item.builtIn);
-
-  if (selfHosted.length > 0) groups.push({ key: "self-hosted", title: "Self-hosted", items: selfHosted });
-  if (cloud.length > 0) groups.push({ key: "cloud-nim", title: "NVIDIA Cloud", items: cloud });
-  if (custom.length > 0) groups.push({ key: "custom", title: "Custom", items: custom });
-
-  return groups;
 }
 
 /* ── Main panel ── */
@@ -306,39 +373,99 @@ export function ServicesPanel() {
     llms, llmsLoading, selectedLLMId, selectLLM, addLLM,
     asrServices, asrLoading, selectedASRId, selectASR, addASR, updateASR, removeASR,
     ttsServices, ttsLoading, selectedTTSId, selectTTS, addTTS, updateTTS, removeTTS,
+    serviceSettings, setServiceSetting, streamingInput, setStreamingInput,
   } = useApp();
+
   const { data: catalog } = useServiceCatalog(selectedExample?.key ?? "");
   const { isLocked } = useConnectionState();
 
   const [addingLLM, setAddingLLM] = useState(false);
   const [addingASR, setAddingASR] = useState(false);
   const [addingTTS, setAddingTTS] = useState(false);
+  const [expandedCard, setExpandedCard] = useState("");
 
-  const llmCustomCount = llms.filter((s) => !s.builtIn).length;
-  const asrCustomCount = asrServices.filter((s) => !s.builtIn).length;
-  const ttsCustomCount = ttsServices.filter((s) => !s.builtIn).length;
   const slotList = selectedExample?.slots ?? [];
-  const llmGroups = groupServicesBySource(llms);
-  const asrGroups = groupServicesBySource(asrServices);
-  const ttsGroups = groupServicesBySource(ttsServices);
+  const canStream = selectedExample?.capabilities?.includes("streaming_input") ?? false;
+
+  const renderSettings = (variant: ServiceVariant, settingsKey: string) => variant.schema && (
+    <ServiceSettingsControls
+      schema={variant.schema}
+      values={serviceSettings[settingsKey] ?? {}}
+      disabled={isLocked}
+      onChange={(name, value) => setServiceSetting(settingsKey, name, value)}
+    >
+      {variant.streamingUrl && (
+        <SettingRow label="Streaming Input">
+          <Toggle
+            checked={Boolean(streamingInput[settingsKey])}
+            onChange={(enabled) => setStreamingInput(settingsKey, enabled)}
+            label="Streaming Input"
+            disabled={isLocked}
+          />
+        </SettingRow>
+      )}
+    </ServiceSettingsControls>
+  );
+
+  const renderCards = (
+    slot: string,
+    cards: ReturnType<typeof groupByCatalogKey>,
+    activeId: string,
+    onSelect?: (id: string) => void,
+  ) => cards.map((card) => {
+    const cardId = `${slot}:${card.key}`;
+    return (
+      <BuiltInServiceCard
+        key={cardId}
+        slot={slot}
+        name={card.name}
+        variants={card.variants}
+        activeId={activeId}
+        expanded={expandedCard === cardId}
+        streaming={Boolean(streamingInput[serviceSettingsKey(slot, card.variants[0].id)])}
+        isLocked={isLocked}
+        onSelect={onSelect}
+        onToggle={() => setExpandedCard(expandedCard === cardId ? "" : cardId)}
+        renderSettings={renderSettings}
+      />
+    );
+  });
+
+  const llmCards = groupByCatalogKey(llms.filter((s) => s.builtIn), (s) => ({
+    id: s.id,
+    source: s.source,
+    details: compact([s.baseUrl, s.modelId]),
+    schema: s.settings,
+    streamingUrl: canStream ? s.streamingUrl : undefined,
+  }));
+  const asrCards = groupByCatalogKey(asrServices.filter((s) => s.builtIn), (s) => ({
+    id: s.id, source: s.source, details: compact([s.server, s.model]), schema: s.settings,
+  }));
+  const ttsCards = groupByCatalogKey(ttsServices.filter((s) => s.builtIn), (s) => ({
+    id: s.id, source: s.source, details: compact([s.server, s.voiceId && `voice: ${s.voiceId}`]), schema: s.settings,
+  }));
 
   const renderCatalogSection = (slot: string) => {
-    const groups = groupServicesBySource(catalog?.[slot] ?? []);
+    const entries: ServiceEntry[] = catalog?.[slot] ?? [];
+    const cards = groupByCatalogKey(entries, (entry) => ({
+      id: entry.id,
+      source: entry.source,
+      details: compact([String(entry.server ?? entry.base_url ?? ""), String(entry.model ?? entry.model_id ?? "")]),
+      schema: serviceSettingsSchema(entry),
+    }));
+    const activeId = entries.find((entry) => entry.selected === true)?.id ?? "";
     const title = `${slot.split("-").map((part) => (part.toUpperCase() === "LLM" ? "LLM" : part[0]?.toUpperCase() + part.slice(1))).join(" ")} Services`;
     return (
       <ServiceSection key={slot} title={title}>
-        {groups.length === 0 && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No services configured</p>}
-        {groups.map((group) => (
-          <ServiceSourceGroup key={group.key} title={group.title}>
-            {group.items.map((entry) => <ReadOnlyServiceRow key={entry.id} entry={entry} isLocked={isLocked} />)}
-          </ServiceSourceGroup>
-        ))}
+        {cards.length === 0 && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No services configured</p>}
+        {renderCards(slot, cards, activeId)}
       </ServiceSection>
     );
   };
 
   const renderSlot = (slot: string) => {
     if (slot === "llm") {
+      const custom = llms.filter((s) => !s.builtIn);
       return (
         <ServiceSection key={slot} title="LLM Services" onAdd={() => setAddingLLM(!addingLLM)}>
           {llmsLoading && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Loading...</p>}
@@ -354,18 +481,20 @@ export function ServicesPanel() {
               onCancel={() => setAddingLLM(false)}
             />
           )}
-          {llmGroups.map((group) => (
-            <ServiceSourceGroup key={group.key} title={group.title}>
-              {group.items.map((svc) => (
-                <LLMServiceRow key={svc.id} svc={svc} isActive={selectedLLMId === svc.id} canRemove={!svc.builtIn && llmCustomCount > 0} onSelect={isLocked ? undefined : selectLLM} />
+          {renderCards(slot, llmCards, selectedLLMId, selectLLM)}
+          {custom.length > 0 && (
+            <CustomServicesGroup>
+              {custom.map((svc) => (
+                <LLMServiceRow key={svc.id} svc={svc} isActive={selectedLLMId === svc.id} onSelect={isLocked ? undefined : selectLLM} />
               ))}
-            </ServiceSourceGroup>
-          ))}
+            </CustomServicesGroup>
+          )}
         </ServiceSection>
       );
     }
 
     if (slot === "asr") {
+      const custom = asrServices.filter((s) => !s.builtIn);
       return (
         <ServiceSection key={slot} title="ASR Services" onAdd={() => setAddingASR(!addingASR)}>
           {asrLoading && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Loading...</p>}
@@ -380,23 +509,24 @@ export function ServicesPanel() {
               onCancel={() => setAddingASR(false)}
             />
           )}
-          {asrGroups.map((group) => (
-            <ServiceSourceGroup key={group.key} title={group.title}>
-              {group.items.map((svc) => (
+          {renderCards(slot, asrCards, selectedASRId, selectASR)}
+          {custom.length > 0 && (
+            <CustomServicesGroup>
+              {custom.map((svc) => (
                 <SimpleServiceRow
                   key={svc.id} svc={svc} isActive={selectedASRId === svc.id}
-                  canRemove={!svc.builtIn && asrCustomCount > 0}
                   fields={[{ label: "Server", key: "server" }, { label: "Model", key: "model" }, { label: "Function ID", key: "functionId" }]}
                   onSelect={isLocked ? undefined : selectASR} onUpdate={updateASR} onRemove={removeASR}
                 />
               ))}
-            </ServiceSourceGroup>
-          ))}
+            </CustomServicesGroup>
+          )}
         </ServiceSection>
       );
     }
 
     if (slot === "tts") {
+      const custom = ttsServices.filter((s) => !s.builtIn);
       return (
         <ServiceSection key={slot} title="TTS Services" onAdd={() => setAddingTTS(!addingTTS)}>
           {ttsLoading && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Loading...</p>}
@@ -411,18 +541,18 @@ export function ServicesPanel() {
               onCancel={() => setAddingTTS(false)}
             />
           )}
-          {ttsGroups.map((group) => (
-            <ServiceSourceGroup key={group.key} title={group.title}>
-              {group.items.map((svc) => (
+          {renderCards(slot, ttsCards, selectedTTSId, selectTTS)}
+          {custom.length > 0 && (
+            <CustomServicesGroup>
+              {custom.map((svc) => (
                 <SimpleServiceRow
                   key={svc.id} svc={svc} isActive={selectedTTSId === svc.id}
-                  canRemove={!svc.builtIn && ttsCustomCount > 0}
                   fields={[{ label: "Server", key: "server" }, { label: "Voice ID", key: "voiceId" }, { label: "Function ID", key: "functionId" }]}
                   onSelect={isLocked ? undefined : selectTTS} onUpdate={updateTTS} onRemove={removeTTS}
                 />
               ))}
-            </ServiceSourceGroup>
-          ))}
+            </CustomServicesGroup>
+          )}
         </ServiceSection>
       );
     }

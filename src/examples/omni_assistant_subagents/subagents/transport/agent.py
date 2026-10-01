@@ -437,13 +437,13 @@ class OmniTransportAgent(PipelineWorker):
         """Dispatch the LLM-selected analyzer after the ack turn has completed."""
         await self._media_analysis.start_pending()
 
-    async def queue_thinking(self, transcript: str, effort: str, reason: str) -> None:
+    async def queue_thinking(self, transcript: str, reason: str) -> None:
         """Queue a reasoning-ON pass when the Speaker stalls; runs after its turn.
 
         ``reason`` is empty when the model spoke its own stall, or names the trigger
         (e.g. ``repetition``) so the Thinker can recover.
         """
-        self._thinking.queue(transcript, effort=effort, reason=reason)
+        self._thinking.queue(transcript, reason=reason)
 
     async def start_pending_thinking(self) -> None:
         """Dispatch the queued reasoning pass after the Speaker's stall turn completes."""

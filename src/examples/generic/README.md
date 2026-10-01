@@ -6,7 +6,7 @@ Generic cascaded voice pipeline using Pipecat's built-in NVIDIA services (`Nvidi
 
 ## Default Models
 
-The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+The `services` lists in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../services.yaml):
 
 | Profile | ASR | LLM | TTS |
 | --- | --- | --- | --- |
@@ -77,7 +77,6 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 | `tools.yaml` | OpenAI function-calling schemas, keyed by tool name |
 | `tool_handlers.py` | async handlers for each schema in `tools.yaml`, exposed through the `TOOL_HANDLERS` registry |
 | `tools.py` | builds a filtered `ToolsSchema` from `tools.yaml` for the tool names a prompt requests, skipping entries without a matching handler |
-| `services.cloud.yaml`, `services.local.yaml` | example-local service catalogs |
 
 To change models, voices, prompts, or tool wiring, see [Configure Services](../../../docs/how-to/configure-services.md), [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure ASR](../../../docs/how-to/configure-asr.md), [Configure TTS](../../../docs/how-to/configure-tts.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md).
 

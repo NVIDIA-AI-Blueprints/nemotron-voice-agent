@@ -118,8 +118,8 @@ Style Guide above.
   `examples_registry.yaml`.
 - Verify pipeline behavior in `src/examples/<example>/pipeline.py` and shared
   behavior in `src/examples/shared/` and `src/server.py`.
-- Verify prompt and service configuration in the example-local `prompts.yaml`,
-  `services.cloud.yaml`, and `services.local.yaml` files.
+- Verify prompt configuration in the example-local `prompts.yaml` and service
+  configuration in the root `services.yaml` and `settings.yaml`.
 - Verify Compose profiles, service names, ports, image tags, environment
   variables, and hardware placement in `docker-compose.yml`, `docker/`, and
   `.env.example`.

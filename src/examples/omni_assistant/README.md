@@ -8,7 +8,7 @@ The pattern replaces the separate ASR and text LLM stages with one audio-input L
 
 ## Default Models
 
-The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+The `services` lists in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../services.yaml):
 
 | Profile | Audio-input LLM | TTS |
 | --- | --- | --- |
@@ -75,7 +75,6 @@ To run host-native without Docker, set `selection: omni-assistant` in [`examples
 | `pipeline.py` | pipecat entry point for the Omni Assistant example |
 | `nvidia_omni_multimodal_service.py` | `NvidiaOmniLLMService` (upstream-shaped Pipecat `LLMService` for Nemotron Omni) |
 | `prompts.yaml` | example-local prompt catalog |
-| `services.cloud.yaml`, `services.local.yaml` | example-local service catalogs for cloud and on-prem deployments |
 
 Environment variables read by [`pipeline.py`](pipeline.py):
 

@@ -1,12 +1,8 @@
 # Chatterbox TTS Multilingual: alternate to Magpie.
 #
-# Opt-in alternate to Magpie (shared ports 50151/9000. Only one TTS can run):
-#   docker compose --profile <recipe>/server --profile chatterbox-tts \
-#     up -d --scale magpie-multilingual-tts-service=0
-# Omitting --profile chatterbox-tts leaves Chatterbox running and holding the
-# ports. Stop it before Magpie can bind again:
-#   docker compose --profile chatterbox-tts stop chatterbox-tts-service
-#   docker compose --profile <recipe>/server up -d
+# Opt-in alternate to Magpie. It publishes its own host ports (50251/9100), so it
+# can run beside Magpie when the GPU has room:
+#   docker compose --profile <recipe>/server --profile chatterbox-tts up -d
 # Then pick chatterbox-multilingual-tts (or Magpie) in the Services tab.
 
 services:
@@ -22,8 +18,8 @@ services:
       # Default 1.1.0 profile (~44.61 GiB GPU / ~4.86 GiB host memory).
       NIM_TAGS_SELECTOR: name=chatterbox-tts-multilingual,batch_size=8
     ports:
-      - "50151:50051"
-      - "9000:9000"
+      - "50251:50051"
+      - "9100:9000"
     volumes:
       - chatterbox_tts_cache:/opt/nim/.cache
     shm_size: 16GB
