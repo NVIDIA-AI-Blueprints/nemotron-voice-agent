@@ -13,7 +13,7 @@ import logging
 import os
 import sqlite3
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -63,6 +63,7 @@ _UI_ASSETS = {
     "styles.css": "text/css; charset=utf-8",
 }
 _READINESS_TIMEOUT_SECONDS = 4.0
+_READINESS_REASON_HEADER = "X-VoiceClaw-Reason"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -74,6 +75,65 @@ class _RuntimePrerequisites:
     adapters: BackendComposition
     issuer: ClientSecretIssuer | None
     upstream_bearer: str | None
+
+
+class RealtimeAdmission:
+    """Bound concurrent public sessions and support graceful runtime draining."""
+
+    def __init__(self, maximum: int | None) -> None:
+        """Create an admission gate with an optional concurrent-session limit."""
+        self._maximum = maximum
+        self._sessions: dict[object, Callable[[], Awaitable[None]]] = {}
+        self._closing = False
+        self._lock = asyncio.Lock()
+        self._empty = asyncio.Event()
+        self._empty.set()
+
+    async def acquire(self, close: Callable[[], Awaitable[None]]) -> object | None:
+        """Reserve one session and its shutdown callback, if capacity remains."""
+        async with self._lock:
+            if self._closing or (self._maximum is not None and len(self._sessions) >= self._maximum):
+                return None
+            lease = object()
+            self._sessions[lease] = close
+            self._empty.clear()
+            return lease
+
+    async def release(self, lease: object) -> None:
+        """Release one previously acquired session lease."""
+        async with self._lock:
+            if self._sessions.pop(lease, None) is None:
+                raise RuntimeError("unknown Realtime admission lease")
+            if not self._sessions:
+                self._empty.set()
+
+    async def can_accept(self) -> bool:
+        """Return whether one new authenticated session can be admitted."""
+        async with self._lock:
+            return not self._closing and (self._maximum is None or len(self._sessions) < self._maximum)
+
+    async def begin_drain(self) -> None:
+        """Reject new sessions while allowing existing sessions to finish."""
+        async with self._lock:
+            self._closing = True
+
+    async def wait_empty(self) -> None:
+        """Wait until every admitted session has released its lease."""
+        await self._empty.wait()
+
+    async def shutdown(self, timeout_seconds: float = 5.0) -> None:
+        """Stop admission and request bounded closure of active sessions."""
+        async with self._lock:
+            self._closing = True
+            closers = tuple(self._sessions.values())
+        if closers:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.gather(*(close() for close in closers), return_exceptions=True),
+                    timeout=timeout_seconds,
+                )
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self.wait_empty(), timeout=timeout_seconds)
 
 
 class _DownstreamTransport(RealtimeTransport):
@@ -392,6 +452,7 @@ def create_app(
     adapters = prerequisites.adapters
     issuer = prerequisites.issuer
     upstream_bearer = prerequisites.upstream_bearer
+    admission = RealtimeAdmission(config.server.max_sessions)
 
     _validate_state_configuration(config.state.path)
     try:
@@ -415,11 +476,18 @@ def create_app(
         try:
             yield
         finally:
-            state_store.close()
+            try:
+                await admission.shutdown()
+            finally:
+                try:
+                    await adapters.shutdown()
+                finally:
+                    state_store.close()
 
     app = FastAPI(title="VoiceClaw", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.voiceclaw_runtime = runtime
     app.state.voiceclaw_state_store = state_store
+    app.state.voiceclaw_admission = admission
 
     def protected_headers(media_type: str) -> dict[str, str]:
         return {
@@ -432,6 +500,22 @@ def create_app(
             "X-Content-Type-Options": "nosniff",
             "Content-Type": media_type,
         }
+
+    async def selected_agent_is_ready() -> bool:
+        try:
+            async with asyncio.timeout(_READINESS_TIMEOUT_SECONDS):
+                await adapters.check_selected_agent_readiness()
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            _LOGGER.warning("VoiceClaw readiness failed: selected_agent_readiness_timeout")
+        except SelectedAgentReadinessError as error:
+            _LOGGER.warning("VoiceClaw readiness failed: %s", error.code)
+        except Exception:
+            _LOGGER.error("VoiceClaw readiness failed: readiness_internal_error")
+        else:
+            return True
+        return False
 
     @app.get("/health")
     async def health() -> JSONResponse:
@@ -472,23 +556,20 @@ def create_app(
     @app.get("/readyz")
     async def ready() -> Response:
         """Attest scoped selected-agent access without starting user work."""
-        try:
-            async with asyncio.timeout(_READINESS_TIMEOUT_SECONDS):
-                await adapters.check_selected_agent_readiness()
-        except asyncio.CancelledError:
-            raise
-        except TimeoutError:
-            _LOGGER.warning("VoiceClaw readiness failed: selected_agent_readiness_timeout")
-            return Response(status_code=503, headers={"Cache-Control": "no-store"})
-        except SelectedAgentReadinessError as error:
-            _LOGGER.warning("VoiceClaw readiness failed: %s", error.code)
-            return Response(status_code=503, headers={"Cache-Control": "no-store"})
-        except Exception:
-            # Never log the exception object: adapter/provider failures can
-            # carry credentials, target identities, or conversational data.
-            _LOGGER.error("VoiceClaw readiness failed: readiness_internal_error")
-            return Response(status_code=503, headers={"Cache-Control": "no-store"})
-        return Response(status_code=200, headers={"Cache-Control": "no-store"})
+        if not await admission.can_accept():
+            return Response(
+                status_code=503,
+                headers={"Cache-Control": "no-store", _READINESS_REASON_HEADER: "client-unavailable"},
+            )
+        if not await selected_agent_is_ready():
+            return Response(
+                status_code=503,
+                headers={"Cache-Control": "no-store", _READINESS_REASON_HEADER: "agent-unavailable"},
+            )
+        return Response(
+            status_code=200,
+            headers={"Cache-Control": "no-store", _READINESS_REASON_HEADER: "ready"},
+        )
 
     if ui:
 
@@ -538,46 +619,63 @@ def create_app(
         if requested_model not in {None, "", config.realtime.public_model}:
             await websocket.close(code=1008, reason="unknown VoiceClaw model")
             return
-        offered = websocket.headers.get("sec-websocket-protocol", "")
-        subprotocol = "realtime" if "realtime" in {part.strip() for part in offered.split(",")} else None
-        await websocket.accept(subprotocol=subprotocol)
-        downstream = _DownstreamTransport(websocket)
+
+        async def close_session() -> None:
+            with suppress(Exception):
+                await websocket.close(code=1001, reason="server shutting down")
+
+        lease = await admission.acquire(close_session)
+        if lease is None:
+            await websocket.close(code=1013, reason="capacity unavailable")
+            return
+        accepted = False
         try:
-            async with WebSocketRealtimeUpstream(
-                endpoint=config.realtime.upstream_endpoint,
-                model=config.realtime.upstream_model,
-                bearer=upstream_bearer,
-                connect_timeout_seconds=config.realtime.connect_timeout_seconds,
-                max_event_bytes=config.realtime.max_event_bytes,
-            ) as upstream:
-                facade = VoiceClawRealtimeFacade(
-                    downstream=downstream,
-                    upstream=upstream,
-                    runtime=runtime,
-                    model_contracts=model_contracts,
-                    interaction_profile=interaction_profile,
-                    public_model=config.realtime.public_model,
+            if adapters.selected_agent_readiness is not None and not await selected_agent_is_ready():
+                await websocket.close(code=1013, reason="backend unavailable")
+                return
+            offered = websocket.headers.get("sec-websocket-protocol", "")
+            subprotocol = "realtime" if "realtime" in {part.strip() for part in offered.split(",")} else None
+            await websocket.accept(subprotocol=subprotocol)
+            accepted = True
+            downstream = _DownstreamTransport(websocket)
+            try:
+                async with WebSocketRealtimeUpstream(
+                    endpoint=config.realtime.upstream_endpoint,
+                    model=config.realtime.upstream_model,
+                    bearer=upstream_bearer,
+                    connect_timeout_seconds=config.realtime.connect_timeout_seconds,
                     max_event_bytes=config.realtime.max_event_bytes,
-                    bootstrap_timeout_seconds=config.realtime.bootstrap_timeout_seconds,
-                    max_pending_speech=config.interaction.max_pending_speech,
-                    context_character_budget=config.interaction.context_character_budget,
-                )
-                await facade.serve()
-        except RealtimeUpstreamError:
-            event = {
-                "type": "error",
-                "error": {
-                    "type": "upstream_unavailable",
-                    "code": "upstream_unavailable",
-                    "message": "The configured realtime frontend is unavailable.",
-                    "param": None,
-                },
-            }
-            with suppress(Exception):
-                await websocket.send_text(json.dumps(event, separators=(",", ":")))
+                ) as upstream:
+                    facade = VoiceClawRealtimeFacade(
+                        downstream=downstream,
+                        upstream=upstream,
+                        runtime=runtime,
+                        model_contracts=model_contracts,
+                        interaction_profile=interaction_profile,
+                        public_model=config.realtime.public_model,
+                        max_event_bytes=config.realtime.max_event_bytes,
+                        bootstrap_timeout_seconds=config.realtime.bootstrap_timeout_seconds,
+                        max_pending_speech=config.interaction.max_pending_speech,
+                        context_character_budget=config.interaction.context_character_budget,
+                    )
+                    await facade.serve()
+            except RealtimeUpstreamError:
+                event = {
+                    "type": "error",
+                    "error": {
+                        "type": "upstream_unavailable",
+                        "code": "upstream_unavailable",
+                        "message": "The configured realtime frontend is unavailable.",
+                        "param": None,
+                    },
+                }
+                with suppress(Exception):
+                    await websocket.send_text(json.dumps(event, separators=(",", ":")))
         finally:
-            with suppress(Exception):
-                await websocket.close(code=1000)
+            if accepted:
+                with suppress(Exception):
+                    await websocket.close(code=1000)
+            await admission.release(lease)
 
     return app
 

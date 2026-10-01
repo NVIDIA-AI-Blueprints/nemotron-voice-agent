@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Client for NemoClaw's hidden, experimental committed-turn HTTP surface.
+"""Client for NemoClaw's response-only committed-turn HTTP contract.
 
-The surface at VoiceClaw's pinned NemoClaw compatibility revision is a
-response-only bridge. This adapter therefore implements
+This transport is a response-only bridge. This adapter therefore implements
 :class:`EphemeralCommittedTurnPort`, not ``AgentInteractionPort``. It never
 manufactures Work, replay, delivery, or durability semantics that the endpoint
 does not provide.
@@ -32,6 +31,11 @@ from enum import StrEnum
 from typing import Any
 from urllib.parse import quote, urlsplit
 
+from voiceclaw.adapters.nemoclaw.security import (
+    ManagedServiceSecurityError,
+    validate_managed_http_origin,
+    validate_managed_route_host,
+)
 from voiceclaw.adapters.result_envelope import (
     MAX_RESULT_DISPLAY_BYTES,
     MAX_RESULT_ENVELOPE_BYTES,
@@ -49,6 +53,10 @@ from voiceclaw.domain.models import (
     EventDelivery,
 )
 from voiceclaw.model_contracts import ModelContractCatalog, load_model_contract_catalog
+from voiceclaw.ports.readiness import (
+    SelectedAgentReadinessCode,
+    SelectedAgentReadinessError,
+)
 from voiceclaw.ports.turns import (
     MAX_COMMITTED_TURN_GOAL_BYTES,
     CommittedTurnBackend,
@@ -62,11 +70,9 @@ from voiceclaw.ports.turns import (
 
 _RUNTIME_VALUE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$")
 _ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
-# JSON can expand one accepted UTF-8 byte to at most six ASCII bytes (for a
-# control character encoded as ``\u00XX``). Keep this backend wire bound
-# distinct from the public goal bound so wrapping never silently reduces the
-# set of valid public goals.
-_MAX_WRAPPED_TURN_BYTES = MAX_COMMITTED_TURN_GOAL_BYTES * 6 + 4096
+# NemoClaw validates the final posted ``text`` value, after VoiceClaw adds its
+# result envelope contract, against this UTF-8 limit.
+_MAX_BACKEND_TURN_TEXT_BYTES = 48 * 1024
 _MAX_STREAM_BYTES = 4 * 1024 * 1024
 # The outer NDJSON encoder may escape each backslash or quote from the inner
 # envelope once more. This wire bound must not narrow either inner limit.
@@ -76,8 +82,10 @@ _MAX_SMALL_BODY_BYTES = 64 * 1024
 _MAX_IDENTIFIER_BYTES = 256
 _MIN_BEARER_BYTES = 32
 _MAX_BEARER_BYTES = 4096
+_ABANDONED_ADMISSION_RECOVERY_SECONDS = 4.0
 _ABANDONED_SESSION_CLEANUP_SECONDS = 1.0
 _ABANDONED_OPERATION_JOIN_SECONDS = 1.25
+_ADAPTER_SHUTDOWN_SECONDS = _ABANDONED_ADMISSION_RECOVERY_SECONDS + _ABANDONED_SESSION_CLEANUP_SECONDS + 0.5
 _STREAM_QUEUE_DEPTH = 16
 _SESSION_LIFETIME = timedelta(minutes=5)
 _SESSION_EXPIRY_TOLERANCE = timedelta(seconds=5)
@@ -105,6 +113,14 @@ class EndpointPolicy(StrEnum):
 
     LOOPBACK_ONLY = "loopback_only"
     PRIVATE_NETWORK = "private_network"
+    MANAGED_PRIVATE_HTTP = "managed_private_http"
+
+
+class DeploymentAuthorization(StrEnum):
+    """Authentication schemes accepted by a specific NemoClaw transport."""
+
+    BEARER = "bearer"
+    NEMOCLAW_SCOPED = "nemoclaw_scoped"
 
 
 class NemoClawEndpointError(ValueError):
@@ -155,6 +171,16 @@ class _Endpoint:
     scheme: str
     host: str
     port: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CleanupAuthority:
+    session_id: str
+    grant: str
+    expires_monotonic: float | None = None
+
+    def expired(self) -> bool:
+        return self.expires_monotonic is not None and time.monotonic() >= self.expires_monotonic
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +249,28 @@ class _ExchangeAbandoned(Exception):
     """Internal signal that the realtime client no longer consumes this exchange."""
 
 
+async def _run_daemon[T](function: Callable[[], T], *, name: str) -> T:
+    """Run one blocking adapter operation on a daemon thread."""
+    completed = threading.Event()
+    result: list[T] = []
+    error: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(function())
+        except BaseException as exc:
+            error.append(exc)
+        finally:
+            completed.set()
+
+    threading.Thread(target=run, name=name, daemon=True).start()
+    while not completed.is_set():
+        await asyncio.sleep(0.025)
+    if error:
+        raise error[0]
+    return result[0]
+
+
 class _ExchangeControl:
     """Thread-safe handle used to interrupt only the active client-side HTTP exchange."""
 
@@ -279,7 +327,7 @@ def _strict_object(raw: bytes) -> dict[str, Any]:
 
     try:
         parsed = json.loads(raw.decode("utf-8"), object_pairs_hook=collect)
-    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateKey) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, _DuplicateKey) as exc:
         raise NemoClawProtocolError("protocol_error") from exc
     if not isinstance(parsed, dict):
         raise NemoClawProtocolError("protocol_error")
@@ -326,6 +374,12 @@ def _validate_grant(value: Any) -> str:
 
 
 def _validate_endpoint(origin: str, policy: EndpointPolicy) -> _Endpoint:
+    if policy is EndpointPolicy.MANAGED_PRIVATE_HTTP:
+        try:
+            _canonical, host, port = validate_managed_http_origin(origin)
+        except ManagedServiceSecurityError as exc:
+            raise NemoClawEndpointError(str(exc)) from exc
+        return _Endpoint(scheme="http", host=host, port=port)
     if not isinstance(origin, str) or not origin or origin != origin.strip():
         raise NemoClawEndpointError("endpoint origin must not be empty or padded")
     try:
@@ -356,6 +410,16 @@ def _validate_endpoint(origin: str, policy: EndpointPolicy) -> _Endpoint:
     return _Endpoint(scheme=parsed.scheme, host=address.compressed, port=port)
 
 
+def _validate_route_host(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        route, _port = validate_managed_route_host(value)
+    except ManagedServiceSecurityError as exc:
+        raise NemoClawEndpointError(str(exc)) from exc
+    return route
+
+
 def _media_type(response: http.client.HTTPResponse) -> str:
     return response.getheader("Content-Type", "").split(";", 1)[0].strip().lower()
 
@@ -375,7 +439,7 @@ def _read_bounded(response: http.client.HTTPResponse, maximum: int) -> bytes:
 
 
 class NemoClawCommittedTurnAdapter:
-    """Execute one fresh experimental NemoClaw session for each committed turn.
+    """Execute one fresh response-only NemoClaw session for each committed turn.
 
     The deployment bearer is held only by this server-side object. NemoClaw's
     returned session grant remains a local variable, is used only for the turn
@@ -386,7 +450,11 @@ class NemoClawCommittedTurnAdapter:
         self,
         *,
         origin: str,
-        deployment_bearer: str,
+        deployment_bearer: str | None = None,
+        deployment_bearer_loader: Callable[[], str] | None = None,
+        deployment_authorization: DeploymentAuthorization = DeploymentAuthorization.BEARER,
+        route_host: str | None = None,
+        target_ref: str = "backend-selected-per-request",
         endpoint_policy: EndpointPolicy = EndpointPolicy.LOOPBACK_ONLY,
         exchange_deadline_seconds: float = 125.0,
         result_display_budget_bytes: int = DEFAULT_RESULT_DISPLAY_BUDGET_BYTES,
@@ -412,23 +480,106 @@ class NemoClawCommittedTurnAdapter:
             raise NemoClawEndpointError(
                 f"result_display_budget_bytes must be an integer from 1 through {MAX_RESULT_DISPLAY_BYTES}"
             )
+        if (deployment_bearer is None) == (deployment_bearer_loader is None):
+            raise NemoClawEndpointError("exactly one deployment credential source is required")
+        try:
+            authorization = DeploymentAuthorization(deployment_authorization)
+        except ValueError as exc:
+            raise NemoClawEndpointError("unknown deployment authorization") from exc
+        managed_route_host = _validate_route_host(route_host)
+        if authorization is DeploymentAuthorization.NEMOCLAW_SCOPED:
+            if policy is not EndpointPolicy.MANAGED_PRIVATE_HTTP or managed_route_host is None:
+                raise NemoClawEndpointError("managed authorization requires its private endpoint and route host")
+        elif managed_route_host is not None or policy is EndpointPolicy.MANAGED_PRIVATE_HTTP:
+            raise NemoClawEndpointError("managed endpoint routing requires managed authorization")
         self._endpoint = _validate_endpoint(origin, policy)
-        self._deployment_bearer = _validate_bearer(deployment_bearer)
+        if managed_route_host is not None:
+            _route, route_port = validate_managed_route_host(managed_route_host)
+            if route_port != self._endpoint.port:
+                raise NemoClawEndpointError("managed endpoint and route host ports must match")
+        if deployment_bearer is not None:
+            static_bearer = _validate_bearer(deployment_bearer)
+            self._deployment_bearer_loader: Callable[[], str] | None = lambda: static_bearer
+        else:
+            assert deployment_bearer_loader is not None
+            self._deployment_bearer_loader = deployment_bearer_loader
+        self._deployment_authorization = authorization
+        self._route_host = managed_route_host
+        if _RUNTIME_VALUE.fullmatch(target_ref) is None:
+            raise NemoClawEndpointError("target_ref is invalid")
+        self._target_ref = target_ref
         self._exchange_deadline_seconds = float(exchange_deadline_seconds)
         self._result_display_budget_bytes = result_display_budget_bytes
         self._model_contracts = model_contracts or load_model_contract_catalog()
-        # A cancelled asyncio wrapper cannot stop a worker thread. Keep the
-        # provider's single-active-session invariant here as a final guard: if
-        # an OS connect cannot be interrupted promptly, later callers fail
-        # closed instead of overlapping another temporary backend session.
+        self._closed = threading.Event()
+        self._discard_authority = threading.Event()
+        self._shutdown_started = threading.Event()
+        self._shutdown_complete = threading.Event()
+        self._shutdown_lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
+        self._active_control: _ExchangeControl | None = None
+        self._cleanup_degraded = threading.Event()
+        self._cleanup_lock = threading.Lock()
+        self._active_cleanup: _CleanupAuthority | None = None
+        self._pending_cleanup: _CleanupAuthority | None = None
+        # A blocking OS connect may not stop promptly after abandonment. Keep
+        # the provider's single-active-session invariant until its worker exits.
         self._operation_gate = threading.Lock()
+
+    def _deployment_bearer(self) -> str:
+        with self._lifecycle_lock:
+            loader = self._deployment_bearer_loader
+        if loader is None:
+            raise NemoClawTransportError("adapter_closed")
+        try:
+            return _validate_bearer(loader())
+        except NemoClawEndpointError as exc:
+            raise NemoClawTransportError("credential_unavailable") from exc
+        except Exception as exc:
+            raise NemoClawTransportError("credential_unavailable") from exc
+
+    async def check_selected_agent(self) -> None:
+        """Attest the installer-bound target without creating conversational work."""
+        if self._closed.is_set():
+            raise SelectedAgentReadinessError(SelectedAgentReadinessCode.UNAVAILABLE)
+        if self._cleanup_degraded.is_set():
+            recovered = await _run_daemon(
+                lambda: self._retry_pending_cleanup(timeout_seconds=_ABANDONED_SESSION_CLEANUP_SECONDS),
+                name="voiceclaw-nemoclaw-readiness-cleanup",
+            )
+            if not recovered:
+                raise SelectedAgentReadinessError(SelectedAgentReadinessCode.UNAVAILABLE)
+        if self._closed.is_set():
+            raise SelectedAgentReadinessError(SelectedAgentReadinessCode.UNAVAILABLE)
+        try:
+            await _run_daemon(self._inspect_sync, name="voiceclaw-nemoclaw-readiness")
+        except NemoClawRequestRejected as exc:
+            if exc.status in {401, 403}:
+                code = SelectedAgentReadinessCode.ACCESS_DENIED
+            elif exc.status == 404:
+                code = SelectedAgentReadinessCode.WRONG_AGENT
+            else:
+                code = SelectedAgentReadinessCode.UNAVAILABLE
+            raise SelectedAgentReadinessError(code) from exc
+        except NemoClawTransportError as exc:
+            raise SelectedAgentReadinessError(SelectedAgentReadinessCode.ENDPOINT_UNAVAILABLE) from exc
+        except NemoClawProtocolError as exc:
+            raise SelectedAgentReadinessError(SelectedAgentReadinessCode.PROTOCOL_ERROR) from exc
+        except NemoClawCommittedTurnError as exc:
+            raise SelectedAgentReadinessError() from exc
+        if self._closed.is_set() or self._cleanup_degraded.is_set():
+            raise SelectedAgentReadinessError(SelectedAgentReadinessCode.UNAVAILABLE)
 
     async def inspect(self) -> CommittedTurnBackend:
         """Check only authenticated gateway health, not target-agent readiness."""
-        await asyncio.to_thread(self._inspect_sync)
+        if self._closed.is_set():
+            raise NemoClawTransportError("adapter_closed")
+        await _run_daemon(self._inspect_sync, name="voiceclaw-nemoclaw-inspect")
+        if self._closed.is_set():
+            raise NemoClawTransportError("adapter_closed")
         return CommittedTurnBackend(
             label="NemoClaw",
-            target_ref="backend-selected-per-request",
+            target_ref=self._target_ref,
             mode="response_only",
             capabilities=BackendCapabilities(
                 backend_kind="response_only",
@@ -459,29 +610,52 @@ class NemoClawCommittedTurnAdapter:
         """Bridge blocking NDJSON into provisional display and terminal events."""
         if not isinstance(request, CommittedTurnRequest):
             raise NemoClawRequestValidationError("invalid_request")
-        if not self._operation_gate.acquire(blocking=False):
-            raise NemoClawTransportError("backend_busy")
+        if self._closed.is_set():
+            raise NemoClawTransportError("adapter_closed")
+        if self._cleanup_degraded.is_set() and not await _run_daemon(
+            self._retry_pending_cleanup,
+            name="voiceclaw-nemoclaw-cleanup",
+        ):
+            raise NemoClawTransportError("cleanup_degraded")
         control = _ExchangeControl()
+        with self._lifecycle_lock:
+            if self._closed.is_set():
+                raise NemoClawTransportError("adapter_closed")
+            if not self._operation_gate.acquire(blocking=False):
+                raise NemoClawTransportError("backend_busy")
+            self._active_control = control
         bridge = _StreamBridge(asyncio.get_running_loop())
 
         def publish_display_delta(event: CommittedTurnDisplayDelta) -> None:
             control.raise_if_abandoned()
             bridge.publish(event)
 
+        completed = threading.Event()
+
         def run_exchange() -> None:
             try:
-                result = self._commit_turn_sync(
-                    request,
-                    control,
-                    on_display_delta=publish_display_delta,
-                )
-                outcome = _StreamOutcome(result=result)
-            except BaseException as exc:
-                outcome = _StreamOutcome(error=exc)
-            with suppress(_ExchangeAbandoned):
-                bridge.publish(outcome)
+                try:
+                    result = self._commit_turn_sync(
+                        request,
+                        control,
+                        on_display_delta=publish_display_delta,
+                    )
+                    outcome = _StreamOutcome(result=result)
+                except BaseException as exc:
+                    outcome = _StreamOutcome(error=exc)
+                with suppress(_ExchangeAbandoned):
+                    bridge.publish(outcome)
+            finally:
+                self._release_operation(control)
+                completed.set()
 
-        operation = asyncio.create_task(asyncio.to_thread(run_exchange))
+        worker = threading.Thread(target=run_exchange, name="voiceclaw-nemoclaw-turn", daemon=True)
+        try:
+            worker.start()
+        except BaseException:
+            self._release_operation(control)
+            completed.set()
+            raise
         retired = False
         try:
             while True:
@@ -491,7 +665,7 @@ class NemoClawCommittedTurnAdapter:
                     continue
                 bridge.close()
                 retired = True
-                await self._retire_operation(operation, control, abandon=False)
+                await self._retire_operation(completed, control, abandon=False)
                 if item.error is not None:
                     raise item.error
                 if item.result is None:
@@ -502,16 +676,16 @@ class NemoClawCommittedTurnAdapter:
             if not retired:
                 retired = True
                 bridge.close()
-                await self._retire_operation(operation, control, abandon=True)
+                await self._retire_operation(completed, control, abandon=True)
 
     async def _retire_operation(
         self,
-        operation: asyncio.Task[None],
+        completed: threading.Event,
         control: _ExchangeControl,
         *,
         abandon: bool,
     ) -> None:
-        """Bound stream teardown and release the single-operation gate exactly once."""
+        """Bound stream teardown while the worker retains admission ownership."""
         if abandon:
             # Presentation abandonment is not backend Work cancellation. Close
             # only this client-side exchange and let the worker perform its
@@ -519,29 +693,109 @@ class NemoClawCommittedTurnAdapter:
             control.abandon()
         cancelled = False
         cleanup_deadline = asyncio.get_running_loop().time() + _ABANDONED_OPERATION_JOIN_SECONDS
-        while not operation.done() and asyncio.get_running_loop().time() < cleanup_deadline:
-            remaining = cleanup_deadline - asyncio.get_running_loop().time()
+        while not completed.is_set() and asyncio.get_running_loop().time() < cleanup_deadline:
             try:
-                await asyncio.wait_for(asyncio.shield(operation), timeout=remaining)
+                await asyncio.sleep(min(0.025, max(0.0, cleanup_deadline - asyncio.get_running_loop().time())))
             except asyncio.CancelledError:
                 cancelled = True
-                continue
-            except (TimeoutError, Exception):
-                break
-        if operation.done():
-            with suppress(BaseException):
-                operation.result()
-            self._operation_gate.release()
-        else:
-            operation.add_done_callback(self._retire_detached_operation)
         if cancelled:
             raise asyncio.CancelledError
 
-    def _retire_detached_operation(self, operation: asyncio.Task[None]) -> None:
-        """Consume a late worker result and reopen admission without overlapping sessions."""
-        with suppress(BaseException):
-            operation.result()
+    def _release_operation(self, control: _ExchangeControl) -> None:
+        """Forget one retired operation before reopening the single-operation gate."""
+        with self._lifecycle_lock:
+            if self._active_control is control:
+                self._active_control = None
         self._operation_gate.release()
+
+    async def shutdown(self) -> None:
+        """Bound remote-session cleanup and discard retained bearer authority."""
+        start_shutdown = False
+        with self._lifecycle_lock:
+            self._closed.set()
+            control = self._active_control
+            if not self._shutdown_started.is_set():
+                self._shutdown_started.set()
+                start_shutdown = True
+        if control is not None:
+            control.abandon()
+        if start_shutdown:
+            worker = threading.Thread(
+                target=self._shutdown_sync,
+                name="voiceclaw-nemoclaw-shutdown",
+                daemon=True,
+            )
+            try:
+                worker.start()
+            except BaseException:
+                self._clear_sensitive_state()
+                self._shutdown_complete.set()
+                raise
+
+        cancelled = False
+        deadline = asyncio.get_running_loop().time() + _ADAPTER_SHUTDOWN_SECONDS + 0.25
+        while not self._shutdown_complete.is_set() and asyncio.get_running_loop().time() < deadline:
+            try:
+                await asyncio.sleep(0.025)
+            except asyncio.CancelledError:
+                cancelled = True
+        if not self._shutdown_complete.is_set():
+            self._clear_sensitive_state()
+            self._shutdown_complete.set()
+        if cancelled:
+            raise asyncio.CancelledError
+
+    def _shutdown_sync(self) -> None:
+        """Serialize one fixed-budget shutdown without retaining failed authority."""
+        if self._shutdown_complete.is_set():
+            return
+        deadline = time.monotonic() + _ADAPTER_SHUTDOWN_SECONDS
+        if not self._shutdown_lock.acquire(timeout=_ADAPTER_SHUTDOWN_SECONDS):
+            self._clear_sensitive_state()
+            self._shutdown_complete.set()
+            return
+        try:
+            if self._shutdown_complete.is_set():
+                return
+            join_seconds = max(
+                0.0,
+                deadline - time.monotonic() - _ABANDONED_SESSION_CLEANUP_SECONDS,
+            )
+            acquired = self._operation_gate.acquire(timeout=join_seconds)
+            try:
+                self._cleanup_for_shutdown(deadline)
+            finally:
+                if acquired:
+                    self._operation_gate.release()
+                self._clear_sensitive_state()
+                self._shutdown_complete.set()
+        finally:
+            self._shutdown_lock.release()
+
+    def _cleanup_for_shutdown(self, deadline: float) -> None:
+        """Try each retained session authority once within the shutdown budget."""
+        with self._cleanup_lock:
+            authorities = tuple(
+                dict.fromkeys(
+                    authority for authority in (self._active_cleanup, self._pending_cleanup) if authority is not None
+                )
+            )
+        for authority in authorities:
+            remaining = min(_ABANDONED_SESSION_CLEANUP_SECONDS, deadline - time.monotonic())
+            if remaining <= 0:
+                break
+            self._delete_once(authority, timeout_seconds=remaining)
+
+    def _clear_sensitive_state(self) -> None:
+        """Drop every adapter-owned reference to deployment or session authority."""
+        self._discard_authority.set()
+        with self._cleanup_lock:
+            self._active_cleanup = None
+            self._pending_cleanup = None
+            self._cleanup_degraded.clear()
+        with self._lifecycle_lock:
+            self._deployment_bearer_loader = None
+            self._active_control = None
 
     def _commit_turn_sync(
         self,
@@ -556,13 +810,13 @@ class NemoClawCommittedTurnAdapter:
         )
         control.raise_if_abandoned()
         deadline = time.monotonic() + self._exchange_deadline_seconds
-        session_id: str | None = None
-        grant: str | None = None
+        authority: _CleanupAuthority | None = None
         try:
-            session_id, grant = self._admit(request.runtime_conversation_id, deadline=deadline, control=control)
+            authority = self._admit(request.runtime_conversation_id, deadline=deadline, control=control)
+            control.raise_if_abandoned()
             return self._exchange(
-                session_id,
-                grant,
+                authority.session_id,
+                authority.grant,
                 request,
                 turn_text=turn_text,
                 deadline=deadline,
@@ -575,16 +829,18 @@ class NemoClawCommittedTurnAdapter:
             raise NemoClawTransportError("timeout") from exc
         except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
             raise NemoClawTransportError("transport_error") from exc
+        except _ExchangeAbandoned as exc:
+            code = "adapter_closed" if self._closed.is_set() else "transport_error"
+            raise NemoClawTransportError(code) from exc
         finally:
-            if session_id is not None and grant is not None:
+            if authority is not None:
                 cleanup_seconds = (
                     _ABANDONED_SESSION_CLEANUP_SECONDS
                     if control.abandoned
                     else min(self._exchange_deadline_seconds, 5.0)
                 )
-                self._delete_best_effort(session_id, grant, timeout_seconds=cleanup_seconds)
-            session_id = None
-            grant = None
+                self._delete_best_effort(authority, timeout_seconds=cleanup_seconds)
+            authority = None
 
     def _validate_request(
         self,
@@ -613,7 +869,7 @@ class NemoClawCommittedTurnAdapter:
             raise NemoClawRequestValidationError("invalid_text") from exc
         if not encoded or b"\x00" in encoded:
             raise NemoClawRequestValidationError("invalid_text")
-        if len(encoded) > _MAX_WRAPPED_TURN_BYTES:
+        if len(encoded) > _MAX_BACKEND_TURN_TEXT_BYTES:
             raise NemoClawRequestValidationError("turn_payload_too_large")
         return turn_text
 
@@ -640,6 +896,8 @@ class NemoClawCommittedTurnAdapter:
         deadline: float,
         *,
         control: _ExchangeControl | None = None,
+        abandon_grace_seconds: float = 0.0,
+        check_abandoned_on_exit: bool = True,
     ) -> Iterator[tuple[http.client.HTTPConnection, Callable[[http.client.HTTPResponse], None]]]:
         """Abort the socket at a wall-clock deadline, including slow trickles.
 
@@ -654,7 +912,11 @@ class NemoClawCommittedTurnAdapter:
         remaining = self._remaining(deadline)
         connection = self._connection(timeout_seconds=remaining)
         expired = threading.Event()
+        abandonment_expired = threading.Event()
+        finished = threading.Event()
         active_response: list[http.client.HTTPResponse | None] = [None]
+        abandoned_timer: list[threading.Timer | None] = [None]
+        abandoned_timer_lock = threading.Lock()
 
         def close_active() -> None:
             sockets: list[Any] = [connection.sock]
@@ -675,23 +937,43 @@ class NemoClawCommittedTurnAdapter:
             expired.set()
             close_active()
 
+        def close_after_abandonment() -> None:
+            abandonment_expired.set()
+            if not finished.is_set():
+                close_active()
+
+        def abandon_connection() -> None:
+            if abandon_grace_seconds <= 0:
+                close_active()
+                return
+            with abandoned_timer_lock:
+                if finished.is_set() or abandoned_timer[0] is not None:
+                    return
+                delay = min(abandon_grace_seconds, max(0.0, deadline - time.monotonic()))
+                timer = threading.Timer(delay, close_after_abandonment)
+                timer.daemon = True
+                abandoned_timer[0] = timer
+                timer.start()
+
         def watch_response(response: http.client.HTTPResponse) -> None:
             active_response[0] = response
-            # Close a response registered in the small race after the timer
-            # fired or the realtime owner abandoned the exchange.
-            if expired.is_set() or (control is not None and control.abandoned):
+            if (
+                expired.is_set()
+                or abandonment_expired.is_set()
+                or (control is not None and control.abandoned and abandon_grace_seconds <= 0)
+            ):
                 close_active()
 
         timer = threading.Timer(remaining, expire)
         timer.daemon = True
         if control is not None:
-            control.bind(close_active)
+            control.bind(abandon_connection)
         timer.start()
         try:
             if control is not None:
                 control.raise_if_abandoned()
             yield connection, watch_response
-            if control is not None:
+            if control is not None and check_abandoned_on_exit:
                 control.raise_if_abandoned()
             if expired.is_set() or time.monotonic() >= deadline:
                 raise TimeoutError
@@ -702,25 +984,34 @@ class NemoClawCommittedTurnAdapter:
                 raise TimeoutError from exc
             raise
         finally:
+            finished.set()
             timer.cancel()
+            with abandoned_timer_lock:
+                if abandoned_timer[0] is not None:
+                    abandoned_timer[0].cancel()
             if control is not None:
-                control.unbind(close_active)
+                control.unbind(abandon_connection)
             connection.close()
 
     def _inspect_sync(self) -> None:
+        control = _ExchangeControl()
+        with self._lifecycle_lock:
+            if self._closed.is_set():
+                raise NemoClawTransportError("adapter_closed")
+            if not self._operation_gate.acquire(blocking=False):
+                raise NemoClawTransportError("backend_busy")
+            self._active_control = control
         try:
             deadline = time.monotonic() + min(self._exchange_deadline_seconds, 5.0)
-            with self._connection_until(deadline) as (connection, watch_response):
+            with self._connection_until(deadline, control=control) as (connection, watch_response):
                 response: http.client.HTTPResponse | None = None
                 try:
+                    headers = self._deployment_headers(accepts="application/json")
+                    control.raise_if_abandoned()
                     connection.request(
                         "GET",
                         "/healthz",
-                        headers={
-                            "Accept": "application/json",
-                            "Authorization": f"Bearer {self._deployment_bearer}",
-                            "Connection": "close",
-                        },
+                        headers=headers,
                     )
                     response = connection.getresponse()
                     watch_response(response)
@@ -738,6 +1029,11 @@ class NemoClawCommittedTurnAdapter:
             raise NemoClawTransportError("timeout") from exc
         except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
             raise NemoClawTransportError("transport_error") from exc
+        except _ExchangeAbandoned as exc:
+            code = "adapter_closed" if self._closed.is_set() else "transport_error"
+            raise NemoClawTransportError(code) from exc
+        finally:
+            self._release_operation(control)
 
     @staticmethod
     def _json_body(value: dict[str, str]) -> bytes:
@@ -746,14 +1042,36 @@ class NemoClawCommittedTurnAdapter:
         except UnicodeEncodeError as exc:
             raise NemoClawRequestValidationError("invalid_text") from exc
 
-    @staticmethod
-    def _headers(bearer: str, *, accepts: str) -> dict[str, str]:
-        return {
+    def _headers(self, bearer: str, *, accepts: str) -> dict[str, str]:
+        headers = {
             "Accept": accepts,
-            "Authorization": f"Bearer {bearer}",
             "Connection": "close",
             "Content-Type": "application/json",
         }
+        authorization_header = (
+            "X-NemoClaw-Authorization"
+            if self._deployment_authorization is DeploymentAuthorization.NEMOCLAW_SCOPED
+            else "Authorization"
+        )
+        headers[authorization_header] = f"Bearer {bearer}"
+        if self._route_host is not None:
+            headers["Host"] = self._route_host
+        return headers
+
+    def _deployment_headers(self, *, accepts: str) -> dict[str, str]:
+        bearer = self._deployment_bearer()
+        headers = {
+            "Accept": accepts,
+            "Connection": "close",
+            "Content-Type": "application/json",
+        }
+        if self._deployment_authorization is DeploymentAuthorization.NEMOCLAW_SCOPED:
+            headers["X-NemoClaw-Authorization"] = f"Bearer {bearer}"
+        else:
+            headers["Authorization"] = f"Bearer {bearer}"
+        if self._route_host is not None:
+            headers["Host"] = self._route_host
+        return headers
 
     def _admit(
         self,
@@ -761,17 +1079,22 @@ class NemoClawCommittedTurnAdapter:
         *,
         deadline: float,
         control: _ExchangeControl,
-    ) -> tuple[str, str]:
+    ) -> _CleanupAuthority:
         session_id: str | None = None
         grant: str | None = None
-        with self._connection_until(deadline, control=control) as (connection, watch_response):
+        with self._connection_until(
+            deadline,
+            control=control,
+            abandon_grace_seconds=_ABANDONED_ADMISSION_RECOVERY_SECONDS,
+            check_abandoned_on_exit=False,
+        ) as (connection, watch_response):
             response: http.client.HTTPResponse | None = None
             try:
                 connection.request(
                     "POST",
                     "/v1/voice/sessions",
                     body=self._json_body({"runtimeConversationId": runtime_conversation_id}),
-                    headers=self._headers(self._deployment_bearer, accepts="application/json"),
+                    headers=self._deployment_headers(accepts="application/json"),
                 )
                 response = connection.getresponse()
                 watch_response(response)
@@ -783,6 +1106,10 @@ class NemoClawCommittedTurnAdapter:
                 # Recover cleanup authority before validating non-authority fields.
                 session_id = _bounded_string(payload.get("voiceSessionId"), maximum=_MAX_IDENTIFIER_BYTES)
                 grant = _validate_grant(payload.get("grant"))
+                authority = _CleanupAuthority(session_id=session_id, grant=grant)
+                with self._cleanup_lock:
+                    if not self._discard_authority.is_set():
+                        self._active_cleanup = authority
                 try:
                     if _media_type(response) != "application/json" or response.getheader(
                         "Content-Encoding", ""
@@ -800,10 +1127,18 @@ class NemoClawCommittedTurnAdapter:
                     remaining = parsed_expiry.astimezone(UTC) - datetime.now(UTC)
                     if remaining <= timedelta(0) or remaining > _SESSION_LIFETIME + _SESSION_EXPIRY_TOLERANCE:
                         raise ValueError
+                    authority = _CleanupAuthority(
+                        session_id=session_id,
+                        grant=grant,
+                        expires_monotonic=time.monotonic() + remaining.total_seconds(),
+                    )
+                    with self._cleanup_lock:
+                        if self._active_cleanup == _CleanupAuthority(session_id=session_id, grant=grant):
+                            self._active_cleanup = authority
                 except (ValueError, NemoClawProtocolError) as exc:
-                    self._delete_best_effort(session_id, grant)
+                    self._delete_best_effort(authority)
                     raise NemoClawProtocolError("protocol_error") from exc
-                return session_id, grant
+                return authority
             finally:
                 if response is not None:
                     response.close()
@@ -845,6 +1180,7 @@ class NemoClawCommittedTurnAdapter:
                     response,
                     session_id,
                     on_display_delta=on_display_delta,
+                    maximum_display_bytes=self._result_display_budget_bytes,
                 )
             finally:
                 if response is not None:
@@ -856,6 +1192,7 @@ class NemoClawCommittedTurnAdapter:
         expected_session_id: str,
         *,
         on_display_delta: Callable[[CommittedTurnDisplayDelta], None] | None,
+        maximum_display_bytes: int,
     ) -> CommittedTurnResult:
         event_count = 0
         total_bytes = 0
@@ -887,7 +1224,7 @@ class NemoClawCommittedTurnAdapter:
         parser = ResultEnvelopeStreamParser(
             publish_display_delta,
             maximum_bytes=MAX_RESULT_ENVELOPE_BYTES,
-            maximum_display_bytes=MAX_RESULT_DISPLAY_BYTES,
+            maximum_display_bytes=maximum_display_bytes,
             maximum_speech_bytes=MAX_RESULT_SPEECH_BYTES,
         )
 
@@ -995,7 +1332,9 @@ class NemoClawCommittedTurnAdapter:
                 pass
         raise NemoClawRequestRejected(code, status=status)
 
-    def _delete_best_effort(self, session_id: str, grant: str, *, timeout_seconds: float | None = None) -> None:
+    def _delete_once(self, authority: _CleanupAuthority, *, timeout_seconds: float | None = None) -> bool:
+        if authority.expired():
+            return True
         try:
             cleanup_timeout = min(self._exchange_deadline_seconds, 5.0) if timeout_seconds is None else timeout_seconds
             cleanup_deadline = time.monotonic() + cleanup_timeout
@@ -1004,26 +1343,71 @@ class NemoClawCommittedTurnAdapter:
                 try:
                     connection.request(
                         "DELETE",
-                        f"/v1/voice/sessions/{quote(session_id, safe='')}",
-                        headers={
-                            "Accept": "application/json",
-                            "Authorization": f"Bearer {grant}",
-                            "Connection": "close",
-                        },
+                        f"/v1/voice/sessions/{quote(authority.session_id, safe='')}",
+                        headers=self._headers(authority.grant, accepts="application/json"),
                     )
                     response = connection.getresponse()
                     watch_response(response)
-                    _read_bounded(response, _MAX_SMALL_BODY_BYTES)
+                    body = _read_bounded(response, _MAX_SMALL_BODY_BYTES)
+                    return (
+                        response.status == 204
+                        and not body
+                        and response.getheader("Content-Encoding", "") in {"", "identity"}
+                    )
                 finally:
                     if response is not None:
                         response.close()
         except Exception:
-            # Cleanup is intentionally best-effort. The ephemeral port claims no
-            # receipt, recovery, or durable state based on DELETE succeeding.
-            return
+            return False
+
+    def _delete_best_effort(
+        self,
+        authority: _CleanupAuthority,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        succeeded = self._delete_once(authority, timeout_seconds=timeout_seconds) or authority.expired()
+        with self._cleanup_lock:
+            if succeeded:
+                if self._active_cleanup == authority:
+                    self._active_cleanup = None
+                if self._pending_cleanup == authority:
+                    self._pending_cleanup = None
+                if self._pending_cleanup is None:
+                    self._cleanup_degraded.clear()
+                return
+            if self._closed.is_set():
+                return
+            if self._active_cleanup == authority:
+                self._active_cleanup = None
+            if self._pending_cleanup is None:
+                self._pending_cleanup = authority
+            self._cleanup_degraded.set()
+
+    def _retry_pending_cleanup(self, *, timeout_seconds: float | None = None) -> bool:
+        if not self._operation_gate.acquire(blocking=False):
+            return False
+        try:
+            with self._cleanup_lock:
+                pending = self._pending_cleanup
+            if pending is None:
+                self._cleanup_degraded.clear()
+                return True
+            if not self._delete_once(pending, timeout_seconds=timeout_seconds) and not pending.expired():
+                return False
+            with self._cleanup_lock:
+                if self._pending_cleanup == pending:
+                    self._pending_cleanup = None
+                recovered = self._pending_cleanup is None
+                if recovered:
+                    self._cleanup_degraded.clear()
+                return recovered
+        finally:
+            self._operation_gate.release()
 
 
 __all__ = [
+    "DeploymentAuthorization",
     "EndpointPolicy",
     "DEFAULT_RESULT_DISPLAY_BUDGET_BYTES",
     "NemoClawBackendFailure",

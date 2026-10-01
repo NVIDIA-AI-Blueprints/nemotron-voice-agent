@@ -311,7 +311,7 @@ def test_cloud_platform_requires_a_shared_service_credential(tmp_path) -> None:
 def test_rejects_unsupported_pipeline_and_provider(tmp_path) -> None:
     unsupported_pipeline = _bundled_profile()
     object.__setattr__(unsupported_pipeline, "pipeline_mode", "omni-assistant")
-    with pytest.raises(ConfigurationError, match="currently supports pipeline_mode"):
+    with pytest.raises(ConfigurationError, match="supports only pipeline_mode"):
         materialize_frontend_runtime(
             unsupported_pipeline,
             tmp_path / "pipeline",

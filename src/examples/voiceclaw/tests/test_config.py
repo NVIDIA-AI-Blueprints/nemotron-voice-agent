@@ -196,6 +196,33 @@ def test_server_listener_security_is_typed_and_rejects_unknown_values() -> None:
         parse_config(raw)
 
 
+def test_server_max_sessions_defaults_to_unbounded_and_accepts_documented_bounds() -> None:
+    raw = {
+        "schema_version": "voiceclaw.config.v2",
+        "backend_profiles": {"default": {"kind": "none", "settings": {}}},
+        "default_backend": "default",
+    }
+
+    assert parse_config(raw).server.max_sessions is None
+
+    for maximum in (1, 1024):
+        raw["server"] = {"max_sessions": maximum}
+        assert parse_config(raw).server.max_sessions == maximum
+
+
+@pytest.mark.parametrize("maximum", [0, -1, 1025, True, 1.5, "1"])
+def test_server_max_sessions_rejects_values_outside_its_integer_bounds(maximum: object) -> None:
+    raw = {
+        "schema_version": "voiceclaw.config.v2",
+        "server": {"max_sessions": maximum},
+        "backend_profiles": {"default": {"kind": "none", "settings": {}}},
+        "default_backend": "default",
+    }
+
+    with pytest.raises(ConfigurationError, match="server.max_sessions"):
+        parse_config(raw)
+
+
 def test_nvidia_api_key_file_is_reserved_for_the_supervised_child_binding() -> None:
     raw = _v3_bundled_config()
     raw["backend_profiles"]["default"]["credential"] = {"env": "NVIDIA_API_KEY_FILE"}

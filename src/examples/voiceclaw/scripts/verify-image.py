@@ -35,6 +35,7 @@ _MAX_PACKAGE_BYTES = 32 * 1024 * 1024
 _EXPECTED_ENTRYPOINT = ["/usr/local/bin/voiceclaw-runtime"]
 _EXPECTED_COMMAND = ["serve"]
 _EXPECTED_HEALTHCHECK = ["CMD", "/usr/local/bin/voiceclaw-runtime", "healthcheck"]
+_RUNTIME_PROFILES = ("standalone", "nemoclaw-managed")
 _OCI_LABELS = {
     "org.opencontainers.image.title": "VoiceClaw",
     "org.opencontainers.image.licenses": "BSD-2-Clause",
@@ -98,6 +99,76 @@ response = connection.getresponse()
 response.read()
 print(response.status)
 """
+_HTTP_READINESS_PROBE = """\
+import http.client
+import json
+import sys
+
+connection = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=2)
+connection.request("GET", sys.argv[2])
+response = connection.getresponse()
+response.read()
+print(json.dumps({
+    "reason": response.getheader("X-VoiceClaw-Reason"),
+    "status": response.status,
+}, separators=(",", ":"), sort_keys=True))
+"""
+_MANAGED_FILESYSTEM_PROBE = """\
+import errno
+import json
+import os
+import stat
+import sys
+
+def has_access_acl(path):
+    try:
+        return bool(os.getxattr(path, "system.posix_acl_access", follow_symlinks=False))
+    except OSError as error:
+        if error.errno in {errno.ENODATA, errno.ENOTSUP, getattr(errno, "ENOATTR", errno.ENODATA)}:
+            return False
+        raise
+
+def inspect(path):
+    metadata = os.lstat(path)
+    if stat.S_ISREG(metadata.st_mode):
+        kind = "file"
+    elif stat.S_ISDIR(metadata.st_mode):
+        kind = "directory"
+    elif stat.S_ISLNK(metadata.st_mode):
+        kind = "symlink"
+    else:
+        kind = "other"
+    return {
+        "access_acl": has_access_acl(path),
+        "kind": kind,
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+        "size": metadata.st_size,
+    }
+
+print(json.dumps({
+    "process": {"uid": os.geteuid(), "gid": os.getegid()},
+    "marker": inspect(sys.argv[1]),
+    "root": inspect(sys.argv[2]),
+    "runtime": inspect(sys.argv[3]),
+    "credentials": inspect(sys.argv[4]),
+    "runtime_root": inspect(sys.argv[5]),
+    "home": inspect(sys.argv[6]),
+    "cache": inspect(sys.argv[7]),
+}, separators=(",", ":"), sort_keys=True))
+"""
+_EXPECTED_MANAGED_FILESYSTEM = {
+    "process": {"uid": 65_532, "gid": 65_532},
+    "marker": {"access_acl": False, "kind": "file", "uid": 0, "gid": 0, "mode": 0o444, "size": 0},
+    "root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "runtime": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "credentials": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "runtime_root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "home": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "cache": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+}
+_EXPECTED_PRE_PROJECTION_READINESS = {"status": 503, "reason": "starting"}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -107,6 +178,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expect-revision", required=True, help="required full lowercase Git revision")
     parser.add_argument("--expect-source", required=True, help="required OCI source URL")
     parser.add_argument("--expect-architecture", help="required Docker architecture, for example arm64")
+    parser.add_argument(
+        "--runtime-profile",
+        choices=_RUNTIME_PROFILES,
+        default="standalone",
+        help="image runtime contract to verify (default: %(default)s)",
+    )
     parser.add_argument("--repository-root", type=Path, help="include digests for the build inputs below this root")
     parser.add_argument("--wheel", type=Path, help="exact verified wheel whose package payload must match the image")
     parser.add_argument("--wheel-evidence", type=Path, help="evidence emitted by verify-wheel.py for --wheel")
@@ -384,6 +461,7 @@ def _verify_contract(
     revision: str,
     source: str,
     architecture: str | None = None,
+    runtime_profile: str = "standalone",
 ) -> dict[str, Any]:
     image_id = inspect.get("Id")
     if not isinstance(image_id, str) or not _IMAGE_ID.fullmatch(image_id):
@@ -407,12 +485,25 @@ def _verify_contract(
         raise ValueError("VoiceClaw image architecture does not match the requested artifact platform")
 
     config = _mapping(inspect.get("Config"), "Config")
+    if runtime_profile not in _RUNTIME_PROFILES:
+        raise ValueError("unknown VoiceClaw image runtime profile")
+    image_user = config.get("User") or ""
+    if runtime_profile == "nemoclaw-managed" and image_user != "65532:65532":
+        raise ValueError("NemoClaw-managed image must run as UID/GID 65532")
+    if runtime_profile == "standalone" and image_user not in {"", "0", "0:0", "root"}:
+        raise ValueError("standalone image must start its split-identity supervisor as root")
     if config.get("Entrypoint") != _EXPECTED_ENTRYPOINT or config.get("Cmd") != _EXPECTED_COMMAND:
         raise ValueError("image entrypoint or default command does not match the managed contract")
-    if "18790/tcp" not in _mapping(config.get("ExposedPorts"), "exposed ports"):
+    exposed_ports = _mapping(config.get("ExposedPorts"), "exposed ports")
+    volumes = _mapping(config.get("Volumes"), "volumes")
+    if "18790/tcp" not in exposed_ports:
         raise ValueError("image does not expose 18790/tcp")
-    if "/var/lib/voiceclaw" not in _mapping(config.get("Volumes"), "volumes"):
+    if "/var/lib/voiceclaw" not in volumes:
         raise ValueError("image does not declare the managed VoiceClaw volume")
+    if runtime_profile == "nemoclaw-managed" and set(exposed_ports) != {"18790/tcp"}:
+        raise ValueError("NemoClaw-managed image must expose only 18790/tcp")
+    if runtime_profile == "nemoclaw-managed" and set(volumes) != {"/var/lib/voiceclaw"}:
+        raise ValueError("NemoClaw-managed image must declare only the managed VoiceClaw volume")
     if config.get("StopSignal") != "SIGTERM":
         raise ValueError("image stop signal does not match the managed contract")
     healthcheck = _mapping(config.get("Healthcheck"), "healthcheck")
@@ -441,6 +532,8 @@ def _verify_contract(
         "id": image_id,
         "os": inspect["Os"],
         "architecture": inspect["Architecture"],
+        "runtime_profile": runtime_profile,
+        "user": image_user,
         "labels": {name: labels[name] for name in sorted(expected_labels)},
     }
 
@@ -502,6 +595,61 @@ def _assert_test_harness_absent(container: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError("VoiceClaw image contains source-only artifact harness scripts")
+
+
+def _validate_managed_filesystem_contract(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict) or set(payload) != set(_EXPECTED_MANAGED_FILESYSTEM):
+        raise RuntimeError("managed image filesystem evidence is malformed")
+    for name, expected in _EXPECTED_MANAGED_FILESYSTEM.items():
+        actual = payload.get(name)
+        if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in expected.items()):
+            raise RuntimeError(f"managed image filesystem contract failed for {name}")
+    return payload
+
+
+def _managed_filesystem_contract(container: str) -> dict[str, object]:
+    result = _docker(
+        "exec",
+        container,
+        "/app/src/examples/voiceclaw/.venv/bin/python",
+        "-c",
+        _MANAGED_FILESYSTEM_PROBE,
+        "/etc/voiceclaw-nemoclaw-managed",
+        "/var/lib/voiceclaw",
+        "/var/lib/voiceclaw/runtime",
+        "/var/lib/voiceclaw/credentials",
+        "/run/voiceclaw-managed",
+        "/run/voiceclaw-managed/home",
+        "/run/voiceclaw-managed/cache",
+    )
+    if len(result.stdout.encode("utf-8")) > 4096:
+        raise RuntimeError("managed image filesystem evidence exceeds its bound")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("managed image filesystem evidence is malformed") from error
+    return _validate_managed_filesystem_contract(payload)
+
+
+def _managed_pre_projection_readiness(container: str) -> dict[str, object]:
+    result = _docker(
+        "exec",
+        container,
+        "/app/src/examples/voiceclaw/.venv/bin/python",
+        "-c",
+        _HTTP_READINESS_PROBE,
+        "18790",
+        "/readyz",
+    )
+    if len(result.stdout.encode("utf-8")) > 4096:
+        raise RuntimeError("managed image readiness evidence exceeds its bound")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("managed image readiness evidence is malformed") from error
+    if payload != _EXPECTED_PRE_PROJECTION_READINESS:
+        raise RuntimeError("managed image pre-projection readiness contract failed")
+    return payload
 
 
 def _stop_cleanly(container: str) -> None:
@@ -582,6 +730,45 @@ def _smoke(image: str, *, version: str, ui: bool, timeout: float) -> dict[str, i
             return result
         finally:
             _docker("rm", "--force", "--volumes", name, check=False)
+
+
+def _managed_smoke(image: str, *, version: str, timeout: float) -> dict[str, object]:
+    if timeout <= 0 or timeout > 300:
+        raise ValueError("smoke timeout must be greater than zero and no more than 300 seconds")
+    name = f"voiceclaw-managed-artifact-{uuid.uuid4().hex}"
+    try:
+        _docker(
+            "run",
+            "--detach",
+            "--name",
+            name,
+            "--cap-drop",
+            "ALL",
+            "--memory",
+            "1g",
+            "--security-opt",
+            "no-new-privileges:true",
+            image,
+        )
+        _wait_for_status(name, "/livez", 200, timeout)
+        _wait_for_status(name, "/readyz", 503, timeout)
+        pre_projection_readyz = _managed_pre_projection_readiness(name)
+        installed_version = _package_version(name)
+        if installed_version != version:
+            raise RuntimeError("installed package version does not match the verified image label")
+        _assert_test_harness_absent(name)
+        managed_filesystem = _managed_filesystem_contract(name)
+        _stop_cleanly(name)
+        return {
+            "livez": 200,
+            "pre_projection_readyz": pre_projection_readyz,
+            "package_version": installed_version,
+            "source_harness_absent": True,
+            "memory_limit_bytes": 1_073_741_824,
+            "managed_filesystem": managed_filesystem,
+        }
+    finally:
+        _docker("rm", "--force", "--volumes", name, check=False)
 
 
 def _available_ports(count: int) -> tuple[int, ...]:
@@ -937,6 +1124,7 @@ def main() -> int:
             revision=arguments.expect_revision,
             source=arguments.expect_source,
             architecture=arguments.expect_architecture,
+            runtime_profile=arguments.runtime_profile,
         )
         immutable_image = image["id"]
         if not isinstance(immutable_image, str):  # pragma: no cover - established by _verify_contract
@@ -948,13 +1136,22 @@ def main() -> int:
                 raise ValueError("image VoiceClaw package payload does not match the verified wheel")
             image_package = {"manifest_sha256": manifest_sha256, "member_count": member_count}
         smoke: dict[str, object] = {}
+        if arguments.runtime_profile == "nemoclaw-managed" and (arguments.smoke_ui or arguments.smoke_realtime):
+            raise ValueError("managed artifact verification does not accept developer UI or fixture overrides")
         if arguments.smoke or arguments.smoke_ui:
-            smoke["headless"] = _smoke(
-                immutable_image,
-                version=arguments.expect_version,
-                ui=False,
-                timeout=arguments.timeout,
-            )
+            if arguments.runtime_profile == "nemoclaw-managed":
+                smoke["headless"] = _managed_smoke(
+                    immutable_image,
+                    version=arguments.expect_version,
+                    timeout=arguments.timeout,
+                )
+            else:
+                smoke["headless"] = _smoke(
+                    immutable_image,
+                    version=arguments.expect_version,
+                    ui=False,
+                    timeout=arguments.timeout,
+                )
         if arguments.smoke_ui:
             smoke["ui"] = _smoke(
                 immutable_image,

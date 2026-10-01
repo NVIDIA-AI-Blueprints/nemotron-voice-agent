@@ -32,6 +32,10 @@ _IMAGE_VERIFIER = _load_script("verify-image.py")
 _WHEEL_VERIFIER = _load_script("verify-wheel.py")
 
 
+def _managed_filesystem_payload() -> dict[str, object]:
+    return {name: dict(value) for name, value in _IMAGE_VERIFIER._EXPECTED_MANAGED_FILESYSTEM.items()}
+
+
 def _zip(tmp_path: Path, name: str, members: dict[str, bytes]) -> Path:
     path = tmp_path / name
     with zipfile.ZipFile(path, "w") as archive:
@@ -48,7 +52,12 @@ def _source_contract(package_files: dict[str, bytes]):
     )
 
 
-def _image_inspect(*, source: str, environment: list[str] | None = None) -> dict[str, object]:
+def _image_inspect(
+    *,
+    source: str,
+    environment: list[str] | None = None,
+    user: str = "",
+) -> dict[str, object]:
     return {
         "Id": "sha256:" + ("a" * 64),
         "Os": "linux",
@@ -68,6 +77,7 @@ def _image_inspect(*, source: str, environment: list[str] | None = None) -> dict
                 "org.opencontainers.image.source": source,
             },
             "Env": environment or ["PATH=/usr/local/bin:/usr/bin:/bin"],
+            "User": user,
         },
     }
 
@@ -243,7 +253,7 @@ def test_wheel_package_manifest_matches_the_image_verifier_contract(tmp_path: Pa
 
 
 def test_image_wheel_binding_checks_bytes_evidence_and_package_identity(tmp_path: Path) -> None:
-    """Image qualification consumes the exact wheel and its prior evidence receipt."""
+    """Image verification consumes the exact wheel and its prior evidence receipt."""
     wheel = _zip(tmp_path, "nemotron_voiceclaw-0.1.0-py3-none-any.whl", {"voiceclaw/a.py": b"a"})
     wheel_bytes = wheel.read_bytes()
     package_manifest = _IMAGE_VERIFIER._package_manifest_sha256(_IMAGE_VERIFIER._wheel_package_members(wheel_bytes))
@@ -286,7 +296,7 @@ def test_wheel_api_rejects_source_identity_without_exact_source_contract(tmp_pat
 
 
 def test_source_contract_uses_exact_tracked_package_and_license_bytes(tmp_path: Path) -> None:
-    """Repository qualification derives its package contract from committed blobs."""
+    """Repository verification derives its package contract from committed blobs."""
     package = tmp_path / "src/examples/voiceclaw/src/voiceclaw"
     package.mkdir(parents=True)
     (package / "__init__.py").write_bytes(b"tracked package\n")
@@ -375,6 +385,181 @@ def test_image_rejects_an_unexpected_stop_signal() -> None:
             revision="development",
             source=source,
         )
+
+
+def test_image_runtime_profiles_require_their_exact_process_identity() -> None:
+    """Managed and standalone images cannot silently exchange runtime identities."""
+    source = "https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent"
+
+    managed = _IMAGE_VERIFIER._verify_contract(
+        _image_inspect(source=source, user="65532:65532"),
+        version="0.1.0",
+        revision="development",
+        source=source,
+        runtime_profile="nemoclaw-managed",
+    )
+    assert managed["runtime_profile"] == "nemoclaw-managed"
+    assert managed["user"] == "65532:65532"
+
+    for root_user in ("", "0", "0:0", "root"):
+        standalone = _IMAGE_VERIFIER._verify_contract(
+            _image_inspect(source=source, user=root_user),
+            version="0.1.0",
+            revision="development",
+            source=source,
+        )
+        assert standalone["user"] == root_user
+
+    with pytest.raises(ValueError, match="UID/GID 65532"):
+        _IMAGE_VERIFIER._verify_contract(
+            _image_inspect(source=source),
+            version="0.1.0",
+            revision="development",
+            source=source,
+            runtime_profile="nemoclaw-managed",
+        )
+    with pytest.raises(ValueError, match="supervisor as root"):
+        _IMAGE_VERIFIER._verify_contract(
+            _image_inspect(source=source, user="65532:65532"),
+            version="0.1.0",
+            revision="development",
+            source=source,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "extra", "message"),
+    [
+        ("ExposedPorts", {"8080/tcp": {}}, "expose only 18790/tcp"),
+        ("Volumes", {"/tmp/extra": {}}, "only the managed VoiceClaw volume"),
+    ],
+)
+def test_managed_image_rejects_additional_ports_and_volumes(
+    field: str,
+    extra: dict[str, object],
+    message: str,
+) -> None:
+    """The managed artifact exposes only its fixed installer surfaces."""
+    source = "https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent"
+    inspect = _image_inspect(source=source, user="65532:65532")
+    inspect["Config"][field].update(extra)
+
+    with pytest.raises(ValueError, match=message):
+        _IMAGE_VERIFIER._verify_contract(
+            inspect,
+            version="0.1.0",
+            revision="development",
+            source=source,
+            runtime_profile="nemoclaw-managed",
+        )
+
+
+def test_managed_filesystem_contract_accepts_exact_runtime_layout() -> None:
+    """The artifact probe accepts the complete expected managed layout."""
+    payload = _managed_filesystem_payload()
+
+    assert _IMAGE_VERIFIER._validate_managed_filesystem_contract(payload) == payload
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("process", "uid", 0),
+        ("process", "gid", 0),
+        ("marker", "kind", "symlink"),
+        ("marker", "kind", "directory"),
+        ("marker", "uid", 65_532),
+        ("marker", "gid", 65_532),
+        ("marker", "access_acl", True),
+        ("marker", "mode", 0o644),
+        ("marker", "size", 1),
+        ("root", "kind", "symlink"),
+        ("root", "kind", "file"),
+        ("root", "uid", 0),
+        ("root", "gid", 0),
+        ("root", "access_acl", True),
+        ("root", "mode", 0o750),
+        ("runtime", "uid", 0),
+        ("credentials", "gid", 0),
+        ("runtime_root", "kind", "symlink"),
+        ("runtime_root", "mode", 0o755),
+        ("home", "uid", 0),
+        ("cache", "gid", 0),
+    ],
+)
+def test_managed_filesystem_contract_rejects_mismatch(
+    section: str,
+    field: str,
+    value: object,
+) -> None:
+    """Every security-relevant managed layout mismatch is rejected."""
+    payload = _managed_filesystem_payload()
+    entry = payload[section]
+    assert isinstance(entry, dict)
+    entry[field] = value
+
+    with pytest.raises(RuntimeError, match=f"filesystem contract failed for {section}"):
+        _IMAGE_VERIFIER._validate_managed_filesystem_contract(payload)
+
+
+def test_managed_smoke_records_filesystem_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Managed smoke evidence records filesystem and pre-projection readiness observations."""
+    filesystem = _managed_filesystem_payload()
+    readiness = dict(_IMAGE_VERIFIER._EXPECTED_PRE_PROJECTION_READINESS)
+    observed: list[str] = []
+
+    def docker(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        del check
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(_IMAGE_VERIFIER, "_docker", docker)
+    monkeypatch.setattr(_IMAGE_VERIFIER, "_wait_for_status", lambda *_args: None)
+    monkeypatch.setattr(
+        _IMAGE_VERIFIER,
+        "_managed_pre_projection_readiness",
+        lambda container: observed.append(container) or readiness,
+    )
+    monkeypatch.setattr(_IMAGE_VERIFIER, "_package_version", lambda _container: "0.1.0")
+    monkeypatch.setattr(_IMAGE_VERIFIER, "_assert_test_harness_absent", lambda _container: None)
+    monkeypatch.setattr(
+        _IMAGE_VERIFIER,
+        "_managed_filesystem_contract",
+        lambda container: observed.append(container) or filesystem,
+    )
+    monkeypatch.setattr(_IMAGE_VERIFIER, "_stop_cleanly", lambda _container: None)
+
+    evidence = _IMAGE_VERIFIER._managed_smoke("sha256:" + "a" * 64, version="0.1.0", timeout=1)
+
+    assert len(observed) == 2
+    assert evidence["managed_filesystem"] == filesystem
+    assert evidence["pre_projection_readyz"] == {"status": 503, "reason": "starting"}
+    assert evidence["memory_limit_bytes"] == 1_073_741_824
+    assert "late_projection" not in evidence
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": 503, "reason": None},
+        {"status": 503, "reason": "configuration-invalid"},
+        {"status": 200, "reason": "starting"},
+        {"status": 503, "reason": "starting", "extra": True},
+    ],
+)
+def test_managed_pre_projection_readiness_requires_exact_status_and_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+) -> None:
+    """A bare 503 or a different managed state is not pre-projection evidence."""
+
+    def docker(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        del arguments, check
+        return subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(_IMAGE_VERIFIER, "_docker", docker)
+
+    with pytest.raises(RuntimeError, match="pre-projection readiness contract failed"):
+        _IMAGE_VERIFIER._managed_pre_projection_readiness("voiceclaw-test")
 
 
 def test_image_realtime_harness_uses_trusted_source_python() -> None:

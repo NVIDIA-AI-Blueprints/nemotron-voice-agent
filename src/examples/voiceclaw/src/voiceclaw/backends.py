@@ -15,6 +15,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import KW_ONLY, dataclass
 from importlib import metadata as importlib_metadata
+from typing import Protocol, runtime_checkable
 
 from voiceclaw.application.interaction import InteractionCoordinator
 from voiceclaw.application.routing import build_turn_routing_policy
@@ -46,6 +47,15 @@ class BackendPluginError(ValueError):
 
 class DurableRuntimeUnavailableError(ConfigurationError):
     """A durable backend was selected before its core Realtime runtime exists."""
+
+
+@runtime_checkable
+class _BackendShutdown(Protocol):
+    """Optional lifecycle hook implemented by adapters that retain authority."""
+
+    async def shutdown(self) -> None:
+        """Release remote resources and discard retained authority."""
+        ...
 
 
 def validate_backend_name(value: object, *, field: str = "backend adapter name") -> str:
@@ -95,6 +105,12 @@ class BackendComposition:
         if self.selected_agent_readiness is None:
             raise SelectedAgentReadinessError(SelectedAgentReadinessCode.READINESS_UNSUPPORTED)
         await self.selected_agent_readiness.check_selected_agent()
+
+    async def shutdown(self) -> None:
+        """Run the selected adapter's optional lifecycle hook."""
+        backend = self.turn_backend if self.turn_backend is not None else self.agent_backend
+        if isinstance(backend, _BackendShutdown):
+            await backend.shutdown()
 
     def create_interaction_coordinator(
         self,

@@ -165,6 +165,37 @@ jobs:
             --smoke --smoke-ui --smoke-realtime --timeout 90 \
             > "${RUNNER_TEMP}/voiceclaw-image/image-evidence.json"
 
+      - name: Build exact NemoClaw-managed image
+        run: |
+          docker build \
+            --target nemoclaw-managed \
+            --build-arg VOICECLAW_VERSION=0.1.0 \
+            --build-arg "VOICECLAW_SOURCE_REVISION=${GITHUB_SHA}" \
+            --build-arg VOICECLAW_SOURCE_URL=https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent \
+            -f src/examples/voiceclaw/Dockerfile \
+            -t "voiceclaw-nemoclaw-ci:${GITHUB_SHA}" \
+            .
+
+      - name: Verify exact NemoClaw-managed image contract and startup
+        run: |
+          mapfile -t wheels < <(find "${RUNNER_TEMP}/voiceclaw-wheel" -maxdepth 1 -type f -name '*.whl' -print)
+          mapfile -t wheel_evidence < <(find "${RUNNER_TEMP}/voiceclaw-wheel" -maxdepth 1 -type f -name 'wheel-evidence.json' -print)
+          test "${#wheels[@]}" -eq 1
+          test "${#wheel_evidence[@]}" -eq 1
+          uv run --project src/examples/voiceclaw --extra server --frozen \
+            python src/examples/voiceclaw/scripts/verify-image.py \
+            "voiceclaw-nemoclaw-ci:${GITHUB_SHA}" \
+            --runtime-profile nemoclaw-managed \
+            --expect-version 0.1.0 \
+            --expect-revision "${GITHUB_SHA}" \
+            --expect-source https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent \
+            --expect-architecture arm64 \
+            --repository-root "${GITHUB_WORKSPACE}" \
+            --wheel "${wheels[0]}" \
+            --wheel-evidence "${wheel_evidence[0]}" \
+            --smoke --timeout 90 \
+            > "${RUNNER_TEMP}/voiceclaw-image/nemoclaw-managed-image-evidence.json"
+
       - name: Export the verified immutable image
         run: |
           python3 src/examples/voiceclaw/scripts/export-image-archive.py \
@@ -172,6 +203,14 @@ jobs:
             --image-evidence "${RUNNER_TEMP}/voiceclaw-image/image-evidence.json" \
             --archive "${RUNNER_TEMP}/voiceclaw-image/voiceclaw-${GITHUB_SHA}-linux-arm64.docker.tar" \
             > "${RUNNER_TEMP}/voiceclaw-image/archive-evidence.json"
+
+      - name: Export the verified immutable NemoClaw-managed image
+        run: |
+          python3 src/examples/voiceclaw/scripts/export-image-archive.py \
+            "voiceclaw-nemoclaw-ci:${GITHUB_SHA}" \
+            --image-evidence "${RUNNER_TEMP}/voiceclaw-image/nemoclaw-managed-image-evidence.json" \
+            --archive "${RUNNER_TEMP}/voiceclaw-image/voiceclaw-nemoclaw-${GITHUB_SHA}-linux-arm64.docker.tar" \
+            > "${RUNNER_TEMP}/voiceclaw-image/nemoclaw-managed-archive-evidence.json"
 
       - name: Verify the retained archive as a consumer
         run: |
@@ -181,6 +220,14 @@ jobs:
             --archive-evidence "${RUNNER_TEMP}/voiceclaw-image/archive-evidence.json" \
             --archive "${RUNNER_TEMP}/voiceclaw-image/voiceclaw-${GITHUB_SHA}-linux-arm64.docker.tar"
 
+      - name: Verify the retained NemoClaw-managed archive as a consumer
+        run: |
+          python3 src/examples/voiceclaw/scripts/export-image-archive.py \
+            --verify-only \
+            --image-evidence "${RUNNER_TEMP}/voiceclaw-image/nemoclaw-managed-image-evidence.json" \
+            --archive-evidence "${RUNNER_TEMP}/voiceclaw-image/nemoclaw-managed-archive-evidence.json" \
+            --archive "${RUNNER_TEMP}/voiceclaw-image/voiceclaw-nemoclaw-${GITHUB_SHA}-linux-arm64.docker.tar"
+
       - name: Upload verified image archive and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -189,6 +236,9 @@ jobs:
             ${{ runner.temp }}/voiceclaw-image/voiceclaw-${{ github.sha }}-linux-arm64.docker.tar
             ${{ runner.temp }}/voiceclaw-image/image-evidence.json
             ${{ runner.temp }}/voiceclaw-image/archive-evidence.json
+            ${{ runner.temp }}/voiceclaw-image/voiceclaw-nemoclaw-${{ github.sha }}-linux-arm64.docker.tar
+            ${{ runner.temp }}/voiceclaw-image/nemoclaw-managed-image-evidence.json
+            ${{ runner.temp }}/voiceclaw-image/nemoclaw-managed-archive-evidence.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 30

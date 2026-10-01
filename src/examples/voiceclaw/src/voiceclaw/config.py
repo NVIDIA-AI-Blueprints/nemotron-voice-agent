@@ -203,7 +203,7 @@ class NvaPlatform(StrEnum):
 
 
 class ProviderKind(StrEnum):
-    """Provider protocols currently understood by the bundled NVA runtime."""
+    """Provider protocols supported by the bundled NVA runtime."""
 
     OPENAI_COMPATIBLE = "openai_compatible"
     NVIDIA_GRPC = "nvidia_grpc"
@@ -333,6 +333,7 @@ class ServerConfig:
     api_key_env: str | None = None
     api_key_file: str | None = None
     client_secret_lifetime_seconds: int = 600
+    max_sessions: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,7 +439,7 @@ def shared_bundled_service_credential(
     if len(configured) != len(credentials):
         raise ConfigurationError(
             f"{path} must configure the same credential source on llm, asr, and tts because "
-            "the current private NVA runtime exposes one shared model key to all three services"
+            "the private NVA runtime exposes one shared model key to all three services"
         )
 
     def identity(credential: CredentialReference) -> tuple[str, str]:
@@ -454,7 +455,7 @@ def shared_bundled_service_credential(
     if any(identity(credential) != selected_identity for credential in configured.values()):
         raise ConfigurationError(
             f"{path} must configure the same credential source on llm, asr, and tts because "
-            "the current private NVA runtime exposes one shared model key to all three services"
+            "the private NVA runtime exposes one shared model key to all three services"
         )
     return selected
 
@@ -639,6 +640,7 @@ def parse_config(raw: Mapping[str, Any]) -> VoiceClawConfig:
             "api_key_env",
             "api_key_file",
             "client_secret_lifetime_seconds",
+            "max_sessions",
         },
         "server",
     )
@@ -668,6 +670,8 @@ def parse_config(raw: Mapping[str, Any]) -> VoiceClawConfig:
         raise ConfigurationError(
             "exactly one of server.api_key_env or server.api_key_file is required when server.auth_mode is ephemeral"
         )
+    raw_max_sessions = server_raw.get("max_sessions")
+    max_sessions = None if raw_max_sessions is None else _positive_int(raw_max_sessions, "server.max_sessions")
     server = ServerConfig(
         host=_string(server_raw.get("host", "127.0.0.1"), "server.host"),
         port=_positive_int(server_raw.get("port", 7860), "server.port"),
@@ -679,11 +683,14 @@ def parse_config(raw: Mapping[str, Any]) -> VoiceClawConfig:
             server_raw.get("client_secret_lifetime_seconds", 600),
             "server.client_secret_lifetime_seconds",
         ),
+        max_sessions=max_sessions,
     )
     if server.port > 65_535:
         raise ConfigurationError("server.port must be at most 65535")
     if not 10 <= server.client_secret_lifetime_seconds <= 3600:
         raise ConfigurationError("server.client_secret_lifetime_seconds must be between 10 and 3600")
+    if server.max_sessions is not None and server.max_sessions > 1024:
+        raise ConfigurationError("server.max_sessions must be at most 1024")
 
     backends = _parse_backends(_mapping(raw.get("backend_profiles"), "backend_profiles"))
 
@@ -802,7 +809,7 @@ def parse_config(raw: Mapping[str, Any]) -> VoiceClawConfig:
     _reject_unknown(state_raw, {"kind", "path"}, "state")
     state_kind = _string(state_raw.get("kind", "sqlite"), "state.kind")
     if state_kind != "sqlite":
-        raise ConfigurationError("state.kind currently supports only sqlite")
+        raise ConfigurationError("state.kind supports only sqlite")
     state = StateConfig(
         kind=state_kind,
         path=_string(state_raw.get("path", "/var/lib/voiceclaw/state/state.db"), "state.path"),
@@ -1007,7 +1014,7 @@ def _parse_bundled_nva_frontend(raw: Mapping[str, Any], path: str) -> BundledNva
         raise ConfigurationError(f"{path}.platform must be cloud, server, or singlegpu") from error
     pipeline_mode = _string(raw.get("pipeline_mode", _NVA_PIPELINE_MODE), f"{path}.pipeline_mode")
     if pipeline_mode != _NVA_PIPELINE_MODE:
-        raise ConfigurationError(f"{path}.pipeline_mode currently supports only generic-assistant")
+        raise ConfigurationError(f"{path}.pipeline_mode supports only generic-assistant")
     services_path = f"{path}.services"
     services_raw = _mapping(raw.get("services"), services_path)
     _reject_unknown(services_raw, {"llm", "asr", "tts"}, services_path)
@@ -1081,7 +1088,7 @@ def _parse_llm_service(raw: Mapping[str, Any], path: str) -> LlmServiceConfig:
     )
     provider_value = _string(raw.get("provider"), f"{path}.provider")
     if provider_value != ProviderKind.OPENAI_COMPATIBLE:
-        raise ConfigurationError(f"{path}.provider currently supports only openai_compatible")
+        raise ConfigurationError(f"{path}.provider supports only openai_compatible")
     provider = ProviderKind.OPENAI_COMPATIBLE
     max_tokens = _optional_bounded_positive_int(raw.get("max_tokens"), f"{path}.max_tokens", 1_000_000)
     realtime_max_output_tokens = _optional_bounded_positive_int(
@@ -1127,7 +1134,7 @@ def _parse_asr_service(raw: Mapping[str, Any], path: str) -> AsrServiceConfig:
     )
     provider_value = _string(raw.get("provider"), f"{path}.provider")
     if provider_value != ProviderKind.NVIDIA_GRPC:
-        raise ConfigurationError(f"{path}.provider currently supports only nvidia_grpc")
+        raise ConfigurationError(f"{path}.provider supports only nvidia_grpc")
     provider = ProviderKind.NVIDIA_GRPC
     common = _parse_service_common(raw, path, allowed_provider=provider, endpoint_kind="grpc")
     return AsrServiceConfig(
@@ -1159,7 +1166,7 @@ def _parse_tts_service(raw: Mapping[str, Any], path: str) -> TtsServiceConfig:
     )
     provider_value = _string(raw.get("provider"), f"{path}.provider")
     if provider_value != ProviderKind.NVIDIA_GRPC:
-        raise ConfigurationError(f"{path}.provider currently supports only nvidia_grpc")
+        raise ConfigurationError(f"{path}.provider supports only nvidia_grpc")
     provider = ProviderKind.NVIDIA_GRPC
     synthesis_mode_value = _string(raw.get("synthesis_mode"), f"{path}.synthesis_mode")
     try:

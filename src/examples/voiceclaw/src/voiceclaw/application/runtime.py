@@ -187,7 +187,7 @@ class RealtimeInteractionManager:
         self._interaction_profile_hash = interaction_profile_hash
         self._tool_registry = CapabilityToolRegistry(profile=interaction_profile)
         self._sessions: dict[str, _SessionState] = {}
-        # The current response-only profile admits one active backend exchange
+        # The response-only profile admits one active backend exchange
         # process-wide. Keep that compatibility constraint outside the frontend
         # protocol and each individual session lock.
         self._backend_admission_lock = asyncio.Lock()
@@ -713,7 +713,7 @@ class RealtimeInteractionManager:
                     text="VoiceClaw is dispatching the queued request to the configured response-only backend.",
                     correlation=state.last_correlation,
                 )
-                # The current bridge provides no separate durable acceptance or
+                # This bridge provides no separate durable acceptance or
                 # running receipt.  Expose only that VoiceClaw is waiting for
                 # the terminal exchange instead of inventing backend state.
                 state.phase = ResponseOnlyRequestState.WAITING_FOR_RESPONSE

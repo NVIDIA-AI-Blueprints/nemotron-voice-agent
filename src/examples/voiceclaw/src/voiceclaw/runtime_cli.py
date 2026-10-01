@@ -9,7 +9,9 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from voiceclaw import container
+from voiceclaw import container, managed_runtime
+
+_MANAGED_RUNTIME_MARKER = Path("/etc/voiceclaw-nemoclaw-managed")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -30,9 +32,20 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Dispatch one of the two image-owned runtime operations."""
-    arguments = _parser().parse_args(argv)
+    parser = _parser()
+    arguments = parser.parse_args(argv)
+    managed = _MANAGED_RUNTIME_MARKER.is_file()
     if arguments.command == "healthcheck":
-        container.main(["--healthcheck"])
+        if managed:
+            managed_runtime.run_healthcheck()
+        else:
+            container.main(["--healthcheck"])
+        return
+
+    if managed:
+        if arguments.config is not None or arguments.ui:
+            parser.error("the NemoClaw-managed image does not accept configuration or UI overrides")
+        managed_runtime.main(["serve"])
         return
 
     forwarded: list[str] = []

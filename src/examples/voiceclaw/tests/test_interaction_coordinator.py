@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from threading import Barrier
+from unittest.mock import patch
 
 import pytest
 
@@ -16,6 +17,7 @@ from voiceclaw.application.interaction import (
     CommandRecoveryPendingError,
     InteractionCoordinator,
     InvalidToolArgumentsError,
+    SessionNotAttachedError,
     UnsupportedOperationError,
 )
 from voiceclaw.domain.capabilities import CapabilityToolRegistry
@@ -340,6 +342,38 @@ def test_attach_rejects_a_backend_session_id_without_local_recovery_evidence(tmp
                 )
 
             assert backend.attach_requests == []
+
+    asyncio.run(scenario())
+
+
+def test_attach_persistence_failure_detaches_unpublished_backend_attachment(tmp_path) -> None:
+    async def scenario() -> None:
+        backend = RecordingBackend()
+        with SqliteStateStore(tmp_path / "state.db") as store:
+            coordinator = InteractionCoordinator(backend=backend, state_store=store)
+
+            with (
+                patch.object(store, "save_session", side_effect=OSError("state unavailable")),
+                pytest.raises(OSError, match="state unavailable"),
+            ):
+                await coordinator.attach(
+                    AttachRequest(
+                        session_id="session-a",
+                        conversation_id="conversation-a",
+                        backend_profile="default",
+                    )
+                )
+
+            assert store.get_session("session-a") is None
+            assert backend.detach_requests == [
+                DetachRequest(
+                    attachment_id="attachment-a",
+                    last_presented_sequence=0,
+                    reason="session_persistence_failed",
+                )
+            ]
+            with pytest.raises(SessionNotAttachedError):
+                coordinator.tools_for_session("session-a")
 
     asyncio.run(scenario())
 

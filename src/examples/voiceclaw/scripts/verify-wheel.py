@@ -49,8 +49,8 @@ _EXPECTED_DIST_INFO_MEMBERS = frozenset(
 _REQUIRED_PACKAGE_FILES = {
     "voiceclaw/py.typed",
     "voiceclaw/resources/model_contracts.v1.yaml",
-    "voiceclaw/resources/interaction_profiles.v1.yaml",
     "voiceclaw/resources/interaction_profiles.v2.yaml",
+    "voiceclaw/resources/nemoclaw_managed.yaml",
     "voiceclaw/resources/voiceclaw.example.yaml",
     "voiceclaw/ui/index.html",
     "voiceclaw/ui/styles.css",

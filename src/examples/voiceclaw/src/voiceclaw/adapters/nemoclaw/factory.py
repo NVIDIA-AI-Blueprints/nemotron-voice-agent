@@ -9,15 +9,18 @@ import errno
 import math
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 
 from voiceclaw.adapters.nemoclaw.committed_turn import (
     DEFAULT_RESULT_DISPLAY_BUDGET_BYTES,
+    DeploymentAuthorization,
     EndpointPolicy,
     NemoClawCommittedTurnAdapter,
 )
+from voiceclaw.adapters.nemoclaw.security import ManagedServiceSecurityError, read_managed_credential
 from voiceclaw.adapters.result_envelope import MAX_RESULT_DISPLAY_BYTES
+from voiceclaw.backends import BackendComposition
 from voiceclaw.config import BackendProfile, ConfigurationError
 from voiceclaw.model_contracts import ModelContractCatalog, load_model_contract_catalog
 from voiceclaw.ports.turns import EphemeralCommittedTurnPort
@@ -26,8 +29,11 @@ _DEFAULT_ENDPOINT = "http://127.0.0.1:18800"
 _ALLOWED_SETTINGS = frozenset(
     {
         "mode",
+        "transport_profile",
         "endpoint",
         "endpoint_policy",
+        "agent_route_host",
+        "target_ref",
         "exchange_deadline_seconds",
         "result_display_budget_bytes",
     }
@@ -38,6 +44,13 @@ class NemoClawConnectionMode(StrEnum):
     """Connection modes whose semantics are implemented by this adapter."""
 
     RESPONSE_ONLY = "response_only"
+
+
+class NemoClawTransportProfile(StrEnum):
+    """Wire bindings implemented without changing response-only semantics."""
+
+    DIRECT_GATEWAY = "direct_gateway"
+    MANAGED_SERVICE = "managed_service"
 
 
 def _credential(profile: BackendProfile, environ: Mapping[str, str]) -> str | None:
@@ -94,6 +107,19 @@ def _credential(profile: BackendProfile, environ: Mapping[str, str]) -> str | No
     return value
 
 
+def _managed_credential_loader(profile: BackendProfile) -> Callable[[], str]:
+    if profile.credential_env is not None or profile.credential_file is None:
+        raise ConfigurationError("managed NemoClaw credentials must use credential.file")
+
+    def load() -> str:
+        try:
+            return read_managed_credential(profile.credential_file)
+        except ManagedServiceSecurityError as error:
+            raise ConfigurationError("managed NemoClaw credential is unavailable") from error
+
+    return load
+
+
 def _setting(profile: BackendProfile, name: str) -> str:
     value = profile.settings.get(name)
     if not isinstance(value, str) or not value.strip():
@@ -117,6 +143,12 @@ def _validate_settings(profile: BackendProfile) -> None:
         raise ConfigurationError(
             "NemoClaw mode must be 'response_only'; the durable Agent Session connection is not implemented yet"
         ) from error
+    try:
+        NemoClawTransportProfile(
+            profile.settings.get("transport_profile", NemoClawTransportProfile.DIRECT_GATEWAY.value)
+        )
+    except (TypeError, ValueError) as error:
+        raise ConfigurationError("NemoClaw transport_profile is invalid") from error
 
 
 def _positive_float_setting(profile: BackendProfile, name: str, default: float) -> float:
@@ -139,30 +171,57 @@ def build_nemoclaw_backend(
     profile: BackendProfile,
     environ: Mapping[str, str],
     model_contracts: ModelContractCatalog | None = None,
-) -> tuple[EphemeralCommittedTurnPort, str]:
+) -> BackendComposition | tuple[EphemeralCommittedTurnPort, str]:
     """Validate and construct the selected NemoClaw connection mode."""
     _validate_settings(profile)
-    credential = _credential(profile, environ)
-    if credential is None:
-        source = profile.credential_env or profile.credential_file or "<unset>"
-        raise ConfigurationError(f"missing required NemoClaw committed-turn credential: {source}")
+    transport_profile = NemoClawTransportProfile(
+        profile.settings.get("transport_profile", NemoClawTransportProfile.DIRECT_GATEWAY.value)
+    )
     policy_value = profile.settings.get("endpoint_policy", EndpointPolicy.LOOPBACK_ONLY.value)
     try:
         policy = EndpointPolicy(policy_value)
     except (TypeError, ValueError) as error:
         raise ConfigurationError("nemoclaw committed-turn endpoint_policy is invalid") from error
-    adapter = NemoClawCommittedTurnAdapter(
-        origin=_endpoint(profile),
-        deployment_bearer=credential,
-        endpoint_policy=policy,
-        exchange_deadline_seconds=_positive_float_setting(profile, "exchange_deadline_seconds", 125.0),
-        result_display_budget_bytes=_bounded_int_setting(
+    arguments = {
+        "origin": _endpoint(profile),
+        "endpoint_policy": policy,
+        "exchange_deadline_seconds": _positive_float_setting(profile, "exchange_deadline_seconds", 125.0),
+        "result_display_budget_bytes": _bounded_int_setting(
             profile,
             "result_display_budget_bytes",
             DEFAULT_RESULT_DISPLAY_BUDGET_BYTES,
             MAX_RESULT_DISPLAY_BYTES,
         ),
-        model_contracts=model_contracts or load_model_contract_catalog(),
+        "model_contracts": model_contracts or load_model_contract_catalog(),
+    }
+    if transport_profile is NemoClawTransportProfile.MANAGED_SERVICE:
+        if policy is not EndpointPolicy.MANAGED_PRIVATE_HTTP:
+            raise ConfigurationError("managed_service requires endpoint_policy 'managed_private_http'")
+        adapter = NemoClawCommittedTurnAdapter(
+            **arguments,
+            deployment_bearer_loader=_managed_credential_loader(profile),
+            deployment_authorization=DeploymentAuthorization.NEMOCLAW_SCOPED,
+            route_host=_setting(profile, "agent_route_host"),
+            target_ref=_setting(profile, "target_ref"),
+        )
+        return BackendComposition(
+            turn_backend=adapter,
+            turn_status="response_only",
+            selected_agent_readiness=adapter,
+        )
+    managed_only = sorted({"agent_route_host", "target_ref"}.intersection(profile.settings))
+    if managed_only:
+        raise ConfigurationError(
+            f"{', '.join(managed_only)} {'is' if len(managed_only) == 1 else 'are'} available only for the "
+            "managed_service transport"
+        )
+    credential = _credential(profile, environ)
+    if credential is None:
+        source = profile.credential_env or profile.credential_file or "<unset>"
+        raise ConfigurationError(f"missing required NemoClaw committed-turn credential: {source}")
+    adapter = NemoClawCommittedTurnAdapter(
+        **arguments,
+        deployment_bearer=credential,
     )
     return adapter, "response_only"
 
@@ -171,9 +230,14 @@ def build_committed_turn_backend(
     profile: BackendProfile,
     environ: Mapping[str, str],
     model_contracts: ModelContractCatalog | None = None,
-) -> tuple[EphemeralCommittedTurnPort, str]:
+) -> BackendComposition | tuple[EphemeralCommittedTurnPort, str]:
     """Build the legacy-named response-only connection for compatibility."""
     return build_nemoclaw_backend(profile, environ, model_contracts)
 
 
-__all__ = ["NemoClawConnectionMode", "build_committed_turn_backend", "build_nemoclaw_backend"]
+__all__ = [
+    "NemoClawConnectionMode",
+    "NemoClawTransportProfile",
+    "build_committed_turn_backend",
+    "build_nemoclaw_backend",
+]

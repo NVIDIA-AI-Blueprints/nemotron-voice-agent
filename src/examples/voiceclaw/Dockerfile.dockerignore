@@ -31,5 +31,6 @@ docs
 eval-runs
 htmlcov
 models
+src/examples/voiceclaw/integrations
 src/examples/voiceclaw/scripts
 src/examples/voiceclaw/tests

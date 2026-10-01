@@ -165,12 +165,22 @@ class InteractionCoordinator:
             created_at=created_at,
             updated_at=utc_now(),
         )
-        self._attachments[request.session_id] = attachment
-        self._state_store.save_session(binding)
+        try:
+            self._state_store.save_session(binding)
+        except Exception:
+            if existing is None or attachment.attachment_id != existing.attachment_id:
+                with suppress(Exception):
+                    await self._backend.detach(
+                        DetachRequest(
+                            attachment_id=attachment.attachment_id,
+                            last_presented_sequence=presented_sequence,
+                            reason="session_persistence_failed",
+                        )
+                    )
+            raise
         try:
             await self._reconcile_unsettled(request.session_id, unsettled, attachment)
         except Exception:
-            self._attachments.pop(request.session_id, None)
             with suppress(Exception):
                 await self._backend.detach(
                     DetachRequest(
@@ -182,6 +192,7 @@ class InteractionCoordinator:
             if existing is not None:
                 self._state_store.save_session(existing)
             raise
+        self._attachments[request.session_id] = attachment
         return attachment
 
     @staticmethod

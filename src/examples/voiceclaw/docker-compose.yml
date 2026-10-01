@@ -16,7 +16,8 @@ services:
     # This developer recipe explicitly opts into the optional UI. The image
     # itself remains headless unless `--ui` is passed.
     command: ["serve", "--ui"]
-    # The separately supervised NemoClaw gateway is host-local today.
+    # This developer recipe connects to a separately supervised host-local
+    # NemoClaw gateway.
     network_mode: host
     # The root supervisor may drop to its two fixed child identities, but no
     # child may regain privilege through a setuid/setgid or file-cap binary.

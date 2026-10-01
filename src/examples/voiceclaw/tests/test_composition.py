@@ -124,7 +124,7 @@ def test_ambient_nemoclaw_endpoint_cannot_override_yaml_or_default(tmp_path: Pat
     assert adapter_type.call_args_list[1].kwargs["origin"] == "http://127.0.0.1:19001"
 
 
-@pytest.mark.parametrize("settings", [{"mode": "agent_session_v1alpha1"}, {"typo": True}])
+@pytest.mark.parametrize("settings", [{"mode": "unsupported_mode"}, {"typo": True}])
 def test_nemoclaw_rejects_unsupported_modes_and_unknown_settings(tmp_path: Path, settings: dict[str, object]) -> None:
     credential_file = tmp_path / "nemoclaw-deployment-bearer"
     credential_file.write_text(f"{TEST_BEARER}\n", encoding="ascii")
@@ -132,6 +132,21 @@ def test_nemoclaw_rejects_unsupported_modes_and_unknown_settings(tmp_path: Path,
     profile = BackendProfile(kind="nemoclaw", credential_file=str(credential_file), settings=settings)
 
     with pytest.raises(ConfigurationError):
+        build_committed_turn_backend(profile, {})
+
+
+@pytest.mark.parametrize("setting", ["agent_route_host", "target_ref"])
+def test_direct_nemoclaw_transport_rejects_managed_only_settings(tmp_path: Path, setting: str) -> None:
+    credential_file = tmp_path / "nemoclaw-deployment-bearer"
+    credential_file.write_text(f"{TEST_BEARER}\n", encoding="ascii")
+    credential_file.chmod(0o600)
+    profile = BackendProfile(
+        kind="nemoclaw",
+        credential_file=str(credential_file),
+        settings={setting: "agent.sandbox.openshell.localhost:8652"},
+    )
+
+    with pytest.raises(ConfigurationError, match="available only for the managed_service transport"):
         build_committed_turn_backend(profile, {})
 
 

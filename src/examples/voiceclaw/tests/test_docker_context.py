@@ -19,6 +19,7 @@ def test_example_docker_context_excludes_local_secrets_and_worktrees() -> None:
         "**/.venv",
         "**/*.docx",
         "models",
+        "src/examples/voiceclaw/integrations",
         "src/examples/voiceclaw/scripts",
         "src/examples/voiceclaw/tests",
     } <= patterns
@@ -44,6 +45,22 @@ def test_container_exposes_the_exact_managed_runtime_contract() -> None:
     assert "install -d -o root -g root -m 0700 /var/lib/voiceclaw/config" in dockerfile
     assert "install -d -o root -g voiceclaw -m 0710 /var/lib/voiceclaw/credentials" in dockerfile
     assert "install -d -o voiceclaw -g voiceclaw -m 0700 /var/lib/voiceclaw/state" in dockerfile
+
+
+def test_container_keeps_managed_and_standalone_runtime_targets_distinct() -> None:
+    example = Path(__file__).resolve().parents[1]
+    dockerfile = (example / "Dockerfile").read_text(encoding="utf-8")
+    managed_start = dockerfile.index("FROM voiceclaw-base AS nemoclaw-managed")
+    standalone_start = dockerfile.index("FROM voiceclaw-base AS voiceclaw-runtime")
+    managed = dockerfile[managed_start:standalone_start]
+
+    assert managed_start < standalone_start
+    assert "touch /etc/voiceclaw-nemoclaw-managed" in managed
+    assert "USER 65532:65532" in managed
+    assert "EXPOSE 18790/tcp" in managed
+    assert dockerfile.rstrip().endswith('CMD ["serve"]')
+    stages = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
+    assert stages[-1] == "FROM voiceclaw-base AS voiceclaw-runtime"
 
 
 def test_container_pins_runtime_tokenizer_data_and_license() -> None:

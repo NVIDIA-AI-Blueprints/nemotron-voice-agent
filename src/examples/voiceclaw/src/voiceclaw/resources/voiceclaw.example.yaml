@@ -71,13 +71,13 @@ interaction_profiles: {}
 
 backend_profiles:
   nemoclaw:
-    # Stable adapter identity. The explicit mode below describes the currently
-    # available non-durable connection without coupling configuration to an
-    # implementation class or delivery phase.
+    # Stable adapter identity. The explicit mode below describes the
+    # non-durable connection without coupling configuration to an implementation
+    # class or delivery phase.
     kind: nemoclaw
     interaction:
-      # The current compatibility gateway proves only one non-durable submit
-      # operation. Capabilities narrow this preset to work.delegate at runtime.
+      # The response-only gateway supports one non-durable submit operation.
+      # Capabilities narrow this preset to work.delegate at runtime.
       profile: stateless
       # Trusted deployers may override model-facing copy per backend without
       # changing executable tool semantics or accepting browser-authored prose.
@@ -87,16 +87,16 @@ backend_profiles:
       # bearer never enters browser state, command arguments, or container env.
       file: ${NEMOCLAW_VOICE_GATEWAY_BEARER_FILE}
     settings:
-      # `response_only` is the only mode implemented by today's pinned
-      # NemoClaw gateway. A future durable Agent Session mode will be a
-      # separately validated adapter path, not an alias for this bearer.
+      # `response_only` implements the non-durable gateway contract. Durable
+      # Agent Session integration requires a separately validated adapter mode,
+      # not an alias for this bearer.
       mode: response_only
       # Omit endpoint for the local default http://127.0.0.1:18800. A remote
       # private literal IP requires an https endpoint and private_network policy.
       endpoint_policy: loopback_only
       # One wall-clock budget for admission plus the complete NDJSON turn.
       exchange_deadline_seconds: 125
-      # This response-only target currently caps completions at 4096 tokens.
+      # This response-only target caps completions at 4096 tokens.
       # Keep its complete Markdown result below that provider capacity; this is
       # independently configurable from VoiceClaw's protocol-wide safety cap.
       result_display_budget_bytes: 8192

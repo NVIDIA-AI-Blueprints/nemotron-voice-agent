@@ -4,7 +4,7 @@ VoiceClaw is a Python package and containerized realtime voice frontend. A
 client uses one OpenAI Realtime-compatible WebSocket for audio, text,
 transcripts, and application projections. VoiceClaw owns the live media and
 presentation loop. In the target managed NemoClaw profile, NemoClaw owns
-authoritative agent sessions and durable Work. The current developer adapter is
+authoritative agent sessions and durable Work. The developer adapter is
 response-only and does not claim that durability.
 
 The package is backend- and frontend-adapter based. The selected realtime
@@ -83,99 +83,87 @@ The managed VoiceClaw container itself requests no GPU and uses private IPC.
 
 ## Managed NemoClaw service
 
-The accepted NemoClaw contract is one referenced VoiceClaw integration, one
-preloaded immutable image, one foreground container, one Docker bridge, one
-disposable volume, and one TCP port. It does not use Compose, host networking,
-sidecars, systemd, automatic restart, or a NemoClaw background monitor.
-
-Build the exact local artifact from a clean repository root and record the
-source, input-file digests, native platform, and immutable image ID:
+The managed NemoClaw profile selects one VoiceClaw integration, one
+sandbox agent, and one preloaded immutable image. Build the dedicated non-root
+target from a clean repository root:
 
 ~~~bash
 test -z "$(git status --porcelain --untracked-files=all)"
 voiceclaw_source_revision="$(git rev-parse HEAD)"
 voiceclaw_version="0.1.0"
 voiceclaw_platform="$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')"
+voiceclaw_artifact_dir="/tmp/voiceclaw-artifacts-${voiceclaw_source_revision}"
+voiceclaw_wheel="${voiceclaw_artifact_dir}/nemotron_voiceclaw-${voiceclaw_version}-py3-none-any.whl"
+voiceclaw_wheel_evidence="${voiceclaw_artifact_dir}/wheel-evidence.json"
 test "${voiceclaw_platform%%/*}" = linux
-mkdir -p src/examples/voiceclaw/dist
-uv build src/examples/voiceclaw \
-  --wheel \
-  --out-dir src/examples/voiceclaw/dist \
-  --clear
+install -d -m 0700 "${voiceclaw_artifact_dir}"
+uv build src/examples/voiceclaw --wheel --clear --out-dir "${voiceclaw_artifact_dir}"
 python3 src/examples/voiceclaw/scripts/verify-wheel.py \
-  src/examples/voiceclaw/dist/nemotron_voiceclaw-0.1.0-py3-none-any.whl \
+  "${voiceclaw_wheel}" \
   --expect-version "${voiceclaw_version}" \
   --expect-revision "${voiceclaw_source_revision}" \
-  --repository-root "$PWD" \
-  > src/examples/voiceclaw/dist/wheel-evidence.json
-sha256sum \
-  src/examples/voiceclaw/Dockerfile \
-  uv.lock \
-  src/examples/voiceclaw/uv.lock
+  --repository-root "$PWD" > "${voiceclaw_wheel_evidence}"
 docker build \
+  --target nemoclaw-managed \
   --platform "${voiceclaw_platform}" \
   --build-arg "VOICECLAW_VERSION=${voiceclaw_version}" \
   --build-arg "VOICECLAW_SOURCE_REVISION=${voiceclaw_source_revision}" \
   -f src/examples/voiceclaw/Dockerfile \
-  -t "voiceclaw-runtime:poc-${voiceclaw_source_revision}" \
+  -t "voiceclaw-nemoclaw:${voiceclaw_source_revision}" \
   .
-docker image inspect \
-  --format '{{.Id}} {{.Os}}/{{.Architecture}}' \
-  "voiceclaw-runtime:poc-${voiceclaw_source_revision}"
+
 uv run --project src/examples/voiceclaw --extra server --frozen \
   python src/examples/voiceclaw/scripts/verify-image.py \
-  "voiceclaw-runtime:poc-${voiceclaw_source_revision}" \
+  "voiceclaw-nemoclaw:${voiceclaw_source_revision}" \
+  --runtime-profile nemoclaw-managed \
   --expect-version "${voiceclaw_version}" \
   --expect-revision "${voiceclaw_source_revision}" \
   --expect-source https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent \
   --expect-architecture "${voiceclaw_platform#*/}" \
   --repository-root "$PWD" \
-  --wheel src/examples/voiceclaw/dist/nemotron_voiceclaw-0.1.0-py3-none-any.whl \
-  --wheel-evidence src/examples/voiceclaw/dist/wheel-evidence.json \
-  --smoke --smoke-ui --smoke-realtime \
-  > src/examples/voiceclaw/dist/image-evidence.json
-python3 src/examples/voiceclaw/scripts/export-image-archive.py \
-  "voiceclaw-runtime:poc-${voiceclaw_source_revision}" \
-  --image-evidence src/examples/voiceclaw/dist/image-evidence.json \
-  --archive src/examples/voiceclaw/dist/voiceclaw-${voiceclaw_source_revision}.docker.tar \
-  > src/examples/voiceclaw/dist/archive-evidence.json
-python3 src/examples/voiceclaw/scripts/export-image-archive.py \
-  --verify-only \
-  --image-evidence src/examples/voiceclaw/dist/image-evidence.json \
-  --archive-evidence src/examples/voiceclaw/dist/archive-evidence.json \
-  --archive src/examples/voiceclaw/dist/voiceclaw-${voiceclaw_source_revision}.docker.tar
+  --wheel "${voiceclaw_wheel}" \
+  --wheel-evidence "${voiceclaw_wheel_evidence}" \
+  --smoke
+
+docker image inspect --format '{{.Id}}' \
+  "voiceclaw-nemoclaw:${voiceclaw_source_revision}"
 ~~~
 
-After the final verification command succeeds, a consumer may load that exact
-archive with `docker load --input <archive>`. CI builds and retains the ARM64
-artifact used by DGX Spark; the local commands above intentionally verify the
-native Linux platform reported by the local Docker engine.
+Use the returned `sha256:...` image ID in NemoClaw; do not use the mutable tag.
+The deterministic image smoke proves the managed process identity, immutable
+mode marker, fresh anonymous-volume layout, package identity, liveness, and the
+expected pre-projection `503` readiness state. It does not prove a supplied
+NemoClaw volume or provider-backed readiness.
 
-The image contract is:
+The managed target has this fixed contract:
 
 | Item | Value |
 | --- | --- |
 | Entrypoint | `/usr/local/bin/voiceclaw-runtime` |
 | Command | `serve` |
+| Process identity | `65532:65532` |
 | Port | `18790/tcp` |
 | Volume | `/var/lib/voiceclaw` |
-| Runtime config | `/var/lib/voiceclaw/config/voiceclaw.yaml` |
-| Credentials | Protected files below `/var/lib/voiceclaw/credentials/` |
-| Local projection | `/var/lib/voiceclaw/state/state.db` |
-| UI | Off; `serve --ui` is developer opt-in only |
+| Installer config | `/var/lib/voiceclaw/runtime/config.json` |
+| NVIDIA credential | `/var/lib/voiceclaw/credentials/speech` |
+| Selected-agent credential | `/var/lib/voiceclaw/credentials/agent` |
+| Local projection | `/var/lib/voiceclaw/runtime/state.db` |
+| Public client API | `WS /v1/realtime` |
+| UI | Disabled in this target |
 
-The volume root and `config/` and `credentials/` are not writable by either
-child process. `credentials/` is root-owned and traverse-only for the facade
-group: a selected-agent credential is root-owned, group-readable by the facade
-(`0440`), while every speech-provider credential is root-only (`0400`). The
-root supervisor stages a speech credential into an ephemeral file owned only
-by the private NVA process. Only `state/` is owned by the facade. The facade
-and NVA run as different fixed UIDs.
+This setup requires a NemoClaw build that implements the `voiceclaw` managed
+service and integration kinds. A build without those kinds rejects this
+configuration during schema validation.
 
-The intended NemoClaw configuration is:
+NemoClaw configuration:
 
 ~~~yaml
 spec:
+  gateway:
+    management: managed
+    engine: unix:///var/run/docker.sock
+    networkCIDR: 172.20.0.0/24
+
   services:
     voice-server:
       kind: voiceclaw
@@ -201,63 +189,81 @@ spec:
         integrationRefs: [voice]
 ~~~
 
-Here `credential.env` names a protected input to NemoClaw; the secret value
-must not become a Docker environment value. NemoClaw must project it as a
-root-owned file and render the non-secret VoiceClaw runtime YAML in the one
-managed volume.
+`speech.credential.env` names a protected NemoClaw input; its value is projected
+to the credential file and is not placed in the Docker runtime specification.
+The managed projection exposes no separate frontend-model credential, so this
+profile uses that NVIDIA credential for its pinned NVIDIA
+LLM, ASR, and TTS services. This is a compatibility assumption for the fixed
+profile, not a general credential-routing contract. The nine-field projection
+is:
+
+~~~json
+{
+  "integration": "voice",
+  "sandbox": "assistant",
+  "agent": "main",
+  "port": 18790,
+  "speechProvider": "nvidia",
+  "speechCredentialPath": "/var/lib/voiceclaw/credentials/speech",
+  "agentCredentialPath": "/var/lib/voiceclaw/credentials/agent",
+  "agentEndpoint": "http://<managed-gateway-ip>:<gateway-port>",
+  "agentRouteHost": "<owned-route>.localhost:<gateway-port>"
+}
+~~~
+
+NemoClaw writes `runtime/` and `credentials/` as `0700` and their files as
+`0600`, owned by `65532:65532`. VoiceClaw rejects duplicate/unknown fields,
+symlinks, ACLs, wrong ownership/modes, unsafe addresses, mismatched route ports,
+and changes observed during a stable double-read. The agent credential is
+reopened for every readiness check and backend admission, so rotation does not
+require an image restart for new admissions. An active response-only session
+keeps its already-issued session grant; if rotation revokes that grant, the
+session may remain unusable until its validated expiry. Configuration or
+speech-credential changes drain the active client and rebuild the private
+frontend.
 
 ### Health and readiness
 
-- `GET /livez` is the content-free process-liveness endpoint used by the image
-  healthcheck and service managers.
-- `GET /health` is an operator-facing diagnostic summary of loaded local
-  runtime components; it is not the managed readiness signal.
-- `GET /readyz` is selected-agent readiness. It performs a bounded,
-  authenticated, non-generative access check and returns empty `200` only when
-  the configured agent can be reached with its scoped credential. Failure is
-  empty `503`; logs contain only allowlisted reason codes. NemoClaw polls this
-  endpoint independently during `check_running()`.
-- Readiness never submits a prompt, creates a user session, starts Work, or
-  runs the historical arithmetic probe.
+- PID 1 binds `0.0.0.0:18790` before projection exists.
+- `GET /livez` is always empty `200` while the process is alive.
+- `GET /readyz` is empty `503` until projection, a non-generative Realtime
+  bootstrap to the bundled frontend, selected-agent access, and one-client
+  admission are ready; success is empty `200`. The bootstrap may perform the
+  frontend's provider prewarm, but it sends no user prompt and creates no
+  backend Work.
+- The bundled frontend uses a fixed 180-second startup budget. The nine-field
+  projection does not support a different `startupTimeoutSeconds` value.
+- Readiness uses a scoped non-generative `GET /healthz` with `Host` and
+  `X-NemoClaw-Authorization`; it never creates a backend session or sends a
+  probe question.
+- Managed mode accepts one public Realtime client. The response-only agent
+  ingress supports one live session. VoiceClaw rejects client or `argv`
+  overrides for configuration, port, authentication, and UI settings.
 
-### Current cross-repository gate
+The nine-field installer projection contains no public-client credential. The
+managed listener must stay on NemoClaw's private service network and must not be
+published directly to an untrusted LAN or the Internet. The one-UID
+installer contract also places the supervisor and bundled frontend in one
+container trust domain; `0600` prevents host peers from reading projected
+credentials but is not process isolation between those two processes.
 
-The VoiceClaw image-side executable, process isolation, configuration loader,
-and health/readiness boundary are implemented. The current NemoClaw draft does
-not yet provide the runtime YAML, protected speech/agent credential files, or
-selected-agent endpoint to the container, so a complete managed
-`nemoclaw apply` must remain a draft integration and `/readyz` correctly fails
-closed.
+### Capability Boundary
 
-The CI Realtime smoke uses isolated loopback fixtures to qualify the image's
-public protocol and adapter boundary. It is not evidence of the still-pending
-managed NemoClaw bridge, credential projection, or selected-agent readiness.
+The NemoClaw ingress provides one response-only NDJSON exchange per
+temporary backend session. VoiceClaw exposes only `work.delegate`, keeps the
+exchange asynchronous from the conversation, streams rich display content to
+the UI, and queues only the bounded speech field for model-mediated delivery.
+It does not advertise durable Work, events, replay, reconnect, cancellation,
+steering, or presentation acknowledgement.
 
-Two producer details must be frozen with NemoClaw before composed validation:
-
-1. Materialize the non-secret runtime YAML plus protected credential files in
-   `/var/lib/voiceclaw`; do not put secret values in YAML, runtime-spec JSON,
-   Docker environment values, arguments, logs, errors, or state.
-2. Permit the root supervisor only `CHOWN`, `DAC_OVERRIDE`, `KILL`, `SETGID`,
-   and `SETUID` after dropping all other capabilities, or provide an equivalent
-   isolation design. `KILL` is required only so PID 1 can stop its different-UID
-   children cleanly. A generic `cap-drop ALL` container cannot supervise the two
-   fixed child identities without this narrow allowance.
-
-The selected-agent credential also needs its own root-owned, facade-readable
-protected file and a new managed NemoClaw adapter. It must not be mapped into
-the current response-only gateway's deployment-bearer field.
-
-Once those are supplied, NemoClaw owns `plan/apply/destroy`, immutable image
-resolution, referenced-service activation, bridge/port/volume creation,
-`restart: no`, readiness polling, scoped grant revocation, and owned cleanup.
-VoiceClaw does not parse NemoClaw internals or receive OpenClaw/OpenShell
-operator credentials.
+NemoClaw remains authoritative for the selected target and durable Work.
+VoiceClaw stores only local correlation, delivery, presentation, and materialized
+projection state. Agent-specific planning never enters this adapter.
 
 ## Developer stack and optional UI
 
 The developer Compose file is intentionally separate from the managed service.
-It enables the UI, host networking, and the current non-durable response-only
+It enables the UI, host networking, and the non-durable response-only
 NemoClaw compatibility adapter. Do not use it as evidence for the managed
 contract.
 
@@ -275,22 +281,23 @@ The example expects the LLM at `http://127.0.0.1:18000/v1` and ASR/TTS at
 `127.0.0.1:50051`. Use hosted NVIDIA endpoints instead by changing only the
 frontend service entries and credential file references in the YAML.
 
-### 2. Prepare the current compatibility gateway
+### 2. Prepare the Developer Compatibility Gateway
 
 ~~~bash
 src/examples/voiceclaw/integrations/nemoclaw/scripts/prepare-nemoclaw.sh
 ~~~
 
 Onboard the prepared NemoClaw sandbox, obtain its actual `dashboardPort`, and
-create the agent and deployment credential files as described by that pinned
-compatibility revision. Then start:
+create the agent and deployment credential files required by the prepared
+gateway. Then start:
 
 ~~~bash
 src/examples/voiceclaw/integrations/nemoclaw/scripts/run-nemoclaw-voice-gateway.sh
 ~~~
 
-This gateway is response-only and non-durable. It is not the accepted scoped
-agent-ingress contract.
+This gateway is response-only and non-durable. It does not provide durable Work,
+events, replay, reconnect, cancellation, steering, or presentation
+acknowledgement.
 
 ### 3. Start VoiceClaw
 

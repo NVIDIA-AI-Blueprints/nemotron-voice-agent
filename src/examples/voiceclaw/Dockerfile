@@ -3,7 +3,7 @@
 
 # Build from the repository root:
 # docker build -f src/examples/voiceclaw/Dockerfile -t voiceclaw .
-FROM nvcr.io/nvidia/base/ubuntu:noble-20260610@sha256:a6015cf73597a174b8624ef0a9f78937f79a0862c078df4922dc35f26cec8fad
+FROM nvcr.io/nvidia/base/ubuntu:noble-20260610@sha256:a6015cf73597a174b8624ef0a9f78937f79a0862c078df4922dc35f26cec8fad AS voiceclaw-base
 
 ARG VOICECLAW_VERSION=0.1.0
 ARG VOICECLAW_SOURCE_REVISION=development
@@ -126,6 +126,36 @@ RUN uv sync \
       --no-dev \
       --frozen \
     && ln -s /app/src/examples/voiceclaw/.venv/bin/voiceclaw-runtime /usr/local/bin/voiceclaw-runtime
+
+FROM voiceclaw-base AS nemoclaw-managed
+
+RUN groupadd --gid 65532 voiceclaw-managed \
+    && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent \
+        --shell /usr/sbin/nologin voiceclaw-managed \
+    && install -d -o 65532 -g 65532 -m 0700 \
+        /var/lib/voiceclaw/runtime \
+        /var/lib/voiceclaw/credentials \
+        /run/voiceclaw-managed \
+        /run/voiceclaw-managed/home \
+        /run/voiceclaw-managed/cache \
+    && chown 65532:65532 /var/lib/voiceclaw \
+    && chmod 0700 /var/lib/voiceclaw \
+    && touch /etc/voiceclaw-nemoclaw-managed \
+    && chmod 0444 /etc/voiceclaw-nemoclaw-managed
+
+USER 65532:65532
+
+VOLUME ["/var/lib/voiceclaw"]
+EXPOSE 18790/tcp
+STOPSIGNAL SIGTERM
+
+HEALTHCHECK --interval=20s --timeout=3s --start-period=90s --retries=3 \
+    CMD ["/usr/local/bin/voiceclaw-runtime", "healthcheck"]
+
+ENTRYPOINT ["/usr/local/bin/voiceclaw-runtime"]
+CMD ["serve"]
+
+FROM voiceclaw-base AS voiceclaw-runtime
 
 VOLUME ["/var/lib/voiceclaw"]
 EXPOSE 18790/tcp
