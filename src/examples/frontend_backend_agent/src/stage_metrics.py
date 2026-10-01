@@ -289,7 +289,9 @@ class StageMetricsCoordinator:
         async with self._lock:
             self._tool_turns.pop(tool_call_id, None)
             backend_call_id = self._tool_backends.pop(tool_call_id, None)
-            if backend_call_id:
+            # A run taken over by a later call_backend stays bound to that call;
+            # only the last tool call that maps to a backend run releases it.
+            if backend_call_id and backend_call_id not in self._tool_backends.values():
                 self._backend_turns.pop(backend_call_id, None)
 
     def _next_invocation_locked(self, prefix: str) -> str:

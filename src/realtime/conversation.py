@@ -406,6 +406,26 @@ class ConversationJournal:
         """Return the immutable operation history."""
         return tuple(copy.deepcopy(self._entries))
 
+    def last_sequence(self) -> int:
+        """Return the sequence of the latest operation, or 0 before the first one."""
+        return self._next_sequence - 1
+
+    def oldest_retained_sequence(self) -> int | None:
+        """Return the sequence of the oldest operation still retained, if any."""
+        return self._entries[0].sequence if self._entries else None
+
+    def added_after(self, sequence: int) -> tuple[tuple[int, str], ...]:
+        """Return ``(sequence, item_id)`` for retained ``added`` operations after ``sequence``.
+
+        Read-only and copy-free: it exposes only sequences and identifiers,
+        never item payloads.
+        """
+        return tuple(
+            (entry.sequence, entry.item_id)
+            for entry in self._entries
+            if entry.operation == "added" and entry.sequence > sequence
+        )
+
     def snapshot_state(self) -> ConversationJournalSnapshot:
         """Capture every mutable field changed by conversation operations."""
         return ConversationJournalSnapshot(

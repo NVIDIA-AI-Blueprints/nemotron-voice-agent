@@ -17,6 +17,12 @@ class BargeInState:
         """Initialize idle speaking and interruption state."""
         self._bot_speaking = False
         self._interrupted_speech = False
+        self._bot_interruptions = 0
+
+    @property
+    def bot_interruptions(self) -> int:
+        """Return how many user turns have started while bot audio was active."""
+        return self._bot_interruptions
 
     def observe(self, frame: Frame) -> None:
         """Update speaking state from pipeline lifecycle frames."""
@@ -27,6 +33,7 @@ class BargeInState:
         elif isinstance(frame, UserStartedSpeakingFrame):
             self._interrupted_speech = self._bot_speaking
             if self._interrupted_speech:
+                self._bot_interruptions += 1
                 logger.info("Barge-in detected while bot audio was active")
 
     def consume_interrupted_speech(self) -> bool:

@@ -54,8 +54,10 @@ THINKER_PLAN_SCHEMA: dict[str, Any] = {
 class ThinkerPlanner(Protocol):
     """Planner interface for selecting internal Thinker tool calls."""
 
-    async def plan(self, *, query: str, slots: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """Return a structured Thinker plan."""
+    async def plan(
+        self, *, query: str, slots: dict[str, Any], state: dict[str, Any], history: Any = None
+    ) -> dict[str, Any]:
+        """Return a structured Thinker plan; ``history`` is the session's earlier delegations, if any."""
 
 
 class PlannerLLM(Protocol):
@@ -94,19 +96,25 @@ class NvidiaThinkerPlanner:
         self._max_tokens = max_tokens
         self._structured_output = structured_output
 
-    async def plan(self, *, query: str, slots: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    async def plan(
+        self, *, query: str, slots: dict[str, Any], state: dict[str, Any], history: Any = None
+    ) -> dict[str, Any]:
         """Ask the Thinker LLM for internal tool plan JSON."""
         today = runtime_today()
         tomorrow = today + timedelta(days=1)
-        user_payload = {
-            "query": query,
-            "structured_fields": slots,
-            "session_state": state,
-            "runtime_context": {
-                "today": today.isoformat(),
-                "tomorrow": tomorrow.isoformat(),
-            },
-        }
+        user_payload: dict[str, Any] = {"query": query}
+        if history is not None:
+            user_payload["conversation_history"] = history
+        user_payload.update(
+            {
+                "structured_fields": slots,
+                "session_state": state,
+                "runtime_context": {
+                    "today": today.isoformat(),
+                    "tomorrow": tomorrow.isoformat(),
+                },
+            }
+        )
         context = LLMContext(
             [
                 {"role": "system", "content": f"{self._system_prompt}{_runtime_date_context(today)}"},

@@ -20,6 +20,7 @@ from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 
+from examples.frontend_backend_agent.src.frontend_verdict import EXPLICIT_REPEAT_RE
 from examples.shared.text_tool_calls import harvest_text_tool_calls
 from utils import parse_env_float
 
@@ -73,7 +74,7 @@ _MAX_BACKEND_RESPONSES = 8
 #: through to the deterministic spoken fallback.
 _TALKER_STREAM_TIMEOUT_SECONDS = parse_env_float("GENERIC_TALKER_STREAM_TIMEOUT_SECONDS", 15.0, min_value=1.0)
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
-_EXPLICIT_REPEAT_RE = re.compile(r"\b(?:repeat|refresh|recheck|again|one more time|check again)\b", re.IGNORECASE)
+_EXPLICIT_REPEAT_RE = EXPLICIT_REPEAT_RE
 _INTERNAL_MECHANICS_RE = re.compile(
     r"(?:\b(?:backend|thinker|filler_text)\b|\b(?:tool|function)\s+call\b|"
     r"\b(?:direct|delegate|cancel)\s+(?:mode|contract|decision)\b|"

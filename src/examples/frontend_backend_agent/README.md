@@ -51,7 +51,7 @@ Each request follows the same path for every domain:
 5. The backend runs the approved tools. For dependent generic work, it gives the Thinker the accumulated trusted results and allows another planning round. The backend stops after the configured round limit, when the Thinker signals completion, when the plan does not request another round, or when the overall backend deadline expires.
 6. The generic backend combines results from every completed round in execution order. If a later round times out or fails, it returns the results already gathered instead of discarding them. It otherwise returns a structured `response_hint` or `tool_result`. The generic domain also generates user-facing capability text from the enabled tool specifications.
 7. The runtime either speaks trusted `response_text` directly or asks the Talker for a concise reply. Text-to-speech (TTS) then produces audio.
-8. `cancel_backend` or a newer superseding request cancels pending work and prevents stale results from reaching the conversation.
+8. `cancel_backend` cancels pending work, and a newer superseding request replaces it. Neither path lets a stale result reach the conversation. When the user only acknowledges or asks about progress while work runs, the new `call_backend` call can continue the running request instead of restarting it. Refer to [Continue Running Work and Share Session History](#continue-running-work-and-share-session-history).
 
 For WebSocket sessions, the browser client supplies an explicit
 `DailyMediaManager`. When the public client callback reports that the user
@@ -238,6 +238,8 @@ The following environment variables bound shared and domain-specific orchestrati
 | `FRONTEND_BACKEND_TALKER_FILLER_MODE` | `emit` | Uses `off`, `observe`, or `emit` to suppress, validate-only, or speak an accepted Talker filler |
 | `FRONTEND_BACKEND_TOOL_RESULT_MODE` | Domain default: Generic `direct`; Airline `talker`; NVCF chart `talker` | An explicit `direct`, `hybrid`, or `talker` value overrides the backend default. Generic `hybrid` uses the Talker only for successful weather results. A client-owned tool's result always goes through the Talker, in every mode: the caller declares that tool's shape, so only the Talker can turn its record into a sentence. |
 | `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE` | Disabled | Legacy switch that forces direct mode only when the explicit result-mode variable is absent |
+| `FRONTEND_BACKEND_FRONTEND_VERDICT` | `true` | Lets a `call_backend` call made while delegated work runs continue that work after a pure acknowledgement or progress check. Any value other than `true` disables it. |
+| `FRONTEND_BACKEND_BACKEND_HISTORY` | `true` | Sends the Thinker a bounded `conversation_history` of earlier delegations in the session. Any value other than `true` disables it. |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delays progress speech until delegated work remains active past the threshold |
 | `THINKER_TOOL_TIMEOUT_SECONDS` | `45.0` | Bounds the shared Talker-to-backend function handler |
 | `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` | `15.0` | Bounds one Generic Talker completion stream. An invalid or stalled stream retries once, so the Talker spends at most twice this value producing a given utterance |
@@ -354,6 +356,63 @@ entry keeps the lower 768-output-token and 256-reasoning-token limits. You can
 override the completion and reasoning limits with
 `GENERIC_THINKER_MAX_TOKENS` and `GENERIC_THINKER_REASONING_BUDGET`.
 
+### Continue Running Work and Share Session History
+
+Two session features apply to both the airline and generic domains. Both are on
+by default. Each variable is enabled only by the value `true`; an unset or
+empty value keeps the default, and any other value, such as `false` or `0`,
+disables the feature.
+
+`FRONTEND_BACKEND_FRONTEND_VERDICT` controls what happens when the user speaks
+while a delegated request is still running:
+
+- The Talker's `call_backend` call accepts an optional `task` field with the
+  value `continue` or `new`. The Talker sees this field and its prompt
+  addendum only when the feature is active.
+- Code makes the final decision. It continues the running request only when
+  every word of the user's latest utterance is on a closed English list of
+  acknowledgement and progress-check words, and the Talker kept the running
+  query unchanged. Corrections, new details, and requests to repeat or check
+  again always start new work.
+- On `continue`, the new call takes over the running backend request. The
+  previous call ends as superseded without speaking, and the user hears one
+  answer. The runtime speaks a progress phrase only when the Talker supplied a
+  `filler_text` that the existing filler policy accepts.
+- On `new`, the existing behavior applies. The generic backend lets the old
+  plan finish silently and plans the new request, and the airline backend
+  cancels the old request and restarts.
+- In a Realtime generic session, user speech still cancels a parked
+  client-tool round. The later `call_backend` call then finds no running
+  request and starts new work.
+
+`FRONTEND_BACKEND_BACKEND_HISTORY` gives the Thinker a bounded
+`conversation_history` key that lists earlier delegations in the session. The
+key is omitted for the first delegation. Each entry contains the following
+information:
+
+- The transcript slice for that delegation. User text is the finalized turn
+  text that the Talker received. Realtime assistant text comes from the
+  conversation journal, so it follows client truncation and deletion. WebRTC
+  assistant text is the text that the pipeline emitted for the turn.
+- The delegated request, the result, and how the result reached the user.
+- Tool calls. Writes are recorded where the side effect happens: the generic
+  client-tool executor and the airline `create_booking` call. Each write is
+  `started`, `confirmed`, or `unconfirmed`. Reads include their status.
+
+The serialized history never exceeds 6,000 characters. When it would, the
+runtime drops transcript text, read arguments, result text, write arguments,
+read lists, and then whole older entries, in that order. It marks any shortened
+part with `history_truncated` and keeps counts of omitted writes. The trusted
+Thinker system prompt receives a short addendum that explains the history;
+Realtime `session.instructions` still reaches the Thinker verbatim.
+
+Neither feature changes the Realtime wire protocol. `call_backend` and its
+`task` argument never reach the client, and the `session.updated` echo is
+unchanged. At startup, the server logs
+`Frontend verdict: on|off; backend history: on|off (domain=<key>)`. Each
+decision emits a structured `frontend_verdict` log event with the decision,
+reason, model-supplied task, and text sizes, but no conversation content.
+
 ## Domain Contract
 
 `src/domain.py` defines the shared contract. A trusted domain factory returns one `DomainSpec` with these values:
@@ -371,10 +430,13 @@ override the completion and reasoning limits with
 | `tool_registry` | Publish the domain's code-owned `ToolSpec` allowlist for registry-selected capabilities |
 | `realtime_prompt_coordinator_factory` | Optionally create a session-local owner that atomically updates Realtime Talker and Thinker prompts |
 | `max_query_chars` | Maximum delegated query length |
+| `supports_conversation_history` | Whether the backend records the session delegation history and sends it to the Thinker; defaults to `False` |
 
-`build_backend` receives a `DomainBuildContext` with `thinker_llm`, the resolved `thinker_prompt`, `thinker_max_tokens`, server-approved `tool_names`, `tool_delay_seconds`, `tool_delay_min_seconds`, and `load_service_entry`. The context does not expose the raw session body or prompt metadata to domain code.
+`build_backend` receives a `DomainBuildContext` with `thinker_llm`, the resolved `thinker_prompt`, `thinker_max_tokens`, server-approved `tool_names`, `tool_delay_seconds`, `tool_delay_min_seconds`, `load_service_entry`, and `conversation_ledger`, which is `None` when backend history is off. The context does not expose the raw session body or prompt metadata to domain code.
 
 The backend returned by `build_backend` implements 3 operations: `call`, `cancel_active`, and `cancel_pending_work`. The pipeline does not need to know the domain's state machine, external services, or result format.
+
+A backend can also opt in to request continuation and session history. Refer to [Opt In to Continuation and Session History](../../../docs/how-to/configure-frontend-backend-domains.md#opt-in-to-continuation-and-session-history).
 
 ## Understand Tool Specifications
 
@@ -444,7 +506,7 @@ The pipeline enforces the following boundaries:
   configure the limit with `GENERIC_MAX_PLANNING_ROUNDS`. It passes only
   accumulated trusted tool results into later rounds and preserves results from
   completed rounds if later planning fails.
-- A backend instance and its state belong to one voice session. A new delegated request cancels and replaces unfinished work in that session.
+- A backend instance and its state belong to one voice session. A new delegated request replaces unfinished work in that session: the airline backend cancels it, and the generic backend lets it finish without speaking its result. With `FRONTEND_BACKEND_FRONTEND_VERDICT` enabled, a pure acknowledgement or progress check continues the running request instead, and only one answer is delivered.
 - Cancellation invalidates the active call identifier, so a late result cannot become the current response.
 - A model-authored internal tool call after a completed backend result cannot
   execute. The runtime retries once, then returns trusted backend speech.

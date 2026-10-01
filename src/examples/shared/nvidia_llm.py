@@ -520,6 +520,20 @@ class _RealtimeAssistantOutput(Enum):
     TOOL_CALL = auto()
 
 
+def _choices_are_empty(choices: object) -> bool:
+    """Return whether streamed choices carry no output: no finish reason and an empty delta."""
+    for choice in choices or ():
+        if getattr(choice, "finish_reason", None) is not None:
+            return False
+        delta = getattr(choice, "delta", None)
+        if delta is None:
+            continue
+        values = delta.model_dump(exclude_none=True) if hasattr(delta, "model_dump") else dict(delta)
+        if any(value not in ("", [], {}) for key, value in values.items() if key != "role"):
+            return False
+    return True
+
+
 def _is_formatting_only_content(content: object) -> bool:
     """Return whether a provider content delta has no semantic text."""
     return isinstance(content, str) and (not content or content.isspace())
@@ -1209,7 +1223,12 @@ class NvidiaLLMService(PipecatNvidiaLLMService):
         async with aclosing(stream):
             async for chunk in stream:
                 finish_reason = chunk.choices[0].finish_reason if chunk.choices else None
-                if terminal_reason is not None and chunk.choices:
+                # Some OpenAI-compatible gateways (for example NVIDIA Inference
+                # Hub) attach the trailing usage chunk to an empty choice
+                # (``{"index": 0, "delta": {}}``) instead of ``choices: []``.
+                # That carries no output, so it is tolerated; any real output
+                # after the terminal chunk still fails closed.
+                if terminal_reason is not None and chunk.choices and not _choices_are_empty(chunk.choices):
                     raise ValueError("Provider stream emitted choices after its terminal chunk")
                 yield chunk
                 if finish_reason is not None:

@@ -34,8 +34,8 @@ class GenericPlannerSessionUpdate:
 class GenericPlanner(Protocol):
     """Planner boundary consumed by the generic backend."""
 
-    async def plan(self, *, query: str, state: dict[str, Any]) -> dict[str, Any]:
-        """Return one unexecuted JSON plan."""
+    async def plan(self, *, query: str, state: dict[str, Any], history: Any = None) -> dict[str, Any]:
+        """Return one unexecuted JSON plan; ``history`` is the session's earlier delegations, if any."""
 
 
 class NvidiaGenericPlanner:
@@ -126,19 +126,23 @@ class NvidiaGenericPlanner:
         """Restore an exact Thinker snapshot after a failed outer transaction."""
         self.commit_session_update(snapshot)
 
-    async def plan(self, *, query: str, state: dict[str, Any]) -> dict[str, Any]:
+    async def plan(self, *, query: str, state: dict[str, Any], history: Any = None) -> dict[str, Any]:
         """Return a parsed plan; the dispatcher remains the authority for validation."""
         now = datetime.now().astimezone()
-        payload = {
-            "untrusted_user_request": query,
-            "enabled_tools": list(self._enabled_tools),
-            "session_state": state,
-            "runtime_context": {
-                "local_datetime": now.isoformat(timespec="seconds"),
-                "date": now.date().isoformat(),
-                "timezone": str(now.tzinfo),
-            },
-        }
+        payload: dict[str, Any] = {"untrusted_user_request": query}
+        if history is not None:
+            payload["conversation_history"] = history
+        payload.update(
+            {
+                "enabled_tools": list(self._enabled_tools),
+                "session_state": state,
+                "runtime_context": {
+                    "local_datetime": now.isoformat(timespec="seconds"),
+                    "date": now.date().isoformat(),
+                    "timezone": str(now.tzinfo),
+                },
+            }
+        )
         context = LLMContext(
             [
                 *copy.deepcopy(self._session_instruction_context.get_messages()),

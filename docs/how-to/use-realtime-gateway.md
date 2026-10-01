@@ -610,6 +610,18 @@ speech. This profile applies the following ownership boundary:
 - The backend retains one parked plan per session. Barge-in, cancellation, a
   newer generation, a late result, or a repeated failed call cannot revive
   stale work.
+- When the user only acknowledges or asks about progress while delegated work
+  runs, a new `call_backend` call can continue that work instead of restarting
+  it. The user hears one answer. `call_backend` and its `task` argument never
+  reach the client, so the wire protocol and `session.updated` echo do not
+  change. Set `FRONTEND_BACKEND_FRONTEND_VERDICT` to `false` to disable this.
+- The Thinker receives a bounded history of earlier delegations in the session,
+  including what was said, the tool calls it made, and how each result reached
+  the user. Assistant text follows client truncation and deletion in the
+  conversation. Set `FRONTEND_BACKEND_BACKEND_HISTORY` to `false` to disable
+  this.
+- User speech during a parked client-tool round still cancels that round. The
+  next `call_backend` call then starts new work instead of continuing it.
 
 The Talker supplies a short, query-grounded `filler_text` in its original
 `call_backend` arguments. `call_backend` itself never reaches the client, so

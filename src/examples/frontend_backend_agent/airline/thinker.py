@@ -13,7 +13,7 @@ from typing import Any
 
 from loguru import logger
 
-from examples.frontend_backend_agent.airline.backend import BookingBackend
+from examples.frontend_backend_agent.airline.backend import BookingBackend, RecordingBookingBackend
 from examples.frontend_backend_agent.airline.booking_tool import BookingTool
 from examples.frontend_backend_agent.airline.flight_search import flight_search
 from examples.frontend_backend_agent.airline.plan_parsing import (
@@ -23,6 +23,8 @@ from examples.frontend_backend_agent.airline.plan_parsing import (
 )
 from examples.frontend_backend_agent.airline.pnr_status import pnr_status
 from examples.frontend_backend_agent.airline.state import ThinkerSessionState
+from examples.frontend_backend_agent.src.delegation import DelegationRun, current_run_id
+from examples.frontend_backend_agent.src.history import DelegationLedger
 from examples.frontend_backend_agent.src.planner import ThinkerPlanner
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, response_hint
 
@@ -31,6 +33,9 @@ from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, 
 # Everything else (flight_search, booking) writes shared session state and must
 # be sequenced — see _dispatch_parallel_tool_calls.
 _READ_ONLY_TOOLS = frozenset({"pnr_status", "response_hint"})
+# Tools recorded as reads in the backend history. The booking write is recorded
+# where it happens, by RecordingBookingBackend.create_booking.
+_LEDGER_READ_TOOLS = frozenset({"flight_search", "pnr_status"})
 
 
 class ThinkerBackend:
@@ -42,6 +47,9 @@ class ThinkerBackend:
     the internal Python tools/backends.
     """
 
+    # A later call_backend can take over the run still working (frontend verdict).
+    supports_task_continuation = True
+
     def __init__(
         self,
         *,
@@ -52,6 +60,7 @@ class ThinkerBackend:
         tool_delay_min_seconds: float | None = None,
         overall_timeout_seconds: float = 30.0,
         planner_timeout_seconds: float = 30.0,
+        conversation_ledger: DelegationLedger | None = None,
     ) -> None:
         """Create a Thinker backend for one voice session."""
         if planner is None:
@@ -59,7 +68,13 @@ class ThinkerBackend:
         if backend is None:
             raise ValueError("ThinkerBackend requires a BookingBackend")
         self.state = state or ThinkerSessionState()
-        self._backend = backend
+        self._active_run: DelegationRun | None = None
+        self._ledger = conversation_ledger
+        self._backend = (
+            RecordingBookingBackend(backend, conversation_ledger)
+            if backend is not None and conversation_ledger is not None
+            else backend
+        )
         self._planner = planner
         self._tool_delay_seconds = tool_delay_seconds
         self._tool_delay_min_seconds = tool_delay_min_seconds
@@ -72,28 +87,51 @@ class ThinkerBackend:
         slots: dict[str, Any] | None = None,
         *,
         on_started: Callable[[ThinkerLifecycleEvent], Awaitable[None]] | None = None,
+        continue_active: bool = False,
     ) -> dict[str, Any]:
-        """Run one Thinker invocation and return a speakable protocol payload."""
+        """Run one Thinker invocation and return a speakable protocol payload.
+
+        With ``continue_active`` and a run still working, this call takes over
+        that run instead of cancelling and restarting it.
+        """
         clean_query = query.strip()
         clean_slots = dict(slots or {})
         call_id = uuid.uuid4().hex[:12]
-        previous_task = self.state.active_task
-        if previous_task and not previous_task.done():
-            self.cancel_active("new_thinker_call")
-            try:
-                await previous_task
-            except asyncio.CancelledError:
-                if _task_cancellation_requested():
-                    raise
-        self.state.active_call_id = call_id
-        started_event = ThinkerLifecycleEvent(marker="ThinkerStarted", call_id=call_id, query=clean_query)
-        self.state.add_event(started_event)
-        if on_started:
-            await on_started(started_event)
-        task = asyncio.create_task(self._run_call(call_id, clean_query, clean_slots))
-        self.state.active_task = task
+        run = self._active_run
+        if continue_active and run is not None and run.running:
+            self.state.active_call_id = call_id
+            future = run.adopt(on_started)
+            continued_event = ThinkerLifecycleEvent(marker="ThinkerContinued", call_id=run.run_id, query=clean_query)
+            self.state.add_event(continued_event)
+            if on_started:
+                await on_started(continued_event)
+        else:
+            previous_task = self.state.active_task
+            if previous_task and not previous_task.done():
+                self.cancel_active("new_thinker_call")
+                try:
+                    await previous_task
+                except asyncio.CancelledError:
+                    if _task_cancellation_requested():
+                        raise
+            self.state.active_call_id = call_id
+            if self._ledger is not None:
+                self._ledger.open(call_id, clean_query)
+            started_event = ThinkerLifecycleEvent(marker="ThinkerStarted", call_id=call_id, query=clean_query)
+            self.state.add_event(started_event)
+            if on_started:
+                await on_started(started_event)
+            run = DelegationRun(
+                call_id,
+                clean_query,
+                lambda _progress: self._run_call(call_id, clean_query, clean_slots),
+                on_started,
+            )
+            future = run.attach()
+            self._active_run = run
+            self.state.active_task = run.task
         try:
-            payload = await task
+            payload = await run.wait(future)
             if self.state.active_call_id != call_id:
                 raise asyncio.CancelledError
         except asyncio.CancelledError:
@@ -107,10 +145,21 @@ class ThinkerBackend:
             )
             raise
         finally:
-            if self.state.active_task is task:
+            if run.owns(future) and self.state.active_task is run.task:
                 self.state.active_task = None
                 self.state.active_call_id = None
+                self._active_run = None
         return payload
+
+    @property
+    def conversation_ledger(self) -> DelegationLedger | None:
+        """Return the session's delegation history, when backend history is enabled."""
+        return self._ledger
+
+    def running_query(self) -> str | None:
+        """Return the query of the run still working, if any."""
+        run = self._active_run
+        return run.query if run is not None and run.running else None
 
     def cancel_active(self, reason: str = "new_user_query") -> bool:
         """Abort the active Thinker task if one is running."""
@@ -146,9 +195,15 @@ class ThinkerBackend:
                 delay_seconds = self._next_tool_delay_seconds()
                 if delay_seconds > 0:
                     await asyncio.sleep(delay_seconds)
-                payload = await self._dispatch(query, slots)
+                payload = await self._dispatch(query, slots, call_id=call_id)
         except TimeoutError:
             payload = _timeout_failure()
+        except asyncio.CancelledError:
+            if self._ledger is not None:
+                self._ledger.cancelled(call_id)
+            raise
+        if self._ledger is not None:
+            self._ledger.close(call_id, payload)
         self.state.add_event(
             ThinkerLifecycleEvent(marker="IntermediateResponse", call_id=call_id, query=query, payload=payload)
         )
@@ -167,10 +222,12 @@ class ThinkerBackend:
         min_delay = max(0.0, min(self._tool_delay_min_seconds, max_delay))
         return random.uniform(min_delay, max_delay)
 
-    async def _dispatch(self, query: str, slots: dict[str, Any]) -> dict[str, Any]:
+    async def _dispatch(self, query: str, slots: dict[str, Any], *, call_id: str = "") -> dict[str, Any]:
+        history = self._ledger.render(call_id) if self._ledger is not None else None
+        history_argument = {} if history is None else {"history": history}
         try:
             plan = await asyncio.wait_for(
-                self._planner.plan(query=query, slots=slots, state=self._planner_state()),
+                self._planner.plan(query=query, slots=slots, state=self._planner_state(), **history_argument),
                 timeout=self._planner_timeout_seconds,
             )
         except TimeoutError:
@@ -244,11 +301,16 @@ class ThinkerBackend:
         tool_call: dict[str, Any],
     ) -> dict[str, Any]:
         try:
-            return await self._dispatch_tool_call(slots, tool_call)
+            payload = await self._dispatch_tool_call(slots, tool_call)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return _tool_exception_hint(tool_call, exc)
+            payload = _tool_exception_hint(tool_call, exc)
+        tool_name = str(tool_call.get("tool", "") or "").strip()
+        if self._ledger is not None and tool_name in _LEDGER_READ_TOOLS:
+            status = payload.get("status") if payload.get("type") == "tool_result" else payload.get("reason")
+            self._ledger.read(current_run_id(), tool_name, tool_call.get("params"), status)
+        return payload
 
     async def _dispatch_tool_call(self, slots: dict[str, Any], tool_call: dict[str, Any]) -> dict[str, Any]:
         tool_name = str(tool_call.get("tool", "") or "").strip()

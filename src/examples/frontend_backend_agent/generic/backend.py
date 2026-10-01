@@ -19,6 +19,7 @@ from examples.frontend_backend_agent.generic.client_tools import (
     ClientToolRoundExecutor,
     ClientToolSpec,
     build_client_tool_specs,
+    format_client_result,
 )
 from examples.frontend_backend_agent.generic.dispatcher import (
     PlanValidationError,
@@ -28,6 +29,8 @@ from examples.frontend_backend_agent.generic.dispatcher import (
 from examples.frontend_backend_agent.generic.planner import GenericPlanner, GenericPlannerSessionUpdate
 from examples.frontend_backend_agent.generic.result_formatters import nothing_further, planner_failure, timeout_failure
 from examples.frontend_backend_agent.generic.state import GenericThinkerSessionState
+from examples.frontend_backend_agent.src.delegation import DelegationRun, current_run_id
+from examples.frontend_backend_agent.src.history import DelegationLedger
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent
 from examples.frontend_backend_agent.src.tools import ToolSpec
 from utils import parse_env_float, parse_env_int
@@ -91,6 +94,8 @@ class GenericThinkerBackend:
     # Talker pass over Pipecat's asynchronous started/final result envelope.
     tool_result_mode_default = "direct"
     talker_result_tools = ("get_weather",)
+    # A later call_backend can take over the run still working (frontend verdict).
+    supports_task_continuation = True
 
     def __init__(
         self,
@@ -107,12 +112,21 @@ class GenericThinkerBackend:
         state: GenericThinkerSessionState | None = None,
         on_tool_started: Callable[[str], Awaitable[None]] | None = None,
         stage_metrics: StageMetricsCoordinator | None = None,
+        conversation_ledger: DelegationLedger | None = None,
     ) -> None:
         """Create a backend with bounded planner and end-to-end deadlines."""
         self._planner = planner
         self._tools = dict(tools)
         self._client_tools = dict(client_tools or {})
-        self._client_tool_executor = client_tool_executor
+        self._ledger = conversation_ledger
+        # Client tools carry no mutation metadata, so every client call is
+        # recorded as a potential write at the executor: the real side-effect
+        # boundary, where the call is published and its output awaited.
+        self._client_tool_executor = (
+            _recording_client_executor(client_tool_executor, conversation_ledger)
+            if client_tool_executor is not None and conversation_ledger is not None
+            else client_tool_executor
+        )
         self._client_tool_timeout_seconds = max(1.0, client_tool_timeout_seconds)
         self._server_enabled_tools = tuple(name for name in enabled_tools if name in self._tools)
         self._enabled_tools = enabled_tools
@@ -133,6 +147,7 @@ class GenericThinkerBackend:
         # Superseded plans still running. Held only so the event loop keeps a
         # strong reference to them until they finish.
         self._detached: set[asyncio.Task[dict[str, Any]]] = set()
+        self._active_run: DelegationRun | None = None
         self.state = state or GenericThinkerSessionState()
 
     @property
@@ -190,38 +205,72 @@ class GenericThinkerBackend:
         self._client_tools = dict(snapshot.client_tools)
         self._enabled_tools = snapshot.enabled_tools
 
+    @property
+    def conversation_ledger(self) -> DelegationLedger | None:
+        """Return the session's delegation history, when backend history is enabled."""
+        return self._ledger
+
+    def running_query(self) -> str | None:
+        """Return the query of the run still working, if any."""
+        run = self._active_run
+        return run.query if run is not None and run.running else None
+
     async def call(
         self,
         query: str,
         slots: dict[str, Any] | None = None,
         *,
         on_started: Callable[[ThinkerLifecycleEvent], Awaitable[None]] | None = None,
+        continue_active: bool = False,
     ) -> dict[str, Any]:
-        """Cancel superseded work and suppress stale results."""
+        """Cancel superseded work and suppress stale results.
+
+        With ``continue_active`` and a run still working, this call takes over
+        that run instead of starting another: the previous caller ends at once
+        as superseded and this caller receives the run's single result.
+        """
         del slots
         clean_query = query.strip()
         if not clean_query:
             return planner_failure()
-        previous = self.state.active_task
-        if previous is not None and not previous.done():
-            # Let the superseded plan finish instead of discarding it. A caller
-            # who adds a detail or says "okay" mid-thought used to destroy the
-            # round already in flight, and the next turn began again at step
-            # one -- so a plan that needs a lookup before it can act never got
-            # to act. Its speech is still dropped (a newer turn owns the
-            # microphone); only its work and what it learned survive.
-            self._detached.add(previous)
-            previous.add_done_callback(self._detached.discard)
         call_id = uuid.uuid4().hex[:12]
-        self.state.active_call_id = call_id
-        started = ThinkerLifecycleEvent(marker="ThinkerStarted", call_id=call_id, query=clean_query)
-        self.state.add_event(started)
-        if on_started:
-            await on_started(started)
-        task = asyncio.create_task(self._run_call(call_id, clean_query, on_progress=on_started))
-        self.state.active_task = task
+        run = self._active_run
+        if continue_active and run is not None and run.running:
+            self.state.active_call_id = call_id
+            future = run.adopt(on_started)
+            continued = ThinkerLifecycleEvent(marker="ThinkerContinued", call_id=run.run_id, query=clean_query)
+            self.state.add_event(continued)
+            if on_started:
+                await on_started(continued)
+        else:
+            previous = self.state.active_task
+            if previous is not None and not previous.done():
+                # Let the superseded plan finish instead of discarding it. A caller
+                # who adds a detail or says "okay" mid-thought used to destroy the
+                # round already in flight, and the next turn began again at step
+                # one -- so a plan that needs a lookup before it can act never got
+                # to act. Its speech is still dropped (a newer turn owns the
+                # microphone); only its work and what it learned survive.
+                self._detached.add(previous)
+                previous.add_done_callback(self._detached.discard)
+            self.state.active_call_id = call_id
+            if self._ledger is not None:
+                self._ledger.open(call_id, clean_query)
+            started = ThinkerLifecycleEvent(marker="ThinkerStarted", call_id=call_id, query=clean_query)
+            self.state.add_event(started)
+            if on_started:
+                await on_started(started)
+            run = DelegationRun(
+                call_id,
+                clean_query,
+                lambda progress: self._run_call(call_id, clean_query, on_progress=progress),
+                on_started,
+            )
+            future = run.attach()
+            self._active_run = run
+            self.state.active_task = run.task
         try:
-            payload = await task
+            payload = await run.wait(future)
             if self.state.active_call_id != call_id:
                 raise asyncio.CancelledError
             return payload
@@ -231,9 +280,10 @@ class GenericThinkerBackend:
             )
             raise
         finally:
-            if self.state.active_task is task:
+            if run.owns(future) and self.state.active_task is run.task:
                 self.state.active_task = None
                 self.state.active_call_id = None
+                self._active_run = None
 
     def cancel_active(self, reason: str = "new_user_query") -> bool:
         """Cancel and immediately invalidate the active task generation."""
@@ -279,6 +329,7 @@ class GenericThinkerBackend:
                             "max_planning_rounds": self._max_planning_rounds,
                             "prior_tool_results": prior_tool_results,
                         },
+                        **self._history_argument(call_id),
                     ),
                     timeout=self._planner_timeout_seconds,
                 )
@@ -376,6 +427,7 @@ class GenericThinkerBackend:
                     if len(accumulated_results) == result_count_before_dispatch:
                         accumulated_results.append(round_payload)
                     self._remember_session_result(round_payload)
+                    self._record_reads(call_id, accumulated_results[result_count_before_dispatch:])
                     requests_follow_up = _requests_follow_up(plan, self._client_tools)
                     if requests_follow_up and planning_round < self._max_planning_rounds:
                         progress = ThinkerLifecycleEvent(
@@ -396,6 +448,8 @@ class GenericThinkerBackend:
                         )
                 payload = self._settle(accumulated_results)
         except asyncio.CancelledError:
+            if self._ledger is not None:
+                self._ledger.cancelled(call_id)
             raise
         except TimeoutError:
             logger.warning("Generic Thinker exhausted its bounded planner/overall deadline")
@@ -415,7 +469,26 @@ class GenericThinkerBackend:
         self.state.add_event(
             ThinkerLifecycleEvent(marker="ThinkerCompleted", call_id=call_id, query=query, payload=payload)
         )
+        if self._ledger is not None:
+            self._ledger.close(call_id, payload)
         return payload
+
+    def _history_argument(self, call_id: str) -> dict[str, Any]:
+        """Return the planner's ``history`` keyword only when there is history to send."""
+        if self._ledger is None:
+            return {}
+        history = self._ledger.render(call_id)
+        return {} if history is None else {"history": history}
+
+    def _record_reads(self, call_id: str, payloads: list[dict[str, Any]]) -> None:
+        """Record server-tool results; client calls are already recorded as writes at the executor."""
+        if self._ledger is None:
+            return
+        for payload in payloads:
+            data = payload.get("data")
+            if payload.get("type") != "tool_result" or not isinstance(data, dict) or data.get("owner") == "client":
+                continue
+            self._ledger.read(call_id, payload.get("tool"), data.get("arguments"), payload.get("status"))
 
 
 def _task_cancellation_requested() -> bool:
@@ -445,3 +518,37 @@ def _requests_follow_up(
 def _is_completion_plan(plan: Mapping[str, Any]) -> bool:
     """Treat explicit completion or a plan with no executable call as complete."""
     return plan.get("complete") is True or ("tool" not in plan and not plan.get("tool_calls"))
+
+
+def _recording_client_executor(
+    executor: ClientToolRoundExecutor,
+    ledger: DelegationLedger,
+) -> ClientToolRoundExecutor:
+    """Record each client call as a write where its round is published and awaited."""
+
+    async def execute(
+        calls: tuple[tuple[str, dict[str, Any]], ...],
+        timeout_secs: float,
+    ) -> list[str | dict[str, Any]]:
+        run_id = current_run_id()
+        records = [ledger.write_started(run_id, name, arguments) for name, arguments in calls]
+        try:
+            outputs = await executor(calls, timeout_secs)
+        except BaseException:
+            for record in records:
+                ledger.write_unconfirmed(record)
+            raise
+        for record, (name, arguments), output in zip(records, calls, outputs, strict=False):
+            if _client_tool_timed_out(output):
+                # The client may still run a call it received after the deadline.
+                ledger.write_unconfirmed(record)
+            else:
+                ledger.write_confirmed(record, format_client_result(name, arguments, output).get("status"))
+        return outputs
+
+    return execute
+
+
+def _client_tool_timed_out(output: object) -> bool:
+    error = output.get("error") if isinstance(output, dict) else None
+    return isinstance(error, dict) and error.get("code") == "client_tool_timeout"

@@ -45,6 +45,8 @@ class DomainBuildContext:
     client_tools: tuple[Mapping[str, Any], ...] = ()
     client_instructions: str = ""
     client_tool_executor: Any = None
+    #: Session delegation history (``DelegationLedger``); None when backend history is off.
+    conversation_ledger: Any = None
 
 
 FillerPolicy = Literal["code_authored", "planner_authored", "talker_authored"]
@@ -72,6 +74,8 @@ class DomainSpec:
     tool_registry: Mapping[str, ToolSpec] = field(default_factory=dict)
     realtime_prompt_coordinator_factory: Callable[..., Any] | None = None
     max_query_chars: int = 4000
+    #: Whether ``build_backend`` records ``conversation_ledger`` and passes it to the Thinker.
+    supports_conversation_history: bool = False
 
 
 # This allowlist is the code-level trust boundary. ``domain_profile`` may arrive

@@ -61,6 +61,7 @@ def _build_backend(context: DomainBuildContext) -> GenericThinkerBackend:
         max_planning_rounds=parse_env_int("GENERIC_MAX_PLANNING_ROUNDS", 8, min_value=1),
         on_tool_started=context.on_tool_started,
         stage_metrics=context.stage_metrics,
+        conversation_ledger=context.conversation_ledger,
     )
 
 
@@ -84,4 +85,5 @@ def create_domain_spec() -> DomainSpec:
         tool_registry=TOOLS,
         realtime_prompt_coordinator_factory=_build_realtime_prompt_coordinator,
         max_query_chars=2000,
+        supports_conversation_history=True,
     )

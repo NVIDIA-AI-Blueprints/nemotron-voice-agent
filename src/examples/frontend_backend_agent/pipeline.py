@@ -31,6 +31,8 @@ from pipecat.workers.runner import WorkerRunner
 import examples_registry
 from examples.frontend_backend_agent.src.barge_in import BargeInState, BargeInTracker
 from examples.frontend_backend_agent.src.domain import DomainBuildContext, resolve_domain_spec
+from examples.frontend_backend_agent.src.frontend_verdict import with_task_field
+from examples.frontend_backend_agent.src.history import ConversationTranscript, DelegationLedger
 from examples.frontend_backend_agent.src.reliable_talker import ReliableNvidiaLLMService
 from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
@@ -59,6 +61,7 @@ from utils import (
     normalize_lang_code,
     nvidia_api_key,
     nvidia_speech_api_key,
+    parse_env_bool,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
@@ -73,6 +76,9 @@ THINKER_TOOL_DELAY_MAX_SECONDS = 0.5
 THINKER_FILLER_THRESHOLD_SECONDS = parse_env_float("THINKER_FILLER_THRESHOLD_SECONDS", 0.3, min_value=0.0)
 THINKER_TOOL_TIMEOUT_SECONDS = parse_env_float("THINKER_TOOL_TIMEOUT_SECONDS", 45.0, min_value=1.0)
 FRONTEND_BACKEND_VAD_STOP_SECS = parse_env_float("FRONTEND_BACKEND_VAD_STOP_SECS", 0.5, min_value=0.0)
+#: Catalog keys of the trusted addenda for the two default-on features.
+FRONTEND_VERDICT_PROMPT_KEY = "frontend_verdict_talker"
+BACKEND_HISTORY_PROMPT_KEY = "backend_history_thinker"
 
 
 def _build_context_messages(
@@ -371,6 +377,31 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     client_tool_round_executor = realtime_client_tool_executor(transport) if is_realtime else None
 
+    # Read per session so a deployment change applies to the next session.
+    frontend_verdict_enabled = parse_env_bool("FRONTEND_BACKEND_FRONTEND_VERDICT", True)
+    backend_history_enabled = parse_env_bool("FRONTEND_BACKEND_BACKEND_HISTORY", True) and (
+        domain.supports_conversation_history
+    )
+    barge_in_state = BargeInState()
+    transcript: ConversationTranscript | None = None
+    if frontend_verdict_enabled or backend_history_enabled:
+        journal_provider = None
+        if is_realtime:
+            from realtime.transport import realtime_controller
+
+            def journal_provider():
+                controller = realtime_controller(transport)
+                return controller.conversation if controller is not None else None
+
+        transcript = ConversationTranscript(journal_provider)
+    conversation_ledger = (
+        DelegationLedger(transcript, interruption_count=lambda: barge_in_state.bot_interruptions)
+        if backend_history_enabled
+        else None
+    )
+    if backend_history_enabled:
+        thinker_prompt = f"{thinker_prompt}\n\n{_load_required_catalog_prompt(BACKEND_HISTORY_PROMPT_KEY)}"
+
     async def on_internal_tool_started(tool_name: str) -> None:
         if task is not None:
             await task.queue_frame(RTVIServerMessageFrame(data={"type": "tool-call", "tool": tool_name}))
@@ -390,8 +421,18 @@ async def bot(runner_args: RunnerArguments) -> None:
             client_tools=client_tools,
             client_instructions=client_instructions,
             client_tool_executor=client_tool_round_executor,
+            conversation_ledger=conversation_ledger,
         )
     )
+    frontend_verdict_active = frontend_verdict_enabled and bool(getattr(thinker, "supports_task_continuation", False))
+    talker_tools_base_schema = (
+        with_task_field(domain.talker_tools_schema) if frontend_verdict_active else domain.talker_tools_schema
+    )
+    talker_prompt_addendum = (
+        _load_required_catalog_prompt(FRONTEND_VERDICT_PROMPT_KEY) if frontend_verdict_active else ""
+    )
+    if frontend_verdict_active:
+        talker_few_shots = [*talker_few_shots, *_load_prompt_few_shots(FRONTEND_VERDICT_PROMPT_KEY)]
     logger.info(f"Frontend/Backend domain: {domain.key} ({domain.label})")
     logger.info(
         f"Thinker LLM: model={thinker_model_id}, base_url={thinker_base_url}, "
@@ -402,7 +443,10 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info(f"Thinker tool delay: {THINKER_TOOL_DELAY_MIN_SECONDS:.3f}s-{THINKER_TOOL_DELAY_MAX_SECONDS:.3f}s")
     logger.info(f"Thinker filler threshold: {THINKER_FILLER_THRESHOLD_SECONDS:.3f}s")
     logger.info(f"Thinker tool timeout: {THINKER_TOOL_TIMEOUT_SECONDS:.3f}s")
-    barge_in_state = BargeInState()
+    logger.info(
+        f"Frontend verdict: {'on' if frontend_verdict_active else 'off'}; "
+        f"backend history: {'on' if backend_history_enabled else 'off'} (domain={domain.key})"
+    )
     available_talker_handlers = build_handlers(
         thinker,
         filler_threshold_seconds=THINKER_FILLER_THRESHOLD_SECONDS,
@@ -417,6 +461,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             if is_realtime and domain.key == "generic"
             else None
         ),
+        frontend_verdict=frontend_verdict_active,
+        transcript=transcript,
     )
     if is_realtime:
         raw_delegate_tools = body.get("delegate_tools", [])
@@ -429,10 +475,10 @@ async def bot(runner_args: RunnerArguments) -> None:
                 f"Trusted pipeline tool {sorted(missing_delegate_handlers)[0]!r} has no registered handler"
             )
         talker_handlers = {name: available_talker_handlers[name] for name in active_delegate_tools}
-        trusted_tools_schema = select_trusted_tools(domain.talker_tools_schema, active_delegate_tools)
+        trusted_tools_schema = select_trusted_tools(talker_tools_base_schema, active_delegate_tools)
     else:
         talker_handlers = available_talker_handlers
-        trusted_tools_schema = domain.talker_tools_schema
+        trusted_tools_schema = talker_tools_base_schema
 
     for name, original_handler in talker_handlers.items():
         if is_realtime:
@@ -519,6 +565,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     # --- Context + aggregators ---
     def render_realtime_instructions(instructions: str) -> list[dict]:
+        if talker_prompt_addendum:
+            instructions = f"{instructions}\n\n{talker_prompt_addendum}"
         rendered = _build_context_messages(
             instructions,
             system_prompt,
@@ -600,6 +648,12 @@ async def bot(runner_args: RunnerArguments) -> None:
     latency_observer = UserBotLatencyObserver()
     summary_lock = asyncio.Lock()
 
+    if transcript is not None:
+
+        @user_aggregator.event_handler("on_user_turn_message_added")
+        async def on_user_turn_message_added(aggregator, message):
+            transcript.record_user(getattr(message, "content", None))
+
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):
         if is_realtime:
@@ -608,6 +662,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         # provider-only snapshot owns any native token-budget truncation.
         if is_realtime:
             return
+        # Realtime assistant text is read from the conversation journal instead.
+        if transcript is not None:
+            transcript.record_assistant(getattr(message, "content", None))
         async with summary_lock:
             _apply_chat_history_sliding_window(context, preserve_prompt_messages, CHAT_HISTORY_RECENT_TURNS)
 

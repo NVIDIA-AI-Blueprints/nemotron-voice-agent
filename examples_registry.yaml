@@ -157,6 +157,8 @@ examples:
       - thinker
       - generic_talker
       - generic_thinker
+      - frontend_verdict_talker
+      - backend_history_thinker
     slots: [llm, thinker-llm, booking-server, asr, tts]
     defaults:
       prompt: [talker]
@@ -181,6 +183,8 @@ examples:
       - talker
       - thinker
       - generic_thinker
+      - frontend_verdict_talker
+      - backend_history_thinker
     slots: [llm, thinker-llm, asr, tts]
     defaults:
       prompt: [generic_talker]
