@@ -16,6 +16,7 @@ This minor release upgrades Pipecat to 1.11.0 and adopts its built-in transcript
 ### Fixed
 
 - The Generic Assistant now waits 15 seconds, instead of Pipecat's 3-second default, for the first TTS audio of a reply. This prevents silent replies and Realtime `tts_provider_error` events under concurrent load. Override the timeout with `TTS_STOP_FRAME_TIMEOUT_S` (minimum 5 seconds).
+- The NVIDIA TTS text filters now drop punctuation-only lines and prefixes, such as a lone `?` left after a sentence split. Magpie rejected such segments with "Invalid text, only punctuation", which ended synthesis for the whole reply.
 
 ## [2.2.0] - TBD
 
