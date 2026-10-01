@@ -18,6 +18,7 @@ from loguru import logger
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.services.llm_service import FunctionCallResultProperties
 
+from examples.frontend_backend_agent.src.frontend_verdict import decide
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload, response_hint
 from examples.frontend_backend_agent.src.runtime_context import runtime_today
 
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
 
     from examples.frontend_backend_agent.src.domain import FillerPolicy
+    from examples.frontend_backend_agent.src.history import ConversationTranscript
     from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 
 
@@ -108,14 +110,21 @@ def build_handlers(
     stage_metrics: StageMetricsCoordinator | None = None,
     allow_talker_frames: bool = True,
     realtime_filler_emitter: Callable[[str], Awaitable[bool]] | None = None,
+    frontend_verdict: bool = False,
+    transcript: ConversationTranscript | None = None,
 ) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent.
 
     Realtime sessions suppress unowned Talker frames. When provided, the
     deferred filler emitter claims a separate pipeline-created response only
     after the delegated function-call response has closed.
+
+    With ``frontend_verdict``, a ``call_backend`` made while earlier work still
+    runs can take over that run instead of restarting it (see
+    ``frontend_verdict.decide``). ``transcript`` supplies the user's latest words.
     """
     consecutive_planner_errors = 0
+    continuation_supported = frontend_verdict and bool(getattr(thinker, "supports_task_continuation", False))
     tool_result_mode_default = getattr(thinker, "tool_result_mode_default", "talker")
     talker_result_tools = frozenset(getattr(thinker, "talker_result_tools", ()))
 
@@ -154,6 +163,8 @@ def build_handlers(
                 allow_talker_frames=allow_talker_frames,
             )
             return
+        continue_active = continuation_supported and _continues_running_request(thinker, arguments, query, transcript)
+        ledger = getattr(thinker, "conversation_ledger", None)
         try:
             if filler_policy == "talker_authored":
                 filler_text = _validated_talker_filler(query, arguments.get("filler_text"))
@@ -173,10 +184,13 @@ def build_handlers(
                 ).info("Processed Talker-authored filler candidate")
             if filler_mode != "emit" or (not allow_talker_frames and realtime_filler_emitter is None):
                 filler_text = ""
-            slots = {key: value for key, value in arguments.items() if key not in {"query", "intent", "filler_text"}}
+            slots = {
+                key: value for key, value in arguments.items() if key not in {"query", "intent", "filler_text", "task"}
+            }
             filler_task: asyncio.Task | None = None
             filler_started = False
             filler_emitted = False
+            run_id: str | None = None
 
             async def emit_filler_once() -> None:
                 nonlocal filler_emitted
@@ -198,9 +212,19 @@ def build_handlers(
                     logger.warning(f"Failed to emit Talker filler: {exc}")
 
             async def schedule_thinker_started_filler(event: ThinkerLifecycleEvent) -> None:
-                nonlocal filler_started, filler_task
+                nonlocal filler_started, filler_task, run_id
+                if event.marker in {"ThinkerStarted", "ThinkerContinued"}:
+                    run_id = event.call_id
                 if stage_metrics is not None:
                     await stage_metrics.bind_backend_call(params.tool_call_id, event.call_id)
+                if event.marker == "ThinkerContinued":
+                    # The run already spoke its own progress phrase if it needed one.
+                    # Speak this call's phrase only when the Talker chose to answer a
+                    # progress check, and do it now rather than after the threshold.
+                    if filler_text and not filler_started:
+                        filler_started = True
+                        filler_task = asyncio.create_task(emit_filler_once())
+                    return
                 if event.marker == "IntermediateResponse" and filler_text and not filler_emitted:
                     await _cancel_pending_filler(filler_task)
                     filler_task = None
@@ -218,7 +242,12 @@ def build_handlers(
                 filler_task = asyncio.create_task(emit_filler_after_threshold())
 
             try:
-                payload = await thinker.call(query, slots=slots, on_started=schedule_thinker_started_filler)
+                if continue_active:
+                    payload = await thinker.call(
+                        query, slots=slots, on_started=schedule_thinker_started_filler, continue_active=True
+                    )
+                else:
+                    payload = await thinker.call(query, slots=slots, on_started=schedule_thinker_started_filler)
             finally:
                 if filler_emitted and filler_task is not None and not filler_task.done():
                     with suppress(asyncio.CancelledError):
@@ -231,6 +260,8 @@ def build_handlers(
                 raise
             consecutive_planner_errors = 0
             logger.info("call_backend result suppressed after Thinker abort")
+            if ledger is not None:
+                ledger.record_delivery(run_id, "not_delivered")
             await params.result_callback(
                 {
                     "type": "response_hint",
@@ -275,13 +306,20 @@ def build_handlers(
                     terminal_payload,
                     allow_talker_frames=allow_talker_frames,
                 )
+                if ledger is not None:
+                    spoken = allow_talker_frames
+                    ledger.record_delivery(
+                        run_id,
+                        "spoken_direct" if spoken else "via_talker",
+                        str(terminal_payload.get("response_text") or "") if spoken else "",
+                    )
                 if stage_metrics is not None:
                     await stage_metrics.cleanup_tool_call(params.tool_call_id)
                 consecutive_planner_errors = 0
                 return
         else:
             consecutive_planner_errors = 0
-        await _deliver_tool_payload(
+        delivery = await _deliver_tool_payload(
             params,
             payload,
             default_mode=tool_result_mode_default,
@@ -289,6 +327,12 @@ def build_handlers(
             stage_metrics=stage_metrics,
             allow_talker_frames=allow_talker_frames,
         )
+        if ledger is not None:
+            ledger.record_delivery(
+                run_id,
+                delivery,
+                str(payload.get("response_text") or "") if delivery == "spoken_direct" else "",
+            )
 
     async def handle_cancel_backend(params: FunctionCallParams) -> None:
         nonlocal consecutive_planner_errors
@@ -324,6 +368,36 @@ def build_handlers(
         await params.result_callback(payload)
 
     return {"call_backend": handle_call_backend, "cancel_backend": handle_cancel_backend}
+
+
+def _continues_running_request(
+    thinker: object,
+    arguments: dict[str, Any],
+    query: str,
+    transcript: ConversationTranscript | None,
+) -> bool:
+    """Apply the frontend verdict to a call_backend made while earlier work may still run."""
+    running_query = getattr(thinker, "running_query", None)
+    running = running_query() if callable(running_query) else None
+    raw_task = arguments.get("task")
+    if running is None:
+        if raw_task is not None:
+            logger.bind(event="frontend_verdict", decision="new", reason="no_running_task", model_task=raw_task).info(
+                "Frontend verdict found no running backend request"
+            )
+        return False
+    utterance = transcript.latest_user_text() if transcript is not None else ""
+    verdict = decide(raw_task, query, running, utterance)
+    logger.bind(
+        event="frontend_verdict",
+        decision=verdict.decision,
+        reason=verdict.reason,
+        model_task=verdict.model_task,
+        query_chars=len(query),
+        running_query_chars=len(running),
+        utterance_words=len(utterance.split()),
+    ).info(f"Frontend verdict: {verdict.decision} ({verdict.reason})")
+    return verdict.decision == "continue"
 
 
 async def _emit_talker_response(llm, text: str, *, append_to_context: bool = True) -> None:
@@ -432,13 +506,16 @@ async def _deliver_tool_payload(
     stage_metrics: StageMetricsCoordinator | None = None,
     talker_result_tools: frozenset[str] = frozenset(),
     allow_talker_frames: bool = True,
-) -> None:
-    """Deliver one grounded payload through the configured final-response path."""
+) -> str:
+    """Deliver one grounded payload through the configured final-response path.
+
+    Returns how it was delivered: ``not_speakable``, ``spoken_direct``, or ``via_talker``.
+    """
     if not is_speakable_payload(payload):
         await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
         if stage_metrics is not None:
             await stage_metrics.cleanup_tool_call(params.tool_call_id)
-        return
+        return "not_speakable"
     response_text = str(payload.get("response_text") or "")
     _remember_backend_response(params.llm, response_text, payload)
     if not allow_talker_frames:
@@ -446,17 +523,18 @@ async def _deliver_tool_payload(
             _talker_result_projection(payload),
             properties=FunctionCallResultProperties(run_llm=True),
         )
-        return
+        return "via_talker"
     if _should_deliver_directly(payload, default_mode=default_mode, talker_result_tools=talker_result_tools):
         await _emit_talker_response(params.llm, response_text, append_to_context=False)
         await params.result_callback(payload, properties=FunctionCallResultProperties(run_llm=False))
         if stage_metrics is not None:
             await stage_metrics.cleanup_tool_call(params.tool_call_id)
-        return
+        return "spoken_direct"
     await params.result_callback(
         _talker_result_projection(payload),
         properties=FunctionCallResultProperties(run_llm=True),
     )
+    return "via_talker"
 
 
 def _tool_result_mode(default_mode: object = "talker") -> str:

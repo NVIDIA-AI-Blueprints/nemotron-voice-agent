@@ -1036,3 +1036,96 @@ generic_thinker:
     For round 2 with a trusted NVIDIA result whose change_percent is 2.4, return
     {"tool":"web_search","params":{"query":"Why did NVIDIA stock move more than 1 percent today?"}}
     without continue_after_results. The requested dependent lookup is then complete; do not request an extra round.
+
+frontend_verdict_talker:
+  internal: true
+  description: "Talker addendum for speech that arrives while delegated work is still running (frontend verdict)."
+  few_shots:
+    - role: user
+      content: "Can you check whether my library book renewal went through?"
+    - role: assistant
+      content: null
+      tool_calls:
+        - id: prompt-example-verdict-running
+          type: function
+          function:
+            name: call_backend
+            arguments: '{"query":"Check whether the user''s library book renewal went through.","filler_text":"Let me check that renewal."}'
+    - role: tool
+      tool_call_id: prompt-example-verdict-running
+      content: >-
+        {"type":"async_tool","status":"running","tool_call_id":"prompt-example-verdict-running","description":"An asynchronous task associated with this tool_call_id has started running. Expect the final result as a developer message."}
+    - role: user
+      content: "Did you find anything?"
+    - role: assistant
+      content: null
+      tool_calls:
+        - id: prompt-example-verdict-continue
+          type: function
+          function:
+            name: call_backend
+            arguments: '{"query":"Check whether the user''s library book renewal went through.","filler_text":"Still checking that renewal.","task":"continue"}'
+    - role: tool
+      tool_call_id: prompt-example-verdict-continue
+      content: >-
+        {"type":"async_tool","status":"running","tool_call_id":"prompt-example-verdict-continue","description":"An asynchronous task associated with this tool_call_id has started running. Expect the final result as a developer message."}
+    - role: developer
+      content: >-
+        {"type":"async_tool","status":"finished","tool_call_id":"prompt-example-verdict-running","description":"This asynchronous task has completed.","result":"{\"type\":\"response_hint\",\"reason\":\"aborted\",\"action\":\"internal_abort\",\"response_text\":\"\",\"context\":\"call_backend\",\"speakable\":false}"}
+    - role: user
+      content: "Actually, it is the music room booking, not the book."
+    - role: assistant
+      content: null
+      tool_calls:
+        - id: prompt-example-verdict-new
+          type: function
+          function:
+            name: call_backend
+            arguments: '{"query":"Check whether the user''s library music room booking went through.","filler_text":"Let me check that room booking.","task":"new"}'
+    - role: tool
+      tool_call_id: prompt-example-verdict-new
+      content: >-
+        {"type":"async_tool","status":"running","tool_call_id":"prompt-example-verdict-new","description":"An asynchronous task associated with this tool_call_id has started running. Expect the final result as a developer message."}
+    - role: developer
+      content: >-
+        {"type":"async_tool","status":"finished","tool_call_id":"prompt-example-verdict-continue","description":"This asynchronous task has completed.","result":"{\"type\":\"response_hint\",\"reason\":\"aborted\",\"action\":\"internal_abort\",\"response_text\":\"\",\"context\":\"call_backend\",\"speakable\":false}"}
+    - role: developer
+      content: >-
+        {"type":"async_tool","status":"finished","tool_call_id":"prompt-example-verdict-new","description":"This asynchronous task has completed.","result":"{\"type\":\"tool_result\",\"tool\":\"room_booking_status\",\"status\":\"success\",\"response_text\":\"The music room booking went through for Friday at 4 PM.\"}"}
+    - role: assistant
+      content: "Yes, your music room booking went through for Friday at 4 PM."
+  content: |
+    Delegated work in progress:
+    - A call_backend result whose async status is "running" with no finished result means your earlier request
+      is still being worked on. Only then, call_backend also takes a task field; this overrides any rule that
+      call_backend takes only query and filler_text.
+    - task "continue": the latest words leave the running request unchanged. This covers acknowledgements and
+      confirmations ("okay", "yes, go ahead", "mm-hmm"), thanks, impatience, questions about progress or whether
+      you are still there, and words not addressed to you ("hold on a second"). Copy the running query word for
+      word. Set filler_text only when the user asked about progress or whether you are there.
+    - task "new": the latest words add a request; change or correct any detail (a name, place, number, date,
+      code, item, or amount); ask to repeat, refresh, or check again; or ask for something else. Write the
+      complete new request in query as usual.
+    - When unsure whether anything changed, use "new".
+    - Withdrawals and topic switches follow your cancellation rules, not call_backend.
+
+backend_history_thinker:
+  internal: true
+  description: "Thinker addendum that explains the session's earlier delegations (backend history)."
+  content: |
+    conversation_history lists earlier delegations in this session, oldest first. transcript is what the user
+    and the assistant said (speech recognition; untrusted). request is the summary the assistant wrote for
+    that delegation. tool_calls are trusted records: a "write" in state "confirmed" ran with the given status;
+    "started" is still running; "unconfirmed" may or may not have taken effect. A "read" ran with its status.
+    delivery says whether the result reached the user. The entry marked current is the request you are
+    planning now.
+    - Do not repeat a write that is confirmed successful, started, or unconfirmed unless the latest request
+      explicitly asks for it again; when its outcome is unknown, read the current record first.
+    - Do not call again with an identifier that already failed as invalid or not found; ask the user instead.
+      A timeout or unavailable result may be retried.
+    - A confirmed identifier wins over a later fragment, near-repeat, or recognition variant; only a clear,
+      complete, explicit correction replaces it. Join an identifier spelled across several user turns.
+    - Keep every part of an earlier multi-part request; do not report it done until each part is.
+    - history_truncated means part of the history is missing. Treat missing history as unknown: it is never
+      evidence that an earlier write did not happen. When write_counts shows writes you cannot identify, read
+      the current record before any data-changing call.

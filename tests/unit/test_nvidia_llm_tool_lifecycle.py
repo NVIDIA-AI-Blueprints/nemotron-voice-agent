@@ -206,6 +206,54 @@ class StreamedToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await _collect_provider_stream(*chunks, parallel_tool_calls=parallel_tool_calls)
             self.assertEqual(str(raised.exception), expected_error)
 
+    async def test_trailing_usage_chunks_without_output_are_accepted_for_any_provider_shape(self) -> None:
+        def trailing(choices: list[dict[str, Any]]) -> ChatCompletionChunk:
+            return ChatCompletionChunk.model_validate(
+                {
+                    "id": "chatcmpl_stream",
+                    "created": 1,
+                    "model": "test-model",
+                    "object": "chat.completion.chunk",
+                    "choices": choices,
+                    "usage": {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11},
+                }
+            )
+
+        shapes = {
+            # OpenAI and most compatible servers.
+            "no choices": trailing([]),
+            # Gateways such as NVIDIA Inference Hub.
+            "empty delta": trailing([{"index": 0, "delta": {}, "finish_reason": None}]),
+            "role only": trailing([{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]),
+            "empty content": trailing([{"index": 0, "delta": {"content": ""}, "finish_reason": None}]),
+        }
+        for label, usage in shapes.items():
+            for terminal in (
+                (_stream_chunk(_tool_delta()), _stream_chunk({}, finish_reason="tool_calls")),
+                (_stream_chunk({"content": "Hi."}), _stream_chunk({}, finish_reason="stop")),
+            ):
+                with self.subTest(shape=label, terminal=terminal[-1].choices[0].finish_reason):
+                    chunks = await _collect_provider_stream(*terminal, usage)
+                    self.assertEqual([chunk.usage.total_tokens for chunk in chunks if chunk.usage], [11])
+
+    async def test_output_after_the_terminal_chunk_still_fails_closed(self) -> None:
+        # Exercise the terminal check directly: in the full chain the tool-call
+        # hold stage drops late tool deltas before they reach it.
+        for label, late in (
+            ("content", _stream_chunk({"content": "late text"})),
+            ("tool call", _stream_chunk(_tool_delta())),
+            ("reasoning", _stream_chunk({"reasoning_content": "late thought"})),
+            ("refusal", _stream_chunk({"refusal": "no"})),
+            ("second terminal", _stream_chunk({}, finish_reason="stop")),
+        ):
+            stream = NvidiaLLMService._with_provider_completion_reason(
+                _ProviderReasonSink(),
+                _stream(_stream_chunk({"content": "Hi."}), _stream_chunk({}, finish_reason="stop"), late),
+            )
+            with self.subTest(label=label), self.assertRaises(ValueError) as raised:
+                [chunk async for chunk in stream]
+            self.assertEqual(str(raised.exception), "Provider stream emitted choices after its terminal chunk")
+
     async def test_formatting_only_prefix_is_not_published_for_a_tool_only_response(self) -> None:
         chunks = await _collect_stream(
             _stream_chunk({"role": "assistant", "content": "\n\u2003"}),

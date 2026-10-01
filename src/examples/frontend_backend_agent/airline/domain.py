@@ -63,6 +63,7 @@ def _build_backend(context: DomainBuildContext) -> ThinkerBackend:
         tool_delay_min_seconds=context.tool_delay_min_seconds,
         overall_timeout_seconds=parse_env_float("AIRLINE_BACKEND_TIMEOUT_SECONDS", 30.0, min_value=1.0),
         planner_timeout_seconds=parse_env_float("AIRLINE_PLANNER_TIMEOUT_SECONDS", 30.0, min_value=1.0),
+        conversation_ledger=context.conversation_ledger,
     )
 
 
@@ -83,4 +84,5 @@ def create_domain_spec() -> DomainSpec:
         runtime_context=_runtime_context,
         tts_text_transform=apply_frontend_backend_agent_pronunciation_for_tts,
         max_query_chars=4000,
+        supports_conversation_history=True,
     )

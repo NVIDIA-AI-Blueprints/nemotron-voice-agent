@@ -226,8 +226,9 @@ A domain factory returns a frozen `DomainSpec`. The shared pipeline consumes the
 | `tool_registry` | Publish the domain's code-owned `ToolSpec` allowlist for registry-selected capabilities |
 | `realtime_prompt_coordinator_factory` | Optionally create a session-local owner that atomically updates Realtime Talker and Thinker prompts |
 | `max_query_chars` | Bound delegated input length |
+| `supports_conversation_history` | Declare that `build_backend` records the session delegation history and passes it to the Thinker; defaults to `False` |
 
-`build_backend` receives a `DomainBuildContext` with `thinker_llm`, the resolved `thinker_prompt`, `thinker_max_tokens`, registry-owned `tool_names`, `tool_delay_seconds`, `tool_delay_min_seconds`, and `load_service_entry`. It does not receive the raw session body or prompt metadata.
+`build_backend` receives a `DomainBuildContext` with `thinker_llm`, the resolved `thinker_prompt`, `thinker_max_tokens`, registry-owned `tool_names`, `tool_delay_seconds`, `tool_delay_min_seconds`, `load_service_entry`, and `conversation_ledger`. It does not receive the raw session body or prompt metadata.
 
 The returned backend must implement:
 
@@ -236,6 +237,46 @@ The returned backend must implement:
 - `cancel_pending_work()` to clear domain state that remains after active execution.
 
 Keep the backend session-scoped. Do not store mutable conversation state in a module-level object.
+
+## Opt In to Continuation and Session History
+
+The shared pipeline offers two optional backend capabilities. Both built-in
+domains opt in to both. A domain that does not opt in keeps the existing
+behavior, and the startup log reports the feature as `off`.
+
+To let a later `call_backend` call continue the running request when
+`FRONTEND_BACKEND_FRONTEND_VERDICT` is enabled, the backend must provide the
+following members:
+
+- A class attribute `supports_task_continuation = True`. Without it, the
+  Talker never sees the `task` field.
+- A `running_query()` method that returns the query of the request still
+  running, or `None`.
+- A `continue_active` keyword argument on `call`. When it is `True` and a
+  request is running, the new caller takes over that request instead of
+  starting another. The backend emits a `ThinkerContinued` lifecycle event,
+  ends the previous caller as superseded, and delivers the single result to
+  the new caller. The shared `DelegationRun` helper in
+  `src/delegation.py` implements this ownership transfer.
+
+To send the Thinker a bounded `conversation_history` when
+`FRONTEND_BACKEND_BACKEND_HISTORY` is enabled, set
+`supports_conversation_history=True` on the `DomainSpec`. The pipeline then
+passes a `DelegationLedger` as `DomainBuildContext.conversation_ledger`, or
+`None` when the feature is off. The backend must do the following:
+
+- Open a ledger entry when a request starts, and close it or mark it
+  cancelled when the request ends.
+- Record each side-effecting call at its real side-effect boundary as
+  started, then confirmed or unconfirmed. Record reads with their status.
+- Pass the rendered history to the planner as the `history` keyword only when
+  the ledger returns a value, and expose the ledger as a
+  `conversation_ledger` property so delivery is recorded.
+
+For reference implementations, refer to `generic/backend.py` and
+`airline/thinker.py` in `src/examples/frontend_backend_agent/`. For the
+user-facing behavior, refer to
+[Continue Running Work and Share Session History](../../src/examples/frontend_backend_agent/README.md#continue-running-work-and-share-session-history).
 
 ## Add a Read-Only Flavor
 
@@ -300,7 +341,7 @@ The generic domain applies the following controls:
   responses can trigger the retry. Other HTTP errors fail immediately.
 - It treats the user request and retrieved webpages as untrusted input.
 - It creates final spoken text from validated arguments and returned service data.
-- It cancels and replaces an unfinished request when the same session sends newer delegated work.
+- It replaces an unfinished request when the same session sends newer delegated work. The superseded plan can finish, but its result is not spoken. When `FRONTEND_BACKEND_FRONTEND_VERDICT` allows it, a pure acknowledgement or progress check continues the running request instead.
 - It invalidates the active call identifier before cancellation, which suppresses late stale results.
 - It blocks another internal tool call after a completed backend result. The
   Talker retries once, then uses the trusted backend response instead of

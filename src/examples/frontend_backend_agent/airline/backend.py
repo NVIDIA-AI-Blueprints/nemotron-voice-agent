@@ -16,6 +16,7 @@ from examples.frontend_backend_agent.airline.transform import (
     sort_flights,
     unique_flights,
 )
+from examples.frontend_backend_agent.src.delegation import current_run_id
 
 
 class BookingBackend(Protocol):
@@ -111,3 +112,45 @@ class HTTPBookingBackend:
             return None
         response.raise_for_status()
         return server_pnr_to_record(response.json())
+
+
+class RecordingBookingBackend:
+    """Record the booking write where it happens; reads pass straight through.
+
+    ``create_booking`` is the airline domain's only side effect. A ``booking``
+    plan that only asks for confirmation never reaches it, so it is never
+    recorded as a write.
+    """
+
+    def __init__(self, backend: BookingBackend, ledger: Any) -> None:
+        """Wrap ``backend`` and record writes in the session's delegation ledger."""
+        self._backend = backend
+        self._ledger = ledger
+
+    async def search_flights(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Return flights from the wrapped backend."""
+        return await self._backend.search_flights(**kwargs)
+
+    async def get_pnr(self, pnr_code: str) -> dict[str, Any] | None:
+        """Return a PNR record from the wrapped backend."""
+        return await self._backend.get_pnr(pnr_code)
+
+    async def create_booking(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Create a booking, recording it as started, then confirmed or unconfirmed."""
+        flight = kwargs.get("flight") if isinstance(kwargs.get("flight"), dict) else {}
+        arguments = {
+            "passenger_name": kwargs.get("passenger_name"),
+            "flight_id": flight.get("flight_id"),
+            "date": flight.get("date"),
+            "seat_pref": kwargs.get("seat_pref"),
+            "meal_pref": kwargs.get("meal_pref"),
+        }
+        record = self._ledger.write_started(current_run_id(), "create_booking", arguments)
+        try:
+            result = await self._backend.create_booking(**kwargs)
+        except BaseException:
+            # A failed or cancelled HTTP request may still have created the PNR.
+            self._ledger.write_unconfirmed(record)
+            raise
+        self._ledger.write_confirmed(record, "success" if result is not None else "not_found")
+        return result
