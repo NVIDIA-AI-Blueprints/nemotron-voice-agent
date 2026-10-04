@@ -53,6 +53,7 @@ from utils import (
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
+    parse_env_float,
     parse_env_int,
     parse_json_dict,
     resolve_tools_available,
@@ -174,6 +175,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             base_url=base_url,
             settings=llm_settings,
             forced_tool_call_stops=llm_profile.get("forced_tool_call_stops"),
+            realtime_max_identical_tool_calls=llm_profile.get("realtime_max_identical_tool_calls"),
+            realtime_max_tool_calls_per_turn=llm_profile.get("realtime_max_tool_calls_per_turn"),
             realtime_parallel_tool_calls=body.get("parallel_tool_calls", True),
             realtime_model_max_output_tokens=body.get("realtime_model_max_output_tokens"),
         )
@@ -256,6 +259,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         "use_ssl": tts_ssl,
         "text_filters": [NemotronSpeechTextFilter()],
         "custom_dictionary": custom_dictionary,
+        # Pipecat's 3s default drops replies whose first Magpie audio arrives
+        # late under load; Magpie ends each stream explicitly, so a longer wait
+        # does not delay normal replies.
+        "stop_frame_timeout_s": parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 15.0, min_value=5.0),
     }
     if tts_function_id or tts_model:
         tts_kwargs["model_function_map"] = {

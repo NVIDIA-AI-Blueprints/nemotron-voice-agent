@@ -8,10 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 This minor release upgrades Pipecat to 1.11.0 and adopts its built-in transcript-independent Smart Turn handling for audio-only user turns.
 
+### Added
+
+- Optional `realtime_max_identical_tool_calls` and `realtime_max_tool_calls_per_turn` LLM catalog fields that bound runaway tool-call loops in OpenAI Realtime sessions of the Generic, Multilingual, and Frontend/Backend Agent examples. When a limit is reached, the next completion withholds tools and asks the model to answer the caller.
+
 ### Changed
 
 - Upgraded Pipecat to version 1.11.0.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
+
+### Fixed
+
+- The NVIDIA TTS text filters now drop punctuation-only lines and prefixes, such as a lone `?` left after a sentence split. Magpie rejected such segments with "Invalid text, only punctuation", which ended synthesis for the whole reply.
+- The Generic Assistant now waits 15 seconds, instead of Pipecat's 3-second default, for the first TTS audio of a reply. This prevents silent replies and Realtime `tts_provider_error` events under concurrent load. Override the timeout with `TTS_STOP_FRAME_TIMEOUT_S` (minimum 5 seconds).
 
 ## [2.2.0] - TBD
 

@@ -473,6 +473,8 @@ llm:
             "supports_tokenize": True,
             "realtime_max_output_tokens": 2048,
             "forced_tool_call_stops": ["</tool_call>"],
+            "realtime_max_identical_tool_calls": 3,
+            "realtime_max_tool_calls_per_turn": 12,
         }
 
         api_entry = utils._build_services_api_entries(
@@ -491,6 +493,8 @@ llm:
             self.assertNotIn("supports_tokenize", entry)
             self.assertNotIn("realtime_max_output_tokens", entry)
             self.assertNotIn("forced_tool_call_stops", entry)
+            self.assertNotIn("realtime_max_identical_tool_calls", entry)
+            self.assertNotIn("realtime_max_tool_calls_per_turn", entry)
 
     def test_multilingual_agent_prompt_keys_are_registry_declared(self) -> None:
         unlocked = examples_registry.Selection(

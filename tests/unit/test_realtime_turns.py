@@ -22,6 +22,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.asyncio.task_manager import TaskManager
 
 from examples.shared.frames import USER_TRANSCRIPT_TURN_FRAME_ID_METADATA
+from realtime import transport as transport_module
 from realtime.frames import (
     RealtimeASRTurnEndedFrame,
     RealtimeASRTurnReleaseFrame,
@@ -29,6 +30,7 @@ from realtime.frames import (
     RealtimeManualUserStartedSpeakingFrame,
     RealtimeManualUserStoppedSpeakingFrame,
 )
+from realtime.transport import bind_realtime_automatic_response_provenance
 from realtime.turns import (
     RealtimeASRInputSequencer,
     RealtimeLLMContextAggregatorPair,
@@ -375,6 +377,18 @@ class RealtimeAggregatorOrderingTests(unittest.IsolatedAsyncioTestCase):
 
 class RealtimeTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
     """Verify ASR producer terminals, rather than final-result bits, stop turns."""
+
+    async def test_inference_trigger_marks_automatic_response_provenance(self) -> None:
+        """Accept Pipecat's inference-trigger arguments and mark one automatic run."""
+        transport = MagicMock()
+        gate = MagicMock()
+        strategy = RealtimeServerVADTurnStopStrategy()
+
+        with patch.dict(transport_module._CONTEXTS, {transport: MagicMock(response_gate=gate)}):
+            bind_realtime_automatic_response_provenance(transport, [strategy])
+            await strategy.trigger_user_turn_inference_triggered()
+
+        gate.register_automatic_response_context.assert_called_once_with()
 
     async def test_server_vad_requires_matching_completed_terminal(self) -> None:
         """Stop inference and release only the matching completed owner."""
