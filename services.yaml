@@ -72,7 +72,9 @@ server:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
       server: "nemotron-asr-streaming-english:50052"
-      model: "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"
+      model: "cache-aware-parakeet-rnnt-en-US-asr-streaming-sortformer"
+      speaker_diarization_supported: true
+      speaker_diarization_max_speakers: 8
       nvcf:
         function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
         model: "nemotron-asr-streaming"

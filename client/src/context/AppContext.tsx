@@ -175,6 +175,10 @@ export interface AppState {
   selectedSessionLanguage: string;
   setSelectedSessionLanguage: (code: string) => void;
 
+  /** Speaker-label settings applied when the next ASR stream opens. */
+  speakerDiarizationEnabled: boolean;
+  setSpeakerDiarizationEnabled: (enabled: boolean) => void;
+
   prompts: Prompt[];
   promptsLoading: boolean;
   selectedPromptKey: string;
@@ -310,6 +314,8 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     setSelectedVoiceId("");
   }, [selectedExample?.key, selectedExampleDefaultSessionLanguage]);
 
+  const [speakerDiarizationEnabled, setSpeakerDiarizationEnabled] = useState(false);
+
   // --- TTS state ---
   const { data: defaultTTS = [], isLoading: ttsLoading } = useDefaultTTS(serviceCatalogKey);
   const {
@@ -343,7 +349,10 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   }, [customTTS, persistTTS]);
 
   // --- Prompt state ---
-  const { data: defaultPrompts = [], isLoading: promptsLoading } = useDefaultPrompts(serviceCatalogKey);
+  const { data: defaultPrompts = [], isLoading: promptsLoading } = useDefaultPrompts(
+    serviceCatalogKey,
+    effectiveSelectedASRId,
+  );
   const [customPrompts, setCustomPrompts] = useState<Prompt[]>(() => readLSArray<Prompt>(PROMPT_STORAGE, []).map((p) => ({ ...p, builtIn: false })));
   const [selectedPromptKey, setSelectedPromptKey] = useState("");
 
@@ -394,6 +403,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     asrServices, asrLoading, selectedASRId: effectiveSelectedASRId, selectASR, addASR, updateASR, removeASR, selectedASR,
     ttsServices, ttsLoading, selectedTTSId: effectiveSelectedTTSId, selectTTS, addTTS, updateTTS, removeTTS, selectedTTS,
     selectedVoiceId, setSelectedVoiceId,
+    speakerDiarizationEnabled, setSpeakerDiarizationEnabled,
     selectedSessionLanguage, setSelectedSessionLanguage,
     prompts, promptsLoading, selectedPromptKey: effectiveSelectedPromptKey, selectPrompt: setSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
     tools, toolsLoading,
@@ -402,6 +412,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
        serviceSettings, setServiceSetting, streamingInput, setStreamingInput,
        asrServices, asrLoading, effectiveSelectedASRId, selectASR, addASR, updateASR, removeASR, selectedASR,
        ttsServices, ttsLoading, effectiveSelectedTTSId, selectTTS, addTTS, updateTTS, removeTTS, selectedTTS,
+       speakerDiarizationEnabled, setSpeakerDiarizationEnabled,
        selectedVoiceId, selectedSessionLanguage, setSelectedSessionLanguage,
        prompts, promptsLoading, effectiveSelectedPromptKey, addPrompt, updatePrompt, removePrompt, selectedPrompt,
        tools, toolsLoading]);

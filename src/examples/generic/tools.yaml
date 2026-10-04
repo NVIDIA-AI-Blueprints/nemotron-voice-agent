@@ -45,6 +45,10 @@ get_current_date_time:
     description: >-
       Get the current date and time, optionally for a specific IANA timezone.
       When the timezone is omitted, the server's local time is returned.
+      Call this tool only when the user explicitly asks for the current date,
+      time, day of the week, or timezone. Do not call it for general
+      conversation, unclear or garbled speech, or when the user does not
+      mention date or time.
     parameters:
       type: object
       properties:

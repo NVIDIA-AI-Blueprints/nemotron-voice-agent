@@ -18,6 +18,7 @@ Prompt presets are defined per example. The Generic Cascaded example currently p
 |------------|-------------|
 | `generic_assistant` | Generic voice assistant with tool support and a single-sentence response format. |
 | `generic_assistant_without_tools` | Generic voice assistant without tool access and with a single-sentence response format. |
+| `multi_speaker_assistant` | Listens to up to eight speakers and answers only when called by name (Nemotron or assistant). Requires speaker labels. Refer to [Enable Speaker Labels](enable-speaker-labels.md). |
 | `flowershop` | Flora persona for the GreenForce Garden flower-shop scenario with strict flow rules. |
 
 ## Changing the Default Prompt

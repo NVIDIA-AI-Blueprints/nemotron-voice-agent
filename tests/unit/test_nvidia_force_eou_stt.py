@@ -97,8 +97,8 @@ class ForceEouStreamingRequestTests(unittest.TestCase):
 
 
 class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
-    def _service(self) -> NvidiaForceEouSTTService:
-        return NvidiaForceEouSTTService(use_ssl=False)
+    def _service(self, **kwargs) -> NvidiaForceEouSTTService:
+        return NvidiaForceEouSTTService(use_ssl=False, **kwargs)
 
     async def test_request_force_eou_sets_pending_and_queues_silence(self) -> None:
         stt = self._service()
@@ -130,7 +130,7 @@ class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dict(requests[2].runtime_config), {"force_eou": "true"})
 
     async def test_vad_stop_forwards_then_requests_force_eou(self) -> None:
-        stt = self._service()
+        stt = self._service(force_eou_on_vad_stop=True)
         events = []
 
         async def process_parent(frame, direction):
@@ -149,6 +149,29 @@ class NvidiaForceEouSTTServiceTests(unittest.IsolatedAsyncioTestCase):
         parent.assert_awaited_once_with(frame, FrameDirection.DOWNSTREAM)
         stt.request_force_eou.assert_awaited_once()
         self.assertEqual(events, [("parent", frame, FrameDirection.DOWNSTREAM), ("force_eou",)])
+
+    async def test_vad_stop_does_not_request_force_eou_unless_enabled(self) -> None:
+        for kwargs in ({}, {"force_eou_on_vad_stop": False}):
+            with self.subTest(kwargs=kwargs):
+                stt = self._service(**kwargs)
+                stt.request_force_eou = AsyncMock()
+                parent = AsyncMock()
+
+                with patch("examples.shared.nvidia_force_eou_stt.NvidiaSTTService.process_frame", parent):
+                    await stt.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+                parent.assert_awaited_once()
+                stt.request_force_eou.assert_not_awaited()
+
+    async def test_environment_variable_does_not_change_the_service(self) -> None:
+        with patch.dict("os.environ", {"ASR_FORCE_EOU": "true"}):
+            stt = self._service()
+            stt.request_force_eou = AsyncMock()
+
+            with patch("examples.shared.nvidia_force_eou_stt.NvidiaSTTService.process_frame", AsyncMock()):
+                await stt.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+        stt.request_force_eou.assert_not_awaited()
 
     async def test_non_vad_stop_frames_do_not_request_force_eou(self) -> None:
         stt = self._service()

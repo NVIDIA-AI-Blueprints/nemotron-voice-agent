@@ -69,6 +69,7 @@ import examples_registry
 from attachment_store import consume_capture_request, store_attachment
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, PIPELINE_AUDIO_OUT_SAMPLE_RATE
 from examples.shared.prewarm import build_session_languages, peek_cached_tts_config, prewarm_tts, warmup_tts_synthesis
+from examples.shared.speaker import speaker_diarization_requested
 from examples.shared.subagents import load_subagent_registry
 from utils import (
     LOCAL_SPEECH_PORTS,
@@ -194,6 +195,22 @@ def _deployment_response(active: dict, options: list[dict]) -> dict:
     }
 
 
+# Session-config keys that require an example capability. The global session
+# allowlist is shared across examples, so enforce example-level features here.
+_CAPABILITY_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
+    "speaker_labels": ("asr_speaker_diarization",),
+}
+
+
+def _asr_supports_diarization(config: dict) -> bool:
+    entry = (
+        load_service_entry_by_id("asr", str(config["asr_id"]))
+        if config.get("asr_id")
+        else load_service_entry("asr", "")
+    )
+    return entry.get("speaker_diarization_supported") is True
+
+
 def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict:
     """Bind the catalog for the requested pipeline_mode and drop unknown slot keys."""
     if not isinstance(data, dict):
@@ -204,7 +221,23 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
         prompt_key = examples_registry.prompt_default_key(example["key"])
         if prompt_key:
             config["prompt_key"] = prompt_key
-    return filter_session_config(config)
+    capabilities = set(example.get("capabilities") or [])
+    for capability, keys in _CAPABILITY_CONFIG_KEYS.items():
+        if capability not in capabilities:
+            for key in keys:
+                config.pop(key, None)
+    config = filter_session_config(config)
+    prompt = load_prompt_catalog(examples_registry.example_module_file(example)).get(config.get("prompt_key", ""), {})
+    multi_speaker_prompt = isinstance(prompt, dict) and prompt.get("multi_speaker_support") is True
+    diarization_disabled = not speaker_diarization_requested(config)
+    if multi_speaker_prompt and (
+        "speaker_labels" not in capabilities or not _asr_supports_diarization(config) or diarization_disabled
+    ):
+        fallback_key = examples_registry.prompt_default_key(example["key"])
+        if fallback_key:
+            config["prompt_key"] = fallback_key
+        config.pop("prompt_content", None)
+    return config
 
 
 def _example_with_module_file(example_key: str = "") -> tuple[dict, Path]:
@@ -895,10 +928,16 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     # ---- Prompt catalog (read-only, scoped to the active example) ----
 
     @app.get("/api/prompts")
-    async def get_prompts(pipeline_mode: str = Query(default="")):
+    async def get_prompts(
+        pipeline_mode: str = Query(default=""),
+        asr_id: str = Query(default=""),
+    ):
         example_key = pipeline_mode or fallback_example_key
+        example = _bind_example_context_by_key(example_key)
         _, module_file = _example_with_module_file(example_key)
         catalog = load_prompt_catalog(module_file)
+        diarization_supported = _asr_supports_diarization({"asr_id": asr_id})
+        speaker_labels_supported = "speaker_labels" in set(example.get("capabilities") or [])
         registry_default_key = examples_registry.prompt_default_key(example_key)
         default_key = registry_default_key if registry_default_key in catalog else default_prompt_key(catalog)
         hidden_prompt_keys = examples_registry.agent_prompt_keys(example_key)
@@ -912,9 +951,13 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 "selectable": key not in hidden_prompt_keys,
                 "scope": "agent" if key in hidden_prompt_keys else "session",
                 "tools": [t for t in (val.get("tools_available") or []) if isinstance(t, str)],
+                "multiSpeakerSupport": val.get("multi_speaker_support") is True,
             }
             for key, val in catalog.items()
-            if isinstance(val, dict) and "content" in val and val.get("internal") is not True
+            if isinstance(val, dict)
+            and "content" in val
+            and val.get("internal") is not True
+            and (val.get("multi_speaker_support") is not True or (speaker_labels_supported and diarization_supported))
         ]
         agent_prompts = catalog.get("agent_prompts")
         if isinstance(agent_prompts, dict):

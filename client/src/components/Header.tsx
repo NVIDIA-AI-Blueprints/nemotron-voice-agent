@@ -41,6 +41,7 @@ type SessionConfigOptions = {
   selectedPrompt?: Prompt;
   selectedPromptKey: string;
   selectedSessionLanguage?: string;
+  speakerDiarizationEnabled?: boolean;
 };
 
 type HeaderProps = {
@@ -133,6 +134,7 @@ function buildSessionConfig({
   selectedPrompt,
   selectedPromptKey,
   selectedSessionLanguage = "",
+  speakerDiarizationEnabled = false,
 }: SessionConfigOptions): Record<string, string> {
   const slots = new Set(selectedExample.slots);
   const config: Record<string, string> = { pipeline_mode: selectedExample.key };
@@ -166,6 +168,11 @@ function buildSessionConfig({
   }, settingsParam(serviceSettings[serviceSettingsKey("asr", selectedASR?.id ?? "")]));
   if (slots.has("asr") && sessionLanguagesEnabled) {
     config.asr_language_code = selectedSessionLanguage || "auto";
+  }
+  const speakerLabelsAvailable = selectedExample.capabilities?.includes("speaker_labels") ?? false;
+  if (slots.has("asr") && speakerLabelsAvailable) {
+    const diarizationEnabled = speakerDiarizationEnabled && selectedASR?.speakerDiarizationSupported === true;
+    config.asr_speaker_diarization = String(diarizationEnabled);
   }
   applyService(config, slots.has("tts"), "tts", selectedTTS, {
     function_id: selectedTTS?.functionId,
@@ -203,6 +210,7 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
     selectedPrompt,
     selectedPromptKey,
     selectedSessionLanguage,
+    speakerDiarizationEnabled,
     setCurrentSessionId,
     serviceSettings,
     streamingInput,
@@ -248,6 +256,7 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
           selectedPrompt,
           selectedPromptKey,
           selectedSessionLanguage,
+          speakerDiarizationEnabled,
         });
 
         if (selectedTransport === "websocket") {

@@ -13,6 +13,18 @@ import {
 import { uploadAttachment } from "../../api";
 import { useApp } from "../../context/useApp";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
+import {
+  hasContainingFinalizedTurn,
+  isSpeakerLabeledTurn,
+  joinTranscriptParts,
+  normalizeTranscript,
+  resolveChronologicalAnchor,
+  resolveSuppressionAnchor,
+  speakerDisplayLabel,
+  speakerTurnMessageId,
+  splitAssistantMessagesAtTurnBoundaries,
+  stripSilenceSentinel,
+} from "../../lib/conversation";
 import { isRecord, stringField } from "../../utils";
 import { TranscriptMessage } from "./TranscriptMessage";
 
@@ -52,6 +64,22 @@ type AssistantTurn = {
   anchorCreatedAt: string;
 };
 
+type LabeledUserTurn = {
+  id: string;
+  text: string;
+  createdAt: string;
+  suppressionAnchorCreatedAt: string;
+  boundaryCreatedAt: string;
+  speakerId: number | null;
+  displayName: string;
+  streaming: boolean;
+};
+
+type IdentifyingTranscript = {
+  text: string;
+  createdAt: string;
+};
+
 const renderPartText = (part: ConversationMessagePart): string => {
   const { text } = part;
   if (text === null || text === undefined) return "";
@@ -69,13 +97,13 @@ const renderPartText = (part: ConversationMessagePart): string => {
   return "";
 };
 
-const renderMessageText = (message: ConversationMessage): string =>
-  message.parts.map(renderPartText).join("");
+const renderMessageText = (message: ConversationMessage): string => {
+  const text = joinTranscriptParts(message.parts.map(renderPartText));
+  return message.role === "assistant" ? stripSilenceSentinel(text) : text;
+};
 
 const isUserOrAssistant = (m: ConversationMessage) =>
   m.role === "user" || m.role === "assistant";
-
-const normalizeTranscript = (text?: string | null) => (text ?? "").trim().replace(/\s+/g, " ");
 
 function mediaKindFromFile(file: File): MediaKind | null {
   if (file.type.startsWith("image/")) return "image";
@@ -159,11 +187,17 @@ const START_ANCHOR = "__start__";
 
 type ExtraItem =
   | { kind: "task"; id: string; anchor: string; createdAt: string; sortKey: number; task: AgentTask }
+  | { kind: "user-turn"; id: string; anchor: string; createdAt: string; sortKey: number; turn: LabeledUserTurn }
   | { kind: "assistant-turn"; id: string; anchor: string; createdAt: string; sortKey: number; turn: AssistantTurn }
   | { kind: "attachment"; id: string; anchor: string; createdAt: string; sortKey: number; attachment: LocalAttachment };
 
 export function ConversationPanel() {
-  const { currentSessionId, selectedExample, setCurrentSessionId } = useApp();
+  const {
+    currentSessionId,
+    selectedExample,
+    selectedPrompt,
+    setCurrentSessionId,
+  } = useApp();
   const { messages } = usePipecatConversation();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
@@ -171,6 +205,9 @@ export function ConversationPanel() {
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const agentTasksRef = useRef<AgentTask[]>([]);
   const [assistantTurns, setAssistantTurns] = useState<AssistantTurn[]>([]);
+  const [labeledUserTurns, setLabeledUserTurns] = useState<LabeledUserTurn[]>([]);
+  const [identifying, setIdentifying] = useState<IdentifyingTranscript | null>(null);
+  const labeledTurnSequenceRef = useRef(0);
   const canUploadAttachments = selectedExample?.capabilities?.includes("attachments") ?? false;
 
   useEffect(() => {
@@ -188,11 +225,18 @@ export function ConversationPanel() {
     });
     setAgentTasks([]);
     setAssistantTurns([]);
+    setLabeledUserTurns([]);
+    setIdentifying(null);
+    labeledTurnSequenceRef.current = 0;
   }, []);
 
   const visibleMessages = useMemo(
-    () => filterEmptyMessages(messages).filter(isUserOrAssistant),
-    [messages]
+    () =>
+      splitAssistantMessagesAtTurnBoundaries(
+        filterEmptyMessages(messages).filter(isUserOrAssistant),
+        labeledUserTurns.map((turn) => turn.boundaryCreatedAt),
+      ),
+    [labeledUserTurns, messages]
   );
 
   const visibleMessagesRef = useRef<ConversationMessage[]>(visibleMessages);
@@ -206,7 +250,53 @@ export function ConversationPanel() {
       if (!isRecord(message)) return;
       const type = stringField(message, "type");
 
-      if (type === "agent-task-update") {
+      if (type === "user-turn-identifying") {
+        // In-progress words wait here until the ASR final assigns them a speaker.
+        const text = normalizeTranscript(stringField(message, "transcript"));
+        const receivedAt = new Date().toISOString();
+        setIdentifying((prev) => (text ? { text, createdAt: prev?.createdAt ?? receivedAt } : null));
+        return;
+      }
+
+      if (type === "user-turn-progress" || type === "user-turn-finalized") {
+        // Unlabeled turns repeat text the raw RTVI transcript stream already renders.
+        if (!isSpeakerLabeledTurn(message)) return;
+        setIdentifying(null);
+        const text = normalizeTranscript(stringField(message, "transcript"));
+        if (!text) return;
+        // Browser receipt time, like the SDK's own messages; a server clock can be skewed from this one.
+        const receivedAt = new Date().toISOString();
+        const rawSpeakerId = message.speaker_id;
+        const speakerId =
+          typeof rawSpeakerId === "number" && Number.isInteger(rawSpeakerId)
+            ? rawSpeakerId
+            : null;
+        labeledTurnSequenceRef.current += 1;
+        const id = speakerTurnMessageId(
+          message,
+          `user-turn-${labeledTurnSequenceRef.current}`,
+        );
+        setLabeledUserTurns((prev) => {
+          const existing = prev.find((turn) => turn.id === id);
+          const next = {
+            id,
+            text,
+            createdAt: existing?.createdAt ?? receivedAt,
+            // The first anchor predates the raw RTVI bubble, so advance it on
+            // each upsert to suppress the duplicate.
+            suppressionAnchorCreatedAt: resolveSuppressionAnchor(
+              existing?.suppressionAnchorCreatedAt,
+              visibleMessagesRef.current.at(-1)?.createdAt,
+              receivedAt,
+            ),
+            boundaryCreatedAt: existing?.boundaryCreatedAt ?? receivedAt,
+            speakerId,
+            displayName: stringField(message, "speaker_display_name"),
+            streaming: type === "user-turn-progress",
+          };
+          return [...prev.filter((turn) => turn.id !== id), next];
+        });
+      } else if (type === "agent-task-update") {
         const taskId = stringField(message, "task_id");
         if (!taskId) return;
         const now = new Date().toISOString();
@@ -314,11 +404,22 @@ export function ConversationPanel() {
 
   const extras = useMemo<ExtraItem[]>(() => {
     const list: ExtraItem[] = [];
+    labeledUserTurns.forEach((turn) =>
+      list.push({
+        kind: "user-turn",
+        id: turn.id,
+        anchor: turn.createdAt,
+        createdAt: turn.createdAt,
+        sortKey: 0,
+        turn,
+      })
+    );
     agentTasks.forEach((task) =>
       list.push({ kind: "task", id: task.id, anchor: task.anchorCreatedAt, createdAt: task.createdAt, sortKey: 1, task })
     );
     assistantTurns
-      .filter((turn) => !assistantMessageTexts.has(normalizeTranscript(turn.text)))
+      .map((turn) => ({ ...turn, text: stripSilenceSentinel(turn.text) }))
+      .filter((turn) => turn.text && !assistantMessageTexts.has(normalizeTranscript(turn.text)))
       .forEach((turn) =>
         list.push({ kind: "assistant-turn", id: turn.id, anchor: turn.anchorCreatedAt, createdAt: turn.createdAt, sortKey: 2, turn })
       );
@@ -326,32 +427,64 @@ export function ConversationPanel() {
       list.push({ kind: "attachment", id: attachment.id, anchor: attachment.anchorCreatedAt, createdAt: attachment.createdAt, sortKey: 3, attachment })
     );
     return list;
-  }, [agentTasks, assistantTurns, assistantMessageTexts, attachments]);
+  }, [agentTasks, assistantTurns, assistantMessageTexts, attachments, labeledUserTurns]);
 
-  const { startExtras, extrasByAnchor } = useMemo(() => {
-    const messageIds = new Set(visibleMessages.map((m) => m.createdAt));
+  const { startExtras, extrasByAnchor, anchoredFinalizedUserTurns } = useMemo(() => {
+    const messageCreatedAts = visibleMessages.map((m) => m.createdAt);
+    const messageIds = new Set(messageCreatedAts);
     const lastCreatedAt = visibleMessages.at(-1)?.createdAt ?? "";
-    const resolve = (anchor: string) => {
+    const resolve = (extra: ExtraItem) => {
+      const { anchor } = extra;
       if (!anchor) return START_ANCHOR;
       if (messageIds.has(anchor)) return anchor;
+      if (extra.kind === "user-turn") {
+        return resolveChronologicalAnchor(anchor, messageCreatedAts) ?? START_ANCHOR;
+      }
       return lastCreatedAt || START_ANCHOR;
     };
     const byAnchor = new Map<string, ExtraItem[]>();
+    const anchoredUserTurns: { text: string; anchorCreatedAt: string }[] = [];
     for (const extra of extras) {
-      const key = resolve(extra.anchor);
+      const key = resolve(extra);
       const bucket = byAnchor.get(key) ?? [];
       bucket.push(extra);
       byAnchor.set(key, bucket);
+      if (extra.kind === "user-turn" && extra.turn.suppressionAnchorCreatedAt) {
+        anchoredUserTurns.push({
+          text: extra.turn.text,
+          anchorCreatedAt: extra.turn.suppressionAnchorCreatedAt,
+        });
+      }
     }
     for (const bucket of byAnchor.values()) {
       bucket.sort((a, b) => a.sortKey - b.sortKey || a.createdAt.localeCompare(b.createdAt));
     }
-    return { startExtras: byAnchor.get(START_ANCHOR) ?? [], extrasByAnchor: byAnchor };
+    return {
+      startExtras: byAnchor.get(START_ANCHOR) ?? [],
+      extrasByAnchor: byAnchor,
+      anchoredFinalizedUserTurns: anchoredUserTurns,
+    };
   }, [extras, visibleMessages]);
 
   const renderExtra = (extra: ExtraItem) => {
     if (extra.kind === "task") return <AgentTaskCard key={extra.id} task={extra.task} />;
     if (extra.kind === "attachment") return <AttachmentPreview key={extra.id} attachment={extra.attachment} />;
+    if (extra.kind === "user-turn") {
+      return (
+        <TranscriptMessage
+          key={extra.id}
+          role="user"
+          text={extra.turn.text}
+          timestamp={extra.turn.createdAt}
+          streaming={extra.turn.streaming}
+          displayName={speakerDisplayLabel(
+            selectedPrompt?.multiSpeakerSupport === true,
+            extra.turn.speakerId,
+            extra.turn.displayName,
+          )}
+        />
+      );
+    }
     return (
       <TranscriptMessage
         key={`assistant-turn-${extra.id}`}
@@ -364,7 +497,10 @@ export function ConversationPanel() {
   };
 
   const showAttachmentControl = Boolean(currentSessionId) && canUploadAttachments && visibleMessages.length > 0;
-  const stickSignal = useMemo(() => ({ messages: visibleMessages, extras }), [visibleMessages, extras]);
+  const stickSignal = useMemo(
+    () => ({ messages: visibleMessages, extras, identifying }),
+    [visibleMessages, extras, identifying],
+  );
   const bottomAnchorRef = useStickToBottom(stickSignal);
 
   return (
@@ -374,9 +510,16 @@ export function ConversationPanel() {
         {visibleMessages.map((message, idx) => {
           const text = renderMessageText(message);
           const bucket = extrasByAnchor.get(message.createdAt);
+          const hasFinalizedUserTurn =
+            message.role === "user"
+            && hasContainingFinalizedTurn(
+              text,
+              message.createdAt,
+              anchoredFinalizedUserTurns,
+            );
           return (
             <Fragment key={`${message.createdAt}-${idx}`}>
-              {text && (
+              {text && !hasFinalizedUserTurn && (
                 <TranscriptMessage
                   role={message.role === "assistant" ? "bot" : "user"}
                   text={text}
@@ -388,6 +531,15 @@ export function ConversationPanel() {
             </Fragment>
           );
         })}
+        {identifying && (
+          <TranscriptMessage
+            role="user"
+            text={identifying.text}
+            timestamp={identifying.createdAt}
+            streaming
+            displayName="Identifying speaker"
+          />
+        )}
         {showAttachmentControl && <AttachMediaButton onClick={() => uploadInputRef.current?.click()} />}
       </ul>
       <div ref={bottomAnchorRef} className="conversation-bottom-spacer" aria-hidden="true" />

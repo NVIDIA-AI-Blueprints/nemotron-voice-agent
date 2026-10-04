@@ -59,6 +59,7 @@ export interface Prompt {
   agent?: string;
   promptName?: string;
   tools?: string[];
+  multiSpeakerSupport?: boolean;
 }
 
 export interface Tool {
@@ -118,12 +119,20 @@ export function useDefaultLLMs(pipelineMode = "") {
   });
 }
 
-export function useDefaultPrompts(pipelineMode = "") {
-  const qs = pipelineMode ? `?pipeline_mode=${encodeURIComponent(pipelineMode)}` : "";
+export function useDefaultPrompts(pipelineMode = "", asrId = "") {
+  const params = new URLSearchParams();
+  if (pipelineMode) params.set("pipeline_mode", pipelineMode);
+  if (asrId) params.set("asr_id", asrId);
+  const qs = params.size ? `?${params.toString()}` : "";
   return useQuery<Prompt[]>({
-    queryKey: ["prompts", pipelineMode],
+    queryKey: ["prompts", pipelineMode, asrId],
     queryFn: () => fetchJson<Prompt[]>(`/api/prompts${qs}`),
-    select: (data) => data.map((p) => ({ ...p, builtIn: true, tools: p.tools ?? [] })),
+    select: (data) => data.map((p) => ({
+      ...p,
+      builtIn: true,
+      tools: p.tools ?? [],
+      multiSpeakerSupport: p.multiSpeakerSupport ?? false,
+    })),
   });
 }
 
@@ -151,6 +160,8 @@ export interface SimpleService {
   voiceId?: string;
   functionId?: string;
   languageCode?: string;
+  speakerDiarizationSupported?: boolean;
+  speakerDiarizationMaxSpeakers?: number;
   builtIn: boolean;
   source?: BuiltInServiceSource;
   settings?: ServiceSettingsSchema;
@@ -166,6 +177,10 @@ export function useDefaultASR(pipelineMode = "") {
         server: String(e.server ?? ""),
         model: e.model ? String(e.model) : undefined,
         functionId: e.function_id ? String(e.function_id) : undefined,
+        speakerDiarizationSupported: e.speaker_diarization_supported === true,
+        speakerDiarizationMaxSpeakers: typeof e.speaker_diarization_max_speakers === "number"
+          ? e.speaker_diarization_max_speakers
+          : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
         settings: serviceSettingsSchema(e),

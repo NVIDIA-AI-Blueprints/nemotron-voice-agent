@@ -207,7 +207,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if fixed_session_language:
         asr_kwargs["settings"].language = fixed_session_language
-    stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
+    stt = NvidiaForceEouSTTService(
+        **asr_kwargs, stop_history=400, force_eou_on_vad_stop=parse_env_bool("ASR_FORCE_EOU")
+    )
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={fixed_session_language}, punctuation={asr_automatic_punctuation}"

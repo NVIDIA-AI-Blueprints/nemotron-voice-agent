@@ -27,21 +27,24 @@ FORCE_EOU_SILENCE_SECS = 0.08
 class NvidiaForceEouSTTService(NvidiaSTTService):
     """NvidiaSTTService that flushes the current utterance via ``force_eou``.
 
-    Local VAD requests finalization at each speech stop. The resulting
-    ``TranscriptionFrame(finalized=True)`` informs Pipecat's turn stop strategy
-    that all audio submitted for that speech segment has been transcribed;
-    Smart Turn remains solely responsible for closing the semantic user turn.
+    With ``force_eou_on_vad_stop=True``, local VAD requests finalization at each
+    speech stop. The resulting ``TranscriptionFrame(finalized=True)`` informs
+    Pipecat's turn stop strategy that all audio submitted for that speech
+    segment has been transcribed; Smart Turn remains solely responsible for
+    closing the semantic user turn. Otherwise the ASR finalizes through its own
+    endpointing. The option is off unless the pipeline turns it on.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, force_eou_on_vad_stop: bool = False, **kwargs):
         """Initialize the silence-chunk force-EOU queue."""
         super().__init__(*args, **kwargs)
         self._force_eou_silences: deque[bytes] = deque()
+        self._force_eou_on_vad_stop = force_eou_on_vad_stop
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Use the parent STT path, then finalize submitted audio on VAD stop."""
+        """Use the parent STT path, then finalize submitted audio on VAD stop when enabled."""
         await super().process_frame(frame, direction)
-        if isinstance(frame, VADUserStoppedSpeakingFrame):
+        if self._force_eou_on_vad_stop and isinstance(frame, VADUserStoppedSpeakingFrame):
             await self.request_force_eou()
 
     def _force_eou_silence(self) -> bytes:

@@ -91,7 +91,7 @@ For ASR latency and throughput across GPUs and WER for different models, see the
   )
   ```
 
-  This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing is the lower-level, ASR-side signal. On each `VADUserStoppedSpeakingFrame`, the local subclass sends an 80 ms PCM silence chunk when the ASR stream is active. The chunk matches the configured sample rate and audio channel count and sets the NVIDIA runtime configuration `force_eou=true` to finalize all submitted audio. If Pipecat reconnects the ASR stream before sending the chunk, the subclass preserves the queued `force_eou` marker for the new stream.
+  This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing is the lower-level, ASR-side signal. By default the ASR finalizes after its own endpoint. With `ASR_FORCE_EOU=true`, on each `VADUserStoppedSpeakingFrame`, the local subclass sends an 80 ms PCM silence chunk when the ASR stream is active. The chunk matches the configured sample rate and audio channel count and sets the NVIDIA runtime configuration `force_eou=true` to finalize all submitted audio. If Pipecat reconnects the ASR stream before sending the chunk, the subclass preserves the queued `force_eou` marker for the new stream.
 
   NVIDIA `force_eou` is honored only by supported cache-aware recurrent neural network transducer (RNNT) models, including the Nemotron ASR Streaming models. Unsupported models ignore this runtime setting and use the configured ASR endpointing instead. The cascaded examples set `stop_history=400`, so these models finalize after 400 ms of trailing silence.
 
