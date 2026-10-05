@@ -13,7 +13,9 @@ request with vLLM's own template and appends only the new prompt tokens to the
 turn's engine request. ``input_text_buffer.commit`` then generates the answer
 through vLLM's chat completions stream, so reasoning and tool parsing are
 unchanged, and ends the request. A render that no longer extends what the
-engine holds starts a new request, which vLLM's prefix cache makes cheap.
+engine holds starts a new request. After an answer that calls a tool, a new
+request prefills the conversation and that answer while the tool runs, so the
+follow-up turn appends only the tool result.
 
 Usage is that of ``vllm serve``::
 
@@ -59,7 +61,9 @@ class _Answer:
     request: ChatCompletionRequest
     conversation: list
     params: SamplingParams
+    prompt_token_ids: list[int]
     outputs: asyncio.Queue[RequestOutput | None] = field(default_factory=asyncio.Queue)
+    token_ids: list[int] = field(default_factory=list)
 
 
 class StreamingSession:
@@ -119,13 +123,17 @@ class StreamingSession:
         else:
             await self._send("error", error=f"Unknown event type: {event_type}", code="unknown_event")
 
-    def _chat_request(self, *, final: bool) -> ChatCompletionRequest:
-        """Render the conversation with the user text so far.
+    def _user_text(self, *, final: bool) -> str:
+        """Return the user text to render.
 
         Before the commit only whole words are rendered. ASR can still extend
         the last word, which would change its tokens and restart the request.
         """
-        text = self.text if final else self.text[: self.text.rfind(" ") + 1].rstrip()
+        return self.text if final else self.text[: self.text.rfind(" ") + 1].rstrip()
+
+    def _chat_request(self, *, final: bool) -> ChatCompletionRequest:
+        """Render the conversation with the user text so far."""
+        text = self._user_text(final=final)
         payload = {**self.request, "stream": True, "stream_options": {"include_usage": True}}
         payload["messages"] = list(payload.get("messages", []))
         if text:
@@ -142,24 +150,29 @@ class StreamingSession:
         return conversation, list(self.chat._extract_prompt_components(engine_inputs[0]).token_ids or [])
 
     async def _prefill(self) -> None:
+        if not self._user_text(final=False):
+            return
         _, token_ids = await self._render(self._chat_request(final=False))
         await self._append(token_ids)
 
     async def _commit(self, response_id: str) -> None:
         request = self._chat_request(final=True)
         conversation, token_ids = await self._render(request)
-        answer = _Answer(response_id, request, conversation, self._answer_params(request, len(token_ids)))
+        answer = _Answer(response_id, request, conversation, self._answer_params(request, len(token_ids)), token_ids)
         await self._append(token_ids, answer)
         self.text = ""
         self._response_task = asyncio.create_task(self._respond(answer))
 
     async def _append(self, token_ids: list[int], answer: _Answer | None = None) -> None:
+        """Queue new input, which supersedes an answer still streaming."""
+        await self._cancel_response()
+        await self._feed(token_ids, answer)
+
+    async def _feed(self, token_ids: list[int], answer: _Answer | None = None) -> None:
         """Queue the prompt tokens beyond what the engine request already holds.
 
-        New input supersedes an answer still streaming, and a prompt that no
-        longer extends the engine's starts a new request.
+        A prompt that no longer extends the engine's starts a new request.
         """
-        await self._cancel_response()
         if self._engine_task is not None and (self._input_closed or token_ids[: len(self._fed)] != self._fed):
             await self._stop_engine()
         delta = token_ids[len(self._fed) :]
@@ -212,6 +225,7 @@ class StreamingSession:
                 if answer is None:
                     self._chunk_done.set()
                     continue
+                answer.token_ids += output.outputs[0].token_ids
                 answer.outputs.put_nowait(output)
                 if output.outputs[0].finish_reason is not None:
                     self._end_answer()
@@ -253,11 +267,16 @@ class StreamingSession:
             RequestResponseMetadata(request_id=request_id),
             chat_template_kwargs=self.chat._effective_chat_template_kwargs(answer.request),
         )
+        called_tool = False
         try:
             async for event in stream:
                 data = event.removeprefix("data: ").strip()
                 if data and data != "[DONE]":
-                    await self._send("response.delta", response_id=answer.response_id, chunk=json.loads(data))
+                    chunk = json.loads(data)
+                    called_tool |= any(c.get("finish_reason") == "tool_calls" for c in chunk.get("choices", []))
+                    await self._send("response.delta", response_id=answer.response_id, chunk=chunk)
+            if called_tool:
+                await self._feed(answer.prompt_token_ids + answer.token_ids[:-1])
             await self._send("response.done", response_id=answer.response_id)
         except Exception as e:
             logger.exception("Streaming response failed")
