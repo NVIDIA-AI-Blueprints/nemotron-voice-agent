@@ -434,6 +434,10 @@ class ClientToolBroker:
         self._closed_event = asyncio.Event()
         self._output_timeout_secs = output_timeout_secs
         self._llm_context: Any | None = None
+        #: Route option: an output for a call this broker cancelled or timed out
+        #: is acknowledged as a late output instead of an error.
+        self.accept_late_outputs = False
+        self._late_output_call_ids: OrderedDict[str, None] = OrderedDict()
 
     def bind_context(self, context: Any) -> None:
         """Bind Pipecat's canonical shared context for exact output storage."""
@@ -684,8 +688,15 @@ class ClientToolBroker:
                 call.context_finalized.set()
                 self._retire_call_locked(call_id, call, outcome="cancelled")
 
-    async def stage_output(self, *, call_id: str, name: str, output: str) -> None:
-        """Reserve one validated client output without waking its handler."""
+    async def stage_output(self, *, call_id: str, name: str, output: str) -> bool:
+        """Reserve one validated client output without waking its handler.
+
+        Returns True when the output is accepted as a late output: with
+        ``accept_late_outputs``, a call that was cancelled or timed out moves to
+        ``settled_late_ok`` and its first same-name output is acknowledged but
+        never delivered to a handler. A duplicate, a different name or an
+        unknown call keep their errors.
+        """
         output_received_at = asyncio.get_running_loop().time()
         async with self._lock:
             if self._closed:
@@ -703,8 +714,18 @@ class ClientToolBroker:
                         code="tool_name_mismatch",
                         param="item.call_id",
                     )
+                if terminal.outcome in {"cancelled", "timed_out"} and self._settle_late_locked(call_id):
+                    return True
                 raise _terminal_output_error(call_id, terminal.outcome)
             call = self._calls.get(call_id)
+            if (
+                call is not None
+                and call.name == name
+                and call.output is None
+                and (call.cancelled or call.timed_out)
+                and self._settle_late_locked(call_id)
+            ):
+                return True
             if call is None:
                 if len(self._calls) >= _MAX_TRACKED_CALLS:
                     raise RealtimeProtocolError(
@@ -735,6 +756,8 @@ class ClientToolBroker:
                 )
             if call.deadline_at is not None and output_received_at > call.deadline_at:
                 self._mark_timed_out_locked(call)
+                if self._settle_late_locked(call_id):
+                    return True
                 raise RealtimeProtocolError(
                     message=f"Client tool call {call_id!r} exceeded its output deadline",
                     code="client_tool_timeout",
@@ -748,6 +771,17 @@ class ClientToolBroker:
                 )
             call.output = output
             call.output_received_at = output_received_at
+            return False
+
+    def _settle_late_locked(self, call_id: str) -> bool:
+        """Accept the first late output of a settled call; return False when it may not be accepted."""
+        if not self.accept_late_outputs or call_id in self._late_output_call_ids:
+            return False
+        self._late_output_call_ids[call_id] = None
+        while len(self._late_output_call_ids) > _MAX_TERMINAL_CALLS:
+            self._late_output_call_ids.popitem(last=False)
+        logger.info(f"Client tool output arrived after its call settled; acknowledged as late: {call_id}")
+        return True
 
     async def release_output(self, *, call_id: str, name: str) -> None:
         """Wake the handler after Response A and output acknowledgements publish."""

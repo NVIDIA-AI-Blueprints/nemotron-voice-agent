@@ -58,10 +58,10 @@ CANCEL_BACKEND_TOOL: dict = {
     "function": {
         "name": "cancel_backend",
         "description": (
-            "Withdraw the delegated request that is currently in flight, when the user interrupts to "
+            "Withdraw the delegated request that is still running, when the user interrupts to "
             "retract it by saying stop, never mind, forget it, or ignore that. This controls only this "
             "assistant's own pending work. It never carries out a cancellation the user is asking for as "
-            "a task, such as cancelling an order, booking, subscription, or reservation; send those to "
+            "a task, such as cancelling an order, booking or subscription; send those to "
             "call_backend like any other request. Use it only while a delegated request is still running, "
             "and do not speak in the same turn."
         ),

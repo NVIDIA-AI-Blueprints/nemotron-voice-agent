@@ -62,6 +62,9 @@ class DomainSpec:
     talker_tools_schema: ToolsSchema
     build_backend: Callable[[DomainBuildContext], DomainBackend]
     runtime_context: Callable[[], str]
+    #: Optional variant of ``runtime_context`` that may read the client's
+    #: session instructions (for example the date they state as today).
+    session_runtime_context: Callable[[str], str] | None = None
     intro_prompt: str = "Please greet the user briefly."
     #: Catalog key of the domain's *static* Talker prompt. Realtime clients may
     #: supply their own ``instructions``, which resolve ``prompt_key`` to

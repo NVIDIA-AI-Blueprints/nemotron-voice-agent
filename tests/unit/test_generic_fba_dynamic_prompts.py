@@ -103,18 +103,19 @@ class GenericRealtimePromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             initial_instructions="Original policy.",
             initial_client_tools=(),
             capability_mode="model",
-            render_talker_messages=lambda prompt: [{"role": "system", "content": prompt}],
+            render_talker_messages=lambda prompt, **_kwargs: [{"role": "system", "content": prompt}],
             profile="generic-frontend-backend-agent",
         )
 
         prepared = await coordinator.prepare_session_update(
-            instructions="Handle retail returns.",
+            instructions="Handle store returns.",
             tools=(_client_tool(),),
             tool_choice="auto",
         )
 
         self.assertEqual(backend.session_instruction_context.messages[0]["content"], "Original policy.")
-        self.assertEqual([tool["name"] for tool in generation_payloads[0]["tools"]], ["get_weather", "find_order"])
+        # A session with its own tools is not offered the built-in ones.
+        self.assertEqual([tool["name"] for tool in generation_payloads[0]["tools"]], ["find_order"])
         self.assertIn("Retrieves a customer order.", prepared.talker_prompt)
         self.assertNotIn("find_order", prepared.talker_prompt)
         self.assertNotIn("Find an order by email.", prepared.talker_prompt)
@@ -124,18 +125,18 @@ class GenericRealtimePromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             backend.session_instruction_context.messages,
-            [{"role": "system", "content": "Handle retail returns."}],
+            [{"role": "system", "content": "Handle store returns."}],
         )
         self.assertEqual(backend.prepared[-1][1][0]["name"], "find_order")
         self.assertEqual(coordinator.current_talker_prompt_messages, list(prepared.talker_prompt_messages))
 
         await coordinator.prepare_session_update(
-            instructions="Handle retail exchanges.",
+            instructions="Handle store exchanges.",
             tools=(_client_tool(),),
             tool_choice="auto",
         )
         self.assertEqual(inference.await_count, 2)
-        self.assertEqual(generation_payloads[-1]["instructions"], "Handle retail exchanges.")
+        self.assertEqual(generation_payloads[-1]["instructions"], "Handle store exchanges.")
 
     async def test_static_mode_skips_talker_inference_and_refreshes_tool_digest(self) -> None:
         backend = _Backend()
@@ -150,7 +151,7 @@ class GenericRealtimePromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             initial_instructions="Original policy.",
             initial_client_tools=(),
             capability_mode="static",
-            render_talker_messages=lambda prompt: [{"role": "system", "content": prompt}],
+            render_talker_messages=lambda prompt, **_kwargs: [{"role": "system", "content": prompt}],
             profile="generic-frontend-backend-agent",
         )
 
@@ -182,7 +183,7 @@ class GenericRealtimePromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             initial_instructions="Original policy.",
             initial_client_tools=(),
             capability_mode="model",
-            render_talker_messages=lambda prompt: [{"role": "system", "content": prompt}],
+            render_talker_messages=lambda prompt, **_kwargs: [{"role": "system", "content": prompt}],
             profile="generic-frontend-backend-agent",
         )
         prepared = await coordinator.prepare_session_update(

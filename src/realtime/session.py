@@ -110,6 +110,7 @@ def _default_turn_detection_config(
     typ: str,
     *,
     supported_options: frozenset[str] | None = None,
+    silence_duration_ms: int = _DEFAULT_SERVER_VAD_SILENCE_DURATION_MS,
 ) -> dict[str, Any]:
     """Return the canonical defaults for one supported VAD mode."""
     if typ == "server_vad":
@@ -117,7 +118,7 @@ def _default_turn_detection_config(
             "type": "server_vad",
             "threshold": _DEFAULT_SERVER_VAD_THRESHOLD,
             "prefix_padding_ms": _DEFAULT_SERVER_VAD_PREFIX_PADDING_MS,
-            "silence_duration_ms": _DEFAULT_SERVER_VAD_SILENCE_DURATION_MS,
+            "silence_duration_ms": silence_duration_ms,
             "create_response": True,
             "interrupt_response": True,
             "idle_timeout_ms": None,
@@ -166,6 +167,9 @@ class RealtimeSessionCapabilities:
     turn_detection_create_response_values: frozenset[bool] = field(default_factory=lambda: frozenset({False, True}))
     turn_detection_interrupt_response_values: frozenset[bool] = field(default_factory=lambda: frozenset({False, True}))
     default_turn_detection_type: str = "server_vad"
+    #: ``server_vad`` silence a session starts with when the client sets none.
+    #: A route may raise it (registry ``session_defaults``); a client value always wins.
+    default_silence_duration_ms: int = _DEFAULT_SERVER_VAD_SILENCE_DURATION_MS
     supports_manual_input: bool = False
     noise_reduction_types: frozenset[str] = field(default_factory=frozenset)
     input_transcription_models: frozenset[str] = field(default_factory=frozenset)
@@ -307,6 +311,7 @@ def _validate_turn_detection(
             _default_turn_detection_config(
                 typ,
                 supported_options=capabilities.turn_detection_options,
+                silence_duration_ms=capabilities.default_silence_duration_ms,
             ),
             patch,
         )
@@ -998,6 +1003,7 @@ class CanonicalRealtimeSession:
                     "turn_detection": _default_turn_detection_config(
                         default_turn_detection_type,
                         supported_options=self.capabilities.turn_detection_options,
+                        silence_duration_ms=self.capabilities.default_silence_duration_ms,
                     ),
                 },
                 "output": {

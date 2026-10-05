@@ -173,6 +173,8 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._manual_input_commit_hook: ManualInputCommitHook | None = None
         self._idle_timeout: RealtimeServerVADIdleTimeout | None = None
         self._response_gate: Any | None = None
+        #: The response the client's own response.create started, if it is the active one.
+        self._client_started_response_id: str | None = None
         self._llm_context: Any | None = None
         self._instructions_renderer: Callable[[str], list[dict[str, Any]]] | None = None
         self._session_prompt_update_owner: Any | None = None
@@ -1241,7 +1243,24 @@ class RealtimeFrameSerializer(FrameSerializer):
         defer_for_conversation_append = bool(
             gate_installed and pending_conversation_item_ids and not self._response_gate.response_slot_occupied
         )
-        defer_response = defer_for_client_output or defer_for_manual_commit or defer_for_conversation_append
+        defer_for_pipeline_response = bool(
+            gate_installed
+            and getattr(self._response_gate, "defer_client_responses_behind_pipeline", False)
+            and (
+                self._controller.pipeline_response_pending
+                or self._response_gate.has_service_audio_reservation
+                or (
+                    self._controller.response_in_progress
+                    and self._controller.active_response_id != self._client_started_response_id
+                )
+            )
+        )
+        defer_response = (
+            defer_for_client_output
+            or defer_for_manual_commit
+            or defer_for_conversation_append
+            or defer_for_pipeline_response
+        )
         response_needs_gate = (
             gate_installed
             or manual_input_mode
@@ -1391,6 +1410,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                     audio_output=copy.deepcopy(response_audio_output),
                 )
                 response_id = self._controller.active_response_id or ""
+                self._client_started_response_id = response_id
                 try:
                     self._refresh_active_response_output_audio()
                     if response_needs_gate:
@@ -1598,7 +1618,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                     )
                 trial_record.response_status = "completed"
             trial.add_function_output(**add_kwargs)
-            await self._client_tool_broker.stage_output(
+            late = await self._client_tool_broker.stage_output(
                 call_id=call_id,
                 name=record.name,
                 output=output,
@@ -1612,6 +1632,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                 item_id=validated_item.get("id"),
                 previous_item_id=previous_item_id,
                 previous_item_id_supplied=previous_supplied,
+                late=late is True,
             )
 
         if item.get("type") != "message" or item.get("role") not in {"system", "user"}:
@@ -2344,6 +2365,13 @@ class RealtimeFrameSerializer(FrameSerializer):
             events = self._controller.add_function_output(**add_kwargs)
             output_recorded = True
             await self._emit_events(events)
+            if frame.late:
+                # The call settled without this output; it is part of the
+                # conversation now, but no handler is waiting to act on it.
+                logger.bind(event="client_tool_late_output", call_id=frame.call_id, tool=frame.tool_name).info(
+                    "Late client tool output acknowledged"
+                )
+                return
             await broker.release_output(
                 call_id=frame.call_id,
                 name=frame.tool_name,
@@ -2477,6 +2505,12 @@ class RealtimeFrameSerializer(FrameSerializer):
                         param="response",
                     )
             pending_calls = self._controller.pending_client_tool_call_ids()
+            if pending_calls and getattr(self._response_gate, "defer_client_responses_behind_pipeline", False):
+                # The response this request waited behind asked the client for
+                # new tool outputs. The client answers those and asks again;
+                # serving or rejecting this request now would only race it.
+                logger.info(f"Deferred response.create superseded by pending client calls: {pending_calls[0]!r}")
+                return None
             if pending_calls:
                 raise RealtimeProtocolError(
                     message=f"Function call {pending_calls[0]!r} requires a correlated output before response.create",

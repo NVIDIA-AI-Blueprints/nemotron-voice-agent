@@ -36,8 +36,8 @@ The `frontend-backend-agent` (airline) defaults in [`examples_registry.yaml`](..
 The Talker and Thinker use different runtime settings. The Talker disables
 reasoning for lower latency. The Generic Server and Single GPU profiles give
 the Nemotron 3 Super Thinker a 1,024-token reasoning budget and allow up to
-2,048 output tokens. The Generic Cloud profile uses a 256-token reasoning
-budget and allows up to 768 output tokens. The Airline Thinker uses its own
+2,048 output tokens. The Generic Cloud profile uses a 1,024-token reasoning
+budget and allows up to 4,096 output tokens. The Airline Thinker uses its own
 catalog settings.
 
 ## Request Flow
@@ -240,10 +240,17 @@ The following environment variables bound shared and domain-specific orchestrati
 | `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE` | Disabled | Legacy switch that forces direct mode only when the explicit result-mode variable is absent |
 | `FRONTEND_BACKEND_FRONTEND_VERDICT` | `true` | Lets a `call_backend` call made while delegated work runs continue that work after a pure acknowledgement or progress check. Any value other than `true` disables it. |
 | `FRONTEND_BACKEND_BACKEND_HISTORY` | `true` | Sends the Thinker a bounded `conversation_history` of earlier delegations in the session. Any value other than `true` disables it. |
+| `FRONTEND_BACKEND_LATE_ANSWERS` | `true` | Lets a superseded generic request still deliver its question or successful client-tool result when nothing newer covered it. Refer to [Generic Client-Tool Safeguards](#generic-client-tool-safeguards). |
+| `FRONTEND_BACKEND_NORMALIZATION` | `true` | Screens spoken identifiers in generic client read-tool calls and writes spelled identifiers out in the Thinker's history transcript |
+| `FRONTEND_BACKEND_PHONE_FORMAT` | `true` | Appends the `generic_thinker_phone_numbers` rule to the generic Thinker prompt and adds the other phone-number form after a phone lookup finds nothing |
+| `FRONTEND_BACKEND_DIRECT_WRITE` | `true` | Issues a confirmed generic client write without a new plan after a bare "yes" to a fully spoken confirmation question (Realtime only) |
+| `FRONTEND_BACKEND_DONE_GUARD` | `true` | Adds `completed_actions` or `no_change_notice` to generic results that the Talker phrases |
+| `FRONTEND_BACKEND_REALTIME_TOOL_ROUNDS` | `true` | Enables the delegation protocol options on the Generic Frontend/Backend Realtime route |
+| `FRONTEND_BACKEND_AGENT_TODAY` | Unset | Overrides today's date for both domains, including the generic Talker and Thinker; uses `YYYY-MM-DD` format |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delays progress speech until delegated work remains active past the threshold |
 | `THINKER_TOOL_TIMEOUT_SECONDS` | `45.0` | Bounds the shared Talker-to-backend function handler |
 | `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` | `15.0` | Bounds one Generic Talker completion stream. An invalid or stalled stream retries once, so the Talker spends at most twice this value producing a given utterance |
-| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `6.0` | Bounds each generic Thinker planning round |
+| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `10.0` | Bounds each generic Thinker planning round |
 | `GENERIC_PLANNER_MAX_ATTEMPTS` | `2` | Retries a transient Thinker planning failure (for example, a temporarily overloaded model endpoint) this many times before the backend deadline fails the round |
 | `GENERIC_PLANNER_RETRY_BACKOFF_SECONDS` | `0.2` | Base delay before a retried planning attempt; doubles with each further attempt |
 | `GENERIC_MAX_PLANNING_ROUNDS` | `8` | Limits dependent generic planning rounds; increasing this value does not extend the overall backend deadline |
@@ -308,7 +315,7 @@ emits an accepted filler at most once after the threshold and never adds it to
 conversation history. A missing or rejected candidate stays silent and never
 blocks the backend; there is no static fallback.
 
-The `generic-frontend-backend-agent` registry entry enables all 5 built-in generic tools. To expose a subset, create or edit a trusted registry entry. Client session data and Talker prompt metadata do not widen that set.
+The `generic-frontend-backend-agent` registry entry enables all 5 built-in generic tools. To expose a subset, create or edit a trusted registry entry. Client session data and Talker prompt metadata do not widen that set. A Realtime session that declares its own client tools disables the built-in tools for that session.
 
 The generic backend permits at most 8 planning rounds by default within the
 existing 40-second overall deadline. Set `GENERIC_MAX_PLANNING_ROUNDS` to
@@ -352,9 +359,37 @@ For model and catalog settings, refer to [Configure LLM](../../../docs/how-to/co
 The built-in generic profile keeps Nemotron 3 Super reasoning enabled for the
 Thinker at temperature `0.0`. The Server and Single GPU catalog entries bound
 each plan to 2,048 output tokens with a 1,024-token reasoning budget. The Cloud
-entry keeps the lower 768-output-token and 256-reasoning-token limits. You can
+entry allows 4,096 output tokens with a 1,024-token reasoning budget. You can
 override the completion and reasoning limits with
-`GENERIC_THINKER_MAX_TOKENS` and `GENERIC_THINKER_REASONING_BUDGET`.
+`GENERIC_THINKER_MAX_TOKENS` and `GENERIC_THINKER_REASONING_BUDGET`. The
+reasoning override writes the top-level `extra_body.reasoning_budget` request
+field, the same field that the catalogs set, so it replaces the catalog value.
+A value that does not parse as an integer falls back to 1,024.
+
+The generic backend treats a plan that stops at the token limit
+(`finish_reason` `length`) like a transient failure. With the default
+`GENERIC_PLANNER_MAX_ATTEMPTS` of `2`, it retries that plan once within the
+backend deadline. When the dispatcher rejects a plan before any side
+effect, the backend re-plans that round once and passes the rejection reason
+as `session_state.validation_error`. Each planning attempt emits a
+`thinker_round` log event with the round, attempt, outcome (`ok`, `timeout`,
+`truncated`, `parse_error`, `plan_rejected`, `cancelled`, or `error`), and
+prompt token count.
+
+A generic session that declares its own client tools does not use the built-in
+server tools (weather, stock price, web search, BMI, and random number). The
+Talker capability digest and the Thinker tool contract list only the client
+tools in that session.
+
+The generic Talker and Thinker take today's date from the first available
+source in this order:
+
+1. `FRONTEND_BACKEND_AGENT_TODAY`, in `YYYY-MM-DD` format.
+2. The first sentence of the Realtime `session.instructions` that mentions the
+   present (for example "current," "today," or "now") and contains an ISO
+   date. An optional time and time-zone abbreviation that follow the date are
+   also used. The instructions themselves are never changed.
+3. The server clock.
 
 ### Continue Running Work and Share Session History
 
@@ -372,18 +407,25 @@ while a delegated request is still running:
 - Code makes the final decision. It continues the running request only when
   every word of the user's latest utterance is on a closed English list of
   acknowledgement and progress-check words, and the Talker kept the running
-  query unchanged. Corrections, new details, and requests to repeat or check
-  again always start new work.
+  query unchanged. A whole utterance that is one progress or presence phrase,
+  such as "any progress," "how much longer," "one second," or "I'll be right
+  with you," continues the running request even when the Talker reworded the
+  query (reason `progress_phrase`). Corrections, new details, and requests to
+  repeat or check again always start new work.
 - On `continue`, the new call takes over the running backend request. The
   previous call ends as superseded without speaking, and the user hears one
   answer. The runtime speaks a progress phrase only when the Talker supplied a
   `filler_text` that the existing filler policy accepts.
 - On `new`, the existing behavior applies. The generic backend lets the old
-  plan finish silently and plans the new request, and the airline backend
-  cancels the old request and restarts.
-- In a Realtime generic session, user speech still cancels a parked
-  client-tool round. The later `call_backend` call then finds no running
-  request and starts new work.
+  plan finish and plans the new request, and the airline backend cancels the
+  old request and restarts. With `FRONTEND_BACKEND_LATE_ANSWERS`, the old
+  generic plan can still deliver a question or client-tool result. Refer to
+  [Generic Client-Tool Safeguards](#generic-client-tool-safeguards).
+- In a Realtime generic session with `FRONTEND_BACKEND_REALTIME_TOOL_ROUNDS`
+  enabled, user speech does not cancel a parked client-tool round that the
+  client already received. The later `call_backend` call finds the request
+  still running and continues it or starts new work. With the switch disabled,
+  user speech cancels the parked round, and the later call starts new work.
 
 `FRONTEND_BACKEND_BACKEND_HISTORY` gives the Thinker a bounded
 `conversation_history` key that lists earlier delegations in the session. The
@@ -407,11 +449,109 @@ Thinker system prompt receives a short addendum that explains the history;
 Realtime `session.instructions` still reaches the Thinker verbatim.
 
 Neither feature changes the Realtime wire protocol. `call_backend` and its
-`task` argument never reach the client, and the `session.updated` echo is
-unchanged. At startup, the server logs
-`Frontend verdict: on|off; backend history: on|off (domain=<key>)`. Each
-decision emits a structured `frontend_verdict` log event with the decision,
-reason, model-supplied task, and text sizes, but no conversation content.
+`task` argument never reach the client. At startup, the server logs
+`Frontend verdict: on|off; backend history: on|off (domain=<key>)` and a
+`frontend_backend_flags` event with every feature switch. Each decision emits a
+structured `frontend_verdict` log event with the decision, reason,
+model-supplied task, and text sizes. The event also includes the user's
+utterance, the new query, and the running query, each clipped to 160
+characters, so treat these logs as conversation content.
+
+### Generic Client-Tool Safeguards
+
+The generic domain adds the following safeguards for sessions that declare
+client-owned tools. Each switch in
+[`src/flags.py`](src/flags.py) is on by default and follows the same rule:
+only `true` enables it when it is set, and an unset or empty value keeps the
+default. The server reads every switch when a session starts, so a change
+applies to the next session. `FRONTEND_BACKEND_LATE_ANSWERS`,
+`FRONTEND_BACKEND_DIRECT_WRITE`, and `FRONTEND_BACKEND_DONE_GUARD` read the
+delegation ledger, so they also need `FRONTEND_BACKEND_BACKEND_HISTORY`. While
+history is off, `session.nvidia.agent.flags` reports these three as `false`.
+
+The backend classifies each client tool as a read or a write from its own
+schema. A tool is a read only when all of the following hold. Every other
+tool, including one that the rules cannot place, is a write.
+
+- Its name starts with `get_`, `find_`, `search_`, `list_`, `lookup_`, or
+  `check_`.
+- Its description opens with a lookup verb, such as "Get," "Find," "Search,"
+  "List," "Look up," or "Check."
+- No later word of its name names a change, such as `update`, `cancel`, `book`,
+  or `in`.
+
+`FRONTEND_BACKEND_NORMALIZATION` screens spoken identifiers before a client
+read tool runs. The rules come only from the session's tool schemas:
+
+- An identifier argument is put into the shape of the quoted example in its
+  argument description, for example `"such as 'XB7TP2'"`. A value that already
+  has that shape is sent unchanged.
+- A clearly unfinished identifier is not sent. The backend asks the caller for
+  the rest of it, and asks them to spell it again if it is still unfinished.
+- A repeat of a call that already failed is suppressed, and the Thinker
+  receives a hint to read the value back to the caller.
+- When a lookup of a person-like record (for example a user, customer, or
+  member) finds nothing, the Thinker's copy of the result carries a recovery
+  hint. The client's result is unchanged.
+- The arguments of a write tool are never changed.
+- In the Thinker's history transcript, spelled identifiers are written out,
+  including one that a pause split across two turns. The raw text stays on the
+  wire and in the Talker context.
+
+`FRONTEND_BACKEND_PHONE_FORMAT` appends the `generic_thinker_phone_numbers`
+prompt rule to the Thinker. The rule prefers the `XXX-XXX-XXXX` form, allows
+one retry in the other ten-digit form, and asks the Thinker to read the digits
+back after a second miss. When a phone lookup finds nothing, the Thinker's copy
+of the result also names the other form. Code never retries a call on its own; any
+second attempt is a Thinker plan.
+
+Code renders every generic confirmation question from a fixed template, and the
+Talker speaks it word for word:
+
+```text
+Just to confirm, I will <opening clause of the tool description>, with <label>: <value>, .... Shall I go ahead?
+```
+
+A list, object, empty value, or value longer than 80 characters is not spoken,
+and the question is marked `summarized`. `FRONTEND_BACKEND_DIRECT_WRITE` then
+lets the backend issue the confirmed call without a new plan when all of the
+following hold:
+
+- The question spoke every value in full, and the confirmed tool is a client
+  write tool.
+- The response that carried the question completed, and the conversation
+  journal shows that the client did not truncate it.
+- The very next user turn is a bare affirmative: "yes," "yes please," "yeah,"
+  "go ahead," "do it," "that's right," "correct," "please do," or "sure."
+- No other user turn, write, or session update came in between.
+
+An approval is used once. In every other case, the backend plans the turn as
+before. Direct writes need the Realtime conversation journal, so they apply
+only to Realtime sessions.
+
+`FRONTEND_BACKEND_DONE_GUARD` adds `completed_actions` to each result that the
+Talker phrases. The field lists the client writes of that delegation that
+succeeded. When no write succeeded, the result carries `no_change_notice`
+instead, and the Talker must not claim that anything was done.
+
+`FRONTEND_BACKEND_LATE_ANSWERS` applies when a newer request supersedes a
+running one. The superseded request can still deliver a question about missing
+or invalid details, a consent question, or a successful client-tool result
+through its own `call_backend` call. It does so only after newer calls settle,
+and only when no newer request spoke, used the same tool, or wrote anything.
+`cancel_backend` withdraws a pending late answer. Each decision emits a
+`late_answer` log event.
+
+`FRONTEND_BACKEND_REALTIME_TOOL_ROUNDS` enables the delegation protocol options
+of the Generic Frontend/Backend Realtime route. For the wire behavior, refer to
+[Run the Generic Frontend/Backend Profile](../../../docs/how-to/use-realtime-gateway.md#run-the-generic-frontendbackend-profile).
+
+Realtime sessions of both Frontend/Backend routes publish the agent build,
+effective Thinker settings, and feature switches as a read-only
+`session.nvidia.agent` object in `session.created` and `session.updated`. The
+Docker image records the build through the `AGENT_GIT_SHA` build argument,
+which defaults to `unknown`. To record the current commit, build with
+`AGENT_GIT_SHA=$(git rev-parse --short HEAD) docker compose build`.
 
 ## Domain Contract
 
@@ -424,6 +564,7 @@ reason, model-supplied task, and text sizes, but no conversation content.
 | `talker_tools_schema` | Talker-visible `call_backend` and `cancel_backend` definitions |
 | `build_backend` | Session-scoped factory for the domain backend and state |
 | `runtime_context` | Trusted date, time, or domain context appended to the Talker prompt |
+| `session_runtime_context` | Optional variant of `runtime_context` that reads the Realtime session instructions, for example a date that they state as today |
 | `intro_prompt` | Initial Talker instruction when welcome messages are enabled |
 | `tts_text_transform` | Optional domain pronunciation transformation |
 | `filler_policy` and `filler_selector` | Choose Talker-authored, planner-authored, or legacy code-authored progress speech and provide a selector only for the legacy policy |
@@ -506,7 +647,7 @@ The pipeline enforces the following boundaries:
   configure the limit with `GENERIC_MAX_PLANNING_ROUNDS`. It passes only
   accumulated trusted tool results into later rounds and preserves results from
   completed rounds if later planning fails.
-- A backend instance and its state belong to one voice session. A new delegated request replaces unfinished work in that session: the airline backend cancels it, and the generic backend lets it finish without speaking its result. With `FRONTEND_BACKEND_FRONTEND_VERDICT` enabled, a pure acknowledgement or progress check continues the running request instead, and only one answer is delivered.
+- A backend instance and its state belong to one voice session. A new delegated request replaces unfinished work in that session: the airline backend cancels it, and the generic backend lets it finish without speaking its result. With `FRONTEND_BACKEND_LATE_ANSWERS` enabled, the superseded generic request can still deliver a question or client-tool result when nothing newer covered it. With `FRONTEND_BACKEND_FRONTEND_VERDICT` enabled, a pure acknowledgement or progress check continues the running request instead, and only one answer is delivered.
 - Cancellation invalidates the active call identifier, so a late result cannot become the current response.
 - A model-authored internal tool call after a completed backend result cannot
   execute. The runtime retries once, then returns trusted backend speech.
@@ -574,7 +715,7 @@ Prompt edits can silently break the architecture contract. After changing the fr
 - Frontend LLM does not call tools for greetings, thanks, or small talk when no flight task is pending.
 - The initial greeting does not call `call_backend` or `cancel_backend`.
 - Backend agent calls `flight_search` only when required route and date details are available.
-- Known past travel dates return a future-date request without invoking the backend agent.
+- Known past travel dates return a future-date request without invoking the backend agent. This guard applies only to the airline domain.
 - Backend agent calls `booking` only after a searched flight has been selected.
 - Backend agent calls `pnr_status` for PNR, record-locator, or booking-status requests.
 - Backend agent returns `response_hint` for missing information or unsupported requests instead of inventing backend results.

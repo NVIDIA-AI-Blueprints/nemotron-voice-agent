@@ -39,15 +39,15 @@ VOICE = "Magpie-Multilingual.EN-US.Aria"
 DELEGATE_TOOLS = ["call_backend", "cancel_backend"]
 
 
-def _client_schema(name: str = "get_reservation_details") -> dict:
+def _client_schema(name: str = "get_subscription_details") -> dict:
     return {
         "type": "function",
         "name": name,
-        "description": "Get the details of a reservation.",
+        "description": "Get the details of a subscription.",
         "parameters": {
             "type": "object",
-            "properties": {"reservation_id": {"type": "string"}},
-            "required": ["reservation_id"],
+            "properties": {"subscription_id": {"type": "string"}},
+            "required": ["subscription_id"],
         },
     }
 
@@ -69,7 +69,7 @@ class DelegateToolProjectionTests(unittest.TestCase):
             {"pipeline_mode": "generic-frontend-backend-agent", "delegate_tools": DELEGATE_TOOLS},
         )
         self.assertEqual(runtime["delegate_tools"], DELEGATE_TOOLS)
-        self.assertEqual([tool["name"] for tool in runtime["client_tools"]], ["get_reservation_details"])
+        self.assertEqual([tool["name"] for tool in runtime["client_tools"]], ["get_subscription_details"])
 
     def test_server_tools_still_require_the_client_to_declare_them(self):
         runtime = _session_patch_to_runtime(
@@ -84,7 +84,7 @@ class TrustedToolActivationTests(unittest.TestCase):
         controller = _controller()
         controller.apply_session_update({"output_modalities": ["text"], "tools": [_client_schema()]})
         controller.bind_session_tool_projection(
-            client_tool_bindings={"get_reservation_details": "get_reservation_details"},
+            client_tool_bindings={"get_subscription_details": "get_subscription_details"},
             mcp_pipeline_names=frozenset(),
         )
         self.assertNotIn(
@@ -94,7 +94,7 @@ class TrustedToolActivationTests(unittest.TestCase):
         controller.start_function_call(
             call_id="call-1",
             name="call_backend",
-            arguments={"query": "Get reservation ABC123.", "filler_text": "One moment."},
+            arguments={"query": "Get subscription ABC123.", "filler_text": "One moment."},
         )
         self.assertEqual(controller.pipeline_tool_owner(call_id="call-1", pipeline_name="call_backend"), "delegate")
 
@@ -102,16 +102,16 @@ class TrustedToolActivationTests(unittest.TestCase):
         controller = _controller()
         controller.apply_session_update({"output_modalities": ["text"], "tools": [_client_schema()]})
         controller.bind_session_tool_projection(
-            client_tool_bindings={"get_reservation_details": "get_reservation_details"},
+            client_tool_bindings={"get_subscription_details": "get_subscription_details"},
             mcp_pipeline_names=frozenset(),
         )
         with self.assertRaises(Exception) as caught:
-            controller.start_function_call(call_id="call-2", name="cancel_reservation", arguments={})
+            controller.start_function_call(call_id="call-2", name="cancel_subscription", arguments={})
         self.assertIn("unknown tool", str(caught.exception))
 
 
 class PendingDelegateCallTests(unittest.TestCase):
-    """An in-flight delegation must not block the next client turn.
+    """A running delegation must not block the next client turn.
 
     The client cannot answer a delegate call, so gating ``response.create`` on
     one would strand the session for the rest of the conversation.
@@ -121,13 +121,13 @@ class PendingDelegateCallTests(unittest.TestCase):
         controller = _controller()
         controller.apply_session_update({"output_modalities": ["text"], "tools": [_client_schema()]})
         controller.bind_session_tool_projection(
-            client_tool_bindings={"get_reservation_details": "get_reservation_details"},
+            client_tool_bindings={"get_subscription_details": "get_subscription_details"},
             mcp_pipeline_names=frozenset(),
         )
         controller.start_function_call(
             call_id="delegate-1",
             name="call_backend",
-            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+            arguments={"query": "Cancel subscription ABC123.", "filler_text": "One moment."},
         )
         return controller
 
@@ -140,8 +140,8 @@ class PendingDelegateCallTests(unittest.TestCase):
         controller = self._controller_with_pending_delegate()
         controller.start_function_call(
             call_id="client-1",
-            name="get_reservation_details",
-            arguments={"reservation_id": "ABC123"},
+            name="get_subscription_details",
+            arguments={"subscription_id": "ABC123"},
         )
         self.assertEqual(controller.pending_client_tool_call_ids(), ("client-1",))
 
@@ -156,7 +156,7 @@ class ClientToolRoundUnderBoundPromptTests(unittest.IsolatedAsyncioTestCase):
             {"output_modalities": ["text"], "instructions": "be helpful", "tools": [_client_schema()]}
         )
         controller.bind_session_tool_projection(
-            client_tool_bindings={"get_reservation_details": "get_reservation_details"},
+            client_tool_bindings={"get_subscription_details": "get_subscription_details"},
             mcp_pipeline_names=frozenset(),
         )
         transport = create_realtime_transport(websocket, controller=controller)
@@ -172,7 +172,7 @@ class ClientToolRoundUnderBoundPromptTests(unittest.IsolatedAsyncioTestCase):
 
         try:
             round_task = asyncio.create_task(
-                executor((("get_reservation_details", {"reservation_id": "ABC123"}),), 5.0)
+                executor((("get_subscription_details", {"subscription_id": "ABC123"}),), 5.0)
             )
             done_events: list[dict] = []
             for _attempt in range(200):
@@ -250,7 +250,7 @@ class DelegateCallWireContractTests(unittest.TestCase):
         return controller.start_function_call(
             call_id="call-1",
             name="call_backend",
-            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+            arguments={"query": "Cancel subscription ABC123.", "filler_text": "One moment."},
         )
 
     def test_a_delegate_call_never_announces_a_function_call(self) -> None:
@@ -277,7 +277,7 @@ class DelegateCallWireContractTests(unittest.TestCase):
         controller.start_function_call(
             call_id="call-1",
             name="call_backend",
-            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+            arguments={"query": "Cancel subscription ABC123.", "filler_text": "One moment."},
         )
 
         events = controller.finish_response(status="completed")
@@ -290,7 +290,7 @@ class DelegateCallWireContractTests(unittest.TestCase):
         controller.start_function_call(
             call_id="call-1",
             name="call_backend",
-            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+            arguments={"query": "Cancel subscription ABC123.", "filler_text": "One moment."},
         )
         controller.finish_response(status="completed")
 
@@ -303,7 +303,7 @@ class DelegateCallWireContractTests(unittest.TestCase):
         controller.start_function_call(
             call_id="call-1",
             name="call_backend",
-            arguments={"query": "Cancel reservation ABC123.", "filler_text": "One moment."},
+            arguments={"query": "Cancel subscription ABC123.", "filler_text": "One moment."},
         )
 
         with self.assertRaises(RealtimeProtocolError) as raised:

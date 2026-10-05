@@ -9,15 +9,19 @@ import copy
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Protocol
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 
 from examples.frontend_backend_agent.src.planner import parse_plan_json
-from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator, run_streamed_inference
-from examples.frontend_backend_agent.src.tools import ToolSpec, render_tool_block
+from examples.frontend_backend_agent.src.runtime_context import (
+    SessionClock,
+    session_clock_from_instructions,
+    session_runtime_fields,
+)
+from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator, run_streamed_inference_result
+from examples.frontend_backend_agent.src.tools import ToolSpec, render_tool_block, session_server_tools
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +33,12 @@ class GenericPlannerSessionUpdate:
     trusted_system_prompt: str
     enabled_tools: tuple[str, ...]
     client_tools: tuple[dict[str, Any], ...]
+    #: The present as the session's instructions state it; None when they state none.
+    session_clock: SessionClock | None = None
+
+
+class PlanTruncatedError(RuntimeError):
+    """The Thinker stopped at its token limit, so its plan is incomplete."""
 
 
 class GenericPlanner(Protocol):
@@ -63,6 +73,8 @@ class NvidiaGenericPlanner:
         self._stage_metrics = stage_metrics
         self._model_name = model_name
         self._session_instruction_context = LLMContext([])
+        #: Token usage of the most recent plan, for per-round logging.
+        self.last_usage: dict[str, int] = {}
         initial = self.prepare_session_update(
             instructions=client_instructions,
             client_tools=client_tools,
@@ -89,15 +101,22 @@ class NvidiaGenericPlanner:
         if not isinstance(instructions, str):
             raise TypeError("Generic Thinker session instructions must be text")
         clients = tuple(copy.deepcopy(dict(tool)) for tool in client_tools)
-        trusted_prompt = f"{self._base_system_prompt}{render_tool_block(self._server_specs, clients)}"
-        enabled = tuple(spec.name for spec in self._server_specs) + tuple(str(tool["name"]) for tool in clients)
+        server_specs = session_server_tools(self._server_specs, clients)
+        trusted_prompt = f"{self._base_system_prompt}{render_tool_block(server_specs, clients)}"
+        enabled = tuple(spec.name for spec in server_specs) + tuple(str(tool["name"]) for tool in clients)
         return GenericPlannerSessionUpdate(
             session_instructions=instructions,
             session_messages=tuple(self.render_session_instructions(instructions)),
             trusted_system_prompt=trusted_prompt,
             enabled_tools=enabled,
             client_tools=clients,
+            session_clock=session_clock_from_instructions(instructions),
         )
+
+    @property
+    def session_clock(self) -> SessionClock | None:
+        """Return the present as the active session instructions state it."""
+        return self._session_clock
 
     def snapshot_session_update(self) -> GenericPlannerSessionUpdate:
         """Capture the active Thinker prompt/tool snapshot for rollback."""
@@ -107,6 +126,7 @@ class NvidiaGenericPlanner:
             trusted_system_prompt=self._system_prompt,
             enabled_tools=self._enabled_tools,
             client_tools=tuple(copy.deepcopy(self._client_tools)),
+            session_clock=self._session_clock,
         )
 
     def commit_session_update(self, prepared: GenericPlannerSessionUpdate) -> None:
@@ -121,6 +141,7 @@ class NvidiaGenericPlanner:
         self._system_prompt = prepared.trusted_system_prompt
         self._enabled_tools = prepared.enabled_tools
         self._client_tools = tuple(copy.deepcopy(prepared.client_tools))
+        self._session_clock = prepared.session_clock
 
     def restore_session_update(self, snapshot: GenericPlannerSessionUpdate) -> None:
         """Restore an exact Thinker snapshot after a failed outer transaction."""
@@ -128,7 +149,6 @@ class NvidiaGenericPlanner:
 
     async def plan(self, *, query: str, state: dict[str, Any], history: Any = None) -> dict[str, Any]:
         """Return a parsed plan; the dispatcher remains the authority for validation."""
-        now = datetime.now().astimezone()
         payload: dict[str, Any] = {"untrusted_user_request": query}
         if history is not None:
             payload["conversation_history"] = history
@@ -136,11 +156,7 @@ class NvidiaGenericPlanner:
             {
                 "enabled_tools": list(self._enabled_tools),
                 "session_state": state,
-                "runtime_context": {
-                    "local_datetime": now.isoformat(timespec="seconds"),
-                    "date": now.date().isoformat(),
-                    "timezone": str(now.tzinfo),
-                },
+                "runtime_context": session_runtime_fields(self._session_clock),
             }
         )
         context = LLMContext(
@@ -161,7 +177,10 @@ class NvidiaGenericPlanner:
                 attempt=attempt,
                 planning_round=planning_round,
             )
-        raw = await run_streamed_inference(self._llm, context, span, max_tokens=self._max_tokens)
-        if not raw:
+        result = await run_streamed_inference_result(self._llm, context, span, max_tokens=self._max_tokens)
+        self.last_usage = dict(result.usage_tokens)
+        if result.truncated:
+            raise PlanTruncatedError(f"Generic Thinker stopped at max_tokens={self._max_tokens}")
+        if not result.text:
             raise RuntimeError("Generic Thinker returned an empty plan")
-        return parse_plan_json(raw)
+        return parse_plan_json(result.text)

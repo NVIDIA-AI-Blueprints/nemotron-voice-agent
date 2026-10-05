@@ -9,6 +9,7 @@ import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Literal
 
 from loguru import logger
@@ -303,6 +304,20 @@ class StageMetricsCoordinator:
         return f"turn-{self._turn_counter}"
 
 
+@dataclass(frozen=True, slots=True)
+class StreamedInference:
+    """One collected out-of-pipeline completion and how the provider ended it."""
+
+    text: str
+    finish_reasons: frozenset[str] = frozenset()
+    usage_tokens: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def truncated(self) -> bool:
+        """Return whether the provider stopped at the token limit."""
+        return "length" in self.finish_reasons
+
+
 async def run_streamed_inference(
     llm,
     context: LLMContext,
@@ -311,6 +326,18 @@ async def run_streamed_inference(
     max_tokens: int | None = None,
 ) -> str:
     """Collect an out-of-pipeline streamed response while measuring true TTFT."""
+    result = await run_streamed_inference_result(llm, context, span, max_tokens=max_tokens)
+    return result.text
+
+
+async def run_streamed_inference_result(
+    llm,
+    context: LLMContext,
+    span: StageSpan | None,
+    *,
+    max_tokens: int | None = None,
+) -> StreamedInference:
+    """Like :func:`run_streamed_inference`, also returning finish reasons and token usage."""
     stream = await _open_out_of_band_stream(llm, context, max_tokens=max_tokens)
     parts: list[str] = []
     chunk_count = 0
@@ -353,7 +380,7 @@ async def run_streamed_inference(
             finish_reasons=",".join(sorted(finish_reasons)) or "none",
             **usage_tokens,
         ).info("Thinker stream completed")
-    return "".join(parts)
+    return StreamedInference("".join(parts), frozenset(finish_reasons), dict(usage_tokens))
 
 
 async def _open_out_of_band_stream(llm, context: LLMContext, *, max_tokens: int | None):

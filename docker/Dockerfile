@@ -74,10 +74,20 @@ COPY pyproject.toml uv.lock ./
 # For full source compliance, see /app/legal/THIRD_PARTY_NOTICES.txt
 RUN uv venv --python python3.12 && . .venv/bin/activate && uv sync --frozen
 
+# Pipecat's sentence tokenizer needs NLTK's punkt_tab data. Without it in the
+# image, the first session of every container downloads it at runtime, and a
+# slow or unreachable download host blocks pipeline setup until it times out.
+RUN .venv/bin/python -m nltk.downloader -d /usr/local/share/nltk_data punkt_tab
+
 COPY src/ src/
 COPY examples_registry.yaml examples_registry.yaml
 COPY benchmarking_tools/scaling-perf/ benchmarking_tools/scaling-perf/
 COPY --from=client-builder /client/dist/ client/dist/
+
+# Containers carry no .git; the build records which commit the image runs.
+# Realtime sessions of the Frontend/Backend Agent report it in session.updated.
+ARG AGENT_GIT_SHA=unknown
+ENV AGENT_GIT_SHA=${AGENT_GIT_SHA}
 
 EXPOSE 7860
 

@@ -66,6 +66,35 @@ def build_server_event(event_type: str, **payload: Any) -> dict[str, Any]:
     return event
 
 
+class ServiceNotReadyError(RuntimeError):
+    """A required service failed its readiness check.
+
+    ``service`` (for example ``TTS``) and ``reason`` (``starting``,
+    ``timeout`` or ``unavailable``) name no host, credential or URL, so they
+    are safe to publish in an ``error`` event.
+    """
+
+    def __init__(self, service: str, reason: str, detail: str = "") -> None:
+        """Record the failing service and a short, public reason."""
+        super().__init__(detail or f"{service} service is not ready ({reason})")
+        self.service = service
+        self.reason = reason
+
+
+SERVICES_NOT_READY_MESSAGE = "One or more required Realtime services are not ready"
+
+
+def services_not_ready_message(exc: BaseException | None) -> str:
+    """Return the public ``services_not_ready`` message, naming the failing service when known."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, ServiceNotReadyError):
+            return f"{SERVICES_NOT_READY_MESSAGE}: {exc.service} ({exc.reason})"
+        exc = exc.__cause__ or exc.__context__
+    return SERVICES_NOT_READY_MESSAGE
+
+
 @dataclass(slots=True)
 class RealtimeProtocolError(ValueError):
     """A client-visible Realtime protocol failure.

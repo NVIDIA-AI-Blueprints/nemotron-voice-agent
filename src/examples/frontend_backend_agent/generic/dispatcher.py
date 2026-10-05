@@ -19,7 +19,6 @@ from examples.frontend_backend_agent.generic.client_tools import (
     client_call_fingerprint,
     client_parameter_labels,
     format_client_result,
-    normalize_client_arguments,
     validate_client_arguments,
 )
 from examples.frontend_backend_agent.generic.result_formatters import (
@@ -36,6 +35,7 @@ from examples.frontend_backend_agent.generic.result_formatters import (
 from examples.frontend_backend_agent.src.tools import ToolContext, ToolSpec, validate_arguments
 
 if TYPE_CHECKING:
+    from examples.frontend_backend_agent.generic.argument_screen import ArgumentScreen
     from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 
 MAX_PARALLEL_TOOL_CALLS = 3
@@ -267,7 +267,21 @@ def _response_hint(
         if context not in enabled or (context not in tools and context not in client_tools):
             raise PlanValidationError("invalid confirmation hint")
         arguments = _confirmation_arguments(plan, tools, client_tools, context)
-        return confirmation_request(context, arguments)
+        client_spec = client_tools.get(context)
+        if client_spec is not None:
+            return confirmation_request(
+                context,
+                arguments,
+                description=client_spec.description,
+                labels=client_parameter_labels(client_spec),
+            )
+        spec = tools[context]
+        return confirmation_request(
+            context,
+            arguments,
+            description=spec.capability or spec.contract,
+            labels={name: param.label or name.replace("_", " ") for name, param in spec.params.items()},
+        )
     if reason == "tool_disabled":
         if (context not in tools and context not in client_tools) or context in enabled:
             raise PlanValidationError("invalid disabled-tool hint")
@@ -296,8 +310,14 @@ async def dispatch_plan(
     client_tool_executor: ClientToolRoundExecutor | None = None,
     client_tool_timeout_seconds: float = 25.0,
     seen_client_calls: set[str] | None = None,
+    argument_screen: ArgumentScreen | None = None,
 ) -> dict[str, Any]:
-    """Validate atomically, serialize mutating tools, and preserve planner order."""
+    """Validate atomically, serialize mutating tools, and preserve planner order.
+
+    ``argument_screen`` puts a read's dictated identifiers into their schema
+    shape and stops a clearly unfinished one with a question for the caller.
+    It never touches a write's arguments.
+    """
     enabled = frozenset(enabled_tools)
     client_tools = client_tools or {}
     enabled_specs = tuple(tools[name] for name in enabled_tools if name in tools)
@@ -325,11 +345,20 @@ async def dispatch_plan(
     pending_client_fingerprints: list[str] = []
     for index, call in enumerate(calls):
         if call.name in client_tools:
-            repaired, restyled = normalize_client_arguments(client_tools[call.name], call.arguments)
-            if restyled:
-                logger.info(f"spoken identifier restyled for client tool: tool={call.name} fields={','.join(restyled)}")
-                call = ValidatedToolCall(name=call.name, arguments=repaired)
-                calls[index] = call
+            if argument_screen is not None:
+                screened, question = argument_screen.screen(call.name, call.arguments)
+                if question is not None:
+                    logger.bind(event="identifier_incomplete", tool=call.name).info(
+                        f"unfinished identifier answered locally: tool={call.name}"
+                    )
+                    return question
+                if screened != call.arguments:
+                    changed = sorted(key for key in screened if screened.get(key) != call.arguments.get(key))
+                    logger.bind(event="identifier_screened", tool=call.name, fields=changed).info(
+                        f"spoken identifier put into schema shape: tool={call.name} fields={','.join(changed)}"
+                    )
+                    call = ValidatedToolCall(name=call.name, arguments=screened)
+                    calls[index] = call
             validation_error = validate_client_arguments(client_tools[call.name], call.arguments)
             if validation_error is not None:
                 logger.warning(f"client-owned tool arguments rejected: tool={call.name}")
@@ -341,8 +370,10 @@ async def dispatch_plan(
                 if seen_client_calls is not None:
                     seen_client_calls.update(pending_client_fingerprints)
                     seen_client_calls.add(fingerprint)
-                logger.warning(f"duplicate client-owned tool call suppressed: tool={call.name}")
-                return format_client_result(
+                logger.bind(event="retry_guard", tool=call.name).warning(
+                    f"duplicate client-owned tool call suppressed: tool={call.name}"
+                )
+                suppressed = format_client_result(
                     call.name,
                     call.arguments,
                     {
@@ -353,6 +384,9 @@ async def dispatch_plan(
                         },
                     },
                 )
+                if argument_screen is not None and argument_screen.enabled:
+                    suppressed["thinker_hint"] = argument_screen.repeated_call_hint()
+                return suppressed
             pending_client_fingerprints.append(fingerprint)
             continue
         spec = tools[call.name]

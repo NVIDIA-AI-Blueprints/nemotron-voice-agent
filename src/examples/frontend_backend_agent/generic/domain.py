@@ -5,23 +5,28 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from examples.frontend_backend_agent.generic.backend import GenericThinkerBackend
 from examples.frontend_backend_agent.generic.client_tools import build_client_tool_specs
 from examples.frontend_backend_agent.generic.planner import NvidiaGenericPlanner
 from examples.frontend_backend_agent.generic.tools import TOOLS, TOOLS_SCHEMA, resolve_enabled_tools
 from examples.frontend_backend_agent.src.domain import DomainBuildContext, DomainSpec
+from examples.frontend_backend_agent.src.runtime_context import session_clock_from_instructions, session_runtime_fields
 from utils import parse_env_float, parse_env_int
 
 
 def _runtime_context() -> str:
-    now = datetime.now().astimezone()
+    return _session_runtime_context("")
+
+
+def _session_runtime_context(instructions: str) -> str:
+    """Render the Talker's date the way the Thinker receives it: override, then session, then clock."""
+    fields = session_runtime_fields(session_clock_from_instructions(instructions))
+    timezone = fields.get("timezone")
     return (
         "\n\nRuntime context:\n"
-        f"- The local date is {now.date().isoformat()}.\n"
-        f"- The local timezone is {now.tzinfo}.\n"
-        "- Delegate current, recent, forecast, or otherwise changing facts instead of answering from memory."
+        f"- The local date is {fields['date']}.\n"
+        + (f"- The local timezone is {timezone}.\n" if timezone else "")
+        + "- Delegate current, recent, forecast, or otherwise changing facts instead of answering from memory."
     )
 
 
@@ -81,6 +86,7 @@ def create_domain_spec() -> DomainSpec:
         talker_tools_schema=TOOLS_SCHEMA,
         build_backend=_build_backend,
         runtime_context=_runtime_context,
+        session_runtime_context=_session_runtime_context,
         filler_policy="talker_authored",
         tool_registry=TOOLS,
         realtime_prompt_coordinator_factory=_build_realtime_prompt_coordinator,

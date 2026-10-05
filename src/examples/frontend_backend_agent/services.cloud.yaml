@@ -30,9 +30,11 @@ thinker-llm:
     name: "Nemotron 3 Super — Reasoning Thinker"
     model_id: "nvidia/nemotron-3-super-120b-a12b"
     base_url: "https://integrate.api.nvidia.com/v1"
-    max_tokens: 768
+    # Budget sized for a plan that must act: at 256 / 768 acting plans ran out
+    # of tokens and came back empty or truncated.
+    max_tokens: 4096
     temperature: 0.0
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":256,"repetition_penalty":1.05}}'
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024,"repetition_penalty":1.05}}'
 
 booking-server:
   default:

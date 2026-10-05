@@ -31,9 +31,16 @@ from pipecat.workers.runner import WorkerRunner
 import examples_registry
 from examples.frontend_backend_agent.src.barge_in import BargeInState, BargeInTracker
 from examples.frontend_backend_agent.src.domain import DomainBuildContext, resolve_domain_spec
+from examples.frontend_backend_agent.src.flags import effective_flags, flag
 from examples.frontend_backend_agent.src.frontend_verdict import with_task_field
 from examples.frontend_backend_agent.src.history import ConversationTranscript, DelegationLedger
+from examples.frontend_backend_agent.src.normalization import join_across_turns, normalize_transcript
 from examples.frontend_backend_agent.src.reliable_talker import ReliableNvidiaLLMService
+from examples.frontend_backend_agent.src.session_metadata import (
+    DEFAULT_REASONING_BUDGET,
+    DEFAULT_THINKER_MAX_TOKENS,
+    thinker_env_overrides,
+)
 from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.shared.audio_recorder import create_audio_recorder
@@ -61,7 +68,6 @@ from utils import (
     normalize_lang_code,
     nvidia_api_key,
     nvidia_speech_api_key,
-    parse_env_bool,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
@@ -79,6 +85,7 @@ FRONTEND_BACKEND_VAD_STOP_SECS = parse_env_float("FRONTEND_BACKEND_VAD_STOP_SECS
 #: Catalog keys of the trusted addenda for the two default-on features.
 FRONTEND_VERDICT_PROMPT_KEY = "frontend_verdict_talker"
 BACKEND_HISTORY_PROMPT_KEY = "backend_history_thinker"
+PHONE_NUMBERS_PROMPT_KEY = "generic_thinker_phone_numbers"
 
 
 def _build_context_messages(
@@ -166,6 +173,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             bind_realtime_session_prompt_updates,
             bind_realtime_tts_service,
             configure_realtime_client_tools,
+            configure_realtime_delegation_protocol,
             prepare_realtime_tools,
             realtime_client_tool_executor,
             realtime_input_audio_processors,
@@ -216,6 +224,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     talker_few_shots = _load_prompt_few_shots(few_shot_prompt_key)
     thinker_prompt_key = str(body.get("thinker_prompt") or domain.thinker_prompt_key)
     thinker_prompt = _load_required_catalog_prompt(thinker_prompt_key)
+    if domain.key == "generic" and flag("FRONTEND_BACKEND_PHONE_FORMAT"):
+        thinker_prompt = f"{thinker_prompt}\n\n{_load_required_catalog_prompt(PHONE_NUMBERS_PROMPT_KEY)}"
     default_booking_server: dict | None = None
     if is_realtime:
         selected_llm_id = str(body.get("llm_id", "") or "")
@@ -312,10 +322,11 @@ async def bot(runner_args: RunnerArguments) -> None:
     talker_llm = talker_cls(**talker_kwargs)
     initial_capability_digest = ""
     if is_realtime and domain.key == "generic":
+        from examples.frontend_backend_agent.src.tools import session_server_tools
         from realtime.capabilities import render_capabilities_for_session
 
         initial_capability_digest = await render_capabilities_for_session(
-            realtime_capability_specs,
+            session_server_tools(realtime_capability_specs, client_tools),
             client_tools,
             mode=realtime_capability_mode,
             llm=talker_llm,
@@ -334,11 +345,10 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
+    env_thinker_max_tokens, env_reasoning_budget = thinker_env_overrides(domain.key)
     thinker_max_tokens = _parse_optional_int(
-        (os.getenv("GENERIC_THINKER_MAX_TOKENS", "") if domain.key == "generic" else "")
-        or body.get("thinker_max_tokens", "")
-        or default_thinker_llm.get("max_tokens"),
-        4096,
+        env_thinker_max_tokens or body.get("thinker_max_tokens", "") or default_thinker_llm.get("max_tokens"),
+        DEFAULT_THINKER_MAX_TOKENS,
     )
     thinker_temperature = _parse_optional_float(
         body.get("thinker_temperature", "") or default_thinker_llm.get("temperature")
@@ -348,19 +358,19 @@ async def bot(runner_args: RunnerArguments) -> None:
         label="thinker_extra_params",
     )
     generic_reasoning_budget = (
-        _parse_optional_int(os.getenv("GENERIC_THINKER_REASONING_BUDGET", ""), 1024)
-        if domain.key == "generic" and os.getenv("GENERIC_THINKER_REASONING_BUDGET", "").strip()
-        else None
+        _parse_optional_int(env_reasoning_budget, DEFAULT_REASONING_BUDGET) if env_reasoning_budget else None
     )
     if generic_reasoning_budget is not None:
         thinker_extra_params = copy.deepcopy(thinker_extra_params)
         extra_body = thinker_extra_params.setdefault("extra_body", {})
         if not isinstance(extra_body, dict):
             raise ValueError("thinker_extra_params.extra_body must be an object")
-        chat_template_kwargs = extra_body.setdefault("chat_template_kwargs", {})
-        if not isinstance(chat_template_kwargs, dict):
-            raise ValueError("thinker_extra_params chat_template_kwargs must be an object")
-        chat_template_kwargs["reasoning_budget"] = generic_reasoning_budget
+        # The same top-level request field the service catalogs set, so the
+        # override replaces the catalog value instead of sending a second one.
+        extra_body["reasoning_budget"] = generic_reasoning_budget
+        chat_template_kwargs = extra_body.get("chat_template_kwargs")
+        if isinstance(chat_template_kwargs, dict):
+            chat_template_kwargs.pop("reasoning_budget", None)
     thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id)
     if thinker_max_tokens is not None:
         thinker_llm_settings.max_tokens = thinker_max_tokens
@@ -378,10 +388,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     client_tool_round_executor = realtime_client_tool_executor(transport) if is_realtime else None
 
     # Read per session so a deployment change applies to the next session.
-    frontend_verdict_enabled = parse_env_bool("FRONTEND_BACKEND_FRONTEND_VERDICT", True)
-    backend_history_enabled = parse_env_bool("FRONTEND_BACKEND_BACKEND_HISTORY", True) and (
-        domain.supports_conversation_history
-    )
+    frontend_verdict_enabled = flag("FRONTEND_BACKEND_FRONTEND_VERDICT")
+    backend_history_enabled = flag("FRONTEND_BACKEND_BACKEND_HISTORY") and (domain.supports_conversation_history)
     barge_in_state = BargeInState()
     transcript: ConversationTranscript | None = None
     if frontend_verdict_enabled or backend_history_enabled:
@@ -447,6 +455,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"Frontend verdict: {'on' if frontend_verdict_active else 'off'}; "
         f"backend history: {'on' if backend_history_enabled else 'off'} (domain={domain.key})"
     )
+    logger.bind(event="frontend_backend_flags", domain=domain.key, **effective_flags()).info(
+        "Frontend/Backend feature switches"
+    )
     available_talker_handlers = build_handlers(
         thinker,
         filler_threshold_seconds=THINKER_FILLER_THRESHOLD_SECONDS,
@@ -463,6 +474,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         ),
         frontend_verdict=frontend_verdict_active,
         transcript=transcript,
+        past_date_guard=domain.key == "airline",
     )
     if is_realtime:
         raw_delegate_tools = body.get("delegate_tools", [])
@@ -517,6 +529,12 @@ async def bot(runner_args: RunnerArguments) -> None:
             trusted_tool_names=talker_handlers,
         )
         await prepare_realtime_tools(transport, thinker_llm)
+        if domain.key == "generic":
+            # Parked client-tool rounds survive a barge-in, late outputs are
+            # acknowledged and a client response.create waits behind a
+            # pipeline response instead of failing (protocol tests:
+            # tests/unit/test_realtime_delegation_protocol.py).
+            configure_realtime_delegation_protocol(transport, enabled=flag("FRONTEND_BACKEND_REALTIME_TOOL_ROUNDS"))
         tools_schema = trusted_tools_schema
         tool_choice = "auto"
 
@@ -564,13 +582,20 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # --- Context + aggregators ---
-    def render_realtime_instructions(instructions: str) -> list[dict]:
+    def render_realtime_instructions(instructions: str, session_instructions: str | None = None) -> list[dict]:
+        # The client's instructions may state today's date; they are only read here.
+        dated_text = instructions if session_instructions is None else session_instructions
+        runtime_context = (
+            domain.session_runtime_context(dated_text)
+            if domain.session_runtime_context is not None
+            else domain.runtime_context()
+        )
         if talker_prompt_addendum:
             instructions = f"{instructions}\n\n{talker_prompt_addendum}"
         rendered = _build_context_messages(
             instructions,
             system_prompt,
-            runtime_context=domain.runtime_context(),
+            runtime_context=runtime_context,
         )
         rendered.extend(copy.deepcopy(talker_few_shots))
         return rendered
@@ -591,7 +616,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             profile=str(body.get("pipeline_mode") or "generic-frontend-backend-agent"),
         )
 
-    messages = render_realtime_instructions(talker_prompt)
+    messages = render_realtime_instructions(talker_prompt, client_instructions if is_realtime else None)
     logger.info(f"Talker native few-shot messages: {len(talker_few_shots)}")
     if tools_schema is not None:
         context = LLMContext(messages, tools=tools_schema, tool_choice=tool_choice)
@@ -649,10 +674,24 @@ async def bot(runner_args: RunnerArguments) -> None:
     summary_lock = asyncio.Lock()
 
     if transcript is not None:
+        normalize_user_text = domain.key == "generic" and flag("FRONTEND_BACKEND_NORMALIZATION")
+        previous_user_text = ""
 
         @user_aggregator.event_handler("on_user_turn_message_added")
         async def on_user_turn_message_added(aggregator, message):
-            transcript.record_user(getattr(message, "content", None))
+            nonlocal previous_user_text
+            raw = str(getattr(message, "content", None) or "")
+            text = raw
+            if normalize_user_text:
+                # The Thinker's history gets spelled identifiers written out,
+                # including one a pause split across two turns. The wire
+                # transcript and the Talker's context keep the raw text.
+                text = normalize_transcript(raw)
+                joined = join_across_turns(previous_user_text, raw)
+                if joined:
+                    text = f"{text} (continuing the previous turn: {joined})"
+            previous_user_text = raw
+            transcript.record_user(text)
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):

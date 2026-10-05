@@ -34,7 +34,7 @@ def test_generic_prompt_loads_subject_neutral_native_repeat_example() -> None:
 def test_generic_prompt_models_the_real_async_weather_result_envelope() -> None:
     messages = pipeline._load_prompt_few_shots("generic_talker")
 
-    assert len(messages) == 15
+    assert len(messages) == 25
     assert [message["role"] for message in messages[5:10]] == ["user", "assistant", "tool", "developer", "assistant"]
     running = json.loads(messages[7]["content"])
     finished = json.loads(messages[8]["content"])
@@ -45,7 +45,7 @@ def test_generic_prompt_models_the_real_async_weather_result_envelope() -> None:
     assert result["tool"] == "get_weather"
     assert result["data"]["city"] == "Pune"
     assert result["data"]["temperature"] == 29
-    assert [message["role"] for message in messages[10:]] == ["user", "assistant", "tool", "developer", "assistant"]
+    assert [message["role"] for message in messages[10:15]] == ["user", "assistant", "tool", "developer", "assistant"]
     negative_finished = json.loads(messages[13]["content"])
     negative_result = json.loads(negative_finished["result"])
     assert negative_result["data"]["city"] == "Reykjavik"
@@ -85,3 +85,14 @@ def test_invalid_catalog_few_shots_fail_closed(messages: object, error: str) -> 
         pytest.raises(ValueError, match=error),
     ):
         pipeline._load_prompt_few_shots("example")
+
+
+def test_generic_prompt_models_consent_before_a_client_action() -> None:
+    messages = pipeline._load_prompt_few_shots("generic_talker")
+
+    asked = json.loads(json.loads(messages[18]["content"])["result"])
+    assert asked["reason"] == "confirmation_needed"
+    assert messages[19]["content"] == asked["response_text"]
+    assert messages[20]["content"] == "Yes."
+    acted = json.loads(json.loads(messages[23]["content"])["result"])
+    assert acted["completed_actions"] == ["cancel_hold"]

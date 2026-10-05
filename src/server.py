@@ -33,7 +33,7 @@ Run:
 
 from dotenv import load_dotenv
 
-from utils import parse_env_bool, parse_env_int
+from utils import parse_env_bool, parse_env_float, parse_env_int
 
 # Deployment-provided environment variables are authoritative. ``.env`` is a
 # local-development defaults file and must never replace Helm/NVCF settings
@@ -51,6 +51,7 @@ import sys
 import time
 import urllib.request
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from importlib import import_module
@@ -86,7 +87,7 @@ from examples.shared.prewarm import (
     warmup_tts_synthesis,
 )
 from examples.shared.subagents import load_subagent_registry
-from realtime.protocol import MAX_REALTIME_EVENT_BYTES
+from realtime.protocol import MAX_REALTIME_EVENT_BYTES, ServiceNotReadyError
 from utils import (
     PROJECT_ROOT,
     build_services_api_response,
@@ -111,6 +112,8 @@ _session_configs: dict[str, dict] = {}
 _active_session_configs: dict[str, dict] = {}
 _CONNECT_PREWARM_TIMEOUT_SECS = parse_env_int("CONNECT_PREWARM_TIMEOUT_SECS", 45)
 _CONNECT_HEALTH_TIMEOUT_SECS = 5
+#: How long a Realtime session may spend retrying a readiness check that failed fast.
+_READINESS_RETRY_BUDGET_SECS = parse_env_float("REALTIME_READINESS_RETRY_SECS", 6.0, min_value=0.0)
 _REALTIME_GA_MAX_OUTPUT_TOKENS = 4096
 _NIM_READY_PATH = "/v1/health/ready"
 _LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
@@ -277,7 +280,13 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
             config["tools"] = [name for name in allowed_tools if name in requested_names]
 
     _bind_registry_prompt(example, config)
-    return filter_session_config(config)
+    sanitized = filter_session_config(config)
+    if example.get("domain_profile"):
+        from examples.frontend_backend_agent.src.session_metadata import session_metadata
+
+        # Server-computed after filtering, so a client can never supply it.
+        sanitized["agent_metadata"] = session_metadata(sanitized)
+    return sanitized
 
 
 def _bind_registry_prompt(example: dict, config: dict) -> None:
@@ -764,6 +773,39 @@ async def _ensure_tts_ready_for_connection(config: dict, example: dict) -> None:
         )
 
 
+def _readiness_reason(exc: BaseException) -> str:
+    """Classify a readiness failure into a short reason that names no host or credential."""
+    message = str(exc).lower()
+    if "timed out" in message:
+        return "timeout"
+    if "starting" in message:
+        return "starting"
+    return "unavailable"
+
+
+async def _ready_with_retry(service: str, check: Callable[[], Awaitable[None]], *, retry: bool) -> None:
+    """Run one readiness check, retrying a failure while the retry budget allows.
+
+    A probe that fails fast (a NIM briefly refusing connections) is retried
+    with backoff; one that already used the budget waiting is not, so a
+    session never waits much longer than the check itself. The raised error
+    names the service and a short reason for the client's ``error`` event.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (_READINESS_RETRY_BUDGET_SECS if retry else 0.0)
+    backoff = 0.5
+    while True:
+        try:
+            await check()
+            return
+        except RuntimeError as exc:
+            if loop.time() + backoff > deadline:
+                raise ServiceNotReadyError(service, _readiness_reason(exc), str(exc)) from exc
+            logger.warning(f"{service} readiness check failed; retrying in {backoff:.1f}s: {exc}")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 2.0)
+
+
 async def _ensure_services_ready_for_connection(
     config: dict,
     example: dict,
@@ -771,12 +813,12 @@ async def _ensure_services_ready_for_connection(
     is_realtime: bool,
 ) -> None:
     """Verify selected services before transport session handoff."""
-    await _ensure_llm_ready_for_connection(config, example)
-    await _ensure_asr_ready_for_connection(config, example)
+    await _ready_with_retry("LLM", lambda: _ensure_llm_ready_for_connection(config, example), retry=is_realtime)
+    await _ready_with_retry("ASR", lambda: _ensure_asr_ready_for_connection(config, example), retry=is_realtime)
     # Realtime text output sets Pipecat's skip_tts mode before the first turn,
     # so an unused speech synthesizer must not block that session at handoff.
     if not (is_realtime and config.get("output_modalities") == ["text"]):
-        await _ensure_tts_ready_for_connection(config, example)
+        await _ready_with_retry("TTS", lambda: _ensure_tts_ready_for_connection(config, example), retry=is_realtime)
 
 
 def _trusted_realtime_model_max_output_tokens(entry: dict) -> int | None:
@@ -1253,7 +1295,11 @@ def _resolve_realtime_model_route(
             code="invalid_value",
             param="session.nvidia",
         ) from exc
-    return RealtimeModelRoute(model=profile["model"], runtime_config=selectors)
+    return RealtimeModelRoute(
+        model=profile["model"],
+        runtime_config=selectors,
+        session_defaults=copy.deepcopy(profile.get("session_defaults") or {}),
+    )
 
 
 def _canonical_realtime_secret_session(controller) -> dict:

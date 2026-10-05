@@ -122,6 +122,22 @@ within `REALTIME_SERVICE_PLATFORM`. It does not probe endpoints or switch to a
 different platform. Use `platform_overrides` when a profile needs a different
 catalog key on one platform.
 
+A profile can also declare `session_defaults`. The registry loader validates
+this field and accepts only `turn_detection.silence_duration_ms`, an integer
+from 0 through 60,000. The value applies only when the client sets no
+`silence_duration_ms` for `server_vad`; a client value is echoed unchanged. The
+`nvidia/nemotron-realtime-generic-frontend-backend` profile sets 800 ms so
+that a spelled identifier with pauses stays in one turn:
+
+```yaml
+realtime_models:
+  nvidia/nemotron-realtime-generic-frontend-backend:
+    # label, pipeline_mode, default, and selectors omitted
+    session_defaults:
+      turn_detection:
+        silence_duration_ms: 800
+```
+
 Use standard `session.instructions` to customize agent behavior. The Generic
 Frontend/Backend profile can update its instructions, tools, and tool choice
 while connected. A live session update cannot change the selected model profile
@@ -350,7 +366,9 @@ or `null`. The update also accepts Boolean `create_response` and
 only `eagerness: "auto"`. Eligible cascaded profiles
 accept either Boolean value, while Omni Smart Turn profiles require both values
 to remain `true`. Use `session.created` as the source of truth for the selected
-profile and automatic type.
+profile and automatic type. When the client omits `silence_duration_ms`, the
+session uses the profile's `session_defaults` value, if any, and otherwise the
+gateway default.
 
 Set `response.instructions`, `response.max_output_tokens`,
 `response.output_modalities`, `response.audio`, `response.tools`,
@@ -362,7 +380,10 @@ Set `response.conversation` to `"auto"`; out-of-band responses with `"none"`
 are not supported. `response.input` accepts item references, inline text
 messages, and function-call context. It does not accept inline audio or image
 input. The gateway runs one active response on the default conversation. A
-second unrelated `response.create` returns `response_in_progress`.
+second unrelated `response.create` returns `response_in_progress`. The Generic
+Frontend/Backend profile defers a client request that meets a pipeline-started
+response instead. For details, refer to
+[Run the Generic Frontend/Backend Profile](#run-the-generic-frontendbackend-profile).
 `response.prompt` and `response.reasoning` are recognized but unsupported.
 
 OpenAI Realtime does not define a general session `temperature` field.
@@ -607,21 +628,61 @@ speech. This profile applies the following ownership boundary:
 - Independent client calls from one planning round share one response. The
   backend waits up to `GENERIC_CLIENT_TOOL_TIMEOUT_SECONDS`, which defaults to
   25 seconds, before it returns one grounded failure.
-- The backend retains one parked plan per session. Barge-in, cancellation, a
-  newer generation, a late result, or a repeated failed call cannot revive
-  stale work.
+- The backend retains one parked plan per session. Cancellation, a newer
+  generation, a late result, or a repeated failed call cannot revive stale
+  work.
+- A session that declares its own client tools does not use the built-in
+  server tools, such as weather or web search. The Talker capability digest
+  and the Thinker tool contract list only the client tools.
 - When the user only acknowledges or asks about progress while delegated work
   runs, a new `call_backend` call can continue that work instead of restarting
   it. The user hears one answer. `call_backend` and its `task` argument never
-  reach the client, so the wire protocol and `session.updated` echo do not
-  change. Set `FRONTEND_BACKEND_FRONTEND_VERDICT` to `false` to disable this.
+  reach the client. Set `FRONTEND_BACKEND_FRONTEND_VERDICT` to `false` to
+  disable this.
 - The Thinker receives a bounded history of earlier delegations in the session,
   including what was said, the tool calls it made, and how each result reached
   the user. Assistant text follows client truncation and deletion in the
   conversation. Set `FRONTEND_BACKEND_BACKEND_HISTORY` to `false` to disable
   this.
-- User speech during a parked client-tool round still cancels that round. The
-  next `call_backend` call then starts new work instead of continuing it.
+- The backend screens spoken identifiers in client read-tool calls, renders
+  confirmation questions from a fixed template, and can issue a confirmed
+  write after a bare "yes" without a new plan. For these safeguards and their
+  switches, refer to
+  [Generic Client-Tool Safeguards](../../src/examples/frontend_backend_agent/README.md#generic-client-tool-safeguards).
+
+When `FRONTEND_BACKEND_REALTIME_TOOL_ROUNDS` is enabled, which is the default,
+this profile applies the following protocol options. Other profiles keep the
+standard behavior.
+
+- User speech does not cancel a pipeline-owned client-tool round that the
+  client already received. The round stays parked until its outputs arrive or
+  it times out.
+- A `function_call_output` for a call that was cancelled or timed out is
+  acknowledged with `conversation.item.added` and `conversation.item.done`
+  instead of an `error`. The output joins the conversation, but no handler
+  acts on it. Only the first output for that call is accepted.
+- A client `response.create` that arrives while a pipeline-started response is
+  starting or active waits until that response finishes, instead of failing
+  with `response_in_progress`.
+- A second overlapping client request, a duplicate output, a function name
+  mismatch, an unknown call, and a closed session keep their errors.
+
+With the switch set to `false`, user speech during a parked client-tool round
+cancels that round, and the next `call_backend` call starts new work.
+
+`session.created` and `session.updated` for the Frontend/Backend profiles
+include a read-only `session.nvidia.agent` object that describes what the
+session runs with. Use it to tell whether two recorded conversations ran the
+same build and settings. A client that echoes the object back in
+`session.update` is not rejected; the server ignores the echoed values.
+
+| Field | Content |
+| --- | --- |
+| `agent_git_sha` | The `AGENT_GIT_SHA` build argument of the image, or `unknown` |
+| `domain` | The Frontend/Backend domain, such as `generic` or `airline` |
+| `thinker` | `llm_id`, `model_id`, `max_tokens`, `reasoning_budget`, and, when the catalog sets it, `reasoning` |
+| `flags` | The effective value of each `FRONTEND_BACKEND_*` feature switch |
+| `session_tools_sha256` | A SHA-256 fingerprint of the session's function tools in declared order |
 
 The Talker supplies a short, query-grounded `filler_text` in its original
 `call_backend` arguments. `call_backend` itself never reaches the client, so
@@ -773,6 +834,17 @@ is not cancelled or replaced.
 
 If TTS finishes an announced audio item without producing wire audio, the
 gateway emits `tts_provider_error` and ends that response as `failed`.
+
+When a required service fails its readiness check, the gateway emits a
+`services_not_ready` error. The message names the failing service and a short
+reason (`starting`, `timeout`, or `unavailable`), for example:
+
+```text
+One or more required Realtime services are not ready: TTS (timeout)
+```
+
+A Realtime session retries a readiness check that failed quickly, with
+backoff, within `REALTIME_READINESS_RETRY_SECS`. The default is `6` seconds.
 
 ## Collect Metrics and Run Tests
 

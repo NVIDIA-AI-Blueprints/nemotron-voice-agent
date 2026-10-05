@@ -345,6 +345,9 @@ class RealtimeClientToolOutputFrame(ControlFrame, UninterruptibleFrame):
     item_id: str | None = None
     previous_item_id: str | None = None
     previous_item_id_supplied: bool = False
+    #: An output for a call that already settled without it (cancelled or
+    #: timed out); it is recorded and acknowledged but never acted on.
+    late: bool = False
 
 
 @dataclass(kw_only=True)

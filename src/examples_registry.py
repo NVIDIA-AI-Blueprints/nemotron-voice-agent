@@ -98,6 +98,9 @@ class RealtimeModelProfile(TypedDict):
     default: bool
     selectors: RealtimeModelSelectors
     platform_overrides: dict[str, RealtimeModelSelectors]
+    #: Validated session defaults a client may still override, e.g.
+    #: ``{"turn_detection": {"silence_duration_ms": 800}}``.
+    session_defaults: dict[str, Any]
 
 
 class RealtimeModelProfileNotAvailable(ValueError):
@@ -300,7 +303,14 @@ def _example_dir(example: EnrichedExample) -> Path:
 
 
 _REALTIME_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
-_REALTIME_PROFILE_FIELDS = frozenset({"label", "pipeline_mode", "default", "selectors", "platform_overrides"})
+_REALTIME_PROFILE_FIELDS = frozenset(
+    {"label", "pipeline_mode", "default", "selectors", "platform_overrides", "session_defaults"}
+)
+#: ``session_defaults`` keys a route may set, with their inclusive bounds. The
+#: bound matches the Realtime session's own server_vad validation.
+_REALTIME_SESSION_DEFAULT_BOUNDS: dict[str, dict[str, tuple[int, int]]] = {
+    "turn_detection": {"silence_duration_ms": (0, 60_000)},
+}
 _REALTIME_SELECTOR_SLOTS: dict[str, tuple[str, str | None]] = {
     "prompt_key": ("prompt", None),
     "thinker_prompt": ("thinker-prompt", None),
@@ -609,6 +619,7 @@ def _load_realtime_model_profiles(
             "default": is_default,
             "selectors": selectors,
             "platform_overrides": platform_overrides,
+            "session_defaults": _validate_realtime_session_defaults(raw_model, raw_profile.get("session_defaults", {})),
         }
         profiles[raw_model] = profile
         if is_default:
@@ -1101,3 +1112,28 @@ def activity_check_config(example_key: str = "") -> ActivityCheckConfig | None:
 def visible_options() -> list[dict]:
     """Return metadata for every example exposed by the current selection."""
     return [metadata(_lookup_by_key(key)) for key in _SELECTION.example_keys]
+
+
+def _validate_realtime_session_defaults(model: str, raw: object) -> dict[str, Any]:
+    """Validate one route's ``session_defaults``; only bounded integer fields are allowed."""
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"Realtime model {model!r} session_defaults must be a mapping")
+    validated: dict[str, Any] = {}
+    for group, fields in raw.items():
+        bounds = _REALTIME_SESSION_DEFAULT_BOUNDS.get(group)
+        if bounds is None:
+            raise RuntimeError(f"Realtime model {model!r} has unknown session default {group!r}")
+        if not isinstance(fields, dict) or not fields:
+            raise RuntimeError(f"Realtime model {model!r} session default {group!r} must be a non-empty mapping")
+        validated[group] = {}
+        for name, value in fields.items():
+            if name not in bounds:
+                raise RuntimeError(f"Realtime model {model!r} has unknown session default {group}.{name}")
+            lower, upper = bounds[name]
+            if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
+                raise RuntimeError(
+                    f"Realtime model {model!r} session default {group}.{name} must be an integer "
+                    f"from {lower} to {upper}"
+                )
+            validated[group][name] = value
+    return validated

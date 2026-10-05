@@ -117,6 +117,41 @@ class ConversationTranscript:
                     latest = (key, text)
         return latest[1] if latest is not None else ""
 
+    def reply_before_latest_user(self) -> tuple[str, str, int] | None:
+        """Return the agent message the newest user turn answered, as the journal holds it now.
+
+        Returns ``(text, status, user_turns)``: the newest assistant message
+        before the newest user turn, its item status (``completed`` only when
+        its response ended normally), and how many user turns followed it. A
+        client that truncates the audio also cuts this text, so it is what the
+        caller can have heard. None without a journal or without such a message.
+        """
+        journal = self._journal()
+        if journal is None:
+            return None
+        live = set(journal.ordered_item_ids())
+        assistants: list[tuple[Cursor, str, str]] = []
+        users = [key for key, role, _text in self._events if role == "user"]
+        for sequence, item_id in journal.added_after(0):
+            if item_id not in live:
+                continue
+            item = journal.item(item_id)
+            if item.get("type") != "message":
+                continue
+            key = (sequence, -1)
+            if item.get("role") == "assistant":
+                assistants.append((key, _journal_item_text(item, "assistant"), str(item.get("status") or "")))
+            elif item.get("role") == "user" and _journal_item_text(item, "user"):
+                users.append(key)
+        if not users:
+            return None
+        latest_user = max(users)
+        earlier = [entry for entry in assistants if entry[0] < latest_user]
+        if not earlier:
+            return None
+        key, text, status = max(earlier, key=lambda entry: entry[0])
+        return text, status, sum(1 for user in users if user > key)
+
     def _append(self, role: str, text: object) -> None:
         clean = " ".join(str(text or "").split())
         if not clean:
@@ -182,6 +217,28 @@ class LedgerCall:
 
 
 @dataclass(slots=True)
+class LedgerConfirmation:
+    """One consent question the backend asked about a specific call.
+
+    ``params`` are the canonical arguments the call would be sent with, and
+    ``text`` is exactly what was handed to the Talker. ``summarized`` marks a
+    question that could not state every value in full. ``outcome`` follows the
+    question: ``pending`` until its response ends, then ``heard`` (the response
+    completed without a reported truncation) or ``not_heard``; ``consumed``
+    once its approval was used and ``expired`` once a later turn replaced it.
+    """
+
+    run_id: str
+    tool: str
+    params: dict[str, Any]
+    text: str
+    summarized: bool = False
+    outcome: str = "pending"
+    #: Session-update generation when it was asked; a later update voids the approval.
+    generation: int = 0
+
+
+@dataclass(slots=True)
 class _Entry:
     number: int
     run_id: str
@@ -195,6 +252,10 @@ class _Entry:
     delivery: str = ""
     delivered_text: str = ""
     interruption_mark: int | None = None
+    confirmation: LedgerConfirmation | None = None
+    #: The closing payload's ``reason`` and ``context``/``tool``; not rendered.
+    outcome_reason: str = ""
+    outcome_context: str = ""
 
 
 class DelegationLedger:
@@ -256,8 +317,10 @@ class DelegationLedger:
         if call is not None and call.state == "started":
             call.state = "unconfirmed"
 
-    def read(self, run_id: str | None, tool: object, arguments: object, status: object) -> None:
-        """Record one read and its status."""
+    def read(
+        self, run_id: str | None, tool: object, arguments: object, status: object, *, state: str | None = None
+    ) -> None:
+        """Record one read and its status; ``state`` marks a read that never reached the tool (``answered_locally``)."""
         entry = self._by_run.get(run_id or "")
         if entry is not None:
             entry.calls.append(
@@ -265,9 +328,70 @@ class DelegationLedger:
                     tool=_clip(str(tool or "tool"), MAX_TOOL_NAME_CHARS),
                     kind="read",
                     arguments=_arguments(arguments),
+                    state=state,
                     status=_status(status),
                 )
             )
+
+    def confirmation(
+        self,
+        run_id: str | None,
+        tool: str,
+        params: Mapping[str, Any],
+        text: str,
+        *,
+        summarized: bool = False,
+    ) -> LedgerConfirmation | None:
+        """Record the consent question a run asked; the newest question replaces older ones."""
+        entry = self._by_run.get(run_id or "")
+        if entry is None:
+            return None
+        record = LedgerConfirmation(
+            run_id=entry.run_id,
+            tool=_clip(tool, MAX_TOOL_NAME_CHARS),
+            params=dict(params),
+            text=text,
+            summarized=summarized,
+        )
+        entry.confirmation = record
+        return record
+
+    @property
+    def transcript(self) -> ConversationTranscript | None:
+        """Return the session transcript this ledger reads, if any."""
+        return self._transcript
+
+    def latest_confirmation(self) -> LedgerConfirmation | None:
+        """Return the consent question of the newest entry that asked one."""
+        for entry in reversed(self._entries):
+            if entry.confirmation is not None:
+                return entry.confirmation
+        return None
+
+    def entry_writes(self, run_id: str | None) -> list[LedgerCall]:
+        """Return the writes recorded for one run, oldest first."""
+        entry = self._by_run.get(run_id or "")
+        return [call for call in entry.calls if call.kind == "write"] if entry is not None else []
+
+    def entry_calls(self, run_id: str | None) -> list[LedgerCall]:
+        """Return every call recorded for one run, oldest first."""
+        entry = self._by_run.get(run_id or "")
+        return list(entry.calls) if entry is not None else []
+
+    def outcome(self, run_id: str | None) -> tuple[str, str, str] | None:
+        """Return ``(result, reason, context)`` of a closed run, or None while it is open or unknown."""
+        entry = self._by_run.get(run_id or "")
+        if entry is None or entry.result == "in_progress":
+            return None
+        return entry.result, entry.outcome_reason, entry.outcome_context
+
+    def runs_after(self, run_id: str | None) -> list[str]:
+        """Return the run ids opened after ``run_id``, oldest first."""
+        entries = list(self._entries)
+        for index, entry in enumerate(entries):
+            if entry.run_id == run_id:
+                return [later.run_id for later in entries[index + 1 :]]
+        return []
 
     def close(self, run_id: str, payload: Mapping[str, Any]) -> None:
         """Record how a run ended, classified from its payload."""
@@ -276,6 +400,8 @@ class DelegationLedger:
             return
         entry.result = classify_result(payload)
         entry.result_text = _clip(str(payload.get("response_text") or ""), MAX_TEXT_CHARS)
+        entry.outcome_reason = str(payload.get("reason") or "")
+        entry.outcome_context = str(payload.get("context") or payload.get("tool") or "")
         self._settle_started(entry)
 
     def cancelled(self, run_id: str) -> None:
@@ -335,6 +461,12 @@ class DelegationLedger:
             rendered["result_text"] = entry.result_text
         if entry.delivery:
             rendered["delivery"] = _delivery(entry)
+        if entry.confirmation is not None:
+            rendered["confirmation"] = {
+                "tool": entry.confirmation.tool,
+                "arguments": _arguments(entry.confirmation.params),
+                "state": entry.confirmation.outcome,
+            }
         if entry.delivered_text:
             rendered["delivered_text"] = entry.delivered_text
             following = entries[index + 1].interruptions_at_open if index + 1 < len(entries) else self._interruptions()
@@ -480,6 +612,10 @@ def _drop_transcript(entry: dict[str, Any]) -> bool:
 
 def _drop_arguments(entry: dict[str, Any], kind: str) -> bool:
     changed = False
+    confirmation = entry.get("confirmation")
+    if kind == "write" and isinstance(confirmation, dict) and "arguments" in confirmation:
+        del confirmation["arguments"]
+        changed = True
     for call in entry.get("tool_calls") or ():
         if call.get("kind") == kind and "arguments" in call:
             del call["arguments"]

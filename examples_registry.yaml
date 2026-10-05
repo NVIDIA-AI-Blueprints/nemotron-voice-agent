@@ -100,6 +100,11 @@ realtime_models:
       thinker_llm_id: nemotron-super-reasoning
       asr_id: registry-default
       tts_id: registry-default
+    # Spelled identifiers carry pauses; 800 ms keeps one value in one turn.
+    # Applies when a client sets no silence_duration_ms; a client value wins.
+    session_defaults:
+      turn_detection:
+        silence_duration_ms: 800
 
 examples:
   generic-assistant:
@@ -159,6 +164,8 @@ examples:
       - generic_thinker
       - frontend_verdict_talker
       - backend_history_thinker
+      - generic_thinker_phone_numbers
+      - generic_voice_hints
     slots: [llm, thinker-llm, booking-server, asr, tts]
     defaults:
       prompt: [talker]
@@ -185,6 +192,8 @@ examples:
       - generic_thinker
       - frontend_verdict_talker
       - backend_history_thinker
+      - generic_thinker_phone_numbers
+      - generic_voice_hints
     slots: [llm, thinker-llm, asr, tts]
     defaults:
       prompt: [generic_talker]

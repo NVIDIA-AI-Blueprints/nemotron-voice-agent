@@ -67,23 +67,76 @@ def missing_client_parameters(tool: str, labels: Sequence[str], names: Sequence[
     )
 
 
-def confirmation_request(tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+#: Values longer than this are not spoken in full, so they cannot be approved by a bare "yes".
+_MAX_CONFIRMATION_VALUE_CHARS = 80
+_MAX_CONFIRMATION_CHARS = 450
+_FIRST_CLAUSE_RE = re.compile(r"^(.*?)(?:[.;:!?](?:\s|$)|$)", re.DOTALL)
+
+
+def confirmation_text(
+    tool: str,
+    description: str,
+    labels: Mapping[str, str],
+    arguments: Mapping[str, Any],
+) -> tuple[str, bool]:
+    """Render the fixed consent question for one call, and whether any value had to be shortened.
+
+    The action is the opening clause of the tool's own description; each
+    argument is said as "label: value" with the value exactly as it will be
+    sent. A value that is a list, an object, empty or very long is not spoken
+    in full, and the question is marked summarized: a bare "yes" to it can
+    never approve the call on its own.
+    """
+    clause = _FIRST_CLAUSE_RE.match(_speech_text(description, max_length=300))
+    action = (clause.group(1).strip() if clause else "") or tool.replace("_", " ").strip() or "that action"
+    action = action[0].lower() + action[1:] if action[:1].isupper() and action[1:2].islower() else action
+    parts: list[str] = []
+    summarized = False
+    for name, value in arguments.items():
+        label = labels.get(name) or name.replace("_", " ")
+        if isinstance(value, bool):
+            rendered = "yes" if value else "no"
+        elif isinstance(value, int | float):
+            rendered = str(value)
+        elif isinstance(value, str) and 0 < len(value.strip()) <= _MAX_CONFIRMATION_VALUE_CHARS:
+            rendered = _speech_text(value)
+            summarized = summarized or rendered != value.strip()
+        else:
+            summarized = True
+            continue
+        parts.append(f"{label}: {rendered}")
+    details = f", with {', '.join(parts)}" if parts else ""
+    text = f"Just to confirm, I will {action}{details}. Shall I go ahead?"
+    if len(text) > _MAX_CONFIRMATION_CHARS:
+        summarized = True
+        text = f"Just to confirm, I will {action}. Shall I go ahead?"
+    return text, summarized
+
+
+def confirmation_request(
+    tool: str,
+    arguments: Mapping[str, Any],
+    *,
+    description: str = "",
+    labels: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     """Ask for consent before one validated action runs.
 
-    The sentence is built from the tool's own name, never from the planner and
-    never from the argument values: those can carry a passenger's name or date
-    of birth, which has no business being read out to ask a yes-or-no question.
-    They travel as structured data so the Talker can state the specifics it is
-    already trusted to phrase.
+    The sentence comes from a fixed template over the tool's own schema and the
+    exact arguments (:func:`confirmation_text`), never from the planner. The
+    Talker speaks it word for word; ``summarized`` tells the backend whether a
+    bare "yes" to it may approve the call.
     """
-    action = tool.replace("_", " ").strip() or "that action"
-    return response_hint(
+    text, summarized = confirmation_text(tool, description, labels or {}, arguments)
+    payload = response_hint(
         reason="confirmation_needed",
         action="req_confirmation",
         params_resolved=dict(arguments),
-        response_text=f"Just to confirm, should I go ahead and {action}?",
+        response_text=text,
         context=tool,
     )
+    payload["summarized"] = summarized
+    return payload
 
 
 def nothing_further() -> dict[str, Any]:
@@ -131,7 +184,7 @@ def unsupported_request(specs: Sequence[ToolSpec], *, suppress_capabilities: boo
 
     A session whose real tools are client-owned has no server capability worth
     naming: listing the built-in ones would advertise weather and BMI on, say,
-    an airline call. Suppress the list there and let the Talker, which holds the
+    a call about the caller's own account. Suppress the list there and let the Talker, which holds the
     caller's own instructions, phrase the refusal in its domain.
     """
     capabilities = [] if suppress_capabilities else [spec.capability for spec in specs if spec.capability]

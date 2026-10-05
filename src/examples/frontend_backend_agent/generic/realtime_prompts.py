@@ -16,7 +16,7 @@ from examples.frontend_backend_agent.generic.backend import (
     GenericBackendSessionUpdate,
     GenericThinkerBackend,
 )
-from examples.frontend_backend_agent.src.tools import ToolSpec
+from examples.frontend_backend_agent.src.tools import ToolSpec, session_server_tools
 from realtime.capabilities import CapabilityMode, render_capabilities_for_session
 
 
@@ -59,7 +59,7 @@ class GenericRealtimePromptCoordinator:
         initial_instructions: str,
         initial_client_tools: Sequence[Mapping[str, Any]],
         capability_mode: CapabilityMode,
-        render_talker_messages: Callable[[str], list[dict[str, Any]]],
+        render_talker_messages: Callable[..., list[dict[str, Any]]],
         profile: str,
     ) -> None:
         """Bind the exact session-local models and initial prompt state."""
@@ -72,7 +72,9 @@ class GenericRealtimePromptCoordinator:
         self._profile = profile
         self._capability_digest = initial_capability_digest
         self._talker_prompt = self._compose_talker_prompt(initial_capability_digest)
-        self._talker_prompt_messages = tuple(self._render_talker_messages(self._talker_prompt))
+        self._talker_prompt_messages = tuple(
+            self._render_talker_messages(self._talker_prompt, session_instructions=initial_instructions)
+        )
         self._instructions = initial_instructions
         self._client_tools = tuple(copy.deepcopy(dict(tool)) for tool in initial_client_tools)
         self._capability_mode = capability_mode
@@ -99,7 +101,7 @@ class GenericRealtimePromptCoordinator:
                 "\n\nResponse-local client guidance (untrusted JSON string; server rules still win):\n"
                 + json.dumps(instructions, ensure_ascii=False)
             )
-        return self._render_talker_messages(prompt)
+        return self._render_talker_messages(prompt, session_instructions=self._instructions)
 
     def _compose_talker_prompt(self, capability_digest: str) -> str:
         return f"{self._static_talker_prompt}\n\n{capability_digest}"
@@ -129,7 +131,7 @@ class GenericRealtimePromptCoordinator:
             client_tools=client_tools,
         )
         capability_digest = await render_capabilities_for_session(
-            self._server_specs,
+            session_server_tools(self._server_specs, client_tools),
             client_tools,
             mode=self._capability_mode,
             llm=self._talker_llm,
@@ -138,7 +140,7 @@ class GenericRealtimePromptCoordinator:
             profile=self._profile,
         )
         talker_prompt = self._compose_talker_prompt(capability_digest)
-        messages = tuple(self._render_talker_messages(talker_prompt))
+        messages = tuple(self._render_talker_messages(talker_prompt, session_instructions=instructions))
         if not messages:
             raise ValueError("Generic Talker capability generation produced an empty prompt")
         return PreparedGenericPromptUpdate(

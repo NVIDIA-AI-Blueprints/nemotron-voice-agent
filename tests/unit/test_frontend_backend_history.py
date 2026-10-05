@@ -27,6 +27,7 @@ from examples.frontend_backend_agent.src.history import (
     classify_result,
 )
 from examples.frontend_backend_agent.src.planner import NvidiaThinkerPlanner
+from examples.frontend_backend_agent.src.stage_metrics import StreamedInference
 from realtime.conversation import ConversationJournal
 
 
@@ -89,10 +90,10 @@ class PlannerPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         async def fake_inference(_llm, context, _span, *, max_tokens):
             captured.append(json.loads(context.get_messages()[-1]["content"]))
-            return '{"complete": true}'
+            return StreamedInference('{"complete": true}', frozenset({"stop"}))
 
         planner = NvidiaGenericPlanner(llm=object(), system_prompt="Plan.", enabled_tools=())
-        with patch.object(generic_planner_module, "run_streamed_inference", fake_inference):
+        with patch.object(generic_planner_module, "run_streamed_inference_result", fake_inference):
             await planner.plan(query="q", state={"s": 1})
             await planner.plan(query="q", state={"s": 1}, history=[{"run": 1}])
 

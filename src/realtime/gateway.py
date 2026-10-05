@@ -10,7 +10,7 @@ import contextlib
 import copy
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -20,6 +20,7 @@ from realtime.controller import RealtimeSessionController
 from realtime.protocol import (
     MAX_REALTIME_EVENT_BYTES,
     RealtimeProtocolError,
+    services_not_ready_message,
     strict_json_loads,
     validate_client_event_id,
 )
@@ -46,6 +47,9 @@ class RealtimeModelRoute:
 
     model: str
     runtime_config: dict[str, Any]
+    #: Validated registry ``session_defaults`` for this route, e.g.
+    #: ``{"turn_detection": {"silence_duration_ms": 800}}``.
+    session_defaults: dict[str, Any] = field(default_factory=dict)
 
 
 ResolveModelRouteFn = Callable[[str | None, dict[str, Any]], RealtimeModelRoute]
@@ -183,6 +187,7 @@ async def create_realtime_controller(
     selected_model = requested_model or session_model
     runtime_seed = copy.deepcopy(nvidia_patch)
     advertised_model: str | None = None
+    route_session_defaults: dict[str, Any] = {}
     if resolve_model_route is not None:
         route = resolve_model_route(selected_model, copy.deepcopy(nvidia_patch))
         if not isinstance(route, RealtimeModelRoute):
@@ -193,6 +198,7 @@ async def create_realtime_controller(
             raise TypeError("Realtime model resolver returned an invalid runtime configuration")
         advertised_model = route.model
         runtime_seed = copy.deepcopy(route.runtime_config)
+        route_session_defaults = copy.deepcopy(route.session_defaults)
 
     runtime_config, server_tools, delegate_tools, trusted_tool_schemas = await _initial_runtime_config(
         sanitize_session_config=sanitize_session_config,
@@ -231,6 +237,7 @@ async def create_realtime_controller(
         resolved_capabilities=resolved_capabilities,
         output_voice_resolver=output_voice_resolver,
         output_voices_resolved=resolve_session_capabilities is None,
+        session_defaults=route_session_defaults,
     )
     if initial_session is None:
         await controller.ensure_output_voice_capabilities()
@@ -260,6 +267,7 @@ def _controller_from_runtime(
     resolved_capabilities: RealtimeSessionCapabilities | None = None,
     output_voice_resolver: Callable[[], Awaitable[frozenset[str]]] | None = None,
     output_voices_resolved: bool = True,
+    session_defaults: dict[str, Any] | None = None,
 ) -> RealtimeSessionController:
     owned_tools = {*server_tools, *delegate_tools}
     schema_names = {
@@ -340,6 +348,9 @@ def _controller_from_runtime(
         ),
         supports_manual_input=manual_input_available,
     )
+    turn_defaults = (session_defaults or {}).get("turn_detection")
+    if isinstance(turn_defaults, dict) and "silence_duration_ms" in turn_defaults:
+        capabilities = replace(capabilities, default_silence_duration_ms=int(turn_defaults["silence_duration_ms"]))
     return RealtimeSessionController(
         model=model,
         voice=voice,
@@ -371,10 +382,17 @@ def _extract_nvidia_patch(session_patch: dict[str, Any]) -> tuple[dict[str, Any]
     return standard, copy.deepcopy(raw_nvidia)
 
 
+#: Server-computed, read-only ``session.nvidia`` keys. A client that echoes a
+#: previous ``session.updated`` back may carry them; their values are ignored.
+_READ_ONLY_NVIDIA_KEYS = frozenset({"agent"})
+
+
 def _validate_immutable_nvidia_patch(nvidia_patch: dict[str, Any], current: dict[str, Any]) -> None:
     """Reject backend routing changes after session.created advertised a model."""
     public = current.get("nvidia") if isinstance(current.get("nvidia"), dict) else {}
     for key, value in nvidia_patch.items():
+        if key in _READ_ONLY_NVIDIA_KEYS and key in public:
+            continue
         if key not in public:
             raise RealtimeProtocolError(
                 message=f"Unknown parameter: session.nvidia.{key}",
@@ -596,7 +614,7 @@ async def _apply_initial_session_update(
         await _send_json(
             websocket,
             RealtimeProtocolError(
-                message="One or more required Realtime services are not ready",
+                message=services_not_ready_message(exc),
                 code="services_not_ready",
                 event_id=echo_id,
                 error_type="server_error",
@@ -644,7 +662,7 @@ async def _ensure_runtime_ready(
         await _send_json(
             websocket,
             RealtimeProtocolError(
-                message="One or more required Realtime services are not ready",
+                message=services_not_ready_message(exc),
                 code="services_not_ready",
                 event_id=event_id,
                 error_type="server_error",
@@ -713,7 +731,7 @@ async def _run_realtime_websocket(
         await _send_json(
             websocket,
             RealtimeProtocolError(
-                message="One or more required Realtime services are not ready",
+                message=services_not_ready_message(exc),
                 code="services_not_ready",
                 error_type="server_error",
             ).to_event(),

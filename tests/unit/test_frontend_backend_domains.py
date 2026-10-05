@@ -332,8 +332,8 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         local_thinker_extra = json.loads(local_thinker["extra_params"])["extra_body"]
         self.assertFalse(talker_extra["chat_template_kwargs"]["enable_thinking"])
         self.assertTrue(thinker_extra["chat_template_kwargs"]["enable_thinking"])
-        self.assertEqual(thinker["max_tokens"], 768)
-        self.assertEqual(thinker_extra["reasoning_budget"], 256)
+        self.assertEqual(thinker["max_tokens"], 4096)
+        self.assertEqual(thinker_extra["reasoning_budget"], 1024)
         self.assertEqual(local_thinker["max_tokens"], 2048)
         self.assertEqual(local_thinker_extra["reasoning_budget"], 1024)
         self.assertEqual(talker["temperature"], 0.0)

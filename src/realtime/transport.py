@@ -11,7 +11,7 @@ import json
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -84,6 +84,8 @@ class _RealtimeTransportContext:
     asr_input_sequencer: RealtimeASRInputSequencer | None = None
     manual_commit_publications: _RealtimeManualCommitPublications | None = None
     observer: RealtimeLifecycleObserver | None = None
+    #: Mutable route policy for pipeline-owned client-tool rounds.
+    round_policy: dict[str, bool] = field(default_factory=lambda: {"keep_parked_on_barge_in": False})
 
 
 _CONTEXTS: WeakKeyDictionary[Any, _RealtimeTransportContext] = WeakKeyDictionary()
@@ -225,6 +227,10 @@ class RealtimeManualResponseGate(FrameProcessor):
         self._response_preparation_id: str | None = None
         self._session_tool_preparation_id: str | None = None
         self._preparation_lock = asyncio.Lock()
+        self._response_preparation_deferred = False
+        #: Route option: a client response.create that meets a pipeline-started
+        #: response (starting or active) waits behind it instead of failing.
+        self.defer_client_responses_behind_pipeline = False
         self._service_audio_response_reservations: dict[str, int] = {}
         self._session_tool_waiting_context: tuple[LLMContextFrame, RealtimeResponseOrigin, int | None] | None = None
         self._cancelled_response_marker_ids: OrderedDict[str, None] = OrderedDict()
@@ -497,11 +503,19 @@ class RealtimeManualResponseGate(FrameProcessor):
         """Bind every preceding unclaimed manual turn to one accepted response."""
         self._unclaimed_manual_commits = 0
 
+    @property
+    def has_service_audio_reservation(self) -> bool:
+        """Return whether a pipeline-started audio response is claimed but not yet created."""
+        return bool(self._service_audio_response_reservations)
+
+    def _may_wait_behind_service_reservation(self, deferred: bool) -> bool:
+        return deferred and self.defer_client_responses_behind_pipeline
+
     async def reserve_response_preparation(self, request_id: str, *, deferred: bool = False) -> None:
         """Reserve the response slot while response-scoped tools are prepared."""
         await self._preparation_lock.acquire()
         try:
-            if self._service_audio_response_reservations:
+            if self._service_audio_response_reservations and not self._may_wait_behind_service_reservation(deferred):
                 raise RealtimeProtocolError(
                     message="A pipeline-triggered audio response is already starting",
                     code="response_in_progress",
@@ -523,6 +537,7 @@ class RealtimeManualResponseGate(FrameProcessor):
             else:
                 self.ensure_response_marker_available()
             self._response_preparation_id = request_id
+            self._response_preparation_deferred = deferred
         except BaseException:
             self._preparation_lock.release()
             raise
@@ -596,7 +611,9 @@ class RealtimeManualResponseGate(FrameProcessor):
         """Recheck async response preparation immediately before its atomic commit."""
         if self._response_preparation_id != request_id:
             raise RuntimeError("Realtime response preparation ownership changed")
-        if self._service_audio_response_reservations:
+        if self._service_audio_response_reservations and not self._may_wait_behind_service_reservation(
+            self._response_preparation_deferred
+        ):
             raise RealtimeProtocolError(
                 message="A pipeline-triggered audio response is already starting",
                 code="response_in_progress",
@@ -2152,6 +2169,7 @@ def create_realtime_transport(
         """Publish one deterministic client-tool response and await its outputs."""
         if not calls:
             return []
+        keep_on_barge_in = round_policy["keep_parked_on_barge_in"]
         initial_generation = controller.interruption_generation
         call_records = tuple((new_realtime_id("call"), name, copy.deepcopy(arguments)) for name, arguments in calls)
         call_ids = tuple(call_id for call_id, _name, _arguments in call_records)
@@ -2211,7 +2229,10 @@ def create_realtime_transport(
                 )
                 try:
                     while not wait_task.done():
-                        if controller.interruption_generation != activation_generation:
+                        # On a route that keeps parked rounds, the caller
+                        # speaking over the agent does not withdraw calls the
+                        # client already received; it executes them anyway.
+                        if controller.interruption_generation != activation_generation and not keep_on_barge_in:
                             await client_tool_broker.cancel_direct_calls(call_ids)
                             wait_task.cancel()
                             with suppress(asyncio.CancelledError):
@@ -2241,6 +2262,7 @@ def create_realtime_transport(
             if not activated and abort is not None:
                 abort()
 
+    round_policy = {"keep_parked_on_barge_in": False}
     _CONTEXTS[transport] = _RealtimeTransportContext(
         controller=controller,
         serializer=serializer,
@@ -2253,6 +2275,7 @@ def create_realtime_transport(
         idle_timeout=idle_timeout,
         execute_client_tool_round=_execute_pipeline_client_tool_round,
         manual_commit_publications=manual_commit_publications,
+        round_policy=round_policy,
     )
 
     @transport.event_handler("on_client_disconnected")
@@ -2349,6 +2372,29 @@ def realtime_lifecycle_observer(transport: Any) -> BaseObserver | None:
         context.serializer.set_on_response_cancel(context.observer.on_response_cancelled)
         context.serializer.set_output_audio_failure_handler(context.observer.on_output_audio_failure)
     return context.observer
+
+
+def configure_realtime_delegation_protocol(transport: Any, *, enabled: bool) -> bool:
+    """Opt one route into protocol behaviour for a delegating (frontend/backend) pipeline.
+
+    When enabled:
+
+    * a pipeline-owned client-tool round stays parked across a barge-in;
+    * an output for a call that was cancelled or timed out is acknowledged as
+      a late output (``settled_late_ok``) instead of an ``error``;
+    * a client ``response.create`` that meets a pipeline-started response waits
+      behind it instead of failing with ``response_in_progress``.
+
+    Other routes never call this and keep the default behaviour. Returns
+    whether a Realtime transport was configured.
+    """
+    context = _CONTEXTS.get(transport)
+    if context is None:
+        return False
+    context.round_policy["keep_parked_on_barge_in"] = enabled
+    context.client_tool_broker.accept_late_outputs = enabled
+    context.response_gate.defer_client_responses_behind_pipeline = enabled
+    return True
 
 
 def configure_realtime_client_tools(

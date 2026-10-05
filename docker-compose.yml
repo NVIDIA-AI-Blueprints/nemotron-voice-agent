@@ -64,6 +64,8 @@ x-app: &app-base
   build:
     context: .
     dockerfile: docker/Dockerfile
+    args:
+      AGENT_GIT_SHA: ${AGENT_GIT_SHA:-unknown}
   image: nemotron-voice-agent:latest
   command: ["uv", "run", "python", "src/server.py", "--host", "0.0.0.0"]
   ports:

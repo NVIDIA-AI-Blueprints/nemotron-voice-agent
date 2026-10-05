@@ -112,6 +112,7 @@ def build_handlers(
     realtime_filler_emitter: Callable[[str], Awaitable[bool]] | None = None,
     frontend_verdict: bool = False,
     transcript: ConversationTranscript | None = None,
+    past_date_guard: bool = True,
 ) -> dict[str, Callable]:
     """Return tool handlers bound to one session-local backend agent.
 
@@ -122,6 +123,10 @@ def build_handlers(
     With ``frontend_verdict``, a ``call_backend`` made while earlier work still
     runs can take over that run instead of restarting it (see
     ``frontend_verdict.decide``). ``transcript`` supplies the user's latest words.
+
+    ``past_date_guard`` answers a query whose only dates have passed with a
+    request for a future travel date. It is airline policy, so only the airline
+    domain enables it.
     """
     consecutive_planner_errors = 0
     continuation_supported = frontend_verdict and bool(getattr(thinker, "supports_task_continuation", False))
@@ -145,7 +150,7 @@ def build_handlers(
                 }
             )
             return
-        past_date = _past_date_in_query(query)
+        past_date = _past_date_in_query(query) if past_date_guard else None
         if past_date is not None:
             consecutive_planner_errors = 0
             payload = response_hint(
@@ -328,6 +333,9 @@ def build_handlers(
             allow_talker_frames=allow_talker_frames,
         )
         if ledger is not None:
+            late = getattr(thinker, "is_late_answer", None)
+            if callable(late) and late(run_id) and delivery != "not_speakable":
+                delivery = "delivered_late"
             ledger.record_delivery(
                 run_id,
                 delivery,
@@ -393,9 +401,13 @@ def _continues_running_request(
         decision=verdict.decision,
         reason=verdict.reason,
         model_task=verdict.model_task,
+        task_state="running",
         query_chars=len(query),
         running_query_chars=len(running),
         utterance_words=len(utterance.split()),
+        utterance=utterance[:160],
+        query=query[:160],
+        running_query=running[:160],
     ).info(f"Frontend verdict: {verdict.decision} ({verdict.reason})")
     return verdict.decision == "continue"
 
@@ -603,6 +615,9 @@ def _talker_result_projection(payload: dict[str, Any]) -> dict[str, Any]:
         # be stated back, and the Talker is the component trusted to phrase a
         # client-owned payload.
         "params_resolved",
+        # Which writes of this delegation succeeded, or a notice that none did.
+        "completed_actions",
+        "no_change_notice",
     }
     projected = {key: value for key, value in payload.items() if key in allowed}
     data = payload.get("data")

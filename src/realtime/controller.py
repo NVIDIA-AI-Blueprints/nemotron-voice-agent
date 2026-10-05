@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -552,6 +553,13 @@ class RealtimeSessionController:
             public_nvidia["server_tools"] = sorted(self.server_tools)
         if self.delegate_tools:
             public_nvidia["delegate_tools"] = sorted(self.delegate_tools)
+        agent_metadata = self.runtime_config.get("agent_metadata")
+        if isinstance(agent_metadata, dict):
+            # Read-only, server-computed description of what this session runs
+            # with; the fingerprint follows the function tools echoed above.
+            published = copy.deepcopy(agent_metadata)
+            published["session_tools_sha256"] = session_tools_sha256(view.get("tools", []))
+            public_nvidia["agent"] = published
         if public_nvidia:
             view["nvidia"] = public_nvidia
         return view
@@ -2452,3 +2460,10 @@ def _response_status_details(
             "code": code,
         },
     }
+
+
+def session_tools_sha256(tools: object) -> str:
+    """Return a stable fingerprint of a session's function tools, in their declared order."""
+    functions = [tool for tool in tools or () if isinstance(tool, dict) and tool.get("type") == "function"]
+    encoded = json.dumps(functions, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

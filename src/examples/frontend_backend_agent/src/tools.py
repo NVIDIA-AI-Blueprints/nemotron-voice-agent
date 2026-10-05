@@ -147,3 +147,13 @@ def render_tool_block(
             + json.dumps(parameters, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
         )
     return "\n".join(lines)
+
+
+def session_server_tools[T](server_tools: tuple[T, ...], client_tools: object) -> tuple[T, ...]:
+    """Return the built-in tools a session may use: none once the session declares its own tools.
+
+    A session that brings its own tools is about the caller's own service; a
+    built-in weather or random-number tool on such a call only invites the
+    planner to answer with something the caller never offered.
+    """
+    return () if client_tools else server_tools

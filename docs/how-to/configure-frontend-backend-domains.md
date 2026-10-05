@@ -188,6 +188,16 @@ schema, or validation failure uses the deterministic digest, so capability
 summarization cannot block the session. Both prompts and the tool validators
 still commit atomically.
 
+A session that declares its own client tools does not use the built-in server
+tools. The Thinker tool contract, runtime `enabled_tools` list, and Talker
+capability digest then contain only the client tools.
+
+The generic backend classifies each client tool as a read or a write from its
+name and description, and screens spoken identifiers only in read-tool calls.
+It renders confirmation questions for client writes from a fixed template. For
+these safeguards and their `FRONTEND_BACKEND_*` switches, refer to
+[Generic Client-Tool Safeguards](../../src/examples/frontend_backend_agent/README.md#generic-client-tool-safeguards).
+
 After a client-owned tool returns, the generic backend starts another planning
 round by default when `continue_after_results` is absent. This lets the Thinker
 interpret the client result and produce a grounded final response. The Thinker
@@ -219,6 +229,7 @@ A domain factory returns a frozen `DomainSpec`. The shared pipeline consumes the
 | `talker_tools_schema` | Define the domain-specific descriptions for `call_backend` and `cancel_backend` |
 | `build_backend` | Create a backend and isolated state for one session |
 | `runtime_context` | Append trusted date, time, timezone, or domain context |
+| `session_runtime_context` | Optionally render the same context from the Realtime session instructions, for example a date that they state as today; defaults to `None` |
 | `intro_prompt` | Define the welcome-turn instruction |
 | `tts_text_transform` | Apply optional pronunciation handling |
 | `filler_policy` | Choose Talker-authored, planner-authored, or legacy code-authored progress speech |
@@ -331,7 +342,7 @@ The generic domain applies the following controls:
   the trusted results accumulated so far, and completed results survive a
   later planning timeout or failure.
 - It bounds the outer function callback, backend, planner, and web tool at 45,
-  40, 6 per planning round, and 20 seconds by default. The overall backend
+  40, 10 per planning round, and 20 seconds by default. The overall backend
   deadline still applies when you increase the planning-round limit, leaving
   time for a grounded response before the outer callback expires.
 - With the default web-tool deadline, web search can make at most 2 attempts.
@@ -341,7 +352,8 @@ The generic domain applies the following controls:
   responses can trigger the retry. Other HTTP errors fail immediately.
 - It treats the user request and retrieved webpages as untrusted input.
 - It creates final spoken text from validated arguments and returned service data.
-- It replaces an unfinished request when the same session sends newer delegated work. The superseded plan can finish, but its result is not spoken. When `FRONTEND_BACKEND_FRONTEND_VERDICT` allows it, a pure acknowledgement or progress check continues the running request instead.
+- It replaces an unfinished request when the same session sends newer delegated work. The superseded plan can finish, but its result is not spoken. When `FRONTEND_BACKEND_LATE_ANSWERS` allows it, the superseded plan can still deliver a question or a successful client-tool result that nothing newer covered. When `FRONTEND_BACKEND_FRONTEND_VERDICT` allows it, a pure acknowledgement or progress check continues the running request instead.
+- It retries a plan that stopped at the Thinker token limit as a transient failure, and re-plans a rejected plan once with the rejection reason in `session_state.validation_error`.
 - It invalidates the active call identifier before cancellation, which suppresses late stale results.
 - It blocks another internal tool call after a completed backend result. The
   Talker retries once, then uses the trusted backend response instead of
