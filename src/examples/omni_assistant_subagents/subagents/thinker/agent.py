@@ -5,8 +5,8 @@
 
 The Speaker runs reasoning-OFF for low latency. When it is stuck or the question
 is genuinely hard, it stalls with a brief "let me think" line and hands the turn
-to this Thinker, which runs the same Omni model **reasoning-ON** (with a budget
-scaled to the situation's complexity) over the conversation so far and returns the
+to this Thinker, which runs the same Omni model **reasoning-ON** (with the
+``reasoning_budget`` from ``subagents.yaml``) over the conversation so far and returns the
 best spoken answer. Mirrors the media-analyzer worker's async job pattern: it
 streams its reasoning and answer tokens to the client as ``agent-task-update``
 bus frames (so the UI shows them live, just like the analyzer), and the transport
@@ -33,9 +33,6 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
 from utils import parse_env_float, parse_env_int
 
 THINKING_TASK_NAME = "think"
-
-_REASONING_BUDGETS = {"low": 512, "medium": 1024, "high": 2048}
-_DEFAULT_EFFORT = "medium"
 
 _REASON_NOTES = {
     "repetition": (
@@ -101,11 +98,6 @@ class ThinkerWorker(BaseWorker):
         transcript = str(payload.get("transcript") or "").strip()
         conversation = str(payload.get("conversation") or "").strip()
         reason = str(payload.get("reason") or "").strip()
-        effort = str(payload.get("effort") or _DEFAULT_EFFORT).strip().lower()
-        reasoning_budget = min(
-            _REASONING_BUDGETS.get(effort, _REASONING_BUDGETS[_DEFAULT_EFFORT]),
-            self._max_tokens - 1,
-        )
 
         await self._emit_update(
             target=requester, task_id=task_id, status="running", stage="started", detail="Thinking it through..."
@@ -117,7 +109,6 @@ class ThinkerWorker(BaseWorker):
                 conversation,
                 transcript,
                 reason,
-                reasoning_budget,
                 requester=requester,
                 task_id=task_id,
             )
@@ -135,7 +126,6 @@ class ThinkerWorker(BaseWorker):
         conversation: str,
         transcript: str,
         reason: str,
-        reasoning_budget: int,
         *,
         requester: str,
         task_id: str,
@@ -157,7 +147,7 @@ class ThinkerWorker(BaseWorker):
         )
         logger.info(
             f"Thinker Omni request: base_url={self._base_url}, model={self._model_id}, "
-            f"max_tokens={self._max_tokens}, reasoning_budget={reasoning_budget}, transcript_chars={len(transcript)}"
+            f"max_tokens={self._max_tokens}, transcript_chars={len(transcript)}"
         )
 
         async def on_reasoning_delta(reasoning_delta: str) -> None:
@@ -182,7 +172,6 @@ class ThinkerWorker(BaseWorker):
         result = await self._omni.run_multimodal_inference(
             context,
             max_tokens=self._max_tokens,
-            reasoning_budget=reasoning_budget,
             temperature=self._temperature,
             stream=True,
             on_reasoning_delta=on_reasoning_delta,

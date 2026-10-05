@@ -93,17 +93,19 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_function_id = body.get("asr_function_id", "") or default_asr.get("function_id", "")
     asr_model = body.get("asr_model", "") or default_asr.get("model", "")
     asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
+    asr_automatic_punctuation = str(body.get("asr_automatic_punctuation", "true")).lower() != "false"
     if asr_function_id or asr_model:
         asr_kwargs["model_function_map"] = {
             "function_id": asr_function_id,
             "model_name": asr_model or "custom-asr",
         }
+    asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if asr_language_code:
-        asr_kwargs["settings"] = NvidiaSTTSettings(language=asr_language_code)
+        asr_kwargs["settings"].language = asr_language_code
     stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
-        f"language={asr_language_code or '(default)'}"
+        f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
     )
 
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")

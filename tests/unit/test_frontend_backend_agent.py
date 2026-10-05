@@ -388,27 +388,21 @@ class FrontendBackendPipelineConfigTests(unittest.TestCase):
             {"BOOKING_BACKEND_URL": "http://custom.example:8001", "APP_RUNTIME": ""},
             clear=True,
         ):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = frontend_backend_pipeline._booking_backend_url()
 
         self.assertEqual(url, "http://custom.example:8001")
 
-    def test_booking_backend_url_rewrites_docker_hostname_for_host_native(self) -> None:
+    def test_booking_backend_url_uses_localhost_for_host_native(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = frontend_backend_pipeline._booking_backend_url()
 
         self.assertEqual(url, "http://localhost:8001")
 
-    def test_booking_backend_url_preserves_container_docker_hostname(self) -> None:
+    def test_booking_backend_url_uses_docker_hostname_in_container(self) -> None:
         with patch.dict("os.environ", {"APP_RUNTIME": "container"}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = frontend_backend_pipeline._booking_backend_url()
 
         self.assertEqual(url, "http://booking-server:8001")
-
-    def test_booking_backend_url_preserves_custom_catalog_url(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking.internal:8001"})
-
-        self.assertEqual(url, "http://booking.internal:8001")
 
 
 class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):

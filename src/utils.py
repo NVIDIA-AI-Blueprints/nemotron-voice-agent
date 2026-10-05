@@ -5,12 +5,15 @@
 
 import ipaddress
 import json
+import math
 import os
 import socket
 import time
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path
+from typing import Any, NamedTuple
 from urllib.parse import urlparse, urlunparse
 
 import yaml
@@ -19,79 +22,75 @@ from loguru import logger
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_FILENAME = "prompts.yaml"
 TOOLS_FILENAME = "tools.yaml"
-_service_context: ContextVar[tuple[Path, tuple[str, ...]] | None] = ContextVar("service_context", default=None)
+SELF_HOSTED_RECIPES: tuple[str, ...] = ("server", "single-gpu")
+SERVICE_RECIPES: tuple[str, ...] = ("auto", "cloud", *SELF_HOSTED_RECIPES)
+SERVICE_CATEGORIES: tuple[str, ...] = ("llm", "asr", "tts")
+ExampleServiceConfig = Mapping[str, Any]
 
 
-def _services_cloud_path() -> Path:
-    context = _service_context.get()
-    if context:
-        return context[0] / "services.cloud.yaml"
-    return Path(os.getenv("SERVICES_CLOUD_PATH", str(PROJECT_ROOT / "src/examples/generic/services.cloud.yaml")))
+class _ExampleBinding(NamedTuple):
+    services: dict[str, tuple[str, ...]] | None
+    settings: dict[str, dict[str, dict[str, object]]]
+    categories: dict[str, str]
+    capabilities: frozenset[str]
 
 
-def _services_local_path() -> Path:
-    context = _service_context.get()
-    if context:
-        return context[0] / "services.local.yaml"
-    return Path(os.getenv("SERVICES_LOCAL_PATH", str(PROJECT_ROOT / "src/examples/generic/services.local.yaml")))
+_NO_BINDING = _ExampleBinding(None, {}, {}, frozenset())
+_service_context: ContextVar[_ExampleBinding | None] = ContextVar("service_context", default=None)
+_active_binding: _ExampleBinding = _NO_BINDING
 
 
-_SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
-    "llm": frozenset({"llm_id", "model_id", "base_url", "system_prompt", "max_tokens", "temperature", "extra_params"}),
-    "thinker-llm": frozenset(
-        {"thinker_llm_id", "thinker_model_id", "thinker_base_url", "thinker_max_tokens", "thinker_extra_params"}
-    ),
-    "asr": frozenset({"asr_id", "asr_server", "asr_model", "asr_function_id", "asr_language_code"}),
-    "tts": frozenset(
-        {
-            "tts_id",
-            "tts_server",
-            "tts_voice_id",
-            "tts_function_id",
-            "tts_model",
-            "tts_synthesis_mode",
-            "tts_language_code",
-        }
-    ),
-}
+def _services_path() -> Path:
+    override = os.getenv("SERVICES_PATH", "").strip()
+    return Path(override) if override else PROJECT_ROOT / "services.yaml"
+
+
+def service_recipe() -> str:
+    """Return ``SERVICE_RECIPE``, or ``auto`` to detect the self-hosted section by reachability."""
+    recipe = os.getenv("SERVICE_RECIPE", "").strip().lower() or "auto"
+    if recipe not in SERVICE_RECIPES:
+        raise RuntimeError(f"SERVICE_RECIPE={recipe!r} must be one of {', '.join(SERVICE_RECIPES)}")
+    return recipe
+
+
 _SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content", "tool_choice"})
-_active_slots: frozenset[str] | None = None
-_active_slot_order: tuple[str, ...] | None = None
 
 
-def set_active_slots(slots: list[str] | tuple[str, ...] | None) -> None:
-    """Declare which example slots are active; ``None`` disables filtering."""
-    global _active_slots, _active_slot_order
-    if slots:
-        _active_slot_order = tuple(slots)
-        _active_slots = frozenset(_active_slot_order)
-    else:
-        _active_slot_order = None
-        _active_slots = None
+def _example_binding(example: ExampleServiceConfig | None) -> _ExampleBinding:
+    """Read an example's ``services``, ``settings``, ``categories``, and ``capabilities``."""
+    if not example or not example.get("services"):
+        return _NO_BINDING
+    return _ExampleBinding(
+        {slot: tuple(keys) for slot, keys in example["services"].items()},
+        example.get("settings") or {},
+        example.get("categories") or {},
+        frozenset(example.get("capabilities") or ()),
+    )
 
 
-def set_service_context(example_dir: str | Path, slots: Iterable[str] | None) -> None:
-    """Bind service catalogs and active slots to the current request context."""
-    _service_context.set((Path(example_dir), tuple(slots) if slots is not None else ()))
+def set_active_services(example: ExampleServiceConfig | None) -> None:
+    """Declare the process-wide example service config; ``None`` disables filtering."""
+    global _active_binding
+    _active_binding = _example_binding(example)
+
+
+def set_service_context(example: ExampleServiceConfig | None) -> None:
+    """Bind one example's service config to the current request context."""
+    _service_context.set(_example_binding(example))
 
 
 def clear_service_context() -> None:
-    """Clear the request-scoped service catalog binding."""
+    """Clear the request-scoped service binding."""
     _service_context.set(None)
 
 
-def _effective_active_slots() -> frozenset[str] | None:
+def _effective_binding() -> _ExampleBinding:
     context = _service_context.get()
-    if context is not None:
-        return frozenset(context[1]) if context[1] else None
-    return _active_slots
+    return context if context is not None else _active_binding
 
 
-def _effective_slot_order() -> tuple[str, ...]:
-    context = _service_context.get()
-    if context is not None:
-        return context[1]
-    return _active_slot_order or ()
+def _effective_services() -> dict[str, tuple[str, ...]] | None:
+    return _effective_binding().services
 
 
 def resolve_prompt_catalog_path(module_file: str | Path) -> Path:
@@ -190,20 +189,26 @@ def render_prompt_addon(
     return f"{base_content.rstrip()}\n\n{rendered.rstrip()}\n"
 
 
-def load_yaml_file(filepath: Path) -> dict:
+def load_yaml_file(filepath: Path, *, required: bool = False) -> dict:
     """Load and return the contents of a YAML file as a dict.
 
     Returns an empty dict if the file is absent, unreadable, malformed, or
-    the parsed value is not a mapping.
+    the parsed value is not a mapping. With ``required``, raises
+    ``RuntimeError`` in those cases instead.
     """
-    if not filepath.is_file():
-        return {}
     try:
         data = yaml.safe_load(filepath.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        logger.warning(f"Failed to load YAML from {filepath}: {exc}")
+        if required:
+            raise RuntimeError(f"Failed to load YAML from {filepath}: {exc}") from exc
+        if filepath.is_file():
+            logger.warning(f"Failed to load YAML from {filepath}: {exc}")
         return {}
-    return data if isinstance(data, dict) else {}
+    if isinstance(data, dict):
+        return data
+    if required:
+        raise RuntimeError(f"YAML root must be a mapping: {filepath}")
+    return {}
 
 
 def is_nvcf(server: str) -> bool:
@@ -227,22 +232,39 @@ def _is_container_runtime() -> bool:
     return os.getenv("APP_RUNTIME", "").strip().lower() == "container"
 
 
-def local_services_enabled() -> bool:
-    """Return whether self-hosted catalog entries should be discovered."""
-    return os.getenv("LOCAL_SERVICES_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+class SpeechPorts(NamedTuple):
+    """Container and published host ports of a speech NIM sidecar."""
 
+    grpc: int
+    host_grpc: int
+    health: int
+    host_health: int
+
+
+LOCAL_SPEECH_PORTS: dict[str, dict[str, SpeechPorts]] = {
+    "asr": {
+        "nemotron-asr-streaming-english": SpeechPorts(50052, 50152, 9001, 9001),
+        "nemotron-asr-streaming-multilingual": SpeechPorts(50052, 50252, 9001, 9101),
+        "parakeet-ctc-asr": SpeechPorts(50052, 50352, 9001, 9201),
+        "parakeet-rnnt-asr": SpeechPorts(50052, 50452, 9001, 9301),
+    },
+    "tts": {
+        "magpie-multilingual-tts-service": SpeechPorts(50051, 50151, 9000, 9000),
+        "chatterbox-tts-service": SpeechPorts(50051, 50251, 9000, 9100),
+        "magpie-zeroshot-tts-service": SpeechPorts(50051, 50351, 9000, 9200),
+    },
+}
 
 _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nvidia-llm", 8000): 18000,
+    ("nemotron-3-super", 8000): 18001,
     ("nvidia-llm-omni", 8000): 18002,
     ("nvidia-llm-vllm", 8000): 18000,
-    ("magpie-multilingual-tts-service", 50051): 50151,
-    ("chatterbox-tts-service", 50051): 50151,
-    ("magpie-zeroshot-tts-service", 50051): 50151,
-    ("nemotron-asr-streaming-english", 50052): 50152,
-    ("nemotron-asr-streaming-multilingual", 50052): 50152,
-    ("parakeet-ctc-asr", 50052): 50152,
-    ("parakeet-rnnt-asr", 50052): 50152,
+    **{
+        (service, ports.grpc): ports.host_grpc
+        for services in LOCAL_SPEECH_PORTS.values()
+        for service, ports in services.items()
+    },
 }
 _LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
@@ -262,7 +284,7 @@ def _is_compose_service_host(host: str) -> bool:
 
 def _rewrite_endpoint_for_host_runtime(field: str, value: str) -> str:
     """Convert Compose-oriented built-ins to host-accessible endpoints."""
-    if field not in {"base_url", "server"}:
+    if field not in {"base_url", "server", "streaming_url"}:
         return value
 
     parsed = urlparse(value if "://" in value else f"//{value}")
@@ -293,7 +315,7 @@ def _rewrite_local_runtime_endpoints(catalog: dict) -> dict:
 
     def _rewrite_entry(entry: dict) -> dict:
         out = dict(entry)
-        for field in ("base_url", "server"):
+        for field in ("base_url", "server", "streaming_url"):
             value = out.get(field)
             if isinstance(value, str):
                 out[field] = _rewrite_endpoint_for_host_runtime(field, value)
@@ -361,155 +383,300 @@ def is_endpoint_reachable(server: str) -> bool:
     return ok
 
 
-def _filter_reachable_entries(catalog: dict) -> dict:
-    """Drop catalog entries whose endpoint is not reachable from this runtime."""
-    filtered: dict = {}
-    for category, section in catalog.items():
-        if not isinstance(section, dict):
-            filtered[category] = section
-            continue
-        kept = {
-            key: entry
-            for key, entry in section.items()
-            if not isinstance(entry, dict)
-            or is_endpoint_reachable(str(entry.get("server") or entry.get("base_url") or ""))
-        }
-        filtered[category] = kept
-    return filtered
+NVCF_GRPC_SERVER = "grpc.nvcf.nvidia.com:443"
+NVCF_LLM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+CLOUD_SOURCE = "cloud-nim"
+SELF_HOSTED_SOURCE = "self-hosted"
 
 
 def _entry_endpoint(entry: dict) -> str:
     return str(entry.get("server") or entry.get("base_url") or "")
 
 
-def _first_reachable_variant(variants: list[tuple[str, dict]]) -> tuple[str, dict] | None:
-    for platform_name, entry in variants:
-        rewritten = _rewrite_local_runtime_endpoints({"_": {"_": entry}}).get("_", {}).get("_", {})
-        if isinstance(rewritten, dict) and is_endpoint_reachable(_entry_endpoint(rewritten)):
-            return platform_name, entry
-    return None
+def _strip_nvcf(entry: dict) -> dict:
+    return {key: value for key, value in entry.items() if key != "nvcf"}
 
 
-def _load_cloud_services_catalog() -> dict:
-    """Load cloud service entries from ``services.cloud.yaml``.
+def _nvcf_entry(entry: dict) -> dict | None:
+    """Return the NVIDIA Cloud variant of a ``server`` entry, or ``None`` when it has no ``nvcf`` key."""
+    if "nvcf" not in entry:
+        return None
+    overrides = entry.get("nvcf") or {}
+    if not isinstance(overrides, dict):
+        raise RuntimeError(f"services.yaml nvcf must be a mapping (got {overrides!r})")
+    out = _strip_nvcf(entry)
+    if "server" in out:
+        out["server"] = NVCF_GRPC_SERVER
+    if "base_url" in out:
+        out["base_url"] = NVCF_LLM_BASE_URL
+    out.update(overrides)
+    return out
 
-    Returns an empty catalog when NVIDIA Cloud is unavailable so those
-    entries are not exposed in the UI or selected by the pipeline.
+
+def _nvcf_catalog(server_catalog: dict) -> dict:
+    return {
+        category: {key: cloud for key, entry in section.items() if (cloud := _nvcf_entry(entry)) is not None}
+        for category, section in server_catalog.items()
+    }
+
+
+_SETTING_TYPES = frozenset({"bool", "int", "float", "enum"})
+
+
+def _coerce_setting(name: str, spec: dict, raw: object) -> object:
+    """Validate one client value against its schema, falling back to the default."""
+    default = spec.get("default")
+    if raw is None:
+        return default
+    kind = spec.get("type")
+    try:
+        if kind == "bool":
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str) and raw.strip().lower() in {"true", "false"}:
+                return raw.strip().lower() == "true"
+            raise ValueError
+        if kind == "enum":
+            if raw in (spec.get("options") or []):
+                return raw
+            raise ValueError
+        if isinstance(raw, bool):
+            raise ValueError
+        value: int | float = int(raw) if kind == "int" else float(raw)
+        if not math.isfinite(value):
+            raise ValueError
+    except (TypeError, ValueError):
+        logger.warning(f"Ignoring invalid value for setting {name!r}: {raw!r}")
+        return default
+    if spec.get("min") is not None:
+        value = max(value, spec["min"])
+    if spec.get("max") is not None:
+        value = min(value, spec["max"])
+    return value
+
+
+def _set_path(target: dict, path: str, value: object) -> None:
+    *parents, leaf = path.split(".")
+    for part in parents:
+        child = target.get(part)
+        if not isinstance(child, dict):
+            child = target[part] = {}
+        target = child
+    target[leaf] = value
+
+
+def _pop_path(target: dict, path: str) -> None:
+    *parents, leaf = path.split(".")
+    for part in parents:
+        target = target.get(part)
+        if not isinstance(target, dict):
+            return
+    target.pop(leaf, None)
+
+
+def apply_service_settings(extra_params: dict, schema: Mapping[str, dict], values: Mapping[str, object]) -> dict:
+    """Return ``extra_params`` with each schema setting written at its ``path``.
+
+    Values come from ``values`` when valid, else the schema default. A setting
+    whose ``requires`` setting resolves falsy is removed instead.
     """
-    if not nvidia_cloud_available():
-        return _normalize_services_catalog({})
-    return _normalize_services_catalog(load_yaml_file(_services_cloud_path()))
+    resolved = {name: _coerce_setting(name, spec, values.get(name)) for name, spec in schema.items()}
+    out = json.loads(json.dumps(extra_params))
+    for name, spec in schema.items():
+        requirement = spec.get("requires")
+        if resolved[name] is None or (requirement and not resolved.get(requirement)):
+            _pop_path(out, spec["path"])
+        else:
+            _set_path(out, spec["path"], resolved[name])
+    return out
 
 
-def _load_local_services_catalog() -> dict:
-    """Load local service entries, merging recipe sections by reachability."""
-    if not local_services_enabled():
-        return _normalize_services_catalog({})
-    local_path = _services_local_path()
-    if not local_path.is_file():
-        return _normalize_services_catalog({})
-    data = load_yaml_file(local_path)
-    if not isinstance(data, dict):
-        return _normalize_services_catalog({})
-
-    variants: dict[str, dict[str, list[tuple[str, dict]]]] = {}
-    for platform_name, platform_data in data.items():
-        if not isinstance(platform_data, dict):
+def _load_settings_profiles() -> dict[str, dict]:
+    """Load ``settings.yaml`` profiles, with each setting's ``path`` defaulting to its name."""
+    profiles: dict[str, dict] = {}
+    for profile_name, profile in load_yaml_file(_services_path().with_name("settings.yaml"), required=True).items():
+        if str(profile_name).startswith("x-"):
             continue
-        for category, section in platform_data.items():
-            if not isinstance(section, dict):
-                continue
-            cat_variants = variants.setdefault(str(category), {})
-            for key, entry in section.items():
-                if isinstance(entry, dict):
-                    cat_variants.setdefault(str(key), []).append((str(platform_name), dict(entry)))
+        if not isinstance(profile, dict):
+            raise RuntimeError(f"settings.yaml profile {profile_name!r} must be a mapping")
+        for name, spec in profile.items():
+            if not isinstance(spec, dict) or spec.get("type") not in _SETTING_TYPES:
+                raise RuntimeError(
+                    f"settings.yaml {profile_name}.{name} needs a type ({', '.join(sorted(_SETTING_TYPES))})"
+                )
+        profiles[profile_name] = {name: {**spec, "path": spec.get("path") or name} for name, spec in profile.items()}
+    return profiles
 
-    merged: dict = {}
-    for category, section in variants.items():
-        target = merged.setdefault(category, {})
-        for key, entries in section.items():
-            first_entry = entries[0][1]
-            if all(entry == first_entry for _, entry in entries):
-                target[key] = first_entry
+
+_MISSING = object()
+
+
+def _get_path(source: dict, path: str) -> object:
+    for part in path.split("."):
+        if not isinstance(source, dict) or part not in source:
+            return _MISSING
+        source = source[part]
+    return source
+
+
+def _entry_settings_schema(profile: Mapping[str, dict], extra_params: dict) -> dict[str, dict]:
+    """Use a value already set at a setting's ``path`` in ``extra_params`` as that entry's default."""
+    schema: dict[str, dict] = {}
+    for name, spec in profile.items():
+        value = _get_path(extra_params, spec["path"])
+        schema[name] = spec if value is _MISSING else {**spec, "default": value}
+    return schema
+
+
+def _attach_settings(
+    catalog: dict, profiles: Mapping[str, dict], slot_settings: Mapping[str, Mapping[str, object]]
+) -> dict:
+    """Replace each ``settings`` profile name with its schema and bake defaults into ``extra_params``.
+
+    ``slot_settings`` holds the example's per-service defaults from the registry
+    (``{slot: {key: {setting: value}}}``); they win over the entry's
+    ``extra_params`` and the profile ``default``.
+    """
+    out: dict = {}
+    for category, section in catalog.items():
+        out[category] = {}
+        for key, entry in section.items():
+            overrides = slot_settings.get(category, {}).get(key, {})
+            profile_name = entry.get("settings")
+            if profile_name is None:
+                out[category][key] = entry
                 continue
-            # Keep the plain key present even when nothing is reachable, so
-            # callers resolving a catalog key by name still find an entry.
-            active_platform, active_entry = _first_reachable_variant(entries) or entries[0]
-            target[key] = active_entry
-            emitted = [active_entry]
-            for platform_name, entry in entries:
-                if platform_name == active_platform:
-                    continue
-                if any(entry == seen for seen in emitted):
-                    continue
-                target[f"{key}-{platform_name}"] = entry
-                emitted.append(entry)
-    return _rewrite_local_runtime_endpoints(_normalize_services_catalog(merged))
+            if profile_name not in profiles:
+                raise RuntimeError(f"services.yaml {category}.{key} references unknown settings {profile_name!r}")
+            profile = profiles[profile_name]
+            field_map = _HYDRATION_FIELD_MAPS.get(category, {})
+            in_extra_params = "extra_params" in field_map
+            if in_extra_params:
+                base = parse_json_dict(entry.get("extra_params", ""), label="extra_params")
+            else:
+                base = {field: value for field, value in entry.items() if field != "settings"}
+                unmapped = sorted(spec["path"] for spec in profile.values() if spec["path"] not in field_map)
+                if unmapped:
+                    raise RuntimeError(f"Settings profile {profile_name!r} sets {unmapped}, unknown to {category}")
+            schema = _entry_settings_schema(profile, base)
+            unknown = sorted(set(overrides) - set(schema))
+            if unknown:
+                raise RuntimeError(f"Registry settings {unknown} are not in settings profile {profile_name!r}")
+            schema = {
+                name: {**spec, "default": overrides[name]} if name in overrides else spec
+                for name, spec in schema.items()
+            }
+            applied = apply_service_settings(base, schema, {})
+            if in_extra_params:
+                out[category][key] = {
+                    **entry,
+                    "settings": schema,
+                    "extra_params": json.dumps(applied, separators=(",", ":")),
+                }
+            else:
+                out[category][key] = {**applied, "settings": schema}
+    return out
+
+
+def _select_example_services(catalog: dict, binding: _ExampleBinding) -> dict:
+    """Keep only the example's slots and keys, in registry order; ``categories`` maps a slot to another category."""
+    if binding.services is None:
+        return catalog
+    selected: dict = {}
+    for slot, keys in binding.services.items():
+        section = catalog.get(binding.categories.get(slot, slot), {})
+        selected[slot] = {key: section[key] for key in keys if key in section}
+    return selected
+
+
+def service_catalog_sources(example: ExampleServiceConfig | None = None) -> list[tuple[str, dict]]:
+    """Return ``(source, catalog)`` pairs for the active recipe, self-hosted first.
+
+    ``example`` supplies ``services`` (the slots and keys to keep, in default
+    order), ``categories`` (the catalog category a slot reads), and ``settings``
+    (per-service setting defaults). It defaults to the example bound by
+    :func:`set_service_context`.
+    """
+    binding = _effective_binding() if example is None else _example_binding(example)
+    data = load_yaml_file(_services_path(), required=True)
+    recipe = service_recipe()
+    sources: list[tuple[str, dict]] = []
+    if recipe == "auto":
+        if self_hosted := _detect_self_hosted_catalog(data, binding):
+            sources.append((SELF_HOSTED_SOURCE, self_hosted))
+    elif recipe != "cloud":
+        sources.append((SELF_HOSTED_SOURCE, _self_hosted_section(data, recipe, binding)))
+    if nvidia_cloud_available():
+        server_catalog = _normalize_services_catalog(data.get("server"))
+        sources.append((CLOUD_SOURCE, _select_example_services(_nvcf_catalog(server_catalog), binding)))
+    profiles = _load_settings_profiles()
+    return [(source, _attach_settings(catalog, profiles, binding.settings)) for source, catalog in sources]
+
+
+def _self_hosted_section(data: dict, recipe: str, binding: _ExampleBinding) -> dict:
+    """Return one self-hosted section without ``nvcf`` keys, rewritten for the runtime and filtered by ``binding``."""
+    section = {
+        category: {key: _strip_nvcf(entry) for key, entry in entries.items() if isinstance(entry, dict)}
+        for category, entries in _normalize_services_catalog(data.get(recipe)).items()
+    }
+    return _select_example_services(_rewrite_local_runtime_endpoints(section), binding)
+
+
+def _reachable_endpoints(endpoints: Iterable[str]) -> set[str]:
+    """Probe endpoints in parallel so one slow or unresolvable host does not serialize the others."""
+    unique = sorted({endpoint for endpoint in endpoints if endpoint})
+    if not unique:
+        return set()
+    with ThreadPoolExecutor(max_workers=min(len(unique), 16)) as pool:
+        results = list(pool.map(is_endpoint_reachable, unique))
+    return {endpoint for endpoint, ok in zip(unique, results, strict=True) if ok}
+
+
+def _detect_self_hosted_catalog(data: dict, binding: _ExampleBinding) -> dict:
+    """Pick the self-hosted section with the most reachable entries.
+
+    Within that section, a slot shows only its reachable entries, or all of
+    them when none is up, so defaults still resolve and the session readiness
+    check reports the stopped service. Ties go to the section listed first in
+    :data:`SELF_HOSTED_RECIPES`. When nothing is reachable, returns ``{}`` if
+    NVIDIA Cloud is available, else the first section.
+    """
+    sections = {recipe: _self_hosted_section(data, recipe, binding) for recipe in SELF_HOSTED_RECIPES}
+    reachable = _reachable_endpoints(
+        _entry_endpoint(entry)
+        for section in sections.values()
+        for entries in section.values()
+        for entry in entries.values()
+    )
+    counts = {
+        recipe: sum(_entry_endpoint(entry) in reachable for entries in section.values() for entry in entries.values())
+        for recipe, section in sections.items()
+    }
+    best = max(SELF_HOSTED_RECIPES, key=lambda recipe: counts[recipe])
+    if not counts[best]:
+        return {} if nvidia_cloud_available() else sections[best]
+    return {
+        category: {key: entry for key, entry in entries.items() if _entry_endpoint(entry) in reachable} or entries
+        for category, entries in sections[best].items()
+    }
 
 
 def _load_effective_services_catalog() -> dict:
-    """Return the merged catalog combining cloud and reachable local entries.
-
-    Reachable local entries win on shared keys, so the pipeline picks the
-    deployed local service. When NVIDIA Cloud is available, cloud entries fill
-    each remaining key, so a cloud-only key stays exposed even while other local
-    endpoints are reachable; the cloud variant of a shared key is used only when
-    no reachable local entry takes precedence.
-    """
-    cloud = _load_cloud_services_catalog()
-    local = _filter_reachable_entries(_load_local_services_catalog())
+    """Merge the active sources so self-hosted entries win on shared keys."""
     merged: dict = {}
-    for category in tuple(local) + tuple(key for key in cloud if key not in local):
-        local_section = local.get(category, {})
-        cloud_section = cloud.get(category, {})
-        target = merged.setdefault(category, {})
-        if isinstance(local_section, dict):
-            target.update(local_section)
-        if isinstance(cloud_section, dict):
-            for key, entry in cloud_section.items():
+    for _, catalog in service_catalog_sources():
+        for category, section in catalog.items():
+            target = merged.setdefault(category, {})
+            for key, entry in section.items():
                 target.setdefault(key, entry)
     return merged
 
 
-# Whitelist of keys accepted on session-config / offer bodies. Anything else
-# sent by the client is dropped before the pipeline sees it.
-SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
-    {
-        "pipeline_mode",
-        "llm_id",
-        "asr_id",
-        "tts_id",
-        "model_id",
-        "base_url",
-        "system_prompt",
-        "max_tokens",
-        "temperature",
-        "extra_params",
-        "thinker_llm_id",
-        "thinker_model_id",
-        "thinker_base_url",
-        "thinker_extra_params",
-        "thinker_max_tokens",
-        "prompt_key",
-        "prompt_content",
-        "tool_choice",
-        "asr_server",
-        "asr_model",
-        "asr_function_id",
-        "asr_language_code",
-        "tts_server",
-        "tts_voice_id",
-        "tts_function_id",
-        "tts_model",
-        "tts_synthesis_mode",
-        "tts_language_code",
-    }
-)
-
-# For each category, map YAML field → session-body field. YAML is the source of
-# truth for built-in selections. Client-overridable fields keep a non-empty
-# user value (voice picker / session language) instead of the catalog default.
-_CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
+# For each category, map YAML field → session-body field, plus the body fields
+# holding the client's editable settings and streaming-input choice. YAML is the
+# source of truth for built-in selections. Client-overridable fields keep a
+# non-empty user value (voice picker / session language) instead of the catalog default.
+_CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str], str, str], ...] = (
     (
         "llm_id",
         "llm",
@@ -521,6 +688,8 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "temperature": "temperature",
             "extra_params": "extra_params",
         },
+        "llm_settings",
+        "llm_streaming",
     ),
     (
         "thinker_llm_id",
@@ -531,6 +700,8 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "max_tokens": "thinker_max_tokens",
             "extra_params": "thinker_extra_params",
         },
+        "thinker_llm_settings",
+        "",
     ),
     (
         "asr_id",
@@ -540,7 +711,10 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "model": "asr_model",
             "function_id": "asr_function_id",
             "language_code": "asr_language_code",
+            "automatic_punctuation": "asr_automatic_punctuation",
         },
+        "asr_settings",
+        "",
     ),
     (
         "tts_id",
@@ -554,8 +728,17 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str]], ...] = (
             "language_code": "tts_language_code",
             "zero_shot_audio_prompt_file": "tts_zero_shot_audio_prompt_file",
         },
+        "tts_settings",
+        "",
     ),
 )
+_HYDRATION_FIELD_MAPS: dict[str, dict[str, str]] = {slot: fields for _, slot, fields, _, _ in _CATALOG_HYDRATION}
+_CATALOG_ONLY_BODY_FIELDS = frozenset({"tts_zero_shot_audio_prompt_file"})
+_SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
+    slot: frozenset({id_field, *fields.values(), settings_field, streaming_field} - {""}) - _CATALOG_ONLY_BODY_FIELDS
+    for id_field, slot, fields, settings_field, streaming_field in _CATALOG_HYDRATION
+}
+SESSION_CONFIG_KEYS: frozenset[str] = _SLOT_AGNOSTIC_KEYS.union(*_SLOT_CONFIG_KEYS.values())
 
 # Body fields the client may set explicitly; catalog hydration must not overwrite them.
 _CLIENT_OVERRIDABLE_BODY_FIELDS = frozenset(
@@ -569,7 +752,9 @@ def hydrate_config_from_catalog(config: dict) -> None:
     Mutates ``config`` in place. Custom (user-authored) entries are left alone so
     the client-provided details continue to drive the pipeline.
     """
-    for id_field, category, field_map in _CATALOG_HYDRATION:
+    for id_field, category, field_map, settings_field, streaming_field in _CATALOG_HYDRATION:
+        user_settings = config.pop(settings_field, None) if settings_field else None
+        user_streaming = config.pop(streaming_field, None) if streaming_field else None
         entry = load_service_entry_by_id(category, config.get(id_field, ""))
         if not entry:
             continue
@@ -591,6 +776,33 @@ def hydrate_config_from_catalog(config: dict) -> None:
                 config[body_field] = json.dumps(value)
             else:
                 config[body_field] = value if isinstance(value, str) else str(value)
+        if settings_field and isinstance(entry.get("settings"), dict):
+            user_values = parse_json_dict(user_settings, label=settings_field)
+            if "extra_params" in field_map:
+                extra_field = field_map["extra_params"]
+                extra = apply_service_settings(
+                    parse_json_dict(config.get(extra_field, ""), label=extra_field),
+                    entry["settings"],
+                    user_values,
+                )
+                if extra:
+                    config[extra_field] = json.dumps(extra, separators=(",", ":"))
+            else:
+                applied = apply_service_settings({}, entry["settings"], user_values)
+                for spec in entry["settings"].values():
+                    value = _get_path(applied, spec["path"])
+                    if value is _MISSING:
+                        config.pop(field_map[spec["path"]], None)
+                    else:
+                        config[field_map[spec["path"]]] = str(value)
+        if _streaming_requested(user_streaming) and entry.get("streaming_url"):
+            config[field_map["base_url"]] = entry["streaming_url"]
+
+
+def _streaming_requested(raw: object) -> bool:
+    """Return whether the client asked for streaming input and the bound example supports it."""
+    requested = raw is True or (isinstance(raw, str) and raw.strip().lower() == "true")
+    return requested and "streaming_input" in _effective_binding().capabilities
 
 
 def filter_session_config(data: dict) -> dict:
@@ -602,10 +814,10 @@ def filter_session_config(data: dict) -> dict:
     catalog hydration may re-add a trusted path afterward.
     """
     filtered = {k: v for k, v in data.items() if k in SESSION_CONFIG_KEYS and v not in ("", None)}
-    active_slots = _effective_active_slots()
-    if active_slots is not None:
+    active_services = _effective_services()
+    if active_services is not None:
         allowed: set[str] = set(_SLOT_AGNOSTIC_KEYS)
-        for slot in active_slots:
+        for slot in active_services:
             allowed |= _SLOT_CONFIG_KEYS.get(slot, frozenset())
         filtered = {k: v for k, v in filtered.items() if k in allowed}
     # Defense in depth: never trust a client path even if it bypasses the allowlists.
@@ -632,14 +844,7 @@ def load_service_entry_by_id(category: str, entry_id: str) -> dict:
         return {}
     if ":" in entry_id:
         source, key = entry_id.split(":", 1)
-        if not key:
-            return {}
-        if source == "cloud-nim":
-            catalog = _load_cloud_services_catalog()
-        elif source == "self-hosted":
-            catalog = _load_local_services_catalog()
-        else:
-            return {}
+        catalog = next((catalog for name, catalog in service_catalog_sources() if name == source), {})
     else:
         key = entry_id
         catalog = _load_effective_services_catalog()
@@ -663,57 +868,34 @@ def load_service_entry(category: str, key: str) -> dict:
     return dict(section[default_key]) if default_key in section else {}
 
 
-def _build_services_api_entries(section: dict, category: str, source: str) -> list[dict]:
-    """Convert one catalog section into API entries for a source."""
-    if not isinstance(section, dict):
-        return []
-
-    selected_key = _section_default_key(section)
-    ordered_items = list(section.items())
-    if selected_key in section:
-        ordered_items.sort(key=lambda item: item[0] != selected_key)
-
-    return [
-        {
-            "id": f"{source}:{key}",
-            "name": val.get("name", key),
-            "builtIn": True,
-            "source": source,
-            **{k: v for k, v in val.items() if k != "name"},
-            "selected": key == selected_key,
-        }
-        for key, val in ordered_items
-        if isinstance(val, dict)
-    ]
-
-
-def _services_api_categories(*catalogs: dict) -> tuple[str, ...]:
-    """Return service categories ordered by the active example's ``slots``."""
-    ordered: list[str] = list(_effective_slot_order())
-    for catalog in catalogs:
-        ordered.extend(category for category in catalog if category not in ordered)
-    return tuple(ordered)
+def service_api_entry(source: str, key: str, entry: dict) -> dict:
+    """Return one catalog entry in the API shape, with its ``<source>:<key>`` id."""
+    return {
+        "id": f"{source}:{key}",
+        "key": key,
+        "name": str(entry.get("name") or key),
+        "builtIn": True,
+        "source": source,
+        **{field: value for field, value in entry.items() if field != "name"},
+    }
 
 
 def build_services_api_response() -> dict:
-    """Build the payload for ``GET /api/services`` with cloud and reachable local entries."""
-    cloud_data = _load_cloud_services_catalog()
-    local_data = _filter_reachable_entries(_load_local_services_catalog())
-    active_slots = _effective_active_slots()
+    """Build the payload for ``GET /api/services``: self-hosted entries first, then NVIDIA Cloud."""
+    sources = service_catalog_sources()
+    services = _effective_services()
+    categories: list[str] = list(services) if services is not None else []
+    for _, catalog in sources:
+        categories.extend(category for category in catalog if category not in categories)
     result: dict = {}
-    for category in _services_api_categories(cloud_data, local_data):
-        if active_slots is not None and category not in active_slots:
-            result[category] = []
-            continue
-        cloud_entries = _build_services_api_entries(cloud_data.get(category, {}), category, "cloud-nim")
-        local_entries = _build_services_api_entries(local_data.get(category, {}), category, "self-hosted")
-        entries = local_entries + cloud_entries
-        selected_seen = False
-        for entry in entries:
-            if entry.get("selected") and not selected_seen:
-                selected_seen = True
-            else:
-                entry["selected"] = False
+    for category in categories:
+        entries = [
+            {**service_api_entry(source, key, entry), "selected": False}
+            for source, catalog in sources
+            for key, entry in catalog.get(category, {}).items()
+        ]
+        if entries:
+            entries[0]["selected"] = True
         result[category] = entries
     return result
 

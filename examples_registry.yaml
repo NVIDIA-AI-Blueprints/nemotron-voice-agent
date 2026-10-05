@@ -20,62 +20,74 @@ selection: all
 # Override at runtime via the ``TRANSPORT_SELECTION`` environment variable.
 transports: all
 
+# Each example lists the services it offers per slot from `services.yaml`, in
+# UI order. Slots follow the key order; the first entry available in the
+# active recipe is the default. A slot reads the catalog category of the same
+# name unless `categories` maps it to another one. `settings` overrides
+# `settings.yaml` defaults per slot and service key.
 examples:
   generic-assistant:
     label: Generic Assistant
-    slots: [llm, asr, tts]
+    services:
+      llm: [nemotron-lightning, nemotron-super]
+      asr: [nemotron-asr-streaming-english, parakeet-ctc, parakeet-rnnt]
+      tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
+    capabilities: [streaming_input]
     activity_check:
       first_warning_s: 480
       second_warning_s: 30
       warning_completion_timeout_s: 45
     defaults:
       prompt: [generic_assistant]
-      llm: [nemotron-lightning]
-      asr: [nemotron-asr-streaming-english]
-      tts: [magpie-multilingual-tts]
     bot: examples.generic.pipeline:bot
 
   multilingual-assistant:
     label: Multilingual Assistant
-    slots: [llm, asr, tts]
+    services:
+      llm: [nemotron-lightning]
+      asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt]
+      tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     capabilities: [session_languages]
     agent_prompt_keys:
       - fixed_session_language_addon
     defaults:
       default_session_language: de-DE
       prompt: [multilingual_voice_assistant]
-      llm: [nemotron-lightning]
-      asr: [nemotron-asr-streaming-multilingual]
-      tts: [magpie-multilingual-tts]
     bot: examples.multilingual.pipeline:bot
 
   omni-assistant:
     label: Nemotron Omni Assistant
-    slots: [llm, tts]
+    services:
+      llm: [nemotron-omni-nvfp4]
+      tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     defaults:
       prompt: [generic_omni_assistant]
-      llm: [nemotron-omni-nvfp4]
-      tts: [magpie-multilingual-tts]
     bot: examples.omni_assistant.pipeline:bot
 
   omni-assistant-subagents:
     label: Nemotron Omni Assistant Subagents
-    slots: [llm, tts]
+    services:
+      llm: [nemotron-omni-nvfp4]
+      tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     capabilities: [attachments, webcam]
     defaults:
       prompt: [omni_subagents_assistant]
-      llm: [nemotron-omni-nvfp4]
-      tts: [magpie-multilingual-tts]
     bot: examples.omni_assistant_subagents.pipeline:bot
 
   frontend-backend-agent:
     label: Frontend Backend Agent
-    slots: [llm, thinker-llm, booking-server, asr, tts]
-    defaults:
-      prompt: [talker]
+    services:
       llm: [nemotron-lightning]
       thinker-llm: [nemotron-lightning]
-      booking-server: [default]
-      asr: [nemotron-asr-streaming-english]
-      tts: [magpie-multilingual-tts]
+      asr: [nemotron-asr-streaming-english, parakeet-ctc]
+      tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
+    categories:
+      thinker-llm: llm
+    settings:
+      thinker-llm:
+        nemotron-lightning:
+          enable_thinking: true
+          reasoning_budget: 1024
+    defaults:
+      prompt: [talker]
     bot: examples.frontend_backend_agent.pipeline:bot

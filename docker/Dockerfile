@@ -76,6 +76,7 @@ RUN uv venv --python python3.12 && . .venv/bin/activate && uv sync --frozen
 
 COPY src/ src/
 COPY examples_registry.yaml examples_registry.yaml
+COPY services.yaml settings.yaml ./
 COPY benchmarking_tools/scaling-perf/ benchmarking_tools/scaling-perf/
 COPY --from=client-builder /client/dist/ client/dist/
 

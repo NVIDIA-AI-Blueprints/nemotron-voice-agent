@@ -3,9 +3,9 @@
 
 """Omni Assistant Subagents multi-agent pipeline entry point.
 
-This package owns its prompt catalog (``prompts.yaml``), service catalogs
-(``services.cloud.yaml`` / ``services.local.yaml``), subagent registry, and
-workers under ``examples.omni_assistant_subagents.subagents``:
+This package owns its prompt catalog (``prompts.yaml``), subagent registry, and
+workers under ``examples.omni_assistant_subagents.subagents``; services come
+from the root ``services.yaml``:
 
 * ``OmniTransportAgent`` owns transport I/O, VAD/turn detection, TTS, and
   routes user frames to ``SpeakerOmniAgent`` through a ``BusBridgeProcessor``.
@@ -35,9 +35,11 @@ from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from examples.shared.pipeline_utils import create_transport as _create_transport
 from examples.shared.subagents import SubagentRegistry, load_subagent_registry
 from utils import (
+    apply_service_settings,
     is_nvcf,
     load_prompt_catalog,
     load_service_entry,
+    load_service_entry_by_id,
     nvidia_api_key,
     parse_json_dict,
     resolve_prompt,
@@ -57,6 +59,16 @@ def _reasoning_for(registry: SubagentRegistry, key: str, default: str) -> str:
     """Reasoning mode declared for a subagent in YAML, or ``default`` if absent."""
     spec = registry.get(key)
     return spec.reasoning if spec else default
+
+
+def _extra_params_for(extra_params: dict, llm_entry: dict, registry: SubagentRegistry, key: str) -> dict:
+    """``extra_params`` with the subagent's YAML ``reasoning_budget`` written where the LLM entry's settings put it."""
+    spec = registry.get(key)
+    setting = (llm_entry.get("settings") or {}).get("reasoning_budget")
+    if not (spec and spec.reasoning_budget and isinstance(setting, dict)):
+        return extra_params
+    schema = {"reasoning_budget": {name: value for name, value in setting.items() if name != "requires"}}
+    return apply_service_settings(extra_params, schema, {"reasoning_budget": spec.reasoning_budget})
 
 
 _FRAGMENT_PATTERN = re.compile(r"\{\{(\w+)\}\}")
@@ -112,6 +124,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
+    llm_id = str(body.get("llm_id") or "")
+    llm_entry = load_service_entry_by_id("llm", llm_id) if llm_id else default_llm
 
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
@@ -185,7 +199,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         api_key=api_key,
         base_url=base_url,
         model_id=model_id,
-        extra_params=extra_params,
+        extra_params=_extra_params_for(extra_params, llm_entry, registry, MediaAnalyzerWorker.AGENT_NAME),
         system_prompt=_agent_prompt_content(prompt_catalog, "MediaAnalyzerAgent", "analysis_system_prompt"),
         reasoning=_reasoning_for(registry, MediaAnalyzerWorker.AGENT_NAME, "on"),
     )
@@ -202,7 +216,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         api_key=api_key,
         base_url=base_url,
         model_id=model_id,
-        extra_params=extra_params,
+        extra_params=_extra_params_for(extra_params, llm_entry, registry, ThinkerWorker.AGENT_NAME),
         system_prompt=_agent_prompt_content(prompt_catalog, "ThinkerAgent", "thinking_system_prompt"),
     )
 

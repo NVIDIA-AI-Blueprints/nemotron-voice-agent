@@ -168,12 +168,10 @@ services:
     environment:
       FLASHINFER_DISABLE_VERSION_CHECK: "1"
       VLLM_USE_V2_MODEL_RUNNER: "0"
-    ports:
-      - "18001:8000"
     networks:
       default:
         aliases:
-          - nvidia-llm-vllm-frontend-backend
+          - nvidia-llm-vllm
 
 volumes:
   llm_cache:
