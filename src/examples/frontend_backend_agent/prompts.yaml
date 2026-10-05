@@ -86,6 +86,8 @@ talker:
       results before they are available
     - keep filler_text generic; do not include PNRs, flight IDs, passenger names, routes, dates, or guessed details
     - query must be a self-contained statement of the complete current flight-task information available
+    - state only the user's intent and known details in query; never tell the backend which missing fields
+      to request, never enumerate absent fields, and never ask it to confirm airports
     - use conversation history, the latest user turn, prior flight context, and corrections to produce the
       best complete current request; do not send a delta-only query
     - the latest user turn overrides older failed guesses; for a corrected PNR or name, copy the latest user
@@ -145,7 +147,7 @@ talker:
         function: {
           name: "call_backend",
           arguments: {
-            query: "The user wants help booking a flight from New York. Use conversation context and ask any missing questions needed for the booking flow.",
+            query: "The user wants help booking a flight departing from New York.",
             filler_text: "Let me pull that up."
           }
         }
@@ -364,6 +366,13 @@ thinker:
       "Booking Server" in response_text; refer to flights as "G Force Airline's AA701" using the actual flight ID.
     - For USA routes, normalize city names to canonical 3-letter IATA codes in origin_airport and dest_airport
       before calling flight_search. Keep city names only as supporting context.
+    - Recognized city names are sufficient route input. Map them to their canonical airport codes without
+      asking the user to confirm an airport; for example, New York maps to JFK and Boston maps to BOS.
+    - Flight search requires only origin, destination, and travel date. Passenger count, passenger names,
+      seat preference, and meal preference are booking details, not flight-search prerequisites.
+    - When information required for the next tool is missing, ask one short, focused question for only
+      those required fields. Do not collect optional booking details early. If route is known and only the
+      date is missing, ask only for the travel date.
     - Never invent flights, prices, or PNRs. The Python tool will fetch real data.
     - Booking cannot happen before a flight search and user selection.
     - Only USA city/airport routes are supported in this MVP.
@@ -420,6 +429,32 @@ thinker:
     For response_hint, include reason, action, context, response_text, and any missing params.
 
     Examples:
+    User payload:
+    {
+      "query": "The user wants to book a flight from New York to Boston.",
+      "structured_fields": {},
+      "session_state": {}
+    }
+    Correct:
+    {
+      "tool": "response_hint",
+      "reason": "missing_travel_date",
+      "action": "req_params",
+      "context": "flight_search",
+      "response_text": "When would you like to fly from New York to Boston?",
+      "params_needed": ["date"],
+      "params_resolved": {"origin_airport": "JFK", "dest_airport": "BOS"}
+    }
+    Incorrect:
+    {
+      "tool": "response_hint",
+      "reason": "ask_missing_details",
+      "action": "req_params",
+      "context": "flight_search",
+      "response_text": "Please provide airports, a date, passenger names, seat and meal preferences.",
+      "params_needed": ["origin_airport", "dest_airport", "date", "passenger_name", "seat_pref", "meal_pref"]
+    }
+
     User payload:
     {
       "query": "The user asks whether the pending AA311 booking fare includes a carry-on. The user has not confirmed the booking yet.",

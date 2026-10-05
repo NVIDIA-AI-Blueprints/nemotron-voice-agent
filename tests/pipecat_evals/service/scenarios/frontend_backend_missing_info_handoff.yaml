@@ -20,3 +20,12 @@ turns:
       - event: response
         eval: "the reply asks for missing flight booking details such as origin, destination, and travel date"
         within_ms: 120000
+  - user: "I want to fly from New York to Boston."
+    expect:
+      - event: function_call
+        calls:
+          - name: call_backend
+        within_ms: 90000
+      - event: response
+        eval: "the reply asks only for the travel date and does not ask for airports, passenger details, seat preferences, or meal preferences"
+        within_ms: 120000
