@@ -812,7 +812,14 @@ def filter_session_config(data: dict) -> dict:
     selections from YAML (see :func:`hydrate_config_from_catalog`).
     Client-supplied ``tts_zero_shot_audio_prompt_file`` is always dropped;
     catalog hydration may re-add a trusted path afterward.
+
+    Raises:
+        ValueError: If a supplied service selection id is not a string.
     """
+    for id_field, *_ in _CATALOG_HYDRATION:
+        value = data.get(id_field)
+        if value not in ("", None) and not isinstance(value, str):
+            raise ValueError(f"{id_field} must be a string")
     filtered = {k: v for k, v in data.items() if k in SESSION_CONFIG_KEYS and v not in ("", None)}
     active_services = _effective_services()
     if active_services is not None:
