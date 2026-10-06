@@ -16,6 +16,7 @@ _FIELD_ORDER = ("schema", "speech", "display")
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 MAX_RESULT_DISPLAY_BYTES = 128_000
 MAX_RESULT_SPEECH_BYTES = 4_096
+DEFAULT_RESULT_SPEECH_BUDGET_BYTES = 512
 # Each decoded byte can require six ASCII bytes as a JSON ``\u00XX`` escape.
 MAX_RESULT_ENVELOPE_BYTES = (MAX_RESULT_DISPLAY_BYTES + MAX_RESULT_SPEECH_BYTES) * 6 + 1024
 
@@ -50,14 +51,14 @@ def build_result_envelope_prompt(
     user_goal: str,
     *,
     display_budget_bytes: int = MAX_RESULT_DISPLAY_BYTES,
+    speech_budget_bytes: int = DEFAULT_RESULT_SPEECH_BUDGET_BYTES,
     contracts: ModelContractCatalog | None = None,
 ) -> str:
     """Wrap one exact user goal with the versioned result-channel contract.
 
-    ``display_budget_bytes`` is the configured capacity of the selected
-    backend, not a VoiceClaw content heuristic.  The protocol-wide parser can
-    accept the larger global limit while a constrained backend is asked to
-    produce a complete result that fits its actual completion budget.
+    The channel budgets are the configured capacities of the selected backend,
+    not VoiceClaw content heuristics. Callers must enforce the same values when
+    parsing the returned envelope.
     """
     if not isinstance(user_goal, str) or not user_goal.strip() or "\x00" in user_goal:
         raise ResultEnvelopeProtocolError
@@ -65,6 +66,12 @@ def build_result_envelope_prompt(
         isinstance(display_budget_bytes, bool)
         or not isinstance(display_budget_bytes, int)
         or not 1 <= display_budget_bytes <= MAX_RESULT_DISPLAY_BYTES
+    ):
+        raise ResultEnvelopeProtocolError
+    if (
+        isinstance(speech_budget_bytes, bool)
+        or not isinstance(speech_budget_bytes, int)
+        or not 1 <= speech_budget_bytes <= MAX_RESULT_SPEECH_BYTES
     ):
         raise ResultEnvelopeProtocolError
     try:
@@ -76,7 +83,7 @@ def build_result_envelope_prompt(
         return (contracts or load_model_contract_catalog()).render_result_envelope(
             user_goal_json=goal_json,
             result_schema=RESULT_ENVELOPE_SCHEMA,
-            speech_budget_bytes=MAX_RESULT_SPEECH_BYTES,
+            speech_budget_bytes=speech_budget_bytes,
             display_budget_bytes=display_budget_bytes,
         )
     except ModelContractError as exc:
@@ -95,8 +102,9 @@ class ResultEnvelopeStreamParser:
 
     ``display`` is emitted incrementally as decoded Markdown. Those deltas are
     provisional until :meth:`finish` validates the complete object. ``speech``
-    contains factual presentation material; it is captured when its value
-    closes and returned only with the validated terminal envelope.
+    contains optional presentation material. A syntactically valid speech value
+    above the configured presentation budget is discarded without invalidating
+    a complete display result; the protocol-wide speech limit still fails closed.
 
     Duplicate, missing, reordered, or unknown members fail closed. The codec
     does not repair model output or apply backend-specific compatibility rules.
@@ -133,6 +141,7 @@ class ResultEnvelopeStreamParser:
         self._current_key: str | None = None
         self._string_chars: list[str] = []
         self._string_bytes = 0
+        self._speech_over_budget = False
         self._unicode_digits = ""
         self._pending_high_surrogate: int | None = None
         self._null_offset = 0
@@ -183,7 +192,7 @@ class ResultEnvelopeStreamParser:
         try:
             return ResponseOnlyResultEnvelope(
                 schema=self._required_string("schema"),
-                speech=self._optional_string("speech"),
+                speech=None if self._speech_over_budget else self._optional_string("speech"),
                 display=self._required_string("display"),
             )
         except (TypeError, UnicodeEncodeError, ValueError) as exc:
@@ -346,7 +355,9 @@ class ResultEnvelopeStreamParser:
         if self._current_key == "schema":
             maximum = len(RESULT_ENVELOPE_SCHEMA)
         elif self._current_key == "speech":
-            maximum = self._maximum_speech_bytes
+            maximum = MAX_RESULT_SPEECH_BYTES
+            if self._string_bytes > self._maximum_speech_bytes:
+                self._speech_over_budget = True
         elif self._current_key == "display":
             maximum = self._maximum_display_bytes
         else:
@@ -387,6 +398,7 @@ class ResultEnvelopeStreamParser:
 
 
 __all__ = [
+    "DEFAULT_RESULT_SPEECH_BUDGET_BYTES",
     "MAX_RESULT_DISPLAY_BYTES",
     "MAX_RESULT_ENVELOPE_BYTES",
     "MAX_RESULT_SPEECH_BYTES",

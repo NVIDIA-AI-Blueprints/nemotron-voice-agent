@@ -15,7 +15,11 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from voiceclaw.domain.models import BackendCapabilities, CapabilityEvidence, CapabilitySource
-from voiceclaw.domain.response_only import ResponseOnlyResultEventKind
+from voiceclaw.domain.response_only import (
+    ResponseOnlyContextContinuity,
+    ResponseOnlyResultEventKind,
+    ResponseOnlyTargetAvailability,
+)
 
 # Public committed goals are bounded independently from any adapter-specific
 # envelope used to carry them. Adapters must preserve every accepted byte and
@@ -144,6 +148,8 @@ class CommittedTurnBackend:
     capabilities: BackendCapabilities
     capability_source: CapabilitySource
     capability_source_id: str
+    context_continuity: ResponseOnlyContextContinuity = ResponseOnlyContextContinuity.UNQUALIFIED
+    target_availability: ResponseOnlyTargetAvailability = ResponseOnlyTargetAvailability.AVAILABLE
     capability_evidence: CapabilityEvidence = field(init=False)
 
     def __post_init__(self) -> None:
@@ -162,6 +168,16 @@ class CommittedTurnBackend:
         except (TypeError, ValueError) as error:
             raise ValueError("capability_source is invalid") from error
         object.__setattr__(self, "capability_source", source)
+        try:
+            continuity = ResponseOnlyContextContinuity(self.context_continuity)
+        except (TypeError, ValueError) as error:
+            raise ValueError("context_continuity is invalid") from error
+        object.__setattr__(self, "context_continuity", continuity)
+        try:
+            availability = ResponseOnlyTargetAvailability(self.target_availability)
+        except (TypeError, ValueError) as error:
+            raise ValueError("target_availability is invalid") from error
+        object.__setattr__(self, "target_availability", availability)
         object.__setattr__(
             self,
             "capability_evidence",
@@ -177,7 +193,7 @@ class EphemeralCommittedTurnPort(Protocol):
     """Admit one non-durable committed turn and return its terminal response."""
 
     async def inspect(self) -> CommittedTurnBackend:
-        """Verify server-side reachability and return bounded capabilities."""
+        """Verify the configured target binding and return bounded capabilities."""
         ...
 
     async def commit_turn(self, request: CommittedTurnRequest) -> CommittedTurnResult:

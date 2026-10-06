@@ -10,10 +10,7 @@ import argparse
 import hashlib
 import io
 import json
-import os
 import re
-import secrets
-import socket
 import stat
 import subprocess
 import sys
@@ -21,7 +18,6 @@ import tempfile
 import time
 import uuid
 import zipfile
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -35,7 +31,6 @@ _MAX_PACKAGE_BYTES = 32 * 1024 * 1024
 _EXPECTED_ENTRYPOINT = ["/usr/local/bin/voiceclaw-runtime"]
 _EXPECTED_COMMAND = ["serve"]
 _EXPECTED_HEALTHCHECK = ["CMD", "/usr/local/bin/voiceclaw-runtime", "healthcheck"]
-_RUNTIME_PROFILES = ("standalone", "nemoclaw-managed")
 _OCI_LABELS = {
     "org.opencontainers.image.title": "VoiceClaw",
     "org.opencontainers.image.licenses": "BSD-2-Clause",
@@ -59,6 +54,7 @@ server:
   port: 18790
   listener_security: loopback
   auth_mode: none
+  max_sessions: 1
 frontend_profiles:
   smoke:
     kind: openai_realtime
@@ -66,28 +62,26 @@ frontend_profiles:
     model: smoke/not-contacted
 default_frontend: smoke
 backend_profiles:
-  none:
-    kind: none
-    settings: {}
+  unavailable_agent:
+    kind: openshell_fabric
+    settings:
+      endpoint: http://127.0.0.1:9
+      authentication: anonymous
+      workspace: smoke-workspace
+      sandbox: smoke-sandbox
+      adapter_id: nvidia.fabric.openclaw
+      fabric_agent: main
+      rpc_timeout_seconds: 1
+      invoke_timeout_seconds: 1
+      check_timeout_seconds: 1
     interaction:
       profile: stateless
       tool_copy: {}
-default_backend: none
+default_backend: unavailable_agent
 state:
   kind: sqlite
   path: /var/lib/voiceclaw/state/state.db
 """
-_REALTIME_SMOKE_QUERY = "Create an artifact verification checklist and preserve this arbitrary request."
-_REALTIME_RESULT_DISPLAY = (
-    "## Verified artifact\n\nThe arbitrary delegated request completed through the normalized backend."
-)
-_REALTIME_RESULT_SPEECH = "The delegated result is ready in the display."
-_REALTIME_TURN_ID = "artifact-turn"
-_REALTIME_RESPONSE_ID = "artifact-response"
-_SCRIPT_DIRECTORY = Path(__file__).resolve().parent
-_FIXTURE_SCRIPT = _SCRIPT_DIRECTORY / "artifact-runtime-fixture.py"
-_REALTIME_VERIFIER_SCRIPT = _SCRIPT_DIRECTORY / "verify-realtime-delegation.py"
-_TRUSTED_HARNESS_SCRIPTS = frozenset({_FIXTURE_SCRIPT, _REALTIME_VERIFIER_SCRIPT})
 _CONTAINER_HARNESS_DIRECTORY = "/app/src/examples/voiceclaw/scripts"
 _HTTP_PROBE = """\
 import http.client
@@ -99,76 +93,6 @@ response = connection.getresponse()
 response.read()
 print(response.status)
 """
-_HTTP_READINESS_PROBE = """\
-import http.client
-import json
-import sys
-
-connection = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=2)
-connection.request("GET", sys.argv[2])
-response = connection.getresponse()
-response.read()
-print(json.dumps({
-    "reason": response.getheader("X-VoiceClaw-Reason"),
-    "status": response.status,
-}, separators=(",", ":"), sort_keys=True))
-"""
-_MANAGED_FILESYSTEM_PROBE = """\
-import errno
-import json
-import os
-import stat
-import sys
-
-def has_access_acl(path):
-    try:
-        return bool(os.getxattr(path, "system.posix_acl_access", follow_symlinks=False))
-    except OSError as error:
-        if error.errno in {errno.ENODATA, errno.ENOTSUP, getattr(errno, "ENOATTR", errno.ENODATA)}:
-            return False
-        raise
-
-def inspect(path):
-    metadata = os.lstat(path)
-    if stat.S_ISREG(metadata.st_mode):
-        kind = "file"
-    elif stat.S_ISDIR(metadata.st_mode):
-        kind = "directory"
-    elif stat.S_ISLNK(metadata.st_mode):
-        kind = "symlink"
-    else:
-        kind = "other"
-    return {
-        "access_acl": has_access_acl(path),
-        "kind": kind,
-        "uid": metadata.st_uid,
-        "gid": metadata.st_gid,
-        "mode": stat.S_IMODE(metadata.st_mode),
-        "size": metadata.st_size,
-    }
-
-print(json.dumps({
-    "process": {"uid": os.geteuid(), "gid": os.getegid()},
-    "marker": inspect(sys.argv[1]),
-    "root": inspect(sys.argv[2]),
-    "runtime": inspect(sys.argv[3]),
-    "credentials": inspect(sys.argv[4]),
-    "runtime_root": inspect(sys.argv[5]),
-    "home": inspect(sys.argv[6]),
-    "cache": inspect(sys.argv[7]),
-}, separators=(",", ":"), sort_keys=True))
-"""
-_EXPECTED_MANAGED_FILESYSTEM = {
-    "process": {"uid": 65_532, "gid": 65_532},
-    "marker": {"access_acl": False, "kind": "file", "uid": 0, "gid": 0, "mode": 0o444, "size": 0},
-    "root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-    "runtime": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-    "credentials": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-    "runtime_root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-    "home": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-    "cache": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-}
-_EXPECTED_PRE_PROJECTION_READINESS = {"status": 503, "reason": "starting"}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -178,22 +102,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expect-revision", required=True, help="required full lowercase Git revision")
     parser.add_argument("--expect-source", required=True, help="required OCI source URL")
     parser.add_argument("--expect-architecture", help="required Docker architecture, for example arm64")
-    parser.add_argument(
-        "--runtime-profile",
-        choices=_RUNTIME_PROFILES,
-        default="standalone",
-        help="image runtime contract to verify (default: %(default)s)",
-    )
     parser.add_argument("--repository-root", type=Path, help="include digests for the build inputs below this root")
     parser.add_argument("--wheel", type=Path, help="exact verified wheel whose package payload must match the image")
     parser.add_argument("--wheel-evidence", type=Path, help="evidence emitted by verify-wheel.py for --wheel")
     parser.add_argument("--smoke", action="store_true", help="start and probe the exact image without the optional UI")
     parser.add_argument("--smoke-ui", action="store_true", help="also start and probe the opt-in packaged UI")
-    parser.add_argument(
-        "--smoke-realtime",
-        action="store_true",
-        help="exercise public Realtime delegation against isolated private fixtures",
-    )
     parser.add_argument("--timeout", type=float, default=30.0, help="startup timeout in seconds (default: %(default)s)")
     return parser
 
@@ -215,76 +128,6 @@ def _docker(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[
         detail = error.stderr.strip().splitlines()
         suffix = f": {detail[-1]}" if detail else ""
         raise RuntimeError(f"docker command failed{suffix}") from error
-
-
-def _trusted_command(script: Path, *arguments: str) -> list[str]:
-    if script not in _TRUSTED_HARNESS_SCRIPTS or script.is_symlink() or not script.is_file():
-        raise RuntimeError("trusted artifact harness script is missing or invalid")
-    return [sys.executable, str(script), *arguments]
-
-
-def _trusted_environment() -> dict[str, str]:
-    return {
-        "PATH": os.defpath,
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONUTF8": "1",
-    }
-
-
-def _start_trusted_process(script: Path, *arguments: str) -> subprocess.Popen[str]:
-    try:
-        return subprocess.Popen(
-            _trusted_command(script, *arguments),
-            cwd=_SCRIPT_DIRECTORY.parent,
-            env=_trusted_environment(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except OSError as error:
-        raise RuntimeError("trusted artifact fixture could not start") from error
-
-
-def _run_trusted_process(
-    script: Path,
-    *arguments: str,
-    timeout: float,
-) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            _trusted_command(script, *arguments),
-            cwd=_SCRIPT_DIRECTORY.parent,
-            env=_trusted_environment(),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError("trusted Realtime verifier exceeded its bounded timeout") from error
-    except OSError as error:
-        raise RuntimeError("trusted Realtime verifier could not start") from error
-
-
-def _stop_trusted_process(process: subprocess.Popen[str]) -> tuple[str, str]:
-    if process.poll() is None:
-        process.terminate()
-    try:
-        stdout, stderr = process.communicate(timeout=10)
-    except subprocess.TimeoutExpired as error:
-        process.kill()
-        process.communicate(timeout=5)
-        raise RuntimeError("trusted artifact fixture did not stop within its bounded timeout") from error
-    if process.returncode != 0:
-        raise RuntimeError("trusted artifact fixture did not stop cleanly")
-    return stdout, stderr
-
-
-def _reject_private_values(payloads: tuple[str, ...], private_values: tuple[str, ...]) -> None:
-    if any(private_value in payload for private_value in private_values for payload in payloads):
-        raise RuntimeError("artifact smoke exposed a private backend credential")
 
 
 def _bounded_file_bytes(path: Path, maximum: int, label: str) -> bytes:
@@ -461,7 +304,6 @@ def _verify_contract(
     revision: str,
     source: str,
     architecture: str | None = None,
-    runtime_profile: str = "standalone",
 ) -> dict[str, Any]:
     image_id = inspect.get("Id")
     if not isinstance(image_id, str) or not _IMAGE_ID.fullmatch(image_id):
@@ -485,30 +327,22 @@ def _verify_contract(
         raise ValueError("VoiceClaw image architecture does not match the requested artifact platform")
 
     config = _mapping(inspect.get("Config"), "Config")
-    if runtime_profile not in _RUNTIME_PROFILES:
-        raise ValueError("unknown VoiceClaw image runtime profile")
     image_user = config.get("User") or ""
-    if runtime_profile == "nemoclaw-managed" and image_user != "65532:65532":
-        raise ValueError("NemoClaw-managed image must run as UID/GID 65532")
-    if runtime_profile == "standalone" and image_user not in {"", "0", "0:0", "root"}:
-        raise ValueError("standalone image must start its split-identity supervisor as root")
+    if image_user not in {"", "0", "0:0", "root"}:
+        raise ValueError("runtime image must start its split-identity supervisor as root")
     if config.get("Entrypoint") != _EXPECTED_ENTRYPOINT or config.get("Cmd") != _EXPECTED_COMMAND:
-        raise ValueError("image entrypoint or default command does not match the managed contract")
+        raise ValueError("image entrypoint or default command does not match the runtime contract")
     exposed_ports = _mapping(config.get("ExposedPorts"), "exposed ports")
     volumes = _mapping(config.get("Volumes"), "volumes")
-    if "18790/tcp" not in exposed_ports:
-        raise ValueError("image does not expose 18790/tcp")
-    if "/var/lib/voiceclaw" not in volumes:
-        raise ValueError("image does not declare the managed VoiceClaw volume")
-    if runtime_profile == "nemoclaw-managed" and set(exposed_ports) != {"18790/tcp"}:
-        raise ValueError("NemoClaw-managed image must expose only 18790/tcp")
-    if runtime_profile == "nemoclaw-managed" and set(volumes) != {"/var/lib/voiceclaw"}:
-        raise ValueError("NemoClaw-managed image must declare only the managed VoiceClaw volume")
+    if set(exposed_ports) != {"7860/tcp"}:
+        raise ValueError("runtime image must expose only 7860/tcp")
+    if set(volumes) != {"/var/lib/voiceclaw"}:
+        raise ValueError("runtime image must declare only the VoiceClaw state volume")
     if config.get("StopSignal") != "SIGTERM":
-        raise ValueError("image stop signal does not match the managed contract")
+        raise ValueError("image stop signal does not match the runtime contract")
     healthcheck = _mapping(config.get("Healthcheck"), "healthcheck")
     if healthcheck.get("Test") != _EXPECTED_HEALTHCHECK:
-        raise ValueError("image healthcheck does not use the managed runtime entrypoint")
+        raise ValueError("image healthcheck does not use the runtime entrypoint")
 
     labels = _mapping(config.get("Labels"), "labels")
     expected_labels = {
@@ -532,7 +366,6 @@ def _verify_contract(
         "id": image_id,
         "os": inspect["Os"],
         "architecture": inspect["Architecture"],
-        "runtime_profile": runtime_profile,
         "user": image_user,
         "labels": {name: labels[name] for name in sorted(expected_labels)},
     }
@@ -595,61 +428,6 @@ def _assert_test_harness_absent(container: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError("VoiceClaw image contains source-only artifact harness scripts")
-
-
-def _validate_managed_filesystem_contract(payload: object) -> dict[str, object]:
-    if not isinstance(payload, dict) or set(payload) != set(_EXPECTED_MANAGED_FILESYSTEM):
-        raise RuntimeError("managed image filesystem evidence is malformed")
-    for name, expected in _EXPECTED_MANAGED_FILESYSTEM.items():
-        actual = payload.get(name)
-        if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in expected.items()):
-            raise RuntimeError(f"managed image filesystem contract failed for {name}")
-    return payload
-
-
-def _managed_filesystem_contract(container: str) -> dict[str, object]:
-    result = _docker(
-        "exec",
-        container,
-        "/app/src/examples/voiceclaw/.venv/bin/python",
-        "-c",
-        _MANAGED_FILESYSTEM_PROBE,
-        "/etc/voiceclaw-nemoclaw-managed",
-        "/var/lib/voiceclaw",
-        "/var/lib/voiceclaw/runtime",
-        "/var/lib/voiceclaw/credentials",
-        "/run/voiceclaw-managed",
-        "/run/voiceclaw-managed/home",
-        "/run/voiceclaw-managed/cache",
-    )
-    if len(result.stdout.encode("utf-8")) > 4096:
-        raise RuntimeError("managed image filesystem evidence exceeds its bound")
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError("managed image filesystem evidence is malformed") from error
-    return _validate_managed_filesystem_contract(payload)
-
-
-def _managed_pre_projection_readiness(container: str) -> dict[str, object]:
-    result = _docker(
-        "exec",
-        container,
-        "/app/src/examples/voiceclaw/.venv/bin/python",
-        "-c",
-        _HTTP_READINESS_PROBE,
-        "18790",
-        "/readyz",
-    )
-    if len(result.stdout.encode("utf-8")) > 4096:
-        raise RuntimeError("managed image readiness evidence exceeds its bound")
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError("managed image readiness evidence is malformed") from error
-    if payload != _EXPECTED_PRE_PROJECTION_READINESS:
-        raise RuntimeError("managed image pre-projection readiness contract failed")
-    return payload
 
 
 def _stop_cleanly(container: str) -> None:
@@ -732,314 +510,6 @@ def _smoke(image: str, *, version: str, ui: bool, timeout: float) -> dict[str, i
             _docker("rm", "--force", "--volumes", name, check=False)
 
 
-def _managed_smoke(image: str, *, version: str, timeout: float) -> dict[str, object]:
-    if timeout <= 0 or timeout > 300:
-        raise ValueError("smoke timeout must be greater than zero and no more than 300 seconds")
-    name = f"voiceclaw-managed-artifact-{uuid.uuid4().hex}"
-    try:
-        _docker(
-            "run",
-            "--detach",
-            "--name",
-            name,
-            "--cap-drop",
-            "ALL",
-            "--memory",
-            "1g",
-            "--security-opt",
-            "no-new-privileges:true",
-            image,
-        )
-        _wait_for_status(name, "/livez", 200, timeout)
-        _wait_for_status(name, "/readyz", 503, timeout)
-        pre_projection_readyz = _managed_pre_projection_readiness(name)
-        installed_version = _package_version(name)
-        if installed_version != version:
-            raise RuntimeError("installed package version does not match the verified image label")
-        _assert_test_harness_absent(name)
-        managed_filesystem = _managed_filesystem_contract(name)
-        _stop_cleanly(name)
-        return {
-            "livez": 200,
-            "pre_projection_readyz": pre_projection_readyz,
-            "package_version": installed_version,
-            "source_harness_absent": True,
-            "memory_limit_bytes": 1_073_741_824,
-            "managed_filesystem": managed_filesystem,
-        }
-    finally:
-        _docker("rm", "--force", "--volumes", name, check=False)
-
-
-def _available_ports(count: int) -> tuple[int, ...]:
-    sockets: list[socket.socket] = []
-    try:
-        for _ in range(count):
-            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            listener.bind(("127.0.0.1", 0))
-            sockets.append(listener)
-        return tuple(int(listener.getsockname()[1]) for listener in sockets)
-    finally:
-        for listener in sockets:
-            listener.close()
-
-
-def _realtime_config(*, public_port: int, upstream_port: int, backend_port: int) -> str:
-    return f"""\
-schema_version: voiceclaw.config.v3
-server:
-  host: 127.0.0.1
-  port: {public_port}
-  listener_security: loopback
-  auth_mode: none
-frontend_profiles:
-  artifact:
-    kind: openai_realtime
-    endpoint: ws://127.0.0.1:{upstream_port}/v1/realtime
-    model: fixture/realtime
-    public_model: nvidia/voiceclaw
-default_frontend: artifact
-model_contracts:
-  profile: default
-interaction_profiles: {{}}
-backend_profiles:
-  artifact:
-    kind: nemoclaw
-    interaction:
-      profile: stateless
-      tool_copy: {{}}
-    credential:
-      file: /run/voiceclaw/operator/backend-bearer
-    settings:
-      mode: response_only
-      endpoint: http://127.0.0.1:{backend_port}
-      endpoint_policy: loopback_only
-      exchange_deadline_seconds: 30
-      result_display_budget_bytes: 8192
-default_backend: artifact
-interaction:
-  max_pending_speech: 8
-  context_character_budget: 24000
-  request_summary_character_limit: 512
-  retained_request_limit: 8
-  turn_routing_mode: model
-state:
-  kind: sqlite
-  path: /var/lib/voiceclaw/state/state.db
-"""
-
-
-def _wait_for_file(path: Path, process: subprocess.Popen[str], timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.is_file():
-            return
-        if process.poll() is not None:
-            raise RuntimeError("trusted artifact fixture exited before readiness")
-        time.sleep(0.1)
-    raise RuntimeError("artifact fixture did not become ready")
-
-
-def _wait_for_fixture_evidence(
-    path: Path,
-    process: subprocess.Popen[str],
-    expected: dict[str, object],
-    timeout: float,
-) -> tuple[str, dict[str, object]]:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError("trusted artifact fixture exited before terminal evidence")
-        try:
-            raw_evidence = path.read_text(encoding="utf-8")
-            evidence = json.loads(raw_evidence)
-        except (FileNotFoundError, json.JSONDecodeError):
-            time.sleep(0.1)
-            continue
-        if isinstance(evidence, dict) and all(evidence.get(name) == value for name, value in expected.items()):
-            return raw_evidence, evidence
-        time.sleep(0.1)
-    raise RuntimeError("artifact fixture did not publish complete terminal evidence")
-
-
-def _realtime_smoke(image: str, *, timeout: float) -> dict[str, object]:
-    if timeout <= 0 or timeout > 300:
-        raise ValueError("smoke timeout must be greater than zero and no more than 300 seconds")
-    public_port, upstream_port, backend_port = _available_ports(3)
-    identity = uuid.uuid4().hex
-    runtime_name = f"voiceclaw-realtime-{identity}"
-    bearer = secrets.token_urlsafe(32)
-    grant = secrets.token_urlsafe(32)
-    with tempfile.TemporaryDirectory(prefix="voiceclaw-realtime-image-") as directory:
-        root = Path(directory)
-        operator = root / "operator"
-        evidence_dir = root / "evidence"
-        operator.mkdir(mode=0o750)
-        evidence_dir.mkdir(mode=0o750)
-        bearer_file = operator / "backend-bearer"
-        bearer_file.write_text(bearer, encoding="ascii")
-        bearer_file.chmod(0o640)
-        grant_file = operator / "session-grant"
-        grant_file.write_text(grant, encoding="ascii")
-        grant_file.chmod(0o640)
-        config = root / "voiceclaw.yaml"
-        config.write_text(
-            _realtime_config(
-                public_port=public_port,
-                upstream_port=upstream_port,
-                backend_port=backend_port,
-            ),
-            encoding="utf-8",
-        )
-        ready_file = evidence_dir / "ready"
-        fixture_evidence_file = evidence_dir / "fixture.json"
-        fixture_process: subprocess.Popen[str] | None = None
-        runtime_started = False
-        fixture_stopped = False
-        runtime_stopped = False
-        try:
-            fixture_process = _start_trusted_process(
-                _FIXTURE_SCRIPT,
-                "--upstream-port",
-                str(upstream_port),
-                "--backend-port",
-                str(backend_port),
-                "--bearer-file",
-                str(bearer_file),
-                "--grant-file",
-                str(grant_file),
-                "--expected-query",
-                _REALTIME_SMOKE_QUERY,
-                "--evidence-file",
-                str(fixture_evidence_file),
-                "--ready-file",
-                str(ready_file),
-            )
-            _wait_for_file(ready_file, fixture_process, timeout)
-            _docker(
-                "run",
-                "--detach",
-                "--name",
-                runtime_name,
-                "--network",
-                "host",
-                "--cap-drop",
-                "ALL",
-                "--cap-add",
-                "CHOWN",
-                "--cap-add",
-                "DAC_OVERRIDE",
-                "--cap-add",
-                "KILL",
-                "--cap-add",
-                "SETGID",
-                "--cap-add",
-                "SETUID",
-                "--group-add",
-                str(os.getgid()),
-                "--security-opt",
-                "no-new-privileges:true",
-                "--mount",
-                f"type=bind,src={config.resolve()},dst=/run/voiceclaw/config.yaml,readonly",
-                "--mount",
-                f"type=bind,src={operator.resolve()},dst=/run/voiceclaw/operator,readonly",
-                "--mount",
-                "type=volume,dst=/var/lib/voiceclaw",
-                image,
-                "serve",
-                "--config",
-                "/run/voiceclaw/config.yaml",
-            )
-            runtime_started = True
-            _wait_for_status(runtime_name, "/livez", 200, timeout, port=public_port)
-            _wait_for_status(runtime_name, "/health", 200, timeout, port=public_port)
-            _assert_test_harness_absent(runtime_name)
-            pre_session_readyz = _probe(runtime_name, "/readyz", port=public_port)
-            if pre_session_readyz != 503:
-                raise RuntimeError("VoiceClaw must remain not-ready before a Realtime session attaches")
-            client = _run_trusted_process(
-                _REALTIME_VERIFIER_SCRIPT,
-                "--url",
-                f"ws://127.0.0.1:{public_port}/v1/realtime?model=nvidia%2Fvoiceclaw",
-                "--allow-loopback-ws",
-                "--query",
-                _REALTIME_SMOKE_QUERY,
-                "--forbid-value-file",
-                str(bearer_file),
-                "--forbid-value-file",
-                str(grant_file),
-                "--timeout",
-                str(min(timeout, 45.0)),
-                timeout=min(timeout, 45.0) + 5.0,
-            )
-            _reject_private_values((client.stdout, client.stderr), (bearer, grant))
-            if client.returncode != 0:
-                raise RuntimeError("trusted Realtime artifact verifier failed")
-            try:
-                client_evidence = json.loads(client.stdout)
-            except json.JSONDecodeError as error:
-                raise RuntimeError("Realtime artifact verifier returned malformed evidence") from error
-            if not isinstance(client_evidence, dict):
-                raise RuntimeError("Realtime artifact verifier returned non-object evidence")
-            expected_client = {
-                "status": "succeeded",
-                "query": _REALTIME_SMOKE_QUERY,
-                "turn_id": _REALTIME_TURN_ID,
-                "backend_response_id": _REALTIME_RESPONSE_ID,
-                "result": _REALTIME_RESULT_DISPLAY,
-                "result_speech_transcript": _REALTIME_RESULT_SPEECH,
-                "speech_source": "backend_authored",
-                "playback_receipts_acknowledged": 2,
-            }
-            for name, expected in expected_client.items():
-                if client_evidence.get(name) != expected:
-                    raise RuntimeError(f"Realtime artifact evidence did not satisfy {name}")
-            delta_count = client_evidence.get("result_display_delta_count")
-            if not isinstance(delta_count, int) or isinstance(delta_count, bool) or delta_count < 2:
-                raise RuntimeError("Realtime artifact evidence did not preserve streamed display deltas")
-            expected_fixture = {
-                "backend_health_authenticated": True,
-                "backend_sessions_admitted": 1,
-                "backend_turns_received": 1,
-                "backend_sessions_deleted": 1,
-                "arbitrary_query_observed": True,
-                "upstream_connections": 1,
-                "model_selected_delegate": True,
-                "speech_purposes": ["delegation_ack", "result_delivery"],
-            }
-            raw_fixture_evidence, fixture_evidence = _wait_for_fixture_evidence(
-                fixture_evidence_file,
-                fixture_process,
-                expected_fixture,
-                timeout,
-            )
-            _reject_private_values((raw_fixture_evidence,), (bearer, grant))
-            runtime_logs = _docker("logs", runtime_name)
-            _reject_private_values((runtime_logs.stdout, runtime_logs.stderr), (bearer, grant))
-            _stop_cleanly(runtime_name)
-            runtime_stopped = True
-            fixture_stdout, fixture_stderr = _stop_trusted_process(fixture_process)
-            fixture_stopped = True
-            _reject_private_values((fixture_stdout, fixture_stderr), (bearer, grant))
-            return {
-                "query": _REALTIME_SMOKE_QUERY,
-                "public_protocol": "openai_realtime_websocket",
-                "backend_contract": "response_only_ndjson",
-                "harness_execution": "trusted_host_python",
-                "source_harness_absent": True,
-                "pre_session_readyz": pre_session_readyz,
-                "client": client_evidence,
-                "fixture": fixture_evidence,
-            }
-        finally:
-            if runtime_started and not runtime_stopped:
-                _docker("stop", "--timeout", "10", runtime_name, check=False)
-            if fixture_process is not None and not fixture_stopped:
-                with suppress(RuntimeError):
-                    _stop_trusted_process(fixture_process)
-            _docker("rm", "--force", "--volumes", runtime_name, check=False)
-
-
 def _input_digests(root: Path | None) -> dict[str, str]:
     if root is None:
         return {}
@@ -1092,16 +562,9 @@ def _source_tree(root: Path | None, revision: str) -> str | None:
 def _assert_harness_origin(root: Path | None) -> None:
     if root is None:
         return
-    expected_directory = root.resolve() / "src/examples/voiceclaw/scripts"
-    expected_paths = (
-        expected_directory / "verify-image.py",
-        expected_directory / "artifact-runtime-fixture.py",
-        expected_directory / "verify-realtime-delegation.py",
-    )
-    actual_paths = (Path(__file__).resolve(), _FIXTURE_SCRIPT, _REALTIME_VERIFIER_SCRIPT)
-    for actual, expected in zip(actual_paths, expected_paths, strict=True):
-        if expected.is_symlink() or not expected.is_file() or actual != expected:
-            raise ValueError("artifact harness does not originate from the authenticated repository")
+    expected = root.resolve() / "src/examples/voiceclaw/scripts/verify-image.py"
+    if expected.is_symlink() or not expected.is_file() or Path(__file__).resolve() != expected:
+        raise ValueError("artifact harness does not originate from the authenticated repository")
 
 
 def main() -> int:
@@ -1124,7 +587,6 @@ def main() -> int:
             revision=arguments.expect_revision,
             source=arguments.expect_source,
             architecture=arguments.expect_architecture,
-            runtime_profile=arguments.runtime_profile,
         )
         immutable_image = image["id"]
         if not isinstance(immutable_image, str):  # pragma: no cover - established by _verify_contract
@@ -1136,32 +598,18 @@ def main() -> int:
                 raise ValueError("image VoiceClaw package payload does not match the verified wheel")
             image_package = {"manifest_sha256": manifest_sha256, "member_count": member_count}
         smoke: dict[str, object] = {}
-        if arguments.runtime_profile == "nemoclaw-managed" and (arguments.smoke_ui or arguments.smoke_realtime):
-            raise ValueError("managed artifact verification does not accept developer UI or fixture overrides")
         if arguments.smoke or arguments.smoke_ui:
-            if arguments.runtime_profile == "nemoclaw-managed":
-                smoke["headless"] = _managed_smoke(
-                    immutable_image,
-                    version=arguments.expect_version,
-                    timeout=arguments.timeout,
-                )
-            else:
-                smoke["headless"] = _smoke(
-                    immutable_image,
-                    version=arguments.expect_version,
-                    ui=False,
-                    timeout=arguments.timeout,
-                )
+            smoke["headless"] = _smoke(
+                immutable_image,
+                version=arguments.expect_version,
+                ui=False,
+                timeout=arguments.timeout,
+            )
         if arguments.smoke_ui:
             smoke["ui"] = _smoke(
                 immutable_image,
                 version=arguments.expect_version,
                 ui=True,
-                timeout=arguments.timeout,
-            )
-        if arguments.smoke_realtime:
-            smoke["realtime_delegation"] = _realtime_smoke(
-                immutable_image,
                 timeout=arguments.timeout,
             )
         evidence = {

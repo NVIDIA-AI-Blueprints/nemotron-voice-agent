@@ -41,14 +41,14 @@ from voiceclaw.frontend_runtime import (
 from voiceclaw.model_contracts import ModelContractError, load_model_contract_catalog
 from voiceclaw.server import _tls_listener_files, _with_listener_host
 
-_DEFAULT_CONFIG = "/var/lib/voiceclaw/config/voiceclaw.yaml"
+_DEFAULT_CONFIG = "/etc/voiceclaw/voiceclaw.yaml"
 _DEFAULT_NVA_SERVER = "/app/src/realtime_server.py"
 _DEFAULT_NVA_PYTHON = "/app/.venv/bin/python"
 _DEFAULT_FRONTEND_RUNTIME_DIR = "/run/voiceclaw/frontend"
 _DEFAULT_HEALTHCHECK_TARGET = "/run/voiceclaw/healthcheck.json"
 _DEFAULT_CONFIG_SNAPSHOT = "/run/voiceclaw/voiceclaw.snapshot.yaml"
 _DEFAULT_OPERATOR_FILES_DIR = "/run/voiceclaw/operator"
-_DEFAULT_MANAGED_CREDENTIALS_DIR = "/var/lib/voiceclaw/credentials"
+_DEFAULT_CREDENTIALS_DIR = "/var/lib/voiceclaw/credentials"
 _CONTAINER_RUNTIME_MARKER = "/etc/voiceclaw-container-runtime"
 _INTERNAL_REALTIME_PORT = 7861
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
@@ -270,8 +270,8 @@ def _read_healthcheck_target(source: Path) -> tuple[str, str, int]:
     return scheme, host, port
 
 
-def _run_healthcheck(source: Path, *, timeout: float = 2.5) -> None:
-    """Probe the effective facade listener without proxies or credentials."""
+def _run_healthcheck(source: Path, *, timeout: float = 225.0) -> None:
+    """Probe the selected agent binding used as container readiness."""
     scheme, host, port = _read_healthcheck_target(source)
     connection: http.client.HTTPConnection
     if scheme == "https":
@@ -282,11 +282,11 @@ def _run_healthcheck(source: Path, *, timeout: float = 2.5) -> None:
     else:
         connection = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
-        connection.request("GET", "/livez", headers={"Connection": "close"})
+        connection.request("GET", "/readyz", headers={"Connection": "close"})
         response = connection.getresponse()
         response.read()
         if response.status != 200:
-            raise RuntimeError(f"facade liveness endpoint returned HTTP {response.status}")
+            raise RuntimeError(f"facade readiness endpoint returned HTTP {response.status}")
     finally:
         connection.close()
 
@@ -348,8 +348,6 @@ def _nva_environment(environ: Mapping[str, str], config: VoiceClawConfig) -> dic
         *(profile.credential_env for profile in config.backend_profiles.values()),
         "VOICECLAW_REALTIME_API_KEY",
         "REALTIME_UPSTREAM_API_KEY",
-        "NEMOCLAW_VOICE_GATEWAY_BEARER",
-        "NEMOCLAW_VOICE_GATEWAY_BEARER_FILE",
         "VOICECLAW_TLS_CERTFILE",
         "VOICECLAW_TLS_KEYFILE",
         *_frontend_credential_environment_names(config),
@@ -426,7 +424,7 @@ def _identity(name: str, *, extra_groups: tuple[int, ...] = ()) -> dict[str, obj
     return {"user": account.pw_uid, "group": account.pw_gid, "extra_groups": extra_groups}
 
 
-def _prepare_managed_volume_layout(
+def _prepare_volume_layout(
     root: Path,
     facade_identity: Mapping[str, object],
     *,
@@ -440,11 +438,11 @@ def _prepare_managed_volume_layout(
             path.mkdir(mode=mode, parents=False, exist_ok=True)
             metadata = os.lstat(path)
             if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-                raise ConfigurationError(f"managed volume path must be a directory: {path}")
+                raise ConfigurationError(f"container volume path must be a directory: {path}")
             current_mode = stat.S_IMODE(metadata.st_mode)
             if metadata.st_uid == uid and metadata.st_gid == gid and current_mode == mode:
                 return
-            # With the managed container's narrow capability set, UID 0 has
+            # With the container's narrow capability set, UID 0 has
             # CAP_CHOWN but intentionally lacks CAP_FOWNER. Reclaim ownership
             # before changing mode, then assign the final child identity.
             if metadata.st_uid != root_uid or metadata.st_gid != root_gid:
@@ -454,7 +452,7 @@ def _prepare_managed_volume_layout(
             if uid != root_uid or gid != root_gid:
                 os.chown(path, uid, gid)
         except OSError as error:
-            raise ConfigurationError(f"managed volume path could not be secured: {path}") from error
+            raise ConfigurationError(f"container volume path could not be secured: {path}") from error
 
     prepare(root, uid=root_uid, gid=root_gid, mode=0o755)
     prepare(root / "config", uid=root_uid, gid=root_gid, mode=0o700)
@@ -679,9 +677,9 @@ def _assert_not_mutable_by_identity(
         raise ConfigurationError(f"{label} is mutable by the {identity_label}")
 
 
-def _assert_managed_credential_ancestry(path: Path) -> None:
-    """Require root custody for credentials projected into the managed volume."""
-    protected_root = Path(_DEFAULT_MANAGED_CREDENTIALS_DIR)
+def _assert_credential_ancestry(path: Path) -> None:
+    """Require root custody for credentials projected into the runtime volume."""
+    protected_root = Path(_DEFAULT_CREDENTIALS_DIR)
     absolute = Path(os.path.abspath(path))
     if not absolute.is_relative_to(protected_root):
         return
@@ -691,7 +689,7 @@ def _assert_managed_credential_ancestry(path: Path) -> None:
         try:
             metadata = os.lstat(directory)
         except OSError as error:
-            raise ConfigurationError("managed credential ancestry could not be inspected") from error
+            raise ConfigurationError("container credential ancestry could not be inspected") from error
         mode = stat.S_IMODE(metadata.st_mode)
         if (
             not stat.S_ISDIR(metadata.st_mode)
@@ -699,7 +697,7 @@ def _assert_managed_credential_ancestry(path: Path) -> None:
             or metadata.st_uid != 0
             or mode & (stat.S_IWGRP | stat.S_IWOTH)
         ):
-            raise ConfigurationError("managed credential directories must be root-owned and non-writable")
+            raise ConfigurationError("container credential directories must be root-owned and non-writable")
         if directory == protected_root:
             break
 
@@ -714,24 +712,24 @@ def _assert_owner_only_secret(path: str, label: str) -> None:
         raise ConfigurationError(f"{label} must be a regular file")
     if stat.S_IMODE(metadata.st_mode) & (stat.S_IRWXG | stat.S_IRWXO):
         raise ConfigurationError(f"{label} must have owner-only permissions")
-    managed_path = Path(os.path.abspath(path))
-    if managed_path.is_relative_to(Path(_DEFAULT_MANAGED_CREDENTIALS_DIR)):
+    protected_path = Path(os.path.abspath(path))
+    if protected_path.is_relative_to(Path(_DEFAULT_CREDENTIALS_DIR)):
         if metadata.st_uid != 0:
-            raise ConfigurationError(f"{label} in the managed credential directory must be root-owned")
-        _assert_managed_credential_ancestry(managed_path)
+            raise ConfigurationError(f"{label} in the container credential directory must be root-owned")
+        _assert_credential_ancestry(protected_path)
 
 
-def _assert_managed_facade_secret(
+def _assert_facade_secret(
     path: str,
     facade_identity: Mapping[str, object],
     label: str,
 ) -> None:
-    """Require managed facade secrets to be root-owned and group-readable."""
-    managed_path = Path(os.path.abspath(path))
-    if not managed_path.is_relative_to(Path(_DEFAULT_MANAGED_CREDENTIALS_DIR)):
+    """Require runtime-volume facade secrets to be root-owned and group-readable."""
+    protected_path = Path(os.path.abspath(path))
+    if not protected_path.is_relative_to(Path(_DEFAULT_CREDENTIALS_DIR)):
         return
     try:
-        metadata = os.lstat(managed_path)
+        metadata = os.lstat(protected_path)
     except OSError as error:
         raise ConfigurationError(f"{label} could not be inspected") from error
     mode = stat.S_IMODE(metadata.st_mode)
@@ -744,9 +742,9 @@ def _assert_managed_facade_secret(
         or mode & (stat.S_IWGRP | stat.S_IXGRP | stat.S_IRWXO)
     ):
         raise ConfigurationError(
-            f"{label} in the managed credential directory must be root-owned and facade-group-readable"
+            f"{label} in the container credential directory must be root-owned and facade-group-readable"
         )
-    _assert_managed_credential_ancestry(managed_path)
+    _assert_credential_ancestry(protected_path)
 
 
 def _configured_frontend_secret_files(config: VoiceClawConfig) -> tuple[set[str], set[str]]:
@@ -1105,7 +1103,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         source_config_path = arguments.config or Path(source_environment.get("VOICECLAW_CONFIG", _DEFAULT_CONFIG))
         inherited_groups = tuple(group for group in os.getgroups() if group != 0)
         facade_identity = _identity("voiceclaw", extra_groups=inherited_groups)
-        _prepare_managed_volume_layout(Path("/var/lib/voiceclaw"), facade_identity)
+        _prepare_volume_layout(Path("/var/lib/voiceclaw"), facade_identity)
         config_path = _snapshot_configuration(
             source_config_path,
             Path(_DEFAULT_CONFIG_SNAPSHOT),
@@ -1164,7 +1162,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             identity_label="voiceclaw facade identity",
         )
         for secret_file in sorted(facade_secret_files):
-            _assert_managed_facade_secret(secret_file, facade_identity, "facade credential file")
+            _assert_facade_secret(secret_file, facade_identity, "facade credential file")
             _assert_not_mutable_by_identity(
                 secret_file,
                 facade_identity,

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
-from voiceclaw.adapters.nemoclaw.factory import build_nemoclaw_backend
+from voiceclaw.adapters.openshell_fabric.factory import build_openshell_fabric_backend
 from voiceclaw.backends import (
     BackendComposition,
     BackendPluginError,
@@ -41,8 +41,7 @@ _BUILTIN_BACKEND_FACTORIES: Mapping[str, BackendFactory] = MappingProxyType(
     {
         "none": _disabled_backend,
         "disabled": _disabled_backend,
-        "nemoclaw": build_nemoclaw_backend,
-        "nemoclaw_committed_turn": build_nemoclaw_backend,
+        "openshell_fabric": build_openshell_fabric_backend,
     }
 )
 

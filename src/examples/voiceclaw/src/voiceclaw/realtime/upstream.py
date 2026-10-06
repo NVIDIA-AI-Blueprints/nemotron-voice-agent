@@ -74,8 +74,15 @@ class WebSocketRealtimeUpstream:
 
     async def receive_text(self) -> str:
         """Receive one text event and reject binary payloads."""
+        try:
+            from websockets.exceptions import ConnectionClosedOK
+        except ImportError as error:  # pragma: no cover - entered only without the server extra
+            raise RealtimeUpstreamError("install nemotron-voiceclaw[server]") from error
         socket = self._require_socket()
-        value = await socket.recv()
+        try:
+            value = await socket.recv()
+        except ConnectionClosedOK as error:
+            raise EOFError from error
         if not isinstance(value, str):
             raise RealtimeUpstreamError("realtime upstream sent a binary event")
         return value

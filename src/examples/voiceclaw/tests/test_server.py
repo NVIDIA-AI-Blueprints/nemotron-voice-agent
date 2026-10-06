@@ -40,11 +40,19 @@ TEST_BEARER = "voiceclaw-test-deployment-bearer-0001"
 
 @pytest.fixture
 def base_env(tmp_path: Path) -> dict[str, str]:
-    credential_file = tmp_path / "nemoclaw-deployment-bearer"
+    credential_file = tmp_path / "openshell-client-secret"
     credential_file.write_text(f"{TEST_BEARER}\n", encoding="ascii")
     credential_file.chmod(0o600)
     return {
-        "NEMOCLAW_VOICE_GATEWAY_BEARER_FILE": str(credential_file),
+        "VOICECLAW_OPENSHELL_CLIENT_SECRET_FILE": str(credential_file),
+        "VOICECLAW_OPENSHELL_ENDPOINT": "127.0.0.1:8080",
+        "VOICECLAW_OPENSHELL_WORKSPACE": "test-workspace",
+        "VOICECLAW_OPENSHELL_SANDBOX": "test-sandbox",
+        "VOICECLAW_FABRIC_ADAPTER_ID": "nvidia.fabric.openclaw",
+        "VOICECLAW_FABRIC_AGENT": "main",
+        "VOICECLAW_NATIVE_AGENT": "main",
+        "VOICECLAW_OPENSHELL_ISSUER": "https://identity.example.test",
+        "VOICECLAW_OPENSHELL_CLIENT_ID": "voiceclaw-test",
         "REALTIME_UPSTREAM_ENDPOINT": "ws://127.0.0.1:7861/v1/realtime",
         "REALTIME_UPSTREAM_API_KEY": "internal-upstream-key",
     }
@@ -99,6 +107,14 @@ class _TurnBackend:
         raise AssertionError("readiness must not create a backend turn")
 
 
+class _ClosableTurnBackend(_TurnBackend):
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 def test_durable_plugin_fails_before_the_facade_opens_state(
     base_env: dict[str, str],
 ) -> None:
@@ -134,6 +150,24 @@ def test_response_only_backend_rejects_stateful_interaction_profiles_before_open
         create_app(config, environ=base_env)
 
     store_type.assert_not_called()
+
+
+def test_failed_app_construction_closes_a_supplied_backend(
+    base_env: dict[str, str],
+) -> None:
+    config = _config(server=ServerConfig(host="127.0.0.1", port=7860), environ=base_env)
+    backend_profile = replace(
+        config.backend_profiles[config.default_backend],
+        interaction_profile="single_stateful",
+    )
+    config = replace(config, backend_profiles={config.default_backend: backend_profile})
+    backend = _ClosableTurnBackend()
+    composition = BackendComposition(turn_backend=backend, turn_status="response_only")
+
+    with pytest.raises(ConfigurationError, match="response-only backends require a sessionless interaction profile"):
+        create_app(config, environ=base_env, composition=composition)
+
+    assert backend.close_calls == 1
 
 
 def test_headless_server_does_not_publish_ui_routes(base_env: dict[str, str]) -> None:
@@ -253,6 +287,41 @@ def test_readiness_fails_closed_without_disclosing_backend_failures(
     assert "untrusted adapter detail" not in caplog.text
 
 
+def test_readiness_has_an_outer_deadline(
+    base_env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(server=ServerConfig(host="127.0.0.1", port=7860), environ=base_env)
+
+    class NeverReady:
+        async def check_selected_agent(self) -> None:
+            await asyncio.Event().wait()
+
+    app = create_app(
+        config,
+        environ=base_env,
+        composition=BackendComposition(
+            turn_backend=_TurnBackend(),
+            turn_status="response_only",
+            selected_agent_readiness=NeverReady(),
+        ),
+    )
+    monkeypatch.setattr("voiceclaw.server._READINESS_TIMEOUT_SECONDS", 0.01)
+
+    async def exercise() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get("/readyz")
+
+    try:
+        response = asyncio.run(exercise())
+    finally:
+        app.state.voiceclaw_state_store.close()
+
+    assert response.status_code == 503
+    assert response.content == b""
+
+
 def test_server_ui_flag_is_opt_in() -> None:
     assert _server_parser().parse_args([]).ui is False
     assert _server_parser().parse_args(["--ui"]).ui is True
@@ -307,6 +376,41 @@ def test_supervised_bundled_check_uses_the_provisioned_loopback_key(
         validate_configuration(config, environ=base_env, bundled_nva_supervised=True)
 
     bind_nva_credential.assert_not_called()
+
+
+def test_configuration_check_closes_validation_only_backend(
+    base_env: dict[str, str],
+) -> None:
+    config = _config(server=ServerConfig(host="127.0.0.1", port=7860), environ=base_env)
+    backend = _ClosableTurnBackend()
+    composition = BackendComposition(turn_backend=backend, turn_status="response_only")
+
+    with patch("voiceclaw.server.compose_backends", return_value=composition):
+        validate_configuration(config, environ=base_env, bundled_nva_supervised=True)
+
+    assert backend.close_calls == 1
+
+
+def test_configuration_check_closes_backend_when_state_validation_fails(
+    base_env: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    blocking_file = tmp_path / "not-a-directory"
+    blocking_file.write_text("blocked", encoding="utf-8")
+    config = replace(
+        _config(server=ServerConfig(host="127.0.0.1", port=7860), environ=base_env),
+        state=StateConfig(path=str(blocking_file / "voiceclaw.db")),
+    )
+    backend = _ClosableTurnBackend()
+    composition = BackendComposition(turn_backend=backend, turn_status="response_only")
+
+    with (
+        patch("voiceclaw.server.compose_backends", return_value=composition),
+        pytest.raises(ConfigurationError, match="parent is not a directory"),
+    ):
+        validate_configuration(config, environ=base_env, bundled_nva_supervised=True)
+
+    assert backend.close_calls == 1
 
 
 def test_configuration_check_validates_public_issuer_constraints(base_env: dict[str, str]) -> None:
@@ -543,131 +647,9 @@ def test_loopback_dev_serves_health_and_packaged_ui_without_auth(base_env: dict[
     assert "connect-src 'self'" in page.headers["content-security-policy"]
     assert "connect-src 'self' ws:" not in page.headers["content-security-policy"]
     assert page.text.index('src="./marked.min.js"') < page.text.index('src="./app.js"')
+    assert script.status_code == 200
     assert marked.status_code == 200
     assert "marked v15.0.12" in marked.text
-    assert "window.marked?.parse?.(value, MARKDOWN_OPTIONS)" in script.text
-    assert "function sanitizeMarkedHtml" in script.text
-    assert "function renderMinimalMarkdown" not in script.text
-    assert "function markdownTableDefinition" not in script.text
-    assert "function scheduleProjectionRender" in script.text
-    assert "projectionRenderFrame" in script.text
-
-    assert "new WebSocket(endpoint, protocols)" in script.text
-    assert "voiceclaw_work_delegate" not in script.text
-    assert "tool_choice" not in script.text
-    assert 'type: "conversation.item.truncate"' in script.text
-    assert "audio_end_ms: truncation.audioEndMs" in script.text
-    interruption = script.text[
-        script.text.index("function interruptActiveResponse") : script.text.index("function secureMicrophoneContext")
-    ]
-    cancel_position = interruption.index('type: "response.cancel"')
-    truncate_position = interruption.index("dispatchPlaybackTruncations(truncations)")
-    assert cancel_position < truncate_position
-    assert "pendingPlaybackTruncations" not in script.text
-    assert "state.pendingClientEvents.get(error.event_id)" in script.text
-    assert "const benignTerminalCancel" in script.text
-    assert "response id is not owned by this session" in script.text
-    assert "state.speechDeliveryQueueDepth - (state.outputActive ? 1 : 0)" not in script.text
-    assert "const waiting = Math.max(0, state.speechDeliveryQueueDepth);" in script.text
-    assert "const INITIAL_PLAYOUT_LEAD_SECONDS = 0.45" in script.text
-    assert "const MIN_REBUFFER_LEAD_SECONDS = 0.12" in script.text
-    assert "playbackScheduleTail: Promise.resolve()" in script.text
-    assert "state.playbackScheduleTail.then" in script.text
-    assert 'case "response.output_audio.done"' in script.text
-    assert "markPlaybackStreamDone(event)" in script.text
-    assert "voice.output_state && !hasLocalPlaybackActivity()" in script.text
-    assert "projection.waiting_depth" in script.text
-    assert "Voice replies queued" in page.text
-    assert 'id="speech-queue" class="queue-indicator empty"' in page.text
-    assert (
-        'title="VoiceClaw voice responses waiting to start; excludes the response currently being delivered"'
-        in page.text
-    )
-    assert 'format: { type: "audio/pcm", rate: INPUT_SAMPLE_RATE }' in script.text
-    assert 'output: { format: { type: "audio/pcm", rate: INPUT_SAMPLE_RATE } }' in script.text
-    assert "usesPcm24" in script.text
-    session_patch = script.text[
-        script.text.index("const patch = {") : script.text.index(
-            "const instructions = elements.instructions.value.trim()"
-        )
-    ]
-    assert "turn_detection:" not in session_patch
-    assert "state.automaticTurnDetection" in script.text
-    assert 'elements.talkButton.addEventListener("click", () => void toggleListening())' in script.text
-    assert 'elements.muteButton.addEventListener("click", () => setMuted(!state.muted))' in script.text
-    assert 'elements.talkButton.addEventListener("pointerdown"' not in script.text
-    assert 'elements.talkButton.addEventListener("pointerup"' not in script.text
-    assert 'elements.talkButton.addEventListener("pointercancel"' not in script.text
-    assert 'state.automaticTurnDetection ? "Stop listening" : "Stop & send"' in script.text
-    start_listening = script.text[
-        script.text.index("async function startListening()") : script.text.index("function stopListening()")
-    ]
-    clear_position = start_listening.index('type: "input_audio_buffer.clear"')
-    capture_position = start_listening.index("state.capturing = true")
-    assert clear_position < capture_position
-    manual_start = start_listening[
-        start_listening.index("if (!state.automaticTurnDetection)") : start_listening.index("state.captureBytes = 0")
-    ]
-    assert 'type: "input_audio_buffer.clear"' in manual_start
-    assert "const MIN_LISTENING_SECONDS = 0.2" in script.text
-    assert "const MIN_CAPTURE_BYTES = INPUT_SAMPLE_RATE * PCM16_BYTES_PER_SAMPLE * MIN_LISTENING_SECONDS" in (
-        script.text
-    )
-    stop_listening = script.text[
-        script.text.index("function stopListening()") : script.text.index("async function toggleListening()")
-    ]
-    automatic_stop = stop_listening[
-        stop_listening.index("if (state.automaticTurnDetection) {") : stop_listening.index(
-            "if (!hadCapture || capturedBytes < MIN_CAPTURE_BYTES)"
-        )
-    ]
-    assert 'type: "input_audio_buffer.clear"' not in automatic_stop
-    assert 'type: "input_audio_buffer.commit"' not in automatic_stop
-    assert 'type: "response.create"' not in automatic_stop
-    assert "AUTOMATIC_STOP_TIMEOUT_MS" in stop_listening
-    short_capture_position = stop_listening.index("if (!hadCapture || capturedBytes < MIN_CAPTURE_BYTES)")
-    commit_position = stop_listening.index('type: "input_audio_buffer.commit"', short_capture_position)
-    response_position = stop_listening.index('type: "response.create"', commit_position)
-    short_turn = stop_listening[short_capture_position:commit_position]
-    assert 'type: "input_audio_buffer.clear"' in short_turn
-    assert 'type: "input_audio_buffer.commit"' not in short_turn
-    assert "return;" in short_turn
-    assert commit_position < response_position
-    assert 'errorCode === "input_audio_transcription_empty"' in script.text
-    assert "VAD_SILENCE_BYTES" not in script.text
-    assert 'id="delegation-list"' in page.text
-    assert 'id="delegation-announcement"' in page.text
-    assert 'id="mute-button"' in page.text
-    assert 'state.backendCapabilities.has("live_delegated_context")' in script.text
-    assert 'record.status = "outcome_unknown"' in script.text
-    assert "stopPlayback(false, true)" in script.text
-    assert "state.muteTruncationReported" in script.text
-    assert '["Backend response", record.correlation.response_id]' in script.text
-    assert 'developerSummary.textContent = "Developer details"' in script.text
-    assert 'succeeded: "Response received"' in script.text
-    assert 'resultLabel.textContent = failed ? "Failure" : "Response"' in script.text
-    assert "record.result = resultPresentation" in script.text
-    assert "projectionCorrelation(root)" in script.text
-    assert "const previous = state.targetProjection || {}" in script.text
-    assert "previous.status" in script.text
-    assert 'state.gatewayReachable ? "gateway_reachable"' in script.text
-    assert '<p class="eyebrow">Backend turns</p>' in page.text
-    speech_started = script.text[
-        script.text.index('case "input_audio_buffer.speech_started"') : script.text.index(
-            'case "input_audio_buffer.speech_stopped"'
-        )
-    ]
-    assert "dispatchPlaybackTruncations(stopPlayback(true, true))" in speech_started
-    assert 'type: "response.cancel"' not in speech_started
-    speech_stopped = script.text[
-        script.text.index('case "input_audio_buffer.speech_stopped"') : script.text.index(
-            'case "input_audio_buffer.committed"'
-        )
-    ]
-    assert "finishAutomaticStop()" in speech_stopped
-    assert "function finishAutomaticStop()" in script.text
-    assert "if (!state.stopAfterSpeech) return" in script.text
-    assert "Hold to talk" not in page.text
 
 
 def test_non_loopback_none_auth_does_not_require_public_key(base_env: dict[str, str]) -> None:

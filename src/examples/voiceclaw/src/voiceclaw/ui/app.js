@@ -80,7 +80,7 @@
     authMode: "unknown",
     connected: false,
     protocolReady: false,
-    gatewayReachable: false,
+    targetBindingVerified: false,
     frontendTools: new Set(),
     backendCapabilities: new Set(),
     targetProjection: null,
@@ -165,7 +165,7 @@
   function normalizeStateClass(value) {
     const normalized = String(value || "neutral").toLowerCase().replaceAll(/[^a-z]+/g, "-");
     const allowed = new Set([
-      "active", "attached", "cancelled", "completed", "dispatching", "error", "failed", "gateway-reachable", "locally-queued", "outcome-unknown", "queued", "reachable", "ready", "received", "running", "started", "submitting", "succeeded", "unavailable", "waiting", "waiting-for-response",
+      "active", "attached", "available", "binding-verified", "cancelled", "completed", "consumed", "dispatching", "error", "failed", "in-flight", "locally-queued", "outcome-unknown", "queued", "reachable", "ready", "received", "running", "started", "submitting", "succeeded", "unavailable", "waiting", "waiting-for-response",
     ]);
     return allowed.has(normalized) ? normalized : "neutral";
   }
@@ -512,7 +512,7 @@
   function cleanupConnection() {
     state.connected = false;
     state.protocolReady = false;
-    state.gatewayReachable = false;
+    state.targetBindingVerified = false;
     state.frontendTools.clear();
     state.backendCapabilities.clear();
     state.targetProjection = null;
@@ -558,9 +558,9 @@
     elements.backendBadge.replaceChildren();
     const dot = document.createElement("span");
     dot.className = "badge-dot";
-    elements.backendBadge.append(dot, document.createTextNode("Backend not attached"));
+    elements.backendBadge.append(dot, document.createTextNode("Backend unavailable"));
     elements.targetAvatar.textContent = "A";
-    elements.targetName.textContent = "No active runtime attachment";
+    elements.targetName.textContent = "No verified agent target";
     elements.targetReference.textContent = "Reconnect to load backend capabilities";
     setStatusPill(elements.targetStatus, "Disconnected", "neutral");
     elements.capabilityList.replaceChildren();
@@ -575,7 +575,7 @@
 
   function resetSessionView() {
     state.protocolReady = false;
-    state.gatewayReachable = false;
+    state.targetBindingVerified = false;
     state.frontendTools.clear();
     state.backendCapabilities.clear();
     state.targetProjection = null;
@@ -608,10 +608,10 @@
     elements.backendBadge.replaceChildren();
     const dot = document.createElement("span");
     dot.className = "badge-dot";
-    elements.backendBadge.append(dot, document.createTextNode("Checking backend gateway"));
+    elements.backendBadge.append(dot, document.createTextNode("Checking target binding"));
     elements.targetAvatar.textContent = "A";
-    elements.targetName.textContent = "Checking backend gateway";
-    elements.targetReference.textContent = "No durable attachment advertised";
+    elements.targetName.textContent = "Checking target binding";
+    elements.targetReference.textContent = "Target binding not verified yet";
     setStatusPill(elements.targetStatus, "Not checked", "neutral");
     elements.capabilityList.replaceChildren();
     const placeholder = document.createElement("span");
@@ -757,9 +757,9 @@
     state.sessionId = typeof session.id === "string" ? session.id : null;
     state.protocolReady = false;
     setConnection("connected", "Applying session settings");
-    elements.targetName.textContent = "Checking backend gateway";
-    elements.targetReference.textContent = "No durable attachment advertised";
-    setStatusPill(elements.targetStatus, "Checking gateway", "waiting");
+    elements.targetName.textContent = "Checking target binding";
+    elements.targetReference.textContent = "Target binding not verified yet";
+    setStatusPill(elements.targetStatus, "Checking binding", "waiting");
     applyNegotiatedTurnDetection(session);
     updateListeningHelp();
 
@@ -817,14 +817,17 @@
     updateQueue();
   }
 
-  function createMessage(role, id, text = "", streaming = false) {
+  function createMessage(role, id, text = "", streaming = false, startedAt = new Date()) {
     elements.emptyConversation.hidden = true;
     const wrapper = document.createElement("article");
     wrapper.className = `message ${role}${streaming ? " streaming" : ""}`;
     wrapper.dataset.messageId = id;
+    const timestamp = startedAt instanceof Date ? startedAt : new Date(startedAt);
+    wrapper.dataset.startedAt = (Number.isNaN(timestamp.getTime()) ? new Date() : timestamp).toISOString();
     const meta = document.createElement("div");
     meta.className = "message-meta";
-    meta.textContent = `${role === "user" ? "You" : "VoiceClaw"} · ${streaming ? "streaming" : timeLabel()}`;
+    const startedLabel = timeLabel(wrapper.dataset.startedAt);
+    meta.textContent = `${role === "user" ? "You" : "VoiceClaw"} · ${streaming ? `streaming · ${startedLabel}` : startedLabel}`;
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
     bubble.textContent = text;
@@ -836,13 +839,14 @@
     return wrapper;
   }
 
-  function updateMessage(id, role, text, streaming) {
-    const wrapper = state.messageElements.get(id) || createMessage(role, id, "", streaming);
+  function updateMessage(id, role, text, streaming, startedAt) {
+    const wrapper = state.messageElements.get(id) || createMessage(role, id, "", streaming, startedAt);
     wrapper.classList.toggle("streaming", Boolean(streaming));
     const bubble = wrapper.querySelector(".message-bubble");
     const meta = wrapper.querySelector(".message-meta");
     bubble.textContent = text;
-    meta.textContent = `${role === "user" ? "You" : "VoiceClaw"} · ${streaming ? "streaming" : timeLabel()}`;
+    const startedLabel = timeLabel(wrapper.dataset.startedAt);
+    meta.textContent = `${role === "user" ? "You" : "VoiceClaw"} · ${streaming ? `streaming · ${startedLabel}` : startedLabel}`;
     scrollConversation();
     return wrapper;
   }
@@ -948,7 +952,9 @@
     const track = responseFor(responseId, false) || responseForItem(item.id);
     if (track?.projection) return;
     const id = track?.id || responseId || `assistant-${item.id}`;
-    if (!state.messageElements.has(id)) updateMessage(id, "assistant", spokenText, item.status !== "completed");
+    if (!state.messageElements.has(id)) {
+      updateMessage(id, "assistant", spokenText, item.status !== "completed", track?.startedAt);
+    }
   }
 
   function responseFor(responseId, create = true) {
@@ -958,6 +964,7 @@
     if (!track && create) {
       track = {
         id,
+        startedAt: new Date(),
         text: "",
         textStreams: { outputText: "", audioTranscript: "" },
         metadata: null,
@@ -984,6 +991,7 @@
     const ignoredProjection = projection !== null && !projectionBelongsToActiveSession(projection);
     state.responses.set(id, {
       id,
+      startedAt: new Date(),
       text: "",
       textStreams: { outputText: "", audioTranscript: "" },
       metadata: response.metadata || null,
@@ -1005,14 +1013,14 @@
     const track = responseFor(responseId);
     if (track && item?.id) {
       track.itemIds.add(item.id);
-      bindConversationMessage(track.id, item.id);
+      bindConversationMessage(track.id, item.id, track.startedAt);
     }
     if (item?.type === "function_call") {
       setSignal("model", "Preparing delegation", true);
     }
   }
 
-  function bindConversationMessage(responseId, itemId) {
+  function bindConversationMessage(responseId, itemId, startedAt) {
     const fallbackId = `assistant-${itemId}`;
     const fallback = state.messageElements.get(fallbackId);
     if (!fallback) return;
@@ -1020,6 +1028,14 @@
     if (responseMessage) fallback.remove();
     else {
       fallback.dataset.messageId = responseId;
+      if (startedAt instanceof Date) {
+        fallback.dataset.startedAt = startedAt.toISOString();
+        const meta = fallback.querySelector(".message-meta");
+        const startedLabel = timeLabel(fallback.dataset.startedAt);
+        if (meta) {
+          meta.textContent = `VoiceClaw · ${fallback.classList.contains("streaming") ? `streaming · ${startedLabel}` : startedLabel}`;
+        }
+      }
       state.messageElements.set(responseId, fallback);
     }
     state.messageElements.delete(fallbackId);
@@ -1096,7 +1112,7 @@
     if (track.projection && stream === "outputText") {
       scheduleProjectionRender(track);
     } else if (!track.projection && stream === "audioTranscript") {
-      updateMessage(track.id, "assistant", track.textStreams.audioTranscript, true);
+      updateMessage(track.id, "assistant", track.textStreams.audioTranscript, true, track.startedAt);
     }
   }
 
@@ -1109,7 +1125,7 @@
     if (track.projection && responseTextStream(eventType) === "outputText") {
       scheduleProjectionRender(track);
     } else if (!track.projection && responseTextStream(eventType) === "audioTranscript") {
-      updateMessage(track.id, "assistant", track.textStreams.audioTranscript, true);
+      updateMessage(track.id, "assistant", track.textStreams.audioTranscript, true, track.startedAt);
     }
   }
 
@@ -1150,7 +1166,7 @@
       applyProjection(track.projection, track.text);
     } else {
       const spokenText = track.textStreams.audioTranscript || spokenTextFromResponse(response);
-      if (spokenText) updateMessage(track.id, "assistant", spokenText, false);
+      if (spokenText) updateMessage(track.id, "assistant", spokenText, false, track.startedAt);
       else removeMessage(track.id);
     }
 
@@ -1194,7 +1210,7 @@
 
   function projectionFromMetadata(metadata) {
     if (!metadata || typeof metadata !== "object") return null;
-    if (metadata.voiceclaw_schema !== "voiceclaw.projection.v1") return null;
+    if (metadata.voiceclaw_schema !== "voiceclaw.projection.v2") return null;
     const projection = {};
     for (const [rawKey, rawValue] of Object.entries(metadata)) {
       if (rawKey === "voiceclaw_schema" || !rawKey.startsWith("voiceclaw_")) continue;
@@ -1327,7 +1343,41 @@
     return correlation;
   }
 
+  function backendTargetBody(value) {
+    if (typeof value !== "string" || !value.trim()) return {};
+    let body;
+    try {
+      body = JSON.parse(value);
+    } catch {
+      return {};
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+    const projection = {};
+    const stringFields = {
+      backend: "backend_name",
+      mode: "backend_mode",
+      target: "target_ref",
+      agent_readiness: "agent_readiness",
+      durability: "durability",
+      event_delivery: "event_delivery",
+      context_continuity: "context_continuity",
+      target_state: "target_state",
+    };
+    for (const [source, target] of Object.entries(stringFields)) {
+      if (typeof body[source] === "string" && body[source]) projection[target] = body[source];
+    }
+    if (Number.isSafeInteger(body.max_parallel_work) && body.max_parallel_work >= 0) {
+      projection.max_parallel_work = body.max_parallel_work;
+    }
+    if (Array.isArray(body.capabilities)) projection.capabilities = body.capabilities;
+    if (Array.isArray(body.frontend_tools)) projection.frontend_tools = body.frontend_tools;
+    return projection;
+  }
+
   function applyProjection(projection, responseText) {
+    if (projection.kind === "backend_target") {
+      projection = { ...backendTargetBody(responseText), ...projection };
+    }
     const kind = String(firstValue(projection.kind, "projection"));
     const phase = String(firstValue(projection.phase, projection.state, "updated"));
     const ephemeralLifecycle = kind === "backend_turn";
@@ -1342,22 +1392,31 @@
     const result = { ...objectValue(projection.result ?? projection.delivery) };
     const activity = objectValue(projection.activity);
     const voice = objectValue(projection.voice ?? projection.runtime);
+    const carriesFrontendTools = Object.prototype.hasOwnProperty.call(projection, "frontend_tools");
+    const carriesCapabilities = Object.prototype.hasOwnProperty.call(projection, "capabilities");
 
-    if (kind === "backend_target" || kind === "runtime_attachment") {
-      state.gatewayReachable = phase === "reachable" || (kind === "runtime_attachment" && phase === "ready");
+    if (carriesFrontendTools) {
       state.frontendTools = new Set(arrayValue(projection.frontend_tools).map(String));
-      state.backendCapabilities = new Set(
-        arrayValue(firstValue(target.capabilities, projection.capabilities)).map(String),
-      );
-      if (!state.gatewayReachable) {
-        showNotice("The configured backend gateway is unavailable. Direct realtime conversation remains available.", "error", 0);
+    }
+    if (carriesCapabilities) {
+      state.backendCapabilities = new Set(arrayValue(projection.capabilities).map(String));
+    }
+
+    if (kind === "backend_target") {
+      state.targetBindingVerified = phase === "verified";
+      if (!carriesFrontendTools) state.frontendTools = new Set();
+      if (!carriesCapabilities) {
+        state.backendCapabilities = new Set(arrayValue(target.capabilities).map(String));
+      }
+      if (!state.targetBindingVerified) {
+        showNotice("The configured target binding is unavailable. Direct realtime conversation remains available.", "error", 0);
       }
     }
 
     if (kind === "backend_turn") {
       const correlation = projectionCorrelation(projection);
       const mappedPhase = [
-        "locally_queued", "dispatching", "waiting_for_response", "succeeded", "failed",
+        "locally_queued", "dispatching", "waiting_for_response", "succeeded", "failed", "outcome_unknown",
       ].includes(phase)
         ? phase
         : "unknown";
@@ -1380,7 +1439,7 @@
         },
         {
           label: "Terminal backend response",
-          state: ["succeeded", "failed"].includes(mappedPhase) ? mappedPhase : "waiting",
+          state: ["succeeded", "failed", "outcome_unknown"].includes(mappedPhase) ? mappedPhase : "waiting",
         },
         ],
       };
@@ -1405,7 +1464,7 @@
       result.state = firstValue(result.state, phase, "received");
       result.title = firstValue(result.title, projection.title, "Response");
       result.display = firstValue(result.display, responseText, projection.title);
-    } else if (ephemeralLifecycle && phase === "failed") {
+    } else if (ephemeralLifecycle && ["failed", "outcome_unknown"].includes(phase)) {
       result.state = firstValue(result.state, phase);
       result.title = firstValue(result.title, projection.title, "Backend response");
       result.display = firstValue(result.display, responseText, projection.title);
@@ -1423,8 +1482,9 @@
     if (backendName) updateBackend(String(backendName), phase !== "unavailable");
 
     const targetProjection = kind === "backend_target"
-      || kind === "runtime_attachment"
       || Object.keys(target).length > 0
+      || carriesFrontendTools
+      || carriesCapabilities
       || Boolean(
         projection.target_name
         || projection.target_ref
@@ -1484,14 +1544,14 @@
     const nextCapabilities = firstValue(target.capabilities, root.capabilities);
     const nextFrontendTools = firstValue(target.frontend_tools, root.frontend_tools);
     const snapshot = {
-      name: firstValue(target.label, target.name, root.target_name, previous.name, "Configured target"),
+      name: firstValue(target.label, target.name, root.target_name, root.backend_name, previous.name, "Configured target"),
       reference: firstValue(
         target.ref,
         target.id,
         target.target_ref,
         root.target_ref,
         previous.reference,
-        "No durable attachment advertised",
+        "Target reference unavailable",
       ),
       status: String(firstValue(
         target.state,
@@ -1499,7 +1559,7 @@
         root.target_state,
         root.kind === "backend_target" ? root.phase : undefined,
         previous.status,
-        state.gatewayReachable ? "gateway_reachable" : undefined,
+        state.targetBindingVerified ? "binding_verified" : undefined,
         "unknown",
       )),
       capabilities: nextCapabilities === undefined
@@ -1512,6 +1572,7 @@
       eventDelivery: firstValue(root.event_delivery, previous.eventDelivery),
       agentReadiness: firstValue(root.agent_readiness, previous.agentReadiness),
       maxParallelWork: firstValue(root.max_parallel_work, previous.maxParallelWork),
+      contextContinuity: firstValue(root.context_continuity, previous.contextContinuity),
     };
     state.targetProjection = snapshot;
     elements.targetAvatar.textContent = String(snapshot.name).trim().charAt(0).toUpperCase() || "A";
@@ -1525,13 +1586,16 @@
     if (snapshot.durability) contractFacts.push(`Durability · ${titleCase(String(snapshot.durability))}`);
     if (snapshot.eventDelivery) contractFacts.push(`Events · ${titleCase(String(snapshot.eventDelivery))}`);
     if (snapshot.agentReadiness) contractFacts.push(`Target readiness · ${titleCase(String(snapshot.agentReadiness))}`);
+    if (snapshot.contextContinuity) {
+      contractFacts.push(`Context continuity · ${titleCase(String(snapshot.contextContinuity))}`);
+    }
     const maxParallel = Number(snapshot.maxParallelWork);
     if (Number.isSafeInteger(maxParallel) && maxParallel >= 0) contractFacts.push(`Concurrency · ${maxParallel}`);
     if (capabilities.length || frontendTools.length || contractFacts.length) {
       elements.capabilityList.replaceChildren();
       const note = document.createElement("span");
       note.className = "capability muted";
-      note.textContent = "Server-projected, not backend-advertised";
+      note.textContent = "VoiceClaw-projected; not discovered from Fabric";
       elements.capabilityList.append(note);
       for (const fact of contractFacts) {
         const chip = document.createElement("span");
@@ -1692,10 +1756,13 @@
   function renderDelegations() {
     const focusedRequestId = document.activeElement?.closest?.(".delegation-card")?.dataset.requestId;
     const records = [...state.delegations.values()].reverse();
-    const sharesLiveContext = state.backendCapabilities.has("live_delegated_context");
-    elements.delegationsNote.textContent = sharesLiveContext
-      ? "Each card is one response-only backend exchange. Delegated follow-ups can share this live agent context, but it is not durable or recoverable after reconnect."
-      : "Each card is one non-durable backend exchange. Do not assume context carries between delegated turns unless the target advertises that capability.";
+    const continuity = state.targetProjection?.contextContinuity;
+    const sharesLiveContext = continuity === "shared_target";
+    elements.delegationsNote.textContent = continuity === "isolated_per_session"
+      ? "Each card is one non-durable backend exchange in this application session."
+      : sharesLiveContext
+        ? "Each card is one non-durable backend exchange. The selected target shares live context; reconnect recovery is not provided."
+        : "Each card is one non-durable backend exchange. Context continuity and isolation are not qualified; do not rely on either across turns or sessions.";
     elements.delegationEmpty.hidden = records.length > 0;
     elements.delegationCount.textContent = `${records.length} ${records.length === 1 ? "turn" : "turns"}`;
     const hasActive = records.some((record) => (
@@ -1796,9 +1863,9 @@
       const identityLabel = record.identityKind === "work" ? "Work ID" : "Local request ID";
       const facts = [
         [identityLabel, record.id],
-        ["Temporary backend session", record.correlation.backend_session_id],
-        ["Backend turn", record.correlation.turn_id],
-        ["Backend response", record.correlation.response_id],
+        ["Backend context reference", record.correlation.backend_session_id],
+        ["Backend request reference", record.correlation.turn_id],
+        ["Backend invocation reference", record.correlation.response_id],
       ];
       if (facts.some(([, value]) => value)) {
         const developer = document.createElement("details");

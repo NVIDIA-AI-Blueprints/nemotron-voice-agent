@@ -11,6 +11,9 @@ server:
   port: 7860
   listener_security: loopback
   auth_mode: none
+  # Limit concurrent use; native context isolation across sequential sessions
+  # remains unqualified for the current retained Fabric runtime.
+  max_sessions: 1
 
 frontend_profiles:
   local_cascade:
@@ -70,38 +73,27 @@ model_contracts:
 interaction_profiles: {}
 
 backend_profiles:
-  nemoclaw:
-    # Stable adapter identity. The explicit mode below describes the
-    # non-durable connection without coupling configuration to an implementation
-    # class or delivery phase.
-    kind: nemoclaw
+  deployed_agent:
+    # The developer-local OpenShell endpoint is intentionally loopback-only and
+    # does not issue OAuth identities. Remote endpoints must use client_credentials.
+    kind: openshell_fabric
     interaction:
-      # The response-only gateway supports one non-durable submit operation.
-      # Capabilities narrow this preset to work.delegate at runtime.
       profile: stateless
-      # Trusted deployers may override model-facing copy per backend without
-      # changing executable tool semantics or accepting browser-authored prose.
       tool_copy: {}
-    credential:
-      # Mount this owner-controlled file into the VoiceClaw container. The
-      # bearer never enters browser state, command arguments, or container env.
-      file: ${NEMOCLAW_VOICE_GATEWAY_BEARER_FILE}
     settings:
-      # `response_only` implements the non-durable gateway contract. Durable
-      # Agent Session integration requires a separately validated adapter mode,
-      # not an alias for this bearer.
-      mode: response_only
-      # Omit endpoint for the local default http://127.0.0.1:18800. A remote
-      # private literal IP requires an https endpoint and private_network policy.
-      endpoint_policy: loopback_only
-      # One wall-clock budget for admission plus the complete NDJSON turn.
-      exchange_deadline_seconds: 125
-      # This response-only target caps completions at 4096 tokens.
-      # Keep its complete Markdown result below that provider capacity; this is
-      # independently configurable from VoiceClaw's protocol-wide safety cap.
-      result_display_budget_bytes: 8192
+      endpoint: ${VOICECLAW_OPENSHELL_ENDPOINT}
+      authentication: anonymous
+      workspace: ${VOICECLAW_OPENSHELL_WORKSPACE}
+      sandbox: ${VOICECLAW_OPENSHELL_SANDBOX}
+      adapter_id: ${VOICECLAW_FABRIC_ADAPTER_ID}
+      fabric_agent: ${VOICECLAW_FABRIC_AGENT}
+      native_agent: ${VOICECLAW_NATIVE_AGENT}
+      tls: false
+      rpc_timeout_seconds: 30
+      invoke_timeout_seconds: 330
+      result_speech_budget_bytes: 512
 
-default_backend: nemoclaw
+default_backend: deployed_agent
 
 interaction:
   max_pending_speech: 32

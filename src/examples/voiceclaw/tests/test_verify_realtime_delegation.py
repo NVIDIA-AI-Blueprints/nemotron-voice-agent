@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from voiceclaw.domain import ResponseOnlySpeechSource
+from voiceclaw.domain import (
+    ResponseOnlyRequestState,
+    ResponseOnlySpeechSource,
+    ResponseOnlyTargetAvailability,
+)
 
 
 def _load_verifier():
@@ -89,7 +93,7 @@ def test_plaintext_realtime_verification_requires_an_explicit_flag() -> None:
 def test_request_summary_is_projection_content_not_request_correlation() -> None:
     """The display summary must not become stable request identity."""
     projection = {
-        "schema": "voiceclaw.projection.v1",
+        "schema": "voiceclaw.projection.v2",
         "session_id": "session-1",
         "kind": "backend_turn",
         "phase": "locally_queued",
@@ -227,6 +231,168 @@ def test_display_only_result_completes_without_result_delivery_speech() -> None:
         result_delivery_completed_at=None,
         queue_depth_transitions=[(4, 1), (21, 0)],
     ) == (21, 0)
+
+
+def test_display_only_result_accepts_an_acknowledgement_queue_drained_before_backend_success() -> None:
+    """A display-only result creates no post-success speech transition to await."""
+    assert _VERIFIER._delivery_completion(
+        speech_source=ResponseOnlySpeechSource.NONE,
+        succeeded_at=20,
+        acknowledgement_completed_at=18,
+        result_delivery_response_id=None,
+        result_delivery_completed_at=None,
+        queue_depth_transitions=[(4, 1), (19, 0)],
+    ) == (19, 0)
+
+
+def test_verifier_default_timeout_covers_the_default_backend_invocation_budget() -> None:
+    """The CLI budget must not expire before the adapter's default invocation deadline."""
+    arguments = _VERIFIER._parser().parse_args(["--query", "delegate this"])
+
+    assert arguments.timeout == 420.0
+
+
+def test_verifier_accepts_repeatable_content_assertions_and_an_expected_outcome() -> None:
+    """CLI qualification can assert both channels without changing their casing."""
+    arguments = _VERIFIER._parser().parse_args(
+        [
+            "--query",
+            "delegate this",
+            "--expect-outcome",
+            "outcome_unknown",
+            "--display-contains",
+            "First Marker",
+            "--display-contains",
+            "second marker",
+            "--speech-contains",
+            "Spoken Marker",
+        ]
+    )
+
+    assert arguments.expect_outcome == ResponseOnlyRequestState.OUTCOME_UNKNOWN.value
+    assert arguments.display_contains == ["First Marker", "second marker"]
+    assert arguments.speech_contains == ["Spoken Marker"]
+
+
+def test_content_assertions_are_case_insensitive_and_require_every_marker() -> None:
+    """Each configured marker must occur in its selected terminal channel."""
+    _VERIFIER._require_content(
+        "# Result\nThe ALPHA and beta facts are ready.",
+        ["alpha", "BETA facts"],
+        channel="display",
+    )
+
+    with pytest.raises(RuntimeError, match="omitted required content"):
+        _VERIFIER._require_content("Only alpha is present.", ["alpha", "beta"], channel="display")
+    with pytest.raises(RuntimeError, match="omitted required content"):
+        _VERIFIER._require_content(None, ["spoken marker"], channel="speech")
+
+
+def test_latency_uses_monotonic_nanoseconds_and_never_accepts_time_reversal() -> None:
+    """Reported latency is an elapsed generation measurement, not wall-clock time."""
+    assert _VERIFIER._latency_ms(1_000_000_000, 1_012_345_678) == 12.346
+    assert _VERIFIER._latency_ms(None, 1_012_345_678) is None
+    with pytest.raises(RuntimeError, match="timeline moved backwards"):
+        _VERIFIER._latency_ms(20, 19)
+
+
+def test_target_contract_validates_initial_binding_and_terminal_tool_withdrawal() -> None:
+    """The verifier proves both ends of the one-shot capability transition."""
+    projection = {
+        "backend_name": "NemoClaw",
+        "backend_mode": "response_only",
+        "target_ref": "workspace/sandbox/agent",
+    }
+    initial = {
+        "backend": "NemoClaw",
+        "mode": "response_only",
+        "target": "workspace/sandbox/agent",
+        "agent_readiness": "unknown",
+        "capabilities": ["work.submit"],
+        "frontend_tools": ["work.delegate"],
+        "durability": "none",
+        "event_delivery": "response_only",
+        "max_parallel_work": 1,
+        "context_continuity": "unqualified",
+        "target_state": "available",
+    }
+    terminal = {
+        **initial,
+        "capabilities": [],
+        "frontend_tools": [],
+        "target_state": "consumed",
+    }
+
+    assert (
+        _VERIFIER._target_contract_payload(
+            json.dumps(initial),
+            projection,
+            expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
+            expected_capabilities=frozenset({"work.submit"}),
+            expected_tools=frozenset({"work.delegate"}),
+        )["target_state"]
+        == "available"
+    )
+    assert (
+        _VERIFIER._target_contract_payload(
+            json.dumps(terminal),
+            projection,
+            expected_state=ResponseOnlyTargetAvailability.CONSUMED,
+            expected_capabilities=frozenset(),
+            expected_tools=frozenset(),
+        )["frontend_tools"]
+        == []
+    )
+
+
+def test_target_contract_rejects_a_consumed_target_that_still_advertises_delegation() -> None:
+    """A terminal one-shot target cannot leave a stale delegate action visible."""
+    projection = {
+        "backend_name": "NemoClaw",
+        "backend_mode": "response_only",
+        "target_ref": "workspace/sandbox/agent",
+    }
+    stale = {
+        "backend": "NemoClaw",
+        "mode": "response_only",
+        "target": "workspace/sandbox/agent",
+        "agent_readiness": "unknown",
+        "capabilities": ["work.submit"],
+        "frontend_tools": ["work.delegate"],
+        "durability": "none",
+        "event_delivery": "response_only",
+        "max_parallel_work": 1,
+        "context_continuity": "unqualified",
+        "target_state": "consumed",
+    }
+
+    with pytest.raises(RuntimeError, match="expected response-only contract"):
+        _VERIFIER._target_contract_payload(
+            json.dumps(stale),
+            projection,
+            expected_state=ResponseOnlyTargetAvailability.CONSUMED,
+            expected_capabilities=frozenset(),
+            expected_tools=frozenset(),
+        )
+
+
+def test_failure_delivery_waits_for_generated_speech_and_queue_drain() -> None:
+    """A terminal failure is complete only after its model-mediated speech drains."""
+    assert (
+        _VERIFIER._failure_delivery_completion(
+            terminal_at=20,
+            acknowledgement_completed_at=18,
+            failure_delivery_completed_at=24,
+            queue_depth_transitions=[(4, 1), (23, 1)],
+        )
+        is None
+    )
+    assert _VERIFIER._failure_delivery_completion(
+        terminal_at=20,
+        acknowledgement_completed_at=18,
+        failure_delivery_completed_at=24,
+        queue_depth_transitions=[(4, 1), (23, 1), (25, 0)],
+    ) == (25, 0)
 
 
 def test_backend_authored_speech_waits_for_delivery_and_queue_drain() -> None:

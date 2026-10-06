@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Application Interaction Manager for realtime sessions and temporary adapters."""
+"""Application Interaction Manager for realtime sessions and response-only adapters."""
 
 from __future__ import annotations
 
@@ -10,8 +10,15 @@ import json
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import Any
 
+from voiceclaw.application.context import (
+    ConversationTurn,
+    FrontendContextProjector,
+    FrontendContextSnapshot,
+    LocalRequestContext,
+)
 from voiceclaw.application.routing import ModelSelectedTurnRoutingPolicy, TurnRoutingPolicy
 from voiceclaw.domain.capabilities import CapabilityToolRegistry, SemanticTool
 from voiceclaw.domain.models import (
@@ -22,6 +29,7 @@ from voiceclaw.domain.models import (
 )
 from voiceclaw.domain.response_only import (
     RUNTIME_PROJECTION_SCHEMA,
+    ResponseOnlyContextContinuity,
     ResponseOnlyRequestState,
     ResponseOnlyResultEventKind,
     ResponseOnlyResultState,
@@ -36,12 +44,16 @@ from voiceclaw.interaction_profiles import (
 )
 from voiceclaw.model_contracts import ModelContractCatalog, load_model_contract_catalog
 from voiceclaw.ports.runtime import (
+    BackendTargetSnapshot,
+    FrontendContextPurpose,
+    FrontendContextRequest,
     FrontendConversationDeliveryState,
     FrontendConversationTurn,
     FrontendPlaybackReceipt,
     FrontendPlaybackReceiptState,
     FrontendResponse,
     FrontendResponsePurpose,
+    FrontendSpeechDeliveryOutcome,
     InteractionUpdate,
     SessionSnapshot,
     TurnDirective,
@@ -62,6 +74,15 @@ from voiceclaw.ports.turns import (
 _RECENT_CONVERSATION_LIMIT = 8
 _RECENT_CONVERSATION_TEXT_LIMIT = 512
 _PLAYBACK_RECEIPT_LIMIT = 8
+
+
+class _ResultPresentationState(StrEnum):
+    """VoiceClaw-local speech presentation state for one available result."""
+
+    NOT_REQUESTED = "not_requested"
+    READY = "ready"
+    AWAITING_PLAYBACK_RECEIPT = "awaiting_playback_receipt"
+    TERMINAL = "terminal"
 
 
 def _request_summary(text: str, *, character_limit: int) -> str:
@@ -103,9 +124,22 @@ class _LatestResult:
     state: ResponseOnlyResultState = ResponseOnlyResultState.NONE
     display_available: bool = False
     speech_source: ResponseOnlySpeechSource = ResponseOnlySpeechSource.NONE
+    presentation_state: _ResultPresentationState = _ResultPresentationState.NOT_REQUESTED
     delivery_state: FrontendConversationDeliveryState | None = None
     presentation_id: str | None = None
     turn_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalRequestAdmission:
+    """Immutable evidence captured before backend dispatch can change state."""
+
+    request_summary: str
+    operation: str
+    projection_revision: int
+    state: ResponseOnlyRequestState = ResponseOnlyRequestState.LOCALLY_QUEUED
+    backend_acceptance: str = "unknown"
+    durability: Durability = Durability.NONE
 
 
 @dataclass(slots=True)
@@ -119,6 +153,14 @@ class _LocalRequestProjection:
     terminal_outcome: ResponseOnlyTerminalOutcome = ResponseOnlyTerminalOutcome.NONE
     failure_code: str | None = None
     result: _LatestResult = field(default_factory=_LatestResult)
+    admission: _LocalRequestAdmission | None = None
+
+
+@dataclass(slots=True)
+class _LocalRequestGuardState:
+    """Track whether an admitted request crossed the backend effects boundary."""
+
+    invocation_started: bool = False
 
 
 @dataclass(slots=True)
@@ -141,14 +183,15 @@ class _SessionState:
     heard_through_presentation_id: str | None = None
     heard_through_turn_id: str | None = None
     latest_playback_receipt: FrontendPlaybackReceipt | None = None
+    context_revision: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class RealtimeInteractionManager:
-    """Coordinate frontend state without pretending temporary APIs own Work.
+    """Coordinate frontend state without pretending response-only APIs own Work.
 
     Durable ``AgentInteractionPort`` Work continues through
-    ``InteractionCoordinator`` and ``BackendEventCoordinator``. The temporary
+    ``InteractionCoordinator`` and ``BackendEventCoordinator``. The response-only
     committed-turn surface handled here is intentionally
     marked non-durable and never receive Work IDs, replay cursors, or receipts.
     """
@@ -227,8 +270,9 @@ class RealtimeInteractionManager:
             projection=self.projection(session_id),
             backend_label=backend.capabilities.target_label if backend is not None else "Backend unavailable",
             backend_mode=backend.capabilities.backend_kind if backend is not None else "disabled",
-            gateway_reachable=backend is not None,
+            target_binding_verified=backend is not None,
             target_ref=backend.target_ref if backend is not None else "not-attached",
+            target_availability=backend.target_availability if backend is not None else None,
             capabilities=(
                 tuple(sorted(operation.value for operation in backend.capabilities.operations))
                 if backend is not None
@@ -240,6 +284,9 @@ class RealtimeInteractionManager:
                 backend.capabilities.event_delivery if backend is not None else EventDelivery.RESPONSE_ONLY
             ),
             max_parallel_work=backend.capabilities.max_parallel_work if backend is not None else 1,
+            context_continuity=(
+                backend.context_continuity if backend is not None else ResponseOnlyContextContinuity.NONE
+            ),
             capability_source=backend.capability_evidence.source if backend is not None else None,
             capability_source_id=backend.capability_evidence.source_id if backend is not None else None,
             capability_revision=backend.capability_evidence.revision if backend is not None else None,
@@ -255,12 +302,13 @@ class RealtimeInteractionManager:
     def projection(self, session_id: str) -> str:
         """Return a bounded, capability-gated snapshot for one response boundary."""
         state = self._session(session_id)
-        gateway_state = (
-            "reachable"
+        target_binding_state = (
+            "verified"
             if state.backend is not None
             else ("unavailable" if self._committed_turns is not None else "disabled")
         )
-        attachment_state = "not_persistent" if state.backend is not None else gateway_state
+        target_availability = state.backend.target_availability if state.backend is not None else None
+        attachment_state = "not_persistent" if state.backend is not None else target_binding_state
         typed_capabilities = state.backend.capabilities if state.backend is not None else None
         capability_evidence = state.backend.capability_evidence if state.backend is not None else None
         backend_capabilities = (
@@ -306,7 +354,7 @@ class RealtimeInteractionManager:
                 "delivery_state": self._result_delivery_state(request.result),
             }
             for request in state.local_requests.values()
-            if request.result.state is ResponseOnlyResultState.AVAILABLE
+            if self._result_available(request.result)
         ]
         recent_conversation = []
         for turn in state.recent_conversation.values():
@@ -333,7 +381,7 @@ class RealtimeInteractionManager:
             "session_id": state.session_id,
             "backend_profile": self._backend_profile,
             "backend_mode": typed_capabilities.backend_kind if typed_capabilities is not None else "disabled",
-            "gateway_reachable": state.backend is not None,
+            "target_binding_verified": state.backend is not None,
             "backend_label": (
                 typed_capabilities.target_label if typed_capabilities is not None else "Backend unavailable"
             ),
@@ -345,10 +393,16 @@ class RealtimeInteractionManager:
             "phase": state.phase,
             "connection": {
                 "frontend_state": "connected" if state.activity.connected else "disconnected",
-                "gateway_state": gateway_state,
+                "target_binding_state": target_binding_state,
+                "target_state": target_availability,
                 "attachment_state": attachment_state,
-                "attachment_mode": "ephemeral_per_request" if self._committed_turns is not None else "none",
+                "attachment_mode": "terminal_invocation" if self._committed_turns is not None else "none",
                 "reconnect_mode": "fresh_frontend_session",
+                "backend_context_continuity": (
+                    state.backend.context_continuity
+                    if state.backend is not None
+                    else ResponseOnlyContextContinuity.NONE
+                ),
                 "resume_supported": False,
                 "recoverable_inflight": False,
             },
@@ -431,6 +485,119 @@ class RealtimeInteractionManager:
         }
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
+    def frontend_context(
+        self,
+        session_id: str,
+        request: FrontendContextRequest,
+        *,
+        maximum_characters: int,
+    ) -> str:
+        """Return only the application state needed for one model purpose."""
+        if not isinstance(request, FrontendContextRequest):
+            raise TypeError("request must be FrontendContextRequest")
+        state = self._session(session_id)
+        target: LocalRequestContext | None = None
+        projection_revision = state.context_revision
+        if request.local_request_id is not None:
+            local_request = state.local_requests.get(request.local_request_id)
+            if local_request is None:
+                raise LookupError("frontend context references an unknown local request")
+            if request.purpose is FrontendContextPurpose.DELEGATION_ACK:
+                if local_request.admission is None:
+                    raise LookupError("local request has no acknowledgement admission snapshot")
+                target = self._admission_context(local_request.admission)
+                projection_revision = local_request.admission.projection_revision
+            else:
+                target = self._local_request_context(local_request)
+
+        active_requests = tuple(
+            self._local_request_context(local_request)
+            for local_request in state.local_requests.values()
+            if local_request.phase.active
+        )
+        ready_results = tuple(
+            self._local_request_context(local_request)
+            for local_request in state.local_requests.values()
+            if self._result_ready_for_speech(local_request.result)
+        )
+        recent_conversation = tuple(
+            self._conversation_context(state, turn) for turn in state.recent_conversation.values()
+        )
+        capabilities = (
+            tuple(sorted(operation.value for operation in state.backend.capabilities.operations))
+            if state.backend is not None
+            else ()
+        )
+        snapshot = FrontendContextSnapshot(
+            purpose=request.purpose,
+            projection_revision=projection_revision,
+            target_request=target,
+            capabilities=capabilities,
+            active_local_requests=active_requests,
+            ready_results=ready_results,
+            recent_conversation=recent_conversation,
+            heard_through_presentation_id=state.heard_through_presentation_id,
+            heard_through_turn_id=state.heard_through_turn_id,
+            voice_activity=state.activity,
+        )
+        return FrontendContextProjector(maximum_characters=maximum_characters).project(snapshot)
+
+    @staticmethod
+    def _admission_context(admission: _LocalRequestAdmission) -> LocalRequestContext:
+        """Convert immutable local-admission evidence without reading later state."""
+        return LocalRequestContext(
+            summary=admission.request_summary,
+            operation=admission.operation,
+            state=admission.state,
+            backend_acceptance=admission.backend_acceptance,
+            durability=admission.durability,
+        )
+
+    @classmethod
+    def _local_request_context(cls, request: _LocalRequestProjection) -> LocalRequestContext:
+        """Normalize mutable local state without promoting it to backend Work."""
+        return LocalRequestContext(
+            summary=request.request_summary,
+            operation=request.operation,
+            state=request.phase,
+            terminal_outcome=request.terminal_outcome,
+            failure_code=request.failure_code,
+            result_state=request.result.state,
+            display_available=request.result.display_available,
+            speech_source=request.result.speech_source,
+            delivery_state=cls._result_delivery_state(request.result),
+        )
+
+    @staticmethod
+    def _conversation_context(state: _SessionState, turn: FrontendConversationTurn) -> ConversationTurn:
+        """Copy only bounded public conversation and playback evidence."""
+        receipt = state.playback_receipts.get(turn.turn_id)
+        return ConversationTurn(
+            turn_id=turn.turn_id,
+            role=turn.role,
+            text=turn.text,
+            delivery_state=turn.delivery_state,
+            presentation_id=turn.presentation_id,
+            local_request_id=turn.local_request_id,
+            heard_through_ms=None if receipt is None else receipt.heard_through_ms,
+            audio_end_ms=None if receipt is None else receipt.audio_end_ms,
+        )
+
+    @staticmethod
+    def _result_ready_for_speech(result: _LatestResult) -> bool:
+        """Return whether semantic speech material still awaits presentation."""
+        return (
+            result.state is ResponseOnlyResultState.AVAILABLE
+            and result.speech_source is ResponseOnlySpeechSource.BACKEND_AUTHORED
+            and result.presentation_state is _ResultPresentationState.READY
+            and result.delivery_state is None
+        )
+
+    @staticmethod
+    def _result_available(result: _LatestResult) -> bool:
+        """Return whether normalized result evidence remains locally available."""
+        return result.state is ResponseOnlyResultState.AVAILABLE
+
     def record_conversation_turn(self, session_id: str, turn: FrontendConversationTurn) -> None:
         """Retain one bounded public turn without creating backend Work evidence."""
         if not isinstance(turn, FrontendConversationTurn):
@@ -474,6 +641,7 @@ class RealtimeInteractionManager:
             oldest_turn_id = next(iter(state.recent_conversation))
             state.recent_conversation.pop(oldest_turn_id)
             state.playback_receipts.pop(oldest_turn_id, None)
+        state.context_revision += 1
 
     def record_playback_receipt(self, session_id: str, receipt: FrontendPlaybackReceipt) -> None:
         """Apply an idempotent receipt without inventing missing transcript text."""
@@ -528,15 +696,47 @@ class RealtimeInteractionManager:
             self._update_result_delivery_from_turn(state, updated_turn)
         else:
             self._update_result_delivery_from_receipt(state, receipt)
+        state.context_revision += 1
+
+    def record_speech_delivery_outcome(
+        self,
+        session_id: str,
+        outcome: FrontendSpeechDeliveryOutcome,
+    ) -> None:
+        """Apply a terminal no-audio outcome without fabricating client evidence."""
+        if not isinstance(outcome, FrontendSpeechDeliveryOutcome):
+            raise TypeError("outcome must be FrontendSpeechDeliveryOutcome")
+        state = self._session(session_id)
+        request = state.local_requests.get(outcome.local_request_id)
+        if request is None:
+            raise ValueError("speech delivery outcome references an unknown local request")
+        if request.result.state is not ResponseOnlyResultState.AVAILABLE:
+            raise ValueError("speech delivery outcome requires an available result")
+        delivery_state = FrontendConversationDeliveryState(outcome.state.value)
+        if request.result.delivery_state is not None:
+            if (
+                request.result.delivery_state is delivery_state
+                and request.result.presentation_id == outcome.presentation_id
+            ):
+                return
+            raise ValueError("result already has a different terminal speech outcome")
+        updated_result = replace(
+            request.result,
+            presentation_state=_ResultPresentationState.TERMINAL,
+            delivery_state=delivery_state,
+            presentation_id=outcome.presentation_id,
+        )
+        request.result = updated_result
+        if state.latest_local_request_id == outcome.local_request_id:
+            state.latest_result = updated_result
+        state.context_revision += 1
 
     @staticmethod
     def _result_delivery_state(result: _LatestResult) -> str:
         """Return a truthful local speech-delivery state for an available result."""
         if result.delivery_state is not None:
             return result.delivery_state.value
-        if result.speech_source is ResponseOnlySpeechSource.BACKEND_AUTHORED:
-            return "ready"
-        return "not_requested"
+        return result.presentation_state.value
 
     @staticmethod
     def _update_result_delivery_from_turn(state: _SessionState, turn: FrontendConversationTurn) -> None:
@@ -549,12 +749,21 @@ class RealtimeInteractionManager:
             raise ValueError("conversation turn references an unknown local request")
         if request.result.state is not ResponseOnlyResultState.AVAILABLE:
             return
-        updated_result = replace(
-            request.result,
-            delivery_state=turn.delivery_state,
-            presentation_id=turn.presentation_id,
-            turn_id=turn.turn_id,
-        )
+        if turn.delivery_state is FrontendConversationDeliveryState.DELIVERED:
+            updated_result = replace(
+                request.result,
+                presentation_state=_ResultPresentationState.AWAITING_PLAYBACK_RECEIPT,
+                presentation_id=turn.presentation_id,
+                turn_id=turn.turn_id,
+            )
+        else:
+            updated_result = replace(
+                request.result,
+                presentation_state=_ResultPresentationState.TERMINAL,
+                delivery_state=turn.delivery_state,
+                presentation_id=turn.presentation_id,
+                turn_id=turn.turn_id,
+            )
         request.result = updated_result
         if state.latest_local_request_id == local_request_id:
             state.latest_result = updated_result
@@ -572,6 +781,7 @@ class RealtimeInteractionManager:
             return
         updated_result = replace(
             request.result,
+            presentation_state=_ResultPresentationState.TERMINAL,
             delivery_state=FrontendConversationDeliveryState(receipt.state.value),
             presentation_id=receipt.presentation_id,
             turn_id=receipt.turn_id,
@@ -596,7 +806,10 @@ class RealtimeInteractionManager:
     async def update_activity(self, session_id: str, activity: FrontendActivity) -> None:
         """Feed the same independent activity axes used by the safe speech queue."""
         state = self._session(session_id)
+        if state.activity == activity:
+            return
         state.activity = activity
+        state.context_revision += 1
 
     async def execute_tool(
         self,
@@ -636,7 +849,7 @@ class RealtimeInteractionManager:
         if not isinstance(delegated_goal, str):
             yield self._failed_turn(state, call_id, commit_id, "invalid_tool_arguments")
             return
-        # Keep the source turn in the ledger; send only the validated standalone goal to the backend.
+        # Retain the source turn locally; send only the validated standalone goal to the backend.
         request_summary = _request_summary(
             delegated_goal,
             character_limit=self._request_summary_character_limit,
@@ -659,7 +872,8 @@ class RealtimeInteractionManager:
                 request_summary=request_summary,
             )
             return
-        async with state.lock, self._guard_local_request(state, call_id, commit_id):
+        guard = _LocalRequestGuardState()
+        async with state.lock, self._guard_local_request(state, call_id, commit_id, guard):
             state.operation = "work.delegate"
             # Publish a prompt local receipt before awaiting the shared backend
             # lane.  Only the holder of that lane may claim ``dispatching``.
@@ -699,7 +913,7 @@ class RealtimeInteractionManager:
                 },
                 frontend_response=FrontendResponse(
                     purpose=FrontendResponsePurpose.DELEGATION_ACK,
-                    payload_text=request_summary,
+                    payload_text=None,
                     local_request_id=commit_id,
                 ),
             )
@@ -723,8 +937,8 @@ class RealtimeInteractionManager:
                     phase=ResponseOnlyRequestState.WAITING_FOR_RESPONSE,
                     title="Waiting for agent response",
                     text=(
-                        "VoiceClaw is waiting on the response-only gateway; the gateway has not supplied "
-                        "a separate durable acceptance or running receipt."
+                        "VoiceClaw is waiting for the configured target; this terminal invocation does not "
+                        "supply a separate durable acceptance or running receipt."
                     ),
                     correlation=state.last_correlation,
                 )
@@ -732,6 +946,7 @@ class RealtimeInteractionManager:
                     result: CommittedTurnResult | None = None
                     display_fragments: list[str] = []
                     expected_display_sequence = 0
+                    guard.invocation_started = True
                     async for event in self._committed_turns.stream_turn(
                         CommittedTurnRequest(
                             runtime_conversation_id=state.conversation_id,
@@ -741,7 +956,7 @@ class RealtimeInteractionManager:
                     ):
                         if isinstance(event, CommittedTurnDisplayDelta):
                             if event.sequence != expected_display_sequence:
-                                raise CommittedTurnError("agent_protocol_error")
+                                raise CommittedTurnError("invocation_result_unusable")
                             expected_display_sequence += 1
                             display_fragments.append(event.delta)
                             yield InteractionUpdate(
@@ -760,24 +975,50 @@ class RealtimeInteractionManager:
                             )
                             continue
                         if not isinstance(event, CommittedTurnCompleted) or result is not None:
-                            raise CommittedTurnError("agent_protocol_error")
+                            raise CommittedTurnError("invocation_result_unusable")
                         result = event.result
                     if result is None or "".join(display_fragments) != result.display_text:
-                        raise CommittedTurnError("agent_protocol_error")
+                        raise CommittedTurnError("invocation_result_unusable")
                 except CommittedTurnError as error:
-                    yield self._failed_turn(state, call_id, commit_id, error.code, tool_output=False)
+                    update = self._failed_turn(state, call_id, commit_id, error.code, tool_output=False)
+                    await self._refresh_backend_contract()
+                    update = self._with_frontend_contract(update, state)
+                    yield update
                     return
                 except Exception:
-                    yield self._failed_turn(state, call_id, commit_id, "backend_unavailable", tool_output=False)
+                    update = self._failed_turn(
+                        state,
+                        call_id,
+                        commit_id,
+                        "runtime_interrupted",
+                        tool_output=False,
+                    )
+                    await self._refresh_backend_contract()
+                    update = self._with_frontend_contract(update, state)
+                    yield update
                     return
             if not result.display_text.strip():
-                yield self._failed_turn(state, call_id, commit_id, "agent_protocol_error", tool_output=False)
+                update = self._failed_turn(
+                    state,
+                    call_id,
+                    commit_id,
+                    "invocation_result_unusable",
+                    tool_output=False,
+                )
+                await self._refresh_backend_contract()
+                update = self._with_frontend_contract(update, state)
+                yield update
                 return
             speech_source = _speech_source(result)
             latest_result = _LatestResult(
                 state=ResponseOnlyResultState.AVAILABLE,
                 display_available=True,
                 speech_source=speech_source,
+                presentation_state=(
+                    _ResultPresentationState.READY
+                    if speech_source is ResponseOnlySpeechSource.BACKEND_AUTHORED
+                    else _ResultPresentationState.NOT_REQUESTED
+                ),
             )
             frontend_response = _result_frontend_response(
                 result,
@@ -825,7 +1066,60 @@ class RealtimeInteractionManager:
                 result=latest_result,
             )
             state.last_correlation = terminal_update.correlation
+            await self._refresh_backend_contract()
+            terminal_update = self._with_frontend_contract(terminal_update, state)
             yield terminal_update
+
+    async def _refresh_backend_contract(self) -> None:
+        """Refresh model-visible operations after a terminal backend exchange."""
+        backend: CommittedTurnBackend | None = None
+        if self._committed_turns is not None:
+            try:
+                backend = await self._committed_turns.inspect()
+            except Exception:
+                backend = None
+        frontend_tools = () if backend is None else self._tool_registry.project(backend.capabilities)
+        for session in self._sessions.values():
+            session.backend = backend
+            session.frontend_tools = frontend_tools
+            session.context_revision += 1
+
+    @staticmethod
+    def _target_snapshot(state: _SessionState) -> BackendTargetSnapshot:
+        """Build one atomic target replacement for protocol adapters."""
+        backend = state.backend
+        if backend is None:
+            return BackendTargetSnapshot(
+                backend_label="Backend unavailable",
+                backend_mode="disabled",
+                target_binding_verified=False,
+                target_ref="not-attached",
+                target_availability=None,
+            )
+        capabilities = backend.capabilities
+        evidence = backend.capability_evidence
+        return BackendTargetSnapshot(
+            backend_label=capabilities.target_label,
+            backend_mode=capabilities.backend_kind,
+            target_binding_verified=True,
+            target_ref=backend.target_ref,
+            target_availability=backend.target_availability,
+            capabilities=tuple(sorted(operation.value for operation in capabilities.operations)),
+            frontend_tools=state.frontend_tools,
+            durability=capabilities.durability,
+            event_delivery=capabilities.event_delivery,
+            max_parallel_work=capabilities.max_parallel_work,
+            context_continuity=backend.context_continuity,
+            capability_source=evidence.source,
+            capability_source_id=evidence.source_id,
+            capability_revision=evidence.revision,
+            capability_hash=evidence.digest,
+        )
+
+    def _with_frontend_contract(self, update: InteractionUpdate, state: _SessionState) -> InteractionUpdate:
+        """Attach one authoritative replacement target snapshot."""
+        target = self._target_snapshot(state)
+        return replace(update, frontend_tools=target.frontend_tools, backend_target=target)
 
     @asynccontextmanager
     async def _guard_local_request(
@@ -833,6 +1127,7 @@ class RealtimeInteractionManager:
         state: _SessionState,
         call_id: str,
         commit_id: str,
+        guard: _LocalRequestGuardState,
     ) -> AsyncIterator[None]:
         """Close any admitted request whose update stream exits nonterminally."""
         try:
@@ -840,13 +1135,16 @@ class RealtimeInteractionManager:
         finally:
             request = state.local_requests.get(commit_id)
             if request is not None and request.phase.active:
+                failure_code = "runtime_interrupted" if guard.invocation_started else "local_request_cancelled"
                 self._failed_turn(
                     state,
                     call_id,
                     commit_id,
-                    "runtime_interrupted",
+                    failure_code,
                     tool_output=False,
                 )
+                if guard.invocation_started:
+                    await self._refresh_backend_contract()
 
     async def close_session(self, session_id: str, reason: str) -> None:
         """Release only the frontend attachment; never reinterpret it as Work cancellation."""
@@ -870,17 +1168,27 @@ class RealtimeInteractionManager:
         tool_output: bool = True,
         request_summary: str | None = None,
     ) -> InteractionUpdate:
+        uncertain = code in {
+            "invocation_outcome_unknown",
+            "invocation_result_unusable",
+            "runtime_interrupted",
+            "target_context_reused",
+        }
+        terminal_phase = ResponseOnlyRequestState.OUTCOME_UNKNOWN if uncertain else ResponseOnlyRequestState.FAILED
+        terminal_outcome = (
+            ResponseOnlyTerminalOutcome.OUTCOME_UNKNOWN if uncertain else ResponseOnlyTerminalOutcome.FAILED
+        )
         state.operation = "work.delegate"
-        state.phase = ResponseOnlyRequestState.FAILED
-        state.latest_terminal_outcome = ResponseOnlyTerminalOutcome.FAILED
+        state.phase = terminal_phase
+        state.latest_terminal_outcome = terminal_outcome
         state.latest_failure_code = code
         state.latest_result = _LatestResult()
         self._touch_local_request(
             state,
             commit_id,
-            phase=ResponseOnlyRequestState.FAILED,
+            phase=terminal_phase,
             request_summary=request_summary,
-            terminal_outcome=ResponseOnlyTerminalOutcome.FAILED,
+            terminal_outcome=terminal_outcome,
             failure_code=code,
             result=_LatestResult(),
         )
@@ -893,12 +1201,12 @@ class RealtimeInteractionManager:
         failure_copy = self._model_contracts.failure_copy(code)
         return InteractionUpdate(
             kind=ResponseOnlyUpdateKind.BACKEND_TURN,
-            phase=ResponseOnlyRequestState.FAILED,
+            phase=terminal_phase,
             title=failure_copy.title,
             text=failure_copy.display,
             correlation=state.last_correlation,
             request_summary=request_summary,
-            tool_output={"status": ResponseOnlyRequestState.FAILED, "error": code} if tool_output else None,
+            tool_output={"status": terminal_phase, "error": code} if tool_output else None,
             frontend_response=FrontendResponse(
                 purpose=FrontendResponsePurpose.FAILURE_DELIVERY,
                 payload_text=failure_copy.speech,
@@ -930,6 +1238,13 @@ class RealtimeInteractionManager:
         request.failure_code = failure_code
         if result is not None:
             request.result = result
+        state.context_revision += 1
+        if request.admission is None and phase is ResponseOnlyRequestState.LOCALLY_QUEUED:
+            request.admission = _LocalRequestAdmission(
+                request_summary=request.request_summary,
+                operation=request.operation,
+                projection_revision=state.context_revision,
+            )
         state.local_requests[local_request_id] = request
         state.latest_local_request_id = local_request_id
         while len(state.local_requests) > self._retained_request_limit:

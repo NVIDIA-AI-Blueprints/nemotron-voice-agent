@@ -117,7 +117,7 @@ def test_projection_is_an_out_of_band_standard_response() -> None:
     ]
     created = events[0]["response"]
     assert created["conversation_id"] is None
-    assert created["metadata"]["voiceclaw_schema"] == "voiceclaw.projection.v1"
+    assert created["metadata"]["voiceclaw_schema"] == "voiceclaw.projection.v2"
     assert created["metadata"]["voiceclaw_turn_id"] == "turn-1"
     assert events[-1]["response"]["status"] == "completed"
     assert not any(event["type"].startswith("conversation.item") for event in events)

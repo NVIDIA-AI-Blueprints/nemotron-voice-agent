@@ -28,6 +28,8 @@ _TOKEN = re.compile(r"\$\{([a-z][a-z0-9_]*)\}")
 _PLACEHOLDER = re.compile(r"\$\{([^}]*)\}")
 _FAILURE_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}")
 _INSTRUCTION_TEMPLATE_TOKENS = {
+    "task_acknowledgement": frozenset({"objective_json"}),
+    "result_delivery": frozenset({"delivery_context_json", "response_context_json"}),
     "server_policy": frozenset({"content"}),
     "untrusted_session": frozenset({"content"}),
     "untrusted_response": frozenset({"content"}),

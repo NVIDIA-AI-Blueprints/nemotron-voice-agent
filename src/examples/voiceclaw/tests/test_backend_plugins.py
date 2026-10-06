@@ -9,19 +9,15 @@ from typing import Any
 
 import pytest
 
-from voiceclaw.adapters.state import SqliteStateStore
-from voiceclaw.application.interaction import InteractionCoordinator
 from voiceclaw.backends import (
     BACKEND_ENTRY_POINT_GROUP,
     BACKEND_PLUGIN_API_VERSION,
     BackendAdapterRegistration,
     BackendComposition,
-    DurableRuntimeUnavailableError,
 )
 from voiceclaw.composition import compose_backends
 from voiceclaw.config import BackendProfile, ConfigurationError, VoiceClawConfig, load_config
-from voiceclaw.interaction_profiles import load_interaction_profile_catalog
-from voiceclaw.model_contracts import ModelContractCatalog, load_model_contract_catalog
+from voiceclaw.model_contracts import ModelContractCatalog
 
 EXAMPLE_CONFIG = Path(__file__).parents[1] / "src" / "voiceclaw" / "resources" / "voiceclaw.example.yaml"
 TEST_BEARER = "voiceclaw-test-deployment-bearer-0001"
@@ -59,11 +55,19 @@ class _FakeEntryPoint:
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
-    credential_file = tmp_path / "nemoclaw-deployment-bearer"
+    credential_file = tmp_path / "openshell-client-secret"
     credential_file.write_text(f"{TEST_BEARER}\n", encoding="ascii")
     credential_file.chmod(0o600)
     return {
-        "NEMOCLAW_VOICE_GATEWAY_BEARER_FILE": str(credential_file),
+        "VOICECLAW_OPENSHELL_CLIENT_SECRET_FILE": str(credential_file),
+        "VOICECLAW_OPENSHELL_ENDPOINT": "127.0.0.1:8080",
+        "VOICECLAW_OPENSHELL_WORKSPACE": "test-workspace",
+        "VOICECLAW_OPENSHELL_SANDBOX": "test-sandbox",
+        "VOICECLAW_FABRIC_ADAPTER_ID": "nvidia.fabric.openclaw",
+        "VOICECLAW_FABRIC_AGENT": "main",
+        "VOICECLAW_NATIVE_AGENT": "main",
+        "VOICECLAW_OPENSHELL_ISSUER": "https://identity.example.test",
+        "VOICECLAW_OPENSHELL_CLIENT_ID": "voiceclaw-test",
         "REALTIME_UPSTREAM_ENDPOINT": "ws://127.0.0.1:7861/v1/realtime",
     }
 
@@ -149,15 +153,6 @@ def test_selected_durable_plugin_supplies_only_the_agent_port(
     assert composition.agent_backend is backend
     assert composition.turn_backend is None
     assert not hasattr(composition, "runtime_factory")
-    with SqliteStateStore(":memory:") as store:
-        coordinator = composition.create_interaction_coordinator(
-            state_store=store,
-            model_contracts=load_model_contract_catalog(),
-            interaction_profile=load_interaction_profile_catalog().resolve("stateless"),
-        )
-        assert isinstance(coordinator, InteractionCoordinator)
-        with pytest.raises(DurableRuntimeUnavailableError, match="core Realtime session runtime"):
-            composition.create_runtime(backend_profile="installed", state_store=store)
 
 
 def test_duplicate_selected_entry_points_are_rejected_before_loading(

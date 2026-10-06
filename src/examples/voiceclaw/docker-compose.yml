@@ -13,11 +13,11 @@ services:
         VOICECLAW_SOURCE_REVISION: ${VOICECLAW_SOURCE_REVISION:-development}
         VOICECLAW_SOURCE_URL: ${VOICECLAW_SOURCE_URL:-https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent}
     image: nemotron-voiceclaw:latest
-    # This developer recipe explicitly opts into the optional UI. The image
-    # itself remains headless unless `--ui` is passed.
+    # This developer recipe opts into the optional UI. The image is headless
+    # unless `--ui` is passed.
     command: ["serve", "--ui"]
-    # This developer recipe connects to a separately supervised host-local
-    # NemoClaw gateway.
+    # Host networking lets the developer configuration reach host-local model
+    # endpoints and a developer-local OpenShell API without publishing them.
     network_mode: host
     # The root supervisor may drop to its two fixed child identities, but no
     # child may regain privilege through a setuid/setgid or file-cap binary.
@@ -32,10 +32,13 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      # The packaged NemoClaw profile selects this file. Other backend
-      # profiles ignore it, so they do not require a NemoClaw secret.
-      NEMOCLAW_VOICE_GATEWAY_BEARER_FILE: /run/voiceclaw/operator/secrets/nemoclaw-deployment-bearer
       VOICECLAW_CONFIG: /run/voiceclaw/config/voiceclaw.yaml
+      VOICECLAW_FABRIC_ADAPTER_ID: ${VOICECLAW_FABRIC_ADAPTER_ID:-nvidia.fabric.openclaw}
+      VOICECLAW_FABRIC_AGENT: ${VOICECLAW_FABRIC_AGENT:-main}
+      VOICECLAW_NATIVE_AGENT: ${VOICECLAW_NATIVE_AGENT:-main}
+      VOICECLAW_OPENSHELL_ENDPOINT: ${VOICECLAW_OPENSHELL_ENDPOINT:?Set connection.gatewayEndpoint URL}
+      VOICECLAW_OPENSHELL_SANDBOX: ${VOICECLAW_OPENSHELL_SANDBOX:?Set the authored sandbox name}
+      VOICECLAW_OPENSHELL_WORKSPACE: ${VOICECLAW_OPENSHELL_WORKSPACE:?Set the applied workspace}
       VOICECLAW_SERVER_HOST: ${VOICECLAW_SERVER_HOST:-127.0.0.1}
     group_add:
       - "${VOICECLAW_FILE_GID:-1000}"
@@ -46,10 +49,8 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # One reviewed, read-only operator root can contain credentials, TLS,
-      # custom catalogs, and alternate configuration fragments. Contents are
-      # ignored by Git; YAML references use absolute /run/voiceclaw/operator
-      # paths. Empty roots support backend:none and external Realtime profiles.
+      # Provider credentials, optional remote OpenShell credentials, and
+      # operator catalogs remain files in this read-only operator root.
       - type: bind
         source: ${VOICECLAW_OPERATOR_FILES_HOST:-./operator}
         target: /run/voiceclaw/operator
@@ -58,7 +59,7 @@ services:
           create_host_path: false
       - voiceclaw-state:/var/lib/voiceclaw
       - voiceclaw-cache:/var/cache/voiceclaw
-    restart: unless-stopped
+    restart: "no"
     logging:
       driver: json-file
       options:

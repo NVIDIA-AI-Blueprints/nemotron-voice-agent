@@ -10,9 +10,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from voiceclaw.domain.models import WorkState
+from voiceclaw.domain.models import Durability, FrontendActivity, WorkState
+from voiceclaw.domain.response_only import (
+    ResponseOnlyRequestState,
+    ResponseOnlyResultState,
+    ResponseOnlySpeechSource,
+    ResponseOnlyTerminalOutcome,
+)
 from voiceclaw.model_contracts import ModelContractCatalog, load_model_contract_catalog
-from voiceclaw.ports.runtime import FrontendConversationDeliveryState
+from voiceclaw.ports.runtime import (
+    MAX_FRONTEND_CONTEXT_CHARACTERS,
+    MIN_FRONTEND_CONTEXT_CHARACTERS,
+    FrontendContextPurpose,
+    FrontendConversationDeliveryState,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +79,170 @@ class ContextSnapshot:
     pending_interactions: tuple[PendingInteractionContext, ...] = ()
     ready_results: tuple[ReadyResultContext, ...] = ()
     recent_conversation: tuple[ConversationTurn, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LocalRequestContext:
+    """Bounded VoiceClaw-local request evidence for a frontend boundary."""
+
+    summary: str
+    operation: str
+    state: ResponseOnlyRequestState
+    backend_acceptance: str = "unknown"
+    durability: Durability = Durability.NONE
+    terminal_outcome: ResponseOnlyTerminalOutcome = ResponseOnlyTerminalOutcome.NONE
+    failure_code: str | None = None
+    result_state: ResponseOnlyResultState = ResponseOnlyResultState.NONE
+    display_available: bool = False
+    speech_source: ResponseOnlySpeechSource = ResponseOnlySpeechSource.NONE
+    delivery_state: str = "not_requested"
+
+
+@dataclass(frozen=True, slots=True)
+class FrontendContextSnapshot:
+    """Typed application state selected for one frontend model purpose."""
+
+    purpose: FrontendContextPurpose
+    projection_revision: int
+    target_request: LocalRequestContext | None = None
+    capabilities: tuple[str, ...] = ()
+    active_local_requests: tuple[LocalRequestContext, ...] = ()
+    ready_results: tuple[LocalRequestContext, ...] = ()
+    recent_conversation: tuple[ConversationTurn, ...] = ()
+    heard_through_presentation_id: str | None = None
+    heard_through_turn_id: str | None = None
+    voice_activity: FrontendActivity = FrontendActivity()
+
+
+class FrontendContextProjector:
+    """Serialize deterministic purpose-specific context without provider details."""
+
+    SCHEMA = "voiceclaw.frontend-context.v1"
+
+    def __init__(self, *, maximum_characters: int) -> None:
+        """Bound every serialized context before it reaches a model adapter."""
+        if not MIN_FRONTEND_CONTEXT_CHARACTERS <= maximum_characters <= MAX_FRONTEND_CONTEXT_CHARACTERS:
+            raise ValueError(
+                "maximum_characters must be between "
+                f"{MIN_FRONTEND_CONTEXT_CHARACTERS} and {MAX_FRONTEND_CONTEXT_CHARACTERS}"
+            )
+        self._maximum_characters = maximum_characters
+
+    def project(self, snapshot: FrontendContextSnapshot) -> str:
+        """Return one bounded view while preserving its correlated target."""
+        if snapshot.purpose is FrontendContextPurpose.DELEGATION_ACK:
+            payload: dict[str, Any] = {
+                "schema": self.SCHEMA,
+                "purpose": snapshot.purpose.value,
+                "projection_revision": snapshot.projection_revision,
+                "target_request": (
+                    None if snapshot.target_request is None else self._acknowledgement_request(snapshot.target_request)
+                ),
+            }
+            return self._bounded(payload)
+
+        payload: dict[str, Any] = {
+            "schema": self.SCHEMA,
+            "purpose": snapshot.purpose.value,
+            "projection_revision": snapshot.projection_revision,
+            "target_request": (None if snapshot.target_request is None else self._request(snapshot.target_request)),
+            "capabilities": [],
+            "active_local_requests": [],
+            "ready_results": [],
+            "recent_conversation": [],
+        }
+        payload["voice_activity"] = {
+            "connected": snapshot.voice_activity.connected,
+            "input": snapshot.voice_activity.input.value,
+            "model": snapshot.voice_activity.model.value,
+            "output": snapshot.voice_activity.output.value,
+        }
+        payload["heard_through"] = {
+            "presentation_id": snapshot.heard_through_presentation_id,
+            "turn_id": snapshot.heard_through_turn_id,
+        }
+
+        if snapshot.purpose is FrontendContextPurpose.CONVERSATION:
+            for capability in snapshot.capabilities:
+                self._try_append(payload, "capabilities", capability)
+            for request in reversed(snapshot.active_local_requests):
+                self._try_append(payload, "active_local_requests", self._request(request))
+            payload["active_local_requests"].reverse()
+            for result in reversed(snapshot.ready_results):
+                self._try_append(payload, "ready_results", self._request(result))
+            payload["ready_results"].reverse()
+
+        accepted_turns: list[dict[str, Any]] = []
+        for turn in reversed(snapshot.recent_conversation):
+            candidate = self._conversation_turn(turn)
+            payload["recent_conversation"] = [candidate, *accepted_turns]
+            if len(self._serialize(payload)) <= self._maximum_characters:
+                accepted_turns.insert(0, candidate)
+            else:
+                payload["recent_conversation"] = accepted_turns
+        return self._bounded(payload)
+
+    def _bounded(self, payload: dict[str, Any]) -> str:
+        serialized = self._serialize(payload)
+        if len(serialized) > self._maximum_characters:
+            raise ValueError("frontend context budget cannot hold its required target")
+        return serialized
+
+    def _try_append(self, payload: dict[str, Any], key: str, value: Any) -> bool:
+        values: list[Any] = payload[key]
+        values.append(value)
+        if len(self._serialize(payload)) <= self._maximum_characters:
+            return True
+        values.pop()
+        return False
+
+    @staticmethod
+    def _acknowledgement_request(request: LocalRequestContext) -> dict[str, Any]:
+        """Project only immutable local-admission facts for acknowledgement speech."""
+        return {
+            "request_summary": request.summary,
+            "operation": request.operation,
+            "state": request.state.value,
+            "backend_acceptance": request.backend_acceptance,
+            "durability": request.durability.value,
+        }
+
+    @staticmethod
+    def _request(request: LocalRequestContext) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "request_summary": request.summary,
+            "operation": request.operation,
+            "state": request.state.value,
+            "backend_acceptance": request.backend_acceptance,
+            "durability": request.durability.value,
+            "terminal_outcome": request.terminal_outcome.value,
+            "result": {
+                "state": request.result_state.value,
+                "display_available": request.display_available,
+                "speech_source": request.speech_source.value,
+                "delivery_state": request.delivery_state,
+            },
+        }
+        if request.failure_code is not None:
+            value["failure_code"] = request.failure_code
+        return value
+
+    @staticmethod
+    def _conversation_turn(turn: ConversationTurn) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "role": turn.role,
+            "text": turn.text,
+            "delivery_state": turn.delivery_state.value,
+        }
+        if turn.heard_through_ms is not None:
+            value["heard_through_ms"] = turn.heard_through_ms
+        if turn.audio_end_ms is not None:
+            value["audio_end_ms"] = turn.audio_end_ms
+        return value
+
+    @staticmethod
+    def _serialize(payload: dict[str, Any]) -> str:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 @dataclass(frozen=True, slots=True)

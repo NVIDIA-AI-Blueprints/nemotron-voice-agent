@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Provider-neutral types for temporary response-only backends."""
+"""Provider-neutral types for bounded response-only backends."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 RESULT_ENVELOPE_SCHEMA = "voiceclaw.result.v1"
-REALTIME_PROJECTION_SCHEMA = "voiceclaw.projection.v1"
-RUNTIME_PROJECTION_SCHEMA = "voiceclaw.runtime.v4"
+REALTIME_PROJECTION_SCHEMA = "voiceclaw.projection.v2"
+RUNTIME_PROJECTION_SCHEMA = "voiceclaw.runtime.v5"
 
 
 class ResponseOnlyRequestState(StrEnum):
@@ -22,6 +22,7 @@ class ResponseOnlyRequestState(StrEnum):
     WAITING_FOR_RESPONSE = "waiting_for_response"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    OUTCOME_UNKNOWN = "outcome_unknown"
 
     @property
     def active(self) -> bool:
@@ -35,7 +36,7 @@ class ResponseOnlyRequestState(StrEnum):
     @property
     def terminal(self) -> bool:
         """Return whether the local request lifecycle has ended."""
-        return self in {self.SUCCEEDED, self.FAILED}
+        return self in {self.SUCCEEDED, self.FAILED, self.OUTCOME_UNKNOWN}
 
 
 class ResponseOnlyTerminalOutcome(StrEnum):
@@ -44,6 +45,24 @@ class ResponseOnlyTerminalOutcome(StrEnum):
     NONE = "none"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    OUTCOME_UNKNOWN = "outcome_unknown"
+
+
+class ResponseOnlyContextContinuity(StrEnum):
+    """Qualified relationship between application sessions and backend context."""
+
+    NONE = "none"
+    ISOLATED_PER_SESSION = "isolated_per_session"
+    SHARED_TARGET = "shared_target"
+    UNQUALIFIED = "unqualified"
+
+
+class ResponseOnlyTargetAvailability(StrEnum):
+    """Process-local availability of a bounded response-only target."""
+
+    AVAILABLE = "available"
+    IN_FLIGHT = "in_flight"
+    CONSUMED = "consumed"
 
 
 class ResponseOnlyResultState(StrEnum):
@@ -108,6 +127,8 @@ __all__ = [
     "RESULT_ENVELOPE_SCHEMA",
     "RUNTIME_PROJECTION_SCHEMA",
     "ResponseOnlyRequestState",
+    "ResponseOnlyContextContinuity",
+    "ResponseOnlyTargetAvailability",
     "ResponseOnlyResultEventKind",
     "ResponseOnlyResultEnvelope",
     "ResponseOnlyResultState",

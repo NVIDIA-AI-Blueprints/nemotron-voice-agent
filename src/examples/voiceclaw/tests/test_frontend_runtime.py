@@ -194,7 +194,17 @@ def test_bundled_prompt_is_generated_from_selected_model_contract(tmp_path) -> N
 def test_example_local_cascade_materializes_deterministic_temperature(tmp_path) -> None:
     configuration = load_config(
         _EXAMPLE_CONFIG,
-        environ={"NEMOCLAW_VOICE_GATEWAY_BEARER_FILE": "/run/secrets/nemoclaw_voice_gateway_bearer"},
+        environ={
+            "VOICECLAW_OPENSHELL_CLIENT_SECRET_FILE": "/run/secrets/test-openshell-client-secret",
+            "VOICECLAW_OPENSHELL_ENDPOINT": "127.0.0.1:8080",
+            "VOICECLAW_OPENSHELL_WORKSPACE": "test-workspace",
+            "VOICECLAW_OPENSHELL_SANDBOX": "test-sandbox",
+            "VOICECLAW_FABRIC_ADAPTER_ID": "nvidia.fabric.openclaw",
+            "VOICECLAW_FABRIC_AGENT": "main",
+            "VOICECLAW_NATIVE_AGENT": "main",
+            "VOICECLAW_OPENSHELL_ISSUER": "https://identity.example.test",
+            "VOICECLAW_OPENSHELL_CLIENT_ID": "voiceclaw-test",
+        },
     )
     profile = configuration.selected_frontend
     assert isinstance(profile, BundledNvaFrontendProfile)
@@ -311,7 +321,7 @@ def test_cloud_platform_requires_a_shared_service_credential(tmp_path) -> None:
 def test_rejects_unsupported_pipeline_and_provider(tmp_path) -> None:
     unsupported_pipeline = _bundled_profile()
     object.__setattr__(unsupported_pipeline, "pipeline_mode", "omni-assistant")
-    with pytest.raises(ConfigurationError, match="supports only pipeline_mode"):
+    with pytest.raises(ConfigurationError, match="currently supports pipeline_mode"):
         materialize_frontend_runtime(
             unsupported_pipeline,
             tmp_path / "pipeline",

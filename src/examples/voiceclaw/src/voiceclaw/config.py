@@ -25,6 +25,7 @@ from voiceclaw.interaction_profiles import (
     InteractionProfileError,
     parse_interaction_profile_catalog,
 )
+from voiceclaw.ports.runtime import MAX_FRONTEND_CONTEXT_CHARACTERS, MIN_FRONTEND_CONTEXT_CHARACTERS
 
 _ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -59,17 +60,6 @@ _RESERVED_OPERATIONAL_ENV_NAMES = frozenset(
         "LIBRARY_PATH",
         "LOGNAME",
         "NO_PROXY",
-        "NEMOCLAW_AGENT",
-        "NEMOCLAW_AGENT_CREDENTIAL_FILE",
-        "NEMOCLAW_AGENT_GATEWAY_URL",
-        "NEMOCLAW_DEPLOYMENT_CREDENTIAL_FILE",
-        "NEMOCLAW_GATEWAY_PORT",
-        "NEMOCLAW_RUNTIME_IDENTITY",
-        "NEMOCLAW_RUNTIME_PROFILE",
-        "NEMOCLAW_SANDBOX",
-        "NEMOCLAW_SOURCE_DIR",
-        "NEMOCLAW_VOICE_GATEWAY_BEARER_FILE",
-        "NEMOCLAW_VOICE_GATEWAY_PORT",
         "NVA_RUNTIME_CONFIG_DIR",
         "NVIDIA_API_KEY_FILE",
         "OLDPWD",
@@ -99,13 +89,21 @@ _RESERVED_OPERATIONAL_ENV_NAMES = frozenset(
         "VOICECLAW_CONFIG_FILE_HOST",
         "VOICECLAW_CLIENT_SECRET_FILE",
         "VOICECLAW_FILE_GID",
+        "VOICECLAW_FABRIC_ADAPTER_ID",
+        "VOICECLAW_FABRIC_AGENT",
         "VOICECLAW_FRONTEND_RUNTIME_DIR",
         "VOICECLAW_HOST_IP",
         "VOICECLAW_INTERNAL_READY_TIMEOUT",
         "VOICECLAW_NVA_PYTHON",
         "VOICECLAW_NVA_SERVER",
+        "VOICECLAW_NATIVE_AGENT",
         "VOICECLAW_OPERATOR_FILES_DIR",
         "VOICECLAW_OPERATOR_FILES_HOST",
+        "VOICECLAW_OPENSHELL_CLIENT_ID",
+        "VOICECLAW_OPENSHELL_ENDPOINT",
+        "VOICECLAW_OPENSHELL_ISSUER",
+        "VOICECLAW_OPENSHELL_SANDBOX",
+        "VOICECLAW_OPENSHELL_WORKSPACE",
         "VOICECLAW_RUNTIME_ROOT",
         "VOICECLAW_SERVER_HOST",
         "VOICECLAW_STATE_PATH",
@@ -135,6 +133,21 @@ _PROVIDER_SECRET_OPTION_PARTS = frozenset(
     }
 )
 _BACKEND_SECRET_SETTING_PARTS = _PROVIDER_SECRET_OPTION_PARTS - {"header", "headers"}
+_BACKEND_ENVIRONMENT_SETTING_NAMES = frozenset(
+    {
+        "adapter_id",
+        "agent",
+        "audience",
+        "client_id",
+        "endpoint",
+        "fabric_agent",
+        "issuer",
+        "native_agent",
+        "sandbox",
+        "tls_ca_file",
+        "workspace",
+    }
+)
 _PROVIDER_CONTROL_OPTION_NAMES = frozenset(
     {
         "base_url",
@@ -697,6 +710,8 @@ def parse_config(raw: Mapping[str, Any]) -> VoiceClawConfig:
     default_backend = _string(raw.get("default_backend"), "default_backend")
     if default_backend not in backends:
         raise ConfigurationError(f"default_backend references unknown profile: {default_backend}")
+    if backends[default_backend].kind == "openshell_fabric" and server.max_sessions != 1:
+        raise ConfigurationError("server.max_sessions must be 1 for the current openshell_fabric backend")
     if schema_version == _CONFIG_SCHEMA_V2:
         frontend_profiles: dict[str, FrontendProfile] = {}
         default_frontend = None
@@ -777,8 +792,11 @@ def parse_config(raw: Mapping[str, Any]) -> VoiceClawConfig:
         interaction_raw.get("context_character_budget", 24_000),
         "interaction.context_character_budget",
     )
-    if context_character_budget > 64_000:
-        raise ConfigurationError("interaction.context_character_budget must be at most 64000")
+    if not MIN_FRONTEND_CONTEXT_CHARACTERS <= context_character_budget <= MAX_FRONTEND_CONTEXT_CHARACTERS:
+        raise ConfigurationError(
+            "interaction.context_character_budget must be between "
+            f"{MIN_FRONTEND_CONTEXT_CHARACTERS} and {MAX_FRONTEND_CONTEXT_CHARACTERS}"
+        )
     request_summary_character_limit = _positive_int(
         interaction_raw.get("request_summary_character_limit", 512),
         "interaction.request_summary_character_limit",
@@ -1641,11 +1659,12 @@ def _environment_reference_allowed(path: tuple[str, ...]) -> bool:
         and path[4:] == ("credential", "file")
     ):
         return True
-    # Endpoint interpolation belongs to the provider-neutral backend boundary,
-    # not to any one built-in adapter.  Plugin factories still own semantic
-    # validation of the expanded value; credentials remain confined to the
-    # typed credential reference above and cannot be interpolated into settings.
-    return len(path) == 4 and path[0] == "backend_profiles" and path[2:] == ("settings", "endpoint")
+    return (
+        len(path) == 4
+        and path[0] == "backend_profiles"
+        and path[2] == "settings"
+        and path[3] in _BACKEND_ENVIRONMENT_SETTING_NAMES
+    )
 
 
 def _configuration_path(path: tuple[str, ...]) -> str:
@@ -1653,7 +1672,7 @@ def _configuration_path(path: tuple[str, ...]) -> str:
 
 
 def configuration_environment_references(value: object) -> frozenset[str]:
-    """Return environment names used only by approved URL and path fields."""
+    """Return environment names used only by approved non-secret operational fields."""
     references: set[str] = set()
 
     def visit(item: object, path: tuple[str, ...]) -> None:

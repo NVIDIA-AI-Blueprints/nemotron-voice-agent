@@ -62,8 +62,8 @@ _UI_ASSETS = {
     "marked.min.js": "text/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
-_READINESS_TIMEOUT_SECONDS = 4.0
 _READINESS_REASON_HEADER = "X-VoiceClaw-Reason"
+_READINESS_TIMEOUT_SECONDS = 180.0
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -106,16 +106,6 @@ class RealtimeAdmission:
                 raise RuntimeError("unknown Realtime admission lease")
             if not self._sessions:
                 self._empty.set()
-
-    async def can_accept(self) -> bool:
-        """Return whether one new authenticated session can be admitted."""
-        async with self._lock:
-            return not self._closing and (self._maximum is None or len(self._sessions) < self._maximum)
-
-    async def begin_drain(self) -> None:
-        """Reject new sessions while allowing existing sessions to finish."""
-        async with self._lock:
-            self._closing = True
 
     async def wait_empty(self) -> None:
         """Wait until every admitted session has released its lease."""
@@ -297,20 +287,29 @@ def _runtime_prerequisites(
         )
     except InteractionProfileError as error:
         raise ConfigurationError(str(error)) from error
+    owns_adapters = composition is None
     adapters = composition or compose_backends(
         config,
         environ=runtime_environ,
         model_contracts=model_contracts,
     )
-    adapters.require_realtime_runtime()
-    adapters.validate_interaction_profile(interaction_profile)
+    try:
+        adapters.require_realtime_runtime()
+        adapters.validate_interaction_profile(interaction_profile)
+        issuer = _public_issuer(config, runtime_environ)
+        upstream_bearer = _upstream_bearer(config, runtime_environ) if resolve_upstream else None
+    except BaseException:
+        if owns_adapters:
+            with suppress(Exception):
+                adapters.close()
+        raise
     return _RuntimePrerequisites(
         model_contracts=model_contracts,
         interaction_profiles=interaction_profiles,
         interaction_profile=interaction_profile,
         adapters=adapters,
-        issuer=_public_issuer(config, runtime_environ),
-        upstream_bearer=_upstream_bearer(config, runtime_environ) if resolve_upstream else None,
+        issuer=issuer,
+        upstream_bearer=upstream_bearer,
     )
 
 
@@ -351,12 +350,15 @@ def validate_configuration(
                     plan.nva_credential,
                     source_environment=runtime_environ,
                 )
-    _runtime_prerequisites(
+    prerequisites = _runtime_prerequisites(
         config,
         runtime_environ,
         resolve_upstream=resolve_upstream,
     )
-    _validate_state_configuration(config.state.path)
+    try:
+        _validate_state_configuration(config.state.path)
+    finally:
+        prerequisites.adapters.close()
 
 
 def _state_parent_for_new_path(path: Path) -> Path:
@@ -445,7 +447,13 @@ def create_app(
     if config.realtime is None:
         raise ConfigurationError("realtime configuration is required to run the VoiceClaw facade")
     runtime_environ = dict(os.environ if environ is None else environ)
-    prerequisites = _runtime_prerequisites(config, runtime_environ, composition=composition)
+    try:
+        prerequisites = _runtime_prerequisites(config, runtime_environ, composition=composition)
+    except BaseException:
+        if composition is not None:
+            with suppress(Exception):
+                composition.close()
+        raise
     model_contracts = prerequisites.model_contracts
     interaction_profiles = prerequisites.interaction_profiles
     interaction_profile = prerequisites.interaction_profile
@@ -454,22 +462,29 @@ def create_app(
     upstream_bearer = prerequisites.upstream_bearer
     admission = RealtimeAdmission(config.server.max_sessions)
 
-    _validate_state_configuration(config.state.path)
+    state_store: SqliteStateStore | None = None
     try:
-        state_store = SqliteStateStore(config.state.path)
-    except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
-        raise ConfigurationError(f"state.path could not be opened: {error}") from error
-    runtime = adapters.create_runtime(
-        backend_profile=config.default_backend,
-        state_store=state_store,
-        turn_routing_mode=config.interaction.turn_routing_mode,
-        request_summary_character_limit=config.interaction.request_summary_character_limit,
-        retained_request_limit=config.interaction.retained_request_limit,
-        model_contracts=model_contracts,
-        interaction_profile=interaction_profile,
-        interaction_profile_schema=interaction_profiles.schema_version,
-        interaction_profile_hash=interaction_profile.resolved_digest,
-    )
+        _validate_state_configuration(config.state.path)
+        try:
+            state_store = SqliteStateStore(config.state.path)
+        except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
+            raise ConfigurationError(f"state.path could not be opened: {error}") from error
+        runtime = adapters.create_runtime(
+            backend_profile=config.default_backend,
+            state_store=state_store,
+            turn_routing_mode=config.interaction.turn_routing_mode,
+            request_summary_character_limit=config.interaction.request_summary_character_limit,
+            retained_request_limit=config.interaction.retained_request_limit,
+            model_contracts=model_contracts,
+            interaction_profile=interaction_profile,
+            interaction_profile_schema=interaction_profiles.schema_version,
+            interaction_profile_hash=interaction_profile.resolved_digest,
+        )
+    except BaseException:
+        if state_store is not None:
+            state_store.close()
+        adapters.close()
+        raise
 
     @asynccontextmanager
     async def lifespan(_app: Any):
@@ -484,7 +499,12 @@ def create_app(
                 finally:
                     state_store.close()
 
-    app = FastAPI(title="VoiceClaw", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    try:
+        app = FastAPI(title="VoiceClaw", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    except BaseException:
+        state_store.close()
+        adapters.close()
+        raise
     app.state.voiceclaw_runtime = runtime
     app.state.voiceclaw_state_store = state_store
     app.state.voiceclaw_admission = admission
@@ -555,12 +575,7 @@ def create_app(
 
     @app.get("/readyz")
     async def ready() -> Response:
-        """Attest scoped selected-agent access without starting user work."""
-        if not await admission.can_accept():
-            return Response(
-                status_code=503,
-                headers={"Cache-Control": "no-store", _READINESS_REASON_HEADER: "client-unavailable"},
-            )
+        """Attest configured dependencies without consuming client capacity."""
         if not await selected_agent_is_ready():
             return Response(
                 status_code=503,
@@ -630,9 +645,6 @@ def create_app(
             return
         accepted = False
         try:
-            if adapters.selected_agent_readiness is not None and not await selected_agent_is_ready():
-                await websocket.close(code=1013, reason="backend unavailable")
-                return
             offered = websocket.headers.get("sec-websocket-protocol", "")
             subprotocol = "realtime" if "realtime" in {part.strip() for part in offered.split(",")} else None
             await websocket.accept(subprotocol=subprotocol)

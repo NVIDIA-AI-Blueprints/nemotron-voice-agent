@@ -45,7 +45,7 @@ from voiceclaw.container import (
     _preflight_facade_configuration,
     _preflight_nva_profile,
     _prepare_environment,
-    _prepare_managed_volume_layout,
+    _prepare_volume_layout,
     _read_healthcheck_target,
     _require_container_runtime,
     _run_healthcheck,
@@ -142,7 +142,7 @@ def test_healthcheck_target_tracks_effective_scheme_host_and_port(tmp_path) -> N
     assert target.stat().st_mode & 0o777 == 0o644
 
 
-def test_container_healthcheck_probes_process_liveness(tmp_path, monkeypatch) -> None:
+def test_container_healthcheck_probes_selected_agent_readiness(tmp_path, monkeypatch) -> None:
     target = tmp_path / "healthcheck.json"
     _write_healthcheck_target(
         target,
@@ -161,7 +161,7 @@ def test_container_healthcheck_probes_process_liveness(tmp_path, monkeypatch) ->
 
     class Connection:
         def __init__(self, host: str, port: int, *, timeout: float) -> None:
-            assert (host, port, timeout) == ("127.0.0.1", 18790, 2.5)
+            assert (host, port, timeout) == ("127.0.0.1", 18790, 225.0)
 
         @staticmethod
         def getresponse() -> Response:
@@ -176,10 +176,9 @@ def test_container_healthcheck_probes_process_liveness(tmp_path, monkeypatch) ->
             requests.append((method, path, headers))
 
     monkeypatch.setattr("voiceclaw.container.http.client.HTTPConnection", Connection)
-
     _run_healthcheck(target)
 
-    assert requests == [("GET", "/livez", {"Connection": "close"})]
+    assert requests == [("GET", "/readyz", {"Connection": "close"})]
 
 
 def test_container_uses_one_root_owned_configuration_snapshot(tmp_path) -> None:
@@ -514,8 +513,8 @@ def test_nva_child_does_not_receive_facade_or_backend_credentials() -> None:
     config = VoiceClawConfig(
         schema_version="voiceclaw.config.v2",
         server=ServerConfig(auth_mode="ephemeral", api_key_env="PUBLIC_REALTIME_KEY"),
-        backend_profiles={"nemoclaw": BackendProfile(kind="nemoclaw_committed_turn", credential_env="BACKEND_BEARER")},
-        default_backend="nemoclaw",
+        backend_profiles={"agent": BackendProfile(kind="openshell_fabric", credential_env="BACKEND_BEARER")},
+        default_backend="agent",
         realtime=RealtimeConfig(
             upstream_endpoint="ws://127.0.0.1:7861/v1/realtime",
             upstream_model="nvidia/nemotron-realtime-client-tools",
@@ -528,7 +527,7 @@ def test_nva_child_does_not_receive_facade_or_backend_credentials() -> None:
         {
             "PUBLIC_REALTIME_KEY": "public-secret",
             "BACKEND_BEARER": "backend-secret",
-            "NEMOCLAW_VOICE_GATEWAY_BEARER_FILE": "/run/secrets/backend",
+            "UNSELECTED_BACKEND_SECRET_FILE": "/run/secrets/backend",
             "REALTIME_UPSTREAM_API_KEY": "facade-to-nva-secret",
             "REALTIME_API_KEY": "facade-to-nva-secret",
             "NVIDIA_API_KEY": "model-secret",
@@ -541,7 +540,7 @@ def test_nva_child_does_not_receive_facade_or_backend_credentials() -> None:
 
     assert "PUBLIC_REALTIME_KEY" not in prepared
     assert "BACKEND_BEARER" not in prepared
-    assert "NEMOCLAW_VOICE_GATEWAY_BEARER_FILE" not in prepared
+    assert "UNSELECTED_BACKEND_SECRET_FILE" not in prepared
     assert "REALTIME_UPSTREAM_API_KEY" not in prepared
     assert prepared["REALTIME_API_KEY"] == "facade-to-nva-secret"
     assert prepared["NVIDIA_API_KEY"] == "model-secret"
@@ -614,8 +613,8 @@ def test_facade_child_receives_only_explicit_configuration_environment(tmp_path)
     config = VoiceClawConfig(
         schema_version="voiceclaw.config.v2",
         server=ServerConfig(auth_mode="ephemeral", api_key_env="PUBLIC_REALTIME_KEY"),
-        backend_profiles={"nemoclaw": BackendProfile(kind="nemoclaw_committed_turn", credential_env="BACKEND_BEARER")},
-        default_backend="nemoclaw",
+        backend_profiles={"agent": BackendProfile(kind="openshell_fabric", credential_env="BACKEND_BEARER")},
+        default_backend="agent",
         realtime=RealtimeConfig(
             upstream_endpoint="ws://127.0.0.1:7861/v1/realtime",
             upstream_model="nvidia/nemotron-realtime-client-tools",
@@ -635,7 +634,7 @@ def test_facade_child_receives_only_explicit_configuration_environment(tmp_path)
             "PATH": "/usr/bin",
             "PUBLIC_REALTIME_KEY": "public-secret",
             "BACKEND_BEARER": "backend-secret",
-            "NEMOCLAW_VOICE_GATEWAY_ORIGIN": "http://127.0.0.1:19000",
+            "UNREFERENCED_BACKEND_ORIGIN": "http://127.0.0.1:19000",
             "REALTIME_UPSTREAM_API_KEY": "facade-to-nva-secret",
             "CONFIG_REFERENCED_VALUE": "operator-selected-value",
             "COMMENT_ONLY_SECRET": "must-not-cross-from-a-comment",
@@ -652,7 +651,7 @@ def test_facade_child_receives_only_explicit_configuration_environment(tmp_path)
     assert prepared["PATH"] == "/usr/bin"
     assert prepared["PUBLIC_REALTIME_KEY"] == "public-secret"
     assert prepared["BACKEND_BEARER"] == "backend-secret"
-    assert "NEMOCLAW_VOICE_GATEWAY_ORIGIN" not in prepared
+    assert "UNREFERENCED_BACKEND_ORIGIN" not in prepared
     assert prepared["REALTIME_UPSTREAM_API_KEY"] == "facade-to-nva-secret"
     assert prepared["CONFIG_REFERENCED_VALUE"] == "operator-selected-value"
     assert prepared["VOICECLAW_TLS_CERTFILE"] == "/run/tls/cert.pem"
@@ -669,8 +668,8 @@ def test_facade_child_receives_only_selected_backend_credential_environment(tmp_
         schema_version="voiceclaw.config.v2",
         server=ServerConfig(auth_mode="none"),
         backend_profiles={
-            "selected": BackendProfile(kind="nemoclaw_committed_turn", credential_env="SELECTED_BACKEND_KEY"),
-            "unused": BackendProfile(kind="nemoclaw_committed_turn", credential_env="UNUSED_BACKEND_KEY"),
+            "selected": BackendProfile(kind="operator_plugin", credential_env="SELECTED_BACKEND_KEY"),
+            "unused": BackendProfile(kind="operator_plugin", credential_env="UNUSED_BACKEND_KEY"),
         },
         default_backend="selected",
         realtime=RealtimeConfig(
@@ -780,11 +779,11 @@ def test_container_provider_secret_parent_is_not_mutable_by_facade(tmp_path) -> 
     )
 
 
-def test_container_prepares_empty_managed_volume(tmp_path) -> None:
+def test_container_prepares_empty_runtime_volume(tmp_path) -> None:
     volume_root = tmp_path / "voiceclaw"
     identity = MappingProxyType({"user": os.getuid(), "group": os.getgid(), "extra_groups": ()})
 
-    _prepare_managed_volume_layout(
+    _prepare_volume_layout(
         volume_root,
         identity,
         root_uid=os.getuid(),
@@ -806,7 +805,7 @@ def test_container_prepares_empty_managed_volume(tmp_path) -> None:
         assert metadata.st_gid == os.getgid()
 
 
-def test_container_prepares_managed_volume_with_prepopulated_credentials(tmp_path) -> None:
+def test_container_prepares_runtime_volume_with_prepopulated_credentials(tmp_path) -> None:
     volume_root = tmp_path / "voiceclaw"
     credential_directory = volume_root / "credentials"
     credential_directory.mkdir(parents=True, mode=0o755)
@@ -815,7 +814,7 @@ def test_container_prepares_managed_volume_with_prepopulated_credentials(tmp_pat
     credential_file.chmod(0o400)
     identity = MappingProxyType({"user": os.getuid(), "group": os.getgid(), "extra_groups": ()})
 
-    _prepare_managed_volume_layout(
+    _prepare_volume_layout(
         volume_root,
         identity,
         root_uid=os.getuid(),
@@ -831,7 +830,7 @@ def test_container_prepares_managed_volume_with_prepopulated_credentials(tmp_pat
     assert stat.S_IMODE((volume_root / "state").stat().st_mode) == 0o700
 
 
-def test_container_rejects_symlink_in_managed_volume_layout(tmp_path) -> None:
+def test_container_rejects_symlink_in_runtime_volume_layout(tmp_path) -> None:
     volume_root = tmp_path / "voiceclaw"
     volume_root.mkdir()
     external_config = tmp_path / "external-config"
@@ -839,8 +838,8 @@ def test_container_rejects_symlink_in_managed_volume_layout(tmp_path) -> None:
     (volume_root / "config").symlink_to(external_config, target_is_directory=True)
     identity = MappingProxyType({"user": os.getuid(), "group": os.getgid(), "extra_groups": ()})
 
-    with pytest.raises(ConfigurationError, match="managed volume path must be a directory"):
-        _prepare_managed_volume_layout(
+    with pytest.raises(ConfigurationError, match="container volume path must be a directory"):
+        _prepare_volume_layout(
             volume_root,
             identity,
             root_uid=os.getuid(),
@@ -911,9 +910,9 @@ def test_unselected_missing_backend_secret_does_not_block_bundled_startup(tmp_pa
         schema_version="voiceclaw.config.v2",
         server=ServerConfig(auth_mode="ephemeral", api_key_file=str(public_master)),
         backend_profiles={
-            "selected": BackendProfile(kind="nemoclaw", credential_file=str(selected)),
-            "existing": BackendProfile(kind="nemoclaw", credential_file=str(unselected_existing)),
-            "missing": BackendProfile(kind="nemoclaw", credential_file=str(unselected_missing)),
+            "selected": BackendProfile(kind="operator_plugin", credential_file=str(selected)),
+            "existing": BackendProfile(kind="operator_plugin", credential_file=str(unselected_existing)),
+            "missing": BackendProfile(kind="operator_plugin", credential_file=str(unselected_missing)),
         },
         default_backend="selected",
         realtime=RealtimeConfig(
@@ -1028,8 +1027,8 @@ def test_facade_configuration_preflight_drops_privilege_and_uses_allowlisted_env
         schema_version="voiceclaw.config.v2",
         server=ServerConfig(auth_mode="none"),
         backend_profiles={
-            "selected": BackendProfile(kind="nemoclaw_committed_turn", credential_env="SELECTED_BACKEND_KEY"),
-            "unused": BackendProfile(kind="nemoclaw_committed_turn", credential_env="UNUSED_BACKEND_KEY"),
+            "selected": BackendProfile(kind="operator_plugin", credential_env="SELECTED_BACKEND_KEY"),
+            "unused": BackendProfile(kind="operator_plugin", credential_env="UNUSED_BACKEND_KEY"),
         },
         default_backend="selected",
         realtime=RealtimeConfig(

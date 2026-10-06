@@ -34,7 +34,7 @@ LABEL org.opencontainers.image.revision="${VOICECLAW_SOURCE_REVISION}"
 LABEL org.opencontainers.image.source="${VOICECLAW_SOURCE_URL}"
 
 ENV PYTHONUNBUFFERED=1 \
-    VOICECLAW_CONFIG=/var/lib/voiceclaw/config/voiceclaw.yaml \
+    VOICECLAW_CONFIG=/etc/voiceclaw/voiceclaw.yaml \
     VOICECLAW_FRONTEND_RUNTIME_DIR=/run/voiceclaw/frontend \
     NLTK_DATA=/usr/local/share/nltk_data \
     XDG_CACHE_HOME=/var/cache/voiceclaw
@@ -123,45 +123,22 @@ COPY examples_registry.yaml examples_registry.yaml
 RUN uv sync \
       --project /app/src/examples/voiceclaw \
       --extra server \
+      --extra openshell \
       --no-dev \
       --frozen \
-    && ln -s /app/src/examples/voiceclaw/.venv/bin/voiceclaw-runtime /usr/local/bin/voiceclaw-runtime
-
-FROM voiceclaw-base AS nemoclaw-managed
-
-RUN groupadd --gid 65532 voiceclaw-managed \
-    && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent \
-        --shell /usr/sbin/nologin voiceclaw-managed \
-    && install -d -o 65532 -g 65532 -m 0700 \
-        /var/lib/voiceclaw/runtime \
-        /var/lib/voiceclaw/credentials \
-        /run/voiceclaw-managed \
-        /run/voiceclaw-managed/home \
-        /run/voiceclaw-managed/cache \
-    && chown 65532:65532 /var/lib/voiceclaw \
-    && chmod 0700 /var/lib/voiceclaw \
-    && touch /etc/voiceclaw-nemoclaw-managed \
-    && chmod 0444 /etc/voiceclaw-nemoclaw-managed
-
-USER 65532:65532
-
-VOLUME ["/var/lib/voiceclaw"]
-EXPOSE 18790/tcp
-STOPSIGNAL SIGTERM
-
-HEALTHCHECK --interval=20s --timeout=3s --start-period=90s --retries=3 \
-    CMD ["/usr/local/bin/voiceclaw-runtime", "healthcheck"]
-
-ENTRYPOINT ["/usr/local/bin/voiceclaw-runtime"]
-CMD ["serve"]
+    && ln -s /app/src/examples/voiceclaw/.venv/bin/voiceclaw-runtime /usr/local/bin/voiceclaw-runtime \
+    && install -d -o root -g root -m 0755 /etc/voiceclaw \
+    && install -o root -g root -m 0644 \
+      /app/src/examples/voiceclaw/src/voiceclaw/resources/voiceclaw.container.yaml \
+      /etc/voiceclaw/voiceclaw.yaml
 
 FROM voiceclaw-base AS voiceclaw-runtime
 
 VOLUME ["/var/lib/voiceclaw"]
-EXPOSE 18790/tcp
+EXPOSE 7860/tcp
 STOPSIGNAL SIGTERM
 
-HEALTHCHECK --interval=20s --timeout=3s --start-period=90s --retries=3 \
+HEALTHCHECK --interval=20s --timeout=240s --start-period=90s --retries=3 \
     CMD ["/usr/local/bin/voiceclaw-runtime", "healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/voiceclaw-runtime"]

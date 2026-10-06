@@ -10,6 +10,7 @@ import json
 import pytest
 
 from voiceclaw.adapters.result_envelope import (
+    DEFAULT_RESULT_SPEECH_BUDGET_BYTES,
     MAX_RESULT_DISPLAY_BYTES,
     MAX_RESULT_SPEECH_BYTES,
     ResultEnvelopeLimitError,
@@ -38,8 +39,8 @@ def _wire(*, speech: str | None = "The tests passed.", display: str = "## Result
 
 
 def test_provider_neutral_protocol_symbols_are_stable() -> None:
-    assert REALTIME_PROJECTION_SCHEMA == "voiceclaw.projection.v1"
-    assert RUNTIME_PROJECTION_SCHEMA == "voiceclaw.runtime.v4"
+    assert REALTIME_PROJECTION_SCHEMA == "voiceclaw.projection.v2"
+    assert RUNTIME_PROJECTION_SCHEMA == "voiceclaw.runtime.v5"
     assert ResponseOnlyRequestState.WAITING_FOR_RESPONSE.active
     assert ResponseOnlyRequestState.SUCCEEDED.terminal
     assert ResponseOnlyUpdateKind.RESULT_DISPLAY == "result_display"
@@ -66,12 +67,14 @@ def test_prompt_preserves_exact_goal_and_declares_only_result_schema() -> None:
     assert json.loads(encoded_goal) == goal
     assert RESULT_ENVELOPE_SCHEMA in prompt
     assert prompt.index('"schema"') < prompt.index('"speech"') < prompt.index('"display"')
+    assert f"at most {DEFAULT_RESULT_SPEECH_BUDGET_BYTES} UTF-8 bytes containing only facts" in prompt
     assert f"at most {MAX_RESULT_DISPLAY_BYTES} UTF-8 bytes" in prompt
     assert "Fit the complete answer within that display budget." in prompt
     assert "Markdown" in prompt
     assert "complete JSON object on one physical line" in prompt
-    assert "two characters backslash+n" in prompt
-    assert "Never place an actual line break" in prompt
+    assert "newline exactly once with JSON's \\n escape" in prompt
+    assert r"Never encode a line break as \\n" in prompt
+    assert "Never place a physical line break" in prompt
     assert '"display":"# Findings\\n\\nDetailed result."' in prompt
     assert 'After the closing quote of "display", emit the object-closing brace.' in prompt
     assert "Do not use a Markdown code fence" in prompt
@@ -83,17 +86,29 @@ def test_prompt_preserves_exact_goal_and_declares_only_result_schema() -> None:
     assert "route" not in prompt.lower()
 
 
-def test_prompt_uses_backend_display_capacity_without_changing_protocol_limit() -> None:
-    prompt = build_result_envelope_prompt("Return a result", display_budget_bytes=8192)
+def test_prompt_uses_configured_channel_capacities_without_changing_protocol_limits() -> None:
+    prompt = build_result_envelope_prompt(
+        "Return a result",
+        display_budget_bytes=8192,
+        speech_budget_bytes=256,
+    )
 
     assert "at most 8192 UTF-8 bytes" in prompt
     assert f"at most {MAX_RESULT_DISPLAY_BYTES} UTF-8 bytes" not in prompt
+    assert "at most 256 UTF-8 bytes containing only facts" in prompt
+    assert f"at most {MAX_RESULT_SPEECH_BYTES} UTF-8 bytes containing only facts" not in prompt
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, MAX_RESULT_DISPLAY_BYTES + 1, "8192"])
 def test_prompt_rejects_invalid_backend_display_capacity(value: object) -> None:
     with pytest.raises(ResultEnvelopeProtocolError):
         build_result_envelope_prompt("Return a result", display_budget_bytes=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, MAX_RESULT_SPEECH_BYTES + 1, "512"])
+def test_prompt_rejects_invalid_backend_speech_capacity(value: object) -> None:
+    with pytest.raises(ResultEnvelopeProtocolError):
+        build_result_envelope_prompt("Return a result", speech_budget_bytes=value)  # type: ignore[arg-type]
 
 
 def test_terminal_parser_preserves_independent_speech_and_markdown_channels() -> None:
@@ -109,6 +124,18 @@ def test_terminal_parser_allows_null_speech_without_deriving_it_from_display() -
 
     assert envelope.speech is None
     assert envelope.display == "## Result\n\n`npm test` passed."
+
+
+def test_configured_speech_budget_discards_only_optional_speech() -> None:
+    deltas: list[str] = []
+    parser = ResultEnvelopeStreamParser(deltas.append, maximum_speech_bytes=4)
+
+    parser.push(_wire(speech="12345", display="## Complete result"))
+    envelope = parser.finish()
+
+    assert envelope.speech is None
+    assert envelope.display == "## Complete result"
+    assert "".join(deltas) == envelope.display
 
 
 @pytest.mark.parametrize(
@@ -199,19 +226,12 @@ def test_stream_parser_rejects_invalid_escapes_and_surrogates(escaped: str) -> N
         parser.push(wire)
 
 
-def test_identical_complete_member_replay_is_rejected() -> None:
-    first = '"schema":"voiceclaw.result.v1","speech":"Ready.","display":"# Result"'
-    wire = "{" + first + "," + first + "}"
-
-    with pytest.raises(ResultEnvelopeProtocolError):
-        parse_result_envelope(wire)
-
-
-def test_more_than_one_complete_member_replay_is_rejected() -> None:
+@pytest.mark.parametrize("repetitions", [2, 3])
+def test_complete_member_replay_is_rejected(repetitions: int) -> None:
     members = '"schema":"voiceclaw.result.v1","speech":null,"display":"ok"'
 
     with pytest.raises(ResultEnvelopeProtocolError):
-        parse_result_envelope("{" + ",".join((members, members, members)) + "}")
+        parse_result_envelope("{" + ",".join([members] * repetitions) + "}")
 
 
 def test_exact_maximum_channels_fit_envelope_bound() -> None:

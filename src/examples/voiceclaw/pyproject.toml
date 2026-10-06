@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+openshell = [
+    "openshell==0.1.2",
+]
 server = [
     "fastapi>=0.135,<1",
     "uvicorn[standard]>=0.42,<1",

@@ -32,7 +32,7 @@ SPDX-License-Identifier: BSD-2-Clause
         <div class="topbar-actions">
           <span id="backend-badge" class="backend-badge">
             <span class="badge-dot"></span>
-            Checking backend gateway
+            Checking target binding
           </span>
           <button id="connection-toggle" class="button button-quiet" type="button" aria-expanded="false" aria-controls="connection-panel">
             Connection
@@ -45,7 +45,7 @@ SPDX-License-Identifier: BSD-2-Clause
         <div class="connection-copy">
           <p class="eyebrow">OpenAI Realtime-compatible transport</p>
           <h2>One socket for voice, text, and application state</h2>
-          <p>VoiceClaw owns this public connection. Backend credentials remain server-side. A reachable gateway is not a durable session attachment; only the server-projected operations below are available.</p>
+          <p>VoiceClaw owns this public connection. Backend credentials remain server-side. A verified target binding does not provide durable Work acceptance, status, replay, or recovery; only the server-projected operations below are available.</p>
         </div>
         <form id="connection-form" class="connection-form">
           <label class="field field-wide">
@@ -148,8 +148,8 @@ SPDX-License-Identifier: BSD-2-Clause
             <div class="target-identity">
               <span id="target-avatar" class="target-avatar" aria-hidden="true">A</span>
               <div>
-                <strong id="target-name">Checking backend gateway</strong>
-                <span id="target-reference">No durable attachment advertised</span>
+                <strong id="target-name">Checking target binding</strong>
+                <span id="target-reference">Target binding not verified yet</span>
               </div>
             </div>
             <div id="capability-list" class="capability-list" aria-label="Configured route features">
@@ -165,11 +165,11 @@ SPDX-License-Identifier: BSD-2-Clause
               </div>
               <span id="delegation-count" class="status-pill neutral">0 turns</span>
             </div>
-            <p id="delegations-note" class="delegations-note">Each card is one backend exchange. Context behavior appears after the configured target reports its capabilities.</p>
+            <p id="delegations-note" class="delegations-note">Each card is one backend exchange. Context behavior appears after VoiceClaw verifies the target and projects the configured adapter contract.</p>
             <div id="delegation-empty" class="panel-empty">
               <span class="panel-empty-icon" aria-hidden="true">◎</span>
               <p>No delegated turns yet</p>
-              <small>Ask for code, research, planning, file inspection, or another backend task. Its query, lifecycle, and rich result will stay here.</small>
+              <small>Ask for code, research, planning, file inspection, or another delegated agent request. Its query, lifecycle, and rich result will stay here.</small>
             </div>
             <p id="delegation-announcement" class="sr-only" role="status" aria-live="polite"></p>
             <div id="delegation-list" class="delegation-list"></div>

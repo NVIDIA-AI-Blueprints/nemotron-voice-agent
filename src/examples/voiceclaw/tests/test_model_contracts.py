@@ -38,9 +38,23 @@ def test_packaged_catalog_is_versioned_deterministic_and_complete() -> None:
     assert "advertised tool schema and its trusted description" in normalized_instructions
     assert "Do not assume target-specific behavior from this static policy" in normalized_instructions
     assert "supplies routing, session, Work, and correlation identifiers" in normalized_instructions
+    acknowledgement = " ".join(first.instruction_templates["task_acknowledgement"].split())
+    assert "single conversational assistant" in acknowledgement
+    assert "Commit to the user-visible action and intended deliverable as your own" in acknowledgement
+    assert "Describe neither a handoff nor the implementation path" in acknowledgement
+    assert "State no answer, conclusion, recommendation, finding, progress, timing, or completion" in acknowledgement
+    delivery = " ".join(first.instruction_templates["result_delivery"].split())
+    assert "authoritative semantic result material" in delivery
+    assert "one natural spoken sentence of at most 35 words" in delivery
+    assert "Use only facts in payload_text" in delivery
+    assert "supplies no result facts" in delivery
+    assert "hidden component boundaries" in delivery
+    assert "Do not repeat, summarize, explain, answer, or elaborate the goal" not in normalized_instructions
     assert "supplies the exact finalized turn" not in normalized_instructions
     assert "do not narrate rich display content" in normalized_instructions
     assert set(first.instruction_templates) == {
+        "task_acknowledgement",
+        "result_delivery",
         "server_policy",
         "untrusted_session",
         "untrusted_response",
@@ -130,28 +144,6 @@ def test_template_values_are_bounded_and_not_recursively_interpreted() -> None:
             ),
             "unknown response_templates",
         ),
-    ],
-)
-def test_override_catalog_rejects_ambiguous_or_unknown_content(
-    tmp_path: Path,
-    mutate,
-    expected: str,
-) -> None:
-    override = tmp_path / "contracts.yaml"
-    override.write_text(mutate(CATALOG.read_text(encoding="utf-8")), encoding="utf-8")
-
-    with pytest.raises(ModelContractError, match=expected):
-        load_model_contract_catalog(override)
-
-
-def test_unknown_profile_is_rejected() -> None:
-    with pytest.raises(ModelContractError, match="unknown model-contract profile"):
-        load_model_contract_catalog(profile="missing")
-
-
-@pytest.mark.parametrize(
-    ("mutate", "expected"),
-    [
         (lambda text: text.replace("        title: Request failed\n", "", 1), "missing title"),
         (
             lambda text: text.replace(
@@ -188,9 +180,18 @@ def test_unknown_profile_is_rejected() -> None:
         ),
     ],
 )
-def test_failure_copy_catalog_is_strict(tmp_path: Path, mutate, expected: str) -> None:
+def test_override_catalog_rejects_invalid_content(
+    tmp_path: Path,
+    mutate,
+    expected: str,
+) -> None:
     override = tmp_path / "contracts.yaml"
     override.write_text(mutate(CATALOG.read_text(encoding="utf-8")), encoding="utf-8")
 
     with pytest.raises(ModelContractError, match=expected):
         load_model_contract_catalog(override)
+
+
+def test_unknown_profile_is_rejected() -> None:
+    with pytest.raises(ModelContractError, match="unknown model-contract profile"):
+        load_model_contract_catalog(profile="missing")

@@ -14,10 +14,17 @@ from typing import Any, Protocol
 from voiceclaw.domain.capabilities import SemanticTool
 from voiceclaw.domain.models import CapabilitySource, Durability, EventDelivery, FrontendActivity
 from voiceclaw.domain.response_only import (
+    ResponseOnlyContextContinuity,
     ResponseOnlyRequestState,
     ResponseOnlyResultEventKind,
+    ResponseOnlyTargetAvailability,
     ResponseOnlyUpdateKind,
 )
+
+MIN_FRONTEND_CONTEXT_CHARACTERS = 256
+MAX_FRONTEND_INSTRUCTION_CHARACTERS = 64_000
+FRONTEND_INSTRUCTION_RESERVE_CHARACTERS = 8_192
+MAX_FRONTEND_CONTEXT_CHARACTERS = MAX_FRONTEND_INSTRUCTION_CHARACTERS - FRONTEND_INSTRUCTION_RESERVE_CHARACTERS
 
 
 class TurnDirectiveKind(StrEnum):
@@ -37,6 +44,15 @@ class FrontendResponsePurpose(StrEnum):
     FAILURE_DELIVERY = "failure_delivery"
 
 
+class FrontendContextPurpose(StrEnum):
+    """Application-owned view requested for one frontend model boundary."""
+
+    CONVERSATION = "conversation"
+    DELEGATION_ACK = "delegation_ack"
+    RESULT_DELIVERY = "result_delivery"
+    FAILURE_DELIVERY = "failure_delivery"
+
+
 class FrontendConversationDeliveryState(StrEnum):
     """VoiceClaw-local evidence for one public conversation turn."""
 
@@ -44,7 +60,9 @@ class FrontendConversationDeliveryState(StrEnum):
     DELIVERED = "delivered"
     HEARD = "heard"
     INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class FrontendPlaybackReceiptState(StrEnum):
@@ -53,6 +71,14 @@ class FrontendPlaybackReceiptState(StrEnum):
     HEARD = "heard"
     INTERRUPTED = "interrupted"
     FAILED = "failed"
+
+
+class FrontendSpeechDeliveryOutcomeState(StrEnum):
+    """Server-observed terminal outcome when no playback receipt can exist."""
+
+    SKIPPED = "skipped"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 def _runtime_identifier(value: str | None, name: str, *, required: bool = True) -> str | None:
@@ -153,6 +179,41 @@ class FrontendPlaybackReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class FrontendSpeechDeliveryOutcome:
+    """Typed terminal speech outcome independent of browser playback evidence."""
+
+    local_request_id: str
+    presentation_id: str
+    state: FrontendSpeechDeliveryOutcomeState
+    reason_code: str
+
+    def __post_init__(self) -> None:
+        """Validate local correlation and a bounded machine-readable reason."""
+        object.__setattr__(
+            self,
+            "local_request_id",
+            _runtime_identifier(self.local_request_id, "local_request_id"),
+        )
+        object.__setattr__(
+            self,
+            "presentation_id",
+            _runtime_identifier(self.presentation_id, "presentation_id"),
+        )
+        try:
+            state = FrontendSpeechDeliveryOutcomeState(self.state)
+        except (TypeError, ValueError) as error:
+            raise ValueError("speech delivery outcome state is invalid") from error
+        object.__setattr__(self, "state", state)
+        if (
+            not isinstance(self.reason_code, str)
+            or not self.reason_code
+            or len(self.reason_code) > 128
+            or not all(character.islower() or character.isdigit() or character == "_" for character in self.reason_code)
+        ):
+            raise ValueError("speech delivery outcome reason_code is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class TurnDirective:
     """Interaction Manager decision consumed by a protocol facade."""
 
@@ -192,13 +253,15 @@ class SessionSnapshot:
     projection: str
     backend_label: str = "Backend unavailable"
     backend_mode: str = "disabled"
-    gateway_reachable: bool = False
+    target_binding_verified: bool = False
     target_ref: str = "not-attached"
+    target_availability: ResponseOnlyTargetAvailability | None = None
     capabilities: tuple[str, ...] = ()
     frontend_tools: tuple[SemanticTool, ...] = ()
     durability: Durability = Durability.NONE
     event_delivery: EventDelivery = EventDelivery.RESPONSE_ONLY
     max_parallel_work: int = 1
+    context_continuity: ResponseOnlyContextContinuity = ResponseOnlyContextContinuity.UNQUALIFIED
     capability_source: CapabilitySource | None = None
     capability_source_id: str | None = None
     capability_revision: str | None = None
@@ -212,30 +275,71 @@ class SessionSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class BackendTargetSnapshot:
+    """Atomic replacement state for the configured backend target."""
+
+    backend_label: str
+    backend_mode: str
+    target_binding_verified: bool
+    target_ref: str
+    target_availability: ResponseOnlyTargetAvailability | None = None
+    capabilities: tuple[str, ...] = ()
+    frontend_tools: tuple[SemanticTool, ...] = ()
+    durability: Durability = Durability.NONE
+    event_delivery: EventDelivery = EventDelivery.RESPONSE_ONLY
+    max_parallel_work: int = 1
+    context_continuity: ResponseOnlyContextContinuity = ResponseOnlyContextContinuity.NONE
+    capability_source: CapabilitySource | None = None
+    capability_source_id: str | None = None
+    capability_revision: str | None = None
+    capability_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize immutable collections and reject contradictory state."""
+        object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        tools = tuple(self.frontend_tools)
+        if not all(isinstance(tool, SemanticTool) for tool in tools):
+            raise TypeError("frontend_tools must contain SemanticTool values")
+        object.__setattr__(self, "frontend_tools", tools)
+        if self.target_availability is not None:
+            try:
+                availability = ResponseOnlyTargetAvailability(self.target_availability)
+            except (TypeError, ValueError) as error:
+                raise ValueError("target_availability is invalid") from error
+            object.__setattr__(self, "target_availability", availability)
+        if not self.target_binding_verified and self.target_availability is not None:
+            raise ValueError("an unavailable backend target cannot advertise target availability")
+        if not self.target_binding_verified and (self.capabilities or tools):
+            raise ValueError("an unavailable backend target cannot advertise capabilities or tools")
+
+
+@dataclass(frozen=True, slots=True)
 class FrontendResponse:
     """One typed speech handoff to the realtime frontend.
 
     ``payload_text`` is quoted data whose meaning is fixed by ``purpose``:
-    a bounded goal for acknowledgement, backend-authorized presentation material
-    for a result, or a safe public reason for failure. The realtime frontend uses
-    it as the factual basis for a context-aware spoken response; it is not a
-    literal utterance or a free-form set of prompt variables.
+    backend-authorized presentation material for a result or a safe public reason
+    for failure. A delegation acknowledgement carries no duplicate payload; its
+    frozen objective and admission evidence come from ``FrontendContextRequest``.
     ``local_request_id`` is transport/UI correlation only and is never a
     backend-issued Work ID.
     """
 
     purpose: FrontendResponsePurpose
-    payload_text: str
+    payload_text: str | None
     local_request_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the typed payload crossing the application port."""
         try:
             purpose = FrontendResponsePurpose(self.purpose)
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             raise ValueError("frontend response purpose is invalid") from error
-        if not isinstance(self.payload_text, str) or not self.payload_text.strip() or "\x00" in self.payload_text:
-            raise ValueError("frontend response payload_text must be non-empty text without NUL")
+        if purpose is FrontendResponsePurpose.DELEGATION_ACK:
+            if self.payload_text is not None:
+                raise ValueError("delegation acknowledgement must not carry payload_text")
+        elif not isinstance(self.payload_text, str) or not self.payload_text.strip() or "\x00" in self.payload_text:
+            raise ValueError("result and failure responses require non-empty payload_text without NUL")
         local_request_id = self.local_request_id
         if local_request_id is not None and (
             not isinstance(local_request_id, str)
@@ -249,6 +353,35 @@ class FrontendResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class FrontendContextRequest:
+    """Select one bounded, purpose-specific frontend model projection."""
+
+    purpose: FrontendContextPurpose
+    local_request_id: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate correlation without assigning backend Work identity."""
+        try:
+            purpose = FrontendContextPurpose(self.purpose)
+        except ValueError as error:
+            raise ValueError("frontend context purpose is invalid") from error
+        local_request_id = self.local_request_id
+        if local_request_id is not None and (
+            not isinstance(local_request_id, str)
+            or not local_request_id
+            or len(local_request_id) > 512
+            or any(ord(character) < 32 or ord(character) == 127 for character in local_request_id)
+        ):
+            raise ValueError("local_request_id is invalid")
+        if purpose is FrontendContextPurpose.CONVERSATION and local_request_id is not None:
+            raise ValueError("conversation context must not target a local request")
+        if purpose is FrontendContextPurpose.DELEGATION_ACK and local_request_id is None:
+            raise ValueError(f"{purpose.value} context requires local_request_id")
+        object.__setattr__(self, "purpose", purpose)
+        object.__setattr__(self, "local_request_id", local_request_id)
+
+
+@dataclass(frozen=True, slots=True)
 class InteractionUpdate:
     """One protocol-neutral projection with optional tool and speech effects.
 
@@ -256,7 +389,9 @@ class InteractionUpdate:
     admitted request, separate from correlation identities. ``frontend_tools``
     is an authoritative replacement snapshot for subsequent frontend response
     boundaries. ``None`` leaves the current snapshot unchanged; an empty tuple
-    explicitly removes every protected Work tool.
+    explicitly removes every protected Work tool. Production target refreshes
+    also carry ``backend_target`` so binding identity, capabilities, and tools
+    change atomically.
     """
 
     kind: ResponseOnlyUpdateKind
@@ -268,6 +403,7 @@ class InteractionUpdate:
     frontend_response: FrontendResponse | None = None
     frontend_tools: tuple[SemanticTool, ...] | None = None
     request_summary: str | None = None
+    backend_target: BackendTargetSnapshot | None = None
 
     def __post_init__(self) -> None:
         """Detach caller-owned mappings before handing the update to an adapter."""
@@ -305,6 +441,11 @@ class InteractionUpdate:
             if len(names) != len(set(names)):
                 raise ValueError("frontend_tools must contain unique logical names")
             object.__setattr__(self, "frontend_tools", tools)
+        if self.backend_target is not None:
+            if not isinstance(self.backend_target, BackendTargetSnapshot):
+                raise TypeError("backend_target must be BackendTargetSnapshot")
+            if self.frontend_tools is not None and self.frontend_tools != self.backend_target.frontend_tools:
+                raise ValueError("frontend_tools must match backend_target.frontend_tools")
 
     @property
     def terminal(self) -> bool:
@@ -320,7 +461,17 @@ class RealtimeSessionRuntimePort(Protocol):
         ...
 
     def projection(self, session_id: str) -> str:
-        """Return a bounded immutable projection for the next response boundary."""
+        """Return a bounded operational projection for UI and diagnostics."""
+        ...
+
+    def frontend_context(
+        self,
+        session_id: str,
+        request: FrontendContextRequest,
+        *,
+        maximum_characters: int,
+    ) -> str:
+        """Return a bounded purpose-specific projection for the frontend model."""
         ...
 
     def record_conversation_turn(self, session_id: str, turn: FrontendConversationTurn) -> None:
@@ -329,6 +480,14 @@ class RealtimeSessionRuntimePort(Protocol):
 
     def record_playback_receipt(self, session_id: str, receipt: FrontendPlaybackReceipt) -> None:
         """Apply one client playback receipt to an already delivered assistant turn."""
+        ...
+
+    def record_speech_delivery_outcome(
+        self,
+        session_id: str,
+        outcome: FrontendSpeechDeliveryOutcome,
+    ) -> None:
+        """Record a terminal no-playback outcome without inventing a receipt."""
         ...
 
     def route_finalized_turn(self, session_id: str, text: str) -> TurnDirective:
@@ -363,13 +522,22 @@ class RealtimeSessionRuntimePort(Protocol):
 
 
 __all__ = [
+    "BackendTargetSnapshot",
+    "FRONTEND_INSTRUCTION_RESERVE_CHARACTERS",
+    "FrontendContextPurpose",
+    "FrontendContextRequest",
     "FrontendConversationDeliveryState",
     "FrontendConversationTurn",
     "FrontendPlaybackReceipt",
     "FrontendPlaybackReceiptState",
+    "FrontendSpeechDeliveryOutcome",
+    "FrontendSpeechDeliveryOutcomeState",
     "FrontendResponse",
     "FrontendResponsePurpose",
     "InteractionUpdate",
+    "MAX_FRONTEND_CONTEXT_CHARACTERS",
+    "MAX_FRONTEND_INSTRUCTION_CHARACTERS",
+    "MIN_FRONTEND_CONTEXT_CHARACTERS",
     "RealtimeSessionRuntimePort",
     "SessionSnapshot",
     "TurnDirective",

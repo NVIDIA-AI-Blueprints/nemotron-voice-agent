@@ -14,6 +14,7 @@ import math
 import os
 import ssl
 import sys
+import time
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -25,9 +26,11 @@ from websockets.exceptions import WebSocketException
 
 from voiceclaw.domain import (
     REALTIME_PROJECTION_SCHEMA,
+    BackendOperation,
     ResponseOnlyRequestState,
     ResponseOnlyResultEventKind,
     ResponseOnlySpeechSource,
+    ResponseOnlyTargetAvailability,
     ResponseOnlyUpdateKind,
 )
 from voiceclaw.ports.runtime import FrontendResponsePurpose
@@ -47,6 +50,13 @@ _PLAYBACK_RECEIPT_METADATA_FIELDS = frozenset(
 )
 _FRONTEND_SPEECH_PURPOSES = frozenset(purpose.value for purpose in FrontendResponsePurpose)
 _MAX_PUBLIC_IDENTIFIER_CHARACTERS = 512
+_EXPECTED_OUTCOMES = (
+    ResponseOnlyRequestState.SUCCEEDED.value,
+    ResponseOnlyRequestState.FAILED.value,
+    ResponseOnlyRequestState.OUTCOME_UNKNOWN.value,
+)
+_INITIAL_RESPONSE_ONLY_CAPABILITIES = frozenset({BackendOperation.SUBMIT.value})
+_INITIAL_RESPONSE_ONLY_TOOLS = frozenset({"work.delegate"})
 
 
 class _PlaybackReceiptContract(NamedTuple):
@@ -234,6 +244,13 @@ def _positive_seconds(value: str) -> float:
     return seconds
 
 
+def _content_assertion(value: str) -> str:
+    candidate = value.strip()
+    if not candidate or "\x00" in candidate or len(candidate.encode("utf-8")) > 4096:
+        raise argparse.ArgumentTypeError("must be non-empty UTF-8 text of at most 4096 bytes without NUL")
+    return candidate
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -247,6 +264,26 @@ def _parser() -> argparse.ArgumentParser:
         help="public VoiceClaw WSS URL (default: %(default)s)",
     )
     parser.add_argument("--query", required=True, help="arbitrary finalized user request to delegate")
+    parser.add_argument(
+        "--expect-outcome",
+        choices=_EXPECTED_OUTCOMES,
+        default=ResponseOnlyRequestState.SUCCEEDED.value,
+        help="required terminal local outcome (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--display-contains",
+        action="append",
+        default=[],
+        type=_content_assertion,
+        help="repeatable case-insensitive substring required in the terminal display",
+    )
+    parser.add_argument(
+        "--speech-contains",
+        action="append",
+        default=[],
+        type=_content_assertion,
+        help="repeatable case-insensitive substring required in generated terminal speech",
+    )
     parser.add_argument(
         "--client-secret-file",
         type=Path,
@@ -277,7 +314,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout",
         type=_positive_seconds,
-        default=120.0,
+        default=420.0,
         help="overall completion timeout in seconds (default: %(default)s)",
     )
     return parser
@@ -370,6 +407,79 @@ def _projection(metadata: object) -> dict[str, str] | None:
 def _projection_correlation(projection: Mapping[str, str]) -> dict[str, str]:
     """Return only application correlation from one projection envelope."""
     return {key: value for key, value in projection.items() if key not in _PROJECTION_ENVELOPE_FIELDS}
+
+
+def _string_set(value: object, *, field: str) -> frozenset[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise RuntimeError(f"the target capability projection contained an invalid {field}")
+    if len(value) != len(set(value)):
+        raise RuntimeError(f"the target capability projection contained duplicate {field}")
+    return frozenset(value)
+
+
+def _target_contract_payload(
+    text: str,
+    projection: Mapping[str, str],
+    *,
+    expected_state: ResponseOnlyTargetAvailability,
+    expected_capabilities: frozenset[str],
+    expected_tools: frozenset[str],
+) -> dict[str, object]:
+    """Validate one complete response-only target replacement projection."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("the target capability projection did not contain valid JSON") from error
+    if not isinstance(payload, dict):
+        raise RuntimeError("the target capability projection did not contain an object")
+    expected_identity = {
+        "backend": projection.get("backend_name"),
+        "mode": projection.get("backend_mode"),
+        "target": projection.get("target_ref"),
+    }
+    if any(not value for value in expected_identity.values()) or any(
+        payload.get(key) != value for key, value in expected_identity.items()
+    ):
+        raise RuntimeError("the target capability projection contradicted its binding identity")
+    if payload.get("target_state") != expected_state.value:
+        raise RuntimeError(
+            f"the target capability projection had an unexpected target state: {payload.get('target_state')!r}"
+        )
+    capabilities = _string_set(payload.get("capabilities"), field="capabilities")
+    tools = _string_set(payload.get("frontend_tools"), field="frontend tools")
+    if capabilities != expected_capabilities or tools != expected_tools:
+        raise RuntimeError(
+            "the target capability projection did not advertise the expected response-only contract: "
+            f"capabilities={sorted(capabilities)!r}, frontend_tools={sorted(tools)!r}"
+        )
+    expected_contract = {
+        "agent_readiness": "unknown",
+        "durability": "none",
+        "event_delivery": "response_only",
+        "max_parallel_work": 1,
+        "context_continuity": "unqualified",
+    }
+    if any(payload.get(key) != value for key, value in expected_contract.items()):
+        raise RuntimeError("the target capability projection changed the qualified response-only contract")
+    return payload
+
+
+def _require_content(text: str | None, needles: list[str], *, channel: str) -> None:
+    if not needles:
+        return
+    folded = text.casefold() if isinstance(text, str) else ""
+    missing = [needle for needle in needles if needle.casefold() not in folded]
+    if missing:
+        raise RuntimeError(f"the terminal {channel} omitted required content: {missing!r}")
+
+
+def _latency_ms(started_at_ns: int | None, completed_at_ns: int | None) -> float | None:
+    """Return a monotonic elapsed duration without implying wall-clock precision."""
+    if started_at_ns is None or completed_at_ns is None:
+        return None
+    if completed_at_ns < started_at_ns:
+        raise RuntimeError("the monotonic delegation timeline moved backwards")
+    return round((completed_at_ns - started_at_ns) / 1_000_000, 3)
 
 
 def _response_content_text(response: object, *, audio: bool) -> str:
@@ -496,7 +606,12 @@ def _delivery_completion(
     if speech_source is ResponseOnlySpeechSource.NONE:
         if result_delivery_response_id is not None or result_delivery_completed_at is not None:
             raise RuntimeError("VoiceClaw delivered result speech after advertising a display-only result")
-        delivery_boundary = max(succeeded_at, acknowledgement_completed_at)
+        if not queue_depth_transitions:
+            return None
+        queue_drained_at, final_queue_depth = queue_depth_transitions[-1]
+        if final_queue_depth != 0:
+            return None
+        return queue_drained_at, final_queue_depth
     elif speech_source is ResponseOnlySpeechSource.BACKEND_AUTHORED:
         if result_delivery_response_id is None or result_delivery_completed_at is None:
             return None
@@ -516,6 +631,24 @@ def _delivery_completion(
     return queue_drained_at, final_queue_depth
 
 
+def _failure_delivery_completion(
+    *,
+    terminal_at: int | None,
+    acknowledgement_completed_at: int | None,
+    failure_delivery_completed_at: int | None,
+    queue_depth_transitions: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    """Return the drained-queue event after one terminal failure is spoken."""
+    if terminal_at is None or acknowledgement_completed_at is None or failure_delivery_completed_at is None:
+        return None
+    if not queue_depth_transitions or queue_depth_transitions[-1][0] <= failure_delivery_completed_at:
+        return None
+    queue_drained_at, final_queue_depth = queue_depth_transitions[-1]
+    if final_queue_depth != 0:
+        raise RuntimeError("the speech delivery queue did not drain after failure delivery")
+    return queue_drained_at, final_queue_depth
+
+
 async def _send(websocket: Any, event: dict[str, object]) -> None:
     value = {"event_id": _event_id(), **event}
     await websocket.send(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
@@ -525,6 +658,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
     url = _validate_url(arguments.url, allow_loopback_ws=arguments.allow_loopback_ws)
     secret = _client_secret(arguments)
     forbidden_values = _forbidden_values(arguments)
+    expected_outcome = ResponseOnlyRequestState(arguments.expect_outcome)
     protocols = ["realtime"]
     if secret:
         protocols.append(f"openai-insecure-api-key.{secret}")
@@ -533,17 +667,20 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
     advertised_turn_detection: dict[str, object] | None = None
     negotiated_turn_detection: dict[str, object] | None = None
     session_updated = False
-    gateway_reachable = False
+    target_binding_verified = False
     query_submitted = False
+    query_submitted_at_ns: int | None = None
     projection_by_response: dict[str, dict[str, str]] = {}
     metadata_by_response: dict[str, dict[str, object]] = {}
     streams_by_response: dict[str, dict[str, str]] = {}
     observed: list[dict[str, str]] = []
     backend_turn_phases: list[ResponseOnlyRequestState] = []
     backend_phase_completed_at: dict[ResponseOnlyRequestState, int] = {}
+    backend_phase_completed_at_ns: dict[ResponseOnlyRequestState, int] = {}
     backend_request_id: str | None = None
-    backend_call_id: str | None = None
     backend_target_identity: tuple[str | None, str | None, str | None] | None = None
+    initial_target_contract: dict[str, object] | None = None
+    terminal_target_contract: dict[str, object] | None = None
     backend_base_correlation: dict[str, str] | None = None
     result_display_response_id: str | None = None
     result_display_correlation: dict[str, str] | None = None
@@ -551,6 +688,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
     result_display_done_text: str | None = None
     result_display_started_at: int | None = None
     result_display_completed_at: int | None = None
+    result_display_completed_at_ns: int | None = None
     event_sequence = 0
     queued_speech_depth = 0
     queue_depth_transitions: list[tuple[int, int]] = []
@@ -559,15 +697,25 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
     acknowledgement_created_at: int | None = None
     acknowledgement_transcript = ""
     acknowledgement_completed_at: int | None = None
+    acknowledgement_audio_generated_at_ns: int | None = None
     succeeded_projection: dict[str, str] | None = None
+    terminal_projection: dict[str, str] | None = None
+    terminal_display = ""
     result_speech_source: ResponseOnlySpeechSource | None = None
     backend_result = ""
     result_delivery_response_id: str | None = None
     result_speech_transcript: str | None = None
     result_delivery_completed_at: int | None = None
+    result_audio_generated_at_ns: int | None = None
+    failure_delivery_response_id: str | None = None
+    failure_speech_transcript: str | None = None
+    failure_delivery_completed_at: int | None = None
+    failure_audio_generated_at_ns: int | None = None
     playback_receipts = _PlaybackReceiptTracker()
     required_playback_response_ids: set[str] = set()
     pending_success_result: dict[str, object] | None = None
+    pending_failure_result: dict[str, object] | None = None
+    terminal_public_error: dict[str, str] | None = None
 
     async with connect(
         url,
@@ -579,6 +727,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
         async with asyncio.timeout(arguments.timeout):
             while True:
                 raw_event = await websocket.recv()
+                event_received_at_ns = time.monotonic_ns()
                 if not isinstance(raw_event, str):
                     raise RuntimeError("VoiceClaw sent a binary event on its JSON Realtime channel")
                 if any(value in raw_event for value in forbidden_values):
@@ -602,7 +751,23 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             detail = f"{detail or 'unknown error'} ({evidence})"
                     else:
                         detail = error
-                    raise RuntimeError(f"VoiceClaw protocol error: {detail or 'unknown error'}")
+                    expected_error_code = (
+                        terminal_projection.get("error_code") if terminal_projection is not None else None
+                    )
+                    received_error_code = error.get("code") if isinstance(error, dict) else None
+                    if (
+                        expected_outcome is ResponseOnlyRequestState.FAILED
+                        and isinstance(expected_error_code, str)
+                        and received_error_code == expected_error_code
+                        and terminal_public_error is None
+                    ):
+                        terminal_public_error = {
+                            "code": received_error_code,
+                            "message": str(detail or ""),
+                        }
+                        print(f"expected terminal error observed: {received_error_code}", file=sys.stderr)
+                    else:
+                        raise RuntimeError(f"VoiceClaw protocol error: {detail or 'unknown error'}")
 
                 if event_type == "session.created":
                     session = event.get("session")
@@ -690,7 +855,12 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                 if set(correlation).difference(backend_base_correlation) != (
                                     _BACKEND_RESPONSE_IDENTITY_FIELDS
                                 ) or any(not correlation.get(key) for key in _BACKEND_RESPONSE_IDENTITY_FIELDS):
-                                    raise RuntimeError("the result display omitted exact backend response correlation")
+                                    observed = sorted(set(correlation).difference(backend_base_correlation))
+                                    expected = sorted(_BACKEND_RESPONSE_IDENTITY_FIELDS)
+                                    raise RuntimeError(
+                                        "the result display omitted exact backend response correlation "
+                                        f"(observed fields: {observed}; expected fields: {expected})"
+                                    )
                                 result_display_response_id = response_id
                                 result_display_correlation = correlation
                                 result_display_started_at = event_sequence
@@ -720,6 +890,17 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                     raise RuntimeError("the result response omitted its delivery marker")
                                 result_delivery_response_id = response_id
                                 print("result-delivery speech started", file=sys.stderr)
+                            elif speech_purpose == FrontendResponsePurpose.FAILURE_DELIVERY.value:
+                                if expected_outcome is ResponseOnlyRequestState.SUCCEEDED:
+                                    raise RuntimeError("the frontend started unexpected failure delivery speech")
+                                if failure_delivery_response_id is not None:
+                                    raise RuntimeError("the frontend started more than one failure delivery")
+                                if not _metadata_true(
+                                    metadata_by_response.get(response_id, {}).get("voiceclaw_delivery")
+                                ):
+                                    raise RuntimeError("the failure response omitted its delivery marker")
+                                failure_delivery_response_id = response_id
+                                print("failure-delivery speech started", file=sys.stderr)
                             else:
                                 raise RuntimeError(
                                     "the frontend emitted an unmarked conversational response during delegation"
@@ -730,6 +911,13 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
 
                 elif event_type == "response.output_audio.done":
                     playback_receipts.observe_audio_done(event)
+                    response_id = event.get("response_id")
+                    if response_id == acknowledgement_response_id:
+                        acknowledgement_audio_generated_at_ns = event_received_at_ns
+                    elif response_id == result_delivery_response_id:
+                        result_audio_generated_at_ns = event_received_at_ns
+                    elif response_id == failure_delivery_response_id:
+                        failure_audio_generated_at_ns = event_received_at_ns
 
                 elif event_type in {"response.output_text.delta", "response.output_audio_transcript.delta"}:
                     response_id = event.get("response_id")
@@ -828,11 +1016,55 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                 raise RuntimeError("the completed result display was empty")
                             backend_result = body_text
                             result_display_completed_at = event_sequence
+                            result_display_completed_at_ns = event_received_at_ns
 
                         if kind == ResponseOnlyUpdateKind.BACKEND_TARGET.value:
-                            gateway_reachable = phase == "reachable"
+                            target_binding_verified = phase == "verified"
                             if phase == "unavailable":
-                                raise RuntimeError("the configured agent gateway is unavailable")
+                                raise RuntimeError("the configured target binding is unavailable")
+                            backend_target_identity = (
+                                projection.get("backend_name"),
+                                projection.get("backend_mode"),
+                                projection.get("target_ref"),
+                            )
+                            if not all(backend_target_identity):
+                                raise RuntimeError("the configured target projection omitted its binding identity")
+                            if not target_binding_verified:
+                                raise RuntimeError("the configured target projection was not verified")
+                            if not query_submitted:
+                                if initial_target_contract is not None:
+                                    raise RuntimeError("VoiceClaw emitted more than one initial target contract")
+                                initial_target_contract = _target_contract_payload(
+                                    text,
+                                    projection,
+                                    expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
+                                    expected_capabilities=_INITIAL_RESPONSE_ONLY_CAPABILITIES,
+                                    expected_tools=_INITIAL_RESPONSE_ONLY_TOOLS,
+                                )
+                            else:
+                                if terminal_projection is None:
+                                    raise RuntimeError(
+                                        "VoiceClaw refreshed the target contract before a terminal outcome"
+                                    )
+                                if terminal_target_contract is not None:
+                                    raise RuntimeError("VoiceClaw emitted more than one terminal target contract")
+                                target_consumed = expected_outcome in {
+                                    ResponseOnlyRequestState.SUCCEEDED,
+                                    ResponseOnlyRequestState.OUTCOME_UNKNOWN,
+                                }
+                                terminal_target_contract = _target_contract_payload(
+                                    text,
+                                    projection,
+                                    expected_state=(
+                                        ResponseOnlyTargetAvailability.CONSUMED
+                                        if target_consumed
+                                        else ResponseOnlyTargetAvailability.AVAILABLE
+                                    ),
+                                    expected_capabilities=(
+                                        frozenset() if target_consumed else _INITIAL_RESPONSE_ONLY_CAPABILITIES
+                                    ),
+                                    expected_tools=(frozenset() if target_consumed else _INITIAL_RESPONSE_ONLY_TOOLS),
+                                )
 
                         if kind == ResponseOnlyUpdateKind.DELIVERY_QUEUE.value:
                             depth = _queue_depth(projection, text)
@@ -858,31 +1090,14 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             if projection.get("work_id"):
                                 raise RuntimeError("the response-only backend projection claimed a durable Work ID")
                             local_request_id = projection.get("local_request_id")
-                            if not local_request_id or projection.get("commit_id") != local_request_id:
+                            if not local_request_id:
                                 raise RuntimeError(
                                     "the response-only lifecycle omitted its VoiceClaw-local request identity"
                                 )
-                            if projection.get("identity_authority") != "voiceclaw_local":
-                                raise RuntimeError("the response-only lifecycle claimed a non-local identity authority")
                             correlation = _projection_correlation(projection)
                             if backend_request_id is None:
                                 backend_request_id = local_request_id
-                                backend_call_id = projection.get("call_id")
-                                backend_target_identity = (
-                                    projection.get("backend_name"),
-                                    projection.get("backend_mode"),
-                                    projection.get("target_ref"),
-                                )
-                            elif (
-                                local_request_id != backend_request_id
-                                or projection.get("call_id") != backend_call_id
-                                or (
-                                    projection.get("backend_name"),
-                                    projection.get("backend_mode"),
-                                    projection.get("target_ref"),
-                                )
-                                != backend_target_identity
-                            ):
+                            elif local_request_id != backend_request_id:
                                 raise RuntimeError(
                                     "the response-only lifecycle changed correlation identity between phases"
                                 )
@@ -897,10 +1112,9 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                     raise RuntimeError(
                                         "the response-only lifecycle changed request correlation before completion"
                                     )
-                            if request_state is ResponseOnlyRequestState.FAILED:
-                                raise RuntimeError(text or title or "the delegated backend turn failed")
                             backend_turn_phases.append(request_state)
                             backend_phase_completed_at.setdefault(request_state, event_sequence)
+                            backend_phase_completed_at_ns.setdefault(request_state, event_received_at_ns)
 
                             if (
                                 request_state is ResponseOnlyRequestState.DISPATCHING
@@ -910,18 +1124,27 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                     "the acknowledgement speech slot was not reserved before backend dispatch"
                                 )
 
-                            if request_state is ResponseOnlyRequestState.SUCCEEDED:
+                            if request_state.terminal:
+                                if request_state is not expected_outcome:
+                                    raise RuntimeError(
+                                        "the delegated turn produced an unexpected terminal outcome: "
+                                        f"expected {expected_outcome.value}, received {request_state.value}"
+                                    )
                                 required_phases = (
                                     ResponseOnlyRequestState.LOCALLY_QUEUED,
                                     ResponseOnlyRequestState.DISPATCHING,
                                     ResponseOnlyRequestState.WAITING_FOR_RESPONSE,
-                                    ResponseOnlyRequestState.SUCCEEDED,
+                                    expected_outcome,
                                 )
                                 if tuple(backend_turn_phases) != required_phases:
                                     raise RuntimeError(
                                         "the delegated turn lifecycle did not follow the required order: "
                                         + " -> ".join(state.value for state in required_phases)
                                     )
+                                terminal_projection = projection
+                                terminal_display = text
+
+                            if request_state is ResponseOnlyRequestState.SUCCEEDED:
                                 missing_backend_identity = [
                                     key
                                     for key in ("backend_session_id", "turn_id", "response_id")
@@ -931,10 +1154,6 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                     raise RuntimeError(
                                         "the succeeded backend turn omitted response correlation: "
                                         + ", ".join(missing_backend_identity)
-                                    )
-                                if acknowledgement_created_at is None or acknowledgement_created_at >= event_sequence:
-                                    raise RuntimeError(
-                                        "the delegation acknowledgement did not start before backend success"
                                     )
                                 if (
                                     result_display_completed_at is None
@@ -958,6 +1177,13 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                     )
                                 result_speech_source = advertised_speech_source
                                 succeeded_projection = projection
+                            elif request_state.terminal:
+                                if backend_base_correlation is None or any(
+                                    correlation.get(key) != value for key, value in backend_base_correlation.items()
+                                ):
+                                    raise RuntimeError("the terminal failure changed request correlation")
+                                if not correlation.get("error_code"):
+                                    raise RuntimeError("the terminal failure omitted its normalized error code")
 
                     else:
                         status = response.get("status")
@@ -997,6 +1223,29 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             result_speech_transcript = text
                             result_delivery_completed_at = event_sequence
                             print("result-delivery speech completed", file=sys.stderr)
+                        elif speech_purpose == FrontendResponsePurpose.FAILURE_DELIVERY.value:
+                            if expected_outcome is ResponseOnlyRequestState.SUCCEEDED:
+                                raise RuntimeError("the frontend completed unexpected failure delivery speech")
+                            if response_id != failure_delivery_response_id or not is_delivery:
+                                raise RuntimeError("the frontend completed an uncorrelated failure delivery")
+                            terminal_at = backend_phase_completed_at.get(expected_outcome)
+                            if terminal_projection is None or terminal_at is None or event_sequence <= terminal_at:
+                                raise RuntimeError("failure speech completed before the terminal backend outcome")
+                            if (
+                                acknowledgement_completed_at is None
+                                or not acknowledgement_transcript
+                                or acknowledgement_completed_at >= event_sequence
+                            ):
+                                raise RuntimeError(
+                                    "the delegation acknowledgement did not complete before failure delivery"
+                                )
+                            failure_speech_transcript = _spoken_response_text(
+                                response,
+                                response_streams,
+                                purpose="failure delivery",
+                            )
+                            failure_delivery_completed_at = event_sequence
+                            print("failure-delivery speech completed", file=sys.stderr)
                         elif speech_purpose == FrontendResponsePurpose.DELEGATION_ACK.value:
                             if response_id != acknowledgement_response_id or is_delivery:
                                 raise RuntimeError("the frontend completed an uncorrelated delegation acknowledgement")
@@ -1041,8 +1290,10 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                         result_delivery_completed_at=result_delivery_completed_at,
                         queue_depth_transitions=queue_depth_transitions,
                     )
-                    if delivery_completion is not None:
+                    if delivery_completion is not None and terminal_target_contract is not None:
                         assert succeeded_projection is not None
+                        if initial_target_contract is None:
+                            raise RuntimeError("the succeeded turn omitted its initial target capability projection")
                         local_receipt_at = backend_phase_completed_at[ResponseOnlyRequestState.LOCALLY_QUEUED]
                         dispatching_at = backend_phase_completed_at[ResponseOnlyRequestState.DISPATCHING]
                         waiting_at = backend_phase_completed_at[ResponseOnlyRequestState.WAITING_FOR_RESPONSE]
@@ -1050,9 +1301,17 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                         assert queue_reserved_before_dispatch_at is not None
                         assert acknowledgement_created_at is not None
                         assert acknowledgement_completed_at is not None
+                        assert acknowledgement_audio_generated_at_ns is not None
                         assert result_display_started_at is not None
                         assert result_display_completed_at is not None
                         assert result_speech_source is not None
+                        if (
+                            result_speech_source is ResponseOnlySpeechSource.BACKEND_AUTHORED
+                            and result_audio_generated_at_ns is None
+                        ):
+                            raise RuntimeError("the result speech completed without an audio-generation boundary")
+                        _require_content(backend_result, arguments.display_contains, channel="display")
+                        _require_content(result_speech_transcript, arguments.speech_contains, channel="speech")
                         queue_drained_at, final_queue_depth = delivery_completion
                         pending_success_result = {
                             "status": "succeeded",
@@ -1063,9 +1322,9 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                 if negotiated_turn_detection is not None
                                 else "manual"
                             ),
-                            "backend": succeeded_projection.get("backend_name"),
-                            "backend_mode": succeeded_projection.get("backend_mode"),
-                            "target_ref": succeeded_projection.get("target_ref"),
+                            "backend": backend_target_identity[0] if backend_target_identity is not None else None,
+                            "backend_mode": backend_target_identity[1] if backend_target_identity is not None else None,
+                            "target_ref": backend_target_identity[2] if backend_target_identity is not None else None,
                             "local_request_id": succeeded_projection.get("local_request_id"),
                             "turn_id": succeeded_projection.get("turn_id"),
                             "backend_response_id": succeeded_projection.get("response_id"),
@@ -1078,10 +1337,22 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                 result_speech_source is ResponseOnlySpeechSource.BACKEND_AUTHORED
                             ),
                             "result_speech_delivered": False,
+                            "result_audio_observation": (
+                                "generated_not_played"
+                                if result_speech_source is ResponseOnlySpeechSource.BACKEND_AUTHORED
+                                else "not_generated"
+                            ),
                             "audio_played_ms": 0,
                             "playback_receipt_protocol": _PLAYBACK_RECEIPT_PROTOCOL,
                             "playback_receipts_acknowledged": playback_receipts.acknowledged_count,
                             "early_local_receipt_observed": True,
+                            "backend_acceptance_supported": False,
+                            "backend_acceptance": None,
+                            "initial_target_contract_verified": True,
+                            "terminal_target_state": terminal_target_contract["target_state"],
+                            "terminal_target_consumed": True,
+                            "terminal_frontend_tools": terminal_target_contract["frontend_tools"],
+                            "terminal_tools_withdrawn": True,
                             "acknowledgement_slot_reserved_before_dispatch": (
                                 queue_reserved_before_dispatch_at < dispatching_at
                             ),
@@ -1113,6 +1384,29 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             ],
                             "speech_queue_final_depth": final_queue_depth,
                             "durable_work_id_issued": False,
+                            "latency_clock": "monotonic",
+                            "latency_ms": {
+                                "local_receipt": _latency_ms(
+                                    query_submitted_at_ns,
+                                    backend_phase_completed_at_ns.get(ResponseOnlyRequestState.LOCALLY_QUEUED),
+                                ),
+                                "local_acknowledgement_generated": _latency_ms(
+                                    query_submitted_at_ns,
+                                    acknowledgement_audio_generated_at_ns,
+                                ),
+                                "substantive_display_completed": _latency_ms(
+                                    query_submitted_at_ns,
+                                    result_display_completed_at_ns,
+                                ),
+                                "terminal_result": _latency_ms(
+                                    query_submitted_at_ns,
+                                    backend_phase_completed_at_ns.get(ResponseOnlyRequestState.SUCCEEDED),
+                                ),
+                                "result_audio_generated": _latency_ms(
+                                    query_submitted_at_ns,
+                                    result_audio_generated_at_ns,
+                                ),
+                            },
                             "backend_turn_phases": [phase.value for phase in backend_turn_phases],
                             "event_order": {
                                 "locally_queued": local_receipt_at,
@@ -1139,6 +1433,135 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             )
                             return pending_success_result
 
+                    failure_completion = _failure_delivery_completion(
+                        terminal_at=backend_phase_completed_at.get(expected_outcome),
+                        acknowledgement_completed_at=acknowledgement_completed_at,
+                        failure_delivery_completed_at=failure_delivery_completed_at,
+                        queue_depth_transitions=queue_depth_transitions,
+                    )
+                    if (
+                        expected_outcome is not ResponseOnlyRequestState.SUCCEEDED
+                        and failure_completion is not None
+                        and terminal_target_contract is not None
+                    ):
+                        assert terminal_projection is not None
+                        assert acknowledgement_response_id is not None
+                        assert acknowledgement_created_at is not None
+                        assert acknowledgement_completed_at is not None
+                        assert acknowledgement_audio_generated_at_ns is not None
+                        assert failure_delivery_response_id is not None
+                        assert failure_delivery_completed_at is not None
+                        if initial_target_contract is None:
+                            raise RuntimeError("the terminal turn omitted its initial target capability projection")
+                        if failure_audio_generated_at_ns is None:
+                            raise RuntimeError("the failure speech completed without an audio-generation boundary")
+                        _require_content(terminal_display, arguments.display_contains, channel="display")
+                        _require_content(failure_speech_transcript, arguments.speech_contains, channel="speech")
+                        local_receipt_at = backend_phase_completed_at[ResponseOnlyRequestState.LOCALLY_QUEUED]
+                        dispatching_at = backend_phase_completed_at[ResponseOnlyRequestState.DISPATCHING]
+                        waiting_at = backend_phase_completed_at[ResponseOnlyRequestState.WAITING_FOR_RESPONSE]
+                        terminal_at = backend_phase_completed_at[expected_outcome]
+                        assert queue_reserved_before_dispatch_at is not None
+                        queue_drained_at, final_queue_depth = failure_completion
+                        pending_failure_result = {
+                            "status": expected_outcome.value,
+                            "query": arguments.query,
+                            "session_id": session_id,
+                            "turn_detection": (
+                                negotiated_turn_detection.get("type")
+                                if negotiated_turn_detection is not None
+                                else "manual"
+                            ),
+                            "backend": backend_target_identity[0] if backend_target_identity is not None else None,
+                            "backend_mode": (
+                                backend_target_identity[1] if backend_target_identity is not None else None
+                            ),
+                            "target_ref": backend_target_identity[2] if backend_target_identity is not None else None,
+                            "local_request_id": terminal_projection.get("local_request_id"),
+                            "error_code": terminal_projection.get("error_code"),
+                            "display": terminal_display,
+                            "acknowledgement_transcript": acknowledgement_transcript,
+                            "failure_speech_transcript": failure_speech_transcript,
+                            "result_speech_generated": True,
+                            "result_speech_delivered": False,
+                            "result_audio_observation": "generated_not_played",
+                            "audio_played_ms": 0,
+                            "playback_receipt_protocol": _PLAYBACK_RECEIPT_PROTOCOL,
+                            "playback_receipts_acknowledged": playback_receipts.acknowledged_count,
+                            "early_local_receipt_observed": True,
+                            "backend_acceptance_supported": False,
+                            "backend_acceptance": None,
+                            "initial_target_contract_verified": True,
+                            "terminal_target_state": terminal_target_contract["target_state"],
+                            "terminal_target_consumed": (
+                                terminal_target_contract["target_state"]
+                                == ResponseOnlyTargetAvailability.CONSUMED.value
+                            ),
+                            "terminal_frontend_tools": terminal_target_contract["frontend_tools"],
+                            "terminal_tools_withdrawn": not terminal_target_contract["frontend_tools"],
+                            "public_terminal_error": terminal_public_error,
+                            "acknowledgement_slot_reserved_before_dispatch": (
+                                queue_reserved_before_dispatch_at < dispatching_at
+                            ),
+                            "backend_dispatch_started_before_acknowledgement_completed": (
+                                dispatching_at < acknowledgement_completed_at
+                            ),
+                            "failure_delivery_completed_after_terminal_result": (
+                                failure_delivery_completed_at > terminal_at
+                            ),
+                            "peak_speech_queue_depth": queued_speech_depth,
+                            "speech_queue_depth_transitions": [
+                                depth for _observed_at, depth in queue_depth_transitions
+                            ],
+                            "speech_queue_final_depth": final_queue_depth,
+                            "durable_work_id_issued": False,
+                            "latency_clock": "monotonic",
+                            "latency_ms": {
+                                "local_receipt": _latency_ms(
+                                    query_submitted_at_ns,
+                                    backend_phase_completed_at_ns.get(ResponseOnlyRequestState.LOCALLY_QUEUED),
+                                ),
+                                "local_acknowledgement_generated": _latency_ms(
+                                    query_submitted_at_ns,
+                                    acknowledgement_audio_generated_at_ns,
+                                ),
+                                "substantive_display_completed": _latency_ms(
+                                    query_submitted_at_ns,
+                                    backend_phase_completed_at_ns.get(expected_outcome),
+                                ),
+                                "terminal_result": _latency_ms(
+                                    query_submitted_at_ns,
+                                    backend_phase_completed_at_ns.get(expected_outcome),
+                                ),
+                                "result_audio_generated": _latency_ms(
+                                    query_submitted_at_ns,
+                                    failure_audio_generated_at_ns,
+                                ),
+                            },
+                            "backend_turn_phases": [phase.value for phase in backend_turn_phases],
+                            "event_order": {
+                                "locally_queued": local_receipt_at,
+                                "delivery_queue_nonempty": queue_reserved_before_dispatch_at,
+                                "dispatching": dispatching_at,
+                                "waiting_for_response": waiting_at,
+                                "acknowledgement_created": acknowledgement_created_at,
+                                "acknowledgement_completed": acknowledgement_completed_at,
+                                expected_outcome.value: terminal_at,
+                                "failure_delivery_completed": failure_delivery_completed_at,
+                                "delivery_queue_drained": queue_drained_at,
+                            },
+                            "projections": observed,
+                        }
+                        required_playback_response_ids = {
+                            acknowledgement_response_id,
+                            failure_delivery_response_id,
+                        }
+                        if playback_receipts.all_acknowledged(required_playback_response_ids):
+                            pending_failure_result["playback_receipts_acknowledged"] = (
+                                playback_receipts.acknowledged_count
+                            )
+                            return pending_failure_result
+
                 elif event_type == "conversation.item.truncated":
                     acknowledged_response_id = playback_receipts.acknowledge(event)
                     print(f"zero-playback receipt acknowledged for {acknowledged_response_id}", file=sys.stderr)
@@ -1147,9 +1570,15 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                     ):
                         pending_success_result["playback_receipts_acknowledged"] = playback_receipts.acknowledged_count
                         return pending_success_result
+                    if pending_failure_result is not None and playback_receipts.all_acknowledged(
+                        required_playback_response_ids
+                    ):
+                        pending_failure_result["playback_receipts_acknowledged"] = playback_receipts.acknowledged_count
+                        return pending_failure_result
 
-                if session_updated and gateway_reachable and not query_submitted:
+                if session_updated and initial_target_contract is not None and not query_submitted:
                     query_submitted = True
+                    query_submitted_at_ns = time.monotonic_ns()
                     await _send(
                         websocket,
                         {
@@ -1178,7 +1607,9 @@ def main() -> None:
         result = asyncio.run(_verify(arguments))
     except KeyboardInterrupt:
         raise SystemExit(130) from None
-    except (OSError, RuntimeError, TimeoutError, ValueError, WebSocketException) as error:
+    except TimeoutError as error:
+        raise SystemExit(f"Realtime delegation verification timed out after {arguments.timeout:g} seconds") from error
+    except (OSError, RuntimeError, ValueError, WebSocketException) as error:
         raise SystemExit(f"Realtime delegation verification failed: {error}") from error
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

@@ -182,7 +182,7 @@ def _materialize_bundled_nva(
 ) -> FrontendRuntimePlan:
     if str(profile.pipeline_mode) != _SUPPORTED_PIPELINE:
         raise ConfigurationError(
-            f"bundled_nva supports only pipeline_mode {_SUPPORTED_PIPELINE!r}; got {profile.pipeline_mode!r}"
+            f"bundled_nva currently supports pipeline_mode {_SUPPORTED_PIPELINE!r}; got {profile.pipeline_mode!r}"
         )
     platform = str(profile.platform)
     if platform not in _SUPPORTED_PLATFORMS:

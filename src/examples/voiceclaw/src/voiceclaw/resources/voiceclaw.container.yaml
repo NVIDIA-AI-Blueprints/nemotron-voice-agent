@@ -5,13 +5,13 @@ schema_version: voiceclaw.config.v3
 
 server:
   host: 0.0.0.0
-  port: 18790
+  port: 7860
   listener_security: private_network
   auth_mode: none
   max_sessions: 1
 
 frontend_profiles:
-  managed_nvidia:
+  nvidia_hosted:
     kind: bundled_nva
     public_model: nvidia/voiceclaw
     realtime_model: nvidia/voiceclaw-cascade
@@ -19,13 +19,13 @@ frontend_profiles:
     pipeline_mode: generic-assistant
     services:
       llm:
-        id: managed-nemotron-lightning
-        name: Nemotron 3.5 Lightning
+        id: nvidia-hosted-llm
+        name: NVIDIA Hosted LLM
         provider: openai_compatible
-        endpoint: https://integrate.api.nvidia.com/v1
+        endpoint: ${VOICECLAW_LLM_ENDPOINT}
         model: nvidia/nemotron-3.5-lightning-30b-a3b
         credential:
-          file: /var/lib/voiceclaw/credentials/speech
+          env: NVIDIA_API_KEY
         temperature: 0.0
         supports_tokenize: true
         realtime_max_output_tokens: 2048
@@ -36,34 +36,30 @@ frontend_profiles:
               enable_thinking: false
             repetition_penalty: 1.05
       asr:
-        id: managed-nemotron-asr
-        name: Nemotron ASR Streaming
+        id: nvidia-hosted-asr
+        name: NVIDIA Hosted Streaming ASR
         provider: nvidia_grpc
-        endpoint: grpc.nvcf.nvidia.com:443
+        endpoint: ${VOICECLAW_ASR_ENDPOINT}
         tls: true
         model: nemotron-asr-streaming
-        function_id: bb0837de-8c7b-481f-9ec8-ef5663e9c1fa
-        language_code: en-US
         credential:
-          file: /var/lib/voiceclaw/credentials/speech
+          env: NVIDIA_API_KEY
       tts:
-        id: managed-magpie-tts
-        name: Magpie TTS Multilingual
+        id: nvidia-hosted-tts
+        name: NVIDIA Hosted Magpie TTS
         provider: nvidia_grpc
-        endpoint: grpc.nvcf.nvidia.com:443
+        endpoint: ${VOICECLAW_TTS_ENDPOINT}
         tls: true
         model: magpie-tts-multilingual
-        voice: Magpie-Multilingual.EN-US.Aria
-        function_id: 877104f7-e885-42b9-8de8-f6e4c6303969
+        voice: John
         synthesis_mode: stitched
-        language_code: en-US
         credential:
-          file: /var/lib/voiceclaw/credentials/speech
+          env: NVIDIA_API_KEY
     connect_timeout_seconds: 15
-    bootstrap_timeout_seconds: 15
+    bootstrap_timeout_seconds: 30
     max_event_bytes: 16777216
 
-default_frontend: managed_nvidia
+default_frontend: nvidia_hosted
 
 model_contracts:
   profile: default
@@ -71,24 +67,28 @@ model_contracts:
 interaction_profiles: {}
 
 backend_profiles:
-  nemoclaw:
-    kind: nemoclaw
+  deployed_agent:
+    kind: openshell_fabric
     interaction:
       profile: stateless
       tool_copy: {}
     credential:
-      file: /var/lib/voiceclaw/credentials/agent
+      env: VOICECLAW_OPENSHELL_CLIENT_SECRET
     settings:
-      mode: response_only
-      transport_profile: managed_service
-      endpoint: http://127.0.0.1:17681
-      endpoint_policy: managed_private_http
-      agent_route_host: placeholder.openshell.localhost:17681
-      target_ref: placeholder:placeholder:placeholder
-      exchange_deadline_seconds: 125
-      result_display_budget_bytes: 8192
+      endpoint: ${VOICECLAW_OPENSHELL_ENDPOINT}
+      workspace: ${VOICECLAW_OPENSHELL_WORKSPACE}
+      sandbox: ${VOICECLAW_OPENSHELL_SANDBOX}
+      adapter_id: ${VOICECLAW_FABRIC_ADAPTER_ID}
+      fabric_agent: ${VOICECLAW_FABRIC_AGENT}
+      native_agent: ${VOICECLAW_NATIVE_AGENT}
+      issuer: ${VOICECLAW_OPENSHELL_ISSUER}
+      client_id: ${VOICECLAW_OPENSHELL_CLIENT_ID}
+      scopes: [sandbox:write]
+      rpc_timeout_seconds: 30
+      invoke_timeout_seconds: 330
+      result_speech_budget_bytes: 512
 
-default_backend: nemoclaw
+default_backend: deployed_agent
 
 interaction:
   max_pending_speech: 32
@@ -99,4 +99,4 @@ interaction:
 
 state:
   kind: sqlite
-  path: /var/lib/voiceclaw/runtime/state.db
+  path: /var/lib/voiceclaw/state/state.db

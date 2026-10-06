@@ -50,7 +50,7 @@ _REQUIRED_PACKAGE_FILES = {
     "voiceclaw/py.typed",
     "voiceclaw/resources/model_contracts.v1.yaml",
     "voiceclaw/resources/interaction_profiles.v2.yaml",
-    "voiceclaw/resources/nemoclaw_managed.yaml",
+    "voiceclaw/resources/voiceclaw.container.yaml",
     "voiceclaw/resources/voiceclaw.example.yaml",
     "voiceclaw/ui/index.html",
     "voiceclaw/ui/styles.css",
@@ -60,6 +60,11 @@ _REQUIRED_PACKAGE_FILES = {
 }
 _FORBIDDEN_PARTS = {"__pycache__", "operator", "tests"}
 _FORBIDDEN_SUFFIXES = (".crt", ".db", ".docx", ".key", ".p12", ".pdf", ".pem", ".pyc", ".pyo", ".sqlite")
+_RETIRED_PACKAGE_PATHS = {
+    "voiceclaw/managed_runtime.py",
+    "voiceclaw/resources/nemoclaw_managed.yaml",
+}
+_RETIRED_PACKAGE_PREFIXES = ("voiceclaw/adapters/nemoclaw/",)
 
 
 class WheelEvidence(NamedTuple):
@@ -311,6 +316,8 @@ def _contents(files: dict[str, zipfile.ZipInfo], dist_info: str) -> None:
             or any(part == ".env" or part.startswith(".env.") for part in lowered_parts)
             or lowered.endswith(_FORBIDDEN_SUFFIXES)
             or ".egg-info/" in lowered
+            or lowered in _RETIRED_PACKAGE_PATHS
+            or lowered.startswith(_RETIRED_PACKAGE_PREFIXES)
         ):
             forbidden.append(name)
     if forbidden:

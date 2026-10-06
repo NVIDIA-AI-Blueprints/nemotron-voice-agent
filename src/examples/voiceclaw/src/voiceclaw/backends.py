@@ -58,6 +58,15 @@ class _BackendShutdown(Protocol):
         ...
 
 
+@runtime_checkable
+class _BackendClose(Protocol):
+    """Optional synchronous close used by validation and failed construction."""
+
+    def close(self) -> None:
+        """Release resources without requiring an event loop."""
+        ...
+
+
 def validate_backend_name(value: object, *, field: str = "backend adapter name") -> str:
     """Return one canonical registry name or reject an unsafe identifier."""
     if (
@@ -107,10 +116,39 @@ class BackendComposition:
         await self.selected_agent_readiness.check_selected_agent()
 
     async def shutdown(self) -> None:
-        """Run the selected adapter's optional lifecycle hook."""
-        backend = self.turn_backend if self.turn_backend is not None else self.agent_backend
-        if isinstance(backend, _BackendShutdown):
-            await backend.shutdown()
+        """Release every distinct adapter-owned lifecycle resource once."""
+        first_error: BaseException | None = None
+        for resource in self._lifecycle_resources():
+            try:
+                if isinstance(resource, _BackendShutdown):
+                    await resource.shutdown()
+                elif isinstance(resource, _BackendClose):
+                    resource.close()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
+
+    def close(self) -> None:
+        """Synchronously release every distinct closeable resource once."""
+        first_error: BaseException | None = None
+        for resource in self._lifecycle_resources():
+            try:
+                if isinstance(resource, _BackendClose):
+                    resource.close()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
+
+    def _lifecycle_resources(self) -> tuple[object, ...]:
+        resources: list[object] = []
+        for candidate in (self.turn_backend, self.agent_backend, self.selected_agent_readiness):
+            if candidate is not None and all(candidate is not resource for resource in resources):
+                resources.append(candidate)
+        return tuple(resources)
 
     def create_interaction_coordinator(
         self,

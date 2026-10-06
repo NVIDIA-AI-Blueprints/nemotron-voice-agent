@@ -948,7 +948,7 @@ button:disabled {
 .status-pill.succeeded,
 .status-pill.ready,
 .status-pill.attached,
-.status-pill.gateway-reachable {
+.status-pill.binding-verified {
   color: #dbffa6;
   background: var(--green-soft);
   border-color: rgba(118, 185, 0, 0.25);

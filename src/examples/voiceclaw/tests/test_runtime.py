@@ -10,12 +10,14 @@ from pathlib import Path
 import pytest
 
 from voiceclaw.adapters.state.sqlite import SqliteStateStore
+from voiceclaw.application.context import FrontendContextProjector, FrontendContextSnapshot, LocalRequestContext
 from voiceclaw.application.runtime import RealtimeInteractionManager
 from voiceclaw.domain import (
     RUNTIME_PROJECTION_SCHEMA,
     ResponseOnlyRequestState,
     ResponseOnlyResultEventKind,
     ResponseOnlySpeechSource,
+    ResponseOnlyTargetAvailability,
     ResponseOnlyUpdateKind,
 )
 from voiceclaw.domain.models import (
@@ -30,11 +32,15 @@ from voiceclaw.domain.models import (
 from voiceclaw.interaction_profiles import INTERACTION_PROFILE_SCHEMA, MAX_DELEGATED_GOAL_BYTES
 from voiceclaw.model_contracts import load_model_contract_catalog
 from voiceclaw.ports.runtime import (
+    FrontendContextPurpose,
+    FrontendContextRequest,
     FrontendConversationDeliveryState,
     FrontendConversationTurn,
     FrontendPlaybackReceipt,
     FrontendPlaybackReceiptState,
     FrontendResponsePurpose,
+    FrontendSpeechDeliveryOutcome,
+    FrontendSpeechDeliveryOutcomeState,
     InteractionUpdate,
     TurnDirective,
     TurnDirectiveKind,
@@ -49,6 +55,34 @@ from voiceclaw.ports.turns import (
 )
 
 _MODEL_CONTRACTS = Path(__file__).parents[1] / "src" / "voiceclaw" / "resources" / "model_contracts.v1.yaml"
+
+
+def test_frontend_context_budget_keeps_newest_local_request() -> None:
+    older = LocalRequestContext(
+        summary="older request",
+        operation="work.delegate",
+        state=ResponseOnlyRequestState.WAITING_FOR_RESPONSE,
+    )
+    newest = LocalRequestContext(
+        summary="newest request",
+        operation="work.delegate",
+        state=ResponseOnlyRequestState.WAITING_FOR_RESPONSE,
+    )
+    single = FrontendContextSnapshot(
+        purpose=FrontendContextPurpose.CONVERSATION,
+        projection_revision=2,
+        active_local_requests=(newest,),
+    )
+    single_projection = FrontendContextProjector(maximum_characters=4096).project(single)
+    bounded = FrontendContextProjector(maximum_characters=len(single_projection)).project(
+        FrontendContextSnapshot(
+            purpose=FrontendContextPurpose.CONVERSATION,
+            projection_revision=2,
+            active_local_requests=(older, newest),
+        )
+    )
+
+    assert json.loads(bounded)["active_local_requests"] == [json.loads(single_projection)["active_local_requests"][0]]
 
 
 def test_interaction_update_preserves_existing_positional_constructor() -> None:
@@ -112,6 +146,55 @@ class _Turns:
         yield CommittedTurnCompleted(result=result)
 
 
+class _StaticResultTurns(_Turns):
+    def __init__(self, display_text: str, speak_text: str | None = None) -> None:
+        self.display_text = display_text
+        self.speak_text = speak_text
+
+    async def commit_turn(self, request):
+        del request
+        return CommittedTurnResult(
+            backend_session_id="backend-session-static",
+            turn_id="turn-static",
+            response_id="response-static",
+            display_text=self.display_text,
+            speak_text=self.speak_text,
+        )
+
+
+class _OneShotTurns(_Turns):
+    def __init__(self) -> None:
+        self.consumed = False
+        self.invocations = 0
+
+    async def inspect(self):
+        backend = await super().inspect()
+        if not self.consumed:
+            return backend
+        return CommittedTurnBackend(
+            label=backend.label,
+            target_ref=backend.target_ref,
+            mode=backend.mode,
+            capabilities=BackendCapabilities(
+                backend_kind=backend.capabilities.backend_kind,
+                target_label=backend.capabilities.target_label,
+                revision=backend.capabilities.revision,
+                operations=frozenset(),
+                durability=backend.capabilities.durability,
+                event_delivery=backend.capabilities.event_delivery,
+                max_parallel_work=backend.capabilities.max_parallel_work,
+            ),
+            capability_source=CapabilitySource.OPERATOR_CONFIGURED,
+            capability_source_id="test_committed_turn",
+            target_availability=ResponseOnlyTargetAvailability.CONSUMED,
+        )
+
+    async def commit_turn(self, request):
+        self.invocations += 1
+        self.consumed = True
+        return await super().commit_turn(request)
+
+
 class _TestRoutingPolicy:
     def decide(self, text: str) -> TurnDirective:
         if text == "Hello":
@@ -143,6 +226,168 @@ def _completed_display(updates):
     ]
     assert len(completed) == 1
     return completed[0]
+
+
+def test_frontend_context_freezes_acknowledgement_and_refreshes_result_state() -> None:
+    async def exercise() -> None:
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="default",
+                state_store=store,
+                committed_turns=_Turns(),
+            )
+            await runtime.open_session("session-context", "conversation-context")
+            updates = runtime.execute_tool(
+                session_id="session-context",
+                commit_id="commit-context",
+                call_id="call-context",
+                tool_name="work.delegate",
+                arguments=_delegation("compare balanced search trees"),
+                finalized_user_text="Please compare balanced search trees.",
+            )
+
+            queued = await anext(updates)
+            assert queued.phase is ResponseOnlyRequestState.LOCALLY_QUEUED
+            acknowledgement_request = FrontendContextRequest(
+                FrontendContextPurpose.DELEGATION_ACK,
+                "commit-context",
+            )
+            frozen_before = runtime.frontend_context(
+                "session-context",
+                acknowledgement_request,
+                maximum_characters=4096,
+            )
+            await _collect(updates)
+            frozen_after = runtime.frontend_context(
+                "session-context",
+                acknowledgement_request,
+                maximum_characters=4096,
+            )
+            assert frozen_after == frozen_before
+            frozen = json.loads(frozen_before)
+            assert frozen["purpose"] == "delegation_ack"
+            assert frozen["target_request"] == {
+                "backend_acceptance": "unknown",
+                "durability": "none",
+                "operation": "work.delegate",
+                "request_summary": "compare balanced search trees",
+                "state": "locally_queued",
+            }
+            assert "local_request_id" not in frozen_before
+            assert "voice_activity" not in frozen
+
+            result = json.loads(
+                runtime.frontend_context(
+                    "session-context",
+                    FrontendContextRequest(FrontendContextPurpose.RESULT_DELIVERY, "commit-context"),
+                    maximum_characters=4096,
+                )
+            )
+            assert result["purpose"] == "result_delivery"
+            assert result["target_request"]["state"] == "succeeded"
+            assert result["target_request"]["terminal_outcome"] == "succeeded"
+            assert result["target_request"]["result"] == {
+                "delivery_state": "ready",
+                "display_available": True,
+                "speech_source": "backend_authored",
+                "state": "available",
+            }
+            assert result["voice_activity"] == {
+                "connected": True,
+                "input": "idle",
+                "model": "idle",
+                "output": "idle",
+            }
+
+            conversation_before = json.loads(
+                runtime.frontend_context(
+                    "session-context",
+                    FrontendContextRequest(FrontendContextPurpose.CONVERSATION),
+                    maximum_characters=4096,
+                )
+            )
+            assert len(conversation_before["ready_results"]) == 1
+            runtime.record_conversation_turn(
+                "session-context",
+                FrontendConversationTurn(
+                    turn_id="assistant-result",
+                    role="assistant",
+                    text="The comparison is ready.",
+                    delivery_state=FrontendConversationDeliveryState.DELIVERED,
+                    presentation_id="presentation-result",
+                    local_request_id="commit-context",
+                ),
+            )
+            conversation_after = json.loads(
+                runtime.frontend_context(
+                    "session-context",
+                    FrontendContextRequest(FrontendContextPurpose.CONVERSATION),
+                    maximum_characters=4096,
+                )
+            )
+            assert conversation_after["ready_results"] == []
+            assert conversation_after["recent_conversation"][-1] == {
+                "delivery_state": "delivered",
+                "role": "assistant",
+                "text": "The comparison is ready.",
+            }
+            result_after_generation = json.loads(
+                runtime.frontend_context(
+                    "session-context",
+                    FrontendContextRequest(FrontendContextPurpose.RESULT_DELIVERY, "commit-context"),
+                    maximum_characters=4096,
+                )
+            )
+            assert result_after_generation["target_request"]["result"]["delivery_state"] == (
+                "awaiting_playback_receipt"
+            )
+
+    asyncio.run(exercise())
+
+
+def test_runtime_records_zero_audio_result_as_skipped_without_a_playback_receipt() -> None:
+    async def exercise() -> None:
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="default",
+                state_store=store,
+                committed_turns=_Turns(),
+            )
+            await runtime.open_session("session-skipped", "conversation-skipped")
+            await _collect(
+                runtime.execute_tool(
+                    session_id="session-skipped",
+                    commit_id="commit-skipped",
+                    call_id="call-skipped",
+                    tool_name="work.delegate",
+                    arguments=_delegation("inspect the result"),
+                    finalized_user_text="inspect the result",
+                )
+            )
+            runtime.record_speech_delivery_outcome(
+                "session-skipped",
+                FrontendSpeechDeliveryOutcome(
+                    local_request_id="commit-skipped",
+                    presentation_id="presentation-skipped",
+                    state=FrontendSpeechDeliveryOutcomeState.SKIPPED,
+                    reason_code="frontend_emitted_no_audio",
+                ),
+            )
+
+            context = json.loads(
+                runtime.frontend_context(
+                    "session-skipped",
+                    FrontendContextRequest(FrontendContextPurpose.RESULT_DELIVERY, "commit-skipped"),
+                    maximum_characters=4096,
+                )
+            )
+            assert context["target_request"]["result"]["delivery_state"] == "skipped"
+            assert context["ready_results"] == []
+            projection = json.loads(runtime.projection("session-skipped"))
+            assert projection["ready_results"][0]["delivery_state"] == "skipped"
+            assert projection["delivery"]["authoritative_client_receipt"] is False
+
+    asyncio.run(exercise())
 
 
 def _delegation(goal: str) -> dict[str, str]:
@@ -206,6 +451,102 @@ def test_runtime_routes_only_to_an_advertised_operation() -> None:
     asyncio.run(exercise())
 
 
+def test_runtime_withdraws_delegation_after_a_one_shot_target_is_consumed() -> None:
+    async def exercise() -> None:
+        turns = _OneShotTurns()
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="default",
+                state_store=store,
+                committed_turns=turns,
+            )
+            await runtime.open_session("session-one-shot", "conversation-one-shot")
+            first = await _collect(
+                runtime.execute_tool(
+                    session_id="session-one-shot",
+                    commit_id="commit-one",
+                    call_id="call-one",
+                    tool_name="work.delegate",
+                    arguments=_delegation("first request"),
+                    finalized_user_text="first request",
+                )
+            )
+            assert first[-1].phase is ResponseOnlyRequestState.SUCCEEDED
+            assert first[-1].frontend_tools == ()
+            assert first[-1].backend_target is not None
+            assert first[-1].backend_target.target_binding_verified is True
+            assert first[-1].backend_target.target_availability is ResponseOnlyTargetAvailability.CONSUMED
+            assert first[-1].backend_target.capabilities == ()
+            assert "capabilities" not in first[-1].correlation
+            assert "frontend_tools" not in first[-1].correlation
+
+            projection = json.loads(runtime.projection("session-one-shot"))
+            assert projection["connection"]["target_state"] == ResponseOnlyTargetAvailability.CONSUMED
+            assert projection["contract"]["operations"] == []
+            assert projection["contract"]["frontend_tools"] == []
+
+            second = await _collect(
+                runtime.execute_tool(
+                    session_id="session-one-shot",
+                    commit_id="commit-two",
+                    call_id="call-two",
+                    tool_name="work.delegate",
+                    arguments=_delegation("second request"),
+                    finalized_user_text="second request",
+                )
+            )
+            assert len(second) == 1
+            assert second[0].phase is ResponseOnlyRequestState.FAILED
+            assert second[0].tool_output == {"status": "failed", "error": "capability_unsupported"}
+            assert second[0].frontend_response is not None
+            assert second[0].frontend_response.purpose is FrontendResponsePurpose.FAILURE_DELIVERY
+            assert turns.invocations == 1
+
+    asyncio.run(exercise())
+
+
+def test_runtime_atomically_marks_the_target_unavailable_when_refresh_fails() -> None:
+    class _RefreshFailureTurns(_Turns):
+        def __init__(self) -> None:
+            self.inspections = 0
+
+        async def inspect(self):
+            self.inspections += 1
+            if self.inspections > 1:
+                raise OSError("private backend failure")
+            return await super().inspect()
+
+    async def exercise() -> None:
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="default",
+                state_store=store,
+                committed_turns=_RefreshFailureTurns(),
+            )
+            await runtime.open_session("session-refresh", "conversation-refresh")
+            updates = await _collect(
+                runtime.execute_tool(
+                    session_id="session-refresh",
+                    commit_id="commit-refresh",
+                    call_id="call-refresh",
+                    tool_name="work.delegate",
+                    arguments=_delegation("run one request"),
+                    finalized_user_text="run one request",
+                )
+            )
+
+            target = updates[-1].backend_target
+            assert target is not None
+            assert target.target_binding_verified is False
+            assert target.backend_label == "Backend unavailable"
+            assert target.frontend_tools == ()
+            projection = json.loads(runtime.projection("session-refresh"))
+            assert projection["connection"]["target_binding_state"] == "unavailable"
+            assert projection["contract"]["operations"] == []
+
+    asyncio.run(exercise())
+
+
 def test_runtime_persists_mapping_and_labels_ephemeral_turn_non_durable() -> None:
     async def exercise() -> None:
         with SqliteStateStore(":memory:") as store:
@@ -265,7 +606,7 @@ def test_runtime_persists_mapping_and_labels_ephemeral_turn_non_durable() -> Non
             assert updates[0].frontend_response is not None
             assert updates[0].frontend_response.purpose is FrontendResponsePurpose.DELEGATION_ACK
             assert updates[0].frontend_response.local_request_id == "commit-1"
-            assert updates[0].frontend_response.payload_text == "build it"
+            assert updates[0].frontend_response.payload_text is None
             assert updates[0].request_summary == "build it"
             assert "request_summary" not in updates[0].correlation
             assert sum(update.tool_output is not None for update in updates) == 1
@@ -286,12 +627,14 @@ def test_runtime_persists_mapping_and_labels_ephemeral_turn_non_durable() -> Non
             projection = json.loads(projection_text)
             assert projection["schema"] == RUNTIME_PROJECTION_SCHEMA
             assert projection["durability"] == "none"
-            assert projection["gateway_reachable"] is True
+            assert projection["target_binding_verified"] is True
             assert projection["connection"] == {
-                "attachment_mode": "ephemeral_per_request",
+                "attachment_mode": "terminal_invocation",
                 "attachment_state": "not_persistent",
+                "backend_context_continuity": "unqualified",
                 "frontend_state": "connected",
-                "gateway_state": "reachable",
+                "target_binding_state": "verified",
+                "target_state": "available",
                 "recoverable_inflight": False,
                 "reconnect_mode": "fresh_frontend_session",
                 "resume_supported": False,
@@ -387,7 +730,7 @@ def test_runtime_persists_mapping_and_labels_ephemeral_turn_non_durable() -> Non
     asyncio.run(exercise())
 
 
-def test_runtime_uses_the_bounded_delegated_goal_as_acknowledgement_payload() -> None:
+def test_runtime_keeps_the_delegated_goal_out_of_the_acknowledgement_payload() -> None:
     async def exercise() -> None:
         source_turn = "Please use the same language and include the complexity discussion."
         delegated_goal = "Create a concise Python binary search tree example and explain its time and space complexity."
@@ -412,7 +755,7 @@ def test_runtime_uses_the_bounded_delegated_goal_as_acknowledgement_payload() ->
             acknowledgement = updates[0].frontend_response
             assert acknowledgement is not None
             assert acknowledgement.purpose is FrontendResponsePurpose.DELEGATION_ACK
-            assert acknowledgement.payload_text == delegated_goal
+            assert acknowledgement.payload_text is None
             assert updates[0].request_summary == delegated_goal
             assert "request_summary" not in updates[0].correlation
             assert _display_text(updates) == f"done: {delegated_goal}"
@@ -930,7 +1273,7 @@ def test_runtime_projection_exposes_only_truthful_active_request_state() -> None
             assert queued.frontend_response is not None
             assert queued.frontend_response.purpose is FrontendResponsePurpose.DELEGATION_ACK
             assert queued.frontend_response.local_request_id == "commit-active"
-            assert queued.frontend_response.payload_text == "do the work"
+            assert queued.frontend_response.payload_text is None
             dispatching = await anext(updates)
             assert dispatching.phase == "dispatching"
             assert dispatching.tool_output is None
@@ -1216,9 +1559,10 @@ def test_cancelled_ephemeral_turn_releases_process_admission_lane() -> None:
             abandoned_projection = json.loads(runtime.projection("session-abandoned"))
             assert abandoned_projection["execution"]["request_active"] is False
             assert abandoned_projection["execution"]["any_request_active"] is False
-            assert abandoned_projection["execution"]["request_state"] == "failed"
+            assert abandoned_projection["execution"]["request_state"] == "outcome_unknown"
             assert abandoned_projection["execution"]["latest_failure_code"] == "runtime_interrupted"
-            assert abandoned_projection["local_requests"][0]["request_state"] == "failed"
+            assert abandoned_projection["execution"]["latest_terminal_outcome"] == "outcome_unknown"
+            assert abandoned_projection["local_requests"][0]["request_state"] == "outcome_unknown"
 
             following = runtime.execute_tool(
                 session_id="session-next",
@@ -1240,6 +1584,51 @@ def test_cancelled_ephemeral_turn_releases_process_admission_lane() -> None:
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("updates_before_close", [1, 2, 3])
+def test_abandoned_preinvoke_request_has_a_known_local_outcome(updates_before_close: int) -> None:
+    class _ObservedTurns(_Turns):
+        def __init__(self) -> None:
+            self.invocations = 0
+
+        async def stream_turn(self, request):
+            self.invocations += 1
+            async for event in super().stream_turn(request):
+                yield event
+
+    async def exercise() -> None:
+        turns = _ObservedTurns()
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="default",
+                state_store=store,
+                committed_turns=turns,
+            )
+            await runtime.open_session("session-local-cancel", "conversation-local-cancel")
+            updates = runtime.execute_tool(
+                session_id="session-local-cancel",
+                commit_id="commit-local-cancel",
+                call_id="call-local-cancel",
+                tool_name="work.delegate",
+                arguments=_delegation("a request cancelled before invocation"),
+                finalized_user_text="a request cancelled before invocation",
+            )
+            observed = [await anext(updates) for _ in range(updates_before_close)]
+            assert [update.phase for update in observed] == [
+                "locally_queued",
+                "dispatching",
+                "waiting_for_response",
+            ][:updates_before_close]
+            await updates.aclose()
+
+            projection = json.loads(runtime.projection("session-local-cancel"))
+            assert projection["execution"]["request_state"] == "failed"
+            assert projection["execution"]["latest_terminal_outcome"] == "failed"
+            assert projection["execution"]["latest_failure_code"] == "local_request_cancelled"
+            assert turns.invocations == 0
+
+    asyncio.run(exercise())
+
+
 def test_runtime_keeps_realtime_available_when_backend_inspection_fails() -> None:
     class _UnavailableTurns(_Turns):
         async def inspect(self):
@@ -1254,12 +1643,12 @@ def test_runtime_keeps_realtime_available_when_backend_inspection_fails() -> Non
             )
             snapshot = await runtime.open_session("session-offline", "conversation-offline")
 
-            assert snapshot.gateway_reachable is False
+            assert snapshot.target_binding_verified is False
             assert snapshot.backend_label == "Backend unavailable"
             assert store.get_session("session-offline") is not None
             projection = json.loads(runtime.projection("session-offline"))
-            assert projection["gateway_reachable"] is False
-            assert projection["connection"]["gateway_state"] == "unavailable"
+            assert projection["target_binding_verified"] is False
+            assert projection["connection"]["target_binding_state"] == "unavailable"
             assert projection["connection"]["attachment_state"] == "unavailable"
             assert projection["contract"]["operations"] == []
             assert projection["contract"]["frontend_tools"] == []
@@ -1267,233 +1656,150 @@ def test_runtime_keeps_realtime_available_when_backend_inspection_fails() -> Non
     asyncio.run(exercise())
 
 
-def test_runtime_keeps_markdown_code_display_only_without_inferred_speech() -> None:
-    class _LongResultTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-long",
-                turn_id="turn-long",
-                response_id="response-long",
-                display_text="```python\n" + ("print('display only')\n" * 40) + "```",
-            )
-
+@pytest.mark.parametrize(
+    ("display_text", "key_fragments"),
+    [
+        pytest.param(
+            "```python\n" + ("print('display only')\n" * 40) + "```",
+            ("print('display only')",),
+            id="fenced-code",
+        ),
+        pytest.param(
+            "Implementation:\n```python\nprint('never speak this')",
+            ("Implementation:", "print('never speak this')"),
+            id="unclosed-code",
+        ),
+        pytest.param(
+            "There are 2 entries.\n\n- AGENTS.md\n- USER.md",
+            ("- AGENTS.md", "- USER.md"),
+            id="markdown-list",
+        ),
+        pytest.param(
+            "First approved sentence. Second approved sentence. Third display-only sentence.",
+            ("First approved sentence.", "Third display-only sentence."),
+            id="multi-sentence-document",
+        ),
+        pytest.param(
+            " ".join("word" for _ in range(50)),
+            ("word word word",),
+            id="bounded-document",
+        ),
+        pytest.param(
+            " ".join(f"fact-{index:04d}." for index in range(600)),
+            ("fact-0000.", "fact-0599."),
+            id="large-document",
+        ),
+        pytest.param(
+            "Search complexity depends on balance. Would you like a walkthrough?\n"
+            "The comparison is complete, and I can also explain more.\n\n"
+            "The American I interviewed reported O(log n) performance.\n\n"
+            "| **Case** | **Behavior** |\n"
+            "| --- | --- |\n"
+            "| Source | https://example.com/details |\n"
+            "| File | /tmp/tree.py |\n"
+            "| Relative file | src/tree.py |\n"
+            "| Docs | [guide](docs/guide.md) |\n"
+            "| Code | `print(tree)` |\n"
+            "| Average case | O(log n) when balanced |\n"
+            "| Worst case | O(n) when degenerate |\n"
+            "| Supported operations | O(log n) for search/insert/delete |\n"
+            "| Mitigation | Use a self-balancing tree |\n"
+            "| Extra | This fourth safe row stays display-only |\n\n"
+            "The implementation is in src/tree.py.\n"
+            "Use `print(tree)` to inspect it.\n"
+            "Documentation: www.example.com/tree.\n"
+            "I can also provide another example.\n"
+            "Do you want implementation details?",
+            (
+                "https://example.com/details",
+                "/tmp/tree.py",
+                "Would you like a walkthrough?",
+                "Do you want implementation details?",
+            ),
+            id="markdown-table-links-and-paths",
+        ),
+        pytest.param(
+            "```python\nprint('display only')\n```\n\n"
+            "**Search complexity:**\n\n"
+            "- **Average case: O(log n)** when the tree is reasonably balanced.\n"
+            "- **Worst case: O(n)** when the tree degenerates into a linked list.\n"
+            "- Use a self-balancing tree to preserve logarithmic search.\n"
+            "- A fourth detail remains available only in the display.",
+            ("print('display only')", "A fourth detail remains available only in the display."),
+            id="code-and-bullets",
+        ),
+        pytest.param(
+            "# Search comparison\n\n"
+            "## Breadth-First Search (BFS)\n\n"
+            "How it works: It explores nodes level by level.\n\n"
+            "**Practical use case:** **Web crawlers** – Web crawlers discover nearby pages first.\n\n"
+            "## Depth-First Search (DFS)\n\n"
+            "How it works: It explores one branch before backtracking.\n\n"
+            "**Practical use case:** **Maze solving** – Maze solving explores one corridor before backtracking.",
+            ("Breadth-First Search (BFS)", "Web crawlers", "Depth-First Search (DFS)", "Maze solving"),
+            id="markdown-sections",
+        ),
+        pytest.param(
+            "Breadth-First Search (BFS) vs. Depth-First Search (DFS)\n\n"
+            "| Aspect | Breadth-First Search (BFS) | Depth-First Search (DFS) |\n"
+            "|---|---|---|\n"
+            "| **Traversal order** | Level by level | One branch before backtracking |\n"
+            "| **Data structure** | Queue (FIFO) | Stack (LIFO) or recursion |\n\n"
+            "### Practical Use Cases\n\n"
+            "#### BFS: **Web crawlers / shortest path finding**\n"
+            "Additional display detail for BFS.\n\n"
+            "#### DFS: **Maze solving / dependency resolution**\n"
+            "Additional display detail for DFS.",
+            (
+                "Traversal order",
+                "Queue (FIFO)",
+                "Web crawlers / shortest path finding",
+                "Maze solving / dependency resolution",
+            ),
+            id="markdown-table-and-sections",
+        ),
+        pytest.param(
+            "Workspace entries:\n\n- AGENTS.md\n- USER.md",
+            ("Workspace entries:", "- AGENTS.md", "- USER.md"),
+            id="heading-and-list",
+        ),
+    ],
+)
+def test_runtime_keeps_display_only_results_out_of_speech(
+    display_text: str,
+    key_fragments: tuple[str, ...],
+) -> None:
     async def exercise() -> None:
         with SqliteStateStore(":memory:") as store:
             runtime = RealtimeInteractionManager(
                 backend_profile="default",
                 state_store=store,
-                committed_turns=_LongResultTurns(),
+                committed_turns=_StaticResultTurns(display_text),
             )
-            await runtime.open_session("session-long", "conversation-long")
+            await runtime.open_session("session-display-only", "conversation-display-only")
             updates = await _collect(
                 runtime.execute_tool(
-                    session_id="session-long",
-                    commit_id="commit-long",
-                    call_id="call-long",
-                    tool_name="work.delegate",
-                    arguments=_delegation("write code"),
-                    finalized_user_text="write code",
-                )
-            )
-
-            terminal = updates[-1]
-            assert "print('display only')" in _display_text(updates)
-            assert terminal.text == ""
-            assert terminal.frontend_response is None
-            assert terminal.correlation["speech_source"] == ResponseOnlySpeechSource.NONE.value
-            projection = json.loads(runtime.projection("session-long"))
-            assert projection["latest_result"]["speech_source"] == ResponseOnlySpeechSource.NONE.value
-
-    asyncio.run(exercise())
-
-
-def test_runtime_does_not_interpret_unclosed_markdown_as_speech() -> None:
-    class _UnclosedCodeTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-unclosed",
-                turn_id="turn-unclosed",
-                response_id="response-unclosed",
-                display_text="Implementation:\n```python\nprint('never speak this')",
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_UnclosedCodeTurns(),
-            )
-            await runtime.open_session("session-unclosed", "conversation-unclosed")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-unclosed",
-                    commit_id="commit-unclosed",
-                    call_id="call-unclosed",
-                    tool_name="work.delegate",
-                    arguments=_delegation("write code"),
-                    finalized_user_text="write code",
-                )
-            )
-
-            terminal = updates[-1]
-            assert _display_text(updates) == "Implementation:\n```python\nprint('never speak this')"
-            assert terminal.text == ""
-            assert terminal.frontend_response is None
-
-    asyncio.run(exercise())
-
-
-def test_runtime_keeps_markdown_lists_display_only_without_summarizing_them() -> None:
-    class _RichResultTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-rich",
-                turn_id="turn-rich",
-                response_id="response-rich",
-                display_text="There are 2 entries.\n\n- AGENTS.md\n- USER.md",
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_RichResultTurns(),
-            )
-            await runtime.open_session("session-rich", "conversation-rich")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-rich",
-                    commit_id="commit-rich",
-                    call_id="call-rich",
-                    tool_name="work.delegate",
-                    arguments=_delegation("inspect the workspace"),
-                    finalized_user_text="inspect the workspace",
-                )
-            )
-
-            terminal = updates[-1]
-            assert _display_text(updates).endswith("- AGENTS.md\n- USER.md")
-            assert terminal.text == ""
-            assert terminal.frontend_response is None
-
-    asyncio.run(exercise())
-
-
-def test_runtime_never_derives_speech_from_large_display_documents() -> None:
-    class _BoundedResultTurns(_Turns):
-        def __init__(self, display_text: str) -> None:
-            self.display_text = display_text
-
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-bounded",
-                turn_id="turn-bounded",
-                response_id="response-bounded",
-                display_text=self.display_text,
-            )
-
-    async def render(display_text: str, suffix: str) -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_BoundedResultTurns(display_text),
-            )
-            await runtime.open_session(f"session-bounded-{suffix}", f"conversation-bounded-{suffix}")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id=f"session-bounded-{suffix}",
-                    commit_id=f"commit-bounded-{suffix}",
-                    call_id=f"call-bounded-{suffix}",
+                    session_id="session-display-only",
+                    commit_id="commit-display-only",
+                    call_id="call-display-only",
                     tool_name="work.delegate",
                     arguments=_delegation("render the requested document"),
                     finalized_user_text="render the requested document",
                 )
             )
-            assert _display_text(updates) == display_text
-            assert updates[-1].text == ""
-            assert updates[-1].frontend_response is None
 
-    async def exercise() -> None:
-        await render(
-            "First approved sentence. Second approved sentence. Third display-only sentence.",
-            "sentences",
-        )
-        await render(" ".join("word" for _ in range(50)), "bounded")
-        await render(
-            " ".join(f"fact-{index:04d}." for index in range(600)),
-            "basis-overflow",
-        )
-
-    asyncio.run(exercise())
-
-
-def test_runtime_does_not_filter_or_summarize_markdown_tables() -> None:
-    class _TableResultTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-table",
-                turn_id="turn-table",
-                response_id="response-table",
-                display_text=(
-                    "Search complexity depends on balance. Would you like a walkthrough?\n"
-                    "The comparison is complete, and I can also explain more.\n\n"
-                    "The American I interviewed reported O(log n) performance.\n\n"
-                    "| **Case** | **Behavior** |\n"
-                    "| --- | --- |\n"
-                    "| Source | https://example.com/details |\n"
-                    "| File | /tmp/tree.py |\n"
-                    "| Relative file | src/tree.py |\n"
-                    "| Docs | [guide](docs/guide.md) |\n"
-                    "| Code | `print(tree)` |\n"
-                    "| Average case | O(log n) when balanced |\n"
-                    "| Worst case | O(n) when degenerate |\n"
-                    "| Supported operations | O(log n) for search/insert/delete |\n"
-                    "| Mitigation | Use a self-balancing tree |\n"
-                    "| Extra | This fourth safe row stays display-only |\n\n"
-                    "The implementation is in src/tree.py.\n"
-                    "Use `print(tree)` to inspect it.\n"
-                    "Documentation: www.example.com/tree.\n"
-                    "I can also provide another example.\n"
-                    "Do you want implementation details?"
-                ),
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_TableResultTurns(),
-            )
-            await runtime.open_session("session-table", "conversation-table")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-table",
-                    commit_id="commit-table",
-                    call_id="call-table",
-                    tool_name="work.delegate",
-                    arguments=_delegation("compare tree search complexity"),
-                    finalized_user_text="compare tree search complexity",
-                )
-            )
-
-            terminal = updates[-1]
-            assert terminal.frontend_response is None
             streamed_display = _display_text(updates)
-            assert "https://example.com/details" in streamed_display
-            assert "/tmp/tree.py" in streamed_display
-            assert "Would you like a walkthrough?" in streamed_display
-            assert "Do you want implementation details?" in streamed_display
-            projection = json.loads(runtime.projection("session-table"))
+            terminal = updates[-1]
+            assert streamed_display == display_text
+            assert all(fragment in streamed_display for fragment in key_fragments)
+            assert terminal.text == ""
+            assert terminal.frontend_response is None
+            assert terminal.correlation["speech_source"] == ResponseOnlySpeechSource.NONE.value
+            projection = json.loads(runtime.projection("session-display-only"))
             assert projection["latest_result"]["speech_source"] == ResponseOnlySpeechSource.NONE.value
+            assert projection["latest_result"]["display_available"] is True
+            assert projection["latest_result"]["display_body_in_context"] is False
+            assert projection["latest_result"]["provider_identifiers_in_context"] is False
 
     asyncio.run(exercise())
 
@@ -1532,22 +1838,23 @@ def test_runtime_rejects_a_whitespace_only_committed_result() -> None:
                 ResponseOnlyRequestState.LOCALLY_QUEUED,
                 ResponseOnlyRequestState.DISPATCHING,
                 ResponseOnlyRequestState.WAITING_FOR_RESPONSE,
-                ResponseOnlyRequestState.FAILED,
+                ResponseOnlyRequestState.OUTCOME_UNKNOWN,
             ]
             assert [update.phase for update in _display_updates(updates)] == [
                 ResponseOnlyResultEventKind.DISPLAY_DELTA,
             ]
             assert _display_text(updates) == " \n\t "
             terminal = updates[-1]
-            assert terminal.text == "I couldn't use the response from the configured target."
-            assert terminal.correlation["error_code"] == "agent_protocol_error"
+            expected = load_model_contract_catalog().failure_copy("invocation_result_unusable")
+            assert terminal.text == expected.display
+            assert terminal.correlation["error_code"] == "invocation_result_unusable"
             assert terminal.tool_output is None
             assert terminal.frontend_response is not None
             assert terminal.frontend_response.purpose is FrontendResponsePurpose.FAILURE_DELIVERY
-            assert terminal.frontend_response.payload_text == "I couldn't use the response from the configured target."
+            assert terminal.frontend_response.payload_text == expected.speech
             projection = json.loads(runtime.projection("session-empty"))
-            assert projection["execution"]["latest_terminal_outcome"] == "failed"
-            assert projection["execution"]["latest_failure_code"] == "agent_protocol_error"
+            assert projection["execution"]["latest_terminal_outcome"] == "outcome_unknown"
+            assert projection["execution"]["latest_failure_code"] == "invocation_result_unusable"
             assert projection["latest_result"]["state"] == "none"
             assert projection["latest_result"]["display_available"] is False
 
@@ -1602,13 +1909,13 @@ def test_runtime_rejects_out_of_order_and_mismatched_display_streams() -> None:
                 ResponseOnlyRequestState.LOCALLY_QUEUED,
                 ResponseOnlyRequestState.DISPATCHING,
                 ResponseOnlyRequestState.WAITING_FOR_RESPONSE,
-                ResponseOnlyRequestState.FAILED,
+                ResponseOnlyRequestState.OUTCOME_UNKNOWN,
             ]
             assert _display_text(updates) == provisional_display
             assert not any(
                 update.phase is ResponseOnlyResultEventKind.COMPLETED for update in _display_updates(updates)
             )
-            assert updates[-1].correlation["error_code"] == "agent_protocol_error"
+            assert updates[-1].correlation["error_code"] == "invocation_result_unusable"
 
     async def exercise() -> None:
         await assert_protocol_failure(_OutOfOrderTurns(), "out-of-order", "")
@@ -1634,325 +1941,68 @@ def test_backend_failure_copy_distinguishes_execution_protocol_and_capacity(code
     assert (copy.display, copy.speech) == (message, message)
 
 
-def test_runtime_leaves_markdown_code_and_bullets_entirely_in_display() -> None:
-    class _ComplexityResultTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-complexity",
-                turn_id="turn-complexity",
-                response_id="response-complexity",
-                display_text=(
-                    "```python\nprint('display only')\n```\n\n"
-                    "**Search complexity:**\n\n"
-                    "- **Average case: O(log n)** when the tree is reasonably balanced.\n"
-                    "- **Worst case: O(n)** when the tree degenerates into a linked list.\n"
-                    "- Use a self-balancing tree to preserve logarithmic search.\n"
-                    "- A fourth detail remains available only in the display."
-                ),
-            )
-
+@pytest.mark.parametrize(
+    ("display_text", "speak_text"),
+    [
+        pytest.param(
+            "A long display result that stays out of model context.",
+            "The structured result is ready.",
+            id="structured-summary",
+        ),
+        pytest.param(
+            "The operation completed successfully.",
+            "Open https://example.invalid/result to see it.",
+            id="url",
+        ),
+        pytest.param(
+            "The operation completed successfully. Would you like more detail?",
+            "The operation completed successfully. Would you like more detail?",
+            id="question",
+        ),
+    ],
+)
+def test_runtime_preserves_backend_authored_speech(
+    display_text: str,
+    speak_text: str,
+) -> None:
     async def exercise() -> None:
         with SqliteStateStore(":memory:") as store:
             runtime = RealtimeInteractionManager(
                 backend_profile="default",
                 state_store=store,
-                committed_turns=_ComplexityResultTurns(),
+                committed_turns=_StaticResultTurns(display_text, speak_text),
             )
-            await runtime.open_session("session-complexity", "conversation-complexity")
+            await runtime.open_session("session-explicit-speech", "conversation-explicit-speech")
             updates = await _collect(
                 runtime.execute_tool(
-                    session_id="session-complexity",
-                    commit_id="commit-complexity",
-                    call_id="call-complexity",
+                    session_id="session-explicit-speech",
+                    commit_id="commit-explicit-speech",
+                    call_id="call-explicit-speech",
                     tool_name="work.delegate",
-                    arguments=_delegation("explain search complexity"),
-                    finalized_user_text="explain search complexity",
+                    arguments=_delegation("complete the operation"),
+                    finalized_user_text="complete the operation",
                 )
             )
 
             terminal = updates[-1]
-            assert terminal.frontend_response is None
-            streamed_display = _display_text(updates)
-            assert "print('display only')" in streamed_display
-            assert "A fourth detail remains available only in the display." in streamed_display
-
-    asyncio.run(exercise())
-
-
-def test_runtime_does_not_extract_speech_from_markdown_sections() -> None:
-    class _ComparisonTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-comparison",
-                turn_id="turn-comparison",
-                response_id="response-comparison",
-                display_text=(
-                    "# Search comparison\n\n"
-                    "## Breadth-First Search (BFS)\n\n"
-                    "How it works: It explores nodes level by level.\n\n"
-                    "**Practical use case:** **Web crawlers** – Web crawlers discover nearby pages first.\n\n"
-                    "## Depth-First Search (DFS)\n\n"
-                    "How it works: It explores one branch before backtracking.\n\n"
-                    "**Practical use case:** **Maze solving** – Maze solving explores one corridor before backtracking."
-                ),
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_ComparisonTurns(),
-            )
-            await runtime.open_session("session-comparison", "conversation-comparison")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-comparison",
-                    commit_id="commit-comparison",
-                    call_id="call-comparison",
-                    tool_name="work.delegate",
-                    arguments=_delegation(
-                        "Compare breadth-first search and depth-first search and give one practical use case for each."
-                    ),
-                    finalized_user_text=(
-                        "Compare breadth-first search and depth-first search and give one practical use case for each."
-                    ),
-                )
-            )
-
-            terminal = updates[-1]
-            assert terminal.frontend_response is None
-            streamed_display = _display_text(updates)
-            assert "Breadth-First Search (BFS)" in streamed_display
-            assert "Web crawlers" in streamed_display
-            assert "Depth-First Search (DFS)" in streamed_display
-            assert "Maze solving" in streamed_display
-
-    asyncio.run(exercise())
-
-
-def test_runtime_does_not_extract_speech_from_markdown_tables_and_sections() -> None:
-    class _ComparisonTableTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-comparison-table",
-                turn_id="turn-comparison-table",
-                response_id="response-comparison-table",
-                display_text=(
-                    "Breadth-First Search (BFS) vs. Depth-First Search (DFS)\n\n"
-                    "| Aspect | Breadth-First Search (BFS) | Depth-First Search (DFS) |\n"
-                    "|---|---|---|\n"
-                    "| **Traversal order** | Level by level | One branch before backtracking |\n"
-                    "| **Data structure** | Queue (FIFO) | Stack (LIFO) or recursion |\n\n"
-                    "### Practical Use Cases\n\n"
-                    "#### BFS: **Web crawlers / shortest path finding**\n"
-                    "Additional display detail for BFS.\n\n"
-                    "#### DFS: **Maze solving / dependency resolution**\n"
-                    "Additional display detail for DFS."
-                ),
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_ComparisonTableTurns(),
-            )
-            await runtime.open_session("session-comparison-table", "conversation-comparison-table")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-comparison-table",
-                    commit_id="commit-comparison-table",
-                    call_id="call-comparison-table",
-                    tool_name="work.delegate",
-                    arguments=_delegation(
-                        "Compare breadth-first search and depth-first search and give one practical use case for each."
-                    ),
-                    finalized_user_text=(
-                        "Compare breadth-first search and depth-first search and give one practical use case for each."
-                    ),
-                )
-            )
-
-            terminal = updates[-1]
-            assert terminal.frontend_response is None
-            streamed_display = _display_text(updates)
-            assert "Traversal order" in streamed_display
-            assert "Queue (FIFO)" in streamed_display
-            assert "Web crawlers / shortest path finding" in streamed_display
-            assert "Maze solving / dependency resolution" in streamed_display
-
-    asyncio.run(exercise())
-
-
-def test_runtime_keeps_a_heading_and_list_display_only_without_speech() -> None:
-    class _HeadingResultTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-heading",
-                turn_id="turn-heading",
-                response_id="response-heading",
-                display_text="Workspace entries:\n\n- AGENTS.md\n- USER.md",
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_HeadingResultTurns(),
-            )
-            await runtime.open_session("session-heading", "conversation-heading")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-heading",
-                    commit_id="commit-heading",
-                    call_id="call-heading",
-                    tool_name="work.delegate",
-                    arguments=_delegation("inspect the workspace"),
-                    finalized_user_text="inspect the workspace",
-                )
-            )
-
-            frontend_response = updates[-1].frontend_response
-            assert frontend_response is None
-            projection = json.loads(runtime.projection("session-heading"))
-            assert projection["latest_result"]["speech_source"] == ResponseOnlySpeechSource.NONE.value
-
-    asyncio.run(exercise())
-
-
-def test_runtime_preserves_explicit_backend_speech_provenance() -> None:
-    class _StructuredResultTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-structured",
-                turn_id="turn-structured",
-                response_id="response-structured",
-                display_text="A long display result that stays out of model context.",
-                speak_text="The structured result is ready.",
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_StructuredResultTurns(),
-            )
-            await runtime.open_session("session-structured", "conversation-structured")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-structured",
-                    commit_id="commit-structured",
-                    call_id="call-structured",
-                    tool_name="work.delegate",
-                    arguments=_delegation("do structured work"),
-                    finalized_user_text="do structured work",
-                )
-            )
-
-            frontend_response = updates[-1].frontend_response
-            assert frontend_response is not None
-            assert frontend_response.purpose is FrontendResponsePurpose.RESULT_DELIVERY
-            assert frontend_response.local_request_id == "commit-structured"
-            assert frontend_response.payload_text == "The structured result is ready."
-            serialized_projection = runtime.projection("session-structured")
+            response = terminal.frontend_response
+            assert _display_text(updates) == display_text
+            assert terminal.correlation["speech_source"] == ResponseOnlySpeechSource.BACKEND_AUTHORED.value
+            assert response is not None
+            assert response.purpose is FrontendResponsePurpose.RESULT_DELIVERY
+            assert response.local_request_id == "commit-explicit-speech"
+            assert response.payload_text == speak_text
+            serialized_projection = runtime.projection("session-explicit-speech")
             projection = json.loads(serialized_projection)
             assert projection["latest_result"]["speech_source"] == ResponseOnlySpeechSource.BACKEND_AUTHORED.value
             assert projection["latest_result"]["display_available"] is True
             assert projection["latest_result"]["display_body_in_context"] is False
             assert projection["latest_result"]["provider_identifiers_in_context"] is False
-            assert "A long display result that stays out of model context." not in serialized_projection
-            assert "The structured result is ready." not in serialized_projection
-
-    asyncio.run(exercise())
-
-
-def test_runtime_routes_backend_authored_url_speech_without_content_filtering() -> None:
-    class _UnsafeSpeechTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-unsafe-speech",
-                turn_id="turn-unsafe-speech",
-                response_id="response-unsafe-speech",
-                display_text="The operation completed successfully.",
-                speak_text="Open https://example.invalid/result to see it.",
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_UnsafeSpeechTurns(),
-            )
-            await runtime.open_session("session-unsafe-speech", "conversation-unsafe-speech")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-unsafe-speech",
-                    commit_id="commit-unsafe-speech",
-                    call_id="call-unsafe-speech",
-                    tool_name="work.delegate",
-                    arguments=_delegation("complete the operation"),
-                    finalized_user_text="complete the operation",
-                )
-            )
-
-            response = updates[-1].frontend_response
-            assert response is not None
-            assert response.purpose is FrontendResponsePurpose.RESULT_DELIVERY
-            assert response.payload_text == "Open https://example.invalid/result to see it."
-            projection = json.loads(runtime.projection("session-unsafe-speech"))
-            assert projection["latest_result"]["speech_source"] == ResponseOnlySpeechSource.BACKEND_AUTHORED.value
-
-    asyncio.run(exercise())
-
-
-def test_runtime_routes_backend_authored_question_speech_without_content_filtering() -> None:
-    class _FollowUpSpeechTurns(_Turns):
-        async def commit_turn(self, request):
-            del request
-            return CommittedTurnResult(
-                backend_session_id="backend-session-follow-up-speech",
-                turn_id="turn-follow-up-speech",
-                response_id="response-follow-up-speech",
-                display_text="The operation completed successfully. Would you like more detail?",
-                speak_text="The operation completed successfully. Would you like more detail?",
-            )
-
-    async def exercise() -> None:
-        with SqliteStateStore(":memory:") as store:
-            runtime = RealtimeInteractionManager(
-                backend_profile="default",
-                state_store=store,
-                committed_turns=_FollowUpSpeechTurns(),
-            )
-            await runtime.open_session("session-follow-up-speech", "conversation-follow-up-speech")
-            updates = await _collect(
-                runtime.execute_tool(
-                    session_id="session-follow-up-speech",
-                    commit_id="commit-follow-up-speech",
-                    call_id="call-follow-up-speech",
-                    tool_name="work.delegate",
-                    arguments=_delegation("complete the operation"),
-                    finalized_user_text="complete the operation",
-                )
-            )
-
-            response = updates[-1].frontend_response
-            assert response is not None
-            assert response.purpose is FrontendResponsePurpose.RESULT_DELIVERY
-            assert response.payload_text == "The operation completed successfully. Would you like more detail?"
-            projection = json.loads(runtime.projection("session-follow-up-speech"))
-            assert projection["latest_result"]["speech_source"] == ResponseOnlySpeechSource.BACKEND_AUTHORED.value
+            assert display_text not in serialized_projection
+            assert speak_text not in serialized_projection
+            assert "backend-session-static" not in serialized_projection
+            assert "turn-static" not in serialized_projection
+            assert "response-static" not in serialized_projection
 
     asyncio.run(exercise())
 
@@ -2007,6 +2057,77 @@ def test_runtime_preserves_safe_adapter_failure_code() -> None:
             assert projection["execution"]["latest_failure_code"] == "turn_timeout"
             assert projection["latest_result"]["state"] == "none"
             assert "timed out" not in runtime.projection("session-failed")
+
+    asyncio.run(exercise())
+
+
+def test_runtime_distinguishes_an_uncertain_invocation_from_a_confirmed_failure() -> None:
+    class _UncertainTurns(_Turns):
+        async def commit_turn(self, request):
+            del request
+            raise CommittedTurnError("invocation_outcome_unknown")
+
+    async def exercise() -> None:
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="default",
+                state_store=store,
+                committed_turns=_UncertainTurns(),
+            )
+            await runtime.open_session("session-uncertain", "conversation-uncertain")
+            updates = await _collect(
+                runtime.execute_tool(
+                    session_id="session-uncertain",
+                    commit_id="commit-uncertain",
+                    call_id="call-uncertain",
+                    tool_name="work.delegate",
+                    arguments=_delegation("perform one side effect"),
+                    finalized_user_text="perform one side effect",
+                )
+            )
+
+            assert _request_phases(updates)[-1] is ResponseOnlyRequestState.OUTCOME_UNKNOWN
+            terminal = updates[-1]
+            assert terminal.correlation["error_code"] == "invocation_outcome_unknown"
+            assert terminal.frontend_response is not None
+            assert terminal.frontend_response.payload_text == "I couldn't confirm whether that request completed."
+            projection = json.loads(runtime.projection("session-uncertain"))
+            assert projection["execution"]["latest_terminal_outcome"] == "outcome_unknown"
+            assert projection["execution"]["latest_failure_code"] == "invocation_outcome_unknown"
+
+    asyncio.run(exercise())
+
+
+def test_runtime_reports_retained_target_context_as_an_uncertain_outcome() -> None:
+    class _ReusedTargetTurns(_Turns):
+        async def commit_turn(self, request):
+            del request
+            raise CommittedTurnError("target_context_reused")
+
+    async def exercise() -> None:
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="default",
+                state_store=store,
+                committed_turns=_ReusedTargetTurns(),
+            )
+            await runtime.open_session("session-reused", "conversation-reused")
+            updates = await _collect(
+                runtime.execute_tool(
+                    session_id="session-reused",
+                    commit_id="commit-reused",
+                    call_id="call-reused",
+                    tool_name="work.delegate",
+                    arguments=_delegation("perform isolated work"),
+                    finalized_user_text="perform isolated work",
+                )
+            )
+
+            terminal = updates[-1]
+            assert terminal.phase is ResponseOnlyRequestState.OUTCOME_UNKNOWN
+            assert terminal.correlation["error_code"] == "target_context_reused"
+            assert terminal.frontend_response is not None
+            assert "fresh isolated session" in terminal.frontend_response.payload_text
 
     asyncio.run(exercise())
 

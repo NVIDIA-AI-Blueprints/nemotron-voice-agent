@@ -18,7 +18,15 @@ from voiceclaw.server import create_app
 
 EXAMPLE_CONFIG = Path(__file__).parents[1] / "src" / "voiceclaw" / "resources" / "voiceclaw.example.yaml"
 ENVIRONMENT = {
-    "NEMOCLAW_VOICE_GATEWAY_BEARER_FILE": "/run/secrets/test-nemoclaw-deployment-bearer",
+    "VOICECLAW_OPENSHELL_CLIENT_SECRET_FILE": "/run/secrets/test-openshell-client-secret",
+    "VOICECLAW_OPENSHELL_ENDPOINT": "127.0.0.1:8080",
+    "VOICECLAW_OPENSHELL_WORKSPACE": "test-workspace",
+    "VOICECLAW_OPENSHELL_SANDBOX": "test-sandbox",
+    "VOICECLAW_FABRIC_ADAPTER_ID": "nvidia.fabric.openclaw",
+    "VOICECLAW_FABRIC_AGENT": "main",
+    "VOICECLAW_NATIVE_AGENT": "main",
+    "VOICECLAW_OPENSHELL_ISSUER": "https://identity.example.test",
+    "VOICECLAW_OPENSHELL_CLIENT_ID": "voiceclaw-test",
     "REALTIME_UPSTREAM_ENDPOINT": "ws://127.0.0.1:7861/v1/realtime",
     "REALTIME_UPSTREAM_API_KEY": "private-realtime-key",
 }
@@ -172,7 +180,7 @@ def test_public_websocket_bootstrap_is_sanitized_and_keeps_protected_tools_serve
     attachment_done = attachment_events[-1]
     assert attachment_done["type"] == "response.done"
     assert attachment_done["response"]["metadata"]["voiceclaw_kind"] == "backend_target"
-    assert attachment_done["response"]["metadata"]["voiceclaw_phase"] == "reachable"
+    assert attachment_done["response"]["metadata"]["voiceclaw_phase"] == "verified"
 
     upstream = _FakeUpstream.instances[0]
     policy_update = json.loads(upstream.sent[0])

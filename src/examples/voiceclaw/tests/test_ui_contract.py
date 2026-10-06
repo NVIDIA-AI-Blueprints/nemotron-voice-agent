@@ -11,11 +11,24 @@ still belongs in a browser E2E suite.
 
 from pathlib import Path
 
-_APP = Path(__file__).parents[1] / "src" / "voiceclaw" / "ui" / "app.js"
+_UI = Path(__file__).parents[1] / "src" / "voiceclaw" / "ui"
+_APP = _UI / "app.js"
+_INDEX = _UI / "index.html"
 
 
 def _source() -> str:
     return _APP.read_text(encoding="utf-8")
+
+
+def _html() -> str:
+    return _INDEX.read_text(encoding="utf-8")
+
+
+def _assert_contract(source: str, *, required: tuple[str, ...], forbidden: tuple[str, ...] = ()) -> None:
+    for value in required:
+        assert value in source
+    for value in forbidden:
+        assert value not in source
 
 
 def _between(source: str, start: str, end: str) -> str:
@@ -56,6 +69,73 @@ def test_negotiated_vad_tracks_commit_response_and_interruption_independently() 
     )
     assert "if (state.automaticResponseInterruption)" in speech_started
     assert "stopPlayback(true, true)" in speech_started
+    assert "dispatchPlaybackTruncations(stopPlayback(true, true))" in speech_started
+    assert 'type: "response.cancel"' not in speech_started
+
+    speech_stopped = _between(
+        server_events,
+        'case "input_audio_buffer.speech_stopped":',
+        'case "input_audio_buffer.committed":',
+    )
+    assert "finishAutomaticStop()" in speech_stopped
+
+    start_listening = _between(source, "async function startListening()", "function stopListening()")
+    assert start_listening.index('type: "input_audio_buffer.clear"') < start_listening.index("state.capturing = true")
+    manual_start = _between(start_listening, "if (!state.automaticTurnDetection)", "state.captureBytes = 0")
+    assert 'type: "input_audio_buffer.clear"' in manual_start
+
+    stop_listening = _between(source, "function stopListening()", "async function toggleListening()")
+    automatic_stop = _between(
+        stop_listening,
+        "if (state.automaticTurnDetection) {",
+        "if (!hadCapture || capturedBytes < MIN_CAPTURE_BYTES)",
+    )
+    _assert_contract(
+        automatic_stop,
+        required=(),
+        forbidden=(
+            'type: "input_audio_buffer.clear"',
+            'type: "input_audio_buffer.commit"',
+            'type: "response.create"',
+        ),
+    )
+    assert "AUTOMATIC_STOP_TIMEOUT_MS" in stop_listening
+    short_capture = stop_listening.index("if (!hadCapture || capturedBytes < MIN_CAPTURE_BYTES)")
+    commit = stop_listening.index('type: "input_audio_buffer.commit"', short_capture)
+    response = stop_listening.index('type: "response.create"', commit)
+    short_turn = stop_listening[short_capture:commit]
+    _assert_contract(
+        short_turn,
+        required=('type: "input_audio_buffer.clear"', "return;"),
+        forbidden=('type: "input_audio_buffer.commit"',),
+    )
+    assert commit < response
+
+    session_patch = _between(source, "const patch = {", "const instructions = elements.instructions.value.trim()")
+    _assert_contract(
+        source,
+        required=(
+            'format: { type: "audio/pcm", rate: INPUT_SAMPLE_RATE }',
+            'output: { format: { type: "audio/pcm", rate: INPUT_SAMPLE_RATE } }',
+            "usesPcm24",
+            "state.automaticTurnDetection",
+            "const MIN_LISTENING_SECONDS = 0.2",
+            "const MIN_CAPTURE_BYTES = INPUT_SAMPLE_RATE * PCM16_BYTES_PER_SAMPLE * MIN_LISTENING_SECONDS",
+            'errorCode === "input_audio_transcription_empty"',
+            "function finishAutomaticStop()",
+            "if (!state.stopAfterSpeech) return",
+            'elements.talkButton.addEventListener("click", () => void toggleListening())',
+            'elements.muteButton.addEventListener("click", () => setMuted(!state.muted))',
+            'state.automaticTurnDetection ? "Stop listening" : "Stop & send"',
+        ),
+        forbidden=(
+            "VAD_SILENCE_BYTES",
+            'elements.talkButton.addEventListener("pointerdown"',
+            'elements.talkButton.addEventListener("pointerup"',
+            'elements.talkButton.addEventListener("pointercancel"',
+        ),
+    )
+    assert "turn_detection:" not in session_patch
 
 
 def test_streaming_markdown_is_throttled_and_latest_result_stays_open() -> None:
@@ -70,6 +150,14 @@ def test_streaming_markdown_is_throttled_and_latest_result_stays_open() -> None:
     assert "window.setTimeout(requestRenderFrame, delay)" in scheduler
     assert "record.expanded = record.id === state.latestDelegationId" in update_request
     assert "record.id === state.latestDelegationId" in update_result
+    _assert_contract(
+        source,
+        required=(
+            "window.marked?.parse?.(value, MARKDOWN_OPTIONS)",
+            "function sanitizeMarkedHtml",
+        ),
+        forbidden=("function renderMinimalMarkdown", "function markdownTableDefinition"),
+    )
 
 
 def test_delegation_card_uses_only_the_server_projected_goal_summary() -> None:
@@ -85,6 +173,33 @@ def test_delegation_card_uses_only_the_server_projected_goal_summary() -> None:
     assert "function fullRequestText(" not in source
     assert 'queryLabel.textContent = "Delegated goal summary"' in source
     assert 'record.query === "Delegated goal summary unavailable" ? summary : record.query' in update_request
+
+
+def test_target_contract_uses_projection_body_instead_of_metadata_capacity() -> None:
+    """Keep capabilities in standard text while metadata remains a small routing header."""
+    source = _source()
+    parser = _between(source, "function backendTargetBody(", "function applyProjection(")
+    application = _between(source, "function applyProjection(", "function updateBackend(")
+
+    assert "JSON.parse(value)" in parser
+    assert "projection.capabilities = body.capabilities" in parser
+    assert "projection.frontend_tools = body.frontend_tools" in parser
+    assert 'target_state: "target_state"' in parser
+    assert 'projection.kind === "backend_target"' in application
+    assert "backendTargetBody(responseText)" in application
+
+
+def test_assistant_message_keeps_response_start_time_after_streaming_completes() -> None:
+    """Render one immutable response start time instead of completion time."""
+    source = _source()
+    messages = _between(source, "function createMessage(", "function removeMessage(")
+    begin_response = _between(source, "function beginResponse(", "function bindOutputItem(")
+    finish_response = _between(source, "function finishResponse(", "function parseMetadataValue(")
+
+    assert "wrapper.dataset.startedAt" in messages
+    assert "timeLabel(wrapper.dataset.startedAt)" in messages
+    assert "startedAt: new Date()" in begin_response
+    assert "track.startedAt" in finish_response
 
 
 def test_conversation_and_client_identity_memory_are_bounded() -> None:
@@ -124,3 +239,70 @@ def test_standard_truncate_reports_partial_and_fully_played_audio() -> None:
     assert 'type: "conversation.item.truncate"' in failed
     assert "audio_end_ms: heardThroughMs" in failed
     assert "reportFailedPlayback(stream)" in source
+
+    interruption = _between(source, "function interruptActiveResponse", "function secureMicrophoneContext")
+    assert interruption.index('type: "response.cancel"') < interruption.index(
+        "dispatchPlaybackTruncations(truncations)"
+    )
+    _assert_contract(
+        source,
+        required=(
+            "state.pendingClientEvents.get(error.event_id)",
+            "const benignTerminalCancel",
+            "response id is not owned by this session",
+            "const waiting = Math.max(0, state.speechDeliveryQueueDepth);",
+            "const INITIAL_PLAYOUT_LEAD_SECONDS = 0.45",
+            "const MIN_REBUFFER_LEAD_SECONDS = 0.12",
+            "playbackScheduleTail: Promise.resolve()",
+            "state.playbackScheduleTail.then",
+            'case "response.output_audio.done"',
+            "markPlaybackStreamDone(event)",
+            "voice.output_state && !hasLocalPlaybackActivity()",
+            "projection.waiting_depth",
+            "stopPlayback(false, true)",
+            "state.muteTruncationReported",
+        ),
+        forbidden=(
+            "pendingPlaybackTruncations",
+            "state.speechDeliveryQueueDepth - (state.outputActive ? 1 : 0)",
+        ),
+    )
+
+
+def test_transport_and_delegation_ui_keep_public_and_backend_contracts_separate() -> None:
+    """Keep backend projections on the standard public Realtime surface."""
+    source = _source()
+    html = _html()
+
+    _assert_contract(
+        source,
+        required=(
+            "new WebSocket(endpoint, protocols)",
+            'continuity === "shared_target"',
+            "Context continuity and isolation are not qualified",
+            'record.status = "outcome_unknown"',
+            '["Backend invocation reference", record.correlation.response_id]',
+            'developerSummary.textContent = "Developer details"',
+            'succeeded: "Response received"',
+            'resultLabel.textContent = failed ? "Failure" : "Response"',
+            "record.result = resultPresentation",
+            "projectionCorrelation(root)",
+            "const previous = state.targetProjection || {}",
+            "previous.status",
+            'state.targetBindingVerified ? "binding_verified"',
+        ),
+        forbidden=("voiceclaw_work_delegate", "tool_choice"),
+    )
+    _assert_contract(
+        html,
+        required=(
+            "Voice replies queued",
+            'id="speech-queue" class="queue-indicator empty"',
+            'title="VoiceClaw voice responses waiting to start; excludes the response currently being delivered"',
+            'id="delegation-list"',
+            'id="delegation-announcement"',
+            'id="mute-button"',
+            '<p class="eyebrow">Backend turns</p>',
+        ),
+        forbidden=("Hold to talk",),
+    )
