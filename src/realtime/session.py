@@ -10,6 +10,8 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from loguru import logger
+
 from realtime.audio import MAX_PENDING_INPUT_SECONDS
 from realtime.protocol import (
     RealtimeProtocolError,
@@ -168,8 +170,13 @@ class RealtimeSessionCapabilities:
     turn_detection_interrupt_response_values: frozenset[bool] = field(default_factory=lambda: frozenset({False, True}))
     default_turn_detection_type: str = "server_vad"
     #: ``server_vad`` silence a session starts with when the client sets none.
-    #: A route may raise it (registry ``session_defaults``); a client value always wins.
+    #: A route may raise it (registry ``session_defaults``); a client value wins
+    #: unless ``honor_client_silence_duration`` is false.
     default_silence_duration_ms: int = _DEFAULT_SERVER_VAD_SILENCE_DURATION_MS
+    #: False when the route owns ``silence_duration_ms`` (registry
+    #: ``honor_client_values: false``): a client value is ignored, and
+    #: ``session.updated`` reports the value applied.
+    honor_client_silence_duration: bool = True
     supports_manual_input: bool = False
     noise_reduction_types: frozenset[str] = field(default_factory=frozenset)
     input_transcription_models: frozenset[str] = field(default_factory=frozenset)
@@ -304,6 +311,12 @@ def _validate_turn_detection(
         raise unsupported_capability(f"Turn detection type {typ!r} is not available", param=f"{param}.type")
     canonical_options = _SERVER_VAD_OPTIONS if typ == "server_vad" else _SEMANTIC_VAD_OPTIONS
     _reject_unknown_fields(patch, canonical_options, param=param)
+    if typ == "server_vad" and not capabilities.honor_client_silence_duration and "silence_duration_ms" in patch:
+        patch = {key: item for key, item in patch.items() if key != "silence_duration_ms"}
+        logger.bind(event="turn_detection_server_owned").info(
+            f"client_silence_duration_ms={value.get('silence_duration_ms')!r} "
+            f"applied={capabilities.default_silence_duration_ms}"
+        )
     if isinstance(current, dict) and current.get("type") == typ:
         config = _merge_object(current, patch)
     else:

@@ -55,10 +55,21 @@ class DecideTests(unittest.TestCase):
                 verdict = decide("continue", RUNNING, RUNNING, utterance)
                 self.assertEqual((verdict.decision, verdict.reason), ("new", "substantive"))
 
-    def test_a_word_already_in_the_running_query_is_still_substantive(self) -> None:
+    def test_the_model_continues_a_restatement_that_kept_the_query(self) -> None:
         verdict = decide("continue", RUNNING, RUNNING, "Mumbai please")
 
+        self.assertEqual((verdict.decision, verdict.reason), ("continue", "same_query"))
+
+    def test_without_the_model_a_restatement_is_substantive(self) -> None:
+        verdict = decide(None, RUNNING, RUNNING, "Mumbai please")
+
         self.assertEqual((verdict.decision, verdict.reason), ("new", "substantive"))
+
+    def test_an_affirmative_answers_a_pending_consent_question(self) -> None:
+        verdict = decide("continue", RUNNING, RUNNING, "yes", consent_pending=True)
+
+        self.assertEqual((verdict.decision, verdict.reason), ("new", "consent_answer"))
+        self.assertEqual(decide("continue", RUNNING, RUNNING, "yes").decision, "continue")
 
     def test_non_numeric_corrections_with_the_old_query_copied_are_new(self) -> None:
         for utterance in (

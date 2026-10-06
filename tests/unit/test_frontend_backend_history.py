@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -65,17 +66,19 @@ class _ScriptedPlanner:
 
 
 def _backend(planner, execute, ledger: DelegationLedger | None, *names: str) -> GenericThinkerBackend:
-    return GenericThinkerBackend(
-        planner=planner,
-        tools={},
-        enabled_tools=names or ("update_record",),
-        client_tools=_client_tools(*(names or ("update_record",))),
-        client_tool_executor=execute,
-        overall_timeout_seconds=5,
-        planner_timeout_seconds=5,
-        max_planning_rounds=2,
-        conversation_ledger=ledger,
-    )
+    # These tests dispatch writes directly; the consent gate has its own tests.
+    with patch.dict(os.environ, {"FRONTEND_BACKEND_CONSENT_GATE": "false"}):
+        return GenericThinkerBackend(
+            planner=planner,
+            tools={},
+            enabled_tools=names or ("update_record",),
+            client_tools=_client_tools(*(names or ("update_record",))),
+            client_tool_executor=execute,
+            overall_timeout_seconds=5,
+            planner_timeout_seconds=5,
+            max_planning_rounds=2,
+            conversation_ledger=ledger,
+        )
 
 
 async def _ok(calls, _timeout):
@@ -215,20 +218,23 @@ class GenericHistoryTests(unittest.IsolatedAsyncioTestCase):
 
         ledger = DelegationLedger(ConversationTranscript())
         blocked = asyncio.Event()
+        release = asyncio.Event()
 
-        async def hanging(calls, _timeout):
+        async def gated(calls, _timeout):
             blocked.set()
-            await asyncio.Event().wait()
+            await release.wait()
+            return [{"ok": True, "updated": True} for _call in calls]
 
-        backend = _backend(_ScriptedPlanner(), hanging, ledger)
+        backend = _backend(_ScriptedPlanner(), gated, ledger)
         call = asyncio.create_task(backend.call("Update record R1."))
         await blocked.wait()
-        backend.cancel_active("user_cancelled")
-        with self.assertRaises(asyncio.CancelledError):
-            await call
-        entry = ledger.render()[0]
-        self.assertEqual(entry["tool_calls"][0]["state"], "unconfirmed")
-        self.assertEqual(entry["result"], "cancelled")
+        # A withdrawal never cancels a dispatched write: it finishes and is reported.
+        self.assertTrue(backend.cancel_active("user_cancelled"))
+        self.assertEqual(ledger.render()[0]["tool_calls"][0]["state"], "started")
+        release.set()
+        payload = await asyncio.wait_for(call, timeout=2)
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(ledger.render()[0]["tool_calls"][0]["state"], "confirmed")
 
     async def test_a_suppressed_duplicate_is_not_recorded_as_executed(self) -> None:
         async def failing(calls, _timeout):

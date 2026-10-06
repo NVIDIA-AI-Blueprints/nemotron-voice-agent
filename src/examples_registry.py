@@ -311,6 +311,11 @@ _REALTIME_PROFILE_FIELDS = frozenset(
 _REALTIME_SESSION_DEFAULT_BOUNDS: dict[str, dict[str, tuple[int, int]]] = {
     "turn_detection": {"silence_duration_ms": (0, 60_000)},
 }
+#: Boolean ``session_defaults`` keys a route may set. ``honor_client_values:
+#: false`` makes the route's ``silence_duration_ms`` win over a client's.
+_REALTIME_SESSION_DEFAULT_FLAGS: dict[str, frozenset[str]] = {
+    "turn_detection": frozenset({"honor_client_values"}),
+}
 _REALTIME_SELECTOR_SLOTS: dict[str, tuple[str, str | None]] = {
     "prompt_key": ("prompt", None),
     "thinker_prompt": ("thinker-prompt", None),
@@ -1115,7 +1120,7 @@ def visible_options() -> list[dict]:
 
 
 def _validate_realtime_session_defaults(model: str, raw: object) -> dict[str, Any]:
-    """Validate one route's ``session_defaults``; only bounded integer fields are allowed."""
+    """Validate one route's ``session_defaults``; only bounded integer and listed boolean fields are allowed."""
     if not isinstance(raw, dict):
         raise RuntimeError(f"Realtime model {model!r} session_defaults must be a mapping")
     validated: dict[str, Any] = {}
@@ -1127,6 +1132,11 @@ def _validate_realtime_session_defaults(model: str, raw: object) -> dict[str, An
             raise RuntimeError(f"Realtime model {model!r} session default {group!r} must be a non-empty mapping")
         validated[group] = {}
         for name, value in fields.items():
+            if name in _REALTIME_SESSION_DEFAULT_FLAGS.get(group, ()):
+                if not isinstance(value, bool):
+                    raise RuntimeError(f"Realtime model {model!r} session default {group}.{name} must be a boolean")
+                validated[group][name] = value
+                continue
             if name not in bounds:
                 raise RuntimeError(f"Realtime model {model!r} has unknown session default {group}.{name}")
             lower, upper = bounds[name]

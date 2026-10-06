@@ -5,16 +5,26 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from loguru import logger
 from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, UserStartedSpeakingFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+if TYPE_CHECKING:
+    from examples.frontend_backend_agent.src.redelivery import DeliveryTracker
 
 
 class BargeInState:
     """Remember whether the current user turn interrupted active bot speech."""
 
-    def __init__(self) -> None:
-        """Initialize idle speaking and interruption state."""
+    def __init__(self, delivery: DeliveryTracker | None = None) -> None:
+        """Initialize idle speaking and interruption state.
+
+        ``delivery`` follows whether the latest backend answer was heard; it
+        sees the same speaking and interruption frames.
+        """
+        self._delivery = delivery
         self._bot_speaking = False
         self._interrupted_speech = False
         self._bot_interruptions = 0
@@ -26,6 +36,8 @@ class BargeInState:
 
     def observe(self, frame: Frame) -> None:
         """Update speaking state from pipeline lifecycle frames."""
+        if self._delivery is not None:
+            self._delivery.observe(frame)
         if isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
         elif isinstance(frame, BotStoppedSpeakingFrame):

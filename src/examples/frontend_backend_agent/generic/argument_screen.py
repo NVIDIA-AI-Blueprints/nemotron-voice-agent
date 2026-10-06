@@ -27,9 +27,11 @@ from typing import Any
 
 from examples.frontend_backend_agent.src.normalization import (
     EMPTY_SCHEMA_RULES,
+    IdentifierRule,
     SchemaRules,
     ToolCall,
     build_schema_rules,
+    is_incomplete,
     other_phone_form,
     screen_call,
     tools_sha256,
@@ -46,6 +48,9 @@ PERSON_NOT_FOUND_RE = re.compile(
 NOT_FOUND_RE = re.compile(r"(?i)\b(not found|no such|does not exist|no (records?|results?|matches?)( found)?)\b")
 #: Recovery hints stop after this many misses until a lookup succeeds.
 MAX_RECOVERY_HINTS = 3
+#: A not-found value is answered with a re-spell question at most this many
+#: times per tool, field and value. Its own counter: no other read resets it.
+MAX_RESPELL_QUESTIONS = 2
 
 
 @cache
@@ -68,6 +73,9 @@ class ArgumentScreen:
     phone_hints: bool = True
     _incomplete_asks: dict[tuple[str, str], int] = field(default_factory=dict)
     _lookup_misses: int = 0
+    #: tool -> the arguments of its most recent call, when that call found nothing.
+    _not_found: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _respell_asks: dict[tuple[str, str, str], int] = field(default_factory=dict)
 
     @classmethod
     def for_tools(cls, tools: Sequence[Mapping[str, Any]], *, enabled: bool, phone_hints: bool) -> ArgumentScreen:
@@ -118,12 +126,13 @@ class ArgumentScreen:
         if not isinstance(data, Mapping) or data.get("owner") != "client":
             return
         status = str(payload.get("status") or "")
+        tool = str(payload.get("tool") or "")
+        arguments = data.get("arguments") if isinstance(data.get("arguments"), Mapping) else {}
+        self._remember_not_found(tool, status, arguments, payload)
         if status == "success" and not _says_not_found(payload, NOT_FOUND_RE):
             self._lookup_misses = 0
             return
-        tool = str(payload.get("tool") or "")
         texts = voice_hint_texts()
-        arguments = data.get("arguments") if isinstance(data.get("arguments"), Mapping) else {}
         phone_args = self.rules.phone_arguments.get(tool, ())
         if self.phone_hints and phone_args and _says_not_found(payload, NOT_FOUND_RE):
             other = other_phone_form(str(arguments.get(phone_args[0]) or ""))
@@ -137,6 +146,72 @@ class ArgumentScreen:
             key = "lookup_not_found_first" if self._lookup_misses == 1 else "lookup_not_found_later"
             payload["thinker_hint"] = texts[key]
 
+    def _remember_not_found(
+        self, tool: str, status: str, arguments: Mapping[str, Any], payload: Mapping[str, Any]
+    ) -> None:
+        """Keep each tool's latest call when it found nothing; any other outcome of that tool replaces it."""
+        if not tool:
+            return
+        transient = status in {"unavailable", "timeout"}
+        pattern = PERSON_NOT_FOUND_RE if PERSON_NOT_FOUND_RE.search(_result_text(payload)) else NOT_FOUND_RE
+        if not transient and _says_not_found(payload, pattern):
+            self._not_found[tool] = dict(arguments)
+        elif not transient:
+            self._not_found.pop(tool, None)
+
+    def respell_question(self, hint: Mapping[str, Any], query: str) -> dict[str, Any] | None:
+        """Return a re-spell question in place of a schema re-ask after a not-found lookup, or None.
+
+        All must hold, so an unrelated "not found" never becomes a spelling
+        request: the hint is about the tool whose latest call found nothing;
+        it asks for an argument of that call which the schema marks as an
+        identifier; the delegated request does not carry a different value
+        for it; and this tool, field and value were asked about fewer than
+        :data:`MAX_RESPELL_QUESTIONS` times. The words are code-written.
+        """
+        if not self.enabled or hint.get("type") != "response_hint":
+            return None
+        if hint.get("reason") not in {"params_missing", "params_invalid"}:
+            return None
+        tool = str(hint.get("context") or "")
+        failed = self._not_found.get(tool)
+        requested = hint.get("params_needed")
+        if failed is None or not isinstance(requested, list):
+            return None
+        for argument in (str(name) for name in requested):
+            value = failed.get(argument)
+            if not isinstance(value, str) or not value.strip() or not self._is_identifier(tool, argument):
+                continue
+            if _carries_other_value(query, value, self.rules.rule_for(tool, argument)):
+                continue
+            key = (tool, argument, _folded(value))
+            asked = self._respell_asks.get(key, 0)
+            if asked >= MAX_RESPELL_QUESTIONS:
+                continue
+            self._respell_asks[key] = asked + 1
+            label = self.rules.labels.get((tool, argument)) or argument.replace("_", " ")
+            texts = voice_hint_texts()
+            prefix = texts["not_found_prefix"].format(label=label)
+            text = f"{prefix} {texts['incomplete_spell_all'].format(label=label)}"
+            return response_hint(
+                reason="params_invalid",
+                action="req_params",
+                params_needed=[argument],
+                response_text=text,
+                context=tool,
+                respell=True,
+            )
+        return None
+
+    def _is_identifier(self, tool: str, argument: str) -> bool:
+        lowered = argument.casefold()
+        return (
+            self.rules.rule_for(tool, argument) is not None
+            or lowered == "id"
+            or lowered.endswith("_id")
+            or lowered.endswith("_ids")
+        )
+
     @staticmethod
     def repeated_call_hint() -> str:
         """Return the read-back hint attached to a suppressed repeat of a failed call."""
@@ -144,10 +219,40 @@ class ArgumentScreen:
 
 
 def _says_not_found(payload: Mapping[str, Any], pattern: re.Pattern[str]) -> bool:
+    return pattern.search(_result_text(payload)) is not None
+
+
+def _result_text(payload: Mapping[str, Any]) -> str:
     data = payload.get("data")
     result = data.get("result") if isinstance(data, Mapping) else None
-    text = f"{payload.get('response_text') or ''} {json.dumps(result, ensure_ascii=False, default=str)}"
-    return pattern.search(text) is not None
+    return f"{payload.get('response_text') or ''} {json.dumps(result, ensure_ascii=False, default=str)}"
+
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_\-]*")
+
+
+def _folded(value: object) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _carries_other_value(query: str, failed: str, rule: IdentifierRule | None) -> bool:
+    """Return whether the request names a different value of the identifier's shape than the one that failed.
+
+    Without a schema rule only the failed value itself can be recognized, so
+    a request that does not contain it is not taken as a new value.
+    """
+    if rule is None or _folded(failed) in _folded(query):
+        return False
+    return any(_shaped_like(rule, token) for token in _TOKEN_RE.findall(query))
+
+
+def _shaped_like(rule: IdentifierRule, token: str) -> bool:
+    """Return whether one written token has the shape of a finished value for ``rule``."""
+    if rule.separator:
+        return token.count(rule.separator) == rule.segments - 1 and not is_incomplete(rule, token)
+    alnum = re.sub(r"[^A-Za-z0-9]", "", token)
+    upper = rule.max_length or 64
+    return any(char.isdigit() for char in alnum) and rule.min_length <= len(alnum) <= upper
 
 
 _SYMBOL_WORDS = {"_": "underscore", "-": "dash", "#": "hash", ".": "dot"}

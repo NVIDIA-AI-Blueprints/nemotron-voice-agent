@@ -123,11 +123,22 @@ different platform. Use `platform_overrides` when a profile needs a different
 catalog key on one platform.
 
 A profile can also declare `session_defaults`. The registry loader validates
-this field and accepts only `turn_detection.silence_duration_ms`, an integer
-from 0 through 60,000. The value applies only when the client sets no
-`silence_duration_ms` for `server_vad`; a client value is echoed unchanged. The
-`nvidia/nemotron-realtime-generic-frontend-backend` profile sets 800 ms so
-that a spelled identifier with pauses stays in one turn:
+this field and accepts only two `turn_detection` keys:
+
+- `silence_duration_ms` is an integer from 0 through 60,000.
+- `honor_client_values` is a Boolean that defaults to `true`.
+
+When `honor_client_values` is `true`, the profile value applies only when the
+client sets no `silence_duration_ms` for `server_vad`, and a client value is
+echoed unchanged. When it is `false`, the profile value overrides the client
+value, and `session.updated` echoes the applied value. The gateway logs the
+ignored client value with a `turn_detection_server_owned` event. A client that
+checks the echo of its own value can fail negotiation with `false`.
+
+The `nvidia/nemotron-realtime-generic-frontend-backend` profile sets 800 ms so
+that a spelled identifier with pauses stays in one turn. It keeps
+`honor_client_values: true` because Tau's `tau_native` path sends 500 ms and
+checks the echo:
 
 ```yaml
 realtime_models:
@@ -136,6 +147,7 @@ realtime_models:
     session_defaults:
       turn_detection:
         silence_duration_ms: 800
+        honor_client_values: true
 ```
 
 Use standard `session.instructions` to customize agent behavior. The Generic
@@ -368,7 +380,8 @@ accept either Boolean value, while Omni Smart Turn profiles require both values
 to remain `true`. Use `session.created` as the source of truth for the selected
 profile and automatic type. When the client omits `silence_duration_ms`, the
 session uses the profile's `session_defaults` value, if any, and otherwise the
-gateway default.
+gateway default. A profile with `honor_client_values: false` replaces a client
+`silence_duration_ms` with its own value.
 
 Set `response.instructions`, `response.max_output_tokens`,
 `response.output_modalities`, `response.audio`, `response.tools`,

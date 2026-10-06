@@ -35,6 +35,7 @@ from examples.frontend_backend_agent.src.flags import effective_flags, flag
 from examples.frontend_backend_agent.src.frontend_verdict import with_task_field
 from examples.frontend_backend_agent.src.history import ConversationTranscript, DelegationLedger
 from examples.frontend_backend_agent.src.normalization import join_across_turns, normalize_transcript
+from examples.frontend_backend_agent.src.redelivery import DeliveryTracker
 from examples.frontend_backend_agent.src.reliable_talker import ReliableNvidiaLLMService
 from examples.frontend_backend_agent.src.session_metadata import (
     DEFAULT_REASONING_BUDGET,
@@ -390,7 +391,22 @@ async def bot(runner_args: RunnerArguments) -> None:
     # Read per session so a deployment change applies to the next session.
     frontend_verdict_enabled = flag("FRONTEND_BACKEND_FRONTEND_VERDICT")
     backend_history_enabled = flag("FRONTEND_BACKEND_BACKEND_HISTORY") and (domain.supports_conversation_history)
-    barge_in_state = BargeInState()
+    # Realtime generic sessions hand every backend answer to the Talker, so an
+    # answer cut off or held by caller speech can be followed until it is heard.
+    delivery_tracker = (
+        DeliveryTracker(
+            hold_answers=flag("FRONTEND_BACKEND_HOLD_ANSWERS"),
+            redeliver_cut_answers=flag("FRONTEND_BACKEND_REDELIVER_CUT_ANSWERS"),
+        )
+        if is_realtime and domain.key == "generic"
+        else None
+    )
+    if delivery_tracker is not None and not delivery_tracker.enabled:
+        delivery_tracker = None
+    barge_in_state = BargeInState(delivery_tracker)
+    bind_delivery = getattr(talker_llm, "bind_delivery_tracker", None)
+    if delivery_tracker is not None and callable(bind_delivery):
+        bind_delivery(delivery_tracker)
     transcript: ConversationTranscript | None = None
     if frontend_verdict_enabled or backend_history_enabled:
         journal_provider = None

@@ -102,9 +102,13 @@ realtime_models:
       tts_id: registry-default
     # Spelled identifiers carry pauses; 800 ms keeps one value in one turn.
     # Applies when a client sets no silence_duration_ms; a client value wins.
+    # honor_client_values: false would make 800 ms win and echo it in
+    # session.updated, but clients that check the echo of their own value
+    # (Tau's tau_native path sends 500 ms) would then fail negotiation.
     session_defaults:
       turn_detection:
         silence_duration_ms: 800
+        honor_client_values: true
 
 examples:
   generic-assistant:

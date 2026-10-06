@@ -4,17 +4,14 @@
 """Decide whether new speech continues the delegated request already running.
 
 The Talker marks a ``call_backend`` made while earlier work still runs with
-``task: continue`` or ``task: new``. Code has the final word, and it errs
-towards ``new``: a wrong ``new`` only restarts the work, which is what happens
-without this feature, while a wrong ``continue`` would lose what the user
-asked for. So ``continue`` requires that the user's latest words are a pure
-acknowledgement or progress check and that the Talker kept the query.
+``task: continue`` or ``task: new``, and its choice decides. Code guards it:
+an unchanged query continues (same-query guard); a request to repeat or
+refresh, or words that correct a detail, are always ``new``; an affirmative
+while a consent question is pending answers that question.
 
-One exception: a whole utterance that is a progress or presence phrase ("any
-progress?", "one second") continues whatever query the Talker wrote. Such an
-utterance cannot carry a new request, so a changed query is only a paraphrase.
-Plain acknowledgements ("okay", "thanks") keep the identical-query rule because
-they can also answer a question.
+A whole utterance that is a progress or presence phrase ("any progress?",
+"one second") continues whatever query the Talker wrote. Such an utterance
+cannot carry a new request, so a changed query is only a paraphrase.
 """
 
 from __future__ import annotations
@@ -208,17 +205,55 @@ def is_progress_phrase(utterance: str) -> bool:
     return tuple(tokens[start:end]) in _PROGRESS_PHRASES
 
 
-def decide(task: object, query: str, running_query: str, utterance: str) -> Verdict:
-    """Return ``continue`` for a pure acknowledgement with the query kept, or for a progress phrase."""
+def decide(task: object, query: str, running_query: str, utterance: str, *, consent_pending: bool = False) -> Verdict:
+    """Return the verdict on speech that arrived while a delegated run was working.
+
+    The Talker's own ``task`` choice decides, with code guards on both sides:
+
+    * a request to repeat or refresh, words that correct something ("no",
+      "actually", "instead"), or a number or code are always ``new``;
+    * while a consent question is pending, an affirmative answers it and goes
+      to the direct-write path as a new request, never as a progress check;
+    * a whole progress phrase continues whatever query the Talker wrote, and
+      an acknowledgement continues only with the query kept;
+    * otherwise the Talker's ``continue`` stands when it kept the running query
+      word for word (same-query guard) and the words only restate it; anything
+      else is ``new``.
+    """
     model_task = task if task in {"continue", "new"} else ""
-    progress_phrase = is_progress_phrase(utterance)
-    if not progress_phrase and not pure_ack_or_progress(utterance):
+    words = set(_WORD_RE.findall(utterance.casefold().replace("’", "'")))
+    if EXPLICIT_REPEAT_RE.search(utterance):
         return Verdict("new", "substantive", model_task)
-    if same_request(query, running_query):
+    if not CORRECTION_CUE_WORDS.isdisjoint(words):
+        return Verdict("new", "substantive", model_task)
+    if consent_pending and words & _CONSENT_WORDS:
+        return Verdict("new", "consent_answer", model_task)
+    progress_phrase = is_progress_phrase(utterance)
+    same = same_request(query, running_query)
+    if not progress_phrase and not pure_ack_or_progress(utterance):
+        if model_task == "continue" and same and _restates(words, running_query):
+            return Verdict("continue", "same_query", model_task)
+        return Verdict("new", "substantive", model_task)
+    if same:
         return Verdict("continue", "model" if model_task == "continue" else "acknowledgement", model_task)
     if progress_phrase:
         return Verdict("continue", "progress_phrase", model_task)
     return Verdict("new", "query_changed", model_task)
+
+
+def _restates(words: set[str], running_query: str) -> bool:
+    """Return whether every word is acknowledgement vocabulary or already in the running query, with no digit.
+
+    A number or code is a new detail even when the Talker copied the query.
+    """
+    if not words or any(character.isdigit() for word in words for character in word):
+        return False
+    known = set(_WORD_RE.findall(running_query.casefold().replace("’", "'"))) | ACK_PROGRESS_WORDS
+    return words <= known
+
+
+#: Words that answer a consent question rather than ask about progress.
+_CONSENT_WORDS = frozenset({"yes", "yeah", "yep", "yup", "sure", "ahead", "proceed", "confirm", "correct"})
 
 
 TASK_PROPERTY: dict = {

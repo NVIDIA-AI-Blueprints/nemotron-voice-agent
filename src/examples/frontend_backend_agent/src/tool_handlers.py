@@ -168,7 +168,7 @@ def build_handlers(
                 allow_talker_frames=allow_talker_frames,
             )
             return
-        pending_question = _pending_question_for_turn(thinker, transcript)
+        pending_question = _pending_question_for_turn(thinker, transcript, query)
         if pending_question is not None:
             # A question the caller still owes an answer to comes before any
             # filler or a new identical lookup.
@@ -392,12 +392,16 @@ def build_handlers(
     return {"call_backend": handle_call_backend, "cancel_backend": handle_cancel_backend}
 
 
-def _pending_question_for_turn(thinker: object, transcript: ConversationTranscript | None) -> dict[str, Any] | None:
+def _pending_question_for_turn(
+    thinker: object, transcript: ConversationTranscript | None, query: str = ""
+) -> dict[str, Any] | None:
     """Return a clarification question to offer again, clearing it on any substantive turn.
 
-    Only an acknowledgement or progress check ("okay", "any update?") brings the
-    question back; anything else may be the answer or a new request, so the
-    question is dropped and the turn is planned normally.
+    An acknowledgement or progress check ("okay", "any update?") brings the
+    question back, and so does a turn whose delegated request only repeats the
+    one that asked it: re-running that request would fail the same way.
+    Anything else may be the answer or a new request, so the question is
+    dropped and the turn is planned normally.
     """
     take = getattr(thinker, "take_pending_question", None)
     clear = getattr(thinker, "clear_pending_question", None)
@@ -405,6 +409,9 @@ def _pending_question_for_turn(thinker: object, transcript: ConversationTranscri
         return None
     utterance = transcript.latest_user_text()
     if pure_ack_or_progress(utterance) or is_progress_phrase(utterance):
+        return take()
+    repeats = getattr(thinker, "repeats_pending_request", None)
+    if query and callable(repeats) and repeats(query):
         return take()
     clear("new_turn")
     return None
@@ -427,7 +434,9 @@ def _continues_running_request(
             )
         return False
     utterance = transcript.latest_user_text() if transcript is not None else ""
-    verdict = decide(raw_task, query, running, utterance)
+    pending_confirmation = getattr(thinker, "has_pending_confirmation", None)
+    consent_pending = bool(pending_confirmation()) if callable(pending_confirmation) else False
+    verdict = decide(raw_task, query, running, utterance, consent_pending=consent_pending)
     logger.bind(
         event="frontend_verdict",
         decision=verdict.decision,
@@ -650,6 +659,9 @@ def _talker_result_projection(payload: dict[str, Any]) -> dict[str, Any]:
         # Which writes of this delegation succeeded, or a notice that none did.
         "completed_actions",
         "no_change_notice",
+        # The Thinker's own final answer over the results, and its reason for a refusal.
+        "draft_answer",
+        "refusal_reason",
     }
     projected = {key: value for key, value in payload.items() if key in allowed}
     data = payload.get("data")

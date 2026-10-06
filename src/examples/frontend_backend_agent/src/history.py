@@ -25,6 +25,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from loguru import logger
+
 #: A position in the conversation: (journal sequence, event counter).
 Cursor = tuple[int, int]
 
@@ -67,6 +69,8 @@ class ConversationTranscript:
         self._journal_provider = journal_provider
         self._events: deque[tuple[Cursor, str, str]] = deque()
         self._counter = 0
+        self._user_turns = 0
+        self._user_turn_listeners: list[Callable[[int, str], None]] = []
         self._evicted: Cursor | None = None
 
     @property
@@ -75,8 +79,27 @@ class ConversationTranscript:
         return self._journal_provider is not None
 
     def record_user(self, text: object) -> None:
-        """Record the finalized text of one user turn."""
+        """Record the finalized text of one user turn, then tell the turn listeners."""
+        clean = " ".join(str(text or "").split())
+        if clean:
+            self._user_turns += 1
         self._append("user", text)
+        if not clean:
+            return
+        for listener in self._user_turn_listeners:
+            try:
+                listener(self._user_turns, clean)
+            except Exception as exc:  # noqa: BLE001 - a listener never loses the turn
+                logger.warning(f"User-turn listener failed: {type(exc).__name__}: {exc}")
+
+    def add_user_turn_listener(self, listener: Callable[[int, str], None]) -> None:
+        """Call ``listener(turn_count, text)`` after each non-empty user turn is recorded."""
+        self._user_turn_listeners.append(listener)
+
+    @property
+    def user_turns(self) -> int:
+        """Return how many non-empty user turns were recorded."""
+        return self._user_turns
 
     def record_assistant(self, text: object) -> None:
         """Record one finalized assistant turn; ignored when the journal is authoritative."""

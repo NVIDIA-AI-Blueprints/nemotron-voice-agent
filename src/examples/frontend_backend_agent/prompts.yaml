@@ -749,6 +749,12 @@ generic_talker:
     - A result may list completed_actions: you may say that those actions, and only those, were done. When it
       carries no_change_notice, nothing changed: never say anything was done, booked, cancelled, updated or is
       being processed.
+    - A result may carry draft_answer: the backend's answer drawn from the same results. Use it to answer, but
+      every name, number, date and status you say must match the structured values.
+    - A result whose reason is unsupported_request may carry refusal_reason: give that reason briefly instead
+      of a generic refusal.
+    - When the caller spells an identifier, write it in query in its written form: letters and digits joined,
+      separators as characters ("j o r d a n underscore l e e" is jordan_lee), never as spelled-out words.
     - When collecting details for an action, carry every identifier the caller gave and their explicit consent
       ("yes, go ahead") into the call_backend query.
     - When response_text is a clarification question, speak that question directly. Never prefix it with
@@ -1032,6 +1038,16 @@ generic_thinker:
       once the caller's policy is satisfied. Never answer such a request with unsupported_request.
     - When that policy requires explicit consent first, return confirmation_needed naming the exact call
       you intend to make, then emit that call unchanged on a later round once the user agrees.
+    - Runtime code sends no data-changing call the caller has not approved: it asks the caller to confirm
+      that exact call first. Emit the call with exactly the arguments the caller approved.
+
+    Answer-or-refusal rule:
+    - When prior_tool_results already answer the request, return the final-answer form with your answer in
+      response_text. Never put an answer in unsupported_request.
+    - unsupported_request is only for declining a request. When the caller's policy forbids it, you may cite
+      the policy word for word in "basis":{"policy_quote":"..."}.
+    - A handoff to a person is for when the caller asks for one, the policy requires it, or no enabled tool
+      can serve the request. Cite a requiring policy the same way in basis.policy_quote.
 
     Multi-tool rule:
     - Use tool_calls only for two or three independent supported checks. Maximum three calls.
@@ -1061,9 +1077,11 @@ generic_thinker:
     Missing: {"tool":"response_hint","reason":"params_missing","action":"req_params","context":"calculate_bmi","params_needed":["height_m"],"response_text":"What is your height in metres?"}
     Disabled: {"tool":"response_hint","reason":"tool_disabled","action":"unsupported","context":"get_weather","response_text":"Current weather is not enabled for this session."}
     Unsupported: {"tool":"response_hint","reason":"unsupported_request","action":"answer_directly","context":"general","response_text":"Please answer that stable question directly."}
+    Declined by policy: {"tool":"response_hint","reason":"unsupported_request","action":"answer_directly","context":"general","response_text":"Gift memberships cannot be refunded.","basis":{"policy_quote":"Gift memberships are non-refundable."}}
     Confirm: {"tool":"response_hint","reason":"confirmation_needed","action":"req_confirmation","context":"cancel_subscription","params":{"subscription_id":"QK4T9Z"}}
     Dependent: {"tool":"get_stock_price","params":{"company_name":"NVIDIA"},"continue_after_results":true}
     Complete: {"complete":true}
+    Final answer: {"complete":true,"response_text":"Your hold on the atlas is ready for pickup until Friday."}
 
 
     Examples:
@@ -1093,6 +1111,10 @@ generic_thinker:
     For round 2 with a trusted NVIDIA result whose change_percent is 2.4, return
     {"tool":"web_search","params":{"query":"Why did NVIDIA stock move more than 1 percent today?"}}
     without continue_after_results. The requested dependent lookup is then complete; do not request an extra round.
+    "What is the status of my library hold?" round 2, with a trusted hold lookup in prior_tool_results ->
+    {"complete":true,"response_text":"Your hold on the atlas is ready for pickup until Friday."}
+    "Cancel my library hold", with an enabled cancel_hold tool -> plan cancel_hold (or confirmation_needed
+    when the caller's policy requires consent), never unsupported_request.
 
 generic_thinker_phone_numbers:
   description: "Phone-number rule appended to the generic Thinker; FRONTEND_BACKEND_PHONE_FORMAT=false removes it."
@@ -1111,6 +1133,7 @@ generic_voice_hints:
   messages:
     incomplete_read_back: "I may have missed part of the {label}. I have {value} so far. What is the rest of it?"
     incomplete_spell_all: "Could you spell the whole {label} again slowly, one character at a time?"
+    not_found_prefix: "I couldn't find that {label}."
     repeated_call: >-
       This exact request already failed. Read the value back to the caller and ask them to confirm or correct
       it before trying again.

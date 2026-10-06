@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -16,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from openai import APIConnectionError, APIError, APITimeoutError, InternalServerError, RateLimitError
 
+from examples.frontend_backend_agent.generic import plan_checks
 from examples.frontend_backend_agent.generic.argument_screen import ArgumentScreen
 from examples.frontend_backend_agent.generic.client_tools import (
     ClientToolRoundExecutor,
@@ -24,6 +27,7 @@ from examples.frontend_backend_agent.generic.client_tools import (
     client_call_fingerprint,
     format_client_result,
 )
+from examples.frontend_backend_agent.generic.consent import ConsentBook
 from examples.frontend_backend_agent.generic.dispatcher import (
     PlanValidationError,
     combine_accumulated_results,
@@ -101,6 +105,10 @@ _PENDING_QUESTION_MAX_REDELIVERIES = 2
 _PENDING_QUESTION_TTL_SECONDS = 60.0
 #: How long a superseded run's answer waits for newer calls to settle.
 _LATE_ANSWER_MAX_WAIT_SECONDS = 20.0
+#: Superseded runs allowed to keep planning; an older one beyond this stops.
+_DETACHED_RUN_CAP = parse_env_int("FRONTEND_BACKEND_DETACHED_RUN_CAP", 1, min_value=0)
+#: Thinker text handed to the Talker as a draft answer or a refusal reason is bounded.
+_MAX_THINKER_TEXT_CHARS = 600
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +221,22 @@ class GenericThinkerBackend:
         self._last_late_question_tool: str | None = None
         self._direct_write_enabled = flag("FRONTEND_BACKEND_DIRECT_WRITE")
         self._done_guard_enabled = flag("FRONTEND_BACKEND_DONE_GUARD")
+        self._plan_checks_enabled = flag("FRONTEND_BACKEND_PLAN_CHECKS")
+        # Approval needs the caller's turns, so the gate runs only with the history's transcript.
+        transcript = conversation_ledger.transcript if conversation_ledger is not None else None
+        self._consent_gate_enabled = flag("FRONTEND_BACKEND_CONSENT_GATE") and transcript is not None
+        self._write_consent = _write_consent_mode()
+        self._consent = ConsentBook()
+        if self._consent_gate_enabled and transcript is not None:
+            transcript.add_user_turn_listener(self._observe_consent_turn)
+        # Superseded runs, oldest first, and what each is doing now (planning,
+        # or a tool round with or without a pending client write).
+        self._detached_runs: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self._run_phase: dict[str, str] = {}
+        #: Runs that must end once their pending tool round has returned.
+        self._stop_after_tools: set[str] = set()
+        #: Withdrawn runs whose dispatched write is still reported.
+        self._withdrawn_writes: set[str] = set()
         #: Incremented by every committed session update; voids pending approvals.
         self._session_generation = 0
         self._argument_screen = _argument_screen_for(
@@ -321,6 +345,7 @@ class GenericThinkerBackend:
         if not clean_query:
             return planner_failure()
         call_id = uuid.uuid4().hex[:12]
+        self._observe_consent_turn()
         run = self._active_run
         if continue_active and run is not None and run.running:
             self.state.active_call_id = call_id
@@ -332,8 +357,9 @@ class GenericThinkerBackend:
         else:
             previous = self.state.active_task
             if previous is not None and not previous.done():
-                if self._active_run is not None:
-                    self._superseded_runs.add(self._active_run.run_id)
+                superseded_id = self._active_run.run_id if self._active_run is not None else None
+                if superseded_id is not None:
+                    self._superseded_runs.add(superseded_id)
                 # Let the superseded plan finish instead of discarding it. A caller
                 # who adds a detail or says "okay" mid-thought used to destroy the
                 # round already running, and the next turn began again at step
@@ -342,6 +368,12 @@ class GenericThinkerBackend:
                 # microphone); only its work and what it learned survive.
                 self._detached.add(previous)
                 previous.add_done_callback(self._detached.discard)
+                # A consent question is never carried across a changed request.
+                self._consent.expire_for_new_request(self._latest_user_text())
+                if superseded_id is not None:
+                    self._detached_runs[superseded_id] = previous
+                    previous.add_done_callback(lambda _task, run_id=superseded_id: self._forget_run(run_id))
+                    self._enforce_detached_cap()
             self.state.active_call_id = call_id
             if self._ledger is not None:
                 self._ledger.open(call_id, clean_query)
@@ -364,16 +396,16 @@ class GenericThinkerBackend:
             if self.state.active_call_id != call_id:
                 late = await self._late_answer(run.run_id, payload)
                 if late is None:
-                    self._retain_superseded_question(run.run_id, payload)
+                    self._retain_superseded_question(run.run_id, payload, run.query)
                     raise asyncio.CancelledError
-                self._retain_question(late)
+                self._retain_question(late, run.query)
                 return late
             if payload.get("reason") == "no_action_needed" and self._late_answers_waiting:
                 # A superseded run finished with a question or a client result
                 # while this turn needed nothing; let that answer be the one
                 # spoken instead of "nothing further" followed by it.
                 return {**payload, "response_text": "", "speakable": False}
-            self._retain_question(payload)
+            self._retain_question(payload, run.query)
             return payload
         except asyncio.CancelledError:
             self.state.add_event(
@@ -392,11 +424,31 @@ class GenericThinkerBackend:
         # even when nothing is running any more.
         self._owner_gone.update(self._superseded_runs)
         self.clear_pending_question("cancelled")
+        self._consent.expire_all("withdrawn")
         task = self.state.active_task
         if task is None or task.done():
             return False
-        logger.info(f"Generic Thinker call {self.state.active_call_id or '(unknown)'} cancelled: {reason}")
+        call_id = self.state.active_call_id
+        logger.info(f"Generic Thinker call {call_id or '(unknown)'} cancelled: {reason}")
         self.state.active_call_id = None
+        phase = self._run_phase.get(call_id or "")
+        if call_id is not None and phase == "tools_write":
+            # A dispatched write cannot be undone by stopping: let it finish and report it.
+            self._withdrawn_writes.add(call_id)
+            self._owner_gone.add(call_id)
+            self._stop_after_tools.add(call_id)
+            logger.bind(event="withdrawal", run_id=call_id, outcome="write_pending").info(
+                "Withdrawal leaves a dispatched write to finish and be reported"
+            )
+            return True
+        if call_id is not None and phase == "tools":
+            # A pending read finishes silently into session memory; planning stops after it.
+            self._owner_gone.add(call_id)
+            self._stop_after_tools.add(call_id)
+            logger.bind(event="withdrawal", run_id=call_id, outcome="read_pending").info(
+                "Withdrawal stops the run after its read returns"
+            )
+            return True
         task.cancel()
         return True
 
@@ -433,7 +485,19 @@ class GenericThinkerBackend:
         )
         self._pending_question = None
 
-    def _retain_question(self, payload: Mapping[str, Any]) -> None:
+    def repeats_pending_request(self, query: str) -> bool:
+        """Return whether ``query`` only repeats the request whose clarification question is still pending."""
+        pending = self._pending_question
+        return pending is not None and bool(pending.query) and _comparable(pending.query) == _comparable(query)
+
+    def has_pending_confirmation(self) -> bool:
+        """Return whether a consent question still awaits the caller's answer."""
+        if self._ledger is None:
+            return False
+        confirmation = self._ledger.latest_confirmation()
+        return confirmation is not None and confirmation.outcome == "pending"
+
+    def _retain_question(self, payload: Mapping[str, Any], query: str = "") -> None:
         """Keep a code-written clarification question for a later progress check."""
         if not self._pending_question_enabled or payload.get("type") != "response_hint":
             return
@@ -448,10 +512,10 @@ class GenericThinkerBackend:
             # The same question asked again keeps its count, so it cannot loop.
             return
         self._pending_question = _PendingQuestion(
-            payload=dict(payload), tool=tool, created_at=asyncio.get_running_loop().time()
+            payload=dict(payload), tool=tool, created_at=asyncio.get_running_loop().time(), query=query
         )
 
-    def _retain_superseded_question(self, run_id: str, payload: Mapping[str, Any]) -> None:
+    def _retain_superseded_question(self, run_id: str, payload: Mapping[str, Any], query: str = "") -> None:
         """Keep a superseded run's question unless newer work covered its tool or was withdrawn."""
         if run_id in self._owner_gone:
             return
@@ -460,7 +524,7 @@ class GenericThinkerBackend:
             blocker = self._late_answer_blocker(run_id, tool, payload)
             if blocker in {"withdrawn", "later_write", "same_tool_later"}:
                 return
-        self._retain_question(payload)
+        self._retain_question(payload, query)
 
     def is_late_answer(self, run_id: str | None) -> bool:
         """Return whether ``run_id`` was returned to its caller as a late answer."""
@@ -476,6 +540,8 @@ class GenericThinkerBackend:
         tool or wrote anything.
         """
         self._superseded_runs.discard(run_id)
+        if run_id in self._withdrawn_writes:
+            return self._withdrawn_write_report(run_id, payload)
         if not self._late_answers_enabled or self._ledger is None or run_id in self._owner_gone:
             return None
         tool = _late_answer_tool(payload)
@@ -495,6 +561,19 @@ class GenericThinkerBackend:
             return None
         if payload.get("type") == "response_hint":
             self._last_late_question_tool = tool
+        self._late_delivered.add(run_id)
+        return payload
+
+    def _withdrawn_write_report(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Report what a withdrawn run's dispatched write did; the caller must hear it."""
+        self._withdrawn_writes.discard(run_id)
+        writes = self._ledger.entry_writes(run_id) if self._ledger is not None else []
+        delivered = bool(writes)
+        logger.bind(event="late_answer", run_id=run_id, delivered=delivered, reason="withdrawn_write").info(
+            f"Withdrawn run's write {'reported' if delivered else 'not reported: no write recorded'}"
+        )
+        if not delivered:
+            return None
         self._late_delivered.add(run_id)
         return payload
 
@@ -714,9 +793,14 @@ class GenericThinkerBackend:
     ) -> dict[str, Any]:
         accumulated_results: list[dict[str, Any]] = []
         seen_client_calls = self._seen_client_calls
+        checks = _CallChecks()
         try:
             async with asyncio.timeout(self._overall_timeout_seconds):
                 for planning_round in range(1, self._max_planning_rounds + 1):
+                    if call_id in self._stop_after_tools:
+                        if call_id in self._withdrawn_writes:
+                            break
+                        raise asyncio.CancelledError
                     plan, round_payload, result_count_before_dispatch = await self._plan_and_dispatch(
                         call_id,
                         query,
@@ -724,6 +808,7 @@ class GenericThinkerBackend:
                         accumulated_results,
                         seen_client_calls,
                         preset_plan=approved_call if planning_round == 1 else None,
+                        checks=checks,
                     )
                     if round_payload is None:
                         break
@@ -761,8 +846,9 @@ class GenericThinkerBackend:
                             "Generic Thinker reached the configured planning-round limit: "
                             f"rounds={self._max_planning_rounds}"
                         )
-                payload = self._settle(accumulated_results)
+                payload = self._with_thinker_text(self._settle(accumulated_results), checks)
         except asyncio.CancelledError:
+            self._end_run_state(call_id)
             if self._ledger is not None:
                 self._ledger.cancelled(call_id)
             raise
@@ -784,8 +870,21 @@ class GenericThinkerBackend:
         self.state.add_event(
             ThinkerLifecycleEvent(marker="ThinkerCompleted", call_id=call_id, query=query, payload=payload)
         )
+        self._end_run_state(call_id)
         if self._ledger is not None:
             self._ledger.close(call_id, payload)
+        return payload
+
+    def _end_run_state(self, call_id: str) -> None:
+        self._run_phase.pop(call_id, None)
+        self._stop_after_tools.discard(call_id)
+
+    def _with_thinker_text(self, payload: dict[str, Any], checks: _CallChecks) -> dict[str, Any]:
+        """Attach the Thinker's final answer as a draft, or its refusal reason, to the closing payload."""
+        if checks.draft_answer and payload.get("type") == "tool_result":
+            return {**payload, "draft_answer": checks.draft_answer}
+        if checks.refusal_reason:
+            return {**payload, "refusal_reason": checks.refusal_reason}
         return payload
 
     async def _plan_and_dispatch(
@@ -797,6 +896,7 @@ class GenericThinkerBackend:
         seen_client_calls: set[str],
         *,
         preset_plan: dict[str, Any] | None = None,
+        checks: _CallChecks | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any] | None, int]:
         """Plan and execute one round; a rejected plan is re-planned once with the reason.
 
@@ -805,9 +905,17 @@ class GenericThinkerBackend:
         side effect, so the re-plan starts from the same state. ``preset_plan``
         is an approved call issued without planning; if it no longer validates,
         the round is planned normally.
+
+        A refusal, a handoff or a refusal-labelled answer may be sent back once
+        per backend call with a code-written reason (:mod:`.plan_checks`); that
+        uses the round's single re-plan, and the second plan is accepted.
         """
+        checks = checks if checks is not None else _CallChecks()
         validation_error: str | None = None
+        rechecking: tuple[tuple[str, ...], dict[str, Any]] | None = None
         while True:
+            prior = self._prior_results_for_round(accumulated_results)
+            self._run_phase[call_id] = "planning"
             if preset_plan is not None:
                 plan, preset_plan = preset_plan, None
                 preset = True
@@ -817,14 +925,29 @@ class GenericThinkerBackend:
                     call_id,
                     query,
                     planning_round=planning_round,
-                    prior_tool_results=self._prior_results_for_round(accumulated_results),
+                    prior_tool_results=prior,
                     validation_error=validation_error,
                 )
             _plan_text = json.dumps(plan)[:240]
             logger.debug(f"plan-out call={call_id[:8]} round={planning_round} plan={_plan_text}")
+            if rechecking is not None:
+                plan = self._after_check(rechecking, plan, query, prior, accumulated_results, checks)
+                rechecking = None
+            elif not preset and validation_error is None:
+                check = self._plan_check(plan, query, prior, accumulated_results, checks)
+                if check is not None:
+                    kinds, reason = check
+                    checks.used = True
+                    rechecking = (kinds, plan)
+                    validation_error = reason
+                    self._log_round(call_id, planning_round, 0, "plan_rechecked")
+                    continue
             if _is_completion_plan(plan):
+                self._take_completion_text(plan, prior, checks)
                 return plan, None, len(accumulated_results)
+            plan = self._gate_writes(plan)
             result_count_before_dispatch = len(accumulated_results)
+            self._run_phase[call_id] = "tools_write" if self._client_writes(plan) else "tools"
             try:
                 round_payload = await dispatch_plan(
                     plan,
@@ -852,7 +975,293 @@ class GenericThinkerBackend:
                     raise
                 validation_error = str(exc)[:200]
                 continue
+            finally:
+                self._run_phase[call_id] = "planning"
+            if self._client_writes(plan):
+                self._consent.write_dispatched()
+            respell = self._argument_screen.respell_question(round_payload, query)
+            if respell is not None:
+                logger.bind(event="respell_question", tool=respell.get("context")).info(
+                    f"Not-found identifier answered with a re-spell question: tool={respell.get('context')}"
+                )
+                round_payload = respell
             return plan, round_payload, result_count_before_dispatch
+
+    # -- one-time plan checks (refusals, handoffs, refusal-labelled answers) --
+
+    def _client_tool_infos(self) -> list[plan_checks.ToolInfo]:
+        return [
+            plan_checks.ToolInfo(spec.name, spec.description, self.client_tool_kind(spec.name))
+            for spec in self._client_tools.values()
+            if spec.name in self._enabled_tools
+        ]
+
+    def _is_handoff_call(self, name: str) -> bool:
+        spec = self._client_tools.get(name)
+        return spec is not None and plan_checks.is_handoff_tool(
+            plan_checks.ToolInfo(spec.name, spec.description, self.client_tool_kind(spec.name))
+        )
+
+    def _client_writes(self, plan: Mapping[str, Any]) -> list[tuple[str, Any]]:
+        """Return the plan's client write calls; a handoff is not one (the handoff check governs it)."""
+        return [
+            (name, params)
+            for name, params in plan_checks.planned_calls(plan)
+            if name in self._client_tools and self.client_tool_kind(name) == "write" and not self._is_handoff_call(name)
+        ]
+
+    def _session_instructions(self) -> str:
+        context = getattr(self._planner, "session_instruction_context", None)
+        messages = context.get_messages() if context is not None else []
+        return str(messages[0].get("content") or "") if messages and isinstance(messages[0], Mapping) else ""
+
+    def _latest_user_text(self) -> str:
+        transcript = self._ledger.transcript if self._ledger is not None else None
+        return transcript.latest_user_text() if transcript is not None else ""
+
+    def _plan_check(
+        self,
+        plan: dict[str, Any],
+        query: str,
+        prior: list[dict[str, Any]],
+        accumulated_results: list[dict[str, Any]],
+        checks: _CallChecks,
+    ) -> tuple[tuple[str, ...], str] | None:
+        """Return the check kinds and code-written reason to re-plan with once, or None to accept the plan."""
+        if not self._plan_checks_enabled or not self._client_tools:
+            return None
+        try:
+            quote = plan_checks.policy_quote(plan)
+        except plan_checks.MalformedBasisError as exc:
+            return ("basis",), f"Rejected basis: {exc}."
+        refusal = plan_checks.is_refusal(plan)
+        handoffs = [name for name, _params in plan_checks.planned_calls(plan) if self._is_handoff_call(name)]
+        if not refusal and not handoffs:
+            return None
+        if checks.used:
+            self._log_check("handoff_check" if handoffs else "refusal_check", "bypassed:check_used")
+            return None
+        quoted = quote is not None and plan_checks.quote_in_instructions(quote, self._session_instructions())
+        tools = self._client_tool_infos()
+        if refusal:
+            kinds: list[str] = []
+            reasons: list[str] = []
+            if prior:
+                if " ".join(str(plan.get("response_text") or "").split()) == plan_checks.PLACEHOLDER_REFUSAL_TEXT:
+                    reasons.append(plan_checks.PLACEHOLDER_REASON)
+                kinds.append("answer")
+                reasons.append(plan_checks.ANSWER_CHECK_REASON)
+            bypass = self._refusal_bypass(query, quoted, accumulated_results)
+            candidates: list[str] = []
+            if bypass is None:
+                writes = [tool for tool in tools if not plan_checks.is_handoff_tool(tool)]
+                candidates = plan_checks.candidate_tools(query, writes, writes_only=True)
+                bypass = None if candidates else "no_candidate"
+            if bypass is None:
+                kinds.append("refusal")
+                reasons.append(plan_checks.refusal_check_reason(candidates))
+            else:
+                self._log_check("refusal_check", f"bypassed:{bypass}")
+            return (tuple(kinds), " ".join(reasons)) if kinds else None
+        bypass = self._handoff_bypass(query, quoted)
+        candidates = []
+        if bypass is None:
+            change = plan_checks.is_change_request(query)
+            pool = [tool for tool in tools if not plan_checks.is_handoff_tool(tool) and (tool.kind == "read" or change)]
+            candidates = plan_checks.candidate_tools(query, pool, writes_only=False)
+            bypass = None if candidates else "no_candidate"
+        if bypass is not None:
+            self._log_check("handoff_check", f"bypassed:{bypass}")
+            return None
+        return ("handoff",), plan_checks.handoff_check_reason(candidates)
+
+    def _refusal_bypass(self, query: str, quoted: bool, accumulated_results: list[dict[str, Any]]) -> str | None:
+        """Return why a refusal is accepted without the refusal check, or None to check it."""
+        if not self._consent_gate_enabled:
+            # A correction away from refusing must never reach an unconsented write.
+            return "no_consent_gate"
+        if not plan_checks.is_change_request(query):
+            return "not_a_change"
+        if quoted:
+            return "policy_quote"
+        for result in accumulated_results:
+            tool = str(result.get("tool") or "")
+            is_write = tool in self._client_tools and self.client_tool_kind(tool) == "write"
+            if is_write and result.get("status") == "error":
+                return "tool_error"
+        return None
+
+    def _handoff_bypass(self, query: str, quoted: bool) -> str | None:
+        """Return why a handoff goes ahead without the handoff check, or None to check it."""
+        if not self._consent_gate_enabled:
+            return "no_consent_gate"
+        if plan_checks.asks_for_person(self._latest_user_text()) or plan_checks.asks_for_person(query):
+            return "person_request"
+        if quoted:
+            return "policy_quote"
+        return None
+
+    def _after_check(
+        self,
+        rechecking: tuple[tuple[str, ...], dict[str, Any]],
+        plan: dict[str, Any],
+        query: str,
+        prior: list[dict[str, Any]],
+        accumulated_results: list[dict[str, Any]],
+        checks: _CallChecks,
+    ) -> dict[str, Any]:
+        """Log how a re-checked plan came back, and return the plan to carry out."""
+        kinds, original = rechecking
+        writes = self._client_writes(plan)
+        if "handoff" in kinds:
+            kept = any(self._is_handoff_call(name) for name, _params in plan_checks.planned_calls(plan))
+            self._log_check("handoff_check", "rechecked:kept" if kept else "rechecked:changed")
+            return plan
+        if "basis" in kinds:
+            return plan
+        if plan_checks.is_refusal(plan):
+            outcome, refusal_outcome = "refused", "kept"
+            text = " ".join(str(plan.get("response_text") or "").split())
+            if prior and text and text != plan_checks.PLACEHOLDER_REFUSAL_TEXT:
+                checks.refusal_reason = text[:_MAX_THINKER_TEXT_CHARS]
+        elif plan_checks.completion_text(plan):
+            outcome, refusal_outcome = "answered", "changed_to_answer"
+        elif writes and not self._consent_gate_enabled:
+            # Without the consent gate a write from a re-plan is never dispatched.
+            outcome, refusal_outcome = "write_blocked", "kept"
+            plan = original
+        elif plan_checks.planned_calls(plan):
+            outcome, refusal_outcome = "call", "changed_to_call"
+        else:
+            outcome, refusal_outcome = "question", "changed_to_question"
+        if "answer" in kinds:
+            wrote = any(
+                self.client_tool_kind(str(result.get("tool") or "")) == "write"
+                for result in accumulated_results
+                if str(result.get("tool") or "") in self._client_tools
+            )
+            logger.bind(
+                event="answer_check",
+                outcome=outcome,
+                change_request=plan_checks.is_change_request(query),
+                wrote=wrote,
+            ).info(f"Answer check: {outcome}")
+        if "refusal" in kinds:
+            self._log_check("refusal_check", f"rechecked:{refusal_outcome}")
+        return plan
+
+    def _take_completion_text(self, plan: Mapping[str, Any], prior: list[dict[str, Any]], checks: _CallChecks) -> None:
+        """Keep a final answer's text as the Talker's draft, only when it can rest on tool results."""
+        text = plan_checks.completion_text(plan)
+        if not text or not self._plan_checks_enabled:
+            return
+        if not prior:
+            logger.bind(event="answer_check", outcome="draft_ignored").info("Final-answer text without tool results")
+            return
+        checks.draft_answer = text[:_MAX_THINKER_TEXT_CHARS]
+
+    @staticmethod
+    def _log_check(event: str, outcome: str) -> None:
+        logger.bind(event=event, outcome=outcome).info(f"{event}: {outcome}")
+
+    # -- consent gate --
+
+    def _gate_writes(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Return the plan to dispatch: unchanged when every client write is approved, else a consent question.
+
+        Each write must match its own granted approval (same tool, identical
+        canonical arguments). If any lacks one, none of the plan's writes is
+        sent and the caller is asked about the first unapproved write.
+        """
+        writes = self._client_writes(plan)
+        if not self._consent_gate_enabled or not writes:
+            return plan
+        approvals = []
+        for name, params in writes:
+            arguments = dict(params) if isinstance(params, Mapping) else {}
+            try:
+                fingerprint = client_call_fingerprint(name, arguments)
+            except (TypeError, ValueError):
+                return plan  # the dispatcher rejects the arguments before any side effect
+            approval = self._consent.take(fingerprint, self._session_generation)
+            if approval is None and self._write_consent == "policy" and self._policy_waives_consent(plan):
+                logger.bind(event="consent_gate", tool=name, outcome="allowed", reason="policy_quote").info(
+                    f"Consent gate allowed a write on a policy quote: tool={name}"
+                )
+                continue
+            if approval is None:
+                logger.bind(
+                    event="consent_gate", tool=name, outcome="asked", arguments_sha=fingerprint_digest(fingerprint)
+                ).info(f"Consent gate turned an unapproved write into a consent question: tool={name}")
+                return {
+                    "tool": "response_hint",
+                    "reason": "confirmation_needed",
+                    "action": "req_confirmation",
+                    "context": name,
+                    "params": arguments,
+                }
+            approvals.append((name, fingerprint, approval))
+        for name, fingerprint, approval in approvals:
+            self._consent.consume(approval)
+            logger.bind(
+                event="consent_gate", tool=name, outcome="allowed", arguments_sha=fingerprint_digest(fingerprint)
+            ).info(f"Consent gate allowed an approved write: tool={name}")
+        return plan
+
+    def _policy_waives_consent(self, plan: Mapping[str, Any]) -> bool:
+        try:
+            quote = plan_checks.policy_quote(plan)
+        except plan_checks.MalformedBasisError:
+            return False
+        return quote is not None and plan_checks.quote_in_instructions(quote, self._session_instructions())
+
+    def _observe_consent_turn(self, turn: int | None = None, utterance: str | None = None) -> None:
+        """Grant or expire write approvals as of the caller's latest turn."""
+        transcript = self._ledger.transcript if self._ledger is not None else None
+        if not self._consent_gate_enabled or transcript is None:
+            return
+        reply = transcript.reply_before_latest_user()
+        self._consent.observe_turn(
+            turn=transcript.user_turns if turn is None else turn,
+            utterance=transcript.latest_user_text() if utterance is None else utterance,
+            reply_completed=None if reply is None else reply[1] == "completed",
+            generation=self._session_generation,
+        )
+
+    # -- superseded runs --
+
+    def _forget_run(self, run_id: str) -> None:
+        self._detached_runs.pop(run_id, None)
+        self._run_phase.pop(run_id, None)
+        self._stop_after_tools.discard(run_id)
+
+    def _enforce_detached_cap(self) -> None:
+        """Keep at most the configured number of superseded runs planning; stop the oldest beyond it.
+
+        A run with a client write pending is never stopped and does not
+        count. A run in a read round stops once the read returns, so its
+        result still reaches session memory.
+        """
+        counted: list[tuple[str, asyncio.Task[dict[str, Any]], str]] = []
+        for run_id, task in self._detached_runs.items():
+            if task.done() or run_id in self._stop_after_tools:
+                continue
+            phase = self._run_phase.get(run_id, "planning")
+            if phase == "tools_write":
+                logger.bind(event="detached_cap_exempt_write", run_id=run_id).info(
+                    "Superseded run with a pending write is exempt from the cap"
+                )
+                continue
+            counted.append((run_id, task, phase))
+        for run_id, task, phase in counted[: max(0, len(counted) - _DETACHED_RUN_CAP)]:
+            self._owner_gone.add(run_id)
+            if phase == "tools":
+                self._stop_after_tools.add(run_id)
+            else:
+                task.cancel()
+            logger.bind(event="detached_cap", run_id=run_id, phase=phase).info(
+                f"Superseded run stopped by the detached-run cap: phase={phase}"
+            )
 
     def _history_argument(self, call_id: str) -> dict[str, Any]:
         """Return the planner's ``history`` keyword only when there is history to send."""
@@ -875,6 +1284,20 @@ class GenericThinkerBackend:
         )
         if record is not None:
             record.generation = self._session_generation
+        transcript = self._ledger.transcript
+        tool = str(payload.get("context") or "")
+        if self._consent_gate_enabled and transcript is not None and tool in self._client_tools:
+            try:
+                fingerprint = client_call_fingerprint(tool, params if isinstance(params, Mapping) else {})
+            except (TypeError, ValueError):
+                return
+            self._consent.record(
+                tool=tool,
+                fingerprint=fingerprint,
+                run_id=call_id,
+                generation=self._session_generation,
+                turn=transcript.user_turns,
+            )
 
     def _with_write_outcome(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Tell the Talker exactly which writes of this run succeeded, or that nothing changed.
@@ -1067,6 +1490,26 @@ def _is_completion_plan(plan: Mapping[str, Any]) -> bool:
     return plan.get("complete") is True or ("tool" not in plan and not plan.get("tool_calls"))
 
 
+@dataclass(slots=True)
+class _CallChecks:
+    """One backend call's plan-check state: at most one check, and what the Thinker wrote."""
+
+    used: bool = False
+    draft_answer: str = ""
+    refusal_reason: str = ""
+
+
+def _write_consent_mode() -> str:
+    """Return ``always`` (every client write needs an approval) or ``policy`` (a verified quote may waive it)."""
+    raw = os.getenv("FRONTEND_BACKEND_WRITE_CONSENT", "always").strip().lower()
+    return raw if raw in {"always", "policy"} else "always"
+
+
+def fingerprint_digest(fingerprint: str) -> str:
+    """Return a short digest of a call fingerprint for logs; never the argument values."""
+    return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:12]
+
+
 @dataclass
 class _PendingQuestion:
     """One clarification question the caller has not answered yet."""
@@ -1075,6 +1518,8 @@ class _PendingQuestion:
     tool: str
     created_at: float
     redelivered: int = 0
+    #: The delegated request that asked the question.
+    query: str = ""
 
 
 def _memory_key(entry: Mapping[str, Any]) -> str:

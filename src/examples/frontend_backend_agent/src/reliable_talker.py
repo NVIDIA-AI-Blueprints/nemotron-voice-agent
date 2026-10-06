@@ -21,6 +21,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.nvidia.llm import NvidiaLLMService
 
 from examples.frontend_backend_agent.src.frontend_verdict import EXPLICIT_REPEAT_RE
+from examples.frontend_backend_agent.src.redelivery import NO_PLAN, DeliveryTracker
 from examples.shared.text_tool_calls import harvest_text_tool_calls
 from utils import parse_env_float
 
@@ -169,6 +170,11 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
             f"frontend_backend_stage_span_{id(self)}",
             default=None,
         )
+        self._delivery_tracker: DeliveryTracker | None = None
+
+    def bind_delivery_tracker(self, tracker: DeliveryTracker | None) -> None:
+        """Follow backend answers so one the caller did not hear is given again."""
+        self._delivery_tracker = tracker
 
     async def _process_context(self, context: LLMContext):
         """Measure logical frontend phases without changing Pipecat's raw metrics."""
@@ -209,6 +215,9 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
         """Remember structured subject values from one successful backend result."""
         response_text = str(payload.get("response_text") or "")
         self.remember_backend_response(response_text)
+        tracker = getattr(self, "_delivery_tracker", None)
+        if tracker is not None:
+            tracker.note_payload(payload)
         tool = str(payload.get("tool") or "").strip()
         values = _backend_reference_values(payload)
         references = list(getattr(self, "_recent_backend_references", ()))
@@ -229,9 +238,23 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
         self._recent_backend_reference_values = [values for _, values in references]
 
     async def get_chat_completions(self, context: LLMContext) -> AsyncIterator[ChatCompletionChunk]:
-        """Return a completion stream with one bounded empty-response retry."""
+        """Return a completion stream with one bounded empty-response retry.
+
+        When the caller did not hear the latest backend answer and has only
+        acknowledged since, the run carries a one-time instruction to give it
+        (:mod:`redelivery`); repeating it is then not a cached replay.
+        """
+        tracker = getattr(self, "_delivery_tracker", None)
+        plan = (
+            tracker.begin_talker_run(_latest_message_role(context), _latest_user_text(context))
+            if tracker is not None
+            else NO_PLAN
+        )
+        if plan.note is not None:
+            context = _build_retry_context(context, plan.note)
         first_stream = await self._start_completion_stream(context)
-        return self._stream_with_liveness(context, first_stream)
+        stream = self._stream_with_liveness(context, first_stream, allow_replay=plan.allow_replay)
+        return _observe_delivery(stream, tracker) if tracker is not None else stream
 
     async def _start_completion_stream(self, context: LLMContext) -> AsyncIterator[ChatCompletionChunk]:
         """Start one NVIDIA completion stream; isolated as a test seam."""
@@ -241,6 +264,8 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
         self,
         context: LLMContext,
         first_stream: AsyncIterator[ChatCompletionChunk],
+        *,
+        allow_replay: bool = False,
     ) -> AsyncIterator[ChatCompletionChunk]:
         finished_result = _latest_finished_tool_result(context)
         if finished_result is not None:
@@ -322,7 +347,7 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
             return
 
         first_chunks = await _collect_stream(first_stream, self._observe_stage_chunk)
-        first_invalid_reason = self._invalid_reason(context, first_chunks)
+        first_invalid_reason = self._invalid_reason(context, first_chunks, allow_replay=allow_replay)
         if first_invalid_reason is None:
             for chunk in first_chunks:
                 yield chunk
@@ -345,7 +370,7 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
         retry_context = _build_retry_context(context, correction)
         retry_stream = await self._start_completion_stream(retry_context)
         retry_chunks = await _collect_stream(retry_stream, self._observe_stage_chunk)
-        retry_invalid_reason = self._invalid_reason(context, retry_chunks)
+        retry_invalid_reason = self._invalid_reason(context, retry_chunks, allow_replay=allow_replay)
         if retry_invalid_reason is None:
             for chunk in retry_chunks:
                 yield chunk
@@ -392,7 +417,13 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
         if span is not None:
             await span.mark_ttft()
 
-    def _invalid_reason(self, context: LLMContext, chunks: list[ChatCompletionChunk]) -> str | None:
+    def _invalid_reason(
+        self,
+        context: LLMContext,
+        chunks: list[ChatCompletionChunk],
+        *,
+        allow_replay: bool = False,
+    ) -> str | None:
         if not any(_chunk_has_valid_output(chunk) for chunk in chunks):
             return "empty"
         if any(_chunk_has_native_tool_call(chunk) for chunk in chunks):
@@ -406,6 +437,8 @@ class ReliableNvidiaLLMService(NvidiaLLMService):
         content = _completion_text(chunks)
         if _internal_mechanics_exposed(content):
             return "internal_mechanics"
+        if allow_replay:
+            return None
         for previous in getattr(self, "_recent_backend_responses", ()):
             if _looks_like_replay(content, previous):
                 return "cached_replay"
@@ -718,6 +751,35 @@ def _repeat_subject_drift(
         return False
     normalized_query = _normalize_response(query)
     return not all(_normalized_phrase_in_text(value, normalized_query) for value in reference_values)
+
+
+def _latest_message_role(context: LLMContext) -> str | None:
+    """Return the role of the newest non-system message, or None."""
+    for message in reversed(context.get_messages()):
+        if not isinstance(message, dict):
+            continue
+        if async_tool_messages.parse_message(message) is not None:
+            return "tool"
+        role = message.get("role")
+        if role in {"system", "developer"}:
+            continue
+        return str(role) if role is not None else None
+    return None
+
+
+async def _observe_delivery(
+    stream: AsyncIterator[ChatCompletionChunk],
+    tracker: DeliveryTracker,
+) -> AsyncIterator[ChatCompletionChunk]:
+    """Tell the delivery tracker whether this run spoke or delegated again."""
+    spoke = called_function = False
+    try:
+        async for chunk in stream:
+            spoke = spoke or _chunk_has_visible_content(chunk)
+            called_function = called_function or _chunk_has_native_tool_call(chunk)
+            yield chunk
+    finally:
+        tracker.talker_output(spoke=spoke, called_function=called_function)
 
 
 def _latest_user_text(context: LLMContext) -> str:

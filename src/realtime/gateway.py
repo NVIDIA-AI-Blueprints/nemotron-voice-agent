@@ -351,6 +351,8 @@ def _controller_from_runtime(
     turn_defaults = (session_defaults or {}).get("turn_detection")
     if isinstance(turn_defaults, dict) and "silence_duration_ms" in turn_defaults:
         capabilities = replace(capabilities, default_silence_duration_ms=int(turn_defaults["silence_duration_ms"]))
+    if isinstance(turn_defaults, dict) and turn_defaults.get("honor_client_values") is False:
+        capabilities = replace(capabilities, honor_client_silence_duration=False)
     return RealtimeSessionController(
         model=model,
         voice=voice,

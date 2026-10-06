@@ -30,8 +30,12 @@ VOICE = "Magpie-Multilingual.EN-US.Aria"
 
 
 class RouteSessionDefaultTests(unittest.TestCase):
-    def _session(self, silence_ms: int) -> CanonicalRealtimeSession:
-        capabilities = RealtimeSessionCapabilities(voices=frozenset({VOICE}), default_silence_duration_ms=silence_ms)
+    def _session(self, silence_ms: int, *, honor_client: bool = True) -> CanonicalRealtimeSession:
+        capabilities = RealtimeSessionCapabilities(
+            voices=frozenset({VOICE}),
+            default_silence_duration_ms=silence_ms,
+            honor_client_silence_duration=honor_client,
+        )
         return CanonicalRealtimeSession(model="m", voice=VOICE, capabilities=capabilities)
 
     def _silence(self, session: CanonicalRealtimeSession) -> int:
@@ -50,6 +54,63 @@ class RouteSessionDefaultTests(unittest.TestCase):
             )
             self.assertEqual(self._silence(session), requested)
 
+    def test_a_server_owned_silence_ignores_the_client_value(self) -> None:
+        session = self._session(800, honor_client=False)
+        update = {"audio": {"input": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 500}}}}
+        with self.assertLogs_loguru() as messages:
+            session.apply_update(update)
+        self.assertEqual(self._silence(session), 800)
+        self.assertTrue(any("client_silence_duration_ms=500 applied=800" in line for line in messages))
+
+        session.apply_update({"audio": {"input": {"turn_detection": {"type": "server_vad", "threshold": 0.6}}}})
+        turn_detection = session.public_view()["audio"]["input"]["turn_detection"]
+        self.assertEqual((turn_detection["silence_duration_ms"], turn_detection["threshold"]), (800, 0.6))
+
+    def test_a_server_owned_silence_still_rejects_an_invalid_patch(self) -> None:
+        session = self._session(800, honor_client=False)
+        with self.assertRaises(RealtimeProtocolError):
+            session.apply_update({"audio": {"input": {"turn_detection": {"type": "server_vad", "threshold": "high"}}}})
+
+    def assertLogs_loguru(self):  # noqa: N802 - mirrors assertLogs
+        from contextlib import contextmanager
+
+        from loguru import logger
+
+        @contextmanager
+        def capture():
+            lines: list[str] = []
+            sink = logger.add(lambda message: lines.append(str(message)), level="INFO")
+            try:
+                yield lines
+            finally:
+                logger.remove(sink)
+
+        return capture()
+
+    def test_the_gateway_applies_the_route_switch_to_the_session(self) -> None:
+        from realtime.gateway import _controller_from_runtime
+
+        update = {"audio": {"input": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 500}}}}
+        for honor, applied in ((False, 800), (True, 500), (None, 500)):
+            turn_defaults: dict = {"silence_duration_ms": 800}
+            if honor is not None:
+                turn_defaults["honor_client_values"] = honor
+            with self.subTest(honor=honor), patch.dict(os.environ, {"USE_SILERO_VAD_TURN_DETECTION": "true"}):
+                controller = _controller_from_runtime(
+                    {
+                        "pipeline_mode": "generic-frontend-backend-agent",
+                        "model_id": "m",
+                        "tts_voice_id": VOICE,
+                        "asr_model": "a",
+                    },
+                    server_tools=[],
+                    delegate_tools=[],
+                    session_defaults={"turn_detection": turn_defaults},
+                )
+                session = controller.session
+                session.apply_update(update)
+                self.assertEqual(self._silence(session), applied)
+
     def test_other_sessions_keep_500_ms(self) -> None:
         self.assertEqual(self._silence(CanonicalRealtimeSession(model="m", voice=VOICE)), 500)
 
@@ -57,15 +118,21 @@ class RouteSessionDefaultTests(unittest.TestCase):
         profiles = examples_registry.realtime_model_profiles()
         self.assertEqual(
             profiles["nvidia/nemotron-realtime-generic-frontend-backend"]["session_defaults"],
-            {"turn_detection": {"silence_duration_ms": 800}},
+            {"turn_detection": {"silence_duration_ms": 800, "honor_client_values": True}},
         )
         self.assertEqual(profiles["nvidia/nemotron-realtime-frontend-backend"]["session_defaults"], {})
+
+    def test_the_honor_client_values_switch_loads_as_a_boolean(self) -> None:
+        raw = {"turn_detection": {"silence_duration_ms": 800, "honor_client_values": False}}
+        self.assertEqual(examples_registry._validate_realtime_session_defaults("m", raw), raw)
 
     def test_invalid_session_defaults_fail_registry_loading(self) -> None:
         for raw in (
             {"turn_detection": {"silence_duration_ms": -1}},
             {"turn_detection": {"silence_duration_ms": "800"}},
             {"turn_detection": {"threshold": 0.5}},
+            {"turn_detection": {"honor_client_values": "false"}},
+            {"turn_detection": {"honor_client_values": 0}},
             {"audio": {}},
             [],
         ):

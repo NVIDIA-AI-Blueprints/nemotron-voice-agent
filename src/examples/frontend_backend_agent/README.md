@@ -241,12 +241,18 @@ The following environment variables bound shared and domain-specific orchestrati
 | `FRONTEND_BACKEND_FRONTEND_VERDICT` | `true` | Lets a `call_backend` call made while delegated work runs continue that work after a pure acknowledgement or progress check. Any value other than `true` disables it. |
 | `FRONTEND_BACKEND_BACKEND_HISTORY` | `true` | Sends the Thinker a bounded `conversation_history` of earlier delegations in the session. Any value other than `true` disables it. |
 | `FRONTEND_BACKEND_LATE_ANSWERS` | `true` | Lets a superseded generic request still deliver its question or successful client-tool result when nothing newer covered it. Refer to [Generic Client-Tool Safeguards](#generic-client-tool-safeguards). |
-| `FRONTEND_BACKEND_PENDING_QUESTION` | `true` | Keeps the latest unanswered generic clarification question (`params_missing` or `params_invalid`, whose text code writes). When the caller only acknowledges or asks for progress and no request is running, the agent asks that question again instead of speaking filler or repeating the lookup. It asks at most twice, and forgets the question after 60 seconds, on any substantive caller turn, on cancellation, on a session update, or after a successful call of the same tool. |
+| `FRONTEND_BACKEND_PENDING_QUESTION` | `true` | Keeps the latest unanswered generic clarification question (`params_missing` or `params_invalid`, whose text code writes). When the caller only acknowledges or asks for progress and no request is running, the agent asks that question again instead of speaking filler or repeating the lookup. It also asks the question again when a new delegated request only repeats the request that asked it. It asks at most twice, and forgets the question after 60 seconds, on any substantive caller turn, on cancellation, on a session update, or after a successful call of the same tool. |
 | `FRONTEND_BACKEND_NORMALIZATION` | `true` | Screens spoken identifiers in generic client read-tool calls and writes spelled identifiers out in the Thinker's history transcript |
 | `FRONTEND_BACKEND_PHONE_FORMAT` | `true` | Appends the `generic_thinker_phone_numbers` rule to the generic Thinker prompt and adds the other phone-number form after a phone lookup finds nothing |
 | `FRONTEND_BACKEND_DIRECT_WRITE` | `true` | Issues a confirmed generic client write without a new plan after a bare "yes" to a fully spoken confirmation question (Realtime only) |
 | `FRONTEND_BACKEND_DONE_GUARD` | `true` | Adds `completed_actions` or `no_change_notice` to generic results that the Talker phrases |
 | `FRONTEND_BACKEND_REALTIME_TOOL_ROUNDS` | `true` | Enables the delegation protocol options on the Generic Frontend/Backend Realtime route |
+| `FRONTEND_BACKEND_HOLD_ANSWERS` | `true` | Holds a generic backend answer that arrives while the caller is speaking and speaks it once after a pure acknowledgement or progress check (Realtime only). Refer to [Answers Interrupted by Caller Speech](#answers-interrupted-by-caller-speech). |
+| `FRONTEND_BACKEND_REDELIVER_CUT_ANSWERS` | `true` | Repeats a generic answer or question that caller speech cut off, once, when that speech was only an acknowledgement (Realtime only) |
+| `FRONTEND_BACKEND_PLAN_CHECKS` | `true` | Enables the generic answer, refusal, and handoff plan checks. Refer to [Plan Checks and Write Consent](#plan-checks-and-write-consent). |
+| `FRONTEND_BACKEND_CONSENT_GATE` | `true` | Blocks a generic client write until the caller approved the same tool with identical arguments; needs `FRONTEND_BACKEND_BACKEND_HISTORY` |
+| `FRONTEND_BACKEND_WRITE_CONSENT` | `always` | Uses `always` to require an approval for every gated client write, or `policy` to let a verified `basis.policy_quote` waive it |
+| `FRONTEND_BACKEND_DETACHED_RUN_CAP` | `1` | Limits how many superseded generic runs keep working; the oldest run beyond the cap stops |
 | `FRONTEND_BACKEND_AGENT_TODAY` | Unset | Overrides today's date for both domains, including the generic Talker and Thinker; uses `YYYY-MM-DD` format |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delays progress speech until delegated work remains active past the threshold |
 | `THINKER_TOOL_TIMEOUT_SECONDS` | `45.0` | Bounds the shared Talker-to-backend function handler |
@@ -408,14 +414,20 @@ while a delegated request is still running:
 - The Talker's `call_backend` call accepts an optional `task` field with the
   value `continue` or `new`. The Talker sees this field and its prompt
   addendum only when the feature is active.
-- Code makes the final decision. It continues the running request only when
+- Code guards the Talker's choice. It continues the running request when
   every word of the user's latest utterance is on a closed English list of
   acknowledgement and progress-check words, and the Talker kept the running
   query unchanged. A whole utterance that is one progress or presence phrase,
   such as "any progress," "how much longer," "one second," or "I'll be right
   with you," continues the running request even when the Talker reworded the
-  query (reason `progress_phrase`). Corrections, new details, and requests to
-  repeat or check again always start new work.
+  query (reason `progress_phrase`). The Talker's `task: continue` also stands
+  when it kept the running query word for word and the utterance only restates
+  it, that is, every word is an acknowledgement word or already in the query
+  and none contains a digit (reason `same_query`).
+- Corrections, new details, and requests to repeat or check again always start
+  new work. While a consent question is pending, an affirmative such as "yes"
+  or "go ahead" is `new` (reason `consent_answer`), so it reaches the
+  direct-write path instead of continuing the running request.
 - On `continue`, the new call takes over the running backend request. The
   previous call ends as superseded without speaking, and the user hears one
   answer. The runtime speaks a progress phrase only when the Talker supplied a
@@ -469,9 +481,10 @@ client-owned tools. Each switch in
 only `true` enables it when it is set, and an unset or empty value keeps the
 default. The server reads every switch when a session starts, so a change
 applies to the next session. `FRONTEND_BACKEND_LATE_ANSWERS`,
-`FRONTEND_BACKEND_DIRECT_WRITE`, and `FRONTEND_BACKEND_DONE_GUARD` read the
-delegation ledger, so they also need `FRONTEND_BACKEND_BACKEND_HISTORY`. While
-history is off, `session.nvidia.agent.flags` reports these three as `false`.
+`FRONTEND_BACKEND_DIRECT_WRITE`, `FRONTEND_BACKEND_DONE_GUARD`, and
+`FRONTEND_BACKEND_CONSENT_GATE` read the delegation ledger, so they also need
+`FRONTEND_BACKEND_BACKEND_HISTORY`. While history is off,
+`session.nvidia.agent.flags` reports these four as `false`.
 
 The backend classifies each client tool as a read or a write from its own
 schema. A tool is a read only when all of the following hold. Every other
@@ -497,10 +510,17 @@ read tool runs. The rules come only from the session's tool schemas:
 - When a lookup of a person-like record (for example a user, customer, or
   member) finds nothing, the Thinker's copy of the result carries a recovery
   hint. The client's result is unchanged.
+- After a lookup finds nothing, the Thinker can ask again for the same tool,
+  identifier field, and value (`params_missing` or `params_invalid`) while the
+  request carries no new value. Code then answers with its own
+  `params_invalid` question: "I couldn't find that {label}. Could you spell the
+  whole {label} again slowly, one character at a time?" It does so at most
+  twice for each tool, field, and value, and logs a `respell_question` event.
 - The arguments of a write tool are never changed.
 - In the Thinker's history transcript, spelled identifiers are written out,
   including one that a pause split across two turns. The raw text stays on the
-  wire and in the Talker context.
+  wire and in the Talker context. The generic Talker prompt also asks the
+  Talker to write a spelled identifier in written form in its query.
 
 `FRONTEND_BACKEND_PHONE_FORMAT` appends the `generic_thinker_phone_numbers`
 prompt rule to the Thinker. The rule prefers the `XXX-XXX-XXXX` form, allows
@@ -545,6 +565,75 @@ through its own `call_backend` call. It does so only after newer calls settle,
 and only when no newer request spoke, used the same tool, or wrote anything.
 `cancel_backend` withdraws a pending late answer. Each decision emits a
 `late_answer` log event.
+
+`FRONTEND_BACKEND_DETACHED_RUN_CAP` bounds superseded runs that keep working.
+When more superseded runs exist than the cap allows, the oldest one stops after
+any pending client read returns (`detached_cap` log event). A run with a
+pending client write is exempt (`detached_cap_exempt_write`). A withdrawal
+through `cancel_backend` never cancels a client write that was already
+dispatched; the write finishes, and its outcome is reported.
+
+### Answers Interrupted by Caller Speech
+
+On the Realtime generic route, the runtime tracks the latest answer, question,
+or consent question that the backend handed to the Talker. Fillers are not
+tracked.
+
+- With `FRONTEND_BACKEND_HOLD_ANSWERS`, an answer that arrives while the caller
+  is speaking is held. When the caller's next turn is only an acknowledgement
+  or a progress check, the Talker speaks the held answer once.
+- With `FRONTEND_BACKEND_REDELIVER_CUT_ANSWERS`, an answer or question that
+  caller speech cut off is delivered again, once, when that speech turns out to
+  be only an acknowledgement. A consent question is asked again in full, word
+  for word, and a partly heard question approves nothing.
+- Substantive caller words, such as a new request, a correction, or a
+  withdrawal, drop the tracked item, and the Talker plans from them as before.
+
+The runtime logs `held_answer`, `cut`, `redelivered`, and `discarded` events.
+
+### Plan Checks and Write Consent
+
+The generic Thinker can end a request with a final answer,
+`{"complete": true, "response_text": "..."}`. The backend accepts it only after
+tool results exist and passes the text to the Talker as `draft_answer`. A plan
+can also carry an optional `basis.policy_quote`, which counts as verified only
+when it appears verbatim in the session instructions.
+
+`FRONTEND_BACKEND_PLAN_CHECKS` re-plans once when a plan looks wrong. Only one
+check runs for each backend call, and each check logs its outcome:
+
+- **Answer check** (`answer_check`): an `unsupported_request` plan after tool
+  results is re-planned once, and the Thinker chooses between an answer and a
+  refusal. A refusal that persists keeps refusal semantics, and its text
+  reaches the Talker as `refusal_reason`.
+- **Refusal check** (`refusal_check`): a refusal of a change request is
+  re-planned once when a candidate write tool exists and the plan has no
+  verified `basis.policy_quote`.
+- **Handoff check** (`handoff_check`): a call to a handoff tool is re-planned
+  once. A handoff tool has `transfer`, `escalate`, or `handoff` in its name and
+  a description that mentions a person. The check is bypassed when the caller
+  asks for a person, when the plan has a verified policy quote, or when no
+  candidate tool exists.
+
+The refusal and handoff checks run only while the consent gate is on.
+
+`FRONTEND_BACKEND_CONSENT_GATE` dispatches no client write without a granted
+approval for the same tool and identical canonical arguments. Handoff tools are
+exempt. The gate works as follows:
+
+- An approval is recorded when the backend produces a `confirmation_needed`
+  question, including a `summarized` one.
+- The caller's next turn grants it when that turn is affirmative, with no
+  negation, condition, or change, and the reply that carried the question
+  completed.
+- A granted approval is used once. It expires on another write, a session
+  update, a changed or withdrawn request, or after two further turns.
+- An unapproved write becomes a `confirmation_needed` question for the first
+  unapproved write.
+
+With `FRONTEND_BACKEND_WRITE_CONSENT=policy`, a verified `basis.policy_quote`
+can waive the approval. Each gate decision emits a `consent_gate` log event
+with the outcome `granted`, `asked`, `allowed`, or `expired`.
 
 `FRONTEND_BACKEND_REALTIME_TOOL_ROUNDS` enables the delegation protocol options
 of the Generic Frontend/Backend Realtime route. For the wire behavior, refer to
@@ -651,7 +740,8 @@ The pipeline enforces the following boundaries:
   configure the limit with `GENERIC_MAX_PLANNING_ROUNDS`. It passes only
   accumulated trusted tool results into later rounds and preserves results from
   completed rounds if later planning fails.
-- A backend instance and its state belong to one voice session. A new delegated request replaces unfinished work in that session: the airline backend cancels it, and the generic backend lets it finish without speaking its result. With `FRONTEND_BACKEND_LATE_ANSWERS` enabled, the superseded generic request can still deliver a question or client-tool result when nothing newer covered it. With `FRONTEND_BACKEND_FRONTEND_VERDICT` enabled, a pure acknowledgement or progress check continues the running request instead, and only one answer is delivered.
+- A backend instance and its state belong to one voice session. A new delegated request replaces unfinished work in that session: the airline backend cancels it, and the generic backend lets it finish without speaking its result. With `FRONTEND_BACKEND_LATE_ANSWERS` enabled, the superseded generic request can still deliver a question or client-tool result when nothing newer covered it. With `FRONTEND_BACKEND_FRONTEND_VERDICT` enabled, a pure acknowledgement or progress check continues the running request instead, and only one answer is delivered. `FRONTEND_BACKEND_DETACHED_RUN_CAP` limits how many superseded generic runs keep working.
+- With `FRONTEND_BACKEND_CONSENT_GATE` enabled, the generic backend dispatches a client write only after the caller approved that exact call.
 - Cancellation invalidates the active call identifier, so a late result cannot become the current response.
 - A model-authored internal tool call after a completed backend result cannot
   execute. The runtime retries once, then returns trusted backend speech.
