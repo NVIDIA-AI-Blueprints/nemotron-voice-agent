@@ -1051,6 +1051,10 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         """
         return {"iceServers": _build_ice_servers(request)}
 
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
     # ---- Static client UI ----
 
     if CLIENT_DIST.is_dir():
@@ -1078,10 +1082,6 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 "status": "running",
                 "hint": "Build the client UI: cd client && npm run build",
             }
-
-    @app.get("/health")
-    async def health():
-        return {"status": "ok"}
 
     return app
 
