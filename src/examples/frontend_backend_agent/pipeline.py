@@ -440,7 +440,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         _load_required_catalog_prompt(FRONTEND_VERDICT_PROMPT_KEY) if frontend_verdict_active else ""
     )
     if frontend_verdict_active:
-        talker_few_shots = [*talker_few_shots, *_load_prompt_few_shots(FRONTEND_VERDICT_PROMPT_KEY)]
+        # Verdict examples go first: as the last history before a live turn,
+        # their chained call_backend calls made Inference Hub Lightning stream
+        # truncated tool names (call_backen) in about 6 of 10 replays; 0 of 10 when placed first.
+        talker_few_shots = [*_load_prompt_few_shots(FRONTEND_VERDICT_PROMPT_KEY), *talker_few_shots]
     logger.info(f"Frontend/Backend domain: {domain.key} ({domain.label})")
     logger.info(
         f"Thinker LLM: model={thinker_model_id}, base_url={thinker_base_url}, "

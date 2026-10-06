@@ -1034,3 +1034,180 @@ class SessionToolMemoryTests(unittest.TestCase):
         backend._remember_session_result({"type": "tool_result", "tool": "get_weather", "status": "success"})
 
         self.assertEqual(backend._session_tool_memory, [])
+
+
+class RunningClientCallTests(unittest.IsolatedAsyncioTestCase):
+    """Repeats of a call are shared, deduplicated or suppressed by what happened to it."""
+
+    async def test_a_call_repeated_in_one_plan_runs_once_and_is_not_a_failure(self) -> None:
+        specs = build_client_tool_specs((_client_schema(),))
+        batches: list[tuple[tuple[str, dict], ...]] = []
+
+        async def execute(calls, _timeout):
+            batches.append(calls)
+            return ['{"id":"one"}']
+
+        seen: set[str] = set()
+        payload = await dispatch_plan(
+            {
+                "tool_calls": [
+                    {"tool": "lookup", "params": {"record_id": "one"}},
+                    {"tool": "lookup", "params": {"record_id": "one"}},
+                ]
+            },
+            {},
+            ("lookup",),
+            client_tools=specs,
+            client_tool_executor=execute,
+            seen_client_calls=seen,
+            running_client_calls={},
+        )
+
+        self.assertEqual([len(batch) for batch in batches], [1])
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(seen, set())
+
+    async def test_a_call_running_in_another_run_is_shared_not_suppressed(self) -> None:
+        specs = build_client_tool_specs((_client_schema(),))
+        release = asyncio.Event()
+        executed: list[tuple[tuple[str, dict], ...]] = []
+
+        async def execute(calls, _timeout):
+            executed.append(calls)
+            await release.wait()
+            return ['{"id":"one"}']
+
+        seen: set[str] = set()
+        running: dict = {}
+        plan = {"tool": "lookup", "params": {"record_id": "one"}}
+        common = {
+            "client_tools": specs,
+            "client_tool_executor": execute,
+            "seen_client_calls": seen,
+            "running_client_calls": running,
+        }
+        first = asyncio.create_task(dispatch_plan(plan, {}, ("lookup",), **common))
+        await asyncio.sleep(0)
+        second = asyncio.create_task(dispatch_plan(plan, {}, ("lookup",), **common))
+        await asyncio.sleep(0)
+        release.set()
+        first_payload, second_payload = await asyncio.gather(first, second)
+
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(first_payload["status"], "success")
+        self.assertEqual(second_payload["status"], "success")
+        self.assertEqual(second_payload["data"], first_payload["data"])
+        self.assertEqual(running, {})
+        self.assertEqual(seen, set())
+
+    async def test_a_failed_repeat_does_not_block_the_other_calls_of_its_plan(self) -> None:
+        specs = build_client_tool_specs((_client_schema(),))
+        failed = {"record_id": "bad"}
+        seen = {client_call_fingerprint("lookup", failed)}
+        executed: list[tuple[tuple[str, dict], ...]] = []
+
+        async def execute(calls, _timeout):
+            executed.append(calls)
+            return ['{"id":"good"}']
+
+        payload = await dispatch_plan(
+            {
+                "tool_calls": [
+                    {"tool": "lookup", "params": failed},
+                    {"tool": "lookup", "params": {"record_id": "good"}},
+                ]
+            },
+            {},
+            ("lookup",),
+            client_tools=specs,
+            client_tool_executor=execute,
+            seen_client_calls=seen,
+            running_client_calls={},
+        )
+
+        self.assertEqual(executed, [(("lookup", {"record_id": "good"}),)])
+        statuses = [item["status"] for item in payload["data"]["results"]]
+        self.assertEqual(statuses, ["unavailable", "success"])
+
+    async def test_a_cancelled_read_is_released_but_a_cancelled_write_stays_blocked(self) -> None:
+        read_schema = _client_schema("get_record")
+        read_schema["description"] = "Get a record by id."
+        write_schema = _client_schema("update_record")
+        write_schema["description"] = "Update a record by id."
+        specs = build_client_tool_specs((read_schema, write_schema))
+        started = asyncio.Event()
+
+        async def execute(_calls, _timeout):
+            started.set()
+            await asyncio.Event().wait()
+
+        for name, blocked in (("get_record", False), ("update_record", True)):
+            with self.subTest(tool=name):
+                started.clear()
+                seen: set[str] = set()
+                running: dict = {}
+                task = asyncio.create_task(
+                    dispatch_plan(
+                        {"tool": name, "params": {"record_id": "one"}},
+                        {},
+                        (name,),
+                        client_tools=specs,
+                        client_tool_executor=execute,
+                        seen_client_calls=seen,
+                        running_client_calls=running,
+                    )
+                )
+                await started.wait()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+
+                self.assertEqual(running, {})
+                self.assertEqual(client_call_fingerprint(name, {"record_id": "one"}) in seen, blocked)
+
+
+class PerCallSessionMemoryTests(unittest.TestCase):
+    """Session memory keeps one entry per distinct call, not per tool name."""
+
+    @staticmethod
+    def _backend() -> GenericThinkerBackend:
+        read_schema = _client_schema("get_record")
+        read_schema["description"] = "Get a record by id."
+        write_schema = _client_schema("update_record")
+        write_schema["description"] = "Update a record by id."
+        return GenericThinkerBackend(
+            planner=SimpleNamespace(plan=None),
+            tools={},
+            enabled_tools=("get_record", "update_record"),
+            client_tools=build_client_tool_specs((read_schema, write_schema)),
+        )
+
+    @staticmethod
+    def _result(tool: str, record_id: str) -> dict:
+        return format_client_result(tool, {"record_id": record_id}, {"id": record_id})
+
+    def test_lookups_with_different_arguments_are_all_kept(self) -> None:
+        backend = self._backend()
+
+        for record_id in ("one", "two", "three"):
+            backend._remember_session_result(self._result("get_record", record_id))
+
+        kept = [entry["data"]["arguments"]["record_id"] for entry in backend._session_tool_memory]
+        self.assertEqual(kept, ["one", "two", "three"])
+
+    def test_carried_entries_only_yield_to_the_same_call(self) -> None:
+        backend = self._backend()
+        backend._remember_session_result(self._result("get_record", "one"))
+        backend._remember_session_result(self._result("get_record", "two"))
+
+        prior = backend._prior_results_for_round([self._result("get_record", "two")])
+
+        self.assertEqual([entry["data"]["arguments"]["record_id"] for entry in prior], ["one", "two"])
+
+    def test_a_successful_write_drops_earlier_reads(self) -> None:
+        backend = self._backend()
+        backend._remember_session_result(self._result("get_record", "one"))
+
+        backend._remember_session_result(self._result("update_record", "one"))
+
+        self.assertEqual([entry["tool"] for entry in backend._session_tool_memory], ["update_record"])

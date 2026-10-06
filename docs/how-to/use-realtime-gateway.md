@@ -493,6 +493,13 @@ non-audio items, delete completed items whose model-context owner is still
 available, and truncate completed assistant audio at a published checkpoint.
 It does not retain input or output PCM for item retrieval.
 
+Some finished assistant replies never get their own model-context message, for
+example a reply cut off by a barge-in while a backend tool call runs. A
+truncate or delete of such a reply edits only the conversation item and logs a
+warning instead of failing the session. For a cancelled reply, the gateway waits
+up to 2 seconds for the context message before it does so. For other finished
+replies, it waits up to `REALTIME_CONTEXT_APPLY_TIMEOUT_SECONDS`.
+
 Each response has its own identifier and ends as `completed`, `cancelled`,
 `failed`, or `incomplete`. Text responses emit
 `response.output_text.delta` and `response.output_text.done`. Audio responses

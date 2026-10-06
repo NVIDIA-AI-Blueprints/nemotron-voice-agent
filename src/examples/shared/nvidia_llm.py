@@ -651,6 +651,23 @@ def _merge_streamed_tool_call_fragments(
                 call["arguments"] += fragment.function.arguments
 
 
+# Some hosted endpoints (observed on NVIDIA Inference Hub) occasionally stream a
+# tool name without its last character, e.g. ``call_backen`` for
+# ``call_backend``. Restore such a name only when a short trailing suffix is
+# missing and exactly one offered function completes it.
+_MAX_TRUNCATED_TOOL_NAME_SUFFIX = 2
+
+
+def _repair_truncated_tool_name(name: str, available_names: set[str]) -> str | None:
+    """Return the unique offered name that ``name`` truncates, if any."""
+    candidates = [
+        available
+        for available in available_names
+        if available.startswith(name) and 0 < len(available) - len(name) <= _MAX_TRUNCATED_TOOL_NAME_SUFFIX
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _validate_streamed_tool_calls(
     calls: Mapping[int, Mapping[str, Any]],
     *,
@@ -682,7 +699,12 @@ def _validate_streamed_tool_calls(
         if not isinstance(name, str) or not name:
             raise ValueError(f"Streamed tool call {index} is missing its function name")
         if name not in available_names:
-            raise ValueError(f"Streamed tool call {index} selected unavailable function {name!r}")
+            repaired = _repair_truncated_tool_name(name, available_names)
+            if repaired is None:
+                raise ValueError(f"Streamed tool call {index} selected unavailable function {name!r}")
+            logger.warning(f"Repaired truncated streamed tool name {name!r} -> {repaired!r} (call {index})")
+            call = {**call, "name": repaired}
+            name = repaired
         arguments = call.get("arguments")
         if not isinstance(arguments, str) or not arguments:
             raise ValueError(f"Streamed tool call {index} is missing its function arguments")

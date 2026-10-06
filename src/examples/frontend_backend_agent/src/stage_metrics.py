@@ -9,6 +9,7 @@ import asyncio
 import inspect
 import time
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -21,6 +22,11 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 MetricOutcome = Literal["success", "timeout", "error", "cancelled", "fallback"]
 MetricEmitter = Callable[[MetricsFrame], Awaitable[None]]
 ServerEventEmitter = Callable[[dict], Awaitable[None]]
+
+#: Called once per received chunk of an out-of-band stream, when a caller that
+#: watches the stream for liveness has set it. A stream that keeps producing
+#: chunks, reasoning included, is alive however long the whole answer takes.
+STREAM_ACTIVITY: ContextVar[Callable[[], None] | None] = ContextVar("stream_activity", default=None)
 
 _PROCESSORS = {
     "frontend_tool_selection": "frontend_tool_selection_llm",
@@ -339,6 +345,7 @@ async def run_streamed_inference_result(
 ) -> StreamedInference:
     """Like :func:`run_streamed_inference`, also returning finish reasons and token usage."""
     stream = await _open_out_of_band_stream(llm, context, max_tokens=max_tokens)
+    on_activity = STREAM_ACTIVITY.get()
     parts: list[str] = []
     chunk_count = 0
     content_chars = 0
@@ -349,6 +356,8 @@ async def run_streamed_inference_result(
     try:
         async for chunk in stream:
             chunk_count += 1
+            if on_activity is not None:
+                on_activity()
             if span is not None and _chunk_has_semantic_token(chunk):
                 await span.mark_ttft()
             content = _chunk_content(chunk)
@@ -379,7 +388,10 @@ async def run_streamed_inference_result(
             reasoning_chars=reasoning_chars,
             finish_reasons=",".join(sorted(finish_reasons)) or "none",
             **usage_tokens,
-        ).info("Thinker stream completed")
+        ).info(
+            f"Thinker stream completed: outcome={outcome} chunks={chunk_count} "
+            f"reasoning_chars={reasoning_chars} content_chars={content_chars}"
+        )
     return StreamedInference("".join(parts), frozenset(finish_reasons), dict(usage_tokens))
 
 

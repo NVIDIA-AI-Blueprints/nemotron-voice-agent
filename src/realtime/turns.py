@@ -9,6 +9,7 @@ import asyncio
 from collections import deque
 from typing import Protocol
 
+from loguru import logger
 from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
@@ -371,13 +372,25 @@ class RealtimeServerVADTurnStopStrategy(BaseUserTurnStopStrategy):
         self._stop_frame_id: int | None = None
         self._text_observed = False
         self._triggered = False
+        self._closed_before_terminal = False
 
     async def handle_user_turn_started(self) -> None:
         """Reset terminal state when Pipecat opens a user turn."""
+        if self._closed_before_terminal:
+            # A late transcript of the stopped segment reopened the turn; its
+            # terminal still ends it normally.
+            self._closed_before_terminal = False
+            return
         self._clear()
 
     async def handle_user_turn_stopped(self) -> None:
         """Release terminal state after Pipecat closes the user turn."""
+        if not self._triggered and self._start_frame_id is not None and self._stop_frame_id is not None:
+            # Pipecat's stop watchdog closed the turn before ASR finished. The
+            # input sequencer still holds later audio for this exact segment, so
+            # keep its owner until the terminal arrives and can release it.
+            self._closed_before_terminal = True
+            return
         self._clear()
 
     async def process_frame(self, frame: Frame) -> ProcessFrameResult:
@@ -387,6 +400,7 @@ class RealtimeServerVADTurnStopStrategy(BaseUserTurnStopStrategy):
             self._stop_frame_id = None
             self._text_observed = False
             self._triggered = False
+            self._closed_before_terminal = False
         elif isinstance(frame, RealtimeVADUserStoppedSpeakingFrame):
             self._stop_frame_id = frame.id
         elif isinstance(frame, TranscriptionFrame) and _transcript_owner(frame) == self._start_frame_id:
@@ -408,7 +422,12 @@ class RealtimeServerVADTurnStopStrategy(BaseUserTurnStopStrategy):
             turn_start_frame_id=frame.turn_start_frame_id,
             turn_stop_frame_id=frame.turn_stop_frame_id,
         )
-        if frame.status in {"completed", "empty"} and self._text_observed:
+        if self._closed_before_terminal:
+            logger.warning(
+                f"Realtime ASR terminal arrived after the user turn closed; releasing input (status={frame.status})"
+            )
+            self._clear()
+        elif frame.status in {"completed", "empty"} and self._text_observed:
             await self.trigger_user_turn_stopped()
         else:
             await self.trigger_user_turn_finalized()
@@ -419,6 +438,7 @@ class RealtimeServerVADTurnStopStrategy(BaseUserTurnStopStrategy):
         self._stop_frame_id = None
         self._text_observed = False
         self._triggered = False
+        self._closed_before_terminal = False
 
 
 class RealtimeSemanticTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
@@ -432,15 +452,30 @@ class RealtimeSemanticTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
         self._segment_terminal = False
         self._segment_released = False
         self._triggered = False
+        self._closed_before_terminal = False
 
     async def handle_user_turn_started(self) -> None:
         """Arm Smart Turn and clear any prior acoustic-segment owner."""
         await super().handle_user_turn_started()
+        if self._closed_before_terminal:
+            # A late transcript of the stopped segment reopened the turn; its
+            # terminal still ends it normally.
+            self._closed_before_terminal = False
+            return
         self._clear_segment()
 
     async def handle_user_turn_stopped(self) -> None:
         """Clear Smart Turn and its terminal owner after finalization."""
         await super().handle_user_turn_stopped()
+        if (
+            not self._segment_released
+            and self._segment_start_frame_id is not None
+            and self._segment_stop_frame_id is not None
+        ):
+            # Pipecat's stop watchdog closed the turn before ASR finished. Keep
+            # the segment owner so its terminal can still release held input.
+            self._closed_before_terminal = True
+            return
         self._clear_segment()
 
     async def process_frame(self, frame: Frame) -> ProcessFrameResult:
@@ -450,6 +485,7 @@ class RealtimeSemanticTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
             self._segment_stop_frame_id = None
             self._segment_terminal = False
             self._segment_released = False
+            self._closed_before_terminal = False
         elif isinstance(frame, RealtimeVADUserStoppedSpeakingFrame):
             self._segment_stop_frame_id = frame.id
         result = await super().process_frame(frame)
@@ -468,7 +504,12 @@ class RealtimeSemanticTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
             turn_stop_frame_id=frame.turn_stop_frame_id,
         )
         self._segment_released = True
-        if frame.status in {"completed", "empty"}:
+        if self._closed_before_terminal:
+            logger.warning(
+                f"Realtime ASR terminal arrived after the user turn closed; releasing input (status={frame.status})"
+            )
+            self._clear_segment()
+        elif frame.status in {"completed", "empty"}:
             self._segment_terminal = True
             await self._maybe_trigger_user_turn_stopped()
         else:
@@ -494,6 +535,7 @@ class RealtimeSemanticTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
         self._segment_terminal = False
         self._segment_released = False
         self._triggered = False
+        self._closed_before_terminal = False
 
 
 class RealtimeManualTurnStopStrategy(BaseUserTurnStopStrategy):

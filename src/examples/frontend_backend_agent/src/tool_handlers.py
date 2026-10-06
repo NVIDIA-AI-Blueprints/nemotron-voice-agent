@@ -18,7 +18,7 @@ from loguru import logger
 from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, LLMTextFrame
 from pipecat.services.llm_service import FunctionCallResultProperties
 
-from examples.frontend_backend_agent.src.frontend_verdict import decide
+from examples.frontend_backend_agent.src.frontend_verdict import decide, is_progress_phrase, pure_ack_or_progress
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent, is_speakable_payload, response_hint
 from examples.frontend_backend_agent.src.runtime_context import runtime_today
 
@@ -165,6 +165,20 @@ def build_handlers(
             await _emit_terminal_payload(
                 params,
                 payload,
+                allow_talker_frames=allow_talker_frames,
+            )
+            return
+        pending_question = _pending_question_for_turn(thinker, transcript)
+        if pending_question is not None:
+            # A question the caller still owes an answer to comes before any
+            # filler or a new identical lookup.
+            consecutive_planner_errors = 0
+            await _deliver_tool_payload(
+                params,
+                pending_question,
+                default_mode=tool_result_mode_default,
+                talker_result_tools=talker_result_tools,
+                stage_metrics=stage_metrics,
                 allow_talker_frames=allow_talker_frames,
             )
             return
@@ -376,6 +390,24 @@ def build_handlers(
         await params.result_callback(payload)
 
     return {"call_backend": handle_call_backend, "cancel_backend": handle_cancel_backend}
+
+
+def _pending_question_for_turn(thinker: object, transcript: ConversationTranscript | None) -> dict[str, Any] | None:
+    """Return a clarification question to offer again, clearing it on any substantive turn.
+
+    Only an acknowledgement or progress check ("okay", "any update?") brings the
+    question back; anything else may be the answer or a new request, so the
+    question is dropped and the turn is planned normally.
+    """
+    take = getattr(thinker, "take_pending_question", None)
+    clear = getattr(thinker, "clear_pending_question", None)
+    if not callable(take) or not callable(clear) or transcript is None:
+        return None
+    utterance = transcript.latest_user_text()
+    if pure_ack_or_progress(utterance) or is_progress_phrase(utterance):
+        return take()
+    clear("new_turn")
+    return None
 
 
 def _continues_running_request(

@@ -323,3 +323,30 @@ class ForcedToolLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(_contents(chunks), expected)
                 self.assertEqual(_tool_names(chunks), ["lookup"])
+
+
+class TruncatedStreamedToolNameTests(unittest.IsolatedAsyncioTestCase):
+    async def _names(self, name: str, available_names: set[str]) -> list[str]:
+        validated = _hold_streamed_tool_calls_until_terminal(
+            _stream(
+                _stream_chunk(_tool_delta(name=name, arguments='{"query": "order status"}')),
+                _stream_chunk({}, finish_reason="tool_calls"),
+            ),
+            available_names=available_names,
+            parallel_tool_calls=False,
+        )
+        return _tool_names([chunk async for chunk in validated])
+
+    async def test_unique_truncated_name_is_restored(self) -> None:
+        names = await self._names("call_backen", {"call_backend", "cancel_backend"})
+
+        self.assertEqual(names, ["call_backend"])
+
+    async def test_ambiguous_or_long_truncation_is_rejected(self) -> None:
+        cases = (
+            ("ambiguous completion", "get_use", {"get_user", "get_users"}),
+            ("suffix too long", "call_back", {"call_backend"}),
+        )
+        for label, name, available in cases:
+            with self.subTest(label), self.assertRaisesRegex(ValueError, "selected unavailable function"):
+                await self._names(name, available)

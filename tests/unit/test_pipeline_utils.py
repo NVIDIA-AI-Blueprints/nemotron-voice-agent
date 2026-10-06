@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from pipecat.frames.frames import BotStartedSpeakingFrame, InterimTranscriptionFrame
+from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
 from pipecat.turns.types import ProcessFrameResult
 
 from examples.shared.pipeline_utils import (
@@ -106,3 +107,33 @@ class UserAggregatorParamsTests(unittest.TestCase):
         self.assertIs(one_word, ProcessFrameResult.CONTINUE)
         self.assertIs(two_words, ProcessFrameResult.STOP)
         self.assertEqual(triggers, [("wait please", 2)])
+
+
+class RealtimeUserTurnStopTimeoutTests(unittest.TestCase):
+    """A Realtime turn must outlive its ASR deadline, or the release is stranded."""
+
+    def _build(self, *, server_vad: bool, realtime: bool):
+        with (
+            patch.dict(os.environ, {"REALTIME_INPUT_TRANSCRIPTION_TIMEOUT_SECONDS": "8"}),
+            patch(
+                "examples.shared.pipeline_utils.realtime_turn_detection_config",
+                return_value={"type": "server_vad"} if realtime else None,
+            ),
+            patch("examples.shared.pipeline_utils.uses_server_vad_turn_detection", return_value=server_vad),
+            patch("examples.shared.pipeline_utils.SileroVADAnalyzer", side_effect=_FakeVADAnalyzer),
+            patch("examples.shared.pipeline_utils.build_smart_turn_stop_strategies", return_value=[]),
+            patch("examples.shared.pipeline_utils.build_smart_turn_analyzer", return_value=None),
+        ):
+            return build_user_aggregator_params(welcome_enabled=False)
+
+    def test_realtime_server_and_semantic_vad_wait_for_the_asr_deadline(self) -> None:
+        for server_vad in (True, False):
+            with self.subTest(server_vad=server_vad):
+                params = self._build(server_vad=server_vad, realtime=True)
+                self.assertEqual(params.user_turn_stop_timeout, 9.0)
+
+    def test_non_realtime_sessions_keep_pipecats_default(self) -> None:
+        for server_vad in (True, False):
+            with self.subTest(server_vad=server_vad):
+                params = self._build(server_vad=server_vad, realtime=False)
+                self.assertEqual(params.user_turn_stop_timeout, LLMUserAggregatorParams().user_turn_stop_timeout)

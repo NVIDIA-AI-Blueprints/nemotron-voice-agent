@@ -364,6 +364,20 @@ def bind_realtime_automatic_response_provenance(
     return strategies
 
 
+def _realtime_user_turn_stop_timeout_kwargs(realtime_config: dict | None) -> dict:
+    """Let a Realtime turn outlive its ASR deadline, as the manual path does.
+
+    Pipecat force-stops a turn 5 s after the last speech or transcript event.
+    A native ASR result may take up to its own deadline plus publication
+    grace, so a shorter watchdog closed the turn before its terminal arrived.
+    """
+    if realtime_config is None:
+        return {}
+    from realtime.transport import realtime_input_transcription_publication_timeout_secs
+
+    return {"user_turn_stop_timeout": realtime_input_transcription_publication_timeout_secs()}
+
+
 def build_user_aggregator_params(
     welcome_enabled: bool,
     *,
@@ -423,6 +437,7 @@ def build_user_aggregator_params(
                 start=start_strategies,
                 stop=stop_strategies,
             ),
+            **_realtime_user_turn_stop_timeout_kwargs(realtime_config),
         )
 
     if realtime_config is not None:
@@ -452,6 +467,7 @@ def build_user_aggregator_params(
             start=start_strategies,
             stop=stop_strategies,
         ),
+        **_realtime_user_turn_stop_timeout_kwargs(realtime_config),
     )
 
 

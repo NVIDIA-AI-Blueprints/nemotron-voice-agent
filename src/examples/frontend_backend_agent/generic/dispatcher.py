@@ -32,6 +32,7 @@ from examples.frontend_backend_agent.generic.result_formatters import (
     unspecified_clarification,
     unsupported_request,
 )
+from examples.frontend_backend_agent.src.normalization import tool_kind
 from examples.frontend_backend_agent.src.tools import ToolContext, ToolSpec, validate_arguments
 
 if TYPE_CHECKING:
@@ -311,12 +312,19 @@ async def dispatch_plan(
     client_tool_timeout_seconds: float = 25.0,
     seen_client_calls: set[str] | None = None,
     argument_screen: ArgumentScreen | None = None,
+    running_client_calls: dict[str, asyncio.Future[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Validate atomically, serialize mutating tools, and preserve planner order.
 
     ``argument_screen`` puts a read's dictated identifiers into their schema
     shape and stops a clearly unfinished one with a question for the caller.
     It never touches a write's arguments.
+
+    ``seen_client_calls`` holds calls that already failed; a repeat is
+    suppressed. ``running_client_calls`` holds calls another run of the same
+    session is still executing; a repeat waits for that result instead of
+    being sent twice or reported as a failure. Without the running-call registry
+    a call is marked seen before it runs, which is the older behavior.
     """
     enabled = frozenset(enabled_tools)
     client_tools = client_tools or {}
@@ -343,6 +351,9 @@ async def dispatch_plan(
     # Preflight every call before the first side effect. A malformed member of
     # a multi-tool plan prevents all other members from running.
     pending_client_fingerprints: list[str] = []
+    suppressed_payloads: dict[int, dict[str, Any]] = {}
+    shared_results: dict[int, asyncio.Future[dict[str, Any]]] = {}
+    dropped_indexes: set[int] = set()
     for index, call in enumerate(calls):
         if call.name in client_tools:
             if argument_screen is not None:
@@ -364,29 +375,30 @@ async def dispatch_plan(
                 logger.warning(f"client-owned tool arguments rejected: tool={call.name}")
                 return invalid_parameters(call.name)
             fingerprint = client_call_fingerprint(call.name, call.arguments)
+            if running_client_calls is not None:
+                if fingerprint in pending_client_fingerprints:
+                    # The same call twice in one plan runs once; the repeat
+                    # never reached the client, so it is not a failure.
+                    logger.info(f"repeated client-owned call in one plan dropped: tool={call.name}")
+                    dropped_indexes.add(index)
+                    continue
+                running = running_client_calls.get(fingerprint)
+                if running is not None and not running.done():
+                    logger.info(f"client-owned call already running in this session; sharing it: tool={call.name}")
+                    shared_results[index] = running
+                    continue
+                if seen_client_calls is not None and fingerprint in seen_client_calls:
+                    suppressed_payloads[index] = _suppressed_duplicate(call, argument_screen)
+                    continue
+                pending_client_fingerprints.append(fingerprint)
+                continue
             if (seen_client_calls is not None and fingerprint in seen_client_calls) or (
                 fingerprint in pending_client_fingerprints
             ):
                 if seen_client_calls is not None:
                     seen_client_calls.update(pending_client_fingerprints)
                     seen_client_calls.add(fingerprint)
-                logger.bind(event="retry_guard", tool=call.name).warning(
-                    f"duplicate client-owned tool call suppressed: tool={call.name}"
-                )
-                suppressed = format_client_result(
-                    call.name,
-                    call.arguments,
-                    {
-                        "ok": False,
-                        "error": {
-                            "code": "duplicate_client_tool_call",
-                            "message": "I stopped a repeated tool request that had not produced a successful result.",
-                        },
-                    },
-                )
-                if argument_screen is not None and argument_screen.enabled:
-                    suppressed["thinker_hint"] = argument_screen.repeated_call_hint()
-                return suppressed
+                return _suppressed_duplicate(call, argument_screen)
             pending_client_fingerprints.append(fingerprint)
             continue
         spec = tools[call.name]
@@ -421,6 +433,14 @@ async def dispatch_plan(
 
     async def run_client_batch(items: list[tuple[int, ValidatedToolCall]]) -> None:
         spans: list[Any] = []
+        owned: dict[int, tuple[str, asyncio.Future[dict[str, Any]]]] = {}
+        if running_client_calls is not None:
+            loop = asyncio.get_running_loop()
+            for index, call in items:
+                fingerprint = client_call_fingerprint(call.name, call.arguments)
+                future: asyncio.Future[dict[str, Any]] = loop.create_future()
+                running_client_calls[fingerprint] = future
+                owned[index] = (fingerprint, future)
         try:
             for index, call in items:
                 if on_tool_started is not None and stage_metrics is None:
@@ -480,6 +500,22 @@ async def dispatch_plan(
                 if seen_client_calls is not None:
                     seen_client_calls.add(client_call_fingerprint(call.name, call.arguments))
         finally:
+            # Always settle and unregister, so a batch cut short by a deadline
+            # or a newer turn never leaves its calls blocked for the session.
+            for index, (fingerprint, future) in owned.items():
+                if running_client_calls is not None and running_client_calls.get(fingerprint) is future:
+                    del running_client_calls[fingerprint]
+                if not future.done():
+                    if payloads[index] is not None:
+                        future.set_result(payloads[index])
+                    else:
+                        future.cancel()
+                if payloads[index] is None and seen_client_calls is not None:
+                    # Cut short with its outcome unknown. A read may simply be
+                    # asked again; a possible write must not be sent twice.
+                    spec = client_tools[calls[index].name]
+                    if tool_kind(spec.name, spec.description) != "read":
+                        seen_client_calls.add(fingerprint)
             if stage_metrics is not None:
                 for span, (index, _call) in zip(spans, items, strict=False):
                     if span is not None:
@@ -493,8 +529,14 @@ async def dispatch_plan(
     mutating: list[tuple[int, ValidatedToolCall]] = []
     client_items: list[tuple[int, ValidatedToolCall]] = []
     coroutines: list[Awaitable[None]] = []
+    for index, payload in suppressed_payloads.items():
+        payloads[index] = payload
     for index, call in enumerate(calls):
-        if call.name in client_tools:
+        if index in dropped_indexes or index in suppressed_payloads:
+            continue
+        if index in shared_results:
+            coroutines.append(_await_shared_result(index, calls[index], shared_results[index], payloads))
+        elif call.name in client_tools:
             client_items.append((index, call))
         elif tools[call.name].mutates:
             mutating.append((index, call))
@@ -508,7 +550,7 @@ async def dispatch_plan(
 
         coroutines.append(run_mutating_chain())
     if client_items:
-        if seen_client_calls is not None:
+        if seen_client_calls is not None and running_client_calls is None:
             seen_client_calls.update(pending_client_fingerprints)
         coroutines.append(run_client_batch(client_items))
     await asyncio.gather(*coroutines)
@@ -517,6 +559,54 @@ async def dispatch_plan(
     if accumulated_results is not None:
         accumulated_results.extend(resolved)
     return resolved[0] if len(resolved) == 1 else combine_tool_results(resolved)
+
+
+def _suppressed_duplicate(call: ValidatedToolCall, argument_screen: ArgumentScreen | None) -> dict[str, Any]:
+    """Report a repeat of a client call that already failed, without sending it again."""
+    logger.bind(event="retry_guard", tool=call.name).warning(
+        f"duplicate client-owned tool call suppressed: tool={call.name}"
+    )
+    suppressed = format_client_result(
+        call.name,
+        call.arguments,
+        {
+            "ok": False,
+            "error": {
+                "code": "duplicate_client_tool_call",
+                "message": "I stopped a repeated tool request that had not produced a successful result.",
+            },
+        },
+    )
+    if argument_screen is not None and argument_screen.enabled:
+        suppressed["thinker_hint"] = argument_screen.repeated_call_hint()
+    return suppressed
+
+
+async def _await_shared_result(
+    index: int,
+    call: ValidatedToolCall,
+    running: asyncio.Future[dict[str, Any]],
+    payloads: list[dict[str, Any] | None],
+) -> None:
+    """Take the result of the identical call another run is executing."""
+    try:
+        payloads[index] = dict(await asyncio.shield(running))
+    except asyncio.CancelledError:
+        if not running.cancelled():
+            raise
+        # The other run was cut short before its result arrived. Report it as a
+        # transient failure; it is not marked seen, so a later round may retry.
+        payloads[index] = format_client_result(
+            call.name,
+            call.arguments,
+            {
+                "ok": False,
+                "error": {
+                    "code": "client_tool_error",
+                    "message": "I couldn't complete that client tool request right now.",
+                },
+            },
+        )
 
 
 def combine_accumulated_results(results: list[dict[str, Any]]) -> dict[str, Any]:

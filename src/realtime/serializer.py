@@ -105,6 +105,18 @@ _CONTEXT_APPLY_TIMEOUT_SECS = parse_env_int(
     10,
     min_value=1,
 )
+#: A cancelled assistant item's turn has already stopped, so its context write is
+#: either done within moments or not coming; wait only this long before editing
+#: the conversation item alone.
+_CANCELLED_CONTEXT_APPLY_GRACE_SECS = 2.0
+
+
+def _log_unbound_assistant_item(item_id: str, reason: str, *, item: dict[str, Any] | None = None) -> None:
+    """Say why an assistant turn's context message was not bound to its Realtime item."""
+    status = item.get("status") if item is not None else None
+    logger.info(
+        f"Realtime assistant item not bound to model context: item_id={item_id} reason={reason} status={status}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +192,9 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._session_prompt_update_owner: Any | None = None
         self._context_messages_by_item_id: dict[str, dict[str, Any]] = {}
         self._context_cleared_item_ids: set[str] = set()
+        # Assistant items edited without a context owner. A late bind must not
+        # attach their stale full text to them afterwards.
+        self._context_detached_item_ids: set[str] = set()
         self._context_applied_events: dict[str, asyncio.Event] = {}
         self._pending_conversation_appends: dict[str, _PendingConversationAppend] = {}
         self._connection_closed = False
@@ -392,22 +407,35 @@ class RealtimeFrameSerializer(FrameSerializer):
         item_id = self._controller.assistant_item_id or self._controller.last_assistant_item_id
         if item_id is None or item_id in self._context_messages_by_item_id:
             return item_id is not None
+        if item_id in self._context_detached_item_ids:
+            _log_unbound_assistant_item(item_id, "edited_without_context")
+            return False
         try:
             item = self._controller.conversation.item(item_id)
         except RealtimeProtocolError:
+            _log_unbound_assistant_item(item_id, "item_gone")
             return False
         if item.get("type") != "message" or item.get("role") != "assistant":
             return False
         messages = self._llm_context.get_messages()
         if not messages:
+            _log_unbound_assistant_item(item_id, "context_empty", item=item)
             return False
         context_message = messages[-1]
         if not isinstance(context_message, dict) or context_message.get("role") != "assistant":
+            last_role = context_message.get("role") if isinstance(context_message, dict) else type(context_message)
+            _log_unbound_assistant_item(item_id, f"last_context_message_role={last_role}", item=item)
             return False
         if context_message.get("tool_calls"):
+            _log_unbound_assistant_item(item_id, "last_context_message_has_tool_calls", item=item)
             return False
         self._context_messages_by_item_id[item_id] = context_message
         self._context_applied_events.setdefault(item_id, asyncio.Event()).set()
+        logger.debug(
+            f"Realtime assistant item bound to model context: item_id={item_id} "
+            f"status={item.get('status')} active={item_id == self._controller.assistant_item_id} "
+            f"text={str(context_message.get('content') or '')[:80]!r}"
+        )
         return True
 
     def prepare_response_done_publication(self, response_id: str) -> None:
@@ -455,6 +483,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._context_applied_events.clear()
         self._context_messages_by_item_id.clear()
         self._context_cleared_item_ids.clear()
+        self._context_detached_item_ids.clear()
         self._pending_conversation_appends.clear()
 
     async def setup(self, setup: FrameProcessorSetup) -> None:
@@ -1698,9 +1727,9 @@ class RealtimeFrameSerializer(FrameSerializer):
                 code="conversation_item_in_use",
                 param="item_id",
             )
-        await self._wait_message_context_if_pending(item_id, item)
+        context_bound = await self._wait_message_context_if_pending(item_id, item, tolerate_unbound_assistant=True)
 
-        context_messages = self._context_messages_after_removing_item(item_id, item)
+        context_messages = self._context_messages_after_removing_item(item_id, item) if context_bound else None
         controller_snapshot = self._controller.snapshot_conversation_mutation_state()
         context_snapshot = self._snapshot_conversation_context()
         next_owners = dict(self._context_messages_by_item_id)
@@ -1760,7 +1789,7 @@ class RealtimeFrameSerializer(FrameSerializer):
                 param="item_id",
             )
         item = self._controller.conversation.item(item_id)
-        await self._wait_message_context_if_pending(item_id, item)
+        context_bound = await self._wait_message_context_if_pending(item_id, item, tolerate_unbound_assistant=True)
 
         projection = self._controller.preview_item_truncation(
             item_id=item_id,
@@ -1769,7 +1798,11 @@ class RealtimeFrameSerializer(FrameSerializer):
         )
 
         replacement: dict[str, Any] | None = None
-        if audio_end_ms == 0:
+        if not context_bound:
+            # The item never reached model context (refer to
+            # _wait_message_context_if_pending); edit the conversation item only.
+            context_messages = None
+        elif audio_end_ms == 0:
             context_messages = self._context_messages_after_removing_item(item_id, item)
             if context_messages is None:
                 raise RealtimeProtocolError(
@@ -1788,7 +1821,9 @@ class RealtimeFrameSerializer(FrameSerializer):
         context_snapshot = self._snapshot_conversation_context()
         next_owners = dict(self._context_messages_by_item_id)
         next_cleared_item_ids = set(self._context_cleared_item_ids)
-        if replacement is not None:
+        if not context_bound:
+            pass
+        elif replacement is not None:
             next_owners[item_id] = replacement
             next_cleared_item_ids.discard(item_id)
         elif projection.context_text:
@@ -2230,16 +2265,45 @@ class RealtimeFrameSerializer(FrameSerializer):
                     pending.append(item_id)
         return tuple(pending)
 
-    async def _wait_message_context_if_pending(self, item_id: str, item: dict[str, Any]) -> None:
-        """Wait for an acknowledged message's downstream context commit."""
+    async def _wait_message_context_if_pending(
+        self,
+        item_id: str,
+        item: dict[str, Any],
+        *,
+        tolerate_unbound_assistant: bool = False,
+    ) -> bool:
+        """Wait for an acknowledged message's downstream context commit.
+
+        Returns False only with ``tolerate_unbound_assistant``, for a finished
+        assistant item that has no model-context owner: a reply cut off by
+        barge-in, for example, whose spoken text never got its own context
+        message. The caller then edits the conversation item alone. Failing
+        the whole session for a reply the model no longer needs in sync used
+        to end the conversation.
+        """
         if item.get("type") != "message" or item_id in self._context_messages_by_item_id:
-            return
+            return True
+        unbound_assistant = (
+            tolerate_unbound_assistant
+            and item.get("role") == "assistant"
+            and item_id not in self._context_cleared_item_ids
+            and not self._controller.is_active_output_item(item_id)
+        )
         applied = self._context_applied_events.get(item_id)
         if applied is None:
-            return
+            if unbound_assistant:
+                self._detach_unbound_assistant_item(item_id, item, waited=False)
+                return False
+            return True
+        timeout: float = _CONTEXT_APPLY_TIMEOUT_SECS
+        if unbound_assistant and item.get("status") == "incomplete":
+            timeout = min(timeout, _CANCELLED_CONTEXT_APPLY_GRACE_SECS)
         try:
-            await asyncio.wait_for(applied.wait(), timeout=_CONTEXT_APPLY_TIMEOUT_SECS)
+            await asyncio.wait_for(applied.wait(), timeout=timeout)
         except TimeoutError as exc:
+            if unbound_assistant and item_id not in self._context_messages_by_item_id:
+                self._detach_unbound_assistant_item(item_id, item, waited=True)
+                return False
             raise RealtimeProtocolError(
                 message=f"Conversation item {item_id!r} did not reach model context before the server deadline",
                 code="conversation_context_apply_timeout",
@@ -2253,6 +2317,20 @@ class RealtimeFrameSerializer(FrameSerializer):
                 param="item_id",
                 error_type="server_error",
             )
+        if item_id not in self._context_messages_by_item_id and unbound_assistant:
+            # The event was set without a context owner (for example, a bind
+            # that found no matching message); edit the conversation item only.
+            self._detach_unbound_assistant_item(item_id, item, waited=True)
+            return False
+        return True
+
+    def _detach_unbound_assistant_item(self, item_id: str, item: dict[str, Any], *, waited: bool) -> None:
+        """Record that an assistant item is edited without touching model context."""
+        self._context_detached_item_ids.add(item_id)
+        logger.warning(
+            f"Realtime assistant item has no model-context owner; editing the conversation item only: "
+            f"item_id={item_id} status={item.get('status')} waited={waited}"
+        )
 
     async def _freeze_response_input(self, response_input: RealtimeResponseInput) -> list[dict[str, Any]]:
         """Resolve every reference once at response.create acceptance time."""

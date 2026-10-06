@@ -929,6 +929,9 @@ class RealtimeNvidiaSTTService(NvidiaSTTService):
             await asyncio.wait_for(turn.done.wait(), timeout=self._realtime_turn_drain_timeout_secs)
             return
         except TimeoutError:
+            logger.warning(
+                f"Realtime NVIDIA ASR turn exceeded its {self._realtime_turn_drain_timeout_secs:.1f}s deadline"
+            )
             self._queue_turn_failure(
                 turn,
                 code="asr_provider_timeout",

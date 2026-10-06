@@ -241,6 +241,7 @@ The following environment variables bound shared and domain-specific orchestrati
 | `FRONTEND_BACKEND_FRONTEND_VERDICT` | `true` | Lets a `call_backend` call made while delegated work runs continue that work after a pure acknowledgement or progress check. Any value other than `true` disables it. |
 | `FRONTEND_BACKEND_BACKEND_HISTORY` | `true` | Sends the Thinker a bounded `conversation_history` of earlier delegations in the session. Any value other than `true` disables it. |
 | `FRONTEND_BACKEND_LATE_ANSWERS` | `true` | Lets a superseded generic request still deliver its question or successful client-tool result when nothing newer covered it. Refer to [Generic Client-Tool Safeguards](#generic-client-tool-safeguards). |
+| `FRONTEND_BACKEND_PENDING_QUESTION` | `true` | Keeps the latest unanswered generic clarification question (`params_missing` or `params_invalid`, whose text code writes). When the caller only acknowledges or asks for progress and no request is running, the agent asks that question again instead of speaking filler or repeating the lookup. It asks at most twice, and forgets the question after 60 seconds, on any substantive caller turn, on cancellation, on a session update, or after a successful call of the same tool. |
 | `FRONTEND_BACKEND_NORMALIZATION` | `true` | Screens spoken identifiers in generic client read-tool calls and writes spelled identifiers out in the Thinker's history transcript |
 | `FRONTEND_BACKEND_PHONE_FORMAT` | `true` | Appends the `generic_thinker_phone_numbers` rule to the generic Thinker prompt and adds the other phone-number form after a phone lookup finds nothing |
 | `FRONTEND_BACKEND_DIRECT_WRITE` | `true` | Issues a confirmed generic client write without a new plan after a bare "yes" to a fully spoken confirmation question (Realtime only) |
@@ -250,7 +251,10 @@ The following environment variables bound shared and domain-specific orchestrati
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delays progress speech until delegated work remains active past the threshold |
 | `THINKER_TOOL_TIMEOUT_SECONDS` | `45.0` | Bounds the shared Talker-to-backend function handler |
 | `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` | `15.0` | Bounds one Generic Talker completion stream. An invalid or stalled stream retries once, so the Talker spends at most twice this value producing a given utterance |
-| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `10.0` | Bounds each generic Thinker planning round |
+| `GENERIC_PLANNER_TIMEOUT_SECONDS` | `30.0` (`10.0` without stream liveness) | Sets the ceiling for one generic Thinker planning attempt. Without stream liveness, it is a fixed limit for each attempt. A live stream that reaches the ceiling is not retried |
+| `GENERIC_PLANNER_STREAM_LIVENESS` | `true` | Ends a planning attempt only when its stream does not start or stops producing chunks, including reasoning chunks. Set `false` to restore the fixed per-attempt limit |
+| `GENERIC_PLANNER_FIRST_CHUNK_TIMEOUT_SECONDS` | `8.0` | With stream liveness, retries an attempt whose stream produces no chunk within this time |
+| `GENERIC_PLANNER_STALL_TIMEOUT_SECONDS` | `5.0` | With stream liveness, retries an attempt whose stream produces no new chunk within this time |
 | `GENERIC_PLANNER_MAX_ATTEMPTS` | `2` | Retries a transient Thinker planning failure (for example, a temporarily overloaded model endpoint) this many times before the backend deadline fails the round |
 | `GENERIC_PLANNER_RETRY_BACKOFF_SECONDS` | `0.2` | Base delay before a retried planning attempt; doubles with each further attempt |
 | `GENERIC_MAX_PLANNING_ROUNDS` | `8` | Limits dependent generic planning rounds; increasing this value does not extend the overall backend deadline |

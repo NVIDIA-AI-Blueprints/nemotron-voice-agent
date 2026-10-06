@@ -21,6 +21,7 @@ from examples.frontend_backend_agent.generic.client_tools import (
     ClientToolRoundExecutor,
     ClientToolSpec,
     build_client_tool_specs,
+    client_call_fingerprint,
     format_client_result,
 )
 from examples.frontend_backend_agent.generic.dispatcher import (
@@ -40,6 +41,7 @@ from examples.frontend_backend_agent.src.flags import flag
 from examples.frontend_backend_agent.src.history import DelegationLedger
 from examples.frontend_backend_agent.src.normalization import tool_kind
 from examples.frontend_backend_agent.src.protocol import ThinkerLifecycleEvent
+from examples.frontend_backend_agent.src.stage_metrics import STREAM_ACTIVITY
 from examples.frontend_backend_agent.src.tools import ToolSpec, session_server_tools
 from utils import parse_env_float, parse_env_int
 
@@ -47,8 +49,9 @@ if TYPE_CHECKING:
     from examples.frontend_backend_agent.src.stage_metrics import StageMetricsCoordinator
 
 _PLANNER_MAX_ATTEMPTS = parse_env_int("GENERIC_PLANNER_MAX_ATTEMPTS", 2, min_value=1)
-# How many distinct lookups one session keeps for later turns.
-_SESSION_TOOL_MEMORY_LIMIT = 6
+# How many distinct lookups one session keeps for later turns. Keyed per call,
+# so a caller with several records keeps each of them.
+_SESSION_TOOL_MEMORY_LIMIT = 12
 _PLANNER_RETRY_BACKOFF_SECONDS = parse_env_float("GENERIC_PLANNER_RETRY_BACKOFF_SECONDS", 0.2, min_value=0.0)
 #: A plan cut off at the token limit is retried once like a transient failure.
 _RETRIABLE_PLANNER_EXCEPTIONS = (
@@ -72,8 +75,14 @@ _TRANSIENT_PLANNER_ERROR_TEXT = (
 )
 
 
+class PlannerCeilingError(TimeoutError):
+    """A live planning stream ran to its per-attempt ceiling; asking again would start over."""
+
+
 def _is_retriable_planner_error(exc: BaseException) -> bool:
     """Return whether one planner failure is worth another attempt."""
+    if isinstance(exc, PlannerCeilingError):
+        return False
     if isinstance(exc, _RETRIABLE_PLANNER_EXCEPTIONS):
         return True
     if isinstance(exc, APIError):
@@ -83,6 +92,13 @@ def _is_retriable_planner_error(exc: BaseException) -> bool:
 
 
 _DEFAULT_MAX_PLANNING_ROUNDS = 8
+#: A clarification question kept for a later progress check. It is code-written
+#: (schema labels or a fixed sentence), so carrying it forward never makes
+#: planner text speakable.
+_PENDING_QUESTION_REASONS = frozenset({"params_missing", "params_invalid"})
+#: A pending question is offered again at most this many times, then dropped.
+_PENDING_QUESTION_MAX_REDELIVERIES = 2
+_PENDING_QUESTION_TTL_SECONDS = 60.0
 #: How long a superseded run's answer waits for newer calls to settle.
 _LATE_ANSWER_MAX_WAIT_SECONDS = 20.0
 
@@ -128,6 +144,8 @@ class GenericThinkerBackend:
         client_tool_timeout_seconds: float = 25.0,
         overall_timeout_seconds: float = 40.0,
         planner_timeout_seconds: float = 6.0,
+        planner_first_chunk_timeout_seconds: float | None = None,
+        planner_stall_timeout_seconds: float | None = None,
         max_planning_rounds: int = _DEFAULT_MAX_PLANNING_ROUNDS,
         state: GenericThinkerSessionState | None = None,
         on_tool_started: Callable[[str], Awaitable[None]] | None = None,
@@ -154,12 +172,26 @@ class GenericThinkerBackend:
         self._enabled_tools = (*session_server_tools(self._server_enabled_tools, client_enabled), *client_enabled)
         self._overall_timeout_seconds = max(1.0, overall_timeout_seconds)
         self._planner_timeout_seconds = min(max(1.0, planner_timeout_seconds), self._overall_timeout_seconds)
+        # With both liveness limits set, a planning attempt ends only when its
+        # stream has not started or has stopped producing chunks; the planner
+        # timeout is then the ceiling for one attempt. A reasoning model that is
+        # still thinking at the old fixed limit used to be cancelled and asked
+        # the same question again from scratch.
+        self._planner_liveness = (
+            (max(0.5, planner_first_chunk_timeout_seconds), max(0.5, planner_stall_timeout_seconds))
+            if planner_first_chunk_timeout_seconds is not None and planner_stall_timeout_seconds is not None
+            else None
+        )
         self._max_planning_rounds = max(1, max_planning_rounds)
         self._on_tool_started = on_tool_started
         self._stage_metrics = stage_metrics
         # Session-scoped so a client call that keeps failing stays suppressed across
         # turns; the frontend re-delegates per turn, and per-call state would reset.
         self._seen_client_calls: set[str] = set()
+        # Client calls a run of this session is executing right now. A newer
+        # run that plans the same call waits for that result instead of having
+        # it suppressed as a failed repeat or sending it twice.
+        self._running_client_calls: dict[str, asyncio.Future[dict[str, Any]]] = {}
         # What this session has already established. A delegation starts with an
         # empty result list, so without this the planner re-plans its opening
         # lookup on every user turn -- and once one of those rounds is lost to
@@ -172,6 +204,8 @@ class GenericThinkerBackend:
         self._active_run: DelegationRun | None = None
         # Late answers of superseded runs (frontend verdict ``new``).
         self._late_answers_enabled = flag("FRONTEND_BACKEND_LATE_ANSWERS")
+        self._pending_question_enabled = flag("FRONTEND_BACKEND_PENDING_QUESTION")
+        self._pending_question: _PendingQuestion | None = None
         self._superseded_runs: set[str] = set()
         self._owner_gone: set[str] = set()
         self._late_answers_waiting: set[str] = set()
@@ -236,6 +270,7 @@ class GenericThinkerBackend:
             raise RuntimeError("Generic planner policy cannot change during an active backend call")
         self._planner.commit_session_update(prepared.planner)
         self._session_generation += 1
+        self.clear_pending_question("session_update")
         self._client_tools = dict(prepared.client_tools)
         self._enabled_tools = prepared.enabled_tools
         if prepared.argument_screen is not None:
@@ -329,13 +364,16 @@ class GenericThinkerBackend:
             if self.state.active_call_id != call_id:
                 late = await self._late_answer(run.run_id, payload)
                 if late is None:
+                    self._retain_superseded_question(run.run_id, payload)
                     raise asyncio.CancelledError
+                self._retain_question(late)
                 return late
             if payload.get("reason") == "no_action_needed" and self._late_answers_waiting:
                 # A superseded run finished with a question or a client result
                 # while this turn needed nothing; let that answer be the one
                 # spoken instead of "nothing further" followed by it.
                 return {**payload, "response_text": "", "speakable": False}
+            self._retain_question(payload)
             return payload
         except asyncio.CancelledError:
             self.state.add_event(
@@ -353,6 +391,7 @@ class GenericThinkerBackend:
         # A withdrawal also withdraws what superseded runs would still say,
         # even when nothing is running any more.
         self._owner_gone.update(self._superseded_runs)
+        self.clear_pending_question("cancelled")
         task = self.state.active_task
         if task is None or task.done():
             return False
@@ -360,6 +399,68 @@ class GenericThinkerBackend:
         self.state.active_call_id = None
         task.cancel()
         return True
+
+    def take_pending_question(self) -> dict[str, Any] | None:
+        """Return the clarification question still owed to the caller, or None.
+
+        Called when the caller only acknowledges or asks for progress. The
+        question was asked by a run whose answer the caller did not hear in
+        full: it was superseded, or the caller spoke over it. Offering it again
+        replaces another filler and another identical lookup. It is offered at
+        most twice, and never while a backend request is running.
+        """
+        pending = self._pending_question
+        if pending is None or self.running_query() is not None:
+            return None
+        if asyncio.get_running_loop().time() - pending.created_at > _PENDING_QUESTION_TTL_SECONDS:
+            self.clear_pending_question("expired")
+            return None
+        if pending.redelivered >= _PENDING_QUESTION_MAX_REDELIVERIES:
+            self.clear_pending_question("redelivery_limit")
+            return None
+        pending.redelivered += 1
+        logger.bind(event="pending_question", tool=pending.tool, redelivered=pending.redelivered).info(
+            f"Pending clarification question offered again: tool={pending.tool} count={pending.redelivered}"
+        )
+        return dict(pending.payload)
+
+    def clear_pending_question(self, reason: str) -> None:
+        """Forget the pending clarification question, if any."""
+        if self._pending_question is None:
+            return
+        logger.bind(event="pending_question", tool=self._pending_question.tool, cleared=reason).info(
+            f"Pending clarification question cleared: {reason}"
+        )
+        self._pending_question = None
+
+    def _retain_question(self, payload: Mapping[str, Any]) -> None:
+        """Keep a code-written clarification question for a later progress check."""
+        if not self._pending_question_enabled or payload.get("type") != "response_hint":
+            return
+        if payload.get("reason") not in _PENDING_QUESTION_REASONS or payload.get("speakable") is False:
+            return
+        tool = str(payload.get("context") or "")
+        text = str(payload.get("response_text") or "").strip()
+        if not tool or tool == "call_backend" or not text:
+            return
+        current = self._pending_question
+        if current is not None and current.tool == tool and current.payload.get("response_text") == text:
+            # The same question asked again keeps its count, so it cannot loop.
+            return
+        self._pending_question = _PendingQuestion(
+            payload=dict(payload), tool=tool, created_at=asyncio.get_running_loop().time()
+        )
+
+    def _retain_superseded_question(self, run_id: str, payload: Mapping[str, Any]) -> None:
+        """Keep a superseded run's question unless newer work covered its tool or was withdrawn."""
+        if run_id in self._owner_gone:
+            return
+        tool = _late_answer_tool(payload)
+        if tool is not None and self._ledger is not None:
+            blocker = self._late_answer_blocker(run_id, tool, payload)
+            if blocker in {"withdrawn", "later_write", "same_tool_later"}:
+                return
+        self._retain_question(payload)
 
     def is_late_answer(self, run_id: str | None) -> bool:
         """Return whether ``run_id`` was returned to its caller as a late answer."""
@@ -471,9 +572,8 @@ class GenericThinkerBackend:
             if validation_error is not None:
                 state["validation_error"] = validation_error
             try:
-                plan = await asyncio.wait_for(
-                    self._planner.plan(query=query, state=state, **self._history_argument(call_id)),
-                    timeout=self._planner_timeout_seconds,
+                plan = await self._await_plan(
+                    self._planner.plan(query=query, state=state, **self._history_argument(call_id))
                 )
             except asyncio.CancelledError:
                 self._log_round(call_id, planning_round, attempt, "cancelled")
@@ -506,6 +606,47 @@ class GenericThinkerBackend:
             prompt_tokens=prompt_tokens,
         ).info(f"Thinker round {planning_round} attempt {attempt}: {outcome}")
 
+    async def _await_plan(self, plan: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+        """Await one planning attempt under the fixed limit or the stream-liveness limits."""
+        if self._planner_liveness is None:
+            return await asyncio.wait_for(plan, timeout=self._planner_timeout_seconds)
+        first_chunk_seconds, stall_seconds = self._planner_liveness
+        loop = asyncio.get_running_loop()
+        last_activity: list[float] = []
+
+        def touch() -> None:
+            last_activity[:] = [loop.time()]
+
+        token = STREAM_ACTIVITY.set(touch)
+        try:
+            # The task copies the current context, so the planner's stream sees ``touch``.
+            task = asyncio.ensure_future(plan)
+        finally:
+            STREAM_ACTIVITY.reset(token)
+        started = loop.time()
+        ceiling = started + self._planner_timeout_seconds
+        try:
+            while True:
+                deadline = min(
+                    ceiling, last_activity[0] + stall_seconds if last_activity else started + first_chunk_seconds
+                )
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    elapsed = loop.time() - started
+                    if deadline == ceiling:
+                        raise PlannerCeilingError(f"Thinker stream reached its ceiling after {elapsed:.1f}s")
+                    reason = "stalled" if last_activity else "did not start"
+                    raise TimeoutError(f"Thinker stream {reason} after {elapsed:.1f}s")
+                done, _pending = await asyncio.wait({task}, timeout=remaining)
+                if done:
+                    return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+                # Collect the abandoned attempt's outcome without swallowing a
+                # cancellation aimed at this caller.
+                await asyncio.gather(task, return_exceptions=True)
+
     def _settle(self, accumulated_results: list[dict[str, Any]]) -> dict[str, Any]:
         """Close one delegation without inventing a failure that did not happen.
 
@@ -526,9 +667,20 @@ class GenericThinkerBackend:
         Anything this call has fetched wins outright: the carried copy of the
         same tool is older by definition and must not appear twice.
         """
-        fetched = {entry.get("tool") for entry in accumulated_results}
-        carried = [entry for entry in self._session_tool_memory if entry.get("tool") not in fetched]
+        fetched = {_memory_key(entry) for entry in accumulated_results}
+        carried = [entry for entry in self._session_tool_memory if _memory_key(entry) not in fetched]
         return [*carried, *accumulated_results]
+
+    def _clear_answered_question(self, result: Mapping[str, Any]) -> None:
+        """A successful call of the tool a pending question was about answers it."""
+        pending = self._pending_question
+        if (
+            pending is not None
+            and result.get("type") == "tool_result"
+            and result.get("status") == "success"
+            and result.get("tool") == pending.tool
+        ):
+            self.clear_pending_question("answered")
 
     def _remember_session_result(self, payload: Mapping[str, Any]) -> None:
         """Keep one successful lookup per distinct call for later turns.
@@ -542,7 +694,13 @@ class GenericThinkerBackend:
         tool = str(payload.get("tool") or "")
         if tool not in self._client_tools:
             return
-        self._session_tool_memory = [entry for entry in self._session_tool_memory if entry.get("tool") != tool]
+        if self.client_tool_kind(tool) == "write":
+            # A successful change makes every earlier read possibly stale.
+            self._session_tool_memory = [
+                entry for entry in self._session_tool_memory if self.client_tool_kind(str(entry.get("tool"))) == "write"
+            ]
+        key = _memory_key(payload)
+        self._session_tool_memory = [entry for entry in self._session_tool_memory if _memory_key(entry) != key]
         self._session_tool_memory.append(dict(payload))
         del self._session_tool_memory[:-_SESSION_TOOL_MEMORY_LIMIT]
 
@@ -575,7 +733,11 @@ class GenericThinkerBackend:
                         self._argument_screen.add_result_hints(
                             result, is_read=self.client_tool_kind(str(result.get("tool") or "")) == "read"
                         )
-                    self._remember_session_result(round_payload)
+                    # One entry per call: a multi-call round's combined payload
+                    # would otherwise never be remembered.
+                    for result in accumulated_results[result_count_before_dispatch:]:
+                        self._remember_session_result(result)
+                        self._clear_answered_question(result)
                     self._record_reads(call_id, accumulated_results[result_count_before_dispatch:])
                     self._record_confirmation(call_id, round_payload)
                     if self._record_local_answer(call_id, round_payload):
@@ -679,6 +841,7 @@ class GenericThinkerBackend:
                     client_tool_timeout_seconds=self._client_tool_timeout_seconds,
                     seen_client_calls=seen_client_calls,
                     argument_screen=self._argument_screen,
+                    running_client_calls=self._running_client_calls,
                 )
             except PlanValidationError as exc:
                 if preset:
@@ -902,6 +1065,28 @@ def _requests_follow_up(
 def _is_completion_plan(plan: Mapping[str, Any]) -> bool:
     """Treat explicit completion or a plan with no executable call as complete."""
     return plan.get("complete") is True or ("tool" not in plan and not plan.get("tool_calls"))
+
+
+@dataclass
+class _PendingQuestion:
+    """One clarification question the caller has not answered yet."""
+
+    payload: dict[str, Any]
+    tool: str
+    created_at: float
+    redelivered: int = 0
+
+
+def _memory_key(entry: Mapping[str, Any]) -> str:
+    """Identify one remembered call by its tool and exact arguments."""
+    data = entry.get("data")
+    arguments = data.get("arguments") if isinstance(data, Mapping) else None
+    if not isinstance(arguments, Mapping):
+        arguments = {}
+    try:
+        return client_call_fingerprint(str(entry.get("tool") or ""), arguments)
+    except (TypeError, ValueError):
+        return f"{entry.get('tool')}\0<unencodable>"
 
 
 def _round_failure_outcome(exc: BaseException) -> str:

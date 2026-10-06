@@ -11,7 +11,7 @@ from examples.frontend_backend_agent.generic.planner import NvidiaGenericPlanner
 from examples.frontend_backend_agent.generic.tools import TOOLS, TOOLS_SCHEMA, resolve_enabled_tools
 from examples.frontend_backend_agent.src.domain import DomainBuildContext, DomainSpec
 from examples.frontend_backend_agent.src.runtime_context import session_clock_from_instructions, session_runtime_fields
-from utils import parse_env_float, parse_env_int
+from utils import parse_env_bool, parse_env_float, parse_env_int
 
 
 def _runtime_context() -> str:
@@ -45,6 +45,7 @@ def _build_backend(context: DomainBuildContext) -> GenericThinkerBackend:
         stage_metrics=context.stage_metrics,
         model_name=context.thinker_model_name,
     )
+    liveness = parse_env_bool("GENERIC_PLANNER_STREAM_LIVENESS", True)
     return GenericThinkerBackend(
         planner=planner,
         tools=TOOLS,
@@ -59,10 +60,20 @@ def _build_backend(context: DomainBuildContext) -> GenericThinkerBackend:
         overall_timeout_seconds=parse_env_float("GENERIC_BACKEND_TIMEOUT_SECONDS", 40.0, min_value=1.0),
         # A plan that must act, rather than look up, spends far more of the
         # reasoning budget: measured round-two plans ran 5-8s where a lookup
-        # ran under one. Six seconds sat inside that spread, so every acting
-        # turn timed out twice and fell back to failure speech. Two attempts at
-        # ten still fit the forty-second overall budget with room for a round.
-        planner_timeout_seconds=parse_env_float("GENERIC_PLANNER_TIMEOUT_SECONDS", 10.0, min_value=1.0),
+        # ran under one, and a hosted reasoning Thinker often ran past ten. A
+        # fixed limit cancelled plans that were still reasoning and asked the
+        # same question again from scratch. With stream liveness on, an attempt
+        # ends only when its stream has not started or has stalled, and the
+        # planner timeout is the ceiling for one attempt.
+        planner_timeout_seconds=parse_env_float(
+            "GENERIC_PLANNER_TIMEOUT_SECONDS", 30.0 if liveness else 10.0, min_value=1.0
+        ),
+        planner_first_chunk_timeout_seconds=(
+            parse_env_float("GENERIC_PLANNER_FIRST_CHUNK_TIMEOUT_SECONDS", 8.0, min_value=0.5) if liveness else None
+        ),
+        planner_stall_timeout_seconds=(
+            parse_env_float("GENERIC_PLANNER_STALL_TIMEOUT_SECONDS", 5.0, min_value=0.5) if liveness else None
+        ),
         max_planning_rounds=parse_env_int("GENERIC_MAX_PLANNING_ROUNDS", 8, min_value=1),
         on_tool_started=context.on_tool_started,
         stage_metrics=context.stage_metrics,

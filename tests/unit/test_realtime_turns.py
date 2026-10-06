@@ -537,6 +537,84 @@ class RealtimeTurnStopStrategyTests(unittest.IsolatedAsyncioTestCase):
                 strategy.trigger_user_turn_finalized.assert_awaited_once()
                 self.assertIsInstance(strategy.push_frame.await_args.args[0], RealtimeASRTurnReleaseFrame)
 
+    async def test_server_vad_terminal_after_watchdog_stop_still_releases_input(self) -> None:
+        """A turn closed by Pipecat's stop watchdog must not strand its ASR release."""
+        for status in ("completed", "failed"):
+            with self.subTest(status=status):
+                strategy = RealtimeServerVADTurnStopStrategy()
+                strategy.trigger_user_turn_stopped = AsyncMock()
+                strategy.trigger_user_turn_finalized = AsyncMock()
+                strategy.push_frame = AsyncMock()
+                start = RealtimeVADUserStartedSpeakingFrame(audio_start_sample=0, sample_rate=16_000)
+                stop = RealtimeVADUserStoppedSpeakingFrame(audio_stop_sample=0, sample_rate=16_000)
+                for frame in (start, stop):
+                    await strategy.process_frame(frame)
+
+                await strategy.handle_user_turn_stopped()
+                await strategy.process_frame(
+                    RealtimeASRTurnEndedFrame(
+                        start.id,
+                        stop.id,
+                        status,
+                        code="asr_provider_timeout" if status == "failed" else None,
+                        message="deadline" if status == "failed" else None,
+                    )
+                )
+
+                strategy.trigger_user_turn_stopped.assert_not_awaited()
+                strategy.trigger_user_turn_finalized.assert_not_awaited()
+                release, direction = strategy.push_frame.await_args.args
+                self.assertEqual((release.turn_start_frame_id, release.turn_stop_frame_id), (start.id, stop.id))
+                self.assertEqual(direction, FrameDirection.UPSTREAM)
+
+                next_start = RealtimeVADUserStartedSpeakingFrame(audio_start_sample=0, sample_rate=16_000)
+                next_stop = RealtimeVADUserStoppedSpeakingFrame(audio_stop_sample=0, sample_rate=16_000)
+                await strategy.handle_user_turn_started()
+                for frame in (next_start, next_stop, _owned_transcript("next", next_start.id)):
+                    await strategy.process_frame(frame)
+                await strategy.process_frame(RealtimeASRTurnEndedFrame(next_start.id, next_stop.id, "completed"))
+                strategy.trigger_user_turn_stopped.assert_awaited_once()
+
+    async def test_server_vad_turn_reopened_before_late_terminal_ends_normally(self) -> None:
+        """A late transcript that reopens the turn still ends it on the same terminal."""
+        strategy = RealtimeServerVADTurnStopStrategy()
+        strategy.trigger_user_turn_stopped = AsyncMock()
+        strategy.trigger_user_turn_finalized = AsyncMock()
+        strategy.push_frame = AsyncMock()
+        start = RealtimeVADUserStartedSpeakingFrame(audio_start_sample=0, sample_rate=16_000)
+        stop = RealtimeVADUserStoppedSpeakingFrame(audio_stop_sample=0, sample_rate=16_000)
+        for frame in (start, stop):
+            await strategy.process_frame(frame)
+
+        await strategy.handle_user_turn_stopped()
+        await strategy.handle_user_turn_started()
+        await strategy.process_frame(_owned_transcript("late words", start.id))
+        await strategy.process_frame(RealtimeASRTurnEndedFrame(start.id, stop.id, "completed"))
+
+        strategy.trigger_user_turn_stopped.assert_awaited_once()
+        self.assertIsInstance(strategy.push_frame.await_args.args[0], RealtimeASRTurnReleaseFrame)
+
+    async def test_semantic_vad_terminal_after_watchdog_stop_still_releases_input(self) -> None:
+        """Keep the segment owner across a watchdog stop so its terminal releases input."""
+        strategy = RealtimeSemanticTurnStopStrategy(turn_analyzer=MagicMock())
+        strategy.trigger_user_turn_stopped = AsyncMock()
+        strategy.trigger_user_turn_finalized = AsyncMock()
+        strategy.push_frame = AsyncMock()
+        start = RealtimeVADUserStartedSpeakingFrame(audio_start_sample=0, sample_rate=16_000)
+        stop = RealtimeVADUserStoppedSpeakingFrame(audio_stop_sample=1_600, sample_rate=16_000)
+        strategy._segment_start_frame_id = start.id
+        strategy._segment_stop_frame_id = stop.id
+
+        await strategy.handle_user_turn_stopped()
+        await strategy.process_frame(RealtimeASRTurnEndedFrame(start.id, stop.id, "completed"))
+
+        strategy.trigger_user_turn_stopped.assert_not_awaited()
+        strategy.trigger_user_turn_finalized.assert_not_awaited()
+        release, direction = strategy.push_frame.await_args.args
+        self.assertEqual((release.turn_start_frame_id, release.turn_stop_frame_id), (start.id, stop.id))
+        self.assertEqual(direction, FrameDirection.UPSTREAM)
+        self.assertIsNone(strategy._segment_start_frame_id)
+
     async def test_manual_commit_requires_its_matching_terminal(self) -> None:
         """Release a manual commit only for its immutable start/stop owner."""
         gate = MagicMock()

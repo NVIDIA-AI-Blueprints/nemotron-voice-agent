@@ -477,6 +477,9 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
             for name in (
                 "GENERIC_BACKEND_TIMEOUT_SECONDS",
                 "GENERIC_PLANNER_TIMEOUT_SECONDS",
+                "GENERIC_PLANNER_STREAM_LIVENESS",
+                "GENERIC_PLANNER_FIRST_CHUNK_TIMEOUT_SECONDS",
+                "GENERIC_PLANNER_STALL_TIMEOUT_SECONDS",
                 "GENERIC_MAX_PLANNING_ROUNDS",
             ):
                 os.environ.pop(name, None)
@@ -497,7 +500,10 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(backend._overall_timeout_seconds, 40.0)
-        self.assertEqual(backend._planner_timeout_seconds, 10.0)
+        # Liveness ends an attempt whose stream has not started or has stalled;
+        # the planner timeout is only the ceiling for one live attempt.
+        self.assertEqual(backend._planner_timeout_seconds, 30.0)
+        self.assertEqual(backend._planner_liveness, (8.0, 5.0))
         self.assertEqual(backend._max_planning_rounds, 8)
         self.assertEqual(backend.tool_result_mode_default, "direct")
         self.assertEqual(TOOLS["web_search"].timeout_s, 20.0)
@@ -508,12 +514,14 @@ class FrontendBackendDomainConfigTests(unittest.TestCase):
         self.assertLess(retry_budget, TOOLS["web_search"].timeout_s)
         self.assertGreater(45.0, backend._overall_timeout_seconds)
         self.assertGreater(backend._overall_timeout_seconds, backend._planner_timeout_seconds)
-        # A timed-out planner is retried with a fresh full deadline, so the
-        # overall budget has to absorb every attempt and still leave room for a
-        # dependent round; otherwise one stalled plan consumes the whole turn.
+        # Only a stream that never started or stalled is retried, so the
+        # overall budget has to absorb every such attempt and still leave room
+        # for a dependent round. A live stream that reaches the ceiling is not
+        # retried, so one ceiling-length attempt must also fit.
+        first_chunk_seconds, _stall_seconds = backend._planner_liveness
         self.assertGreater(
             backend._overall_timeout_seconds,
-            backend._planner_timeout_seconds * backend_module._PLANNER_MAX_ATTEMPTS,
+            first_chunk_seconds * backend_module._PLANNER_MAX_ATTEMPTS,
         )
         self.assertGreater(backend._overall_timeout_seconds, TOOLS["web_search"].timeout_s)
 
