@@ -743,5 +743,17 @@ class HostRuntimeRewriteTests(unittest.TestCase):
         self.assertEqual(len(host_ports), len(set(host_ports)))
 
 
+class ComposeRecipeTests(unittest.TestCase):
+    def test_frontend_backend_single_gpu_speaks_validated_thinker_response_directly(self) -> None:
+        compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker-compose.yml")
+        environment = compose["services"]["frontend-backend-agent-single-gpu"]["environment"]
+
+        self.assertEqual(environment["THINKER_TOOL_TIMEOUT_SECONDS"], "${THINKER_TOOL_TIMEOUT_SECONDS:-90}")
+        self.assertEqual(
+            environment["FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE"],
+            "${FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE:-true}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
