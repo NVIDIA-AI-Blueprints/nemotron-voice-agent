@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Demo configuration for the REPL with the backend conversation history on:
+# paired mode, and the backend keeps its own earlier requests, tool calls,
+# results and answers, plus the user's own words each turn. Paired with
+# `examples.frontend_backend_verdict.text.demo_tools:TOOLS`.
+#
+#   PYTHONPATH=src uv run python -m examples.frontend_backend_verdict.text.cli.chat \
+#     --config src/prototypes/text_frontend_backend_agent/config/examples/backend_history.yaml \
+#     --tools examples.frontend_backend_verdict.text.demo_tools:TOOLS
+
+agent:
+  name: "Order Assistant"
+  persona: |
+    Your name is the Order Assistant. You help customers with their existing orders.
+  mode: frontend_backend
+
+prompts:
+  path: "../prompts.yaml"
+
+frontend:
+  llm:
+    model: "${FRONTEND_LLM_MODEL:-nvidia/nvidia/nemotron-3.5-lightning}"
+    base_url: "${FRONTEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    max_tokens: 1024
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false     # frontend: reasoning OFF (it only routes)
+
+backend:
+  llm:
+    model: "${BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}"
+    base_url: "${BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    max_tokens: 2048
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true      # backend: reasoning ON (it does the task work)
+      reasoning_budget: 1024
+  conversation_history:
+    enabled: true
+    include: full               # full | backend_turns | transcript
+    guidance_key: auto          # "" keeps only the context note (no behavioural guidance)
+  tools:
+    execution: internal
+    max_tool_iterations: 6
+  history:
+    max_groups: 40
+
+domain:
+  policy: |
+    You can look up an order by id and cancel an order that has not shipped.
+    Always confirm the order id back to the customer in your final answer.
+    An order that has already shipped cannot be cancelled; say so and suggest a return instead.
+  capabilities:
+    - "checking the status of an existing order"
+    - "cancelling an order that has not shipped yet"
+  unsupported_reply: "I can only check order status and cancel orders that have not shipped."
+
+logging:
+  event_sink: logging

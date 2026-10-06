@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3 arm "verdict": tau3_eval.yaml plus barge_in.while_thinking: frontend_verdict, and
+# nothing else, so it compares with a "paired" run on the same commit by one key. See
+# misc/prototypes/voice/barge-in-frontend-verdict-plan.md, section 8.2.
+
+extends: tau3_eval.yaml
+
+barge_in:
+  while_thinking: frontend_verdict

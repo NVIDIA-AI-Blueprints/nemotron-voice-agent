@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Browser microphone test of the frontend barge-in verdict: browser_demo_slow_backend.yaml
+# plus barge_in.while_thinking: frontend_verdict. Speech while a delegated request is being
+# worked on no longer restarts it: the frontend decides whether the new words continue the
+# request (no-op) or start a new one (cancel and merge, as before). See
+# misc/prototypes/voice/barge-in-frontend-verdict-plan.md.
+
+extends: browser_demo_slow_backend.yaml
+
+barge_in:
+  while_thinking: frontend_verdict

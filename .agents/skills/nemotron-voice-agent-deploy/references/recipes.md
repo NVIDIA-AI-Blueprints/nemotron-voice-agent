@@ -24,6 +24,7 @@ Per-example catalogs at `src/examples/<example>/services.{cloud,local}.yaml` are
 | `frontend-backend-agent` | `frontend-backend-agent` | `booking-server` |
 | `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech` (ASR + TTS) |
+| `frontend-backend-verdict-agent/single-gpu` | `frontend-backend-verdict-agent-single-gpu` | `nemo-speech` (ASR + TTS). LLMs use the NVIDIA Inference Hub. OpenAI Realtime only. |
 
 `NVIDIA_API_KEY` is required for cloud-only, `*/server`, and `generic-assistant/server-perf`. `HF_TOKEN` is required for `*/single-gpu`. Cloud catalog entries appear only when `NVIDIA_API_KEY` is set. Local catalogs merge by TCP reachability: NIM sidecars (`*/server`) and NeMo-Speech.cpp (`*/single-gpu`) appear when those endpoints are up. Host-native `uv run` uses the same rule.
 
@@ -46,4 +47,5 @@ Do not treat these as extra preflights.
   - Media analyzer never runs after upload → speaker did not set `selected_input_source=uploaded_attachment`. Look for `Speaker Omni queued media analysis trigger`. If absent, `src/examples/omni_assistant_subagents/prompts.yaml` was overridden.
   - `ModuleNotFoundError: pipecat_subagents` → rebuild: `docker compose --profile omni-assistant-subagents build`.
 - **Frontend/Backend:** every recipe includes `booking-server`. Also check `docker compose logs --tail 200 booking-server`.
+- **Frontend/Backend Verdict:** only `frontend-backend-verdict-agent/single-gpu` exists. It needs `HF_TOKEN` for the speech weights and `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key for both LLMs. It serves only `WS /v1/realtime?model=nvidia/nemotron-realtime-frontend-backend-verdict`, not the browser UI. Compose sets `UVICORN_WS_PING_INTERVAL=0` and `UVICORN_WS_PING_TIMEOUT=20`. A session fails when these values differ from the `FBV_PROFILE` keepalive. A client that receives `server_busy` and close code 1013 hit the 8-session cap or a failed speech warm-up. Refer to `src/examples/frontend_backend_verdict/README.md`.
 - **`generic-assistant/server-perf`:** four-GPU Blackwell layout, pinned NVFP4 TP2 LLM profile, 200 Uvicorn workers, not a browser UI session. On older hardware, select a compatible TP2 profile first. See `benchmarking_tools/scaling-perf/README.md`.

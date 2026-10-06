@@ -34,7 +34,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 
 ## Instructions
 
-1. Identify the active example by inspecting the running app container (`generic-assistant`, `multilingual-assistant`, `omni-assistant`, `omni-assistant-subagents`, or `frontend-backend-agent`). Each example has its own catalog under its package directory in `src/examples/` (the example id maps to a package dir: `generic-assistant` → `src/examples/generic`, `multilingual-assistant` → `src/examples/multilingual`, `omni-assistant` → `src/examples/omni_assistant`, `omni-assistant-subagents` → `src/examples/omni_assistant_subagents`, `frontend-backend-agent` → `src/examples/frontend_backend_agent`).
+1. Identify the active example by inspecting the running app container (`generic-assistant`, `multilingual-assistant`, `omni-assistant`, `omni-assistant-subagents`, `frontend-backend-agent`, or `frontend-backend-verdict-agent`). Each example has its own catalog under its package directory in `src/examples/` (the example id maps to a package dir: `generic-assistant` → `src/examples/generic`, `multilingual-assistant` → `src/examples/multilingual`, `omni-assistant` → `src/examples/omni_assistant`, `omni-assistant-subagents` → `src/examples/omni_assistant_subagents`, `frontend-backend-agent` → `src/examples/frontend_backend_agent`, `frontend-backend-verdict-agent` → `src/examples/frontend_backend_verdict`).
 
 2. Edit the smallest configuration surface that satisfies the request:
    - `.env`: feature flags, tracing, chat history, audio debugging, buffering, and the supported vLLM memory overrides.

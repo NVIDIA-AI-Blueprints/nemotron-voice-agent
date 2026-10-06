@@ -33,7 +33,7 @@ Run:
 
 from dotenv import load_dotenv
 
-from utils import parse_env_bool, parse_env_int
+from utils import parse_env_bool, parse_env_int, uvicorn_ws_ping_kwargs
 
 # Deployment-provided environment variables are authoritative. ``.env`` is a
 # local-development defaults file and must never replace Helm/NVCF settings
@@ -200,6 +200,7 @@ def _run_single_worker(args: argparse.Namespace, app: FastAPI, ssl_kwargs: dict)
         host=args.host,
         port=args.port,
         ws_max_size=MAX_REALTIME_EVENT_BYTES,
+        **uvicorn_ws_ping_kwargs(),
         **ssl_kwargs,
     )
 
@@ -213,6 +214,7 @@ def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) 
         workers=workers,
         factory=True,
         ws_max_size=MAX_REALTIME_EVENT_BYTES,
+        **uvicorn_ws_ping_kwargs(),
         **ssl_kwargs,
     )
 

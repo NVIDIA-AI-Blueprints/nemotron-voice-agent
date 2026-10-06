@@ -131,6 +131,18 @@ When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows ar
 - use **sticky routing** so a session stays on the same worker
 - move session state into **shared storage**
 
+## WebSocket Keepalive
+
+`UVICORN_WS_PING_INTERVAL` and `UVICORN_WS_PING_TIMEOUT` set the server WebSocket keepalive in seconds for `src/server.py` and `src/realtime_server.py`. When they are unset, uvicorn uses 20 seconds for both. An interval of `0` turns the server ping off.
+
+```bash
+# .env or container env
+UVICORN_WS_PING_INTERVAL=<seconds>
+UVICORN_WS_PING_TIMEOUT=<seconds>
+```
+
+The values apply to every WebSocket session in the server process. The [Frontend/Backend Verdict Agent](../../src/examples/frontend_backend_verdict/README.md) requires the keepalive to match its behavior profile, which sets the interval to `0` and the timeout to `20`.
+
 ## Transport Selection
 
 The server supports both WebRTC and WebSocket transports simultaneously on different endpoints:

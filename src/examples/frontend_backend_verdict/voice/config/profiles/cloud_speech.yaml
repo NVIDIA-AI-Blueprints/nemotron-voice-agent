@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# ASR and TTS through NVIDIA Cloud Functions instead of a local nemo-speech server.
+# Needs NVIDIA_API_KEY in the environment (.env in Compose); function ids come from
+# src/examples/frontend_backend_agent/services.cloud.yaml.
+
+extends: ../voice_agent.yaml
+
+asr:
+  catalog: {services: cloud, platform: ""}
+
+tts:
+  catalog: {services: cloud, platform: ""}

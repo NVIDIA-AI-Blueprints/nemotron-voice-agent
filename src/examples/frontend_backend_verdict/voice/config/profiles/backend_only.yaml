@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Backend-only mode: no frontend LLM, a single stateful backend with its own history.
+
+extends: ../voice_agent.yaml
+
+server:
+  # tau2 freezes its tick loop for up to ~90 s at a time (synchronous user-simulator
+  # LLM and TTS calls) and stops reading the socket; the agent's streamed audio then
+  # fills the client's receive queue, so its pongs stop and a keepalive ping would
+  # close a healthy session mid-task. The eval client is local; keepalive is off.
+  ws_ping_interval_s: 0
+
+agent:
+  overrides:
+    agent: {mode: backend_only}
+    # backend_only already keeps the full backend history. Pinned off so that
+    # FBA_BACKEND_HISTORY=true cannot make this profile fail validation.
+    backend:
+      conversation_history: {enabled: false}
+
+# Identifier normalization, the same as tau3_eval.yaml (default since 2026-09-29). Without a
+# frontend the frontend note is skipped; the transcript and tool-argument hooks still apply.
+normalization:
+  transcript:
+    enabled: true
+    case: lower
+    frontend_note_key: identifier_note_voice
+  tool_arguments:
+    enabled: true
+    rules:
+      - tool: get_user_details
+        argument: user_id
+        label: user ID
+        format_hint: firstname_lastname_1234
+        spoken_form: true
+        strip: " .-"
+        collapse_separators: "_"
+        case: lower
+        pattern: '^[a-z]+_[a-z]+_\d{4}$'
+        on_invalid: answer_locally
+    retry_guard:
+      enabled: true
+      scope: rules
+      # tau2's lookup error ("Error: User jordan_lee_82 not found"); transient errors never match.
+      permanent_failure_pattern: '^Error: .*\bnot found\b'

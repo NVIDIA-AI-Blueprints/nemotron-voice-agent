@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3-bench voice evaluation, identifier-normalization arm. Since 2026-09-29 identifier
+# normalization is on in tau3_eval.yaml itself, so this profile is the same as tau3_eval.yaml.
+# It is kept so that existing commands and the norm container keep working. See
+# misc/prototypes/voice/normalization-plan.md.
+
+extends: tau3_eval.yaml

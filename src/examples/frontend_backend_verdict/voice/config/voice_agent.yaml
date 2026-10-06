@@ -1,0 +1,157 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice Frontend/Backend Agent prototype: the single configuration entry point.
+# Defaults are tau3-eval-safe: paired mode, filler silenced (log only), client
+# tools executed by the client, no greeting, nemo-speech single-GPU speech.
+#
+# ${VAR} and ${VAR:-default} are resolved from the environment, per file.
+# [in-path] keys resolve against THIS file's directory; [out-path] keys resolve
+# against the working directory (the repository root, or /app in the container).
+# Profiles in profiles/ extend this file; see the plan, section 6.1.
+
+server:
+  host: "0.0.0.0"
+  port: ${FBA_VOICE_PORT:-8765}
+  path: "/v1/realtime"
+  require_bearer: false            # tau2 sends "Bearer $PINE_API_KEY"; set true + a token to enforce
+  bearer_token: "${FBA_VOICE_TOKEN:-}"
+  max_sessions: 8
+  session_update_timeout_s: 30     # wall clock, before the first session.update
+  warmup: true                     # probe ASR/TTS at startup; /health is 503 until it passes
+  ws_ping_interval_s: 20           # WebSocket keepalive ping (uvicorn); 0 disables it
+  ws_ping_timeout_s: 20            # close the socket when a ping gets no pong in this time
+
+agent:
+  config: "../../text/config/agent.yaml"   # [in-path]
+  overrides:                        # deep-merged into the text agent.yaml before validation
+    agent: {mode: frontend_backend}           # frontend_backend (default) | backend_only
+    prompts: {path: "${FBA_VOICE_PROMPTS:-prompts.voice.yaml}"}   # [in-path] -> this directory
+    backend:
+      tools:
+        on_incomplete_results: synthesize_error_result
+        on_user_message_while_pending: discard_pending
+    logging: {event_sink: none}     # the voice layer installs its own routing sink
+
+protocol:
+  greeting: {enabled: false, text: ""}        # tau3: never greet
+  seed_history_with_client_greeting: "Hi! How can I help you today?"   # tau2 says this text-only; "" disables
+  auto_response: true               # respond on VAD turn end (server_vad create_response semantics)
+  resume_on: response_create        # response_create | last_function_output
+  emit_input_transcription: true    # conversation.item.input_audio_transcription.completed
+  emit_usage: true                  # AgentTurn usage -> response.done.response.usage
+
+audio:
+  engine_rate: 16000                # internal PCM16 mono rate (VAD/ASR)
+  default_input_format:  {type: "audio/pcm", rate: 24000}   # used when the client does not specify
+  default_output_format: {type: "audio/pcm", rate: 24000}
+  output_chunk_ms: 100              # size of each response.output_audio.delta
+  pace_output: false                # false: send as synthesized (tau2 buffers); true: real-time pacing
+  pace_lead_ms: 300                 # with pace_output: how far audio may run ahead of real time
+
+turn_detection:                     # defaults; session.update server_vad fields override per session
+  vad: silero                       # silero | energy
+  threshold: 0.5
+  prefix_padding_ms: 300
+  silence_duration_ms: 500
+  min_speech_ms: 120                # shorter bursts are discarded as noise (no turn, no barge-in)
+  min_transcript_chars: 1           # shorter ASR results -> no response
+  honor_client_values: true         # take threshold/prefix/silence from session.update
+
+barge_in:
+  enabled: true
+  history: truncate_heard           # truncate_heard | keep_full
+  interruption_marker: " [interrupted by the user]"   # appended to the heard prefix; "" for none
+  while_thinking: cancel_and_merge  # cancel_and_merge | ignore | frontend_verdict (never cancels after tool calls went out)
+  frontend_verdict:                 # used only with while_thinking: frontend_verdict
+    note_key: frontend_task_in_progress   # prompt catalog key: the in-progress note given to the frontend
+    timeout_ms: 4000                # deadline for the frontend's verdict; on timeout, cancel_and_merge applies
+    same_query_guard: true          # a probe query equal to the running one counts as continue (reason same_query)
+
+asr:
+  source: catalog                   # catalog | inline
+  catalog:
+    example_dir: "../.."   # [in-path]
+    services: local                 # local -> services.local.yaml | cloud -> services.cloud.yaml
+    platform: singlegpu             # local only: top-level section (server | singlegpu); empty for cloud
+    key: nemotron-asr-streaming-english
+    server_override: "${FBA_ASR_SERVER:-}"   # non-empty replaces the catalog server (host-native: localhost:50051)
+  inline: {server: "localhost:50051", model: "", function_id: "", language_code: "en-US", use_ssl: false}
+  interim_results: true             # -> conversation.item.input_audio_transcription.delta
+  max_concurrent_streams: 0         # 0 -> server.max_sessions
+
+tts:
+  source: catalog
+  catalog:
+    example_dir: "../.."   # [in-path]
+    services: local
+    platform: singlegpu
+    key: magpie-multilingual-tts
+    server_override: "${FBA_TTS_SERVER:-}"
+  inline: {server: "localhost:50051", voice_id: "", model: "", function_id: "", language_code: "en-US", use_ssl: false}
+  voice_map: {alloy: ""}            # client voice -> TTS voice id ("" = catalog default); unknown -> default
+  sample_rate: 22050                # requested TTS rate (Magpie max); resampled to the client format
+  max_concurrent_streams: 0         # 0 -> 2 x server.max_sessions (one-sentence lookahead)
+  normalize_text: true              # strip characters reserved by the NVIDIA TTS preprocessor
+  sentence_split: true              # one TTS request + transcript delta per sentence
+
+filler:
+  mode: log_only                    # log_only (default, tau3) | speak
+  speak_after_ms: 300               # speak only if the backend is still busy after this delay
+  log_path: "${FBA_FILLER_LOG:-}"   # [out-path] JSONL; timing is always recorded (loguru + event_log) even when ""
+
+tools:
+  source: client                    # client (session.update tools, executed by the client) | config (internal)
+  config_tools: ""                  # "module:attr" -> list[ToolSpec] with callables (tools.source: config)
+  result_timeout_s: 120             # outstanding function calls with no output -> synthesized error result
+
+instructions:
+  apply_to: [backend]               # backend | frontend (any subset)
+  placement: policy_slot            # policy_slot ({domain_policy}) | replace_prompt | append
+  fallback_file: ""                 # [in-path] used when the client sends no instructions
+  cascade_addendum_key: cascade_voice_addendum     # key in the prompt catalog, appended to prompts with instructions
+  strip_patterns: []                # regexes removed from client instructions (multiline mode)
+  frontend_capabilities: from_tools # from_tools | static (domain.capabilities) | none
+
+logging:
+  level: INFO
+  event_log: "${FBA_VOICE_EVENT_LOG:-}"    # [out-path] JSONL of internal + voice + timing events
+  log_wire: false                           # log every wire event type (debug; never logs audio)
+  redact_content: false                     # true: omit transcripts/tool payloads from the event log
+
+# Identifier normalization between speech and the agent (all off in this base config). See
+# misc/prototypes/voice/normalization-plan.md. The tau3 eval profiles
+# (profiles/tau3_eval.yaml and everything extending it, and profiles/backend_only.yaml) turn it on.
+normalization:
+  transcript:                       # ASR hook: spoken identifiers -> written form, for the agent only
+    enabled: false                  # the wire keeps the raw transcript
+    separator_words: {underscore: "_"}   # spoken word -> character; a separator word anchors a span
+    ruleset: en                     # language word lists (digits, fillers, stop words); en is the only one
+    number_words: true              # "four three" -> 43 inside a span
+    compound_numbers: true          # "forty three" -> 43, "nineteen" -> 19
+    extra_filler_words: []          # added to the ruleset's fillers
+    extra_stop_words: []            # added to the ruleset's stop words
+    max_part_tokens: 6              # more tokens between two separators: they are separate spans
+    case: keep                      # keep | lower | upper (written spans only)
+    frontend_note_key: ""           # prompt catalog key appended to the frontend prompt ("" = none)
+  tool_arguments:                   # tool-argument hook (requires tools.source: client)
+    enabled: false
+    rules: []                       # {tool, argument, label, format_hint, spoken_form, strip,
+                                    #  collapse_separators, case, pattern, on_invalid: answer_locally | send,
+                                    #  restore_prefix, keep_pattern}; or auto: derived per session from the
+                                    #  tool schemas (read tools only; the delegation prototype implements it)
+    invalid_message_key: tool_argument_invalid
+    max_local_rounds: 3             # consecutive all-local rounds; then the canonical calls go out
+    retry_guard:                    # answer a repeat of a permanently failed call locally
+      enabled: false
+      scope: rules                  # rules (tools with a rule) | all
+      permanent_failure_pattern: "" # regex searched in the client's output; required when enabled
+      message_key: tool_call_already_failed
+    result_hints:                   # a note appended to a failed lookup's result
+      enabled: false
+      tools: []                     # the lookups it watches (one shared miss counter per session); auto = every read tool
+      failure_pattern: ""           # regex searched in the client's output; required when enabled
+      count_local_invalid: true     # a local "invalid" answer for these tools counts as a miss
+      max_hints: 3                  # notes per session until a lookup of these tools succeeds
+      message_key: lookup_not_found_hint            # the first miss
+      escalate_message_key: ""      # later misses ("" = message_key again)
