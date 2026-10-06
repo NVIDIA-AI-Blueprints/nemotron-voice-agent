@@ -13,10 +13,13 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 - **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the **Streaming Input** toggle on the Lightning service card streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
 - One root `services.yaml` for every example, selected by `SERVICE_RECIPE`, and editable LLM parameters such as reasoning and temperature in the Services tab.
 - Services tab controls for TTS and ASR: **Synthesis Mode** on Magpie TTS entries and **Punctuation** on the single-GPU NeMo-Speech.cpp ASR entries.
+- Speaker labels for the Generic Assistant. NVIDIA streaming ASR can tag who is talking, and the conversation panel shows those labels while diarization is on.
 
 ### Changed
 
 - Upgraded Pipecat to version 1.12.0.
+- Updated Nemotron ASR Streaming NIM to version 1.4.0.
+- NVIDIA `force_eou` at each voice-activity pause is now opt-in with `ASR_FORCE_EOU=true` in the Generic, Multilingual, and Frontend/Backend examples. By default the ASR finalizes after 400 ms of trailing silence.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
 - UI selections (example, transport, services, prompt) no longer persist in browser localStorage. They survive disconnect and reconnect, and a page refresh resets them to the server defaults. Custom services and prompts stay saved.
 
@@ -24,6 +27,7 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 
 - Host-native runs reach Nemotron 3 Super on its published port `18001`.
 - The Frontend/Backend Agent Thinker honors the Max Tokens setting.
+- The Generic Assistant welcome message follows the selected prompt's persona.
 
 ### Removed
 

@@ -81,6 +81,10 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 
 To change models, voices, prompts, or tool wiring, see [Configure Services](../../../docs/how-to/configure-services.md), [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure ASR](../../../docs/how-to/configure-asr.md), [Configure TTS](../../../docs/how-to/configure-tts.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md).
 
+## Speaker labels
+
+Optional. Select **Generic Assistant** with an ASR entry that sets `speaker_diarization_supported: true`, then turn on **Diarization** in **Speaker Labels** before you connect. Default prompts follow the first speaker. `multi_speaker_assistant` labels every speaker and answers only when called by name. Refer to [Enable Speaker Labels](../../../docs/how-to/enable-speaker-labels.md).
+
 ## Tips & best practices
 
 - **Start from this baseline.** The generic example is intentionally minimal. Add domain logic, custom tools, and deployment-specific service choices on top of it rather than starting from scratch.

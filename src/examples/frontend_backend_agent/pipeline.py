@@ -52,6 +52,7 @@ from utils import (
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
+    parse_env_bool,
     parse_env_float,
     parse_env_int,
     parse_json_dict,
@@ -139,7 +140,9 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if asr_language_code:
         asr_kwargs["settings"].language = asr_language_code
-    stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
+    stt = NvidiaForceEouSTTService(
+        **asr_kwargs, stop_history=400, force_eou_on_vad_stop=parse_env_bool("ASR_FORCE_EOU")
+    )
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"

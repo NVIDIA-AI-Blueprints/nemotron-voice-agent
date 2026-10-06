@@ -1,6 +1,6 @@
 ---
 name: nemotron-voice-agent-deploy
-description: Deploy and configure Nemotron Voice Agent using root Compose recipe profiles. Use when deploying, troubleshooting authentication and startup, or changing `.env`, prompts, default services, or LLM settings of a running deployment.
+description: Deploy and configure Nemotron Voice Agent using root Compose recipe profiles. Use when deploying, troubleshooting authentication and startup, or changing `.env`, prompts, default services, LLM settings, or speaker labels of a running deployment.
 version: "2.3.0"
 license: CC-BY-4.0 AND Apache-2.0
 metadata:
@@ -16,7 +16,7 @@ metadata:
 
 Use this skill to bring up or tear down the Nemotron Voice Agent with a Docker Compose recipe profile. It covers choosing a cloud, `*/server`, or `*/single-gpu` recipe, wiring the right credentials (`NVIDIA_API_KEY` plus an `nvcr.io` login for `*/server`, `HF_TOKEN` for `*/single-gpu`), inspecting host hardware, selecting a recipe, and troubleshooting startup or authentication failures.
 
-It also covers configuration changes to a running deployment (`.env`, prompts, default services, LLM settings, exposed examples and transports) through `references/configure.md`.
+It also covers configuration changes to a running deployment (`.env`, prompts, default services, LLM settings, speaker labels, exposed examples and transports) through `references/configure.md`.
 
 Do not use this skill to change `pipeline.py` or migrate Pipecat versions (use `nemotron-voice-agent-upgrade-pipecat`), or for work unrelated to this blueprint.
 

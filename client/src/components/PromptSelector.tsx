@@ -16,25 +16,41 @@ function hasMultilingualTerm(value: string): boolean {
 
 export function PromptSelector() {
   const { isLocked } = useConnectionState();
-  const { prompts, promptsLoading, selectedPromptKey, selectPrompt, selectedPrompt, selectedASR, selectedTTS } = useApp();
+  const {
+    prompts,
+    promptsLoading,
+    selectedPromptKey,
+    selectPrompt,
+    selectedPrompt,
+    selectedASR,
+    selectedTTS,
+    selectedExample,
+    speakerDiarizationEnabled,
+  } = useApp();
   const asrDescriptor = [selectedASR?.id, selectedASR?.name, selectedASR?.model].filter(Boolean).join(" ");
   const ttsDescriptor = [selectedTTS?.id, selectedTTS?.name, selectedTTS?.voiceId].filter(Boolean).join(" ");
   const multilingualReady = hasMultilingualTerm(asrDescriptor) && hasMultilingualTerm(ttsDescriptor);
+  const diarizationReady = speakerDiarizationEnabled && selectedASR?.speakerDiarizationSupported === true;
   const selectablePrompts = useMemo(() => prompts.filter(isSelectablePrompt), [prompts]);
   const visiblePrompts = useMemo(
-    () =>
-      multilingualReady
-        ? selectablePrompts
-        : selectablePrompts.filter((p) => p.key !== MULTILINGUAL_PROMPT_KEY),
-    [multilingualReady, selectablePrompts],
+    () => selectablePrompts.filter((prompt) => (
+      (multilingualReady || prompt.key !== MULTILINGUAL_PROMPT_KEY)
+      && (diarizationReady || prompt.multiSpeakerSupport !== true)
+    )),
+    [diarizationReady, multilingualReady, selectablePrompts],
   );
 
   useEffect(() => {
-    if (selectedPromptKey === MULTILINGUAL_PROMPT_KEY && !multilingualReady) {
-      const fallback = selectablePrompts.find((p) => p.key !== MULTILINGUAL_PROMPT_KEY);
+    const selectedIsHidden = !visiblePrompts.some((prompt) => prompt.key === selectedPromptKey);
+    if (selectedPromptKey && selectedIsHidden) {
+      const registryDefault = selectedExample?.defaults?.prompt?.[0];
+      const registryDefaultKey = registryDefault && "key" in registryDefault ? registryDefault.key : "";
+      const fallback = visiblePrompts.find((prompt) => prompt.key === registryDefaultKey)
+        ?? visiblePrompts.find((prompt) => prompt.default)
+        ?? visiblePrompts[0];
       if (fallback) selectPrompt(fallback.key);
     }
-  }, [multilingualReady, selectablePrompts, selectPrompt, selectedPromptKey]);
+  }, [selectPrompt, selectedExample, selectedPromptKey, visiblePrompts]);
 
   if (promptsLoading) {
     return <PanelSection label="PROMPT" loading loadingText="Loading..." />;

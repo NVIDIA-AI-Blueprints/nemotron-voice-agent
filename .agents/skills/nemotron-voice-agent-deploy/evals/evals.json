@@ -104,6 +104,16 @@
       ]
     },
     {
+      "id": "nemotron-voice-agent-deploy-configure-speaker-labels",
+      "prompt": "Turn on speaker labels for the generic assistant.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Selects nemotron-asr-streaming-english, says to switch Speaker Labels > Diarization in the browser (or send asr_speaker_diarization, or set ENABLE_SPEAKER_DIARIZATION=true in .env for API clients), and points to docs/how-to/enable-speaker-labels.md.",
+      "assertions": [
+        "Did not edit pipeline.py.",
+        "Pointed to docs/how-to/enable-speaker-labels.md."
+      ]
+    },
+    {
       "id": "nemotron-voice-agent-deploy-negative-upgrade",
       "prompt": "Upgrade pipecat-ai from 1.7.0 to 1.9.0 across this repository.",
       "expected_skill": null,

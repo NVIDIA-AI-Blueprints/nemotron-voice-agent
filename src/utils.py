@@ -712,6 +712,8 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str], str, str], ...] = (
             "function_id": "asr_function_id",
             "language_code": "asr_language_code",
             "automatic_punctuation": "asr_automatic_punctuation",
+            "speaker_diarization_supported": "asr_speaker_diarization_supported",
+            "speaker_diarization_max_speakers": "asr_speaker_diarization_max_speakers",
         },
         "asr_settings",
         "",
@@ -733,9 +735,14 @@ _CATALOG_HYDRATION: tuple[tuple[str, str, dict[str, str], str, str], ...] = (
     ),
 )
 _HYDRATION_FIELD_MAPS: dict[str, dict[str, str]] = {slot: fields for _, slot, fields, _, _ in _CATALOG_HYDRATION}
-_CATALOG_ONLY_BODY_FIELDS = frozenset({"tts_zero_shot_audio_prompt_file"})
+_CATALOG_ONLY_BODY_FIELDS = frozenset(
+    {"tts_zero_shot_audio_prompt_file", "asr_speaker_diarization_supported", "asr_speaker_diarization_max_speakers"}
+)
+# Client-only request fields per slot that have no catalog counterpart.
+_SLOT_REQUEST_FIELDS: dict[str, frozenset[str]] = {"asr": frozenset({"asr_speaker_diarization"})}
 _SLOT_CONFIG_KEYS: dict[str, frozenset[str]] = {
     slot: frozenset({id_field, *fields.values(), settings_field, streaming_field} - {""}) - _CATALOG_ONLY_BODY_FIELDS
+    | _SLOT_REQUEST_FIELDS.get(slot, frozenset())
     for id_field, slot, fields, settings_field, streaming_field in _CATALOG_HYDRATION
 }
 SESSION_CONFIG_KEYS: frozenset[str] = _SLOT_AGNOSTIC_KEYS.union(*_SLOT_CONFIG_KEYS.values())
@@ -829,6 +836,13 @@ def filter_session_config(data: dict) -> dict:
         filtered = {k: v for k, v in filtered.items() if k in allowed}
     # Defense in depth: never trust a client path even if it bypasses the allowlists.
     filtered.pop("tts_zero_shot_audio_prompt_file", None)
+    if "asr_speaker_diarization" in filtered:
+        requested = filtered["asr_speaker_diarization"]
+        filtered["asr_speaker_diarization"] = (
+            "true"
+            if requested is True or (isinstance(requested, str) and requested.strip().lower() == "true")
+            else "false"
+        )
     # Custom (non-catalog) selections skip hydration, so the raw client value would
     # reach ``normalize_lang_code`` in the pipeline. Keep only usable strings.
     raw_tts_language_code = filtered.get("tts_language_code")

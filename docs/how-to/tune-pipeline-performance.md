@@ -15,7 +15,7 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 ### How It Works
 
 1. The user speaks, and ASR emits interim transcripts as audio streams in.
-2. Silero VAD detects a pause in speech. On each `VADUserStoppedSpeakingFrame`, the local NVIDIA STT subclass sends an 80 ms PCM silence chunk when the ASR stream is active. The chunk matches the configured audio channel count and includes the NVIDIA runtime configuration `force_eou=true`. If the ASR stream reconnects before sending the chunk, the subclass preserves its queued `force_eou` marker for the new stream.
+2. Silero VAD detects a pause in speech. With `ASR_FORCE_EOU=true`, on each `VADUserStoppedSpeakingFrame`, the local NVIDIA STT subclass sends an 80 ms PCM silence chunk when the ASR stream is active. The chunk matches the configured audio channel count and includes the NVIDIA runtime configuration `force_eou=true`. If the ASR stream reconnects before sending the chunk, the subclass preserves its queued `force_eou` marker for the new stream.
 3. When NVIDIA returns `is_final`, stock `NvidiaSTTService` response handling emits `TranscriptionFrame(finalized=True)`.
 4. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it is incomplete but silence continues past the Smart Turn stop threshold (default 1.0 s, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
 5. Pipecat's stock turn analyzer strategy remains responsible for semantic turn closure. A finalized transcript closes a complete turn immediately; the existing STT timeout remains the fallback. The transcript goes to the LLM, and TTS streams the reply back.
@@ -23,6 +23,12 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 The VAD-stop finalization is an early transcript yield; it does not close the
 semantic user turn. If the user resumes speaking, VAD starts a new speech
 segment and repeats the sequence.
+
+VAD-stop finalization is off by default (`ASR_FORCE_EOU=false`), so the ASR
+finalizes after its own 400 ms endpoint. Set `ASR_FORCE_EOU=true` to finalize at
+each pause, which closes turns about 0.3 s sooner but can split a sentence at a
+short pause. The setting applies to the Generic, Multilingual, and
+Frontend/Backend examples.
 
 NVIDIA `force_eou` finalization requires a supported cache-aware recurrent
 neural network transducer (RNNT) model, such as a Nemotron ASR Streaming
@@ -37,6 +43,7 @@ The cascaded examples configure `stop_history=400`, which finalizes after
 | `USE_SILERO_VAD_TURN_DETECTION` | `false` | Keep `false` for Smart Turn. Set `true` to disable it and use pure Silero VAD end-of-utterance detection instead. |
 | `SILERO_VAD_STOP_SECS` | `0.5` | Silence (seconds) before end-of-utterance. Applies **only** in pure-VAD mode (`USE_SILERO_VAD_TURN_DETECTION=true`). |
 | `SMART_TURN_STOP_SECS` | `1.0` | Smart Turn silence fallback (seconds) before the turn completes without a `COMPLETE` classification. Applies **only** in Smart Turn mode (`USE_SILERO_VAD_TURN_DETECTION=false`). |
+| `ASR_FORCE_EOU` | `false` | Set `true` to send NVIDIA `force_eou` at each Silero VAD stop with Nemotron ASR. Turns close about 0.3 s sooner, but a short pause can split a sentence. |
 
 > On the Smart Turn path, a fixed `0.2 s` Silero VAD pause (`stop_secs=0.2`) first detects the silence. The Smart Turn model then gets up to the configured fallback period (default `1.0 s`, `SMART_TURN_STOP_SECS`) to finalize the turn. Only `SILERO_VAD_STOP_SECS` is ignored in Smart Turn mode. The `generic-assistant/server-perf` profile forces pure Silero VAD (`USE_SILERO_VAD_TURN_DETECTION=true`, `SILERO_VAD_STOP_SECS=0.5`) for lower-overhead load testing.
 
