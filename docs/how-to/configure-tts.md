@@ -157,6 +157,26 @@ Pipecat's `NvidiaTTSService` supports two synthesis modes through the catalog fi
 
 Set `synthesis_mode` on the catalog entry (hydrated as `tts_synthesis_mode`). Magpie multilingual and Magpie zeroshot ship with `stitched`; Chatterbox ships with `per_sentence`. Always set the field explicitly so a UI/backend TTS switch cannot inherit another model's mode through the registry-default fallback in the pipeline.
 
+### Audio Context Timeout
+
+Pipecat's `NvidiaTTSService` closes a reply's audio context when no audio arrives within `stop_frame_timeout_s`. Under concurrent load, the first Magpie audio for a reply can arrive later than that. The reply then produces no audio, and Realtime clients receive `tts_provider_error`.
+
+The following examples read the `TTS_STOP_FRAME_TIMEOUT_S` environment variable, in seconds:
+
+| Example | Default | Minimum |
+|---------|---------|---------|
+| Generic Assistant | `3` | `1` |
+| Frontend/Backend Agent | `3` | `1` |
+| Omni Assistant and Omni Assistant with Subagents | `30` | `5` |
+
+The Multilingual example does not read this variable and uses Pipecat's 3-second default. To raise the timeout, set it in `.env` and restart the app:
+
+```bash
+TTS_STOP_FRAME_TIMEOUT_S=15
+```
+
+The value applies to every example that reads it, including Omni. A value below an example's minimum is raised to that minimum, and a non-numeric value falls back to the example default; both cases log a warning. Magpie ends each synthesis stream explicitly, so a longer timeout does not delay normal replies.
+
 ### Word-Level Input Streaming and Timestamps
 
 > **NIM only.** `NvidiaWordTTSService` supports Magpie served by NVIDIA NIM. It does not support the GGML/GGUF-based NeMo-Speech.cpp backend used by `*/single-gpu` profiles.

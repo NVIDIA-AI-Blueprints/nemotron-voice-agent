@@ -66,6 +66,7 @@ from utils import (
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
+    parse_env_float,
     parse_env_int,
     parse_json_dict,
     resolve_tools_available,
@@ -273,6 +274,11 @@ async def bot(runner_args: RunnerArguments) -> None:
         "use_ssl": tts_ssl,
         "text_filters": [NemotronSpeechTextFilter()],
         "custom_dictionary": custom_dictionary,
+        # Pipecat closes a reply's audio context when no audio arrives within this
+        # window. Keep its 3 s default; raise TTS_STOP_FRAME_TIMEOUT_S when first
+        # Magpie audio arrives late under load. Magpie ends each stream explicitly,
+        # so a longer value does not delay normal replies.
+        "stop_frame_timeout_s": parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 3.0, min_value=1.0),
     }
     if tts_function_id or tts_model:
         tts_kwargs["model_function_map"] = {

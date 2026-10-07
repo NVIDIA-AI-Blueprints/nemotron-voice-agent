@@ -12,6 +12,7 @@ This minor release upgrades Pipecat to 1.11.0, adopts its built-in transcript-in
 
 - **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the `Nemotron 3.5 Lightning 30B A3B (Streaming Input)` catalog entry streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
 - Optional `realtime_max_identical_tool_calls` and `realtime_max_tool_calls_per_turn` LLM catalog fields that bound runaway tool-call loops in OpenAI Realtime sessions of the Generic, Multilingual, and Frontend/Backend Agent examples. When a limit is reached, the next completion withholds tools and asks the model to answer the caller.
+- The Generic Assistant and Frontend/Backend Agent read `TTS_STOP_FRAME_TIMEOUT_S` for the TTS audio-context timeout. The default stays at Pipecat's 3 seconds; raise it when replies end without audio under concurrent load.
 
 ### Changed
 
