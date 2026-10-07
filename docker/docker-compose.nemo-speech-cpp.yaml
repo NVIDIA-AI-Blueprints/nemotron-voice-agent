@@ -22,6 +22,7 @@ services:
     profiles:
       - generic-assistant/single-gpu
       - frontend-backend-agent/single-gpu
+      - frontend-backend-verdict-agent/single-gpu
     command:
       - --asr.model.path=/models/nemotron-speech-streaming-en-0.6b.q8_0.gguf
       - --asr.backend.gpu=0

@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3-bench voice evaluation with the backend conversation history on: identical
+# to tau3_eval.yaml except for backend.conversation_history (which also derives
+# backend.stateful: true). See
+# misc/prototypes/frontend-backend-agent-backend-history-plan.md. For the
+# no-guidance ablation, extend this file and set guidance_key: "".
+
+extends: tau3_eval.yaml
+
+agent:
+  overrides:
+    backend:
+      conversation_history: {enabled: true, include: full}

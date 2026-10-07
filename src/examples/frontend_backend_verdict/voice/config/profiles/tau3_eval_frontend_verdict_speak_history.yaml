@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3 arm "verdictspk" with backend conversation history: tau3_eval_frontend_verdict_speak.yaml
+# (frontend barge-in verdict, filler spoken; identifier normalization and 800 ms turn detection come
+# from tau3_eval.yaml) plus backend.conversation_history as in tau3_eval_backend_history.yaml
+# (include: full, with the default guidance). Audible filler: Pass^1 is not comparable with the
+# silent arms.
+
+extends: tau3_eval_frontend_verdict_speak.yaml
+
+agent:
+  overrides:
+    backend:
+      conversation_history: {enabled: true, include: full}

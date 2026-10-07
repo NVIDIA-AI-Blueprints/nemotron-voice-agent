@@ -101,6 +101,21 @@ realtime_models:
       asr_id: registry-default
       tts_id: registry-default
 
+  # The voice Frontend/Backend prototype with the frontend barge-in verdict, backend
+  # conversation history and identifier normalization (src/examples/frontend_backend_verdict).
+  # The pipeline owns the whole Realtime session, so its turn detection (server_vad,
+  # 800 ms silence, server-owned) comes from the selected prototype profile, not from here.
+  nvidia/nemotron-realtime-frontend-backend-verdict:
+    label: Nemotron Realtime Frontend/Backend Verdict
+    pipeline_mode: frontend-backend-verdict-agent
+    default: true
+    selectors:
+      prompt_key: frontend
+      llm_id: registry-default
+      thinker_llm_id: registry-default
+      asr_id: registry-default
+      tts_id: registry-default
+
 examples:
   generic-assistant:
     label: Generic Assistant
@@ -189,3 +204,33 @@ examples:
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
     bot: examples.frontend_backend_agent.pipeline:bot
+
+  frontend-backend-verdict-agent:
+    label: Frontend Backend Verdict Agent
+    # Prompt keys used by the agent itself; `frontend` is the public prompt.
+    agent_prompt_keys:
+      - backend
+      - cascade_voice_addendum
+      - backend_history_request
+      - backend_history_context_full
+      - backend_history_context_backend_turns
+      - backend_history_context_transcript
+      - backend_history_guidance_full
+      - backend_history_guidance_backend_turns
+      - backend_history_guidance_transcript
+      - identifier_note_voice
+      - tool_argument_invalid
+      - tool_argument_invalid_readback
+      - tool_argument_invalid_spell_all
+      - tool_call_already_failed
+      - lookup_not_found_hint
+      - lookup_not_found_hint_words
+      - frontend_task_in_progress
+    slots: [llm, thinker-llm, asr, tts]
+    defaults:
+      prompt: [frontend]
+      llm: [nemotron-3.5-lightning]
+      thinker-llm: [nemotron-3-ultra]
+      asr: [nemotron-asr-streaming-english]
+      tts: [magpie-multilingual-tts]
+    bot: examples.frontend_backend_verdict.pipeline:bot

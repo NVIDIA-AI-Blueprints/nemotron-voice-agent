@@ -62,6 +62,9 @@ docker compose --profile multilingual-assistant/single-gpu up -d
 docker compose --profile omni-assistant/single-gpu up -d
 docker compose --profile frontend-backend-agent/single-gpu up -d
 
+# Frontend/Backend Verdict Agent (single-GPU speech, Inference Hub LLMs, OpenAI Realtime only)
+docker compose --profile frontend-backend-verdict-agent/single-gpu up -d
+
 # Resource-heavy single-GPU path (workstation or DGX Spark)
 docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```

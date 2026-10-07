@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3 arm "verdictspk": tau3_eval_frontend_verdict.yaml with the frontend's filler spoken
+# (filler.mode: speak), so the tau2 user hears it and can answer it. Like the filler validation
+# container of the tau3 runbook, a run with audible filler is not comparable with the silent
+# arms' Pass^1. See misc/prototypes/voice/barge-in-frontend-verdict-plan.md.
+
+extends: tau3_eval_frontend_verdict.yaml
+
+filler:
+  mode: speak

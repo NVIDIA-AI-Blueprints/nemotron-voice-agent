@@ -54,6 +54,8 @@ Configure these deployment settings in `.env` when needed:
 | `REALTIME_ALLOW_PROXY_BEARER` | Allows a trusted proxy's authenticated outer Bearer credential to coexist with a browser `ek_` client secret. The default is `false`. |
 | `REALTIME_SERVICE_PLATFORM` | Selects the exact `cloud`, `server`, or `singlegpu` catalog section. Host-native runs default to `cloud`; Compose pins the value for each recipe. |
 | `REALTIME_MCP_ALLOWED_SERVER_URLS` | JSON array of exact, trusted Streamable HTTP MCP URLs that the gateway can contact. |
+| `UVICORN_WS_PING_INTERVAL` | Server WebSocket keepalive ping interval in seconds. Unset keeps the uvicorn default of 20 seconds. `0` turns the ping off. |
+| `UVICORN_WS_PING_TIMEOUT` | Seconds to wait for a keepalive pong before the server closes the socket. Unset keeps the uvicorn default of 20 seconds. |
 
 For local development, `.env` supplies defaults for variables that are not
 already present in the process environment. Existing process variables remain
@@ -95,6 +97,7 @@ The repository defines these profiles:
 | `nvidia/nemotron-realtime-omni-subagents` | Omni multi-agent pipeline without client-defined functions |
 | `nvidia/nemotron-realtime-frontend-backend` | Airline Frontend/Backend Agent with trusted delegation functions |
 | `nvidia/nemotron-realtime-generic-frontend-backend` | Generic Frontend/Backend Agent with server and client tools planned by its hidden Thinker |
+| `nvidia/nemotron-realtime-frontend-backend-verdict` | Voice Frontend/Backend Agent prototype that owns the whole Realtime session. Refer to the [Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md). |
 
 Select a model in the WebSocket URL:
 

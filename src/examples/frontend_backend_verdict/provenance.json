@@ -1,0 +1,727 @@
+{
+  "files": {
+    "prompts.yaml": {
+      "sha256": "776f252dd9bb87fc3685f0faa4b0e977418f1aaeebc39e47a6aea7c9f395478e",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/prompts.voice.yaml"
+    },
+    "tests/_fbv_fakes.py": {
+      "kind": "test",
+      "sha256": "4b40eb8871aef66a9898590f832abeb173e2b9a1ca3b741a1fa32214edeb8f31",
+      "source": "tests/unit/prototypes/_fakes.py"
+    },
+    "tests/_fbv_voice_fakes.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. the harness passes write_gate to the runner and FakeChatClient records tool_choice."
+      },
+      "kind": "test",
+      "sha256": "e80794cf49030d7d2fa5c01e3d5ce315af5845d59e885876664677176a03d2f2",
+      "source": "tests/unit/prototypes/voice/_voice_fakes.py"
+    },
+    "tests/test_fbv_agent_turn.py": {
+      "kind": "test",
+      "sha256": "854406b913b4965078215cee8173871ec723a8dd8d4575dd5d5e5667c1ec87a4",
+      "source": "tests/unit/prototypes/test_agent_turn.py"
+    },
+    "tests/test_fbv_argument_normalizer.py": {
+      "kind": "test",
+      "sha256": "8e0ce1683d57cc8557ad8f3e7395ee580f12ec6a0c0005db9c934b81f510193a",
+      "source": "tests/unit/prototypes/voice/test_argument_normalizer.py"
+    },
+    "tests/test_fbv_backend.py": {
+      "kind": "test",
+      "sha256": "3efd76c6180d54722563c33954f245eb42a275898d7f4e48cf2c359f9f491b2a",
+      "source": "tests/unit/prototypes/test_backend.py"
+    },
+    "tests/test_fbv_backend_history.py": {
+      "kind": "test",
+      "sha256": "f98cb358e4795cfbc038bcaa9a5b0adfe72bec04ed454c458983a61411563cbe",
+      "source": "tests/unit/prototypes/test_backend_history.py"
+    },
+    "tests/test_fbv_config.py": {
+      "kind": "test",
+      "sha256": "62c512474e3b1232fab5c4157e9d0b3ca3a4f7f0ef2d746fb9b955de57d98a4c",
+      "source": "tests/unit/prototypes/test_config.py"
+    },
+    "tests/test_fbv_delegation_args.py": {
+      "kind": "test",
+      "sha256": "d3916c255a4eedcf5911cbf704203b2a1093af4dab30cdb4b67e8ee84c2c0f0e",
+      "source": "tests/unit/prototypes/test_delegation_args.py"
+    },
+    "tests/test_fbv_external_tools.py": {
+      "kind": "test",
+      "sha256": "e37b28d90cecc21c02218c33d4a91493e0bf8fb187441d92b764407ec289b038",
+      "source": "tests/unit/prototypes/test_external_tools.py"
+    },
+    "tests/test_fbv_frontend.py": {
+      "kind": "test",
+      "sha256": "0736a2421a664268f4b6c043696e8878415c2f60c5d4e2e2555bb4cb017f0a81",
+      "source": "tests/unit/prototypes/test_frontend.py"
+    },
+    "tests/test_fbv_frontend_disabled.py": {
+      "kind": "test",
+      "sha256": "689ca8284f55c5734977cb6bdcc7f2e429bdc8307faa9e2aad534e194f8c44b6",
+      "source": "tests/unit/prototypes/test_frontend_disabled.py"
+    },
+    "tests/test_fbv_frontend_step.py": {
+      "kind": "test",
+      "sha256": "b786adcd488bbe48eb3a7bc1751339d12db75e76fe23ed3941e30c28456f85a5",
+      "source": "tests/unit/prototypes/test_frontend_step.py"
+    },
+    "tests/test_fbv_history_pruning.py": {
+      "kind": "test",
+      "sha256": "b261f972b2e39fb85b6b7ae9e2a18fa00a12d6a3496d566b537e9d56fabedf77",
+      "source": "tests/unit/prototypes/test_history_pruning.py"
+    },
+    "tests/test_fbv_immutability.py": {
+      "kind": "test",
+      "sha256": "0a2e3132e3088832d4284f99bb47152d164390c9a89df90156ea23c26e9a3de1",
+      "source": "tests/unit/prototypes/test_immutability.py"
+    },
+    "tests/test_fbv_no_filler_leak.py": {
+      "kind": "test",
+      "sha256": "53c3dba951b6b738403fcf31919bce0c05de0146249d9bfd2dfd254967fd52c7",
+      "source": "tests/unit/prototypes/test_no_filler_leak.py"
+    },
+    "tests/test_fbv_normalization_rules.py": {
+      "kind": "test",
+      "sha256": "9e543bc2c364164c4e0fbc36b955a6da63ecbfd1521667cf7d345615bb7d899c",
+      "source": "tests/unit/prototypes/voice/test_normalization_rules.py"
+    },
+    "tests/test_fbv_prompt_templates.py": {
+      "kind": "test",
+      "sha256": "4c5951bdf46589d7bfc82962b38b15686d89f83d4921a9c7b5332dac7d5947e7",
+      "source": "tests/unit/prototypes/test_prompt_templates.py"
+    },
+    "tests/test_fbv_prompts.py": {
+      "kind": "test",
+      "sha256": "8212cb2bdfe61c613d1b9bb2476509e470088e83a7b9218c13a41bd750e1f9ee",
+      "source": "tests/unit/prototypes/test_prompts.py"
+    },
+    "tests/test_fbv_session.py": {
+      "kind": "test",
+      "sha256": "472543005ac9779e1f4f2a48ea848d0143e1dfdb89cfbcd46150fa016644b567",
+      "source": "tests/unit/prototypes/test_session.py"
+    },
+    "tests/test_fbv_state_replay.py": {
+      "kind": "test",
+      "sha256": "18143ad7a65294c16d3bea7357962b789641116f97a596e21b598bd923735c56",
+      "source": "tests/unit/prototypes/test_state_replay.py"
+    },
+    "tests/test_fbv_tool_protocol.py": {
+      "kind": "test",
+      "sha256": "23900f9337576bfeb32b324247154025ffb579bd6dbf6e8f0dcbd08272a6568e",
+      "source": "tests/unit/prototypes/test_tool_protocol.py"
+    },
+    "tests/test_fbv_transcript_normalizer.py": {
+      "kind": "test",
+      "sha256": "48978e3d0056163e9893f7544308283ccee10341e41ed84e7246c0bf893b1b66",
+      "source": "tests/unit/prototypes/voice/test_transcript_normalizer.py"
+    },
+    "tests/test_fbv_usage_accounting.py": {
+      "kind": "test",
+      "sha256": "8a9ee55d22b58c7995a3b5ed716c8b7848a0ae301aaac82d69e06b43fc0c3e2d",
+      "source": "tests/unit/prototypes/test_usage_accounting.py"
+    },
+    "tests/test_fbv_voice_audio_clock.py": {
+      "kind": "test",
+      "sha256": "1d5ba35b4f45614f9278dcba1e185f54a33bc9e5852ac8d94ec3f4c4bb63cae0",
+      "source": "tests/unit/prototypes/voice/test_voice_audio_clock.py"
+    },
+    "tests/test_fbv_voice_backend_history.py": {
+      "kind": "test",
+      "sha256": "a2fcff446b2057264a7154be5aa0239c8f55920437cac3c2c9fa8b345185cbe7",
+      "source": "tests/unit/prototypes/voice/test_voice_backend_history.py"
+    },
+    "tests/test_fbv_voice_barge_in.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): speech while a tool call is out now resumes that wait with the caller's words instead of queueing a separate later turn; the queued-turn test is replaced by its R1 equivalent."
+      },
+      "kind": "test",
+      "sha256": "08e1d99c90e748c6e1ba037a754eccb21de858c2213aaa40b8bf42ac8404fc86",
+      "source": "tests/unit/prototypes/voice/test_voice_barge_in.py"
+    },
+    "tests/test_fbv_voice_barge_in_verdict.py": {
+      "kind": "test",
+      "sha256": "7f33620d6e5891c2a88946daf0aa99711652e07902dca1f0b3146a9d945f49da",
+      "source": "tests/unit/prototypes/voice/test_voice_barge_in_verdict.py"
+    },
+    "tests/test_fbv_voice_config.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): one more shipped profile (the write-gate profile)."
+      },
+      "kind": "test",
+      "sha256": "7e1f6f89956b8a6eccbe9384fe8a95547c3bcf61cafea288968a7944d196108a",
+      "source": "tests/unit/prototypes/voice/test_voice_config.py"
+    },
+    "tests/test_fbv_voice_filler.py": {
+      "kind": "test",
+      "sha256": "9a19d93545a55084a5dcb2e41250e6e212e44dc55256b4beb3cf920c38c77b10",
+      "source": "tests/unit/prototypes/voice/test_voice_filler.py"
+    },
+    "tests/test_fbv_voice_history_repair.py": {
+      "kind": "test",
+      "sha256": "1734017e99e3ebfbf1a79b33d6c3f31bbd6d2f0e224da61db830838048e25121",
+      "source": "tests/unit/prototypes/voice/test_voice_history_repair.py"
+    },
+    "tests/test_fbv_voice_instructions.py": {
+      "kind": "test",
+      "sha256": "094c203109719855fd8181ce2a93ffbe09c6ea3c4114521ee2c32214a40ff8c6",
+      "source": "tests/unit/prototypes/voice/test_voice_instructions.py"
+    },
+    "tests/test_fbv_voice_modes.py": {
+      "kind": "test",
+      "sha256": "30df3b6acd06eed4ca75b3c3d0a8a636765295d8b2fe9fa30f09d7e1b87cfef0",
+      "source": "tests/unit/prototypes/voice/test_voice_modes.py"
+    },
+    "tests/test_fbv_voice_normalization.py": {
+      "kind": "test",
+      "sha256": "2afc9e972266a36c26fdb8377f8d2f2661fdb85e524e578d38b39ae004138dd2",
+      "source": "tests/unit/prototypes/voice/test_voice_normalization.py"
+    },
+    "tests/test_fbv_voice_riva_adapters.py": {
+      "kind": "test",
+      "sha256": "bfd71ddd1d5f70133ef5b1a497bbddbd6d8c12bdf6ada1349032a2950a86935c",
+      "source": "tests/unit/prototypes/voice/test_voice_riva_adapters.py"
+    },
+    "tests/test_fbv_voice_session_hooks.py": {
+      "kind": "test",
+      "sha256": "25341f3b9ba52b5eda730dac9efcdb110f7460db20240b53752006f9910bf5c7",
+      "source": "tests/unit/prototypes/voice/test_voice_session_hooks.py"
+    },
+    "tests/test_fbv_voice_tau2_contract.py": {
+      "kind": "test",
+      "sha256": "2fd3ef6efeeed9312510c907ae36f7052f5d9231a5b92ac0257c3db76eabfc74",
+      "source": "tests/unit/prototypes/voice/test_voice_tau2_contract.py"
+    },
+    "tests/test_fbv_voice_usage_log.py": {
+      "kind": "test",
+      "sha256": "37cbca68b6baffd8030b5233fdad9024f5191fbbb508f8a6bb68339c15da5f42",
+      "source": "tests/unit/prototypes/voice/test_voice_usage_log.py"
+    },
+    "tests/test_fbv_voice_vad_silero.py": {
+      "kind": "test",
+      "sha256": "dd2e394afd12ec00a00c4ee6ddc78881ee89c92b7c8ba152daaca6d4b72485e5",
+      "source": "tests/unit/prototypes/voice/test_voice_vad_silero.py"
+    },
+    "tests/test_fbv_voice_verdict_replay.py": {
+      "kind": "test",
+      "sha256": "028ad71c4bebec62fd2965596a01694b95fc03a79d89031bf9edd11f3d1b4bb0",
+      "source": "tests/unit/prototypes/voice/test_voice_verdict_replay.py"
+    },
+    "tests/test_fbv_voice_wire.py": {
+      "kind": "test",
+      "sha256": "672aeaf068f86447cf03e95c9d177dc4a13c83b39fe232bf8191a3691c44b1a2",
+      "source": "tests/unit/prototypes/voice/test_voice_wire.py"
+    },
+    "tests/test_fbv_voice_ws_end_to_end.py": {
+      "kind": "test",
+      "sha256": "f61c55b509bb653cd5539f7d4cd107fdc1946d0d965e2a620ce70b5577311dd0",
+      "source": "tests/unit/prototypes/voice/test_voice_ws_end_to_end.py"
+    },
+    "text/__init__.py": {
+      "sha256": "74c67ebf3f2c689ca523c55d49671393b0a1e2d04be6e6c100576c9f3f5b0a66",
+      "source": "src/prototypes/text_frontend_backend_agent/__init__.py"
+    },
+    "text/agent.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. send_tool_results takes the caller's words; the frontend history records them after the delegation result. R4 (tau-airline-20261007 report): write gate. decide_turn passes the pending summary; close_turn ends a held turn without an LLM call."
+      },
+      "sha256": "5bda2ae6d3e2b39522f5c7cca7e4f86aefd9cf37dd84b7eb287b8915607b4421",
+      "source": "src/prototypes/text_frontend_backend_agent/agent.py"
+    },
+    "text/backend.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. ToolResults carries an optional user message placed after the tool messages."
+      },
+      "sha256": "217a2b4edc8c54ba0a358083f6b00e501cca355d7751fa6eff0126e23aa54afd",
+      "source": "src/prototypes/text_frontend_backend_agent/backend.py"
+    },
+    "text/backend_context.py": {
+      "sha256": "05d5ab872ee49bc81f0c7e80b588cc0ae0d150679719e2391f475c23fcb47964",
+      "source": "src/prototypes/text_frontend_backend_agent/backend_context.py"
+    },
+    "text/config.py": {
+      "sha256": "e7e8d5868524d98c642c5dabda74e200fa7c30878ce95c37f79fcfcc5a1b8eef",
+      "source": "src/prototypes/text_frontend_backend_agent/config.py"
+    },
+    "text/config/agent.yaml": {
+      "sha256": "b78b46f7088b3c06f2c39d1367961039d9bbdad2600cc39d2c40a335571a24ef",
+      "source": "src/prototypes/text_frontend_backend_agent/config/agent.yaml"
+    },
+    "text/config/examples/backend_history.yaml": {
+      "sha256": "397a948e36c935b15e72446f0ec1f1d739750d1b79587eba6abfb6c15da2994c",
+      "source": "src/prototypes/text_frontend_backend_agent/config/examples/backend_history.yaml"
+    },
+    "text/config/examples/backend_only.yaml": {
+      "sha256": "e9d9978d24f733648e8282d2aa0ee966217fc5a621c614940dc706dc8a074ec1",
+      "source": "src/prototypes/text_frontend_backend_agent/config/examples/backend_only.yaml"
+    },
+    "text/config/examples/echo_tools.yaml": {
+      "sha256": "bcfc10a46e7952275bac0f69477d7ccfa67090596f5aa5d3db55b05e4dede5e5",
+      "source": "src/prototypes/text_frontend_backend_agent/config/examples/echo_tools.yaml"
+    },
+    "text/config/examples/external_tools.yaml": {
+      "sha256": "7127326e4b080a9a67707f0e7ed8e8ce433f59037ceb2479cac6d8acb6df5678",
+      "source": "src/prototypes/text_frontend_backend_agent/config/examples/external_tools.yaml"
+    },
+    "text/config/prompts.yaml": {
+      "sha256": "75f4af6883dff08941c37f87382ed18636084aeb0a77d3db8f410d11a040f2c0",
+      "source": "src/prototypes/text_frontend_backend_agent/config/prompts.yaml"
+    },
+    "text/delegation.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. call_backend variant with the required confirmation enum, forced tool_choice, and the pending-confirmation note."
+      },
+      "sha256": "52daa4d5fe1c50cb6eba4258a266e5b4c2c5fe84ae940320cb107d360cb7573c",
+      "source": "src/prototypes/text_frontend_backend_agent/delegation.py"
+    },
+    "text/demo_tools.py": {
+      "sha256": "da5db12ac9a6b36cbecf5b3f73fd8e649a4313c3cf34ed031877bd51491b7a97",
+      "source": "src/prototypes/text_frontend_backend_agent/demo_tools.py"
+    },
+    "text/errors.py": {
+      "sha256": "377cdcc09c68f54f3035f32bc794ba67da10b48507f0c1a87843fdf7f7ddf2fe",
+      "source": "src/prototypes/text_frontend_backend_agent/errors.py"
+    },
+    "text/events.py": {
+      "sha256": "b4fc11ea76f969f587bed7f43b97ee7de380da9723303c130127224fd0aaebf8",
+      "source": "src/prototypes/text_frontend_backend_agent/events.py"
+    },
+    "text/frontend.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. decide() takes a pending summary: forced call_backend and the confirmation field (missing or invalid fails closed)."
+      },
+      "sha256": "c11128079f2f0e566c7cf6ed85773a88d7e48edf7a6244c9fb4e4ffc8495da91",
+      "source": "src/prototypes/text_frontend_backend_agent/frontend.py"
+    },
+    "text/history.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. a user message marked continues_turn stays in its turn's group."
+      },
+      "sha256": "4b3bcf1ed41d63013a7f4845ad74110219d5226009086667c06431fb264d3fa7",
+      "source": "src/prototypes/text_frontend_backend_agent/history.py"
+    },
+    "text/llm.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. complete() accepts an optional tool_choice."
+      },
+      "sha256": "f918aa9dcccda9a2af6924a545eceb14f910ed84c979b68a23083cf4534839a1",
+      "source": "src/prototypes/text_frontend_backend_agent/llm.py"
+    },
+    "text/messages.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. Message gains a non-rendered meta field and the continues_turn marker."
+      },
+      "sha256": "348abe1cfa690a5dfc309bf90a81720c214f5a7dc0ff6287e221088e19898127",
+      "source": "src/prototypes/text_frontend_backend_agent/messages.py"
+    },
+    "text/prompts.py": {
+      "sha256": "99ebf3e120145ff0d7cd84e5420424adc772d23b855c78a79a651a813a72b40e",
+      "source": "src/prototypes/text_frontend_backend_agent/prompts.py"
+    },
+    "text/protocol.py": {
+      "sha256": "0888d7ff07aac4646cd5579d9ae29841f3492acf6d4fb0f666602d1649d40546",
+      "source": "src/prototypes/text_frontend_backend_agent/protocol.py"
+    },
+    "text/session.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. PendingTurn records caller_inputs; meta is serialized."
+      },
+      "sha256": "23e2f447b5497dc8c7fa7ae9d26c0f72961f84d1515b773acd1e64d891f911fd",
+      "source": "src/prototypes/text_frontend_backend_agent/session.py"
+    },
+    "text/stub_server.py": {
+      "sha256": "d2230b55ee05d320d91c8558036bb75079a34eb1a44264fd29e8c333077b8e10",
+      "source": "src/prototypes/text_frontend_backend_agent/stub_server.py"
+    },
+    "text/tools.py": {
+      "sha256": "6accd500c049366a4798d047793d0ab72e7f8e74d8650b662898ba6385007d07",
+      "source": "src/prototypes/text_frontend_backend_agent/tools.py"
+    },
+    "voice/__init__.py": {
+      "sha256": "625faedcf5a5fd6b866f33a2bdd56e9dc53e29376d0ef2d9fb7ec94a0fddc713",
+      "source": "src/prototypes/voice_frontend_backend_agent/__init__.py"
+    },
+    "voice/agent/__init__.py": {
+      "sha256": "c1f409f7dd49de1a9fd83ce1829158b6c6fc01c38366f4c817e8fd773d0f5ed5",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/__init__.py"
+    },
+    "voice/agent/filler.py": {
+      "sha256": "b5edfc02c41990ce2ea8478e1512f3f1d83a607c99077091c9776ec8685d9d3e",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/filler.py"
+    },
+    "voice/agent/history_repair.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): a delegated group may hold the caller's words from a tool wait between the tool result and the continuation; barge-in repair keeps treating it as one delegated group."
+      },
+      "sha256": "7072aef1d1470df9d29552f5c3ca09febacf3f9e9c290ef576d49ca65e45a86c",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/history_repair.py"
+    },
+    "voice/agent/instructions.py": {
+      "sha256": "b11a1d1199f0c95f2ff8dc7a75270ca9959da49cb276318922565e9a9b10a9eb",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/instructions.py"
+    },
+    "voice/agent/port.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. AgentPort.resume gains keyword-only user_text and user_meta. R4 (tau-airline-20261007 report): write gate. AgentReply.presentation and AgentPort.presentation_heard."
+      },
+      "sha256": "8aa9c01bfbd68fc7752dba6e17b10ec15bc97472d73224c6fb852d2df8371e09",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/port.py"
+    },
+    "voice/agent/runner.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. resume passes the caller's words to the text agent. R4 (tau-airline-20261007 report): write gate. the gate runs on every settle path after normalization, fails closed, binds confirmation to the first caller turn after a fully heard summary."
+      },
+      "sha256": "e5f14a32be9575cc4cc86ed8c34b291f5fa9dad65bcda408915a76b656e7fc13",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/runner.py"
+    },
+    "voice/agent/scripted.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. resume accepts and records the caller's words. R4 (tau-airline-20261007 report): write gate. presentation_heard no-op."
+      },
+      "sha256": "252bcca763815aa3a55848307f03495642b7972e34f5bcde4e61237f46469699",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/scripted.py"
+    },
+    "voice/agent/sinks.py": {
+      "sha256": "7c83c5eb11dbe628abcd7ff56874e10cec2c07d6bdd17a649752256479503443",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/sinks.py"
+    },
+    "voice/agent/tools.py": {
+      "sha256": "2f104d1d046284acb780406a43e151a6501d758342e697f35a3c5270824b94e6",
+      "source": "src/prototypes/voice_frontend_backend_agent/agent/tools.py"
+    },
+    "voice/agent/write_gate.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): new module, the write gate (proposals, generated summaries, confirmation binding). Not in the prototype."
+      },
+      "source": null
+    },
+    "voice/audio/__init__.py": {
+      "sha256": "d93a864646578790ac6bb3377d26567fa5aa9658f8c1e4075bade3d2b06e4376",
+      "source": "src/prototypes/voice_frontend_backend_agent/audio/__init__.py"
+    },
+    "voice/audio/formats.py": {
+      "sha256": "d4ecae74906cf795a01fbee9018133fae6834b9935db5b2dcdeb1a99a3d315fb",
+      "source": "src/prototypes/voice_frontend_backend_agent/audio/formats.py"
+    },
+    "voice/audio/g711.py": {
+      "sha256": "44e745e6777483f744bc716086a3951aa614dfbd511202ef90fceb1cbdd2b449",
+      "source": "src/prototypes/voice_frontend_backend_agent/audio/g711.py"
+    },
+    "voice/audio/pcm.py": {
+      "sha256": "5c6f0128e1f8813f690b41dd0adce695d6b18e6a35533cddcd7ee74ca43893ea",
+      "source": "src/prototypes/voice_frontend_backend_agent/audio/pcm.py"
+    },
+    "voice/audio/resample.py": {
+      "sha256": "23ea19b35913cb74da3f44c85ba385304eb37eb9fb73dcc8f9c1f15fb5cd4ed3",
+      "source": "src/prototypes/voice_frontend_backend_agent/audio/resample.py"
+    },
+    "voice/cli/__init__.py": {
+      "sha256": "4e64e8069d3e0fad30fb59ab7858d4d560785557acd43de737d82c3207262417",
+      "source": "src/prototypes/voice_frontend_backend_agent/cli/__init__.py"
+    },
+    "voice/cli/audio_io.py": {
+      "sha256": "27301b39d5db70a9294b3c78b5bb62ad11d17b8212d368bff6298ac3c010fefd",
+      "source": "src/prototypes/voice_frontend_backend_agent/cli/audio_io.py"
+    },
+    "voice/cli/client_tools.py": {
+      "sha256": "4ca3c8f61e2bf23c65f6954aacd3a0e898e8202e2003538e7846d6bde7c8c8f4",
+      "source": "src/prototypes/voice_frontend_backend_agent/cli/client_tools.py"
+    },
+    "voice/cli/normalization_replay.py": {
+      "sha256": "86ef9d09b4c26b8c3fa7c47df05c9167e530d4b6aed260d7e906c18c04a9a86e",
+      "source": "src/prototypes/voice_frontend_backend_agent/cli/normalization_replay.py"
+    },
+    "voice/cli/tau2_replay.py": {
+      "sha256": "5d49ef85d2d00449d75ca7ecf385908720694e95955f1376ba7d58c6d84ba42c",
+      "source": "src/prototypes/voice_frontend_backend_agent/cli/tau2_replay.py"
+    },
+    "voice/cli/verdict_replay.py": {
+      "sha256": "53429adb056cf87ccdfdde3175b5b20af4d0d4f8da5d9e530f2b65aa650b69c0",
+      "source": "src/prototypes/voice_frontend_backend_agent/cli/verdict_replay.py"
+    },
+    "voice/cli/voice_chat.py": {
+      "sha256": "4f9dc4503da7d8e1cf1b019a8f8c0d0ec35818b9c8749945682f7f0af78099dd",
+      "source": "src/prototypes/voice_frontend_backend_agent/cli/voice_chat.py"
+    },
+    "voice/clock.py": {
+      "sha256": "3e33c0d9a65fe3d9e182293185f2ab2624e8042fe7341adda05607678f0779c8",
+      "source": "src/prototypes/voice_frontend_backend_agent/clock.py"
+    },
+    "voice/config.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. the write_gate section (schema, parsing, frontend requirement)."
+      },
+      "sha256": "5d5687fa722fa9439a8d8b95f67312bf98398dc3099b4a5372af68a682984b71",
+      "source": "src/prototypes/voice_frontend_backend_agent/config.py"
+    },
+    "voice/config/profiles/backend_only.yaml": {
+      "sha256": "9e74db0d346c2f89d962b0763dcaf974a2226ea2a7fe691f5cc72a0f414402e8",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/backend_only.yaml"
+    },
+    "voice/config/profiles/browser_demo.yaml": {
+      "sha256": "e83481b8a20ae19f27d1b40a75fe946924c687f62c5407037ecf224f12d029c1",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/browser_demo.yaml"
+    },
+    "voice/config/profiles/browser_demo_frontend_verdict.yaml": {
+      "sha256": "a6414085897553b2f7447c4070fa9f64bd3f314711f1b7edd15a78a2295b5d35",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/browser_demo_frontend_verdict.yaml"
+    },
+    "voice/config/profiles/browser_demo_slow_backend.yaml": {
+      "sha256": "8e7d2d0f198e40959e0b3f8d90cab493d91a2687a6bb053b8c2d370f07a51a8a",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/browser_demo_slow_backend.yaml"
+    },
+    "voice/config/profiles/cloud_speech.yaml": {
+      "sha256": "f461d1797987a24ebb6190eeb78e698c237de2cbf61389264f79f3013ab18d99",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/cloud_speech.yaml"
+    },
+    "voice/config/profiles/live_demo.yaml": {
+      "sha256": "ae8cb94f5b24a74172c5076753a81931af4216940d0f768cbc201d7cd013c9fe",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/live_demo.yaml"
+    },
+    "voice/config/profiles/tau3_eval.yaml": {
+      "sha256": "ff0f104d59ad95747dee2894979f8477dd3cb0e0fba753494456f52f1ec51e8d",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval.yaml"
+    },
+    "voice/config/profiles/tau3_eval_backend_history.yaml": {
+      "sha256": "c12f2cba156fa956cdf0a36bbad5d60541057c4fc672b3acdcd462a5c9bfcb06",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_backend_history.yaml"
+    },
+    "voice/config/profiles/tau3_eval_backend_history_noguide.yaml": {
+      "sha256": "9825af1c21d9c65caee2b2c83eb81efaa7f018a9d8e22e4dd40c2a5cf0ac7532",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_backend_history_noguide.yaml"
+    },
+    "voice/config/profiles/tau3_eval_frontend_verdict.yaml": {
+      "sha256": "49f794e308526850ba8710cf0d7fd6fc3da2d392407640a7695cbe1db0b3d9a8",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_frontend_verdict.yaml"
+    },
+    "voice/config/profiles/tau3_eval_frontend_verdict_speak.yaml": {
+      "sha256": "a2c9d3351c8b1f06ab1787dae54ea9e17b9e9293ae80a5ce33d63452cc96b62e",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_frontend_verdict_speak.yaml"
+    },
+    "voice/config/profiles/tau3_eval_frontend_verdict_speak_history.yaml": {
+      "sha256": "c1617aeaad76f4887d48982cd51fc95fb769158b4ec37f346a283afbfe837d55",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_frontend_verdict_speak_history.yaml"
+    },
+    "voice/config/profiles/tau3_eval_frontend_verdict_speak_history_write_gate.yaml": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): new profile, tau3_eval_frontend_verdict_speak_history with the write gate and the R4.6 backend guidance. Not in the prototype."
+      },
+      "source": null
+    },
+    "voice/config/profiles/tau3_eval_normalization.yaml": {
+      "sha256": "caf37b6b1e7a2dd4d03ef6247b48b794e53fee14565b09dd01d48d1134a8d6e0",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_normalization.yaml"
+    },
+    "voice/config/prompts.voice.yaml": {
+      "sha256": "776f252dd9bb87fc3685f0faa4b0e977418f1aaeebc39e47a6aea7c9f395478e",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/prompts.voice.yaml"
+    },
+    "voice/config/voice_agent.yaml": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. documents the write_gate section (off by default)."
+      },
+      "sha256": "3217a0a5c2072c117ace944b1f6a8f8f34682fe1d9f26119103ce0ea2819d837",
+      "source": "src/prototypes/voice_frontend_backend_agent/config/voice_agent.yaml",
+      "value_edits": [
+        {
+          "count": 1,
+          "new": "config: \"../../text/config/agent.yaml\"   # [in-path]",
+          "old": "config: \"../../text_frontend_backend_agent/config/agent.yaml\"   # [in-path]",
+          "reason": "the text agent package is named text in this example"
+        },
+        {
+          "count": 2,
+          "new": "example_dir: \"../..\"   # [in-path]",
+          "old": "example_dir: \"../../../examples/frontend_backend_agent\"   # [in-path]",
+          "reason": "ASR and TTS catalogs: this example's services.*.yaml (the prototype, under src/prototypes/, read the frontend_backend_agent example's catalog; the keys and nemo-speech endpoints are the same)"
+        }
+      ]
+    },
+    "voice/engine/__init__.py": {
+      "sha256": "91d85391ebd30e71541775f973d9dd41306a19903796075d2a3f06548f7c1ddb",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/__init__.py"
+    },
+    "voice/engine/input_path.py": {
+      "sha256": "7cfa9ef8bcb53caaaeb6f5c5d7412c3226f07983d875244af82b83e73066b3da",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/input_path.py"
+    },
+    "voice/engine/output_path.py": {
+      "sha256": "121172add2ce941eb82c5380a3d21e8eca93a2d26bced808881f125ff7eb4918",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/output_path.py"
+    },
+    "voice/engine/playback.py": {
+      "sha256": "93867b54f005e1bea0ca6a9996ed3eb21223b198ed09d64c232a40f71d1078c4",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/playback.py"
+    },
+    "voice/engine/segmenter.py": {
+      "sha256": "a40f2bd5903046c264044efde552a06561e0ccb314cfac1550b07408f42bf67a",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/segmenter.py"
+    },
+    "voice/engine/session.py": {
+      "sha256": "d5a859d8f6d16eb59b5b56a4250f038384bc75d527222d0774fe3140955edc71",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/session.py"
+    },
+    "voice/engine/turn_api.py": {
+      "sha256": "c1a116967b03a7653a440e12ae1dd684618004fb1676f85359e5dcab750e6663",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/turn_api.py"
+    },
+    "voice/engine/turn_manager.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. per-wait inbox, resume trigger, and the late response.create rule. R4 (tau-airline-20261007 report): write gate. tracks the spoken summary's item and reports whether it was heard to its end."
+      },
+      "sha256": "d6422d074961a427da8547e31e943d7024c0a7fc80887d278fa8ff7805799f2d",
+      "source": "src/prototypes/voice_frontend_backend_agent/engine/turn_manager.py"
+    },
+    "voice/errors.py": {
+      "sha256": "460ba4d5d5766b6f57568e46df71242ae13513bfed083a2cecd9828da69e6c70",
+      "source": "src/prototypes/voice_frontend_backend_agent/errors.py"
+    },
+    "voice/normalization/__init__.py": {
+      "sha256": "c5d43b063ca1d0ce5b61e0ef4a092da404fc145d705dfdb692fbecf3200085fa",
+      "source": "src/prototypes/voice_frontend_backend_agent/normalization/__init__.py"
+    },
+    "voice/normalization/arguments.py": {
+      "sha256": "c84bada9b928830304b6fc22b2e84665a7f590f169a59716faada9967943858a",
+      "source": "src/prototypes/voice_frontend_backend_agent/normalization/arguments.py"
+    },
+    "voice/normalization/prompts.py": {
+      "sha256": "dfe0f5267b17d9a56e6c608d672f4fd03237bf542f396f08e058f5188d7543c2",
+      "source": "src/prototypes/voice_frontend_backend_agent/normalization/prompts.py"
+    },
+    "voice/normalization/rules.py": {
+      "sha256": "1ecb87663a157101ead95441a78345db60811828129d71b3984ceb1926356279",
+      "source": "src/prototypes/voice_frontend_backend_agent/normalization/rules.py"
+    },
+    "voice/normalization/schema_rules.py": {
+      "sha256": "9c6824752fb81980ecae656c5c9c10c6af49fa1eb510cccef1f1fa715d5f7ac0",
+      "source": "src/prototypes/voice_frontend_backend_agent/normalization/schema_rules.py"
+    },
+    "voice/normalization/transcript.py": {
+      "sha256": "8e1e8f384e15a39e7ff1386f9796d6255000b9da3c45fb047c1d4f27c3e8e6c9",
+      "source": "src/prototypes/voice_frontend_backend_agent/normalization/transcript.py"
+    },
+    "voice/server.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. passes write_gate to the runner."
+      },
+      "sha256": "9314ae5787c86eef1c9f5acfeaa91dcbb00091ac6f862beea5bc74ed882dbb01",
+      "source": "src/prototypes/voice_frontend_backend_agent/server.py"
+    },
+    "voice/speech/__init__.py": {
+      "sha256": "feaa82655597382b192d790f3f9833c27ba68bad91592c8cff756e7f008667e0",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/__init__.py"
+    },
+    "voice/speech/asr_riva.py": {
+      "sha256": "4a1db3b099b30d8a573bb944b8d0d9c8e7b5b9f1f845ce8a6fc0269d76cb4483",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/asr_riva.py"
+    },
+    "voice/speech/catalog.py": {
+      "sha256": "2513b6c86662aecfa08d0f5e5cc6571af8e3eed817f2eb670ea15f08f5c5341e",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/catalog.py"
+    },
+    "voice/speech/factory.py": {
+      "sha256": "947ae6c5f41aea4f825d156bb0e8c9aaa52994e69d49df5d84c8091931e597ca",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/factory.py"
+    },
+    "voice/speech/ports.py": {
+      "sha256": "a8cc09591dea55cf1ee402d01580ff8d88e23418454d1811c402db828aa0540f",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/ports.py"
+    },
+    "voice/speech/stubs.py": {
+      "sha256": "4ea623b047953312324a47ed37149a5b439554d35d62e433a62edc3be1430217",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/stubs.py"
+    },
+    "voice/speech/text_normalizer.py": {
+      "sha256": "33d16191c25b59ce7bb69c8fa2a17d165f1bb35d6c14cc162160feb4b4e2d719",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/text_normalizer.py"
+    },
+    "voice/speech/tts_riva.py": {
+      "sha256": "83a710ee36ecf4516e1cd3c9a99a64c1581b2b9f533bc80e65c9653e3925bd8b",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/tts_riva.py"
+    },
+    "voice/speech/vad_energy.py": {
+      "sha256": "9ba864eb9f3da7bedce533d3be23626de37425b7a0c6f9a3c12780065ba7316a",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/vad_energy.py"
+    },
+    "voice/speech/vad_silero.py": {
+      "sha256": "3c128432768d3f4795a3a8b3496ee5e6f3aa0329337febc9fc15060cea7fbf3c",
+      "source": "src/prototypes/voice_frontend_backend_agent/speech/vad_silero.py"
+    },
+    "voice/web/index.html": {
+      "sha256": "7cfa96319e0b99e15a8c3b706f3bdca1856007ab090d46c754a0969923fcdca8",
+      "source": "src/prototypes/voice_frontend_backend_agent/web/index.html"
+    },
+    "voice/wire/__init__.py": {
+      "sha256": "d3ef26abdae8b9104a0ede1a94aef4c7820476edca606694526d69e356f4478f",
+      "source": "src/prototypes/voice_frontend_backend_agent/wire/__init__.py"
+    },
+    "voice/wire/client_events.py": {
+      "sha256": "55a53cdf1bebdc69a4af88435a5bce40f7e71014c2e9e754dbe65cdf8a1684fe",
+      "source": "src/prototypes/voice_frontend_backend_agent/wire/client_events.py"
+    },
+    "voice/wire/ids.py": {
+      "sha256": "4490d3d575036bb60f537642d64bd390173ea8384395d951634e06e7efba5a66",
+      "source": "src/prototypes/voice_frontend_backend_agent/wire/ids.py"
+    },
+    "voice/wire/response_writer.py": {
+      "sha256": "da0766c40212a4462ff95297bb8d116783709f77e1a346564b2caa88f0d0d14a",
+      "source": "src/prototypes/voice_frontend_backend_agent/wire/response_writer.py"
+    },
+    "voice/wire/server_events.py": {
+      "sha256": "ca0891c34c833262c685e69ae5186e2c37e2b741aa6cc66613f996ee50598647",
+      "source": "src/prototypes/voice_frontend_backend_agent/wire/server_events.py"
+    },
+    "voice/wire/session_view.py": {
+      "sha256": "f76226ca583ae96c3cf7152caf9bed0b813da5a84dc6c2cd753bc00885a95f45",
+      "source": "src/prototypes/voice_frontend_backend_agent/wire/session_view.py"
+    },
+    "voice/wire/writer.py": {
+      "sha256": "dac014b66a2075881192467109f9b91f2759c667a747ab46034d15dac4451872",
+      "source": "src/prototypes/voice_frontend_backend_agent/wire/writer.py"
+    }
+  },
+  "package_rewrites": [
+    [
+      "prototypes.text_frontend_backend_agent",
+      "examples.frontend_backend_verdict.text"
+    ],
+    [
+      "prototypes.voice_frontend_backend_agent",
+      "examples.frontend_backend_verdict.voice"
+    ]
+  ],
+  "prototype_commit": "66f6c672dad8b0b9d0134fff98501f9291217a4f",
+  "prototype_repository": "nemotron-voice-agent-smasurekar",
+  "test_helper_renames": [
+    [
+      "_fakes",
+      "_fbv_fakes"
+    ],
+    [
+      "_voice_fakes",
+      "_fbv_voice_fakes"
+    ]
+  ]
+}

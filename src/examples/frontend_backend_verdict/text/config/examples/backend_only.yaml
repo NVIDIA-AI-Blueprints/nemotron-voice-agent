@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Demo configuration with the frontend switched off: one backend agent, its own
+# conversation history, no delegation. Pairs with
+# `examples.frontend_backend_verdict.text.demo_tools:TOOLS`.
+#
+#   PYTHONPATH=src uv run python -m examples.frontend_backend_verdict.text.cli.chat \
+#     --config src/prototypes/text_frontend_backend_agent/config/examples/backend_only.yaml \
+#     --tools examples.frontend_backend_verdict.text.demo_tools:TOOLS
+
+agent:
+  name: "Order Assistant"
+  persona: |
+    Your name is the Order Assistant. You help customers with their existing orders.
+  mode: backend_only
+
+prompts:
+  path: "../prompts.yaml"
+
+backend:
+  llm:
+    model: "${BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}"
+    base_url: "${BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    max_tokens: 2048
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true      # backend: reasoning ON (it does the task work)
+      reasoning_budget: 1024
+  tools:
+    execution: internal
+    max_tool_iterations: 6
+  history:
+    max_groups: 40
+
+domain:
+  policy: |
+    You can look up an order by id and cancel an order that has not shipped.
+    Always confirm the order id back to the customer in your final answer.
+    An order that has already shipped cannot be cancelled; say so and suggest a return instead.
+  capabilities:
+    - "checking the status of an existing order"
+    - "cancelling an order that has not shipped yet"
+  unsupported_reply: "I can only check order status and cancel orders that have not shipped."
+
+logging:
+  event_sink: logging

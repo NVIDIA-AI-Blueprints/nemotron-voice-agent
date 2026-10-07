@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3_eval_frontend_verdict_speak_history.yaml plus the write gate (R4 of
+# misc/frontend-backend-analysis/tau-airline-20261007-fbv-run-analysis-and-recommendations.md):
+# every tool the generic read/write classifier does not call a read is held until the caller
+# confirms a generated summary of the exact call, and only that call then goes out. The backend
+# guidance adds the policy re-check before an action that changes data (R4.6, prompt-level only).
+#
+# transfer_to_human_agents (offered in every tau3 domain) is exempt: a handoff is not held.
+
+extends: tau3_eval_frontend_verdict_speak_history.yaml
+
+agent:
+  overrides:
+    backend:
+      conversation_history: {guidance_key: backend_history_guidance_full_write_gate}
+    prompts:
+      inline:
+        backend_history_guidance_full_write_gate: |
+          {% include 'backend_history_guidance_full' %}
+          - Before you call a tool that changes data, re-read the policy rules for that action against the
+            current record and the user's request. If the policy does not allow it, do not call the tool;
+            tell the user what is possible instead.
+          - A call that changes data is held until the user confirms it. Its result then says
+            "confirmation_required": nothing has been done yet. Introduce the summary in one short
+            sentence; the user hears the details and is asked to confirm. When the next request says
+            the user confirmed, call the same tool again with exactly the same arguments. When it says
+            "not_confirmed", do not repeat the call unchanged: ask what to change, or follow the user's
+            correction.
+
+write_gate:
+  enabled: true
+  default: non_read
+  exempt: [transfer_to_human_agents]

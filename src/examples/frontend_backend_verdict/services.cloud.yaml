@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Cloud service catalog for the Frontend/Backend Verdict example. The LLM entries are the
+# prototype's Inference Hub defaults (see services.local.yaml). The ASR and TTS entries
+# exist for the registry's per-platform validation only: the prototype speech loader of
+# every served profile reads services.local.yaml (`singlegpu`), and this example has no
+# cloud recipe.
+
+llm:
+  nemotron-3.5-lightning:
+    name: "Nemotron 3.5 Lightning frontend (Inference Hub, reasoning off)"
+    model_id: "nvidia/nvidia/nemotron-3.5-lightning"
+    base_url: "https://inference-api.nvidia.com/v1"
+    system_prompt: ""
+    max_tokens: 1024
+    temperature: 0.0
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
+
+thinker-llm:
+  nemotron-3-ultra:
+    name: "Nemotron 3 Ultra backend (Inference Hub, reasoning on)"
+    model_id: "nvidia/nvidia/nemotron-3-ultra"
+    base_url: "https://inference-api.nvidia.com/v1"
+    max_tokens: 4096
+    temperature: 0.0
+    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024}}'
+
+tts:
+  magpie-multilingual-tts:
+    name: "Magpie TTS Multilingual"
+    server: "grpc.nvcf.nvidia.com:443"
+    voice_id: "Magpie-Multilingual.EN-US.Aria"
+    model: "magpie-tts-multilingual"
+    function_id: "500bfea0-ba3d-4158-8276-1d04daedfdcd"
+    synthesis_mode: stitched
+
+asr:
+  nemotron-asr-streaming-english:
+    name: "Nemotron ASR Streaming English"
+    server: "grpc.nvcf.nvidia.com:443"
+    model: "nemotron-asr-streaming"
+    function_id: "4155ae85-73e1-4936-b47f-87b9de165651"

@@ -872,6 +872,21 @@ def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:
     return value
 
 
+def uvicorn_ws_ping_kwargs() -> dict[str, float | None]:
+    """Return uvicorn's WebSocket keepalive from ``UVICORN_WS_PING_INTERVAL`` / ``UVICORN_WS_PING_TIMEOUT``.
+
+    Both are optional and in seconds. When unset, nothing is returned and uvicorn keeps
+    its defaults (20 s / 20 s). An interval of ``0`` disables the server ping, which is
+    how the frontend/backend verdict example's prototype profiles run.
+    """
+    kwargs: dict[str, float | None] = {}
+    if (os.getenv("UVICORN_WS_PING_INTERVAL") or "").strip():
+        kwargs["ws_ping_interval"] = parse_env_float("UVICORN_WS_PING_INTERVAL", 20.0, min_value=0.0) or None
+    if (os.getenv("UVICORN_WS_PING_TIMEOUT") or "").strip():
+        kwargs["ws_ping_timeout"] = parse_env_float("UVICORN_WS_PING_TIMEOUT", 20.0, min_value=0.0)
+    return kwargs
+
+
 def parse_env_float(name: str, default: float, min_value: float | None = None) -> float:
     """Parse a float environment variable with safe fallback and optional minimum."""
     raw = os.getenv(name, str(default))

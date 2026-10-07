@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Browser microphone test (the page served at /): a greeting, the text prototype's
+# demo tools executed in-process (a browser cannot run the tools itself), silenced
+# filler (logged, and shown in gray on the page), and real-time output pacing so the
+# server's playout estimate matches what the browser plays.
+
+extends: ../voice_agent.yaml
+
+protocol:
+  greeting: {enabled: true, text: "Hi! How can I help you today?"}
+  seed_history_with_client_greeting: ""
+
+tools:
+  source: config
+  config_tools: "examples.frontend_backend_verdict.text.demo_tools:TOOLS"
+
+instructions:
+  frontend_capabilities: from_tools
+
+audio:
+  pace_output: true

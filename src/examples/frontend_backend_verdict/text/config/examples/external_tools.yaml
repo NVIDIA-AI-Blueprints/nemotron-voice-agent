@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Demo configuration for `execution: external`: the agent hands its backend tool
+# calls back to the caller instead of running them. This is the shape a scaffold
+# evaluation harness (tau2-bench) drives. The REPL cannot run this mode -- drive
+# it from your own script with send() / send_tool_results().
+
+agent:
+  name: "Order Assistant"
+  persona: |
+    Your name is the Order Assistant. You help customers with their existing orders.
+  mode: frontend_backend
+
+prompts:
+  path: "../prompts.yaml"
+
+frontend:
+  llm:
+    model: "${FRONTEND_LLM_MODEL:-nvidia/nvidia/nemotron-3.5-lightning}"
+    base_url: "${FRONTEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    max_tokens: 1024
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false     # frontend: reasoning OFF (it only routes)
+
+backend:
+  llm:
+    model: "${BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}"
+    base_url: "${BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    max_tokens: 2048
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true      # backend: reasoning ON (it does the task work)
+      reasoning_budget: 1024
+  tools:
+    execution: external
+    on_incomplete_results: error
+    on_user_message_while_pending: error
+
+domain:
+  policy: |
+    You can look up an order by id and cancel an order that has not shipped.
+    Always confirm the order id back to the customer in your final answer.
+  capabilities:
+    - "checking the status of an existing order"
+    - "cancelling an order that has not shipped yet"
+
+logging:
+  event_sink: logging

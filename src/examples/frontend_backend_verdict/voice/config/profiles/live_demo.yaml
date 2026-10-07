@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Live demo: audible filler, a greeting, the text prototype's demo tools executed
+# in-process, and real-time output pacing for clients that play what they receive.
+
+extends: ../voice_agent.yaml
+
+protocol:
+  greeting: {enabled: true, text: "Hi! How can I help you today?"}
+  seed_history_with_client_greeting: ""
+
+filler:
+  mode: speak
+
+tools:
+  source: config
+  config_tools: "examples.frontend_backend_verdict.text.demo_tools:TOOLS"
+
+instructions:
+  frontend_capabilities: from_tools
+
+audio:
+  pace_output: true

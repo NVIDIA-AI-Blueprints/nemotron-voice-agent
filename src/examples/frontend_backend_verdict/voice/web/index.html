@@ -1,0 +1,201 @@
+<!doctype html>
+<!--
+  SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: Apache-2.0
+
+  Browser microphone client for the prototype's OpenAI Realtime endpoint. It is served
+  at / by server.py and talks to /v1/realtime on the same origin. Microphone access
+  needs a secure context: open it over https (server --tls) or on http://localhost.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Voice Frontend/Backend Agent — mic test</title>
+<style>
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
+  header { padding: 12px 16px; background: #1b1b1b; display: flex; gap: 12px; align-items: center; }
+  button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 0; cursor: pointer; }
+  #start { background: #76b900; color: #000; } #stop { background: #444; color: #eee; }
+  #status { color: #aaa; } #meter { width: 120px; height: 8px; background: #333; border-radius: 4px; overflow: hidden; }
+  #level { height: 100%; width: 0; background: #76b900; }
+  #log { padding: 12px 16px; }
+  .line { margin: 4px 0; white-space: pre-wrap; } .who { display: inline-block; width: 64px; font-weight: 600; }
+  .you .who { color: #7ddc6f; } .agent .who { color: #5fc9f3; } .filler { color: #888; } .filler .who { color: #888; }
+  .tool { color: #d78bf0; } .info { color: #888; font-size: 13px; } .error { color: #ff6b6b; }
+  .partial { opacity: .6; }
+</style>
+</head>
+<body>
+<header>
+  <button id="start">Start</button><button id="stop" disabled>Stop</button>
+  <div id="meter"><div id="level"></div></div><span id="status">idle</span>
+</header>
+<div id="log"></div>
+<script>
+"use strict";
+const RATE = 24000;           // wire format: audio/pcm at 24 kHz, both directions
+const CHUNK = 480;            // 20 ms of input per input_audio_buffer.append
+
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+let ws = null, ctx = null, stream = null, node = null;
+let playHead = 0, sources = [];
+const agentLines = new Map();  // item_id -> element
+let userPartial = null;
+
+function line(kind, who, text) {
+  const el = document.createElement("div");
+  el.className = "line " + kind;
+  const w = document.createElement("span"); w.className = "who"; w.textContent = who;
+  const t = document.createElement("span"); t.textContent = text;
+  el.append(w, t); logEl.append(el); el.scrollIntoView({ block: "end" });
+  return t;
+}
+const status = (text) => { $("status").textContent = text; };
+
+function b64FromInt16(samples) {
+  const bytes = new Uint8Array(samples.buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+function play(b64) {
+  const bin = atob(b64), n = bin.length >> 1;
+  const buf = ctx.createBuffer(1, n, RATE), out = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) {
+    const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    out[i] = (v >= 0x8000 ? v - 0x10000 : v) / 32768;
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.connect(ctx.destination);
+  playHead = Math.max(playHead, ctx.currentTime + 0.05);
+  src.start(playHead); playHead += buf.duration;
+  sources.push(src); src.onended = () => { sources = sources.filter((s) => s !== src); };
+}
+
+function stopPlayback() {
+  for (const s of sources) { try { s.stop(); } catch (_) {} }
+  sources = []; playHead = 0;
+}
+
+// Captures the microphone at the context's native rate and resamples to 24 kHz
+// (linear interpolation), posting 20 ms Int16 chunks to the page.
+const WORKLET = `
+class Capture extends AudioWorkletProcessor {
+  constructor(opts) {
+    super(); this.ratio = sampleRate / ${RATE}; this.pos = 0; this.prev = 0;
+    this.out = new Int16Array(${CHUNK}); this.n = 0;
+  }
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (!ch) return true;
+    let peak = 0;
+    for (let i = 0; i < ch.length; i++) peak = Math.max(peak, Math.abs(ch[i]));
+    while (this.pos < ch.length) {
+      const i = Math.floor(this.pos), f = this.pos - i;
+      const a = i === 0 ? this.prev : ch[i - 1], b = ch[i];
+      const v = Math.max(-1, Math.min(1, a + (b - a) * f));
+      this.out[this.n++] = v < 0 ? v * 32768 : v * 32767;
+      if (this.n === ${CHUNK}) { this.port.postMessage({ pcm: this.out.slice(0), peak }); this.n = 0; }
+      this.pos += this.ratio;
+    }
+    this.pos -= ch.length; this.prev = ch[ch.length - 1];
+    return true;
+  }
+}
+registerProcessor("capture", Capture);`;
+
+function sessionUpdate() {
+  return {
+    type: "session.update",
+    session: {
+      type: "realtime",
+      output_modalities: ["audio"],
+      audio: {
+        input: {
+          format: { type: "audio/pcm", rate: RATE },
+          turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
+        },
+        output: { format: { type: "audio/pcm", rate: RATE }, voice: "alloy" },
+      },
+    },
+  };
+}
+
+function onEvent(ev) {
+  switch (ev.type) {
+    case "session.created": ws.send(JSON.stringify(sessionUpdate())); break;
+    case "session.updated": status("listening — speak"); break;
+    case "input_audio_buffer.speech_started":
+      stopPlayback(); userPartial = line("you partial", "you", "…"); break;
+    case "conversation.item.input_audio_transcription.delta":
+      if (userPartial) userPartial.textContent = (userPartial.textContent === "…" ? "" : userPartial.textContent) + ev.delta;
+      break;
+    case "conversation.item.input_audio_transcription.completed":
+      if (userPartial) { userPartial.textContent = ev.transcript; userPartial.parentElement.classList.remove("partial"); userPartial = null; }
+      else line("you", "you", ev.transcript);
+      break;
+    case "response.output_audio.delta": play(ev.delta); break;
+    case "response.output_audio_transcript.delta":
+    case "response.output_text.delta": {
+      let t = agentLines.get(ev.item_id);
+      if (!t) { t = line("agent", "agent", ""); agentLines.set(ev.item_id, t); }
+      t.textContent += ev.delta; break;
+    }
+    case "response.output_item.done":
+      if (ev.item.type === "message" && ev.item.status && ev.item.status !== "completed") {
+        const t = agentLines.get(ev.item.id); if (t) t.textContent += `  [${ev.item.status}]`;
+      }
+      agentLines.delete(ev.item.id); break;
+    case "response.function_call_arguments.done": line("tool", "tool", `${ev.name}(${ev.arguments})`); break;
+    case "x_nvidia.filler": line("filler", "filler", `${ev.text}  (silent)`); break;
+    case "error": line("error", "error", `${ev.error.code || ""}: ${ev.error.message}`); break;
+  }
+}
+
+async function start() {
+  $("start").disabled = true;
+  try {
+    if (!window.isSecureContext) throw new Error("the microphone needs https (start the server with --tls) or http://localhost");
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    ctx = new AudioContext();
+    await ctx.resume();  // the permission prompt may outlast the click's user activation
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
+    node = new AudioWorkletNode(ctx, "capture");
+    ctx.createMediaStreamSource(stream).connect(node);
+    node.connect(ctx.destination);  // outputs silence; keeps the node pulled by the render graph
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${scheme}://${location.host}/v1/realtime?model=pine-browser&x_nvidia_filler=1`);
+    status("connecting …");
+    ws.onmessage = (m) => onEvent(JSON.parse(m.data));
+    ws.onclose = (e) => { line("info", "info", `disconnected (${e.code}${e.reason ? " " + e.reason : ""})`); stop(); };
+    ws.onerror = () => line("error", "error", "WebSocket error (is the server up? accepted the certificate?)");
+    node.port.onmessage = ({ data }) => {
+      $("level").style.width = Math.min(100, data.peak * 140) + "%";
+      if (ws && ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64FromInt16(data.pcm) }));
+    };
+    $("stop").disabled = false;
+    line("info", "info", `mic at ${ctx.sampleRate} Hz → ${RATE} Hz; use headphones to avoid echo`);
+  } catch (err) {
+    line("error", "error", String(err.message || err)); stop();
+  }
+}
+
+function stop() {
+  stopPlayback();
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  if (node) { node.port.onmessage = null; node.disconnect(); node = null; }
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  if (ctx) { ctx.close(); ctx = null; }
+  $("level").style.width = "0"; $("start").disabled = false; $("stop").disabled = true; status("idle");
+}
+
+$("start").onclick = start;
+$("stop").onclick = stop;
+</script>
+</body>
+</html>

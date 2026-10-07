@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Browser microphone test with an audible frontend: browser_demo.yaml plus spoken
+# filler and a simulated slow backend (a fixed sleep before each delegated backend
+# turn), so the filler is heard while the backend works.
+
+extends: browser_demo.yaml
+
+filler:
+  mode: speak
+
+agent:
+  overrides:
+    backend:
+      simulated_delay_s: ${FBA_BACKEND_DELAY_S:-5}

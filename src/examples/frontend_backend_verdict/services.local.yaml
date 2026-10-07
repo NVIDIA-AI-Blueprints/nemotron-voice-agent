@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# On-prem service catalog for the Frontend/Backend Verdict example.
+#
+# LLM endpoints (model and base URL) come from the `llm` (frontend) and `thinker-llm`
+# (backend) entries the Realtime route selects. The request parameters (temperature,
+# max_tokens, reasoning switches) are the prototype's, from
+# text/config/agent.yaml; the catalog values below repeat them.
+# Both LLMs default to the NVIDIA Inference Hub, as in the prototype; the API key is
+# NVIDIA_API_KEY (an Inference Hub `sk-...` key).
+#
+# ASR and TTS are resolved by the prototype's own catalog loader from the `singlegpu`
+# section (voice/config/voice_agent.yaml: asr/tts.catalog). The
+# `server` section exists for the registry's per-platform validation; this example has
+# only the single-GPU recipe.
+# `synthesis_mode` is required by the repository catalog rules; this example does not
+# use it: the prototype synthesizer makes one Riva SynthesizeOnline call per sentence.
+
+server:
+  llm:
+    nemotron-3.5-lightning:
+      name: "Nemotron 3.5 Lightning frontend (Inference Hub, reasoning off)"
+      model_id: "nvidia/nvidia/nemotron-3.5-lightning"
+      base_url: "https://inference-api.nvidia.com/v1"
+      system_prompt: ""
+      max_tokens: 1024
+      temperature: 0.0
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
+  thinker-llm:
+    nemotron-3-ultra:
+      name: "Nemotron 3 Ultra backend (Inference Hub, reasoning on)"
+      model_id: "nvidia/nvidia/nemotron-3-ultra"
+      base_url: "https://inference-api.nvidia.com/v1"
+      max_tokens: 4096
+      temperature: 0.0
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024}}'
+  tts:
+    magpie-multilingual-tts:
+      name: "Magpie TTS"
+      server: "magpie-multilingual-tts-service:50051"
+      voice_id: "Magpie-Multilingual.EN-US.Aria"
+      model: "magpie-tts-multilingual"
+      function_id: ""
+      synthesis_mode: stitched
+  asr:
+    nemotron-asr-streaming-english:
+      name: "Nemotron ASR Streaming English"
+      server: "nemotron-asr-streaming-english:50052"
+      model: "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"
+      function_id: ""
+
+singlegpu:
+  llm:
+    nemotron-3.5-lightning:
+      name: "Nemotron 3.5 Lightning frontend (Inference Hub, reasoning off)"
+      model_id: "nvidia/nvidia/nemotron-3.5-lightning"
+      base_url: "https://inference-api.nvidia.com/v1"
+      system_prompt: ""
+      max_tokens: 1024
+      temperature: 0.0
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
+  thinker-llm:
+    nemotron-3-ultra:
+      name: "Nemotron 3 Ultra backend (Inference Hub, reasoning on)"
+      model_id: "nvidia/nvidia/nemotron-3-ultra"
+      base_url: "https://inference-api.nvidia.com/v1"
+      max_tokens: 4096
+      temperature: 0.0
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":1024}}'
+  tts:
+    magpie-multilingual-tts:
+      name: "Magpie TTS (NeMo-Speech.cpp)"
+      server: "nemo-speech:50051"
+      voice_id: "John"
+      model: "magpie-tts-multilingual"
+      function_id: ""
+      synthesis_mode: stitched
+  asr:
+    nemotron-asr-streaming-english:
+      name: "Nemotron Speech Streaming"
+      server: "nemo-speech:50051"
+      model: "nemotron-speech-streaming-en-0.6b"
+      function_id: ""
