@@ -4772,11 +4772,11 @@ def test_noncompleted_server_speech_projects_delivery_outcome_without_work_mutat
                 "event_id": f"server-speech-{speech_purpose}-{status}",
                 "type": "response.create",
                 "response": {},
-                },
-                purpose=purpose,
-                requires_speech_floor=True,
-                speech_purpose=speech_purpose,
-                local_request_id=local_request_id,
+            },
+            purpose=purpose,
+            requires_speech_floor=True,
+            speech_purpose=speech_purpose,
+            local_request_id=local_request_id,
             frontend_context_request=(
                 FrontendContextRequest(FrontendContextPurpose.DELEGATION_ACK, local_request_id)
                 if purpose is facade_module._ResponsePurpose.ACKNOWLEDGEMENT

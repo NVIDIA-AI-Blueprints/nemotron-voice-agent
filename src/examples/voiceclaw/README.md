@@ -49,6 +49,52 @@ and an `HF_TOKEN` in the repository `.env`. Refer to the
 [Getting Started guide](../../../docs/01-getting-started.md) for host and GPU
 prerequisites.
 
+## Install with NemoClaw Container v1
+
+The `nemoclaw-container-v1` image target implements the accepted
+`voiceclaw.nemoclaw.container.v1` installer contract. NemoClaw declares and
+manages an ordinary application container, delivers protected inputs, and binds
+it to an existing OpenShell sandbox. VoiceClaw does not install or manage the
+agent.
+
+This profile preserves the upstream OpenShell/Fabric adapter, request codec,
+result validation, and fresh-target limits. A narrow installer executor supplies
+the protected descriptor and pinned SDK transport. It does not replace the
+default image supervisor, developer Compose recipe, or cloud configuration.
+
+Use the following nonsecret environment inputs in the application declaration:
+
+```text
+VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1
+VOICECLAW_INSTALL_CONTRACT=voiceclaw.nemoclaw.container.v1
+VOICECLAW_AGENT_CONNECTION_FILE=/var/lib/voiceclaw/config/agent-connection.json
+VOICECLAW_SPEECH_CREDENTIAL_FILE=/var/lib/voiceclaw/credentials/speech
+VOICECLAW_STATE_PATH=/var/lib/voiceclaw/state/state.db
+```
+
+NemoClaw supplies the descriptor and credential files before startup. Do not
+place credentials in YAML, Docker environment values, or command arguments.
+Refer to the [installer contract](NEMOCLAW_CONTAINER_V1.md) for the descriptor,
+image build, ownership, transport, and validation requirements.
+
+The installer profile is API-only: `WS /v1/realtime` on port `18790`, without the
+browser UI. Publish it only on host loopback or the approved private deployment
+network. After NemoClaw apply returns, check local installation readiness:
+
+```bash
+curl --fail --max-time 15 http://127.0.0.1:18790/readyz
+```
+
+An empty `200` response confirms protected inputs, initialized local components,
+and the bundled frontend listener. It does not prove native Fabric health,
+provider credentials, model responses, or a complete voice turn. Agent checks
+and invocations retain upstream validation; unsupported native health is not
+reported as healthy. Provision a fresh agent target for each delegated turn.
+
+The earlier installer revision passed a manual ARM64 Station installation and
+local readiness check. That result does not qualify this upstream adaptation;
+refer to the [evidence boundaries](NEMOCLAW_CONTAINER_V1.md#validation-and-evidence).
+
 ## Run the Developer Stack
 
 1. Create the environment file and operator directory:
