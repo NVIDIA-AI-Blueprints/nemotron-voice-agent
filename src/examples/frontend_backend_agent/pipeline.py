@@ -299,6 +299,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         talker_kwargs.update(
             {
                 "forced_tool_call_stops": llm_profile.get("forced_tool_call_stops"),
+                "realtime_max_identical_tool_calls": llm_profile.get("realtime_max_identical_tool_calls"),
+                "realtime_max_tool_calls_per_turn": llm_profile.get("realtime_max_tool_calls_per_turn"),
                 "realtime_parallel_tool_calls": body.get("parallel_tool_calls", True),
                 "realtime_model_max_output_tokens": body.get("realtime_model_max_output_tokens"),
             }
@@ -497,6 +499,11 @@ async def bot(runner_args: RunnerArguments) -> None:
         "use_ssl": tts_ssl,
         "text_filters": [NemotronSpeechTextFilter()],
         "custom_dictionary": custom_dictionary,
+        # Pipecat closes a reply's audio context when no audio arrives within this
+        # window. Keep its 3 s default; raise TTS_STOP_FRAME_TIMEOUT_S when first
+        # Magpie audio arrives late under load. Magpie ends each stream explicitly,
+        # so a longer value does not delay normal replies.
+        "stop_frame_timeout_s": parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 3.0, min_value=1.0),
     }
     if domain.tts_text_transform is not None:
         tts_kwargs["text_transforms"] = [("*", domain.tts_text_transform)]

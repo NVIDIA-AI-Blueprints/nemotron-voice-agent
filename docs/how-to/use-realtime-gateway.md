@@ -716,9 +716,64 @@ client without enforcing that schema. The client must validate arguments and
 return one correlated success or failure output.
 
 The model-serving endpoint owns model-specific tool parsing. The gateway uses
-typed OpenAI-style calls and does not parse raw `<tool_call>` or XML text. The
+typed OpenAI-style calls and does not parse raw `<tool_call>` or XML text into
+tool calls. The only exception is a loop-guarded completion, which removes that
+markup from the spoken reply. Refer to
+[Bound Model Tool-Call Loops](#bound-model-tool-call-loops). The
 `qwen3_coder` values in the checked-in vLLM configuration name a parser
 implementation; they do not select or deploy a Qwen model.
+
+### Bound Model Tool-Call Loops
+
+Some models can keep issuing tool calls without answering the caller. For
+example, Nemotron 3.5 Lightning with reasoning off can repeat an identical call
+or chain many calls after one caller turn. You can bound these loops with two
+optional fields on an LLM entry in `services.cloud.yaml` or
+`services.local.yaml`.
+
+| Field | Guard condition |
+| --- | --- |
+| `realtime_max_identical_tool_calls` | The most recent tool calls since the latest user message include this many identical calls in a row. Identical calls use the same function name and the same JSON arguments, ignoring key order. |
+| `realtime_max_tool_calls_per_turn` | The model has made this many tool calls since the latest user message. |
+
+The following LLM catalog entry sets both limits:
+
+```yaml
+llm:
+  nemotron-lightning:
+    name: "Nemotron 3.5 Lightning 30B A3B"
+    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+    base_url: "https://integrate.api.nvidia.com/v1"
+    realtime_max_identical_tool_calls: 3
+    realtime_max_tool_calls_per_turn: 10
+```
+
+Both fields are unset by default, and the guard is off. Each value must be a
+positive integer. The server rejects `0`, negative numbers, booleans, and
+non-integer values when it creates the LLM service. The gateway keeps both
+fields private and does not include them in client-visible service metadata.
+
+When a limit is reached, the server guards the next completion as follows:
+
+- It sends `tool_choice: "none"` and drops `parallel_tool_calls`. The tools
+  stay declared.
+- It appends one system instruction that tells the model to answer the caller
+  from the previous tool results or to ask for missing information. This
+  change applies to that provider request only; the conversation is unchanged.
+- It requests the reply without streaming and removes raw
+  `<tool_call>...</tool_call>` markup from the text, so the markup never
+  reaches TTS.
+- It retries once when no speakable text remains. If the retry is also empty,
+  the response completes without text.
+
+The server logs a `WARNING` that contains `Realtime tool loop guard withheld
+tools for this completion:` and states the reason. The guard never overrides a
+forced tool choice (`required` or a named function) or `none`. A new user
+message resets both counters.
+
+The guard applies to Realtime sessions that use the cascaded Generic,
+Multilingual, and Frontend/Backend Agent pipelines. It does not apply to
+browser RTVI sessions or to the Omni pipelines.
 
 ## Handle Errors
 

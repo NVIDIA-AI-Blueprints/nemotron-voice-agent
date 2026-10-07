@@ -13,6 +13,19 @@ _TTS_RESERVED_CHARACTERS = re.compile(
     r"|[*{}]"  # Markdown asterisks and ARPAbet phoneme delimiters: *, {, }
 )
 
+# Magpie rejects a segment that contains only punctuation ("Invalid text, only
+# punctuation"), and that error ends the whole synthesis stream for the reply.
+# Drop lines with no letters or digits (for example a lone "?" left after a
+# sentence split, or a "---" separator) and punctuation-only prefixes before a
+# word, such as list bullets ("- ", "• ").
+_PUNCTUATION_ONLY_SEGMENT = re.compile(r"(?m)^[^\w\n]*$\n?|^\s*[^\w\s]+\s+(?=\w)")
+
+
+def _clean_for_nvidia_tts(text: str) -> str:
+    """Remove reserved characters and punctuation-only segments from TTS input."""
+    text = _TTS_RESERVED_CHARACTERS.sub("", text)
+    return _PUNCTUATION_ONLY_SEGMENT.sub("", text)
+
 
 class NemotronSpeechTextFilter(BaseTextFilter):
     """Strips characters reserved by the NVIDIA TTS text preprocessor.
@@ -22,11 +35,13 @@ class NemotronSpeechTextFilter(BaseTextFilter):
     ``<tag>``  SSML tags.
 
     ``*``  Markdown emphasis markers.
+
+    It also drops punctuation-only lines and prefixes, which Magpie rejects.
     """
 
     async def filter(self, text: str) -> str:
-        """Strip markdown asterisks, SSML tag openers, and ARPAbet delimiters from TTS input."""
-        return _TTS_RESERVED_CHARACTERS.sub("", text)
+        """Strip reserved characters and punctuation-only segments from TTS input."""
+        return _clean_for_nvidia_tts(text)
 
 
 class NemotronSpeechMarkdownTextFilter(MarkdownTextFilter):
@@ -39,6 +54,6 @@ class NemotronSpeechMarkdownTextFilter(MarkdownTextFilter):
     """
 
     async def filter(self, text: str) -> str:
-        """Apply Markdown stripping then remove NVIDIA TTS reserved characters."""
+        """Apply Markdown stripping, then remove NVIDIA TTS reserved characters and punctuation-only segments."""
         text = await super().filter(text)
-        return _TTS_RESERVED_CHARACTERS.sub("", text)
+        return _clean_for_nvidia_tts(text)

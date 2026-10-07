@@ -26,7 +26,9 @@ LOCAL_SERVICE_CATALOG_PLATFORMS: tuple[str, ...] = ("server", "singlegpu")
 REALTIME_PRIVATE_SERVICE_FIELDS: frozenset[str] = frozenset(
     {
         "forced_tool_call_stops",
+        "realtime_max_identical_tool_calls",
         "realtime_max_output_tokens",
+        "realtime_max_tool_calls_per_turn",
         "supports_tokenize",
     }
 )
