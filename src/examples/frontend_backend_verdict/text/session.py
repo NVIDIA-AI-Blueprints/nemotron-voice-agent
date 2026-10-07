@@ -31,6 +31,8 @@ class PendingTurn:
     outstanding: tuple[str, ...]
     iterations: int = 1
     frontend_assistant: Message | None = None
+    #: Caller speech carried into this turn's resumed steps, in order.
+    caller_inputs: tuple[Message, ...] = ()
 
     def with_step(self, *, backend_history: History, outstanding: Sequence[str]) -> PendingTurn:
         """Return a copy advanced by one backend round."""
@@ -69,6 +71,7 @@ class SessionState:
                 "frontend_assistant": _message_to_dict(self.pending.frontend_assistant)
                 if self.pending.frontend_assistant
                 else None,
+                "caller_inputs": [_message_to_dict(m) for m in self.pending.caller_inputs],
             },
         }
 
@@ -87,6 +90,7 @@ class SessionState:
                 frontend_assistant=_message_from_dict(pending_raw["frontend_assistant"])
                 if pending_raw.get("frontend_assistant")
                 else None,
+                caller_inputs=tuple(_message_from_dict(m) for m in pending_raw.get("caller_inputs", [])),
             )
         return cls(
             session_id=str(data.get("session_id") or uuid.uuid4().hex[:12]),
@@ -146,6 +150,8 @@ def _message_to_dict(message: Message) -> dict[str, Any]:
         ]
     if message.tool_call_id:
         payload["tool_call_id"] = message.tool_call_id
+    if message.meta:
+        payload["meta"] = message.meta
     return payload
 
 
@@ -158,4 +164,5 @@ def _message_from_dict(data: dict[str, Any]) -> Message:
             for call in data.get("tool_calls", [])
         ),
         tool_call_id=data.get("tool_call_id"),
+        meta=data.get("meta"),
     )

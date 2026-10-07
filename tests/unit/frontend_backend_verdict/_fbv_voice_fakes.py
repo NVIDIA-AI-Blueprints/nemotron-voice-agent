@@ -86,14 +86,22 @@ class FakeChatClient:
         self.gates: dict[int, asyncio.Event] = {}
         self.failures: dict[int, BaseException] = {}
         self.calls: list[dict[str, Any]] = []
+        self.tool_choices: list[Any] = []
 
     def queue(self, *responses: ChatResponse) -> FakeChatClient:
         self.responses.extend(responses)
         return self
 
-    async def complete(self, *, messages: Sequence[Message], tools: Sequence[dict[str, Any]] | None = None):
+    async def complete(
+        self,
+        *,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ):
         index = len(self.calls)
-        self.calls.append({"messages": list(messages), "tools": list(tools or [])})
+        self.calls.append({"messages": list(messages), "tools": list(tools or []), "tool_choice": tool_choice})
+        self.tool_choices.append(tool_choice)
         gate = self.gates.get(index)
         if gate is not None:
             await gate.wait()
@@ -226,6 +234,7 @@ class SessionHarness:
                     normalization=self.config.normalization,
                     barge_in=frontend_verdict_settings(self.config),
                     prompt_context=prompt_context(self.config),
+                    write_gate=self.config.write_gate,
                 )
                 self.runners.append(runner)
                 return runner

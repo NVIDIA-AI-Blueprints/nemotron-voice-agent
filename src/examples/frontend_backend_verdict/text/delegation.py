@@ -79,3 +79,38 @@ def _with_task_field(tool: dict[str, Any]) -> dict[str, Any]:
 #: (a caller passes an in-progress note). ``FRONTEND_TOOLS`` is unchanged.
 CALL_BACKEND_TOOL_IN_PROGRESS: dict[str, Any] = _with_task_field(CALL_BACKEND_TOOL)
 FRONTEND_TOOLS_IN_PROGRESS: tuple[dict[str, Any], ...] = (CALL_BACKEND_TOOL_IN_PROGRESS,)
+
+#: Values of the pending-confirmation ``confirmation`` field; only ``yes`` confirms.
+CONFIRMATION_VALUES = ("yes", "partial", "no", "unclear")
+
+
+def _with_confirmation_field(tool: dict[str, Any]) -> dict[str, Any]:
+    extended = copy.deepcopy(tool)
+    parameters = extended["function"]["parameters"]
+    parameters["properties"]["confirmation"] = {
+        "type": "string",
+        "enum": list(CONFIRMATION_VALUES),
+        "description": (
+            "Your reading of the user's reply to the action summary they were asked to confirm: 'yes' only if "
+            "the user approves the whole summary and adds or changes nothing; 'partial' if they approve some "
+            "parts or change anything; 'no' if they decline; 'unclear' if you cannot tell."
+        ),
+    }
+    parameters["required"] = [*parameters["required"], "confirmation"]
+    return extended
+
+
+#: ``call_backend`` with the required ``confirmation`` field, offered (and forced) only on the first
+#: user turn after the agent read out an action summary and asked for confirmation (``write_gate``).
+CALL_BACKEND_TOOL_CONFIRMATION: dict[str, Any] = _with_confirmation_field(CALL_BACKEND_TOOL)
+FRONTEND_TOOLS_CONFIRMATION: tuple[dict[str, Any], ...] = (CALL_BACKEND_TOOL_CONFIRMATION,)
+#: ``tool_choice`` that makes the model call ``call_backend`` (it cannot answer directly).
+FORCE_CALL_BACKEND: dict[str, Any] = {"type": "function", "function": {"name": CALL_BACKEND}}
+
+PENDING_CONFIRMATION_NOTE = """PENDING CONFIRMATION
+You just read this action to the user and asked "Shall I go ahead?":
+  {summary}
+The latest user message is their reply. For this turn, always call call_backend: restate the request in
+query, include the user's exact words, and set "confirmation" to "yes" only if they approve the whole
+action and add or change nothing; "partial" if they approve only some of it or change anything; "no" if
+they decline; "unclear" if you cannot tell."""

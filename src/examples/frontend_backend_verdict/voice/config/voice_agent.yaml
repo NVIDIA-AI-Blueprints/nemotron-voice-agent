@@ -155,3 +155,12 @@ normalization:
       max_hints: 3                  # notes per session until a lookup of these tools succeeds
       message_key: lookup_not_found_hint            # the first miss
       escalate_message_key: ""      # later misses ("" = message_key again)
+
+write_gate:                         # hold consequential tool calls until the caller confirms the exact call
+  enabled: false                    # needs the frontend (it judges the confirmation); see tau3_eval_..._write_gate.yaml
+  default: non_read                 # non_read (every tool schema_rules.is_read_tool does not call a read) | none
+  exempt: []                        # tool names never held (e.g. a handoff tool); must be offered by the session
+  include: []                       # tool names held even if classified as reads
+  tools: {}                         # per tool: {not_consequential: [json paths, e.g. items[].note], labels: {path: label}}
+  max_summary_chars: 600            # a longer generated summary blocks the call (summary_too_long), never truncated
+  max_unconfirmed_reissues: 2       # held re-issues before a confirmation, then the agent asks again this turn

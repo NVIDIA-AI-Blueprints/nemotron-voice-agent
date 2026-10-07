@@ -31,6 +31,17 @@ Rules, all on the audio clock except the two timeouts:
   ``cancel_and_merge``.
 * Speech during a tool-call response in ``filler.mode: speak`` cancels only the
   filler's audio; the function calls are still emitted.
+* With automatic responses on, a caller turn committed while tools are out goes
+  into that wait's own inbox. The wait resumes once its response is done and
+  every output is in, on a ``response.create`` *or* on inbox speech (the OpenAI
+  rule: a committed turn with ``create_response`` gets a response), and the
+  resumed step carries the caller's words after the tool messages. One later
+  ``response.create`` that can only be the client's request for that wait is
+  consumed as a no-op.
+* A reply that ends with a write-gate summary (``AgentReply.presentation``) is
+  tracked to the audio item that speaks it. The first committed caller turn
+  afterwards tells the agent whether the summary was heard to its end: no caller
+  speech started before its last audio, and it was not cut by a barge-in.
 * One response at a time; its jobs (filler item, answer item, function calls,
   ``response.done``) run in order on one task, so items never interleave.
 """
@@ -131,6 +142,15 @@ class _SpeakJob:
     prepared: PreparedSpeech
     on_first_audio: Callable[[], None] | None = None
     on_done: Callable[[], None] | None = None
+    on_item: Callable[[str], None] | None = None
+
+
+@dataclass(slots=True)
+class _Presentation:
+    """A spoken write-gate summary, until the next committed caller turn."""
+
+    proposal_id: str
+    item_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -159,6 +179,15 @@ class _Response:
 
 
 @dataclass(slots=True)
+class _WaitInput:
+    """A caller turn committed while a wait was open, with the outputs that had arrived by then."""
+
+    user_input: UserInput
+    seq: int
+    after_outputs: tuple[str, ...]
+
+
+@dataclass(slots=True)
 class _ToolWait:
     turn: UserTurn
     outstanding: tuple[str, ...]
@@ -166,10 +195,26 @@ class _ToolWait:
     response_done: bool = False
     resume_requested: bool = False
     timer: asyncio.TimerHandle | None = None
+    wait_id: int = 0
+    #: Caller turns committed during this wait (not ``_queued``), in commit order.
+    inputs: list[_WaitInput] = field(default_factory=list)
+    #: Counts outputs and inputs, so each input records where it fell among the outputs.
+    seq: int = 0
 
     @property
     def complete(self) -> bool:
         return all(call_id in self.outputs for call_id in self.outstanding)
+
+
+@dataclass(slots=True)
+class _InboxResume:
+    """A wait resumed on caller speech, before the client asked for it with ``response.create``."""
+
+    wait_id: int
+    step: int
+    consumed: bool = False
+    #: A caller turn committed after the resume (a later ``response.create`` may answer it).
+    turn_since: bool = False
 
 
 class TurnManager:
@@ -213,6 +258,13 @@ class TurnManager:
         self._agent_task: asyncio.Task[None] | None = None
         self._turn: UserTurn | None = None
         self._wait: _ToolWait | None = None
+        self._wait_counter = 0
+        #: Serial number of the agent step (turn start or resume) most recently started.
+        self._step = 0
+        self._inbox_resume: _InboxResume | None = None
+        self._presentation: _Presentation | None = None
+        #: Playout position (``heard_ms``) when the caller last started speaking.
+        self._heard_at_speech: float | None = None
         self._queued: list[UserInput] = []
         self._pending_inputs: list[UserInput] = []
         self._merge_prefix = ""
@@ -257,6 +309,7 @@ class TurnManager:
 
     async def on_speech_started(self) -> None:
         """Confirmed user speech (``speech_started`` was already emitted)."""
+        self._heard_at_speech = self.progress.heard_ms
         settings = self._settings()
         if not self._config.barge_in.enabled or not settings.turn_detection.interrupt_response:
             return
@@ -294,9 +347,15 @@ class TurnManager:
             return
         else:
             user_input.text = text
+        self._report_presentation(from_audio=from_audio)
         auto = from_audio and self._config.protocol.auto_response and self._settings().turn_detection.create_response
         if not auto:
             self._pending_inputs.append(user_input)
+            return
+        if self._inbox_resume is not None:
+            self._inbox_resume.turn_since = True
+        if self._wait is not None:
+            self._wait_input(self._wait, user_input)
             return
         if self._busy():
             self._queued.append(user_input)
@@ -318,6 +377,7 @@ class TurnManager:
                 f"duplicate function_call_output for {call_id!r}", code="invalid_value", param="item.call_id"
             )
         wait.outputs[call_id] = output
+        wait.seq += 1
         self._log("tool_output_in", call_id=call_id, output=output)
         if wait.complete and self._config.protocol.resume_on == "last_function_output":
             wait.resume_requested = True
@@ -325,8 +385,23 @@ class TurnManager:
 
     def on_response_create(self) -> None:
         """Client ``response.create``."""
+        mark = self._inbox_resume
+        if (
+            mark is not None
+            and not mark.consumed
+            and not mark.turn_since
+            and self._wait is None
+            and self._step == mark.step
+            and (self.thinking or self.progress.generating)
+        ):
+            # The resumed step for this wait is still running and nobody spoke since:
+            # this can only be the client's continuation request, already served.
+            mark.consumed = True
+            self._log("response_create", wait_id=mark.wait_id, rule="consumed_after_inbox_resume")
+            return
         if self._wait is not None:
             # tau2 may send this before our tool-call response.done went out: queue, never reject.
+            self._log("response_create", wait_id=self._wait.wait_id, rule="resume_wait")
             self._wait.resume_requested = True
             self._maybe_resume()
             return
@@ -359,6 +434,11 @@ class TurnManager:
             for index, item in enumerate(bucket):
                 if item.item_id == item_id:
                     del bucket[index]
+                    return True
+        if self._wait is not None:
+            for index, entry in enumerate(self._wait.inputs):
+                if entry.user_input.item_id == item_id:
+                    del self._wait.inputs[index]
                     return True
         return False
 
@@ -443,15 +523,26 @@ class TurnManager:
             agent_start=Stamp.now(self._clock, self._audio_now()),
         )
         self._turn = turn
+        self._step += 1
         self._log("agent_turn_start", turn_id=turn.turn_id, text=turn.text)
         self._agent_task = asyncio.create_task(
             self._run_agent(turn, None, probe=probe), name=f"agent-turn-{turn.turn_id}"
         )
 
-    async def _run_agent(self, turn: UserTurn, outputs: dict[str, str] | None, *, probe: Probe | None = None) -> None:
+    async def _run_agent(
+        self,
+        turn: UserTurn,
+        outputs: dict[str, str] | None,
+        *,
+        probe: Probe | None = None,
+        user_text: str | None = None,
+        user_meta: dict[str, Any] | None = None,
+    ) -> None:
         started = self._clock.monotonic()
         try:
-            if outputs is not None:
+            if outputs is not None and user_text is not None:
+                reply = await self._agent.resume(outputs, user_text=user_text, user_meta=user_meta)
+            elif outputs is not None:
                 reply = await self._agent.resume(outputs)
             elif probe is not None:
                 reply = await self._proceed(turn, probe)
@@ -505,18 +596,29 @@ class TurnManager:
                 record.backend_done = Stamp.now(self._clock)
                 record.outcome = "answer"
             prepared = self._prepare(reply.text, kind="answer")
+            on_item = None
+            if reply.presentation is not None:
+                presentation = self._presentation = _Presentation(proposal_id=reply.presentation)
+
+                def on_item(item_id: str, presentation: _Presentation = presentation) -> None:
+                    presentation.item_id = item_id
+
             response.jobs.put_nowait(
                 _SpeakJob(
                     prepared,
                     on_first_audio=lambda: self._first_answer_audio(turn),
                     on_done=lambda: self._answer_sent(turn),
+                    on_item=on_item,
                 )
             )
             response.jobs.put_nowait(_FinishJob(usage=usage))
             return
         turn.tools_out = True
         response.tools_committed = True
-        self._wait = _ToolWait(turn=turn, outstanding=tuple(call.call_id for call in reply.calls))
+        self._wait_counter += 1
+        self._wait = _ToolWait(
+            turn=turn, outstanding=tuple(call.call_id for call in reply.calls), wait_id=self._wait_counter
+        )
         self._log("tool_calls_out", turn_id=turn.turn_id, calls=[call.name for call in reply.calls])
         if record is not None and not record.emitted:
             record.outcome = "tool_calls"
@@ -772,9 +874,26 @@ class TurnManager:
         self._log("tool_result_timeout", missing=missing)
         self._resume(wait)
 
+    def _wait_input(self, wait: _ToolWait, user_input: UserInput) -> None:
+        """A caller turn committed while tools are out: it belongs to this wait's resume."""
+        wait.seq += 1
+        entry = _WaitInput(user_input=user_input, seq=wait.seq, after_outputs=tuple(wait.outputs))
+        wait.inputs.append(entry)
+        self._log(
+            "wait_input",
+            wait_id=wait.wait_id,
+            seq=entry.seq,
+            after_outputs=list(entry.after_outputs),
+            outstanding=len(wait.outstanding),
+            text=user_input.text,
+        )
+        self._maybe_resume()
+
     def _maybe_resume(self) -> None:
         wait = self._wait
-        if wait is None or not wait.response_done or not wait.resume_requested or not wait.complete:
+        if wait is None or not wait.response_done or not wait.complete:
+            return
+        if not wait.resume_requested and not wait.inputs:
             return
         self._resume(wait)
 
@@ -784,9 +903,61 @@ class TurnManager:
         self._wait = None
         turn = wait.turn
         self._turn = turn
+        self._step += 1
+        user_text: str | None = None
+        user_meta: dict[str, Any] | None = None
+        if wait.inputs:
+            user_text = " ".join(entry.user_input.text for entry in wait.inputs)
+            # Timing is metadata only: the model sees the caller's words, nothing else.
+            user_meta = {
+                "tool_wait": {
+                    "wait_id": wait.wait_id,
+                    "outstanding": list(wait.outstanding),
+                    "inputs": [
+                        {"seq": entry.seq, "after_outputs": list(entry.after_outputs), "text": entry.user_input.text}
+                        for entry in wait.inputs
+                    ],
+                }
+            }
+            if not wait.resume_requested:
+                self._inbox_resume = _InboxResume(wait_id=wait.wait_id, step=self._step)
+            self._log(
+                "wait_resumed",
+                wait_id=wait.wait_id,
+                trigger="response_create" if wait.resume_requested else "caller_turn",
+                inputs=len(wait.inputs),
+                outputs=len(wait.outputs),
+                complete=wait.complete,
+            )
         self._agent_task = asyncio.create_task(
-            self._run_agent(turn, dict(wait.outputs)), name=f"agent-resume-{turn.turn_id}"
+            self._run_agent(turn, dict(wait.outputs), user_text=user_text, user_meta=user_meta),
+            name=f"agent-resume-{turn.turn_id}",
         )
+
+    # -- write gate -------------------------------------------------------------------------
+
+    def _report_presentation(self, *, from_audio: bool) -> None:
+        """Tell the agent whether the last spoken summary was heard to its end (once, then forget it)."""
+        presentation, self._presentation = self._presentation, None
+        if presentation is None:
+            return
+        span = self.progress.item(presentation.item_id) if presentation.item_id is not None else None
+        complete = bool(
+            from_audio
+            and span is not None
+            and not span.repaired
+            and self._heard_at_speech is not None
+            and self._heard_at_speech >= span.end_ms
+        )
+        self._log(
+            "write_presentation",
+            proposal_id=presentation.proposal_id,
+            item_id=presentation.item_id,
+            complete=complete,
+            heard_at_speech_ms=None if self._heard_at_speech is None else int(self._heard_at_speech),
+            summary_end_ms=None if span is None else int(span.end_ms),
+        )
+        self._agent.presentation_heard(presentation.proposal_id, complete=complete)
 
     # -- filler -------------------------------------------------------------------------
 
@@ -915,6 +1086,8 @@ class TurnManager:
                 if isinstance(job, _SpeakJob):
                     response.prepared.append(job.prepared)
                     item = writer.begin_message(kind=job.prepared.kind)
+                    if job.on_item is not None:
+                        job.on_item(item.item_id)
                     response.current_item = item
                     response.current_prepared = job.prepared
                     response.skip_speech = False

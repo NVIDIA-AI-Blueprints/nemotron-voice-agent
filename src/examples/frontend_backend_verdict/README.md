@@ -2,13 +2,15 @@
 
 The Frontend/Backend Verdict Agent serves the voice Frontend/Backend Agent prototype on the repository's OpenAI Realtime WebSocket endpoint. A fast frontend large language model (LLM) talks to the user and decides whether to answer or delegate. A reasoning backend LLM does the delegated work with the tools that the Realtime client defines.
 
-This example adds three behaviors to the cascaded voice loop:
+This example adds the following behaviors to the cascaded voice loop:
 
 - A frontend barge-in verdict decides whether speech during backend work continues the running task or starts a new one.
 - The backend receives the full conversation history with each delegated request.
 - Identifier normalization writes spoken identifiers, such as user IDs, in their written form before the agent sees them.
+- Caller speech while client tool calls are outstanding resumes the tool continuation with the caller's words.
+- An optional write gate holds every consequential tool call until the caller confirms a spoken summary of it.
 
-The behavior code is a copy of the prototype from the `nemotron-voice-agent-smasurekar` fork at commit `66f6c67`. Pipecat only hosts the prototype session on the socket that the Realtime gateway authenticated. This example is separate from the [Frontend/Backend Agent](../frontend_backend_agent/README.md) example and does not import its Talker/Thinker planner.
+The behavior code is a copy of the prototype from the `nemotron-voice-agent-smasurekar` fork at commit `66f6c67`, with the local changes that `provenance.json` records. Refer to [Provenance](#provenance). Pipecat only hosts the prototype session on the socket that the Realtime gateway authenticated. This example is separate from the [Frontend/Backend Agent](../frontend_backend_agent/README.md) example and does not import its Talker/Thinker planner.
 
 ## Realtime Model
 
@@ -58,11 +60,11 @@ The example has the following parts.
 | `bridge/runtime.py` | Process-wide state for one profile: event log, speech services, LLM clients, speech warm-up, and the session cap. It also validates `FBV_PROFILE` and the WebSocket keepalive. |
 | `bridge/session_processor.py` | Pipecat processor that runs one prototype `RealtimeSession` per connection. |
 | `bridge/wire.py` | Pass-through serializer. The prototype session parses and builds every Realtime event itself. |
-| `text/` | Copied text Frontend/Backend Agent: frontend, backend, delegation, conversation history, and prompts. |
-| `voice/` | Copied voice layer: wire protocol, engine, speech adapters, normalization, and configuration profiles. |
+| `text/` | Text Frontend/Backend Agent copied from the prototype: frontend, backend, delegation, conversation history, and prompts. |
+| `voice/` | Voice layer copied from the prototype: wire protocol, engine, speech adapters, normalization, and configuration profiles. It also contains the example's own write gate (`voice/agent/write_gate.py`). |
 | `prompts.yaml` | Registry-facing copy of the prototype voice prompt catalog (`voice/config/prompts.voice.yaml`). |
 | `services.cloud.yaml`, `services.local.yaml` | Example-local service catalogs. |
-| `provenance.json` | SHA-256 hash and source path of every copied prototype file. |
+| `provenance.json` | SHA-256 hash and source path of every copied prototype file, and a `diverged` record for every file that the example changes or adds. |
 
 ## Default Models
 
@@ -165,6 +167,7 @@ The following table lists the served profiles and what each one changes.
 | `tau3_eval_frontend_verdict` | `tau3_eval` plus `barge_in.while_thinking: frontend_verdict`. |
 | `tau3_eval_frontend_verdict_speak` | `tau3_eval_frontend_verdict` plus spoken filler (`filler.mode: speak`). |
 | `tau3_eval_frontend_verdict_speak_history` | `tau3_eval_frontend_verdict_speak` plus backend conversation history with `include: full`. This is the default. |
+| `tau3_eval_frontend_verdict_speak_history_write_gate` | `tau3_eval_frontend_verdict_speak_history` plus the write gate, with `transfer_to_human_agents` exempt. It also overrides the backend history guidance prompt. The added guidance tells the backend to re-check the policy before a call that changes data and how to handle a held call. |
 
 An unknown profile name raises an error that lists the served profiles. The `SHIPPED_PROFILES` tuple in `bridge/runtime.py` defines the list.
 
@@ -181,6 +184,8 @@ The default profile resolves to the following effective values. The profile file
 | Backend history | On, with `include: full` and the default guidance. |
 | Filler | Spoken (`speak`) when the backend is still busy after 300 ms. |
 | Identifier normalization | The transcript hook writes spoken identifiers in lowercase written form for the agent. The wire keeps the raw ASR transcript. The tool-argument rule canonicalizes `get_user_details.user_id` to the pattern `^[a-z]+_[a-z]+_\d{4}$` and answers a malformed ID locally. The retry guard answers a repeat of a call that failed with `Error: ... not found` locally. |
+| Speech while tools are out | Goes to the outstanding tool wait. Refer to [Tool Continuation Resume](#tool-continuation-resume). |
+| Write gate | Off. Refer to [Write Gate](#write-gate). |
 | Tools | Client-owned. The client declares tools in `session.update` and returns each function call output. A call with no output after 120 seconds receives a synthesized error result. |
 | Instructions | Client `session.instructions` fill the backend prompt's domain-policy slot. |
 | Greeting | Off. The session seeds its history with the client greeting `Hi! How can I help you today?`. |
@@ -206,6 +211,40 @@ Relative log paths resolve against the working directory. That directory is the 
 
 The served profiles set `server.ws_ping_interval_s: 0` and `server.ws_ping_timeout_s: 20`. The example compares these values with `UVICORN_WS_PING_INTERVAL` and `UVICORN_WS_PING_TIMEOUT` when it builds a profile's runtime. If they differ, the session fails and the error names the values to set. The keepalive variables apply to the whole server process, so they also change the keepalive for every other example in that process.
 
+### Tool Continuation Resume
+
+This behavior is always on when automatic responses are on, that is, when `protocol.auto_response` and the session's `turn_detection.create_response` are both true. A caller turn that commits while client function calls are outstanding goes to that tool wait instead of starting a new turn. The wait resumes after its tool-call response is done and every function call output is in. Either a `response.create` or the caller's speech triggers the resume, following the OpenAI Realtime `create_response` rule.
+
+The resumed backend request contains the tool messages and then one user message with the caller's words. Several caller turns are joined in order. Timing details are kept as message metadata and are never sent to a model. The frontend history records the caller's words after the delegation result, in the same turn group.
+
+After a resume that caller speech triggers, the session consumes one later `response.create` as a no-op. This applies only while the resumed step still runs and no new caller turn has committed. Any other `response.create` follows the usual rules. It starts a response from pending input when the session is idle, or it marks an outstanding tool wait for resume. During an active response, it returns the `conversation_already_has_active_response` error.
+
+### Write Gate
+
+The write gate holds consequential tool calls until the caller confirms the exact call. It is off by default. Turn it on with the `tau3_eval_frontend_verdict_speak_history_write_gate` profile, or set `write_gate.enabled: true` in a profile. The gate needs the frontend, because the frontend judges the caller's reply. Turning it on without the frontend raises a configuration error.
+
+The gate works as follows:
+
+1. The backend's call to a non-read tool is held and does not reach the client. The generic read/write classifier decides which tools are reads. A tool that the session did not offer is classified by its name.
+2. The backend receives an internal `confirmation_required` result. It receives `arguments_mismatch` when a call differs from the pending proposal, and `summary_too_long` when the generated summary exceeds `max_summary_chars`.
+3. The agent speaks the model's short framing sentence, a summary generated from the canonical call arguments, and the question "Shall I go ahead?"
+4. Only the first committed caller turn after the summary played to its end, with no barge-in, can confirm. On that turn, the frontend must call `call_backend` with a required `confirmation` value of `yes`, `partial`, `no`, or `unclear`. A missing call or an invalid value counts as `unclear`.
+5. Only `yes` confirms. After that, only a re-issued call equal to the proposal goes to the client.
+
+The gate checks consent and argument consistency. It does not check whether the policy allows the action. That decision stays with the model.
+
+The following `write_gate` keys in `voice/config/voice_agent.yaml` configure the gate.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `enabled` | `false` | Turns the gate on. |
+| `default` | `non_read` | `non_read` holds every tool that the classifier does not call a read. `none` holds only the tools in `include`. |
+| `exempt` | `[]` | Tool names that are never held, for example a handoff tool. |
+| `include` | `[]` | Tool names that are held even when they are classified as reads. |
+| `tools` | `{}` | Per-tool settings: `not_consequential` lists argument paths left out of the summary, and `labels` maps argument paths to spoken labels. |
+| `max_summary_chars` | `600` | Longest generated summary. A longer summary blocks the call instead of being truncated. |
+| `max_unconfirmed_reissues` | `2` | Held re-issues in one caller turn before a confirmation. After that, the agent asks the caller again. |
+
 ### Change the LLM Endpoints
 
 To change an LLM model or base URL, edit the `llm` or `thinker-llm` entry in the catalog section that `REALTIME_SERVICE_PLATFORM` selects. The example uses only `model_id` and `base_url` from the catalog. Other request settings, such as `temperature`, `max_tokens`, and reasoning switches, come from `text/config/agent.yaml`.
@@ -222,6 +261,9 @@ Set `FBA_VOICE_EVENT_LOG` to record one JSONL record per internal, voice, and ti
 - `backend_context`: the history settings and history size of each delegated backend request.
 - `transcript_normalized`: an ASR transcript after identifier normalization.
 - `filler_timing`: when filler was ready, whether it was spoken, and its outcome.
+- `wait_input` and `wait_resumed`: a caller turn added to an outstanding tool wait, and the resume of that wait with its trigger.
+- `response_create`: how a client `response.create` was handled, for example the rule `consumed_after_inbox_resume` or `resume_wait`.
+- `write_proposed`, `write_presented`, `write_presentation`, `write_presentation_heard`, `write_confirmation`, `write_confirmed`, `write_invalidated`, `write_held`, `write_gate_error`, and `write_gate_config_problem`: the write gate's proposals, spoken summaries, confirmation verdicts, and problems.
 
 The log can record transcripts and tool payloads. Treat it as sensitive data.
 
@@ -235,21 +277,18 @@ The session implements the OpenAI Realtime protocol in the prototype's `voice/wi
 - Add `?x_nvidia_filler=1` to the WebSocket URL to receive unspoken filler as non-standard `x_nvidia.filler` events. The default profile speaks its filler, so these events apply to profiles with `filler.mode: log_only`.
 - Over the session cap, or before the speech warm-up succeeds, the server sends an `error` event with code `server_busy` and closes the socket with code 1013. The next session retries the warm-up.
 
-## Provenance and Re-Sync
+## Provenance
 
-The `text/` and `voice/` directories are byte-for-byte copies of the prototype's `src/prototypes/text_frontend_backend_agent` and `src/prototypes/voice_frontend_backend_agent` directories, with the following exceptions:
+The `text/` and `voice/` directories are copies of the prototype's `src/prototypes/text_frontend_backend_agent` and `src/prototypes/voice_frontend_backend_agent` directories, with the following exceptions:
 
 - The package prefix is rewritten to `examples.frontend_backend_verdict.text` and `examples.frontend_backend_verdict.voice`.
 - `voice/config/voice_agent.yaml` has two listed value edits. They point the text agent configuration at `text/config/agent.yaml` and the speech catalogs at this example's `services.*.yaml`.
 - The text terminal UI (`text/cli`), the voice `cli/tau2_gates` scripts, and the prototype READMEs are not copied.
+- Files that the example changes for the tool continuation resume (`R1`) or the write gate (`R4`) carry a `diverged` record in `provenance.json` with the change ID and a reason. The two files that the example adds, `voice/agent/write_gate.py` and the `tau3_eval_frontend_verdict_speak_history_write_gate.yaml` profile, are recorded as `diverged` with `"source": null`.
 
-The ported unit tests in `tests/unit/frontend_backend_verdict/` are also prototype copies. The `provenance.json` file records the prototype repository, commit, and SHA-256 hash of every original file. The `test_fbv_provenance.py` test reverses the rewrites and checks every hash, so a manual edit to a copied file fails CI.
+The ported unit tests in `tests/unit/frontend_backend_verdict/` are also prototype copies, and some of them are diverged as well. The `provenance.json` file records the prototype repository, commit, and SHA-256 hash of every original file. The `test_fbv_provenance.py` test reverses the rewrites and checks every hash that is not diverged, so an unrecorded edit to a copied file fails CI. Each diverged entry must have a reason and a change ID, such as `R1` or `R1+R4`.
 
-Change copied behavior in the prototype, and then re-sync from a prototype checkout:
-
-```bash
-python scripts/frontend_backend_verdict_sync.py --prototype-root <prototype-checkout>
-```
+When updating copied files from a newer prototype commit, update `provenance.json` and preserve the recorded local changes. Run the provenance test below to verify the resulting file hashes.
 
 ## Test the Example
 

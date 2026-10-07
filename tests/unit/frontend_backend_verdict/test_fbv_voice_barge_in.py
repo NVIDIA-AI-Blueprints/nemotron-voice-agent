@@ -149,14 +149,16 @@ class WhileThinkingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transcript, "Merged answer.")
         await harness.close()
 
-    async def test_speech_after_a_tool_call_left_is_queued_never_cancelled(self) -> None:
+    async def test_speech_after_a_tool_call_left_resumes_with_the_words_never_cancelled(self) -> None:
+        # R1: the words said while the call is out go into that wait's resume, after the tool
+        # message, instead of a separate turn that waits for the agent to become idle.
         harness, frontend, backend = paired()
-        frontend.queue(delegate_response("Look up the user."), delegate_response("Second question."))
+        frontend.queue(delegate_response("Look up the user."))
         backend.queue(
             tool_response(("get_users", {}), ids=["call_a"]),
             text_response("Found them."),
-            text_response("Second answer."),
         )
+        resumed = backend.gates.setdefault(1, asyncio.Event())
         await harness.start(tau2_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
@@ -169,11 +171,18 @@ class WhileThinkingTests(unittest.IsolatedAsyncioTestCase):
                 "item": {"type": "function_call_output", "call_id": "call_a", "output": "ok"},
             }
         )
-        await harness.send({"type": "response.create"})
-        await harness.wait_for("response.done", 3)
+        self.assertEqual(harness.session.turns.state, "THINKING")  # resumed on the last output
+        await harness.send({"type": "response.create"})  # the client's late request: consumed
+        resumed.set()
+        await harness.wait_for("response.done", 2)
+        await harness.idle(500)
         statuses = [e["response"]["status"] for e in harness.of_type("response.done")]
-        self.assertEqual(statuses, ["completed", "completed", "completed"])
-        self.assertEqual(frontend.calls[1]["messages"][-1].content, "utterance 2")
+        self.assertEqual(statuses, ["completed", "completed"])
+        self.assertFalse(harness.of_type("error"))
+        tail = backend.calls[1]["messages"][-2:]
+        self.assertEqual([m.role for m in tail], ["tool", "user"])
+        self.assertEqual(tail[1].content, "utterance 2")
+        self.assertEqual(len(frontend.calls), 1)
         await harness.close()
 
     async def test_noise_shorter_than_min_speech_never_interrupts(self) -> None:

@@ -18,8 +18,12 @@ from examples.frontend_backend_verdict.text import events
 from examples.frontend_backend_verdict.text.config import Config
 from examples.frontend_backend_verdict.text.delegation import (
     CALL_BACKEND,
+    CONFIRMATION_VALUES,
+    FORCE_CALL_BACKEND,
     FRONTEND_TOOLS,
+    FRONTEND_TOOLS_CONFIRMATION,
     FRONTEND_TOOLS_IN_PROGRESS,
+    PENDING_CONFIRMATION_NOTE,
     TASK_CONTINUE,
     TASK_NEW,
 )
@@ -58,6 +62,8 @@ class Delegate:
     assistant_message: Message
     #: ``continue`` or ``new`` when the call carried a valid in-progress ``task``; ``""`` otherwise.
     task: str = ""
+    #: The pending-confirmation verdict when the call carried a valid one; ``""`` otherwise.
+    confirmation: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +114,13 @@ class FrontendAgent:
         return render_template(self._template, self._config, context, key=self._prompt_key)
 
     async def decide(
-        self, user_text: str, history: History, *, session_id: str, in_progress: Mapping[str, Any] | None = None
+        self,
+        user_text: str,
+        history: History,
+        *,
+        session_id: str,
+        in_progress: Mapping[str, Any] | None = None,
+        confirmation: Mapping[str, Any] | None = None,
     ) -> tuple[Decision, UsageTotals]:
         """Choose between answering directly and delegating.
 
@@ -120,6 +132,10 @@ class FrontendAgent:
         ``in_progress`` (a caller's description of a request already being worked
         on) is passed to the prompt template, and adds the required ``task`` field
         to ``call_backend``. Without it the call is unchanged.
+
+        ``confirmation`` (``{"summary": ...}``: an action the user was just asked
+        to confirm) adds a note with the summary, the required ``confirmation``
+        field, and forces ``call_backend`` with ``tool_choice``.
         """
         totals = UsageTotals()
         delegation = self._config.frontend.delegation
@@ -129,17 +145,28 @@ class FrontendAgent:
         if in_progress is not None:
             system_prompt = self._render(in_progress)
             tools = FRONTEND_TOOLS_IN_PROGRESS
+        forced: dict[str, Any] = {}
+        if confirmation is not None:
+            note = PENDING_CONFIRMATION_NOTE.format(summary=str(confirmation.get("summary", "")).strip())
+            system_prompt = f"{system_prompt}\n\n{note}"
+            tools = FRONTEND_TOOLS_CONFIRMATION
+            forced = {"tool_choice": FORCE_CALL_BACKEND}
         problem = ""
         for attempt in range(delegation.max_repair_attempts + 1):
             response = await self._client.complete(
                 messages=[Message.system(system_prompt), *attempt_messages],
                 tools=list(tools),
+                **forced,
             )
             totals = totals.add_call(
                 "frontend", usage=response.usage, latency_ms=response.latency_ms, cost=response.cost
             )
             decision, problem = self._interpret(
-                response.content, response.tool_calls, session_id=session_id, in_progress=in_progress is not None
+                response.content,
+                response.tool_calls,
+                session_id=session_id,
+                in_progress=in_progress is not None,
+                confirmation=confirmation is not None,
             )
             if decision is not None:
                 return decision, totals
@@ -161,7 +188,13 @@ class FrontendAgent:
         return ContractFallback(text=delegation.fallback_text, problem=problem), totals
 
     def _interpret(
-        self, content: str | None, tool_calls: tuple[ToolCall, ...], *, session_id: str, in_progress: bool = False
+        self,
+        content: str | None,
+        tool_calls: tuple[ToolCall, ...],
+        *,
+        session_id: str,
+        in_progress: bool = False,
+        confirmation: bool = False,
     ) -> tuple[Decision | None, str]:
         """Map one raw completion onto a decision, or report why it is invalid."""
         if tool_calls:
@@ -186,13 +219,21 @@ class FrontendAgent:
                 # treats it as a new request.
                 raw_task = str(arguments.get("task") or "").strip().lower()
                 task = raw_task if raw_task in (TASK_CONTINUE, TASK_NEW) else ""
+            verdict = ""
+            if confirmation:
+                # Missing or invalid is not repaired here: the caller treats it as "unclear" (fails closed).
+                raw_verdict = str(arguments.get("confirmation") or "").strip().lower()
+                verdict = raw_verdict if raw_verdict in CONFIRMATION_VALUES else ""
             return Delegate(
                 query=query,
                 filler_text=filler,
                 assistant_message=Message.assistant_tool_calls((call,)),
                 task=task,
+                confirmation=verdict,
             ), ""
         text = (content or "").strip()
+        if confirmation:
+            return None, f"answered directly on a confirmation turn; call {CALL_BACKEND} with 'confirmation'"
         if not text:
             return None, "returned neither text nor a tool call"
         if any(marker in text for marker in _TYPED_TOOL_CALL_MARKERS):

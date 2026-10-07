@@ -35,6 +35,7 @@ from examples.frontend_backend_verdict.text.config import Config, build_config, 
 from examples.frontend_backend_verdict.text.errors import ConfigError
 from examples.frontend_backend_verdict.text.prompts import load_catalog, render
 from examples.frontend_backend_verdict.text.tools import ToolSpec
+from examples.frontend_backend_verdict.voice.agent.write_gate import ToolGateSettings, WriteGateSettings
 from examples.frontend_backend_verdict.voice.audio.formats import AudioFormat, parse_format
 from examples.frontend_backend_verdict.voice.errors import VoiceConfigError
 from examples.frontend_backend_verdict.voice.normalization import NormalizationSettings
@@ -69,7 +70,9 @@ IN_PATH_KEYS: tuple[str, ...] = (
 #: Keys whose values are output paths, resolved against the working directory.
 OUT_PATH_KEYS: tuple[str, ...] = ("filler.log_path", "logging.event_log")
 #: Mappings whose keys are free-form (not checked against the schema).
-_FREE_FORM: frozenset[str] = frozenset({"agent.overrides", "tts.voice_map", "normalization.transcript.separator_words"})
+_FREE_FORM: frozenset[str] = frozenset(
+    {"agent.overrides", "tts.voice_map", "normalization.transcript.separator_words", "write_gate.tools"}
+)
 
 _SPEECH_DEFAULTS: dict[str, Any] = {
     "source": "catalog",
@@ -189,7 +192,19 @@ DEFAULTS: dict[str, Any] = {
             },
         },
     },
+    "write_gate": {
+        "enabled": False,
+        "default": "non_read",
+        "exempt": [],
+        "include": [],
+        "tools": {},
+        "max_summary_chars": 600,
+        "max_unconfirmed_reissues": 2,
+    },
 }
+
+#: Keys of one ``write_gate.tools.<name>`` entry.
+_WRITE_GATE_TOOL_KEYS = frozenset({"not_consequential", "labels"})
 
 #: Keys of one ``normalization.tool_arguments.rules`` entry, with their defaults.
 _ARGUMENT_RULE_DEFAULTS: dict[str, Any] = {
@@ -223,6 +238,7 @@ _ENUMS: dict[str, tuple[str, ...]] = {
     "normalization.transcript.case": CASES,
     "normalization.transcript.spelled_runs.case": CASES,
     "normalization.tool_arguments.retry_guard.scope": GUARD_SCOPES,
+    "write_gate.default": ("non_read", "none"),
 }
 
 
@@ -382,6 +398,7 @@ class VoiceConfig:
     instructions: InstructionsConfig
     logging: LoggingConfig
     normalization: NormalizationSettings = field(default_factory=NormalizationSettings)
+    write_gate: WriteGateSettings = field(default_factory=WriteGateSettings)
     source_files: tuple[Path, ...] = ()
     resolved_in_paths: dict[str, str] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
@@ -659,6 +676,40 @@ def _tools(reader: _Reader) -> ToolsConfig:
         result_timeout_s=reader.float("tools.result_timeout_s", minimum=0.1),
         config_tool_specs=specs,
     )
+
+
+def _write_gate(reader: _Reader) -> WriteGateSettings:
+    """``write_gate``; tool names and schema paths are checked per session, when the tools are known."""
+    tools: dict[str, ToolGateSettings] = {}
+    for name, raw in reader.mapping("write_gate.tools").items():
+        key = f"write_gate.tools.{name}"
+        if not isinstance(raw, dict) or set(raw) - _WRITE_GATE_TOOL_KEYS:
+            raise VoiceConfigError(f"{key}: must be a mapping with keys {sorted(_WRITE_GATE_TOOL_KEYS)}")
+        paths = raw.get("not_consequential", [])
+        labels = raw.get("labels", {})
+        if not isinstance(paths, list) or not all(isinstance(item, str) and item for item in paths):
+            raise VoiceConfigError(f"{key}.not_consequential: must be a list of paths")
+        if not isinstance(labels, dict) or not all(isinstance(v, str) and v for v in labels.values()):
+            raise VoiceConfigError(f"{key}.labels: must map paths to nonempty labels")
+        tools[str(name)] = ToolGateSettings(
+            not_consequential=tuple(paths), labels={str(path): label for path, label in labels.items()}
+        )
+    return WriteGateSettings(
+        enabled=reader.bool("write_gate.enabled"),
+        default=reader.enum("write_gate.default"),
+        exempt=reader.str_list("write_gate.exempt"),
+        include=reader.str_list("write_gate.include"),
+        tools=tools,
+        max_summary_chars=reader.int("write_gate.max_summary_chars", minimum=1),
+        max_unconfirmed_reissues=reader.int("write_gate.max_unconfirmed_reissues", minimum=1),
+    )
+
+
+def _check_write_gate(config: VoiceConfig) -> None:
+    if config.write_gate.enabled and not config.agent.frontend_enabled:
+        raise VoiceConfigError(
+            "write_gate.enabled needs the frontend (agent frontend enabled): it judges the caller's confirmation"
+        )
 
 
 def _instructions(reader: _Reader) -> InstructionsConfig:
@@ -1004,12 +1055,14 @@ def build_voice_config(merged: dict[str, Any], files: Sequence[Path] = ()) -> Vo
             redact_content=reader.bool("logging.redact_content"),
         ),
         normalization=_normalization(reader, tools, warnings),
+        write_gate=_write_gate(reader),
         source_files=tuple(files),
         resolved_in_paths={key: str(_get(merged, key) or "") for key in IN_PATH_KEYS if key != "extends"},
         warnings=tuple(warnings),
     )
     _check_normalization_prompts(config)
     _check_frontend_verdict(config)
+    _check_write_gate(config)
     _check_prompt_templates(config)
     transcript = config.normalization.transcript
     language = RULESETS[transcript.ruleset].language

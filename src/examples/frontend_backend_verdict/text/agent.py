@@ -107,19 +107,28 @@ class FrontendBackendAgent:
         return await self.continue_turn(await self.decide_turn(text, session))
 
     async def decide_turn(
-        self, text: str, session: SessionState, *, in_progress: Mapping[str, Any] | None = None
+        self,
+        text: str,
+        session: SessionState,
+        *,
+        in_progress: Mapping[str, Any] | None = None,
+        confirmation: Mapping[str, Any] | None = None,
     ) -> FrontendStep:
         """Run only the frontend for one user message (paired mode).
 
         The session is not changed and no delegation, filler or backend event is
         emitted; :meth:`continue_turn` does both. ``in_progress`` is passed to
         :meth:`FrontendAgent.decide`; without it the request is exactly the one
-        :meth:`send` makes.
+        :meth:`send` makes. So is ``confirmation`` (a pending action summary).
         """
         assert self._frontend is not None  # noqa: S101 - guaranteed by build_agent for this mode
         session = self._resolve_pending_before_user_message(session)
         decision, totals = await self._frontend.decide(
-            text, session.frontend_history, session_id=session.session_id, in_progress=in_progress
+            text,
+            session.frontend_history,
+            session_id=session.session_id,
+            in_progress=in_progress,
+            confirmation=confirmation,
         )
         return FrontendStep(user_text=text, session=session, decision=decision, totals=totals)
 
@@ -153,17 +162,23 @@ class FrontendBackendAgent:
         )
 
     async def send_tool_results(
-        self, results: Sequence[ToolResult], session: SessionState
+        self, results: Sequence[ToolResult], session: SessionState, *, user_message: Message | None = None
     ) -> tuple[AgentTurn, SessionState]:
-        """Resume a suspended turn with caller-executed tool results."""
+        """Resume a suspended turn with caller-executed tool results.
+
+        ``user_message`` is caller speech from while the calls were out. The
+        backend gets it right after the tool messages, and the frontend history
+        records it after the delegation's result when the turn closes.
+        """
         pending = session.pending
         if pending is None:
             raise ToolProtocolError("no tool calls are outstanding")
         ordered = validate_tool_results(
             pending.outstanding, results, on_incomplete=self._config.backend.tools.on_incomplete_results
         )
+        caller_inputs = pending.caller_inputs + ((user_message,) if user_message is not None else ())
         return await self._drive(
-            ToolResults(results=ordered),
+            ToolResults(results=ordered, user_message=user_message),
             pending.backend_history,
             session,
             user_message=pending.user_message,
@@ -171,6 +186,30 @@ class FrontendBackendAgent:
             frontend_assistant=pending.frontend_assistant,
             totals=UsageTotals(),
             iterations=pending.iterations,
+            caller_inputs=caller_inputs,
+        )
+
+    def close_turn(
+        self, results: Sequence[ToolResult], text: str, session: SessionState
+    ) -> tuple[AgentTurn, SessionState]:
+        """Close a suspended turn with ``results`` and the final ``text``, without another LLM call."""
+        pending = session.pending
+        if pending is None:
+            raise ToolProtocolError("no tool calls are outstanding")
+        ordered = validate_tool_results(
+            pending.outstanding, results, on_incomplete=self._config.backend.tools.on_incomplete_results
+        )
+        history = pending.backend_history.extend(Message.tool(r.tool_call_id, r.content) for r in ordered).append(
+            Message.assistant(text)
+        )
+        return self._finish_backend(
+            text,
+            session,
+            pending.user_message,
+            pending.frontend_assistant,
+            history,
+            UsageTotals(),
+            pending.caller_inputs,
         )
 
     # -- turn routing -----------------------------------------------------
@@ -198,6 +237,7 @@ class FrontendBackendAgent:
         frontend_assistant: Message | None,
         totals: UsageTotals,
         iterations: int,
+        caller_inputs: tuple[Message, ...] = (),
     ) -> tuple[AgentTurn, SessionState]:
         """Run the backend to a final answer, or suspend for the caller."""
         tools_config = self._config.backend.tools
@@ -209,7 +249,9 @@ class FrontendBackendAgent:
             step, history, step_totals = await self._backend.step(current, history, session_id=session.session_id)
             totals = totals.merge(step_totals)
             if isinstance(step, Final):
-                return self._finish_backend(step.text, session, user_message, frontend_assistant, history, totals)
+                return self._finish_backend(
+                    step.text, session, user_message, frontend_assistant, history, totals, caller_inputs
+                )
             iterations += 1
             if tools_config.execution == "external":
                 pending = PendingTurn(
@@ -219,6 +261,7 @@ class FrontendBackendAgent:
                     outstanding=outstanding_ids(step.tool_calls),
                     iterations=iterations,
                     frontend_assistant=frontend_assistant,
+                    caller_inputs=caller_inputs,
                 )
                 session = replace(session, pending=pending, usage=session.usage.merge(totals))
                 self._emit_usage(session, totals)
@@ -227,7 +270,9 @@ class FrontendBackendAgent:
                 final, history = self._backend.force_final(
                     history, session_id=session.session_id, reason=f"exceeded {tools_config.max_tool_iterations}"
                 )
-                return self._finish_backend(final.text, session, user_message, frontend_assistant, history, totals)
+                return self._finish_backend(
+                    final.text, session, user_message, frontend_assistant, history, totals, caller_inputs
+                )
             current = ToolResults(results=await self._execute_batch(step, session))
 
     async def _execute_batch(self, step: NeedsTools, session: SessionState) -> tuple[ToolResult, ...]:
@@ -268,8 +313,13 @@ class FrontendBackendAgent:
         frontend_assistant: Message | None,
         backend_history: History,
         totals: UsageTotals,
+        caller_inputs: tuple[Message, ...] = (),
     ) -> tuple[AgentTurn, SessionState]:
-        """Close a backend-completed turn in whichever histories own it."""
+        """Close a backend-completed turn in whichever histories own it.
+
+        Caller speech from while tools were out follows the delegation's result
+        in the frontend history, as it followed the tool messages in the backend's.
+        """
         if self._config.backend.stateful:
             session = replace(session, backend_history=backend_history.prune(self._config.backend.history.max_groups))
         if not self._config.frontend_enabled:
@@ -283,6 +333,7 @@ class FrontendBackendAgent:
             Message.user(user_message),
             frontend_assistant,
             Message.tool(call_id, text),
+            *caller_inputs,
             Message.assistant(text),
         ).prune(self._config.frontend.history.max_groups)
         session = replace(session, frontend_history=history, pending=None, usage=session.usage.merge(totals))

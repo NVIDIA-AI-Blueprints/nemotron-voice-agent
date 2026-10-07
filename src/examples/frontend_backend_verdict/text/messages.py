@@ -18,6 +18,9 @@ from typing import Any, Literal
 
 Role = Literal["system", "user", "assistant", "tool"]
 
+#: ``Message.meta`` key: a user message said during a turn, not one that starts a new turn.
+CONTINUES_TURN = "continues_turn"
+
 #: Roles that make LLM calls, for per-role accounting.
 LLM_ROLES = ("frontend", "backend")
 
@@ -76,11 +79,13 @@ class Message:
     content: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
+    #: Bookkeeping that is never sent to a model (for example when the words were said).
+    meta: dict[str, Any] | None = field(default=None, compare=False)
 
     @classmethod
-    def user(cls, content: str) -> Message:
-        """Build a user message."""
-        return cls(role="user", content=content)
+    def user(cls, content: str, *, meta: dict[str, Any] | None = None) -> Message:
+        """Build a user message (``meta`` is not rendered to the model)."""
+        return cls(role="user", content=content, meta=meta)
 
     @classmethod
     def assistant(cls, content: str) -> Message:

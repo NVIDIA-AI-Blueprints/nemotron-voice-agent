@@ -42,8 +42,13 @@ class ChatClient(Protocol):
         *,
         messages: Sequence[Message],
         tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatResponse:
-        """Return one completion for ``messages``."""
+        """Return one completion for ``messages``.
+
+        ``tool_choice`` (``None`` means ``"auto"`` when there are tools) is passed only by
+        callers that must force a tool, so implementations may omit the parameter otherwise.
+        """
 
 
 def to_wire_messages(messages: Sequence[Message]) -> list[dict[str, Any]]:
@@ -98,6 +103,7 @@ class OpenAIChatClient:
         *,
         messages: Sequence[Message],
         tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatResponse:
         """Call the endpoint and normalize the response."""
         request: dict[str, Any] = {
@@ -108,7 +114,7 @@ class OpenAIChatClient:
         }
         if tools:
             request["tools"] = list(tools)
-            request["tool_choice"] = "auto"
+            request["tool_choice"] = tool_choice or "auto"
         if self._config.extra_body:
             request["extra_body"] = dict(self._config.extra_body)
         started = time.perf_counter()

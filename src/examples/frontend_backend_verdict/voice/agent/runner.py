@@ -40,6 +40,7 @@ from examples.frontend_backend_verdict.text.events import EventSink, InternalEve
 from examples.frontend_backend_verdict.text.frontend import Delegate, DirectAnswer
 from examples.frontend_backend_verdict.text.llm import ChatClient
 from examples.frontend_backend_verdict.text.messages import (
+    CONTINUES_TURN,
     AgentTurn,
     Message,
     RoleTotals,
@@ -62,8 +63,16 @@ from examples.frontend_backend_verdict.voice.agent.port import (
     RoleUsage,
 )
 from examples.frontend_backend_verdict.voice.agent.tools import realtime_tools_to_specs, to_outgoing, to_results
+from examples.frontend_backend_verdict.voice.agent.write_gate import (
+    ConfirmationProposal,
+    GateState,
+    WriteGate,
+    WriteGateSettings,
+    resolve_gate,
+    spoken_presentation,
+)
 from examples.frontend_backend_verdict.voice.config import InstructionsConfig, ToolsConfig, VoiceConfig
-from examples.frontend_backend_verdict.voice.errors import ProbeStateError
+from examples.frontend_backend_verdict.voice.errors import HistoryRepairError, ProbeStateError, VoiceConfigError
 from examples.frontend_backend_verdict.voice.normalization import (
     ARGUMENT_NORMALIZED,
     CALL_ANSWERED_LOCALLY,
@@ -168,6 +177,7 @@ class _Settled:
     state: SessionState
     held: dict[str, str]
     keys: dict[str, FailureKey]
+    gate: GateState = GateState()
 
 
 class TextAgentRunner:
@@ -186,6 +196,7 @@ class TextAgentRunner:
         normalization: NormalizationSettings | None = None,
         barge_in: FrontendVerdictSettings | None = None,
         prompt_context: Mapping[str, Any] | None = None,
+        write_gate: WriteGateSettings | None = None,
     ) -> None:
         """Build the initial agent (no client tools, no instructions yet).
 
@@ -220,6 +231,11 @@ class TextAgentRunner:
         #: The held result and its retry-guard keys, until ``end_staging``.
         self._staged: tuple[_Settled, frozenset[FailureKey]] | None = None
         self._agent: FrontendBackendAgent | None = None
+        #: ``write_gate``: settings, the session's resolved gate, its state, and which summaries were heard.
+        self._gate_settings = write_gate or WriteGateSettings()
+        self._gate: WriteGate | None = None
+        self._gate_state = GateState()
+        self._heard: dict[str, bool] = {}
         self.config: Config = base_config
         self.resolved_instructions: ResolvedInstructions | None = None
         self.tool_specs: tuple[ToolSpec, ...] = ()
@@ -258,6 +274,10 @@ class TextAgentRunner:
             backend_client=self._clients.backend,
             prompt_context=self._prompt_context,
         )
+        resolved_gate = resolve_gate(self._gate_settings, specs)
+        if resolved_gate is not None and not config.frontend_enabled:
+            raise VoiceConfigError("write_gate needs the frontend: it judges the caller's confirmation")
+        self._gate = WriteGate(resolved_gate, self._emit) if resolved_gate is not None else None
         self.config = config
         self.resolved_instructions = resolved
         self.tool_specs = tuple(specs)
@@ -268,18 +288,31 @@ class TextAgentRunner:
         call = self._begin_call()
         try:
             text = self._normalize_transcript(text)
+            gate, bound = self._gate_turn()
             if not self._base.frontend_enabled:
                 turn, state = await self._agent.send(text, self._state)
             else:
-                step = await self._agent.decide_turn(text, self._state)
+                confirmation = {"summary": bound.summary_text} if bound is not None else None
+                step = await self._agent.decide_turn(text, self._state, confirmation=confirmation)
+                gate, step = self._gate_decision(gate, bound, step)
                 turn, state = await self._continue(step)
-            settled = await self._settle(turn, state, self._failed)
+            settled = await self._settle(turn, state, self._failed, gate)
             return self._commit_or_stage(settled, self._failed, call)
         finally:
             self._end_call(call)
 
-    async def resume(self, outputs: Mapping[str, str]) -> AgentReply:
-        """Continue a suspended turn with the client's outputs (plus any held local results)."""
+    async def resume(
+        self,
+        outputs: Mapping[str, str],
+        *,
+        user_text: str | None = None,
+        user_meta: Mapping[str, Any] | None = None,
+    ) -> AgentReply:
+        """Continue a suspended turn with the client's outputs (plus any held local results).
+
+        ``user_text`` (caller speech while the calls were out) follows the tool
+        messages as one user message; ``user_meta`` stays on that message only.
+        """
         assert self._agent is not None  # noqa: S101 - built in __init__
         call = self._begin_call()
         try:
@@ -290,8 +323,14 @@ class TextAgentRunner:
                     for call_id, output in outputs.items()
                     if call_id in self._sent_keys and self._arguments.is_permanent_failure(output)
                 }
-            turn, state = await self._agent.send_tool_results(to_results({**self._held, **outputs}), self._state)
-            settled = await self._settle(turn, state, failed)
+            message = None
+            if user_text is not None:
+                meta = {**(user_meta or {}), CONTINUES_TURN: True}
+                message = Message.user(self._normalize_transcript(user_text), meta=meta)
+            turn, state = await self._agent.send_tool_results(
+                to_results({**self._held, **outputs}), self._state, user_message=message
+            )
+            settled = await self._settle(turn, state, failed, self._gate_state)
             self._commit(settled, failed)
             return settled.reply
         finally:
@@ -359,8 +398,11 @@ class TextAgentRunner:
             raise ProbeStateError("the conversation state changed since the probe; it cannot be carried out")
         call = self._begin_call()
         try:
+            # The probe was decided without a pending summary, so it cannot confirm one.
+            gate, bound = self._gate_turn()
+            gate, step = self._gate_decision(gate, bound, step)
             turn, state = await self._continue(step)
-            settled = await self._settle(turn, state, self._failed)
+            settled = await self._settle(turn, state, self._failed, gate)
             return self._commit_or_stage(settled, self._failed, call)
         finally:
             self._end_call(call)
@@ -378,6 +420,11 @@ class TextAgentRunner:
             self._in_flight = None
         if staged is not None and commit:
             self._commit(*staged)
+
+    def presentation_heard(self, proposal_id: str, *, complete: bool) -> None:
+        """Record whether a spoken action summary played to its end before the caller's next turn."""
+        self._heard[proposal_id] = complete
+        self._emit("write_presentation_heard", proposal_id=proposal_id, complete=complete)
 
     def repair_last_answer(self, full_text: str, replacement: str) -> None:
         """Rewrite every stored copy of the interrupted answer."""
@@ -460,41 +507,124 @@ class TextAgentRunner:
         self._held = settled.held
         self._sent_keys = settled.keys
         self._failed = failed
+        self._gate_state = settled.gate
 
-    async def _settle(self, turn: AgentTurn, state: SessionState, failed: frozenset[FailureKey]) -> _Settled:
-        """Screen the turn's tool calls; answer all-local batches at once, at most ``max_local_rounds`` times."""
+    # -- write gate -------------------------------------------------------------
+
+    def _gate_turn(self) -> tuple[GateState, ConfirmationProposal | None]:
+        """A caller turn starts: the proposal it may confirm (the gate state is committed with the turn)."""
+        if self._gate is None:
+            return self._gate_state, None
+        return self._gate.begin_caller_turn(self._gate_state, self._heard)
+
+    def _gate_decision(
+        self, gate: GateState, bound: ConfirmationProposal | None, step: FrontendStep
+    ) -> tuple[GateState, FrontendStep]:
+        """Judge the bound turn (fail closed) and put the gate's notes into the backend request."""
+        if self._gate is None:
+            return gate, step
+        decision = step.decision
+        if bound is not None:
+            verdict = decision.confirmation if isinstance(decision, Delegate) else ""
+            gate = self._gate.judge(gate, bound, verdict or "unclear")
+        if not isinstance(decision, Delegate) or not gate.notes:
+            return gate, step
+        gate, notes = self._gate.take_notes(gate)
+        query = "\n\n".join([decision.query, *notes])
+        return gate, replace(step, decision=replace(decision, query=query))
+
+    def _rewrite_answer(self, state: SessionState, text: str, spoken: str) -> SessionState:
+        """Store what is actually spoken (framing + summary + question) as the turn's answer."""
+        try:
+            return repair_interrupted_answer(
+                state,
+                full_text=text,
+                replacement=spoken,
+                frontend_enabled=self._base.frontend_enabled,
+                backend_history=self._base.backend.conversation_history.keeps_backend_turns,
+            )
+        except HistoryRepairError as exc:
+            self._emit("write_gate_error", error=f"history rewrite skipped: {exc}")
+            return state
+
+    def _presented(self, turn: AgentTurn, totals: UsageTotals, state: SessionState, gate: GateState) -> _Settled:
+        """The turn's text reply; when a held call awaits its summary, the summary and question follow it."""
+        reply = _reply(turn, totals)
+        proposal = self._gate.unpresented(gate) if self._gate is not None else None
+        if proposal is None or reply.text is None:
+            return _Settled(reply, state, {}, {}, gate)
+        spoken = spoken_presentation(reply.text, proposal)
+        state = self._rewrite_answer(state, reply.text, spoken)
+        gate = self._gate.present(gate, proposal)
+        return _Settled(replace(reply, text=spoken, presentation=proposal.proposal_id), state, {}, {}, gate)
+
+    # -- settling ---------------------------------------------------------------
+
+    async def _settle(
+        self, turn: AgentTurn, state: SessionState, failed: frozenset[FailureKey], gate: GateState
+    ) -> _Settled:
+        """Screen the turn's tool calls, then gate them, before anything is sent.
+
+        All-local batches (argument normalization, write-gate holds) are answered at
+        once and the backend continues, at most ``max_local_rounds`` times for the
+        normalizer's own answers. The write gate runs on every path, including the
+        normalizer's exhausted fallback: a gated call is never sent without a match
+        to a confirmed proposal.
+        """
+        assert self._agent is not None  # noqa: S101 - built in __init__
         totals = turn.usage
-        rounds = 0
-        while self._arguments is not None and turn.tool_calls:
-            screening = self._arguments.screen(turn.tool_calls, failed)
-            state = _rewrite_pending_calls(state, screening.calls)
-            self._emit_rewrites(screening)
-            sent = screening.sent
-            if not sent and rounds >= self._arguments.settings.max_local_rounds:
-                # Only the local interception is bypassed: the canonical calls go out.
-                self._emit(LOCAL_ROUNDS_EXHAUSTED, tools=[call.name for call in screening.calls], rounds=rounds)
-                reply = _reply(turn, totals, screening.calls)
-                return _Settled(reply, state, {}, dict(screening.keys))
-            for answer in screening.local:
-                self._emit(
-                    CALL_ANSWERED_LOCALLY,
-                    call_id=answer.call_id,
-                    tool=answer.tool,
-                    argument=answer.argument,
-                    value=answer.value,
-                    reason=answer.reason,
-                    local_round=rounds + 1,
-                )
-            held = {answer.call_id: answer.message for answer in screening.local}
+        rounds = gate_rounds = 0
+        while turn.tool_calls:
+            candidates = turn.tool_calls
+            local: dict[str, str] = {}
+            keys: dict[str, FailureKey] = {}
+            if self._arguments is not None:
+                screening = self._arguments.screen(turn.tool_calls, failed)
+                state = _rewrite_pending_calls(state, screening.calls)
+                self._emit_rewrites(screening)
+                keys = dict(screening.keys)
+                if not screening.sent and rounds >= self._arguments.settings.max_local_rounds:
+                    # Only the local interception is bypassed: the canonical calls go out (if the gate allows).
+                    self._emit(LOCAL_ROUNDS_EXHAUSTED, tools=[call.name for call in screening.calls], rounds=rounds)
+                    candidates = screening.calls
+                else:
+                    for answer in screening.local:
+                        self._emit(
+                            CALL_ANSWERED_LOCALLY,
+                            call_id=answer.call_id,
+                            tool=answer.tool,
+                            argument=answer.argument,
+                            value=answer.value,
+                            reason=answer.reason,
+                            local_round=rounds + 1,
+                        )
+                    local = {answer.call_id: answer.message for answer in screening.local}
+                    candidates = screening.sent
+            sent, held = candidates, dict(local)
+            if self._gate is not None:
+                screened = self._gate.screen(candidates, gate)
+                gate, sent = screened.state, screened.allowed
+                held.update(screened.held)
+                if screened.held and not sent:
+                    gate_rounds += 1
+                stop = screened.stop or gate_rounds > self._gate.settings.max_unconfirmed_reissues + 1
+                proposal = self._gate.unpresented(gate) or gate.proposal(gate.presented)
+                if stop and proposal is not None and not sent:
+                    # Stop the backend loop for this caller turn and ask again; the call is never sent.
+                    results = tuple(ToolResult(tool_call_id=k, content=v) for k, v in held.items())
+                    turn, state = self._agent.close_turn(results, spoken_presentation("", proposal), state)
+                    gate = self._gate.present(gate, proposal)
+                    reply = replace(_reply(turn, totals), presentation=proposal.proposal_id)
+                    return _Settled(reply, state, {}, {}, gate)
             if sent:
-                keys = {call_id: key for call_id, key in screening.keys.items() if call_id not in held}
-                return _Settled(_reply(turn, totals, sent), state, held, keys)
-            rounds += 1
+                keys = {call_id: key for call_id, key in keys.items() if call_id not in held}
+                return _Settled(_reply(turn, totals, sent), state, held, keys, gate)
+            if local:
+                rounds += 1
             results = tuple(ToolResult(tool_call_id=call_id, content=message) for call_id, message in held.items())
-            assert self._agent is not None  # noqa: S101 - built in __init__
             turn, state = await self._agent.send_tool_results(results, state)
             totals = totals.merge(turn.usage)
-        return _Settled(_reply(turn, totals), state, {}, {})
+        return self._presented(turn, totals, state, gate)
 
     def _emit_rewrites(self, screening: Screening) -> None:
         for rewrite in screening.rewrites:

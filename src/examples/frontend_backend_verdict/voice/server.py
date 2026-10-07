@@ -130,6 +130,7 @@ def _agent_factory(state: _AppState) -> Any:
             normalization=config.normalization,
             barge_in=barge_in,
             prompt_context=prompt_context(config),
+            write_gate=config.write_gate,
         )
 
     return factory

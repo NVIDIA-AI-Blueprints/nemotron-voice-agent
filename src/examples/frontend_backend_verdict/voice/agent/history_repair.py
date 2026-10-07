@@ -9,6 +9,9 @@ The text prototype stores a spoken answer in more than one place (plan section
     user, assistant(call_backend), tool(call_id, <answer>), assistant(<answer>)
 
 so both the tool message and the assistant continuation hold the full answer.
+Caller speech said while the turn's tool calls were out (user messages marked
+``CONTINUES_TURN``) sits between the tool message and the continuation and is
+part of the same group.
 A direct answer is ``user, assistant(<answer>)``; ``backend_only`` keeps the
 answer as the final assistant message of the last backend group. With the paired
 backend history on (``backend.conversation_history``), a delegated answer is also
@@ -24,16 +27,20 @@ from dataclasses import replace
 
 from examples.frontend_backend_verdict.text.delegation import CALL_BACKEND
 from examples.frontend_backend_verdict.text.history import History
-from examples.frontend_backend_verdict.text.messages import Message
+from examples.frontend_backend_verdict.text.messages import CONTINUES_TURN, Message
 from examples.frontend_backend_verdict.text.session import SessionState
 from examples.frontend_backend_verdict.voice.errors import HistoryRepairError
+
+
+def _continues_turn(message: Message) -> bool:
+    return message.role == "user" and bool((message.meta or {}).get(CONTINUES_TURN))
 
 
 def _last_group_bounds(history: History) -> tuple[int, int]:
     messages = history.messages
     start = 0
     for index, message in enumerate(messages):
-        if message.role == "user":
+        if message.role == "user" and not _continues_turn(message):
             start = index
     return start, len(messages)
 
@@ -53,18 +60,20 @@ def _repair_frontend(history: History, full_text: str, replacement: str) -> tupl
         messages[start + 1] = _replace_content(group[1], full_text, replacement, "direct answer")
         return History(tuple(messages)), False
     if (
-        len(group) == 4
+        len(group) >= 4
         and group[0].role == "user"
         and group[1].role == "assistant"
         and len(group[1].tool_calls) == 1
         and group[1].tool_calls[0].name == CALL_BACKEND
         and group[2].role == "tool"
         and group[2].tool_call_id == group[1].tool_calls[0].id
-        and group[3].role == "assistant"
-        and not group[3].tool_calls
+        and all(_continues_turn(message) for message in group[3:-1])
+        and group[-1].role == "assistant"
+        and not group[-1].tool_calls
     ):
+        last = start + len(group) - 1
         messages[start + 2] = _replace_content(group[2], full_text, replacement, "call_backend tool result")
-        messages[start + 3] = _replace_content(group[3], full_text, replacement, "assistant continuation")
+        messages[last] = _replace_content(group[-1], full_text, replacement, "assistant continuation")
         return History(tuple(messages)), True
     raise HistoryRepairError(f"unexpected shape of the last frontend group: {[m.role for m in group]}")
 

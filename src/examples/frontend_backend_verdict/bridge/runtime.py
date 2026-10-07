@@ -51,6 +51,8 @@ SHIPPED_PROFILES = (
     "tau3_eval_backend_history_noguide",
     "tau3_eval_normalization",
     "tau3_eval",
+    # The default arm plus the R4 write gate (consequential tool calls held until the caller confirms).
+    "tau3_eval_frontend_verdict_speak_history_write_gate",
 )
 DEFAULT_PROFILE = SHIPPED_PROFILES[0]
 #: uvicorn's defaults, used by src/server.py when UVICORN_WS_PING_* are unset.

@@ -101,9 +101,18 @@ class ScriptedAgentPort:
         self.history.append(("assistant", text_out))
         return AgentReply(text=text_out)
 
-    async def resume(self, outputs: Mapping[str, str]) -> AgentReply:
-        """Answer after the tool outputs arrive."""
+    async def resume(
+        self,
+        outputs: Mapping[str, str],
+        *,
+        user_text: str | None = None,
+        user_meta: Mapping[str, Any] | None = None,
+    ) -> AgentReply:
+        """Answer after the tool outputs arrive (caller speech from the wait is recorded, not scripted)."""
         self.outputs.append(dict(outputs))
+        if user_text is not None:
+            self.inputs.append(user_text)
+            self.history.append(("user", user_text))
         step = self._pending or {}
         self._pending = None
         text_out = str(step.get("then_say") or "Done.")
@@ -140,3 +149,6 @@ class ScriptedAgentPort:
 
     def end_staging(self, *, commit: bool) -> None:
         """Nothing is ever staged."""
+
+    def presentation_heard(self, proposal_id: str, *, complete: bool) -> None:
+        """Never presents an action summary."""

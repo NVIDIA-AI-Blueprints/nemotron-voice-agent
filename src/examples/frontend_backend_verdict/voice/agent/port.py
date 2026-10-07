@@ -72,6 +72,9 @@ class AgentReply:
     calls: tuple[OutgoingCall, ...] = ()
     usage: ReplyUsage = field(default_factory=ReplyUsage)
     staged: bool = False
+    #: ``write_gate``: the proposal whose generated summary ``text`` ends with. The engine reports
+    #: whether it was heard completely with :meth:`AgentPort.presentation_heard`.
+    presentation: str | None = None
 
     def __post_init__(self) -> None:
         """Enforce the text/calls exclusivity."""
@@ -125,8 +128,20 @@ class AgentPort(Protocol):
     async def respond(self, text: str) -> AgentReply:
         """Answer one user turn. Cancellation must leave the conversation state untouched."""
 
-    async def resume(self, outputs: Mapping[str, str]) -> AgentReply:
-        """Continue a turn with the client's function-call outputs, keyed by ``call_id``."""
+    async def resume(
+        self,
+        outputs: Mapping[str, str],
+        *,
+        user_text: str | None = None,
+        user_meta: Mapping[str, Any] | None = None,
+    ) -> AgentReply:
+        """Continue a turn with the client's function-call outputs, keyed by ``call_id``.
+
+        ``user_text`` is caller speech committed while the calls were out; it reaches
+        the backend after the tool messages. ``user_meta`` (when it was said) is kept
+        on the history message and never shown to a model. The engine passes neither
+        when there is no such speech.
+        """
 
     def repair_last_answer(self, full_text: str, replacement: str) -> None:
         """Rewrite every stored copy of the last spoken answer (raises ``HistoryRepairError``)."""
@@ -151,3 +166,8 @@ class AgentPort(Protocol):
 
     def end_staging(self, *, commit: bool) -> None:
         """Stop staging; a held result is committed (``commit``) or dropped as if the turn was cancelled."""
+
+    # -- write gate (write_gate) ---------------------------------------------------
+
+    def presentation_heard(self, proposal_id: str, *, complete: bool) -> None:
+        """The first committed caller turn after ``AgentReply.presentation``: was the summary heard to its end?"""

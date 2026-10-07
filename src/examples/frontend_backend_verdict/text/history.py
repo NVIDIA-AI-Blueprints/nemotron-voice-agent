@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from examples.frontend_backend_verdict.text.messages import Message
+from examples.frontend_backend_verdict.text.messages import CONTINUES_TURN, Message
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,11 +51,13 @@ class History:
         """Split the history into logical groups, one per user message.
 
         Any messages preceding the first user message form a leading group so
-        that no message is ever lost by grouping.
+        that no message is ever lost by grouping. A user message marked
+        ``CONTINUES_TURN`` (speech while the turn's tool calls were out) stays in
+        the group of the turn it was said in.
         """
         groups: list[list[Message]] = []
         for message in self.messages:
-            if message.role == "user" or not groups:
+            if (message.role == "user" and not (message.meta or {}).get(CONTINUES_TURN)) or not groups:
                 groups.append([message])
             else:
                 groups[-1].append(message)

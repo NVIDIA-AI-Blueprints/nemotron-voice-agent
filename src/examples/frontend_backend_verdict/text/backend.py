@@ -34,9 +34,15 @@ class Query:
 
 @dataclass(frozen=True, slots=True)
 class ToolResults:
-    """Backend input: results for the outstanding tool calls."""
+    """Backend input: results for the outstanding tool calls.
+
+    ``user_message`` is caller speech that arrived while the calls were out. It
+    follows the tool messages, which chat-completions requires directly after
+    the assistant message that made the calls.
+    """
 
     results: tuple[ToolResult, ...]
+    user_message: Message | None = None
 
 
 BackendInput = Query | ToolResults
@@ -117,7 +123,10 @@ class BackendAgent:
     def _apply_input(inp: BackendInput, history: History) -> History:
         if isinstance(inp, Query):
             return history.append(Message.user(inp.text))
-        return history.extend(Message.tool(result.tool_call_id, result.content) for result in inp.results)
+        history = history.extend(Message.tool(result.tool_call_id, result.content) for result in inp.results)
+        if inp.user_message is not None:
+            history = history.append(inp.user_message)
+        return history
 
 
 def outstanding_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:

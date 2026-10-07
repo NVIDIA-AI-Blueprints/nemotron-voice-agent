@@ -10,6 +10,10 @@
       "source": "tests/unit/prototypes/_fakes.py"
     },
     "tests/_fbv_voice_fakes.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. the harness passes write_gate to the runner and FakeChatClient records tool_choice."
+      },
       "kind": "test",
       "sha256": "e80794cf49030d7d2fa5c01e3d5ce315af5845d59e885876664677176a03d2f2",
       "source": "tests/unit/prototypes/voice/_voice_fakes.py"
@@ -130,6 +134,10 @@
       "source": "tests/unit/prototypes/voice/test_voice_backend_history.py"
     },
     "tests/test_fbv_voice_barge_in.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): speech while a tool call is out now resumes that wait with the caller's words instead of queueing a separate later turn; the queued-turn test is replaced by its R1 equivalent."
+      },
       "kind": "test",
       "sha256": "08e1d99c90e748c6e1ba037a754eccb21de858c2213aaa40b8bf42ac8404fc86",
       "source": "tests/unit/prototypes/voice/test_voice_barge_in.py"
@@ -140,6 +148,10 @@
       "source": "tests/unit/prototypes/voice/test_voice_barge_in_verdict.py"
     },
     "tests/test_fbv_voice_config.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): one more shipped profile (the write-gate profile)."
+      },
       "kind": "test",
       "sha256": "7e1f6f89956b8a6eccbe9384fe8a95547c3bcf61cafea288968a7944d196108a",
       "source": "tests/unit/prototypes/voice/test_voice_config.py"
@@ -214,10 +226,18 @@
       "source": "src/prototypes/text_frontend_backend_agent/__init__.py"
     },
     "text/agent.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. send_tool_results takes the caller's words; the frontend history records them after the delegation result. R4 (tau-airline-20261007 report): write gate. decide_turn passes the pending summary; close_turn ends a held turn without an LLM call."
+      },
       "sha256": "5bda2ae6d3e2b39522f5c7cca7e4f86aefd9cf37dd84b7eb287b8915607b4421",
       "source": "src/prototypes/text_frontend_backend_agent/agent.py"
     },
     "text/backend.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. ToolResults carries an optional user message placed after the tool messages."
+      },
       "sha256": "217a2b4edc8c54ba0a358083f6b00e501cca355d7751fa6eff0126e23aa54afd",
       "source": "src/prototypes/text_frontend_backend_agent/backend.py"
     },
@@ -254,6 +274,10 @@
       "source": "src/prototypes/text_frontend_backend_agent/config/prompts.yaml"
     },
     "text/delegation.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. call_backend variant with the required confirmation enum, forced tool_choice, and the pending-confirmation note."
+      },
       "sha256": "52daa4d5fe1c50cb6eba4258a266e5b4c2c5fe84ae940320cb107d360cb7573c",
       "source": "src/prototypes/text_frontend_backend_agent/delegation.py"
     },
@@ -270,18 +294,34 @@
       "source": "src/prototypes/text_frontend_backend_agent/events.py"
     },
     "text/frontend.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. decide() takes a pending summary: forced call_backend and the confirmation field (missing or invalid fails closed)."
+      },
       "sha256": "c11128079f2f0e566c7cf6ed85773a88d7e48edf7a6244c9fb4e4ffc8495da91",
       "source": "src/prototypes/text_frontend_backend_agent/frontend.py"
     },
     "text/history.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. a user message marked continues_turn stays in its turn's group."
+      },
       "sha256": "4b3bcf1ed41d63013a7f4845ad74110219d5226009086667c06431fb264d3fa7",
       "source": "src/prototypes/text_frontend_backend_agent/history.py"
     },
     "text/llm.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. complete() accepts an optional tool_choice."
+      },
       "sha256": "f918aa9dcccda9a2af6924a545eceb14f910ed84c979b68a23083cf4534839a1",
       "source": "src/prototypes/text_frontend_backend_agent/llm.py"
     },
     "text/messages.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. Message gains a non-rendered meta field and the continues_turn marker."
+      },
       "sha256": "348abe1cfa690a5dfc309bf90a81720c214f5a7dc0ff6287e221088e19898127",
       "source": "src/prototypes/text_frontend_backend_agent/messages.py"
     },
@@ -294,6 +334,10 @@
       "source": "src/prototypes/text_frontend_backend_agent/protocol.py"
     },
     "text/session.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. PendingTurn records caller_inputs; meta is serialized."
+      },
       "sha256": "23e2f447b5497dc8c7fa7ae9d26c0f72961f84d1515b773acd1e64d891f911fd",
       "source": "src/prototypes/text_frontend_backend_agent/session.py"
     },
@@ -318,6 +362,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/agent/filler.py"
     },
     "voice/agent/history_repair.py": {
+      "diverged": {
+        "change": "R1",
+        "reason": "R1 (tau-airline-20261007 report): a delegated group may hold the caller's words from a tool wait between the tool result and the continuation; barge-in repair keeps treating it as one delegated group."
+      },
       "sha256": "7072aef1d1470df9d29552f5c3ca09febacf3f9e9c290ef576d49ca65e45a86c",
       "source": "src/prototypes/voice_frontend_backend_agent/agent/history_repair.py"
     },
@@ -326,14 +374,26 @@
       "source": "src/prototypes/voice_frontend_backend_agent/agent/instructions.py"
     },
     "voice/agent/port.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. AgentPort.resume gains keyword-only user_text and user_meta. R4 (tau-airline-20261007 report): write gate. AgentReply.presentation and AgentPort.presentation_heard."
+      },
       "sha256": "8aa9c01bfbd68fc7752dba6e17b10ec15bc97472d73224c6fb852d2df8371e09",
       "source": "src/prototypes/voice_frontend_backend_agent/agent/port.py"
     },
     "voice/agent/runner.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. resume passes the caller's words to the text agent. R4 (tau-airline-20261007 report): write gate. the gate runs on every settle path after normalization, fails closed, binds confirmation to the first caller turn after a fully heard summary."
+      },
       "sha256": "e5f14a32be9575cc4cc86ed8c34b291f5fa9dad65bcda408915a76b656e7fc13",
       "source": "src/prototypes/voice_frontend_backend_agent/agent/runner.py"
     },
     "voice/agent/scripted.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. resume accepts and records the caller's words. R4 (tau-airline-20261007 report): write gate. presentation_heard no-op."
+      },
       "sha256": "252bcca763815aa3a55848307f03495642b7972e34f5bcde4e61237f46469699",
       "source": "src/prototypes/voice_frontend_backend_agent/agent/scripted.py"
     },
@@ -344,6 +404,13 @@
     "voice/agent/tools.py": {
       "sha256": "2f104d1d046284acb780406a43e151a6501d758342e697f35a3c5270824b94e6",
       "source": "src/prototypes/voice_frontend_backend_agent/agent/tools.py"
+    },
+    "voice/agent/write_gate.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): new module, the write gate (proposals, generated summaries, confirmation binding). Not in the prototype."
+      },
+      "source": null
     },
     "voice/audio/__init__.py": {
       "sha256": "d93a864646578790ac6bb3377d26567fa5aa9658f8c1e4075bade3d2b06e4376",
@@ -398,6 +465,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/clock.py"
     },
     "voice/config.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. the write_gate section (schema, parsing, frontend requirement)."
+      },
       "sha256": "5d5687fa722fa9439a8d8b95f67312bf98398dc3099b4a5372af68a682984b71",
       "source": "src/prototypes/voice_frontend_backend_agent/config.py"
     },
@@ -449,6 +520,13 @@
       "sha256": "c1617aeaad76f4887d48982cd51fc95fb769158b4ec37f346a283afbfe837d55",
       "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_frontend_verdict_speak_history.yaml"
     },
+    "voice/config/profiles/tau3_eval_frontend_verdict_speak_history_write_gate.yaml": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): new profile, tau3_eval_frontend_verdict_speak_history with the write gate and the R4.6 backend guidance. Not in the prototype."
+      },
+      "source": null
+    },
     "voice/config/profiles/tau3_eval_normalization.yaml": {
       "sha256": "caf37b6b1e7a2dd4d03ef6247b48b794e53fee14565b09dd01d48d1134a8d6e0",
       "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_normalization.yaml"
@@ -458,6 +536,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/config/prompts.voice.yaml"
     },
     "voice/config/voice_agent.yaml": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. documents the write_gate section (off by default)."
+      },
       "sha256": "3217a0a5c2072c117ace944b1f6a8f8f34682fe1d9f26119103ce0ea2819d837",
       "source": "src/prototypes/voice_frontend_backend_agent/config/voice_agent.yaml",
       "value_edits": [
@@ -504,6 +586,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/engine/turn_api.py"
     },
     "voice/engine/turn_manager.py": {
+      "diverged": {
+        "change": "R1+R4",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. per-wait inbox, resume trigger, and the late response.create rule. R4 (tau-airline-20261007 report): write gate. tracks the spoken summary's item and reports whether it was heard to its end."
+      },
       "sha256": "d6422d074961a427da8547e31e943d7024c0a7fc80887d278fa8ff7805799f2d",
       "source": "src/prototypes/voice_frontend_backend_agent/engine/turn_manager.py"
     },
@@ -536,6 +622,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/normalization/transcript.py"
     },
     "voice/server.py": {
+      "diverged": {
+        "change": "R4",
+        "reason": "R4 (tau-airline-20261007 report): write gate. passes write_gate to the runner."
+      },
       "sha256": "9314ae5787c86eef1c9f5acfeaa91dcbb00091ac6f862beea5bc74ed882dbb01",
       "source": "src/prototypes/voice_frontend_backend_agent/server.py"
     },
