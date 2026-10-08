@@ -721,6 +721,11 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Live session protocol (``/v1/live/...``): separate from ``/v1/realtime`` below.
+    from live.mount import mount_live
+
+    mount_live(app)
+
     def _resolve_example(config: dict) -> dict:
         """Return the active registry entry. ``examples_registry.find()`` honors any selection lock."""
         return examples_registry.find(config.get("pipeline_mode", ""))
