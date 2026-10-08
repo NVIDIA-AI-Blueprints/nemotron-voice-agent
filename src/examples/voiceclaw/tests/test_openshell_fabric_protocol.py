@@ -261,6 +261,51 @@ def test_openclaw_codec_requires_a_message_list(messages: object) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("response_padding", "history_padding"),
+    [("", "\n"), ("\n", ""), (" \t\r\n", "\n\r\t "), ("", "\t\r\n ")],
+)
+def test_openclaw_codec_accepts_only_outer_json_whitespace_differences(
+    response_padding: str, history_padding: str
+) -> None:
+    body = '{"schema":"voiceclaw.result.v1","speech":null,"display":"Done."}'
+    response = response_padding + body + response_padding
+    result = _first_turn_result(response=response)
+    result["output"]["messages"][1]["content"] = history_padding + body + history_padding
+
+    assert (
+        adapter_codec("nvidia.fabric.openclaw").validate_first_turn_result(
+            fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="do the work"
+        )
+        == "agent:default:fabric-runtime-1"
+    )
+    assert result["output"]["response"] == response
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        '{"display":"different"}',
+        '{ "display":"Done."}',
+        '{"display":" Done."}',
+        '\u00a0{"display":"Done."}\u00a0',
+        '\v{"display":"Done."}\v',
+        '\f{"display":"Done."}\f',
+        None,
+        [],
+    ],
+    ids=("different-value", "internal-format", "inside-string", "nbsp", "vertical-tab", "form-feed", "null", "list"),
+)
+def test_openclaw_codec_rejects_body_changes_and_non_json_whitespace(history: object) -> None:
+    result = _first_turn_result(response='{"display":"Done."}')
+    result["output"]["messages"][1]["content"] = history
+
+    with pytest.raises(FabricProtocolError, match="qualification"):
+        adapter_codec("nvidia.fabric.openclaw").validate_first_turn_result(
+            fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="do the work"
+        )
+
+
 def test_unknown_adapter_never_guesses_a_request_codec() -> None:
     with pytest.raises(FabricProtocolError):
         adapter_codec("vendor.unknown")

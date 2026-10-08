@@ -344,6 +344,32 @@ def test_terminal_bridge_projects_one_display_delta_before_completion() -> None:
     assert events[1].result.display_text == events[0].delta
 
 
+@pytest.mark.parametrize("speech", [None, "The result is ready."])
+def test_history_outer_whitespace_preserves_result_channels_and_single_invocation(speech: str | None) -> None:
+    execution = _invoke_success(result_text=_result_text(speech=speech))
+    wire = json.loads(execution.stdout)
+    output = wire["result"]["fabric_result"]["output"]
+    output["messages"][1]["content"] = "\n" + output["response"] + "\n"
+    executor = _Executor([SandboxExecution(0, _wire(wire))])
+    adapter = _adapter(executor)
+
+    async def collect() -> list[CommittedTurnDisplayDelta | CommittedTurnCompleted]:
+        return [event async for event in adapter.stream_turn(_request())]
+
+    events = asyncio.run(collect())
+    assert len(events) == 2
+    assert isinstance(events[0], CommittedTurnDisplayDelta)
+    assert events[0].sequence == 0
+    assert events[0].delta == "## Result\n\nDone."
+    assert isinstance(events[1], CommittedTurnCompleted)
+    assert events[1].result.display_text == events[0].delta
+    assert events[1].result.speak_text == speech
+    assert asyncio.run(adapter.inspect()).target_availability is ResponseOnlyTargetAvailability.CONSUMED
+    with pytest.raises(OpenShellFabricRejected, match="target_context_consumed"):
+        asyncio.run(adapter.commit_turn(_request()))
+    assert [call[0][1] for call in executor.calls] == ["invoke"]
+
+
 def test_configured_display_budget_is_enforced_on_the_returned_result() -> None:
     executor = _Executor([_invoke_success(result_text=_result_text(display="12345"), display_budget_bytes=4)])
     adapter = _adapter(executor, result_display_budget_bytes=4)

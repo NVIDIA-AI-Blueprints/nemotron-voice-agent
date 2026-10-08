@@ -154,6 +154,13 @@ identities and satisfy the first-turn context shape. The selected response must
 parse as `voiceclaw.result.v1` display/speech channels. Plain text is not a
 successful fallback.
 
+The first-turn comparison allows assistant history content and `output.response`
+to differ only in leading or trailing JSON whitespace: ASCII space, tab,
+carriage return, or newline. The response body, exact user prompt, message keys,
+and empty tool-call requirement remain unchanged. The selected response still
+passes the strict result-envelope parser; JSON-equivalent rewrites are not
+accepted as matching history. This does not change routing or agent lifecycle.
+
 The adapter supports one concurrent session and one non-durable delegated turn
 for each fresh target. A successful or ambiguous invocation consumes that
 target. Provision a fresh target before another delegated turn; restarting the
