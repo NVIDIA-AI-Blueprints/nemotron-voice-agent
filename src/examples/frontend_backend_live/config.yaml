@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Frontend/Backend Live configuration. Unknown keys are errors.
+#
+# `frontend` is the talker: one fast call per caller turn that either speaks a reply or delegates. `backend` is
+# the thinker: the tool-using model that does the delegated work. Each role names
+#   provider  a registered implementation (models/registry.py):
+#               chat-completions   any OpenAI-compatible chat endpoint (NVIDIA NIM, vLLM, hosted)
+#               openai-responses   the OpenAI Responses API
+#             For the frontend only, `realtime` uses a remote realtime model as the caller-facing voice, with no
+#             cascade of our own: its slot's entry sets `base_url` (a ws:// or wss:// realtime endpoint), `model_id`
+#             and `api_key_env`; `extra_params` may carry `headers`, `session` (merged into session.update) and
+#             `transcription_model`. The model delegates to the backend through a `delegate` function.
+#   slot      the `examples_registry.yaml` services slot whose selected `services.yaml` entry is the model
+#             (endpoint, model id, sampling and reasoning settings are set there, not here)
+#   prompt    the `prompts.yaml` entry used as the role's static instructions when a live session supplies none
+#             (default: `talker` for the frontend, `thinker` for the backend)
+# Adding a provider is adding a subclass of `Frontend` or `Backend` and registering it by name.
+frontend:
+  provider: chat-completions
+  slot: llm
+  prompt: talker
+
+backend:
+  provider: chat-completions
+  slot: thinker-llm
+  prompt: thinker
+
+# Prompt set added on top of the example's prompts: `v1` is the original routing text; `v2` makes the supplied
+# instructions outrank the examples and delegates detail-bearing turns.
+prompt_version: v1
+
+reliability:
+  provider_retries: 2                  # transient provider failures (timeout, 429, 5xx), with backoff
+  talker_attempt_timeout_seconds: 10   # one routing or phrasing attempt
+  api_timeout_seconds: 45              # one backend round
+  tool_timeout_seconds: 60             # one tool call
+  max_tool_rounds: 8
+  max_pending_delegations: 16
+  recover_failures: true               # a failed call is recovered (delegate, speak as written, apologize)
+
+guards:
+  repeat_guard: true         # a spoken reply that nearly repeats an earlier one becomes a delegation
+  turn_router: false         # drop acknowledgment-only turns ("okay", "mm-hmm") before the talker
+  turn_router_shadow: false  # only trace what the router would drop
+  continuers: [uh-huh, uh huh, mm-hmm, mm hmm, mhm, hmm, mm, mmm, ah, oh, i see, got it]
+
+backend_context_tokens: 100000   # budget for the history the backend is resent each round
+chat_history_recent_turns: 20    # conversation turns kept in the talker's context
