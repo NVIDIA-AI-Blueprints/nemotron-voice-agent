@@ -29,6 +29,7 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 
 ### Added
 
+- **Frontend/Backend Live** example (`frontend-backend-live`): a talker that speaks or delegates each turn, a tool-using backend, and a commentary step, with frontend and backend models selected in `config.yaml`. It also serves live sessions at `/v1/live/sessions`. Cloud, `/server`, and `/single-gpu` recipes are available.
 - **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the **Streaming Input** toggle on the Lightning service card streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
 - One root `services.yaml` for every example, selected by `SERVICE_RECIPE`, and editable LLM parameters such as reasoning and temperature in the Services tab.
 - Services tab controls for TTS and ASR: **Synthesis Mode** on Magpie TTS entries and **Punctuation** on the single-GPU NeMo-Speech.cpp ASR entries.

@@ -12,7 +12,7 @@ Open this file only to change the configuration of a deployed agent. Edit the sm
 | `settings.yaml` | Editable LLM setting profiles referenced by `settings: <profile>` in `services.yaml` |
 | `src/examples/<package>/prompts.yaml` | Built-in prompts for that example |
 
-Example ids map to packages under `src/examples/`: `generic-assistant` → `generic`, `multilingual-assistant` → `multilingual`, `omni-assistant` → `omni_assistant`, `omni-assistant-subagents` → `omni_assistant_subagents`, `frontend-backend-agent` → `frontend_backend_agent`.
+Example ids map to packages under `src/examples/`: `generic-assistant` → `generic`, `multilingual-assistant` → `multilingual`, `omni-assistant` → `omni_assistant`, `omni-assistant-subagents` → `omni_assistant_subagents`, `frontend-backend-agent` → `frontend_backend_agent`, `frontend-backend-live` → `frontend_backend_live`.
 
 ## Validate
 

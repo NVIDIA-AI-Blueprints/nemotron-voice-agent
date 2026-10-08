@@ -24,6 +24,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
+| [`frontend-backend-live`](../src/examples/frontend_backend_live/README.md) | Routing talker with a tool-using backend and pluggable frontend and backend models (Bluebird Cafe reference) | `frontend-backend-live`, `frontend-backend-live/server`, `frontend-backend-live/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
@@ -75,6 +76,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant up -d               # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents up -d     # Nemotron Omni Assistant Subagents
     docker compose --profile frontend-backend-agent up -d       # Frontend/Backend Agent Airline Assistant
+    docker compose --profile frontend-backend-live up -d        # Frontend/Backend Live Cafe Assistant
     ```
 
     **4.2 Server** (workstation NIM stack, not DGX Spark or Jetson Thor):
@@ -85,6 +87,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant/server up -d            # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/server up -d  # Nemotron Omni Assistant Subagents
     docker compose --profile frontend-backend-agent/server up -d    # Frontend/Backend Agent Airline Assistant
+    docker compose --profile frontend-backend-live/server up -d     # Frontend/Backend Live Cafe Assistant
     ```
 
     **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve those weights as W4A16 through Marlin. Blackwell workstations enable DFlash speculative decoding automatically. DGX Spark does not load a DSpark draft model due to a known issue with vLLM streaming prefill. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
@@ -103,6 +106,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
     docker compose --profile frontend-backend-agent/single-gpu up -d     # Frontend/Backend Agent
+    docker compose --profile frontend-backend-live/single-gpu up -d      # Frontend/Backend Live
     ```
 
     To verify all services are healthy, run `docker compose ps`.
@@ -174,6 +178,7 @@ For development and debugging, you can run the server directly:
     | `omni-assistant` | Lock to Nemotron Omni Assistant |
     | `omni-assistant-subagents` | Lock to Nemotron Omni Assistant Subagents |
     | `frontend-backend-agent` | Lock to Frontend Backend Agent |
+    | `frontend-backend-live` | Lock to Frontend Backend Live |
 
     > **Note:** Docker Compose deployments pin `EXAMPLE_SELECTION=<example>` to a single example. You can set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
 

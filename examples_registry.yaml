@@ -91,3 +91,32 @@ examples:
     defaults:
       prompt: [talker]
     bot: examples.frontend_backend_agent.pipeline:bot
+
+  frontend-backend-live:
+    label: Frontend Backend Live
+    services:
+      llm: [nemotron-lightning]
+      thinker-llm: [nemotron-lightning, nemotron-super]
+      asr: [nemotron-asr-streaming-english, parakeet-ctc]
+      tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
+    categories:
+      thinker-llm: llm
+    settings:
+      llm:
+        nemotron-lightning:
+          temperature: 0.0
+          max_tokens: 512
+          enable_thinking: false
+      thinker-llm:
+        nemotron-lightning:
+          temperature: 0.7
+          max_tokens: 4096
+          enable_thinking: true
+          reasoning_budget: 256
+        nemotron-super:
+          temperature: 0.7
+          max_tokens: 4096
+          enable_thinking: true
+    defaults:
+      prompt: [talker]
+    bot: examples.frontend_backend_live.pipeline:bot
