@@ -25,7 +25,8 @@ frontend_profiles:
         credential:
           file: /var/lib/voiceclaw/credentials/speech
         temperature: 0.0
-        supports_tokenize: true
+        # The hosted route does not expose the provider tokenizer endpoint.
+        supports_tokenize: false
         realtime_max_output_tokens: 2048
         forced_tool_call_stops:
         - </tool_call>

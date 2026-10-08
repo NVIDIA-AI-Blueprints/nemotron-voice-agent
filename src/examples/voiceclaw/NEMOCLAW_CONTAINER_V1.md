@@ -231,6 +231,14 @@ The image bundles executable dependencies; startup downloads no executable or
 package. The hosted frontend preset does not inherit the sandbox's local vLLM
 provider automatically.
 
+The hosted frontend large language model (LLM) sets `supports_tokenize: false`
+because its endpoint does not provide the `/tokenize` API. This disables native
+Realtime context truncation without substituting an approximate token counter.
+A working `/v1/chat/completions` route does not establish tokenizer support;
+advertising an unavailable tokenizer can produce `llm_provider_error` before
+completion. This setting does not change the sandbox's local Qwen provider or
+qualify a complete voice reply.
+
 Application removal deletes its owned disposable volume and preserves the
 agent dependency. Deployment-wide destroy follows NemoClaw ownership and can
 delete its sandbox. VoiceClaw shutdown stops only local work and children.

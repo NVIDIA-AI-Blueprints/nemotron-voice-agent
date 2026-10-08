@@ -18,6 +18,7 @@ from test_installer_inputs import connection, connection_value
 
 from voiceclaw import installer_runtime
 from voiceclaw.config import load_config
+from voiceclaw.frontend_runtime import materialize_frontend_runtime
 from voiceclaw.installer_executor import compose_installer_backend
 from voiceclaw.installer_runtime import InstallerApplication, run_healthcheck
 from voiceclaw.model_contracts import load_model_contract_catalog
@@ -236,6 +237,22 @@ def test_installer_shutdown_cancels_its_executor_even_if_upstream_draining_fails
     app.executor.close.assert_called_once_with()
     app.executor.wait_closed.assert_called_once_with(2)
     terminate.assert_awaited_once()
+
+
+def test_installer_hosted_llm_does_not_advertise_provider_tokenization(tmp_path):
+    resource = Path(installer_runtime.__file__).parent / "resources" / "nemoclaw_container_v1.yaml"
+    config = load_config(resource, environ={})
+    profile = config.selected_frontend
+    assert profile.services.llm.supports_tokenize is False
+
+    plan = materialize_frontend_runtime(
+        profile, tmp_path / "frontend", internal_endpoint="ws://127.0.0.1:7861/v1/realtime"
+    )
+    catalog = yaml.safe_load(plan.services_cloud_path.read_text())
+    llm = catalog["llm"][profile.services.llm.id]
+    assert llm["supports_tokenize"] is False
+    assert llm["base_url"] == "https://integrate.api.nvidia.com/v1"
+    assert llm["realtime_max_output_tokens"] == 2048
 
 
 def test_installer_preset_constructs_the_real_upstream_facade_without_network(tmp_path):
