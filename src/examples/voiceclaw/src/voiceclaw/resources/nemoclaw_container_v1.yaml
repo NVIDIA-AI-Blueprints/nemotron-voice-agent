@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-2-Clause
+
+schema_version: voiceclaw.config.v3
+server:
+  host: 0.0.0.0
+  port: 18790
+  listener_security: private_network
+  auth_mode: none
+  max_sessions: 1
+frontend_profiles:
+  managed_nvidia:
+    kind: bundled_nva
+    public_model: nvidia/voiceclaw
+    realtime_model: nvidia/voiceclaw-cascade
+    platform: cloud
+    pipeline_mode: generic-assistant
+    services:
+      llm:
+        id: managed-nemotron-lightning
+        name: Nemotron 3.5 Lightning
+        provider: openai_compatible
+        endpoint: https://integrate.api.nvidia.com/v1
+        model: nvidia/nemotron-3.5-lightning-30b-a3b
+        credential:
+          file: /var/lib/voiceclaw/credentials/speech
+        temperature: 0.0
+        # The hosted route does not expose the provider tokenizer endpoint.
+        supports_tokenize: false
+        realtime_max_output_tokens: 2048
+        forced_tool_call_stops:
+        - </tool_call>
+        extra_params:
+          extra_body:
+            chat_template_kwargs:
+              enable_thinking: false
+            repetition_penalty: 1.05
+      asr:
+        id: managed-nemotron-asr
+        name: Nemotron ASR Streaming
+        provider: nvidia_grpc
+        endpoint: grpc.nvcf.nvidia.com:443
+        tls: true
+        model: nemotron-asr-streaming
+        function_id: bb0837de-8c7b-481f-9ec8-ef5663e9c1fa
+        language_code: en-US
+        credential:
+          file: /var/lib/voiceclaw/credentials/speech
+      tts:
+        id: managed-magpie-tts
+        name: Magpie TTS Multilingual
+        provider: nvidia_grpc
+        endpoint: grpc.nvcf.nvidia.com:443
+        tls: true
+        model: magpie-tts-multilingual
+        voice: Magpie-Multilingual.EN-US.Aria
+        function_id: 877104f7-e885-42b9-8de8-f6e4c6303969
+        synthesis_mode: stitched
+        language_code: en-US
+        credential:
+          file: /var/lib/voiceclaw/credentials/speech
+    connect_timeout_seconds: 15
+    bootstrap_timeout_seconds: 15
+    max_event_bytes: 16777216
+default_frontend: managed_nvidia
+model_contracts:
+  profile: default
+interaction_profiles: {}
+backend_profiles:
+  nemoclaw:
+    kind: openshell_fabric
+    interaction:
+      profile: stateless
+      tool_copy: {}
+    settings: {}
+default_backend: nemoclaw
+interaction:
+  max_pending_speech: 32
+  context_character_budget: 24000
+  request_summary_character_limit: 512
+  retained_request_limit: 8
+  turn_routing_mode: model
+state:
+  kind: sqlite
+  path: /var/lib/voiceclaw/state/state.db

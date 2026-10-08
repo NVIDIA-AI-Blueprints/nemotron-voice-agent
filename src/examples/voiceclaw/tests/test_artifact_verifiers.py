@@ -441,6 +441,58 @@ def test_image_runtime_requires_the_split_identity_supervisor() -> None:
         )
 
 
+@pytest.mark.parametrize("fault", [None, "uid", "port", "health", "sdk", "revision"])
+def test_installer_image_has_an_explicit_nonroot_contract(fault: str | None) -> None:
+    """The installer target cannot pass as the root-operated default image."""
+    source = "https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent"
+    revision = "a" * 40
+    inspected = _image_inspect(source=source, user="65532:65532")
+    config = inspected["Config"]
+    config["ExposedPorts"] = {"18790/tcp": {}}
+    config["Env"] = ["VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1"]
+    config["Labels"].update(
+        {
+            "org.opencontainers.image.revision": revision,
+            "com.nvidia.voiceclaw.install-contract": "voiceclaw.nemoclaw.container.v1",
+            "com.nvidia.voiceclaw.openshell-revision": _IMAGE_VERIFIER._OPEN_SHELL_REVISION,
+        }
+    )
+    config["Healthcheck"].update(
+        Interval=10_000_000_000, Timeout=20_000_000_000, StartPeriod=180_000_000_000, Retries=3
+    )
+    if fault == "uid":
+        config["User"] = "root"
+    elif fault == "port":
+        config["ExposedPorts"] = {"7860/tcp": {}}
+    elif fault == "health":
+        config["Healthcheck"]["Timeout"] = 240_000_000_000
+    elif fault == "sdk":
+        config["Labels"]["com.nvidia.voiceclaw.openshell-revision"] = "b" * 40
+    elif fault == "revision":
+        revision = "development"
+
+    def verify():
+        return _IMAGE_VERIFIER._verify_contract(
+            inspected, version="0.1.0", revision=revision, source=source, runtime_profile="nemoclaw-container-v1"
+        )
+
+    if fault is not None:
+        with pytest.raises(ValueError):
+            verify()
+    else:
+        assert verify()["user"] == "65532:65532"
+
+
+def test_installer_manifest_requires_selected_engine_resolution() -> None:
+    """A tag or configuration ID cannot replace the manifest reference."""
+    reference = "voiceclaw-test@sha256:" + "a" * 64
+    assert _IMAGE_VERIFIER._manifest_reference(reference, {"RepoDigests": [reference]}) == reference
+    with pytest.raises(ValueError):
+        _IMAGE_VERIFIER._manifest_reference(reference, {"RepoDigests": []})
+    with pytest.raises(ValueError):
+        _IMAGE_VERIFIER._manifest_reference("voiceclaw-test:latest", {"RepoDigests": [reference]})
+
+
 @pytest.mark.parametrize(
     ("field", "extra", "message"),
     [

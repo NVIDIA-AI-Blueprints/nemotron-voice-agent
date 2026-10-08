@@ -109,12 +109,15 @@ class FabricAdapterCodec:
         if set(user_message) != {"role", "content"} or user_message != {"role": "user", "content": prompt}:
             raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
         response = output.get("response")
+        history_content = assistant_message.get("content")
+        # OpenClaw history can retain outer JSON whitespace omitted by returned payloads.
         if (
             not isinstance(response, str)
             or not response
             or set(assistant_message) != {"role", "content", "tool_calls"}
             or assistant_message.get("role") != "assistant"
-            or assistant_message.get("content") != response
+            or not isinstance(history_content, str)
+            or history_content.strip(" \t\r\n") != response.strip(" \t\r\n")
             or assistant_message.get("tool_calls") != []
         ):
             raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")

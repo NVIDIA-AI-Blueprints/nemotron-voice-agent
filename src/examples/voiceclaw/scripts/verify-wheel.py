@@ -51,6 +51,7 @@ _REQUIRED_PACKAGE_FILES = {
     "voiceclaw/resources/model_contracts.v1.yaml",
     "voiceclaw/resources/interaction_profiles.v2.yaml",
     "voiceclaw/resources/voiceclaw.container.yaml",
+    "voiceclaw/resources/nemoclaw_container_v1.yaml",
     "voiceclaw/resources/voiceclaw.example.yaml",
     "voiceclaw/ui/index.html",
     "voiceclaw/ui/styles.css",
