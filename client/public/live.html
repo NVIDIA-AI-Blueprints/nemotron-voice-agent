@@ -1,0 +1,177 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Console | Nemotron Voice Agent</title>
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="stylesheet" href="/live/live.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark">NVIDIA</span>
+        <h1>Live Console</h1>
+        <span class="dot" id="statusDot"></span>
+        <span class="sub" id="statusText">Idle</span>
+      </div>
+
+      <div class="who">
+        <div class="who-card" title="The frontend: hears the caller, speaks, and decides when to delegate.">
+          <span class="who-role">FRONTEND</span>
+          <span class="who-model" id="badgeFrontend">…</span>
+          <span class="who-note" id="noteFrontend">speech in / speech out · decides when to delegate</span>
+        </div>
+        <span class="who-arrow">delegates&nbsp;→</span>
+        <div class="who-card thinker" title="The backend: reasons, picks tools and returns verified facts.">
+          <span class="who-role">BACKEND</span>
+          <span class="who-model" id="badgeBackend">…</span>
+          <span class="who-note" id="noteBackend">reasons · picks tools · returns facts</span>
+        </div>
+        <span class="who-arrow">tool calls&nbsp;→</span>
+        <div class="who-card client" title="This browser runs the cafe tools.">
+          <span class="who-role">CLIENT</span>
+          <span class="who-model">this browser</span>
+          <span class="who-note">runs get_menu · manage_cart · place_order</span>
+        </div>
+      </div>
+
+      <div class="meters">
+        <div><label>session</label><code id="mSession">—</code></div>
+        <div><label>voice secs</label><code id="mUsage">0</code></div>
+        <div><label>context</label><code id="mCtx">0%</code></div>
+        <div><label>delegations</label><code id="mDelegations">0</code></div>
+        <div><label>tool calls</label><code id="mTools">0</code></div>
+      </div>
+    </header>
+
+    <section class="setup" id="setup">
+      <div class="setup-row">
+        <label>Delegation <select id="optMode">
+          <option value="responses">responses — the server runs the backend</option>
+          <option value="client">client — this browser runs it</option>
+        </select></label>
+        <label>Backend model <input id="optBackend" list="backendModels" size="34" /></label>
+        <datalist id="backendModels"></datalist>
+        <label>Voice <select id="optVoice"></select></label>
+        <label>Reasoning <select id="optEffort"></select></label>
+        <label>Tool choice <select id="optToolChoice"></select></label>
+        <label>Bearer token <input id="optToken" type="password" size="12" placeholder="if required" /></label>
+        <label class="check"><input type="checkbox" id="optAutoCommentary" checked /> auto progress commentary</label>
+      </div>
+      <details class="advanced">
+        <summary>Prompts, tools and earlier messages (what the session is created with)</summary>
+        <div class="advanced-grid">
+          <label>Frontend instructions<textarea id="optInstructions" rows="7"></textarea></label>
+          <label>Backend instructions<textarea id="optBackendInstructions" rows="7"></textarea></label>
+          <label>Backend tools (JSON; this browser runs the cafe tools)<textarea id="optTools" rows="7" class="mono"></textarea></label>
+          <label>Earlier messages (one per line, <code>role: text</code>)<textarea id="optHistory" rows="7" placeholder="user: hi&#10;assistant: Welcome to Bluebird Cafe."></textarea></label>
+        </div>
+      </details>
+      <div class="setup-row">
+        <button id="btnStart" class="primary">Start conversation</button>
+        <button id="btnStop" disabled>End conversation (graceful)</button>
+        <button id="btnMute" disabled>Mute mic</button>
+        <button id="btnShowConfig">Show session config</button>
+        <button id="btnShowPrompts">Show prompts</button>
+        <audio id="player" autoplay controls></audio>
+      </div>
+    </section>
+
+    <main class="grid">
+      <section class="panel" id="panelConversation">
+        <h2>Conversation <small>full duplex — both sides can speak at once</small></h2>
+        <div class="captions" id="captions"></div>
+        <div class="typed">
+          <input id="typedInput" placeholder="Type exact text (sent as response.item.create + response.create)" />
+          <button id="btnTyped">Send to backend</button>
+        </div>
+
+        <h2 class="mt">Client state <small>what the mock tools actually mutate</small></h2>
+        <div class="cart" id="cartView"></div>
+        <details class="menu">
+          <summary>Menu (mock data)</summary>
+          <div id="menuView"></div>
+        </details>
+      </section>
+
+      <section class="panel" id="panelConsole">
+        <h2>Live session event console <small>every frame on the <code>oai-events</code> data channel</small></h2>
+        <div class="filters" id="filters">
+          <label class="check"><input type="checkbox" data-cat="lifecycle" checked /> lifecycle</label>
+          <label class="check"><input type="checkbox" data-cat="transcript" checked /> transcript</label>
+          <label class="check"><input type="checkbox" data-cat="delegation" checked /> delegation</label>
+          <label class="check"><input type="checkbox" data-cat="backend" checked /> backend (response.event)</label>
+          <label class="check"><input type="checkbox" data-cat="tool" checked /> tools</label>
+          <label class="check"><input type="checkbox" data-cat="context" checked /> context appends</label>
+          <label class="check"><input type="checkbox" data-cat="app" checked /> app notes</label>
+          <label class="check"><input type="checkbox" data-cat="error" checked /> errors</label>
+          <label class="check"><input type="checkbox" id="hideDeltas" checked /> hide streaming deltas</label>
+          <span class="spacer"></span>
+          <input id="search" placeholder="filter text…" />
+          <button id="btnAutoscroll" class="toggle on">autoscroll</button>
+          <button id="btnClear">clear</button>
+          <button id="btnExport">export</button>
+        </div>
+        <div class="log" id="log"></div>
+      </section>
+
+      <section class="panel" id="panelDelegations">
+        <h2>Delegation timeline <small>one card per <code>session.delegation.created</code></small></h2>
+        <div class="delegations" id="delegations">
+          <p class="empty">No delegation yet. Ask about the menu once connected.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="controls">
+      <div class="ctl-group">
+        <span class="ctl-title">Steer the frontend from the client
+          <small>all three take <code>delegation_id: null</code> in responses delegation</small>
+        </span>
+        <div class="ctl-row">
+          <select id="ctlKind">
+            <option value="session.instructions.append">session.instructions.append — behavior / exact wording</option>
+            <option value="session.thinking.append">session.thinking.append — silent context</option>
+            <option value="session.commentary.append">session.commentary.append — say this aloud</option>
+          </select>
+          <select id="ctlPreset"></select>
+          <input id="ctlContent" placeholder="content (≤ 500 tokens)" />
+          <button id="btnAppend" disabled>Send append</button>
+        </div>
+      </div>
+      <div class="ctl-group">
+        <span class="ctl-title">Reconfigure the backend mid-session <small><code>session.update</code></small></span>
+        <div class="ctl-row">
+          <input id="ctlUpdModel" list="backendModels" placeholder="model" />
+          <select id="ctlUpdEffort"></select>
+          <select id="ctlUpdToolChoice"></select>
+          <button id="btnUpdate" disabled>Send session.update</button>
+        </div>
+      </div>
+      <div class="ctl-group">
+        <span class="ctl-title">Send any event <small>exactly as typed</small></span>
+        <div class="ctl-row">
+          <input id="rawEvent" class="mono" value='{"type": "session.thinking.append", "delegation_id": null, "content": "…"}' />
+          <button id="btnRaw" disabled>Send</button>
+        </div>
+      </div>
+    </footer>
+
+    <div class="modal" id="modal" hidden>
+      <div class="modal-box">
+        <div class="modal-head">
+          <h3 id="modalTitle"></h3>
+          <button id="modalClose">close</button>
+        </div>
+        <pre id="modalBody"></pre>
+      </div>
+    </div>
+
+    <script type="module" src="/live/app.js"></script>
+  </body>
+</html>
