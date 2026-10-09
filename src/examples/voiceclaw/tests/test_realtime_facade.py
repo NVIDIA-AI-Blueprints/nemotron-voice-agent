@@ -2130,6 +2130,44 @@ def test_model_selected_route_is_a_silent_required_structured_turn() -> None:
     assert direct_reply["response"]["tools"] == []
 
 
+@pytest.mark.parametrize(
+    ("status", "details", "diagnostic"),
+    [
+        ("incomplete", {"type": "incomplete", "reason": "max_output_tokens"}, "reason=max_output_tokens"),
+        ("failed", {"type": "failed", "error": {"code": "llm_provider_error"}}, "code=llm_provider_error"),
+        ("cancelled", {"type": "cancelled", "reason": "client_cancelled"}, "reason=client_cancelled"),
+        (
+            "failed",
+            {"type": "failed", "error": {"code": "nvapi-private-fixture", "message": "private route reasoning"}},
+            "code=unrecognized",
+        ),
+    ],
+)
+def test_failed_model_route_logs_only_allowlisted_terminal_details(caplog, status, details, diagnostic) -> None:
+    turns = _TurnPort()
+    facade, downstream, _ = _facade(runtime=_AutoRuntime(turns))
+
+    async def exercise() -> None:
+        await facade.bootstrap()
+        await _finalize_text_turn(facade, "Use the connected agent for private route reasoning")
+        await facade.handle_downstream_event({"event_id": "model-route", "type": "response.create", "response": {}})
+        await facade.handle_upstream_event(_response_created())
+        event = _response_done()
+        event["response"].update(status=status, status_details=details, output=[])
+        await facade.handle_upstream_event(event)
+
+    asyncio.run(exercise())
+    assert diagnostic in caplog.text
+    assert f"status={status}" in caplog.text
+    assert "nvapi-private-fixture" not in caplog.text
+    assert "private route reasoning" not in caplog.text
+    assert "resp-private" not in caplog.text
+    assert turns.requests == []
+    public_errors = [event for event in downstream.events() if event["type"] == "error"]
+    assert public_errors[-1]["error"]["code"] == "routing_unavailable"
+    assert "private route reasoning" not in json.dumps(public_errors)
+
+
 def test_model_selected_direct_reply_reaches_client_as_one_audio_response() -> None:
     turns = _TurnPort()
     facade, downstream, _ = _facade(runtime=_AutoRuntime(turns))

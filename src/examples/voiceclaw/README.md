@@ -314,6 +314,18 @@ invocation. Provision a fresh target before either check, including after a
 failed verification following dispatch. Do not replay the recording against
 the consumed target.
 
+### Troubleshoot Route Selection
+
+`routing_unavailable` can indicate a failed, incomplete, or canceled private
+model route-selection response. This terminal failure stops before delegated
+dispatch. Inspect the application container logs for
+`Realtime route selection did not complete`.
+
+The warning reports only allowlisted `status`, `type`, `reason`, and `code`
+values. Missing or unknown values appear as `unrecognized`. Private goals,
+response IDs, provider error messages, and model reasoning remain out of this
+warning.
+
 ## Current Limitations
 
 - The OpenShell profile supports one concurrent VoiceClaw session.

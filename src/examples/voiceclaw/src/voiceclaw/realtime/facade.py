@@ -3174,6 +3174,33 @@ class VoiceClawRealtimeFacade:
                 reason=f"frontend_response_{delivery_phase}",
             )
             if model_route_selection:
+                details = response.get("status_details")
+                details = details if isinstance(details, dict) else {}
+                error = details.get("error")
+                error = error if isinstance(error, dict) else {}
+
+                def diagnostic(value: object, allowed: set[str]) -> str:
+                    return value if isinstance(value, str) and value in allowed else "unrecognized"
+
+                _LOGGER.warning(
+                    "Realtime route selection did not complete status=%s type=%s reason=%s code=%s",
+                    diagnostic(response_status, {"incomplete", "failed", "cancelled", "canceled"}),
+                    diagnostic(details.get("type"), {"incomplete", "failed", "cancelled"}),
+                    diagnostic(
+                        details.get("reason"),
+                        {"max_output_tokens", "content_filter", "turn_detected", "client_cancelled"},
+                    ),
+                    diagnostic(
+                        error.get("code"),
+                        {
+                            "llm_provider_error",
+                            "tts_provider_error",
+                            "pipeline_error",
+                            "lifecycle_error",
+                            "response_failed",
+                        },
+                    ),
+                )
                 await self._send_public_error(
                     "routing_unavailable",
                     "VoiceClaw could not select a safe response route for this turn.",
