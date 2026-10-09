@@ -4456,6 +4456,24 @@ def test_uncorrelated_upstream_error_does_not_release_in_flight_response() -> No
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("code", ["llm_provider_error", "tts_provider_error"])
+def test_provider_failure_reports_its_safe_classification_without_private_details(code: str) -> None:
+    facade, downstream, _ = _facade()
+
+    async def exercise() -> None:
+        await facade.bootstrap()
+        await facade.handle_upstream_event(
+            {"type": "error", "error": {"code": code, "message": "PRIVATE_TOKEN_AND_PROVIDER_BODY"}}
+        )
+
+    asyncio.run(exercise())
+    errors = [event["error"] for event in downstream.events() if event["type"] == "error"]
+    assert errors[-1]["code"] == code
+    assert "PRIVATE_TOKEN" not in json.dumps(downstream.events())
+    if code == "tts_provider_error":
+        assert "backend turn" in errors[-1]["message"]
+
+
 def test_response_arbiter_waits_for_user_input_before_speaking_backend_result() -> None:
     async def exercise() -> None:
         started = asyncio.Event()

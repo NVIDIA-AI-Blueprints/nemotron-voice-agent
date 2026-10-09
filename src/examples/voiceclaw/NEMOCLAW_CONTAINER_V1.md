@@ -150,8 +150,9 @@ or new fields. Both the Fabric agent and native OpenClaw agent are bound to
 `descriptor.target.agent`. Different Fabric and native agent names are not
 supported by this installer contract.
 Successful results must preserve the Fabric runtime, adapter, and agent
-identities and satisfy the first-turn context shape. The selected response must
-parse as `voiceclaw.result.v1` display/speech channels. Plain text is not a
+identities and qualify each appended turn against verified native history.
+The selected response must parse as `voiceclaw.result.v1` display/speech
+channels. Plain text is not a
 successful fallback.
 
 First-turn qualification requires exactly one original user prompt, the matching
@@ -176,15 +177,25 @@ The final assistant history content and `output.response` can differ only in
 leading or trailing JSON whitespace: ASCII space, tab, carriage return, or
 newline. The response body and exact user prompt remain unchanged. The selected
 response still passes the strict result-envelope parser; JSON-equivalent
-rewrites are not accepted as matching history. This qualification does not
-establish multi-turn continuity or change routing or agent lifecycle.
+rewrites are not accepted as matching history.
 
-The adapter supports one concurrent session and one non-durable delegated turn
-for each fresh target. A successful or ambiguous invocation consumes that
-target. Provision a fresh target before another delegated turn; restarting the
-application does not clear native conversation history. There is no automatic
-replay, durable backend work, event streaming, steering, confirmed remote
-cancellation, or qualified conversation continuity.
+The installer profile enables sequential non-durable turns in shared native
+context, with one concurrent VoiceClaw session. After full binding, correlation,
+history, and result-envelope validation, the target returns to the available
+state for another turn. The application retains a copy of verified history in
+memory, pins the runtime and native session identity, and rejects reused turn
+or response IDs. Each later result must preserve that exact history prefix and
+append one complete new turn with the same per-turn validation. Changed
+returned history or identities, unusable results, and ambiguous invocations
+consume the target and prevent further delegation.
+
+This is process-local shared context, not durable work or reconnect recovery.
+Restarting the application loses the verified history prefix and does not clear
+native conversation history. Existing native history fails the new process's
+first-turn check; provision a fresh target before delegating again. The generic
+OpenShell/Fabric adapter keeps its default single-turn behavior: a successful
+or ambiguous invocation consumes the target. There is no automatic replay,
+event streaming, steering, or confirmed remote cancellation.
 
 The executor bounds stdin and streamed output and enforces the descriptor's
 deadlines. Bearer control data enters the trusted SDK child through a private
@@ -326,7 +337,10 @@ Remaining qualification requires these distinct results:
    correlated input transcription, delegated work, and generated result audio.
    Require transcript, display, and speech markers plus a captured result WAV
    for this evidence. The verifier saves generated audio and acknowledges zero
-   playback; audible delivery requires separate observation.
+   playback; audible delivery requires separate observation. For installer
+   qualification, select `--context-continuity shared_target`. Then verify a
+   subsequent turn on the same running application, with unchanged prior native
+   history and no replay. Local tests do not establish this live result.
 4. Test failed/revoked identity and TLS rejection, ambiguous invocation with no
    replay, secret-free export/reapply, and owned application removal without
    deleting the agent or retained inference storage.

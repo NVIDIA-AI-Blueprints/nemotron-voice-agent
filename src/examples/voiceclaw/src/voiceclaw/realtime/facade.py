@@ -1532,9 +1532,20 @@ class VoiceClawRealtimeFacade:
             await self._handle_client_item_create_error(value)
             await self._handle_manual_audio_commit_error(value)
             await self._handle_response_create_error(value)
+            provider_messages = {
+                "llm_provider_error": "The language model failed while generating this response.",
+                "tts_provider_error": (
+                    "Speech playback could not be generated. Check the backend turn for its text result."
+                ),
+            }
+            provider_code = (
+                upstream_code
+                if isinstance(upstream_code, str) and upstream_code in provider_messages
+                else "upstream_error"
+            )
             await self._send_public_error(
-                "upstream_error",
-                "The realtime frontend rejected an event.",
+                provider_code,
+                provider_messages.get(provider_code, "The realtime frontend rejected an event."),
                 event_id=failed_client_event_id,
             )
             return

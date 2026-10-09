@@ -300,6 +300,12 @@ def _parser() -> argparse.ArgumentParser:
         help="required terminal local outcome (default: %(default)s)",
     )
     parser.add_argument(
+        "--context-continuity",
+        choices=("unqualified", "shared_target"),
+        default="unqualified",
+        help="required backend context contract; container-v1 uses shared_target (default: %(default)s)",
+    )
+    parser.add_argument(
         "--display-contains",
         action="append",
         default=[],
@@ -453,6 +459,7 @@ def _target_contract_payload(
     expected_state: ResponseOnlyTargetAvailability,
     expected_capabilities: frozenset[str],
     expected_tools: frozenset[str],
+    expected_continuity: str = "unqualified",
 ) -> dict[str, object]:
     """Validate one complete response-only target replacement projection."""
     try:
@@ -486,7 +493,7 @@ def _target_contract_payload(
         "durability": "none",
         "event_delivery": "response_only",
         "max_parallel_work": 1,
-        "context_continuity": "unqualified",
+        "context_continuity": expected_continuity,
     }
     if any(payload.get(key) != value for key, value in expected_contract.items()):
         raise RuntimeError("the target capability projection changed the qualified response-only contract")
@@ -1273,6 +1280,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                     expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
                                     expected_capabilities=_INITIAL_RESPONSE_ONLY_CAPABILITIES,
                                     expected_tools=_INITIAL_RESPONSE_ONLY_TOOLS,
+                                    expected_continuity=getattr(arguments, "context_continuity", "unqualified"),
                                 )
                             else:
                                 if terminal_projection is None:
@@ -1281,10 +1289,10 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                     )
                                 if terminal_target_contract is not None:
                                     raise RuntimeError("VoiceClaw emitted more than one terminal target contract")
-                                target_consumed = expected_outcome in {
-                                    ResponseOnlyRequestState.SUCCEEDED,
-                                    ResponseOnlyRequestState.OUTCOME_UNKNOWN,
-                                }
+                                target_consumed = expected_outcome is ResponseOnlyRequestState.OUTCOME_UNKNOWN or (
+                                    expected_outcome is ResponseOnlyRequestState.SUCCEEDED
+                                    and getattr(arguments, "context_continuity", "unqualified") == "unqualified"
+                                )
                                 terminal_target_contract = _target_contract_payload(
                                     text,
                                     projection,
@@ -1297,6 +1305,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                                         frozenset() if target_consumed else _INITIAL_RESPONSE_ONLY_CAPABILITIES
                                     ),
                                     expected_tools=(frozenset() if target_consumed else _INITIAL_RESPONSE_ONLY_TOOLS),
+                                    expected_continuity=getattr(arguments, "context_continuity", "unqualified"),
                                 )
 
                         if kind == ResponseOnlyUpdateKind.DELIVERY_QUEUE.value:
@@ -1583,9 +1592,12 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             "backend_acceptance": None,
                             "initial_target_contract_verified": True,
                             "terminal_target_state": terminal_target_contract["target_state"],
-                            "terminal_target_consumed": True,
+                            "terminal_target_consumed": (
+                                terminal_target_contract["target_state"]
+                                == ResponseOnlyTargetAvailability.CONSUMED.value
+                            ),
                             "terminal_frontend_tools": terminal_target_contract["frontend_tools"],
-                            "terminal_tools_withdrawn": True,
+                            "terminal_tools_withdrawn": not terminal_target_contract["frontend_tools"],
                             "acknowledgement_slot_reserved_before_dispatch": (
                                 queue_reserved_before_dispatch_at < dispatching_at
                             ),

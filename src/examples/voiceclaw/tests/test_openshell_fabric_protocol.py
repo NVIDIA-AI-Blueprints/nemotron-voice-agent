@@ -129,6 +129,35 @@ def _tool_history() -> list[dict[str, object]]:
     ]
 
 
+@pytest.mark.parametrize("mutation", [None, "changed-answer", "tool-error-type", "truncated-prefix"])
+def test_shared_context_requires_the_exact_typed_prefix_before_a_new_tool_turn(mutation: str | None) -> None:
+    prior = _first_turn_result()["output"]["messages"]
+    prior[1:1] = _tool_history()
+    result = _first_turn_result(messages=json.loads(json.dumps(prior)), response="new result")
+    result["output"]["messages"].extend(
+        [
+            {"role": "user", "content": "new request"},
+            *_tool_history(),
+            {"role": "assistant", "content": "new result", "tool_calls": []},
+        ]
+    )
+    if mutation == "changed-answer":
+        result["output"]["messages"][3]["content"] = "changed result"
+    elif mutation == "tool-error-type":
+        result["output"]["messages"][2]["is_error"] = 0
+    elif mutation == "truncated-prefix":
+        del result["output"]["messages"][0]
+    codec = adapter_codec("nvidia.fabric.openclaw")
+    parameters = dict(
+        fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="new request", prior_messages=prior
+    )
+    if mutation is None:
+        assert codec.validate_turn_result(**parameters) == "agent:default:fabric-runtime-1"
+    else:
+        with pytest.raises(FabricFirstTurnQualificationError, match="previously verified history"):
+            codec.validate_turn_result(**parameters)
+
+
 @pytest.mark.parametrize("is_error", [False, True])
 def test_openclaw_codec_accepts_a_completed_memory_tool_in_the_first_turn(is_error: bool) -> None:
     result = _first_turn_result()

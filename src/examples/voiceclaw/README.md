@@ -58,11 +58,15 @@ it to an existing OpenShell sandbox. VoiceClaw does not install or manage the
 agent.
 
 This profile preserves the upstream OpenShell/Fabric adapter, request codec,
-result validation, and fresh-target limits. A narrow installer executor supplies
+and result validation. A narrow installer executor supplies
 the protected descriptor and pinned SDK transport. It does not replace the
 default image supervisor, developer Compose recipe, or cloud configuration.
-The first-turn check permits matched native tool calls and results within that
-single invocation. Target identity and final response validation remain strict.
+The installer starts with a fresh target and permits sequential turns using
+verified shared native context while the application runs. Each new result
+must preserve the exact prior history, runtime, and session identity before
+another turn becomes available. Matched native tool calls and results can run
+within each invocation. The generic adapter retains its default single-turn
+behavior.
 
 Use the following nonsecret environment inputs in the application declaration:
 
@@ -92,7 +96,8 @@ An empty `200` response confirms protected inputs, initialized local components,
 and the bundled frontend listener. It does not prove native Fabric health,
 provider credentials, model responses, or a complete voice turn. Agent checks
 and invocations retain upstream validation; unsupported native health is not
-reported as healthy. Provision a fresh agent target for each delegated turn.
+reported as healthy. The installer needs a fresh agent target for its first
+delegated turn; verified successful turns can then share that native context.
 
 The earlier installer revision passed a manual ARM64 Station installation and
 local readiness check. That result does not qualify this upstream adaptation;
@@ -120,17 +125,22 @@ WebSocket share port `18790`; no separate browser server is required.
 3. Wait for **Session ready**, then select **Start listening** and grant
    microphone access. Follow the negotiated turn behavior shown below the
    composer, or enter a typed request and press **Enter**.
-4. Ask for one delegated agent task against a fresh target. Inspect the result
-   in **Backend turns** and check audible result playback separately.
+4. Ask for a delegated agent task against a fresh target. Inspect the result in
+   **Backend turns** and check audible result playback separately. After a
+   verified successful agent result, you can submit another sequential task
+   using the same native context.
 
 Microphone capture requires a secure browser context, such as localhost.
 Opening the remote host's plain HTTP address does not provide that context.
 If microphone access is unavailable, typed requests remain available.
 
-A valid result can contain `speech: null`. VoiceClaw displays that result
-without queuing result speech. Display success alone does not prove hosted
-speech-provider access or audible playback. A successful or ambiguous delegated
-invocation consumes the target; provision a fresh target before another one.
+The result prompt asks for useful spoken material about the outcome, needed
+clarification, or a missing requirement. A valid result can still contain
+`speech: null`. VoiceClaw displays that result without queuing or inventing
+result speech. Display success alone does not prove hosted speech-provider
+access or audible playback. An ambiguous invocation consumes the target;
+provision a fresh target before retrying. An application restart loses the
+verified history prefix and cannot resume a target with existing native history.
 
 ## Run the Developer Stack
 
@@ -282,6 +292,7 @@ uv run --project src/examples/voiceclaw --extra server --extra openshell \
   python src/examples/voiceclaw/scripts/verify-realtime-delegation.py \
   --url 'ws://127.0.0.1:18790/v1/realtime?model=nvidia%2Fvoiceclaw' \
   --allow-loopback-ws \
+  --context-continuity shared_target \
   --input-audio-wav /absolute/path/agent-question.wav \
   --transcript-contains balanced \
   --display-contains balanced \
@@ -289,7 +300,10 @@ uv run --project src/examples/voiceclaw --extra server --extra openshell \
   --output-audio-wav /absolute/path/agent-result.wav
 ```
 
-For the developer stack, use port `7860` in the URL. Audio input and `--query`
+For the developer stack, use port `7860` and `--context-continuity unqualified`.
+The default verifier contract is `unqualified`. The installer requires
+`shared_target`, which checks that a successful turn returns the target to the
+available state with delegation still enabled. Audio input and `--query`
 are mutually exclusive; the recorded-input check sends no typed fallback.
 The verifier sends paced 20 ms audio chunks and follows the session's
 negotiated automatic or manual turn behavior. It preserves the cascade's
@@ -311,10 +325,12 @@ The saved WAV records generated result audio. The verifier reports
 prove audible delivery. Listen to the saved result separately before reporting
 that you heard the reply.
 
-The current response-only target is consumed after a successful or ambiguous
-invocation. Provision a fresh target before either check, including after a
-failed verification following dispatch. Do not replay the recording against
-the consumed target.
+Start qualification with a fresh target. The generic adapter consumes the
+target after a successful or ambiguous invocation. The installer can accept
+another sequential turn after a fully verified agent result while the process
+retains its native history proof. Ambiguous outcomes still consume the target.
+Do not replay a recording after an uncertain invocation; use a fresh target.
+Restarting the installer cannot recover prior native history or pending work.
 
 ### Troubleshoot Route Selection
 
@@ -328,14 +344,27 @@ values. Missing or unknown values appear as `unrecognized`. Private goals,
 response IDs, provider error messages, and model reasoning remain out of this
 warning.
 
+Frontend provider errors use fixed public messages with `llm_provider_error`
+or `tts_provider_error` codes. A language-model error identifies failed frontend
+generation. For a speech-provider error, inspect **Backend turns** for the text
+result before repeating agent work. Provider error details remain private.
+
+The application log warning `Realtime frontend rejected an event` can include
+a fixed `param` label. Examples include `provider.tool_call_missing` for a
+missing structured model call, `provider.grpc.deadline_exceeded` for a provider
+deadline, and `provider.empty_audio` for synthesis that completes without audio.
+These labels classify known failures without copying raw provider errors or
+credentials into the diagnostic.
+
 ## Current Limitations
 
 - The OpenShell profile supports one concurrent VoiceClaw session.
-- The R1a integration supports one non-durable delegated turn for each fresh
-  target.
+- The generic OpenShell/Fabric adapter supports one non-durable delegated turn
+  for each fresh target. The installer profile enables sequential turns with
+  verified shared native history inside the running application.
 - Agent results are terminal responses. Backend event streaming, durable
-  acceptance, replay, steering, cancellation, and qualified conversation
-  continuity are not available yet.
+  acceptance, replay, steering, confirmed remote cancellation, and reconnect
+  recovery are not available yet.
 - SQLite stores local request and presentation state, not durable backend work.
 
 Refer to the repository [Troubleshooting guide](../../../docs/06-troubleshooting.md)

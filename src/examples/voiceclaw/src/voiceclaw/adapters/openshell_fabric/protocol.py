@@ -88,6 +88,20 @@ class FabricAdapterCodec:
         prompt: str,
     ) -> str:
         """Validate the fail-closed first-turn shape and return its session key."""
+        return self.validate_turn_result(
+            fabric_result=fabric_result, native_agent=native_agent, runtime_id=runtime_id, prompt=prompt
+        )
+
+    def validate_turn_result(
+        self,
+        *,
+        fabric_result: dict[str, Any],
+        native_agent: str,
+        runtime_id: str,
+        prompt: str,
+        prior_messages: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Require an exact verified prefix followed by one complete new turn."""
         output = fabric_result.get("output")
         if not isinstance(output, dict):
             raise FabricProtocolError("Fabric result output is invalid")
@@ -101,6 +115,12 @@ class FabricAdapterCodec:
             raise FabricProtocolError("Fabric result omitted context-isolation evidence")
         if any(not isinstance(message, dict) for message in messages):
             raise FabricProtocolError("Fabric result contains malformed context-isolation evidence")
+        if prior_messages is not None:
+            if not prior_messages or json.dumps(messages[: len(prior_messages)], sort_keys=True) != json.dumps(
+                prior_messages, sort_keys=True
+            ):
+                raise FabricFirstTurnQualificationError("Fabric result changed previously verified history")
+            messages = messages[len(prior_messages) :]
         if len(messages) < 2:
             raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
         user_message, assistant_message = messages[0], messages[-1]

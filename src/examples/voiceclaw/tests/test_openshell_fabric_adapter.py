@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import threading
 from collections.abc import Sequence
@@ -206,6 +207,104 @@ def _request() -> CommittedTurnRequest:
         commit_id="commit-1",
         text="Compare two search tree implementations.",
     )
+
+
+def _continued_success(first: SandboxExecution, *, text: str = "Now explain the difference.") -> SandboxExecution:
+    previous = json.loads(first.stdout)
+    value = copy.deepcopy(previous)
+    result = value["result"]["fabric_result"]
+    result["request_id"] = "request-2"
+    result["invocation_id"] = "invocation-2"
+    result["output"]["response"] = _result_text(display="The follow-up result.")
+    result["output"]["messages"].extend(
+        [
+            {"role": "user", "content": build_result_envelope_prompt(text)},
+            {"role": "assistant", "content": result["output"]["response"], "tool_calls": []},
+        ]
+    )
+    return SandboxExecution(0, _wire(value))
+
+
+def test_shared_context_accepts_a_correlated_followup_without_consuming_the_target() -> None:
+    first = _invoke_success()
+    executor = _Executor([first, _continued_success(first), _check_unsupported()])
+    adapter = _adapter(executor, allow_shared_context=True)
+    initial = asyncio.run(adapter.commit_turn(_request()))
+    followup = asyncio.run(
+        adapter.commit_turn(CommittedTurnRequest("conversation-1", "commit-2", "Now explain the difference."))
+    )
+    descriptor = asyncio.run(adapter.inspect())
+    assert initial.backend_session_id == followup.backend_session_id
+    assert followup.turn_id == "request-2"
+    assert followup.response_id == "invocation-2"
+    assert followup.display_text == "The follow-up result."
+    assert descriptor.context_continuity is ResponseOnlyContextContinuity.SHARED_TARGET
+    assert descriptor.target_availability is ResponseOnlyTargetAvailability.AVAILABLE
+    assert descriptor.capabilities.operations == frozenset({BackendOperation.SUBMIT})
+    assert [call[0][1] for call in executor.calls] == ["invoke", "invoke", "check"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "changed-prefix",
+        "missing-prefix",
+        "wrong-runtime",
+        "reused-request",
+        "reused-invocation",
+        "extra-user",
+        "unfinished-tool",
+    ],
+)
+def test_shared_context_fences_unqualified_followups_and_never_replays(mutation: str) -> None:
+    first = _invoke_success()
+    second = json.loads(_continued_success(first).stdout)
+    result = second["result"]["fabric_result"]
+    messages = result["output"]["messages"]
+    if mutation == "changed-prefix":
+        messages[1]["content"] = "altered previous answer"
+    elif mutation == "missing-prefix":
+        del messages[:2]
+    elif mutation == "wrong-runtime":
+        second["result"]["runtime_id"] = result["runtime_id"] = "runtime-other"
+    elif mutation == "reused-request":
+        result["request_id"] = "request-1"
+    elif mutation == "reused-invocation":
+        result["invocation_id"] = "invocation-1"
+    elif mutation == "extra-user":
+        messages.insert(-1, {"role": "user", "content": "another request"})
+    else:
+        messages.insert(
+            -1,
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call-pending", "type": "function", "function": {"name": "memory_get", "arguments": "{}"}}
+                ],
+            },
+        )
+    executor = _Executor([first, SandboxExecution(0, _wire(second))])
+    adapter = _adapter(executor, allow_shared_context=True)
+    asyncio.run(adapter.commit_turn(_request()))
+    followup = CommittedTurnRequest("conversation-1", "commit-2", "Now explain the difference.")
+    with pytest.raises(OpenShellFabricAmbiguous, match="target_context_reused"):
+        asyncio.run(adapter.commit_turn(followup))
+    assert asyncio.run(adapter.inspect()).target_availability is ResponseOnlyTargetAvailability.CONSUMED
+    with pytest.raises(OpenShellFabricRejected, match="target_context_consumed"):
+        asyncio.run(adapter.commit_turn(followup))
+    assert len(executor.calls) == 2
+
+
+def test_shared_context_never_adopts_existing_history_after_an_application_restart() -> None:
+    first = _invoke_success()
+    executor = _Executor([_continued_success(first)])
+    adapter = _adapter(executor, allow_shared_context=True)
+    with pytest.raises(OpenShellFabricAmbiguous, match="target_context_reused"):
+        asyncio.run(
+            adapter.commit_turn(CommittedTurnRequest("new-conversation", "new-commit", "Now explain the difference."))
+        )
+    assert asyncio.run(adapter.inspect()).target_availability is ResponseOnlyTargetAvailability.CONSUMED
 
 
 def test_commit_uses_one_stdin_invoke_and_keeps_speech_separate_from_display() -> None:

@@ -348,6 +348,37 @@ def test_target_contract_validates_initial_binding_and_terminal_tool_withdrawal(
     )
 
 
+def test_shared_target_contract_keeps_delegation_available_only_when_explicitly_selected() -> None:
+    """A live shared target must advertise the explicitly selected continuation contract."""
+    projection = {"backend_name": "NemoClaw", "backend_mode": "response_only", "target_ref": "workspace/sandbox/agent"}
+    payload = {
+        "backend": "NemoClaw",
+        "mode": "response_only",
+        "target": "workspace/sandbox/agent",
+        "agent_readiness": "unknown",
+        "capabilities": ["work.submit"],
+        "frontend_tools": ["work.delegate"],
+        "durability": "none",
+        "event_delivery": "response_only",
+        "max_parallel_work": 1,
+        "context_continuity": "shared_target",
+        "target_state": "available",
+    }
+    parameters = dict(
+        expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
+        expected_capabilities=frozenset({"work.submit"}),
+        expected_tools=frozenset({"work.delegate"}),
+    )
+    with pytest.raises(RuntimeError, match="qualified response-only contract"):
+        _VERIFIER._target_contract_payload(json.dumps(payload), projection, **parameters)
+    assert (
+        _VERIFIER._target_contract_payload(
+            json.dumps(payload), projection, expected_continuity="shared_target", **parameters
+        )
+        == payload
+    )
+
+
 def test_target_contract_rejects_a_consumed_target_that_still_advertises_delegation() -> None:
     """A terminal one-shot target cannot leave a stale delegate action visible."""
     projection = {
