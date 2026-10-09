@@ -188,10 +188,19 @@ The dedicated `nemoclaw-container-v1` image target owns the following interface:
 | Entrypoint and command | `/usr/local/bin/voiceclaw-runtime serve` |
 | Runtime identity | `65532:65532` |
 | Listener and API | `0.0.0.0:18790`; `WS /v1/realtime` |
-| Browser UI | Disabled |
+| Browser UI | Packaged console at `GET /` on the same listener |
 | Disposable data | `/var/lib/voiceclaw` |
 | Writable scratch | `/run/voiceclaw-managed` |
 | Stop allowance | SIGTERM; local children stop within 15 seconds |
+
+The browser console uses the existing `WS /v1/realtime` facade on port `18790`.
+Keep host publication on loopback or the approved private deployment network.
+For a remote Linux host, forward its loopback listener to your local computer
+with SSH, then open `http://localhost:18790/`. Refer to the
+[browser access procedure](README.md#open-the-installed-browser-console).
+Microphone capture requires a secure browser context, such as localhost, and
+your microphone permission. Browser access retains the installer's private
+network boundary and existing agent binding.
 
 Build from the repository root after committing all reviewed inputs:
 
@@ -291,7 +300,10 @@ Remaining qualification requires these distinct results:
    readiness without native inference.
 3. Submit one explicit committed turn against a fresh target after apply exits.
    Prove intended-agent invocation and display/speech results separately from
-   hosted speech-provider credential acceptance and audio behavior.
+   hosted speech-provider credential acceptance and audio behavior. Check the
+   browser result display and audible result playback independently. A valid
+   `voiceclaw.result.v1` response with `speech: null` requests no result speech;
+   its display result does not establish an audible reply.
 4. Test failed/revoked identity and TLS rejection, ambiguous invocation with no
    replay, secret-free export/reapply, and owned application removal without
    deleting the agent or retained inference storage.

@@ -77,9 +77,10 @@ place credentials in YAML, Docker environment values, or command arguments.
 Refer to the [installer contract](NEMOCLAW_CONTAINER_V1.md) for the descriptor,
 image build, ownership, transport, and validation requirements.
 
-The installer profile is API-only: `WS /v1/realtime` on port `18790`, without the
-browser UI. Publish it only on host loopback or the approved private deployment
-network. After NemoClaw apply returns, check local installation readiness:
+The installer profile serves the packaged browser console at `GET /` and
+`WS /v1/realtime` on port `18790`. Publish it only on host loopback or the
+approved private deployment network. After NemoClaw apply returns, check local
+installation readiness on the Linux host:
 
 ```bash
 curl --fail --max-time 15 http://127.0.0.1:18790/readyz
@@ -94,6 +95,40 @@ reported as healthy. Provision a fresh agent target for each delegated turn.
 The earlier installer revision passed a manual ARM64 Station installation and
 local readiness check. That result does not qualify this upstream adaptation;
 refer to the [evidence boundaries](NEMOCLAW_CONTAINER_V1.md#validation-and-evidence).
+
+### Open the Installed Browser Console
+
+Use the installed facade directly. The console, browser assets, and Realtime
+WebSocket share port `18790`; no separate browser server is required.
+
+1. For a remote installation, forward the Linux host's loopback listener from
+   your local computer. Replace `operator@your-linux-host` with your SSH target:
+
+   ```bash
+   ssh -N -o ExitOnForwardFailure=yes \
+     -L 127.0.0.1:18790:127.0.0.1:18790 operator@your-linux-host
+   ```
+
+   Keep the SSH session running while you use the console. The installer must
+   publish the application port on the remote host's loopback address first.
+
+2. Open `http://localhost:18790/` locally and select **Connect**. The console
+   derives its WebSocket endpoint from this address. Leave **Client secret**
+   empty for the private installer profile.
+3. Wait for **Session ready**, then select **Start listening** and grant
+   microphone access. Follow the negotiated turn behavior shown below the
+   composer, or enter a typed request and press **Enter**.
+4. Ask for one delegated agent task against a fresh target. Inspect the result
+   in **Backend turns** and check audible result playback separately.
+
+Microphone capture requires a secure browser context, such as localhost.
+Opening the remote host's plain HTTP address does not provide that context.
+If microphone access is unavailable, typed requests remain available.
+
+A valid result can contain `speech: null`. VoiceClaw displays that result
+without queuing result speech. Display success alone does not prove hosted
+speech-provider access or audible playback. A successful or ambiguous delegated
+invocation consumes the target; provision a fresh target before another one.
 
 ## Run the Developer Stack
 

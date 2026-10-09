@@ -172,7 +172,7 @@ class InstallerApplication:
             self.delegate = create_app(
                 config,
                 environ={**self.environment, "REALTIME_UPSTREAM_API_KEY": internal_key},
-                ui=False,
+                ui=True,
                 composition=compose_installer_backend(self.connection, contracts, executor=self.executor),
             )
             self.lifespan = self.delegate.router.lifespan_context(self.delegate)

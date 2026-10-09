@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import yaml
 from test_installer_inputs import connection, connection_value
@@ -564,7 +565,7 @@ def test_bootstrap_uses_bundled_preset_and_limits_speech_key_to_trusted_child(
     from voiceclaw.adapters.openshell_fabric.committed_turn import OpenShellFabricAdapter
 
     assert type(selected["composition"].turn_backend) is OpenShellFabricAdapter
-    assert selected["ui"] is False
+    assert selected["ui"] is True
     assert selected["config"].backend_profiles["nemoclaw"].kind == "openshell_fabric"
     assert selected["config"].backend_profiles["nemoclaw"].settings == {}
     child_env = spawn.call_args.kwargs["env"]
@@ -578,6 +579,70 @@ def test_bootstrap_uses_bundled_preset_and_limits_speech_key_to_trusted_child(
     for generated in tmp_path.rglob("*"):
         if generated.is_file():
             assert b"speech-fixture-sentinel" not in generated.read_bytes()
+
+
+@pytest.mark.parametrize("no_auth", [False, True])
+def test_installer_serves_packaged_browser_without_reading_credentials_or_invoking_agent(
+    tmp_path, monkeypatch, no_auth
+):
+    from voiceclaw.installer_inputs import protected_directory
+
+    def directory(path, *, root=None, mutable=False):
+        return protected_directory(path, root=root or tmp_path, uid=os.getuid(), gid=os.getgid(), mutable=mutable)
+
+    def no_acl(*_args, **_kwargs):
+        raise OSError(errno.ENOTSUP, "fixture ACL unavailable")
+
+    monkeypatch.setattr(installer_runtime, "RUNTIME_ROOT", tmp_path)
+    monkeypatch.setattr(installer_runtime, "protected_directory", directory)
+    monkeypatch.setattr(os, "getxattr", no_acl, raising=False)
+    monkeypatch.setattr(installer_runtime, "read_protected", lambda _: b"speech-fixture-sentinel")
+    app = runtime(no_auth=no_auth)
+    app.inputs.state = tmp_path / "state.db"
+    app.environment = {"VOICECLAW_RUNTIME_PROFILE": "nemoclaw-container-v1"}
+
+    async def scenario():
+        with (
+            patch("voiceclaw.installer_runtime.asyncio.create_subprocess_exec", return_value=Process()),
+            patch("voiceclaw.installer_runtime._terminate_process", new=AsyncMock()),
+        ):
+            await app.start()
+            try:
+                with (
+                    patch.object(app.executor, "execute") as execute,
+                    patch("voiceclaw.installer_runtime.read_protected") as read,
+                ):
+                    transport = httpx.ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:18790") as client:
+                        for path, content_type in (
+                            ("/", "text/html"),
+                            ("/app.js", "text/javascript"),
+                            ("/styles.css", "text/css"),
+                            ("/marked.min.js", "text/javascript"),
+                        ):
+                            response = await client.get(path)
+                            assert response.status_code == 200
+                            assert response.headers["content-type"].startswith(content_type)
+                            assert response.headers["cache-control"] == "no-store"
+                            assert "connect-src 'self'" in response.headers["content-security-policy"]
+                            assert response.headers["x-content-type-options"] == "nosniff"
+                            assert response.content
+                            assert "speech-fixture-sentinel" not in response.text
+                            assert "agent-connection.json" not in response.text
+                        for path in (
+                            "/credentials/speech",
+                            "/config/agent-connection.json",
+                            "/state.db",
+                            "/voiceclaw.yaml",
+                            "/missing.js",
+                        ):
+                            assert (await client.get(path)).status_code == 404
+                    execute.assert_not_called()
+                    read.assert_not_called()
+            finally:
+                await app.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_local_child_ignoring_sigterm_is_killed_and_reaped():
