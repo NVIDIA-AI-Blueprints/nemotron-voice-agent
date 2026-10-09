@@ -11,6 +11,7 @@ import pytest
 
 from voiceclaw.adapters.state.sqlite import SqliteStateStore
 from voiceclaw.application.context import FrontendContextProjector, FrontendContextSnapshot, LocalRequestContext
+from voiceclaw.application.routing import build_turn_routing_policy
 from voiceclaw.application.runtime import RealtimeInteractionManager
 from voiceclaw.domain import (
     RUNTIME_PROJECTION_SCHEMA,
@@ -447,6 +448,23 @@ def test_runtime_routes_only_to_an_advertised_operation() -> None:
             assert greeting.kind is TurnDirectiveKind.DIRECT
             assert missing.kind is TurnDirectiveKind.REJECT
             assert missing.reason_code == "operation_unavailable"
+
+    asyncio.run(exercise())
+
+
+def test_agent_routing_rejects_when_delegation_is_unavailable() -> None:
+    async def exercise() -> None:
+        with SqliteStateStore(":memory:") as store:
+            runtime = RealtimeInteractionManager(
+                backend_profile="unavailable",
+                state_store=store,
+                committed_turns=None,
+                turn_routing_policy=build_turn_routing_policy("agent"),
+            )
+            await runtime.open_session("session-agent", "conversation-agent")
+            directive = runtime.route_finalized_turn("session-agent", "Hello")
+            assert directive.kind is TurnDirectiveKind.REJECT
+            assert directive.reason_code == "operation_unavailable"
 
     asyncio.run(exercise())
 
@@ -2127,7 +2145,7 @@ def test_runtime_reports_retained_target_context_as_an_uncertain_outcome() -> No
             assert terminal.phase is ResponseOnlyRequestState.OUTCOME_UNKNOWN
             assert terminal.correlation["error_code"] == "target_context_reused"
             assert terminal.frontend_response is not None
-            assert "fresh isolated session" in terminal.frontend_response.payload_text
+            assert "couldn't verify the agent's history" in terminal.frontend_response.payload_text
 
     asyncio.run(exercise())
 

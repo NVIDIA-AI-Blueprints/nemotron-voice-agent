@@ -2156,6 +2156,12 @@ class VoiceClawRealtimeFacade:
             # defaults.
             response["tools"] = list(copy.deepcopy(self._tools.schemas()))
             response["tool_choice"] = {"type": "function", "name": protected.value}
+            # Routing is private. Acknowledgement and backend result speech
+            # have their own responses after the tool has been admitted.
+            response.pop("audio", None)
+            response["output_modalities"] = ["text"]
+            response["max_output_tokens"] = _MAX_REALTIME_RESPONSE_TOKENS
+            response["parallel_tool_calls"] = False
             queued.expected_protected_tool = protected
         elif directive.kind is TurnDirectiveKind.AUTO:
             # Run classification as a silent structured model turn. A mixed

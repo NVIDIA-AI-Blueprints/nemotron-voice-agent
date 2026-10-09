@@ -245,6 +245,8 @@ def test_installer_hosted_llm_does_not_advertise_provider_tokenization(tmp_path)
     config = load_config(resource, environ={})
     profile = config.selected_frontend
     assert profile.services.llm.supports_tokenize is False
+    assert config.interaction.turn_routing_mode == "agent"
+    assert "work.delegate" in config.backend_profiles[config.default_backend].tool_copy
 
     plan = materialize_frontend_runtime(
         profile, tmp_path / "frontend", internal_endpoint="ws://127.0.0.1:7861/v1/realtime"

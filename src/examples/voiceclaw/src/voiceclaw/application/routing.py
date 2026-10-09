@@ -27,14 +27,26 @@ class ModelSelectedTurnRoutingPolicy:
         return TurnDirective.auto(reason_code="frontend_model")
 
 
+class AgentTurnRoutingPolicy:
+    """Send finalized requests to the currently advertised agent operation."""
+
+    def decide(self, text: str) -> TurnDirective:
+        """Require delegation; the runtime still checks current availability."""
+        del text
+        return TurnDirective.tool("work.delegate", reason_code="agent_request")
+
+
 def build_turn_routing_policy(mode: str) -> TurnRoutingPolicy:
     """Build the configured routing policy without binding it to a provider."""
     if mode == "model":
         return ModelSelectedTurnRoutingPolicy()
+    if mode == "agent":
+        return AgentTurnRoutingPolicy()
     raise ValueError(f"unsupported turn routing mode: {mode}")
 
 
 __all__ = [
+    "AgentTurnRoutingPolicy",
     "ModelSelectedTurnRoutingPolicy",
     "TurnRoutingPolicy",
     "build_turn_routing_policy",

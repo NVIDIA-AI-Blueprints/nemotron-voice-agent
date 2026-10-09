@@ -144,6 +144,19 @@ fixed `/usr/local/bin/fabric-agent check --agent ... --live` and
 `/usr/local/bin/fabric-agent invoke --agent ... --input -` operations. It runs
 no login shell or lifecycle command.
 
+The installer sets `interaction.turn_routing_mode: agent`, requiring
+`work.delegate` for every finalized voice or typed request, including follow-ups.
+The runtime checks the currently advertised operation before admission;
+unavailable or consumed backends reject the request. The private frontend model
+call selects the required delegation tool without speech. Acknowledgements and
+result speech use separate responses. Other configurations retain the default
+`model` routing mode.
+
+The installer-specific trusted `tool_copy` instructs the frontend to preserve
+the user's intent, constraints, and references to verified live agent context
+in the delegation goal. The selected agent resolves those references. The
+frontend must not invent missing facts or answer on the agent's behalf.
+
 Requests use the `nvidia.fabric.openclaw` codec with `{agent, message}` input.
 The image selects this OpenClaw adapter; the descriptor adds no adapter override
 or new fields. Both the Fabric agent and native OpenClaw agent are bound to
@@ -340,7 +353,8 @@ Remaining qualification requires these distinct results:
    playback; audible delivery requires separate observation. For installer
    qualification, select `--context-continuity shared_target`. Then verify a
    subsequent turn on the same running application, with unchanged prior native
-   history and no replay. Local tests do not establish this live result.
+   history and no replay. Prove intended-agent invocation for each finalized
+   request, including follow-ups. Local tests do not establish this live result.
 4. Test failed/revoked identity and TLS rejection, ambiguous invocation with no
    replay, secret-free export/reapply, and owned application removal without
    deleting the agent or retained inference storage.

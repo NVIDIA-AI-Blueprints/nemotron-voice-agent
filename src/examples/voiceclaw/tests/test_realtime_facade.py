@@ -2534,6 +2534,22 @@ def test_forced_route_fails_closed_before_direct_assistant_content_is_forwarded(
     )
 
 
+def test_forced_agent_route_is_silent_and_selects_only_one_backend_operation() -> None:
+    facade, _, upstream = _facade(runtime=_Runtime(_TurnPort(), force_delegate=True))
+
+    async def exercise() -> None:
+        await facade.bootstrap()
+        await _finalize_text_turn(facade, "Now do the same in hexadecimal")
+        await facade.handle_downstream_event({"event_id": "agent-follow-up", "type": "response.create", "response": {}})
+
+    asyncio.run(exercise())
+    create = [event for event in upstream.events() if event["type"] == "response.create"][-1]
+    assert create["response"]["tool_choice"] == {"type": "function", "name": "voiceclaw_work_delegate"}
+    assert create["response"]["output_modalities"] == ["text"]
+    assert create["response"]["parallel_tool_calls"] is False
+    assert "audio" not in create["response"]
+
+
 def test_direct_delegation_is_server_side_and_schedules_acknowledgement_and_result() -> None:
     turns = _TurnPort(display_text="Use this binary search tree implementation.")
     runtime = _Runtime(turns, force_delegate=True)

@@ -29,11 +29,12 @@ realtime frontend                 OpenShell adapter
     LLM / ASR / TTS
 ```
 
-The realtime frontend handles greetings and short conversational turns. For
-agent work, it creates a complete goal from the relevant conversation. The
-Interaction Manager invokes the configured agent, sends rich Markdown to the
-UI, and queues concise result material for conversational speech through the
-frontend model.
+By default, the realtime frontend model chooses between a conversational reply
+and agent delegation. The installer profile requires agent delegation for every
+finalized voice or typed request, including follow-ups. The frontend creates the
+delegation goal and presents acknowledgements and result speech. The Interaction
+Manager invokes the configured agent and sends its rich Markdown result to the
+UI.
 
 The browser never receives OpenShell credentials and never calls NemoClaw or
 the deployed agent directly.
@@ -67,6 +68,13 @@ must preserve the exact prior history, runtime, and session identity before
 another turn becomes available. Matched native tool calls and results can run
 within each invocation. The generic adapter retains its default single-turn
 behavior.
+
+The installer sets `interaction.turn_routing_mode: agent`. Delegation requires
+the currently advertised `work.delegate` operation; an unavailable or consumed
+backend rejects the request. The trusted tool description instructs the
+frontend to preserve the user's intent, constraints, and references to the
+agent's live conversation. The selected agent resolves those references;
+the frontend must not guess missing facts or answer on the agent's behalf.
 
 Use the following nonsecret environment inputs in the application declaration:
 
@@ -220,6 +228,12 @@ under `backend_profiles`, and queue and routing bounds under `interaction`.
 Use `kind: openai_realtime` to replace the bundled cascade with an external
 Realtime endpoint.
 
+`interaction.turn_routing_mode` accepts `model` or `agent`. The default `model`
+mode lets the frontend select a direct reply or delegation. The installer uses
+`agent` to require `work.delegate` for every finalized request. Its private
+structured model call is silent; acknowledgements and result speech follow
+separately after admission.
+
 For remote OpenShell, use TLS, `client_credentials`, and an operator-owned
 credential file or environment reference. Do not store secret values directly
 in YAML or `.env`.
@@ -333,6 +347,11 @@ Do not replay a recording after an uncertain invocation; use a fresh target.
 Restarting the installer cannot recover prior native history or pending work.
 
 ### Troubleshoot Route Selection
+
+In `agent` mode, `operation_unavailable` means the current session does not
+advertise the required delegation operation. This rejects the finalized request
+before dispatch. An ambiguous invocation still consumes the target; use a fresh
+target rather than replaying it.
 
 `routing_unavailable` can indicate a failed, incomplete, or canceled private
 model route-selection response. This terminal failure stops before delegated

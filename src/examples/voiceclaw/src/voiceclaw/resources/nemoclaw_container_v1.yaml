@@ -71,7 +71,18 @@ backend_profiles:
     kind: openshell_fabric
     interaction:
       profile: stateless
-      tool_copy: {}
+      tool_copy:
+        work.delegate:
+          description: >-
+            Send the finalized user request to the selected agent. The agent
+            retains its verified live conversation across successful requests.
+            Preserve references to that conversation for the agent to resolve;
+            do not invent missing facts or answer on the agent's behalf.
+          properties:
+            goal: >-
+              The user's request, preserving their intent, constraints, and
+              references to the agent's live conversation. Do not replace an
+              unresolved reference with a guessed name or answer.
     settings: {}
 default_backend: nemoclaw
 interaction:
@@ -79,7 +90,7 @@ interaction:
   context_character_budget: 24000
   request_summary_character_limit: 512
   retained_request_limit: 8
-  turn_routing_mode: model
+  turn_routing_mode: agent
 state:
   kind: sqlite
   path: /var/lib/voiceclaw/state/state.db
