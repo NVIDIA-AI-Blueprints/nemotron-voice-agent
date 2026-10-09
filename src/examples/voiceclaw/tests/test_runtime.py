@@ -13,6 +13,7 @@ from voiceclaw.adapters.state.sqlite import SqliteStateStore
 from voiceclaw.application.context import FrontendContextProjector, FrontendContextSnapshot, LocalRequestContext
 from voiceclaw.application.routing import build_turn_routing_policy
 from voiceclaw.application.runtime import RealtimeInteractionManager
+from voiceclaw.backends import BackendComposition
 from voiceclaw.domain import (
     RUNTIME_PROJECTION_SCHEMA,
     ResponseOnlyRequestState,
@@ -822,6 +823,40 @@ def test_runtime_sends_the_validated_model_authored_goal_not_the_source_turn_to_
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("mode", ["model", "agent"])
+def test_configured_agent_mode_preserves_the_finalized_request_instead_of_a_model_rewrite(mode: str) -> None:
+    class _RecordingTurns(_Turns):
+        committed_text = None
+
+        async def commit_turn(self, request):
+            self.committed_text = request.text
+            return await super().commit_turn(request)
+
+    async def exercise() -> None:
+        source_turn = '  Now convert that same word to hexadecimal. Preserve "quotes"\nand Unicode ☃.  '
+        proposed_goal = "Convert the word 'that' to hexadecimal."
+        turns = _RecordingTurns()
+        with SqliteStateStore(":memory:") as store:
+            runtime = BackendComposition(turns, "configured").create_runtime(
+                backend_profile="default", state_store=store, turn_routing_mode=mode
+            )
+            await runtime.open_session("session-original", "conversation-original")
+            updates = await _collect(
+                runtime.execute_tool(
+                    session_id="session-original",
+                    commit_id="commit-original",
+                    call_id="call-original",
+                    tool_name="work.delegate",
+                    arguments=_delegation(proposed_goal),
+                    finalized_user_text=source_turn,
+                )
+            )
+            assert turns.committed_text == (source_turn.strip() if mode == "agent" else proposed_goal)
+            assert updates[-1].phase is ResponseOnlyRequestState.SUCCEEDED
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -905,7 +940,10 @@ def test_runtime_rejects_a_delegation_goal_over_the_utf8_byte_limit() -> None:
     ],
     ids=["nul", "over-utf8-byte-limit"],
 )
-def test_runtime_rejects_invalid_finalized_source_turns_before_backend_dispatch(source_turn: str) -> None:
+@pytest.mark.parametrize("delegate_original_text", [False, True])
+def test_runtime_rejects_invalid_finalized_source_turns_before_backend_dispatch(
+    source_turn: str, delegate_original_text: bool
+) -> None:
     class _RecordingTurns(_Turns):
         def __init__(self) -> None:
             self.calls = 0
@@ -921,6 +959,7 @@ def test_runtime_rejects_invalid_finalized_source_turns_before_backend_dispatch(
                 backend_profile="default",
                 state_store=store,
                 committed_turns=turns,
+                delegate_original_text=delegate_original_text,
             )
             await runtime.open_session("session-invalid-source", "conversation-invalid-source")
             updates = await _collect(

@@ -152,10 +152,11 @@ call selects the required delegation tool without speech. Acknowledgements and
 result speech use separate responses. Other configurations retain the default
 `model` routing mode.
 
-The installer-specific trusted `tool_copy` instructs the frontend to preserve
-the user's intent, constraints, and references to verified live agent context
-in the delegation goal. The selected agent resolves those references. The
-frontend must not invent missing facts or answer on the agent's behalf.
+In `agent` mode, the runtime forwards the finalized user text directly to the
+agent, removing only outer whitespace. It does not substitute a model-proposed
+goal. The selected agent resolves references to its verified live conversation.
+Argument, source-text, readiness, and availability checks still apply. The
+default `model` mode retains frontend selection of a standalone delegation goal.
 
 Requests use the `nvidia.fabric.openclaw` codec with `{agent, message}` input.
 The image selects this OpenClaw adapter; the descriptor adds no adapter override

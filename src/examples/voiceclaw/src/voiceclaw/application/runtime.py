@@ -203,6 +203,7 @@ class RealtimeInteractionManager:
         state_store: StateStore,
         committed_turns: EphemeralCommittedTurnPort | None,
         turn_routing_policy: TurnRoutingPolicy | None = None,
+        delegate_original_text: bool = False,
         request_summary_character_limit: int = 512,
         retained_request_limit: int = 8,
         model_contracts: ModelContractCatalog | None = None,
@@ -215,6 +216,7 @@ class RealtimeInteractionManager:
         self._state_store = state_store
         self._committed_turns = committed_turns
         self._turn_routing_policy = turn_routing_policy or ModelSelectedTurnRoutingPolicy()
+        self._delegate_original_text = delegate_original_text
         if request_summary_character_limit < 1 or retained_request_limit < 1:
             raise ValueError("interaction projection limits must be positive")
         self._request_summary_character_limit = request_summary_character_limit
@@ -849,7 +851,10 @@ class RealtimeInteractionManager:
         if not isinstance(delegated_goal, str):
             yield self._failed_turn(state, call_id, commit_id, "invalid_tool_arguments")
             return
-        # Retain the source turn locally; send only the validated standalone goal to the backend.
+        if self._delegate_original_text:
+            # A voice relay must preserve references for the selected agent's
+            # verified live context, rather than trust a model's guessed rewrite.
+            delegated_goal = finalized_user_text.strip()
         request_summary = _request_summary(
             delegated_goal,
             character_limit=self._request_summary_character_limit,

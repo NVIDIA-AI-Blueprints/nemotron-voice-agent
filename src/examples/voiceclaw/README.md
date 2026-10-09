@@ -30,11 +30,12 @@ realtime frontend                 OpenShell adapter
 ```
 
 By default, the realtime frontend model chooses between a conversational reply
-and agent delegation. The installer profile requires agent delegation for every
-finalized voice or typed request, including follow-ups. The frontend creates the
-delegation goal and presents acknowledgements and result speech. The Interaction
-Manager invokes the configured agent and sends its rich Markdown result to the
-UI.
+and agent delegation, building a standalone goal for delegated work. The
+installer profile requires agent delegation for every finalized voice or typed
+request, including follow-ups. It forwards the finalized user text directly to
+the agent. The frontend selects the required operation and presents
+acknowledgements and result speech. The Interaction Manager invokes the
+configured agent and sends its rich Markdown result to the UI.
 
 The browser never receives OpenShell credentials and never calls NemoClaw or
 the deployed agent directly.
@@ -71,10 +72,10 @@ behavior.
 
 The installer sets `interaction.turn_routing_mode: agent`. Delegation requires
 the currently advertised `work.delegate` operation; an unavailable or consumed
-backend rejects the request. The trusted tool description instructs the
-frontend to preserve the user's intent, constraints, and references to the
-agent's live conversation. The selected agent resolves those references;
-the frontend must not guess missing facts or answer on the agent's behalf.
+backend rejects the request. The runtime forwards the finalized user text,
+removing only outer whitespace. A model-proposed goal does not replace that
+text. The selected agent resolves references to its verified live conversation.
+Argument, source-text, readiness, and availability checks still apply.
 
 Use the following nonsecret environment inputs in the application declaration:
 
