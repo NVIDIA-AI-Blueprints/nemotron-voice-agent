@@ -246,7 +246,7 @@ curl --fail http://127.0.0.1:7860/livez
 curl --fail http://127.0.0.1:7860/readyz
 ```
 
-Run one end-to-end turn against a fresh target:
+Run a typed delegation check against a fresh target:
 
 ```bash
 uv run --project src/examples/voiceclaw --extra server --extra openshell \
@@ -257,8 +257,62 @@ uv run --project src/examples/voiceclaw --extra server --extra openshell \
   --display-contains AVL
 ```
 
+### Verify a Recorded Voice Turn
+
+To check recorded voice input, agent delegation, and generated result audio,
+prepare a mono WAV file with one continuous spoken request. Use 16-bit
+pulse-code modulation (PCM16), a 24 kHz sample rate, and a duration greater
+than zero and at most 60 seconds. Avoid long pauses and trim trailing silence;
+the verifier rejects early or multiple committed turns.
+
+For example, record this request:
+
+> Ask the agent to compare a balanced search tree with an unbalanced tree for a
+> read-heavy workload. Include the word balanced in your answer.
+
+After NemoClaw apply exits, run the following command against the installed
+listener on the Linux host or through its loopback SSH forward. Replace the
+input and output paths with your recording and a new output filename. The
+output directory must already exist.
+
+```bash
+uv run --project src/examples/voiceclaw --extra server --extra openshell \
+  python src/examples/voiceclaw/scripts/verify-realtime-delegation.py \
+  --url 'ws://127.0.0.1:18790/v1/realtime?model=nvidia%2Fvoiceclaw' \
+  --allow-loopback-ws \
+  --input-audio-wav /absolute/path/agent-question.wav \
+  --transcript-contains balanced \
+  --display-contains balanced \
+  --speech-contains balanced \
+  --output-audio-wav /absolute/path/agent-result.wav
+```
+
+For the developer stack, use port `7860` in the URL. Audio input and `--query`
+are mutually exclusive; the recorded-input check sends no typed fallback.
+The verifier sends paced 20 ms audio chunks and follows the session's
+negotiated automatic or manual turn behavior. It preserves the cascade's
+startup turn-detection mode.
+
+`--transcript-contains` requires a case-insensitive marker in the final input
+transcript correlated to the committed audio item. Repeat it to check multiple
+markers. `--display-contains` and `--speech-contains` check the result display
+and generated result-delivery transcript separately.
+
+`--output-audio-wav` requires a successful result with nonempty,
+backend-authored result-delivery audio. A display-only `speech: null` result
+does not satisfy that check. After the lifecycle and acknowledgement checks
+pass, the verifier creates a new mode `0600` WAV containing only correlated
+result audio, bounded to 120 seconds. It does not overwrite an existing file.
+
+The saved WAV records generated result audio. The verifier reports
+`generated_not_played` and zero playback; its playback acknowledgements do not
+prove audible delivery. Listen to the saved result separately before reporting
+that you heard the reply.
+
 The current response-only target is consumed after a successful or ambiguous
-invocation. Provision a fresh target before repeating the test.
+invocation. Provision a fresh target before either check, including after a
+failed verification following dispatch. Do not replay the recording against
+the consumed target.
 
 ## Current Limitations
 

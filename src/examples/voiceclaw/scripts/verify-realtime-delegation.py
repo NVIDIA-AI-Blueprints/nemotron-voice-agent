@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
+import hashlib
 import ipaddress
 import json
 import math
@@ -16,6 +19,7 @@ import ssl
 import sys
 import time
 import uuid
+import wave
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -57,6 +61,13 @@ _EXPECTED_OUTCOMES = (
 )
 _INITIAL_RESPONSE_ONLY_CAPABILITIES = frozenset({BackendOperation.SUBMIT.value})
 _INITIAL_RESPONSE_ONLY_TOOLS = frozenset({"work.delegate"})
+_AUDIO_RATE = 24_000
+_PCM_BYTES_PER_SECOND = _AUDIO_RATE * 2
+_MAX_INPUT_AUDIO_SECONDS = 60
+_MAX_RESULT_AUDIO_SECONDS = 120
+_AUDIO_CHUNK_SECONDS = 0.02
+_AUDIO_CHUNK_BYTES = int(_PCM_BYTES_PER_SECOND * _AUDIO_CHUNK_SECONDS)
+_AUTOMATIC_SILENCE_SECONDS = 5
 
 
 class _PlaybackReceiptContract(NamedTuple):
@@ -254,7 +265,7 @@ def _content_assertion(value: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Send one arbitrary typed turn through VoiceClaw's public WSS endpoint and require the "
+            "Send one typed or recorded voice turn through VoiceClaw's public WSS endpoint and require the "
             "frontend to delegate it and produce the asynchronous response-only lifecycle."
         ),
     )
@@ -263,7 +274,25 @@ def _parser() -> argparse.ArgumentParser:
         default=os.getenv("VOICECLAW_REALTIME_URL", "wss://127.0.0.1:7860/v1/realtime"),
         help="public VoiceClaw WSS URL (default: %(default)s)",
     )
-    parser.add_argument("--query", required=True, help="arbitrary finalized user request to delegate")
+    turn_input = parser.add_mutually_exclusive_group(required=True)
+    turn_input.add_argument("--query", help="arbitrary finalized user request to delegate")
+    turn_input.add_argument(
+        "--input-audio-wav",
+        type=Path,
+        help="one continuous utterance in mono PCM16 WAV at 24 kHz, at most 60 seconds; no typed fallback",
+    )
+    parser.add_argument(
+        "--transcript-contains",
+        action="append",
+        default=[],
+        type=_content_assertion,
+        help="repeatable case-insensitive substring required in the finalized recorded-input transcript",
+    )
+    parser.add_argument(
+        "--output-audio-wav",
+        type=Path,
+        help="save backend-authored result audio to a new private PCM16 WAV; requires generated result audio",
+    )
     parser.add_argument(
         "--expect-outcome",
         choices=_EXPECTED_OUTCOMES,
@@ -654,11 +683,209 @@ async def _send(websocket: Any, event: dict[str, object]) -> None:
     await websocket.send(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
+class _VoiceProbe:
+    """Submit one recorded utterance and retain only correlated result PCM."""
+
+    def __init__(self, arguments: argparse.Namespace) -> None:
+        self.input_path = arguments.input_audio_wav
+        self.output_path = arguments.output_audio_wav
+        self.transcript_contains = arguments.transcript_contains
+        if self.input_path is None and self.transcript_contains:
+            raise ValueError("--transcript-contains requires --input-audio-wav")
+        if self.output_path is not None:
+            if arguments.expect_outcome != ResponseOnlyRequestState.SUCCEEDED.value:
+                raise ValueError("--output-audio-wav requires --expect-outcome succeeded")
+            if self.output_path.exists() or self.output_path.is_symlink():
+                raise FileExistsError("--output-audio-wav must name a new file")
+            if not self.output_path.parent.is_dir():
+                raise ValueError("the --output-audio-wav parent directory must already exist")
+        self.pcm = b""
+        if self.input_path is not None:
+            try:
+                with wave.open(str(self.input_path), "rb") as recording:
+                    if (
+                        recording.getnchannels() != 1
+                        or recording.getsampwidth() != 2
+                        or recording.getframerate() != _AUDIO_RATE
+                        or recording.getcomptype() != "NONE"
+                    ):
+                        raise ValueError("--input-audio-wav must be mono PCM16 at 24 kHz")
+                    frames = recording.getnframes()
+                    if not 0 < frames <= _AUDIO_RATE * _MAX_INPUT_AUDIO_SECONDS:
+                        raise ValueError("--input-audio-wav must contain more than zero and at most 60 seconds")
+                    self.pcm = recording.readframes(frames + 1)
+                    if len(self.pcm) != frames * 2:
+                        raise ValueError("--input-audio-wav contains truncated PCM")
+            except (wave.Error, EOFError) as error:
+                raise ValueError("--input-audio-wav must be a valid mono PCM16 WAV at 24 kHz") from error
+        self.sender: asyncio.Task[None] | None = None
+        self.input_sent = False
+        self.committed_item_id: str | None = None
+        self.transcribed_item_id: str | None = None
+        self.transcript: str | None = None
+        self.turn_detection: dict[str, object] | None = None
+        self._result_pcm = bytearray()
+        self._result_response_id: str | None = None
+
+    async def __aenter__(self) -> _VoiceProbe:
+        return self
+
+    async def __aexit__(self, exc_type: object, *_exc: object) -> None:
+        if self.sender is not None:
+            if not self.sender.done():
+                self.sender.cancel()
+            outcomes = await asyncio.gather(self.sender, return_exceptions=True)
+            if exc_type is None and isinstance(outcomes[0], Exception):
+                raise outcomes[0]
+
+    async def submit(self, websocket: Any, turn_detection: dict[str, object] | None) -> None:
+        """Keep the advertised automatic mode; manual mode uses standard commit/create."""
+        if self.input_path is None:
+            raise RuntimeError("recorded audio submission requires an input WAV")
+        self.turn_detection = turn_detection
+        self.sender = asyncio.create_task(self._send_recording(websocket))
+
+    async def _send_recording(self, websocket: Any) -> None:
+        async def append(pcm: bytes, *, final_input_chunk: bool = False) -> None:
+            await _send(
+                websocket, {"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode("ascii")}
+            )
+            if final_input_chunk:
+                self.input_sent = True
+            await asyncio.sleep(len(pcm) / _PCM_BYTES_PER_SECOND)
+
+        for offset in range(0, len(self.pcm), _AUDIO_CHUNK_BYTES):
+            await append(
+                self.pcm[offset : offset + _AUDIO_CHUNK_BYTES],
+                final_input_chunk=offset + _AUDIO_CHUNK_BYTES >= len(self.pcm),
+            )
+        if self.turn_detection is None:
+            await _send(websocket, {"type": "input_audio_buffer.commit"})
+            await _send(websocket, {"type": "response.create", "response": {}})
+        else:
+            # The cascaded pipeline cannot switch from automatic to manual detection
+            # after startup. Supply a bounded silence tail for its normal turn stop.
+            for _ in range(int(_AUTOMATIC_SILENCE_SECONDS / _AUDIO_CHUNK_SECONDS)):
+                if self.committed_item_id is not None:
+                    break
+                await append(bytes(_AUDIO_CHUNK_BYTES))
+
+    async def receive(self, websocket: Any) -> object:
+        """Surface sender errors promptly while receiving pipeline events concurrently."""
+        if self.sender is None:
+            return await websocket.recv()
+        if self.sender.done():
+            self.sender.result()
+            return await websocket.recv()
+        receiving = asyncio.create_task(websocket.recv())
+        try:
+            await asyncio.wait((receiving, self.sender), return_when=asyncio.FIRST_COMPLETED)
+            if self.sender.done():
+                self.sender.result()
+            return await receiving
+        finally:
+            if not receiving.done():
+                receiving.cancel()
+            await asyncio.gather(receiving, return_exceptions=True)
+
+    def observe_input(self, event: Mapping[str, object]) -> bool:
+        """Validate a single audio item; return whether automatic commit needs create."""
+        if self.input_path is None:
+            return False
+        event_type = event.get("type")
+        if event_type == "input_audio_buffer.committed":
+            if not self.input_sent:
+                raise RuntimeError(
+                    "audio turn committed before the recording was fully sent; use one continuous utterance"
+                )
+            if self.committed_item_id is not None:
+                raise RuntimeError(
+                    "the recording produced more than one committed audio turn; do not replay this target"
+                )
+            self.committed_item_id = _public_identifier(event.get("item_id"), "input audio item identity")
+            return self.turn_detection is not None and self.turn_detection.get("create_response") is False
+        if event_type == "conversation.item.input_audio_transcription.failed":
+            raise RuntimeError("the recorded input transcription failed")
+        if event_type == "conversation.item.input_audio_transcription.completed":
+            if self.transcribed_item_id is not None:
+                raise RuntimeError("the recording produced more than one finalized transcription")
+            item_id = _public_identifier(event.get("item_id"), "transcribed input item identity")
+            transcript = event.get("transcript")
+            if item_id != self.committed_item_id or not isinstance(transcript, str) or not transcript.strip():
+                raise RuntimeError("the recorded input transcription was empty or did not match its committed item")
+            self.transcribed_item_id = item_id
+            self.transcript = transcript.strip()
+            _require_content(self.transcript, self.transcript_contains, channel="input transcript")
+        return False
+
+    def observe_audio(self, event: Mapping[str, object], result_response_id: str | None) -> None:
+        """Exclude acknowledgement, failure, and unrelated frontend speech."""
+        if self.output_path is None or result_response_id is None or event.get("response_id") != result_response_id:
+            return
+        delta = event.get("delta")
+        limit = _MAX_RESULT_AUDIO_SECONDS * _PCM_BYTES_PER_SECOND
+        if not isinstance(delta, str) or not delta or len(delta) > ((limit + 2) // 3) * 4:
+            raise RuntimeError("the result audio delta is invalid or exceeds the 120-second capture limit")
+        try:
+            pcm = base64.b64decode(delta, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise RuntimeError("the result audio delta is not valid base64 PCM") from error
+        if not pcm or len(pcm) % 2 or len(self._result_pcm) + len(pcm) > limit:
+            raise RuntimeError("the result audio is not PCM16 or exceeds the 120-second capture limit")
+        if self._result_response_id is not None and self._result_response_id != result_response_id:
+            raise RuntimeError("the result audio changed response identity")
+        self._result_response_id = result_response_id
+        self._result_pcm.extend(pcm)
+
+    def finish(self, result: dict[str, object]) -> dict[str, object]:
+        """Save audio only after the existing lifecycle and receipt checks pass."""
+        if self.input_path is not None:
+            if (
+                not self.input_sent
+                or self.committed_item_id is None
+                or self.transcribed_item_id != self.committed_item_id
+                or not self.transcript
+            ):
+                raise RuntimeError("the delegated turn omitted a complete correlated input transcription")
+            result["query"] = self.transcript
+            result["input"] = {
+                "kind": "recorded_audio",
+                "source_wav": str(self.input_path),
+                "sample_rate_hz": _AUDIO_RATE,
+                "duration_ms": round(len(self.pcm) * 1000 / _PCM_BYTES_PER_SECOND, 3),
+                "pcm_sha256": hashlib.sha256(self.pcm).hexdigest(),
+                "item_id": self.committed_item_id,
+                "transcript": self.transcript,
+            }
+        if self.output_path is not None:
+            if (
+                result.get("status") != "succeeded"
+                or result.get("speech_source") != ResponseOnlySpeechSource.BACKEND_AUTHORED.value
+                or not self._result_pcm
+            ):
+                raise RuntimeError("the delegated turn omitted backend-authored result audio")
+            descriptor = os.open(self.output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as stream, wave.open(stream, "wb") as recording:
+                recording.setnchannels(1)
+                recording.setsampwidth(2)
+                recording.setframerate(_AUDIO_RATE)
+                recording.writeframes(self._result_pcm)
+            result["result_audio_wav"] = {
+                "path": str(self.output_path),
+                "response_id": self._result_response_id,
+                "sample_rate_hz": _AUDIO_RATE,
+                "duration_ms": round(len(self._result_pcm) * 1000 / _PCM_BYTES_PER_SECOND, 3),
+                "pcm_sha256": hashlib.sha256(self._result_pcm).hexdigest(),
+            }
+        return result
+
+
 async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
     url = _validate_url(arguments.url, allow_loopback_ws=arguments.allow_loopback_ws)
     secret = _client_secret(arguments)
     forbidden_values = _forbidden_values(arguments)
     expected_outcome = ResponseOnlyRequestState(arguments.expect_outcome)
+    voice_probe = _VoiceProbe(arguments)
     protocols = ["realtime"]
     if secret:
         protocols.append(f"openai-insecure-api-key.{secret}")
@@ -717,16 +944,19 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
     pending_failure_result: dict[str, object] | None = None
     terminal_public_error: dict[str, str] | None = None
 
-    async with connect(
-        url,
-        ssl=_tls_context(arguments, url),
-        subprotocols=protocols,
-        max_size=16 * 1024 * 1024,
-        open_timeout=min(arguments.timeout, 30.0),
-    ) as websocket:
+    async with (
+        connect(
+            url,
+            ssl=_tls_context(arguments, url),
+            subprotocols=protocols,
+            max_size=16 * 1024 * 1024,
+            open_timeout=min(arguments.timeout, 30.0),
+        ) as websocket,
+        voice_probe,
+    ):
         async with asyncio.timeout(arguments.timeout):
             while True:
-                raw_event = await websocket.recv()
+                raw_event = await voice_probe.receive(websocket)
                 event_received_at_ns = time.monotonic_ns()
                 if not isinstance(raw_event, str):
                     raise RuntimeError("VoiceClaw sent a binary event on its JSON Realtime channel")
@@ -738,6 +968,8 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
 
                 event_sequence += 1
                 event_type = event["type"]
+                if voice_probe.observe_input(event):
+                    await _send(websocket, {"type": "response.create", "response": {}})
                 if event_type == "error":
                     error = event.get("error")
                     if isinstance(error, dict):
@@ -908,6 +1140,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
 
                 elif event_type == "response.output_audio.delta":
                     playback_receipts.observe_audio_delta(event)
+                    voice_probe.observe_audio(event, result_delivery_response_id)
 
                 elif event_type == "response.output_audio.done":
                     playback_receipts.observe_audio_done(event)
@@ -1431,7 +1664,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             pending_success_result["playback_receipts_acknowledged"] = (
                                 playback_receipts.acknowledged_count
                             )
-                            return pending_success_result
+                            return voice_probe.finish(pending_success_result)
 
                     failure_completion = _failure_delivery_completion(
                         terminal_at=backend_phase_completed_at.get(expected_outcome),
@@ -1560,7 +1793,7 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                             pending_failure_result["playback_receipts_acknowledged"] = (
                                 playback_receipts.acknowledged_count
                             )
-                            return pending_failure_result
+                            return voice_probe.finish(pending_failure_result)
 
                 elif event_type == "conversation.item.truncated":
                     acknowledged_response_id = playback_receipts.acknowledge(event)
@@ -1569,16 +1802,19 @@ async def _verify(arguments: argparse.Namespace) -> dict[str, object]:
                         required_playback_response_ids
                     ):
                         pending_success_result["playback_receipts_acknowledged"] = playback_receipts.acknowledged_count
-                        return pending_success_result
+                        return voice_probe.finish(pending_success_result)
                     if pending_failure_result is not None and playback_receipts.all_acknowledged(
                         required_playback_response_ids
                     ):
                         pending_failure_result["playback_receipts_acknowledged"] = playback_receipts.acknowledged_count
-                        return pending_failure_result
+                        return voice_probe.finish(pending_failure_result)
 
                 if session_updated and initial_target_contract is not None and not query_submitted:
                     query_submitted = True
                     query_submitted_at_ns = time.monotonic_ns()
+                    if arguments.input_audio_wav is not None:
+                        await voice_probe.submit(websocket, negotiated_turn_detection)
+                        continue
                     await _send(
                         websocket,
                         {

@@ -303,7 +303,12 @@ Remaining qualification requires these distinct results:
    hosted speech-provider credential acceptance and audio behavior. Check the
    browser result display and audible result playback independently. A valid
    `voiceclaw.result.v1` response with `speech: null` requests no result speech;
-   its display result does not establish an audible reply.
+   its display result does not establish an audible reply. Use the
+   [recorded voice verifier](README.md#verify-a-recorded-voice-turn) to check
+   correlated input transcription, delegated work, and generated result audio.
+   Require transcript, display, and speech markers plus a captured result WAV
+   for this evidence. The verifier saves generated audio and acknowledges zero
+   playback; audible delivery requires separate observation.
 4. Test failed/revoked identity and TLS rejection, ambiguous invocation with no
    replay, secret-free export/reapply, and owned application removal without
    deleting the agent or retained inference storage.
