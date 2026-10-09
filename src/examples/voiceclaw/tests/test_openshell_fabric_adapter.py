@@ -251,6 +251,50 @@ def test_response_only_target_is_claimed_by_exactly_one_invocation() -> None:
     assert [call[0][1] for call in executor.calls] == ["invoke"]
 
 
+@pytest.mark.parametrize("speech", [None, "The result is ready."])
+def test_completed_tool_turn_preserves_result_channels_and_consumes_target(speech: str | None) -> None:
+    wire = json.loads(_invoke_success(result_text=_result_text(speech=speech)).stdout)
+    output = wire["result"]["fabric_result"]["output"]
+    output["messages"][1:1] = [
+        {
+            "role": "assistant",
+            "content": "\n\n",
+            "tool_calls": [
+                {
+                    "id": "call-memory",
+                    "type": "function",
+                    "function": {"name": "memory_get", "arguments": '{"path":"USER.md","from":1,"lines":1}'},
+                }
+            ],
+        },
+        {"role": "tool", "content": '{"text":"# USER.md"}', "tool_call_id": "call-memory", "is_error": False},
+    ]
+    output["messages"][-1]["content"] = "\n\n" + output["response"]
+    executor = _Executor([SandboxExecution(0, _wire(wire))])
+    adapter = _adapter(executor)
+
+    async def collect() -> list[CommittedTurnDisplayDelta | CommittedTurnCompleted]:
+        return [event async for event in adapter.stream_turn(_request())]
+
+    events = asyncio.run(collect())
+    assert len(events) == 2
+    assert isinstance(events[0], CommittedTurnDisplayDelta)
+    assert events[0].delta == "## Result\n\nDone."
+    assert isinstance(events[1], CommittedTurnCompleted)
+    result = events[1].result
+    assert result.display_text == events[0].delta
+    assert result.speak_text == speech
+    assert result.backend_session_id == "agent:default:fabric-runtime-1"
+    assert result.turn_id == "request-1"
+    assert result.response_id == "invocation-1"
+    backend = asyncio.run(adapter.inspect())
+    assert backend.target_availability is ResponseOnlyTargetAvailability.CONSUMED
+    assert backend.capabilities.operations == frozenset()
+    with pytest.raises(OpenShellFabricRejected, match="target_context_consumed"):
+        asyncio.run(adapter.commit_turn(_request()))
+    assert [call[0][1] for call in executor.calls] == ["invoke"]
+
+
 def test_ambiguous_invocation_permanently_consumes_the_response_only_target() -> None:
     executor = _Executor([SandboxExecution(0, "not-json\n")])
     adapter = _adapter(executor)

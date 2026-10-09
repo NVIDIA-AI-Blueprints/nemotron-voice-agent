@@ -154,12 +154,30 @@ identities and satisfy the first-turn context shape. The selected response must
 parse as `voiceclaw.result.v1` display/speech channels. Plain text is not a
 successful fallback.
 
-The first-turn comparison allows assistant history content and `output.response`
-to differ only in leading or trailing JSON whitespace: ASCII space, tab,
-carriage return, or newline. The response body, exact user prompt, message keys,
-and empty tool-call requirement remain unchanged. The selected response still
-passes the strict result-envelope parser; JSON-equivalent rewrites are not
-accepted as matching history. This does not change routing or agent lifecycle.
+First-turn qualification requires exactly one original user prompt, the matching
+session identity for the native agent and runtime, and a final assistant response with empty
+`tool_calls`. Between the user prompt and final response, the agent can emit
+assistant function-call batches and their matching tool results within that
+single invocation. Each call must have a unique ID and exactly one matching
+result. Results within a batch can arrive in any order, but every pending call
+must resolve before another assistant batch or the final response. Unknown or
+duplicate IDs, missing results, extra user or system messages, prior conversation
+history, and malformed message or call shapes fail qualification.
+
+Intermediate assistant messages have exactly `role`, string `content`, and a
+nonempty `tool_calls` list. Each call has exactly `id`, `type`, and `function`,
+with `type: function`. The `function` object has exactly string `name` and
+`arguments` fields. Call IDs and function names must be nonempty strings without
+NUL. Tool results have exactly `role: tool`, string `content`, string
+`tool_call_id`, and boolean `is_error`. A reported tool error still requires its
+matching call ID.
+
+The final assistant history content and `output.response` can differ only in
+leading or trailing JSON whitespace: ASCII space, tab, carriage return, or
+newline. The response body and exact user prompt remain unchanged. The selected
+response still passes the strict result-envelope parser; JSON-equivalent
+rewrites are not accepted as matching history. This qualification does not
+establish multi-turn continuity or change routing or agent lifecycle.
 
 The adapter supports one concurrent session and one non-durable delegated turn
 for each fresh target. A successful or ambiguous invocation consumes that

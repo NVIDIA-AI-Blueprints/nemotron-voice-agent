@@ -22,7 +22,7 @@ class FabricProtocolError(ValueError):
 
 
 class FabricFirstTurnQualificationError(FabricProtocolError):
-    """The selected runtime contained conversation history from another turn."""
+    """The selected runtime history cannot be qualified as one fresh turn."""
 
 
 class FabricStatus(StrEnum):
@@ -101,13 +101,14 @@ class FabricAdapterCodec:
             raise FabricProtocolError("Fabric result omitted context-isolation evidence")
         if any(not isinstance(message, dict) for message in messages):
             raise FabricProtocolError("Fabric result contains malformed context-isolation evidence")
-        if len(messages) > 2:
-            raise FabricFirstTurnQualificationError("Fabric result does not satisfy first-turn qualification")
-        if len(messages) != 2:
+        if len(messages) < 2:
             raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
-        user_message, assistant_message = messages
+        user_message, assistant_message = messages[0], messages[-1]
         if set(user_message) != {"role", "content"} or user_message != {"role": "user", "content": prompt}:
+            if len(messages) > 2:
+                raise FabricFirstTurnQualificationError("Fabric result does not satisfy first-turn qualification")
             raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
+        _validate_tool_history(messages[1:-1])
         response = output.get("response")
         history_content = assistant_message.get("content")
         # OpenClaw history can retain outer JSON whitespace omitted by returned payloads.
@@ -122,6 +123,68 @@ class FabricAdapterCodec:
         ):
             raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
         return expected_session_key
+
+
+def _validate_tool_history(messages: list[dict[str, Any]]) -> None:
+    """Require completed function-call batches between the sole user and final answer."""
+    seen: set[str] = set()
+    pending: set[str] = set()
+    for message in messages:
+        if message.get("role") == "assistant":
+            if pending:
+                raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unfinished tool calls")
+            calls = message.get("tool_calls")
+            if (
+                set(message) != {"role", "content", "tool_calls"}
+                or not isinstance(message.get("content"), str)
+                or not isinstance(calls, list)
+            ):
+                raise FabricProtocolError("Fabric result contains malformed tool history")
+            if not calls:
+                raise FabricFirstTurnQualificationError("Fabric first-turn qualification found an extra assistant turn")
+            for call in calls:
+                if not isinstance(call, dict) or set(call) != {"id", "type", "function"}:
+                    raise FabricProtocolError("Fabric result contains malformed tool calls")
+                function = call.get("function")
+                call_id = call.get("id")
+                if (
+                    call.get("type") != "function"
+                    or not isinstance(call_id, str)
+                    or not call_id
+                    or "\x00" in call_id
+                    or not isinstance(function, dict)
+                    or set(function) != {"name", "arguments"}
+                    or not isinstance(function.get("name"), str)
+                    or not function["name"]
+                    or "\x00" in function["name"]
+                    or not isinstance(function.get("arguments"), str)
+                ):
+                    raise FabricProtocolError("Fabric result contains malformed tool calls")
+                if call_id in seen:
+                    raise FabricFirstTurnQualificationError(
+                        "Fabric first-turn qualification found reused tool-call IDs"
+                    )
+                seen.add(call_id)
+                pending.add(call_id)
+        elif message.get("role") == "tool":
+            if set(message) != {"role", "content", "tool_call_id", "is_error"}:
+                raise FabricFirstTurnQualificationError(
+                    "Fabric first-turn qualification found unqualified tool results"
+                )
+            call_id = message.get("tool_call_id")
+            if (
+                not isinstance(message.get("content"), str)
+                or not isinstance(message.get("is_error"), bool)
+                or not isinstance(call_id, str)
+            ):
+                raise FabricProtocolError("Fabric result contains malformed tool results")
+            if call_id not in pending:
+                raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unmatched tool results")
+            pending.remove(call_id)
+        else:
+            raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unrelated history")
+    if pending:
+        raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unfinished tool calls")
 
 
 def adapter_codec(adapter_id: str) -> FabricAdapterCodec:

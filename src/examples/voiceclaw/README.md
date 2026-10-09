@@ -61,6 +61,8 @@ This profile preserves the upstream OpenShell/Fabric adapter, request codec,
 result validation, and fresh-target limits. A narrow installer executor supplies
 the protected descriptor and pinned SDK transport. It does not replace the
 default image supervisor, developer Compose recipe, or cloud configuration.
+The first-turn check permits matched native tool calls and results within that
+single invocation. Target identity and final response validation remain strict.
 
 Use the following nonsecret environment inputs in the application declaration:
 
