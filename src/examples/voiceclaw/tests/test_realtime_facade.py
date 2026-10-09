@@ -2143,9 +2143,13 @@ def test_model_selected_route_is_a_silent_required_structured_turn() -> None:
         ),
     ],
 )
-def test_failed_model_route_logs_only_allowlisted_terminal_details(caplog, status, details, diagnostic) -> None:
+@pytest.mark.parametrize("required_agent", [False, True])
+def test_failed_model_route_logs_only_allowlisted_terminal_details(
+    caplog, status, details, diagnostic, required_agent
+) -> None:
     turns = _TurnPort()
-    facade, downstream, _ = _facade(runtime=_AutoRuntime(turns))
+    runtime = _Runtime(turns, force_delegate=True) if required_agent else _AutoRuntime(turns)
+    facade, downstream, _ = _facade(runtime=runtime)
 
     async def exercise() -> None:
         await facade.bootstrap()
@@ -2535,19 +2539,33 @@ def test_forced_route_fails_closed_before_direct_assistant_content_is_forwarded(
 
 
 def test_forced_agent_route_is_silent_and_selects_only_one_backend_operation() -> None:
-    facade, _, upstream = _facade(runtime=_Runtime(_TurnPort(), force_delegate=True))
+    turns = _TurnPort()
+    facade, downstream, upstream = _facade(runtime=_Runtime(turns, force_delegate=True))
+    private_public_ids = []
 
     async def exercise() -> None:
         await facade.bootstrap()
         await _finalize_text_turn(facade, "Now do the same in hexadecimal")
         await facade.handle_downstream_event({"event_id": "agent-follow-up", "type": "response.create", "response": {}})
+        await facade.handle_upstream_event(_response_created())
+        private_public_ids.append(facade._registry.response("resp-private"))
+        assert not any(event.get("response", {}).get("id") in private_public_ids for event in downstream.events())
+        assert "resp-private" not in facade._playback_leases_by_response
+        goal = "Now do the same in hexadecimal"
+        await facade.handle_upstream_event(_protected_added())
+        await facade.handle_upstream_event(_protected_done(arguments=_goal_arguments(goal)))
+        await facade.handle_upstream_event(_response_done(arguments=_goal_arguments(goal)))
+        await facade.wait_for_pending_tools()
 
     asyncio.run(exercise())
-    create = [event for event in upstream.events() if event["type"] == "response.create"][-1]
+    create = next(event for event in upstream.events() if event["type"] == "response.create")
     assert create["response"]["tool_choice"] == {"type": "function", "name": "voiceclaw_work_delegate"}
     assert create["response"]["output_modalities"] == ["text"]
     assert create["response"]["parallel_tool_calls"] is False
     assert "audio" not in create["response"]
+    assert len(turns.requests) == 1
+    assert turns.requests[0].text == "Now do the same in hexadecimal"
+    assert not any(event.get("response", {}).get("id") in private_public_ids for event in downstream.events())
 
 
 def test_direct_delegation_is_server_side_and_schedules_acknowledgement_and_result() -> None:
