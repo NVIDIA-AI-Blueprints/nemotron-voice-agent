@@ -26,8 +26,9 @@ from ..registry import FRONTENDS
 from .translation import strip_reasoning
 
 JSON_RULES = """
-Reply with a single JSON object and nothing else: exactly the keys "action" and
-"speech". No markdown, no code fences, no reasoning text before or after the object.
+Reply with a single JSON object and nothing else: the keys "action" and
+"speech". No markdown, no code fences, no reasoning text before or
+after the object.
 """
 FORMAT_ORDER = ("json_schema", "json_object", "none")
 FORMAT_ERROR_HINTS = ("response_format", "json_schema", "json_object", "guided", "structured")

@@ -39,9 +39,9 @@ transport -> STT -> user aggregator -> LiveTalkerProcessor -> TTS -> transport -
 `LiveTalkerProcessor` sits where the LLM service normally sits. It receives the context frame for each user turn and pushes the same response frames an LLM service pushes, so TTS and the assistant aggregator need no changes.
 
 1. The **talker** returns one JSON decision: `speak` with a reply, or `delegate` with an optional short lead-in. A turn always gets one of the two.
-2. A **delegation** goes to a queue that runs one backend round at a time. The backend calls tools, the worker adds the results to the history, and the next round starts until the model answers.
+2. A **delegation** goes to a queue that runs one task at a time. The backend calls tools, the worker adds the results to the history, and the next round starts until the model answers. The talker sees the work still in progress.
 3. The **commentary writer** phrases the answer for speech and does not repeat the lead-in. If phrasing fails, the verified text is spoken as written.
-4. The **answer** is spoken after the caller finishes their sentence. It is dropped only when a newer delegation is queued.
+4. Every delegation's **answer** is spoken after the caller finishes their sentence. An answer that a newer request changes is spoken as being updated.
 
 ## Configuration
 
@@ -72,6 +72,8 @@ To put a remote realtime model in front of the same backend instead of the casca
 | `openai-responses` | The OpenAI Responses API. |
 
 `prompt_version` selects the routing, commentary, and answer text added to the prompts in [`prompts.yaml`](prompts.yaml). The guards (repeat guard, turn router, and failure recovery) are set under `guards` and `reliability`. A backend round that failed after emitting a function call is never retried.
+
+The `delegation` section controls several requests in one call. A request that arrives while another waits joins it (`merge_pending`). A request that arrives before the running one has emitted a function call restarts it once with both requests (`fold_before_acting`). That cannot repeat an action or leave one half done, and a task is restarted at most once. A short "any update?" turn is answered from the work in progress (`status_from_ledger`), and work that runs silently for `progress_after_seconds` gets a short status line, at most `progress_max_per_delegation` per delegation (`progress_speech`). `LIVE_CONFIG_PATH` points the server at another config file.
 
 ## Using Your Own Realtime Frontend
 
@@ -151,9 +153,9 @@ The talker, commentary, delegation, and model packages do not import Pipecat, so
 | Package | Owns |
 | --- | --- |
 | [`engine/`](engine/) | What every live engine shares: session settings and updates, the pipeline host, and the factory the live server calls. |
-| [`cascade/`](cascade/) | The core cascaded pipeline: the per-call session, the Pipecat processor, speech services, and the `talker/` and `commentary/` packages. |
+| [`cascade/`](cascade/) | The core cascaded pipeline: the per-call session, the Pipecat processor, speech services, the `talker/` and `commentary/` packages, and `application_input.py` for commentary, thinking and instructions from the application. |
 | [`realtime/`](realtime/) | A remote realtime model as the frontend: the WebSocket client processor and its engine. |
-| [`delegation/`](delegation/) | The delegation coordinator, the serialized backend worker, the thinker wrapper, and the events relayed to the client. |
+| [`delegation/`](delegation/) | The delegation coordinator and its ledger of open work, the serialized backend worker, the thinker wrapper, and the events relayed to the client. |
 | [`tool_calling/`](tool_calling/) | The client's tool gateway, the executor interface, and the reference cafe tools in [`cafe/`](tool_calling/cafe/). |
 | [`models/`](models/) | The `Frontend` and `Backend` base classes, the registry, endpoint resolution, and the implementations. |
 | [`prompts/`](prompts/) | Prompt sets `v1` and `v2`, the static prompts, and the realtime frontend's text. |

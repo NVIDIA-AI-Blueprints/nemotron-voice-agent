@@ -46,5 +46,15 @@ guards:
   turn_router_shadow: false  # only trace what the router would drop
   continuers: [uh-huh, uh huh, mm-hmm, mm hmm, mhm, hmm, mm, mmm, ah, oh, i see, got it]
 
+# Several delegations in one call: each gets its own answer, spoken as it arrives.
+delegation:
+  merge_pending: true          # a delegation that arrives while another waits joins it (one backend run)
+  fold_before_acting: true     # a request that arrives before the running one calls a tool restarts it once, with both
+  status_from_ledger: true     # "any update?" is answered from the work in progress, not a new delegation
+  progress_speech: true        # say a short status line when work has run silently for a while
+  progress_after_seconds: 8
+  progress_interval_seconds: 12
+  progress_max_per_delegation: 1
+
 backend_context_tokens: 100000   # budget for the history the backend is resent each round
 chat_history_recent_turns: 20    # conversation turns kept in the talker's context

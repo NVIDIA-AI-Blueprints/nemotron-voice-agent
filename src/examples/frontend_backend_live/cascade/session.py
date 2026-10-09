@@ -13,8 +13,12 @@ Behavior:
   that nearly repeats an earlier reply becomes a delegation (repeat guard).
 * A backend result enters the history in time order. The phrasing request for that answer carries what the
   caller was already told, and only that request does.
-* An answer is dropped only when a newer delegation is queued; otherwise it is spoken, even after the caller
-  said "okay" in the meantime. Phrasing that fails or stays silent still speaks the verified text.
+* Every delegation's answer is spoken, even after the caller said "okay" in the meantime. Phrasing that fails or
+  stays silent still speaks the verified text. An answer that a newer request in progress changes is spoken as
+  being updated, not as final.
+* The talker sees the work still in progress. A turn that only asks for an update is answered from it, and a
+  turn that corrects work in flight replaces it (see the worker). Work that runs silently for a while gets a
+  short status line.
 * The delegate receives only the voice turns since its previous delegation, never backend results.
 * An optional turn router drops acknowledgment-only turns (or, in shadow mode, only traces them).
 
@@ -25,11 +29,13 @@ client owns the work: the session only announces each delegation, and the client
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 
 from loguru import logger
 
 from examples.frontend_backend_live.cascade.agent import LiveAgent
+from examples.frontend_backend_live.cascade.application_input import ApplicationInput
 from examples.frontend_backend_live.cascade.commentary.guards import plain_speech, safe_lead_in
 from examples.frontend_backend_live.cascade.conversation import (
     Conversation,
@@ -39,9 +45,10 @@ from examples.frontend_backend_live.cascade.conversation import (
 )
 from examples.frontend_backend_live.cascade.talker.repeat_guard import repeated_speech
 from examples.frontend_backend_live.cascade.talker.router import TurnRouter
-from examples.frontend_backend_live.common.history import BACKEND_RESULT_PREFIX, CLIENT_CONTEXT_PREFIX
+from examples.frontend_backend_live.common.history import BACKEND_RESULT_PREFIX
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
 from examples.frontend_backend_live.delegation.coordinator import DelegationCoordinator, Observe, log_observation
+from examples.frontend_backend_live.delegation.ledger import STATUS_LINES, asks_for_status
 from examples.frontend_backend_live.delegation.tasks import CLIENT, RESPONSES, BackendTask, DelegatedTask
 from examples.frontend_backend_live.models.decision import TalkerDecision
 
@@ -107,9 +114,21 @@ class CascadeSession:
             on_client_delegation=on_client_delegation,
             observe=observe,
         )
+        self.application = ApplicationInput(
+            conversation,
+            self.coordinator,
+            phrase=self._phrase,
+            wait_for_caller=self._wait_for_caller,
+            say=self._say,
+            act=self._act,
+            interrupt=interrupt,
+        )
         self.user_speaking = False
         self._user_idle = asyncio.Event()
         self._user_idle.set()
+        self.last_spoke = self.last_progress = 0.0
+        self._status_count = 0
+        self._progress: asyncio.Task | None = None
 
     @property
     def worker(self):
@@ -127,11 +146,16 @@ class CascadeSession:
         return self.coordinator.backend_busy
 
     def start(self) -> None:
-        """Start the delegation worker (``responses`` mode)."""
+        """Start the delegation worker (``responses`` mode) and the progress announcer."""
         self.coordinator.start()
+        if self.coordinator.worker and self.config.delegation.progress_speech:
+            self._progress = asyncio.create_task(self._announce_progress(), name="delegation-progress")
 
     async def close(self) -> None:
         """Stop the worker and release the models."""
+        if self._progress:
+            self._progress.cancel()
+            await asyncio.gather(self._progress, return_exceptions=True)
         await self.coordinator.close()
         await self.agent.close()
 
@@ -153,13 +177,52 @@ class CascadeSession:
             return
         if self.router and await self._dropped_by_router(text, messages):
             return
+        if self._asks_for_status(text):
+            self._remember_voice("user", text)
+            self.observe("status.answered", open=len(self.coordinator.ledger.open()))
+            await self._say(self._status_line())
+            return
         await self._act(text)
+
+    def _asks_for_status(self, text: str) -> bool:
+        return (
+            self.config.delegation.status_from_ledger and bool(self.coordinator.ledger.open()) and asks_for_status(text)
+        )
+
+    def _status_line(self) -> str:
+        line = STATUS_LINES[self._status_count % len(STATUS_LINES)]
+        self._status_count += 1
+        return line
+
+    async def _announce_progress(self) -> None:
+        """Say a short status line when work has run for a while without the assistant saying anything."""
+        settings = self.config.delegation
+        tick = max(0.05, min(1.0, settings.progress_after_seconds / 4))
+        while True:
+            await asyncio.sleep(tick)
+            oldest = self.coordinator.ledger.oldest_open()
+            if oldest is None or self.user_speaking:
+                continue
+            since = oldest.created_at
+            if oldest.progress_lines >= settings.progress_max_per_delegation:
+                continue
+            now = time.monotonic()
+            if now - max(self.last_spoke, since) < settings.progress_after_seconds:
+                continue
+            if now - self.last_progress < settings.progress_interval_seconds:
+                continue
+            self.last_progress = now
+            oldest.progress_lines += 1
+            self.observe("progress.spoken", open=len(self.coordinator.ledger.open()))
+            await self._say(self._status_line())
 
     async def _act(self, text: str, *, instruction: bool = False) -> None:
         """Run the routing decision for ``text`` and carry it out."""
         instructions, history = split_messages(self.conversation.messages())
-        decision = await self._decide(instructions, history, text)
-        decision = self._apply_repeat_guard(decision, text, history)
+        work = self.coordinator.ledger.describe()
+        decision = await self._decide(instructions, history, work)
+        if not work:
+            decision = self._apply_repeat_guard(decision, text, history)
         self.observe("talker.completed", action=decision.action, **decision.diagnostics)
         if decision.action == "delegate":
             await self._delegate(decision, text, instruction=instruction)
@@ -179,9 +242,9 @@ class CascadeSession:
         self.observe("router.would_drop", text=text, reason=verdict.reason)
         return False
 
-    async def _decide(self, instructions: str, history: list[dict], text: str) -> TalkerDecision:
+    async def _decide(self, instructions: str, history: list[dict], work_in_progress: str) -> TalkerDecision:
         try:
-            return await self.agent.talker.decide(instructions, history)
+            return await self.agent.talker.decide(instructions, history, work_in_progress)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -210,7 +273,8 @@ class CascadeSession:
         if speech:
             # Recorded at submit time: the answer can arrive and be phrased before this lead-in finishes
             # playing, so waiting for playback could miss the "already told" note.
-            self.coordinator.told[delegation_id] = speech
+            earlier = self.coordinator.told.get(delegation_id)  # a request that joined a waiting delegation
+            self.coordinator.told[delegation_id] = f"{earlier} {speech}" if earlier else speech
             await self._say(speech)
 
     async def submit_items(self, items: list[dict]) -> str:
@@ -218,17 +282,22 @@ class CascadeSession:
         return await self.coordinator.submit_items(items)
 
     # --------------------------------------------------------------------- the answer
-    async def on_result(self, text: str, task: DelegatedTask, told: str | None, *, superseded: bool) -> None:
-        """Record a backend result; phrase and speak it unless a newer delegation supersedes it."""
+    async def on_result(self, text: str, task: DelegatedTask, told: str | None, *, newer_requests: list[str]) -> None:
+        """Record a backend result, then phrase and speak it (as being updated if a newer request may change it)."""
         self.conversation.add({"role": "user", "content": BACKEND_RESULT_PREFIX + text})
-        if superseded:
-            return
-        speech = await self._phrase(BACKEND_RESULT_PREFIX, text, told, answer=True)
+        speech = await self._phrase(BACKEND_RESULT_PREFIX, text, told, answer=True, newer_requests=newer_requests)
         await self._wait_for_caller()
         await self._say(speech)
 
     async def _phrase(
-        self, prefix: str, text: str, already_said: str | None, *, answer: bool, must_speak: bool = False
+        self,
+        prefix: str,
+        text: str,
+        already_said: str | None,
+        *,
+        answer: bool,
+        must_speak: bool = False,
+        newer_requests: list[str] | None = None,
     ) -> str:
         """Return the words to speak for an update.
 
@@ -242,6 +311,12 @@ class CascadeSession:
         )
         if must_speak and not answer:
             note += "\n(the application asked for this to be said to the caller, so speak it)"
+        if newer_requests:
+            asked = "; ".join(f'"{request}"' for request in newer_requests)
+            note += (
+                f"\n(the caller has since asked something else, still in progress: {asked}. If it changes this result, "
+                "say what was found, briefly, and that you are updating it; otherwise report this result normally)"
+            )
         instructions, history = split_messages(self.conversation.messages())
         # The phrasing request carries the update once, as the commentary update; leave its history copy out.
         positions = [i for i, m in enumerate(history) if m["content"] == prefix + text]
@@ -278,24 +353,16 @@ class CascadeSession:
 
     # ----------------------------------------------------------- client commands (appends)
     async def on_commentary(self, text: str, delegation_id: str | None) -> None:
-        """Retain a client-supplied fact and say it to the caller: commentary is spoken, in the writer's wording."""
-        self.conversation.add({"role": "user", "content": CLIENT_CONTEXT_PREFIX + text})
-        told = self.coordinator.told.pop(delegation_id, None) if delegation_id else None
-        speech = await self._phrase(CLIENT_CONTEXT_PREFIX, text, told, answer=False, must_speak=True)
-        if speech:
-            await self._wait_for_caller()
-            await self._say(speech)
+        """Say a client-supplied fact to the caller (see :class:`ApplicationInput`)."""
+        await self.application.commentary(text, delegation_id)
 
     def on_thinking(self, text: str) -> None:
-        """Retain silent context for later decisions; nothing is spoken."""
-        self.conversation.add({"role": "user", "content": CLIENT_CONTEXT_PREFIX + text})
+        """Retain silent context (see :class:`ApplicationInput`)."""
+        self.application.thinking(text)
 
     async def on_instruction(self, text: str) -> None:
-        """Steer behavior: cut off current speech, add the direction, and decide again."""
-        self.conversation.add({"role": "developer", "content": text})
-        if self.interrupt:
-            await self.interrupt()
-        await self._act(text, instruction=True)
+        """Steer behavior (see :class:`ApplicationInput`)."""
+        await self.application.instruction(text)
 
     # ------------------------------------------------------------------------- speech
     def _remember_voice(self, role: str, text: str) -> None:
@@ -306,3 +373,4 @@ class CascadeSession:
             return
         self._remember_voice("assistant", text)
         await self.say_text(text)
+        self.last_spoke = time.monotonic()

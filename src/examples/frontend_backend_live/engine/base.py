@@ -87,9 +87,7 @@ class BaseLiveEngine:
     def update_backend(self, config: SessionConfig) -> None:
         """Apply a ``session.update`` to the backend settings used from the next round on."""
         self.config = config
-        task = backend_task_for(config, self.backend_endpoint.model, self.backend_instructions)
-        if task is not None and self.coordinator.worker is not None:
-            self.coordinator.worker.task = task
+        self.coordinator.update_settings(config, self.backend_endpoint.model, self.backend_instructions)
 
     def knows_delegation(self, delegation_id: str) -> bool:
         """Return True for a client-mode delegation id this session issued."""

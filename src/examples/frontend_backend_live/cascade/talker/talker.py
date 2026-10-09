@@ -35,7 +35,13 @@ class Talker:
         """Bind the frontend model and the prompt set."""
         self.frontend, self.prompts = frontend, prompts
 
-    async def decide(self, instructions: str, history: list[dict]) -> TalkerDecision:
-        """Return the routing decision for ``history`` under the client's ``instructions``."""
-        decision = await self.frontend.complete(instructions + "\n" + self.prompts.routing, history)
+    async def decide(self, instructions: str, history: list[dict], work_in_progress: str = "") -> TalkerDecision:
+        """Return the routing decision for ``history`` under the client's ``instructions``.
+
+        ``work_in_progress`` describes the delegations still open, when there are any.
+        """
+        routing = instructions + "\n" + self.prompts.routing
+        if work_in_progress:
+            routing += "\n" + work_in_progress
+        decision = await self.frontend.complete(routing, history)
         return never_silent(decision)

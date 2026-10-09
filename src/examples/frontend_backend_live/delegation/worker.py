@@ -7,6 +7,11 @@ Only one backend round runs at a time. Each task runs rounds until the model ans
 tool: after a round that called tools, every call runs, the results join the history, and the next round
 starts. A failed or uncertain round is never retried once a function call was emitted, because an
 application action may already have happened.
+
+Work that has not started can be changed. A delegation that arrives while another waits joins it, so one
+run answers both. A request that arrives while the running task has emitted no function call and is not
+delivering its answer restarts it once with both requests: nothing has happened yet, so nothing can repeat or
+be left half done.
 """
 
 from __future__ import annotations
@@ -20,13 +25,14 @@ from copy import deepcopy
 from loguru import logger
 
 from examples.frontend_backend_live.common.ids import approx_tokens, uid
-from examples.frontend_backend_live.config_manager.schema import ReliabilityConfig
+from examples.frontend_backend_live.config_manager.schema import DelegationConfig, ReliabilityConfig
 from examples.frontend_backend_live.delegation.tasks import BackendTask, DelegatedTask
 from examples.frontend_backend_live.delegation.thinker import Thinker
 from examples.frontend_backend_live.tool_calling.executor import ToolExecutor
 
 APOLOGY = "Sorry, I ran into a problem with that. Could you say it again?"
 MAX_COMPLETED_CALLS = 512
+MAX_FOLDS = 1
 
 
 class DelegationError(Exception):
@@ -57,6 +63,7 @@ class DelegationWorker:
         on_event: Callable[[DelegatedTask, dict], Awaitable[None]] | None = None,
         observe: Callable[..., None] = _noop,
         context_tokens: int = 100_000,
+        policy: DelegationConfig | None = None,
     ):
         """Wire the thinker, its tools and the answer callback.
 
@@ -71,13 +78,17 @@ class DelegationWorker:
                 protocol layer can forward the stream.
             observe: Optional ``observe(kind, **fields)`` hook for traces.
             context_tokens: Budget for the history resent each round.
+            policy: Whether waiting delegations merge and whether a correction may replace the running task.
         """
         self.thinker, self.task, self.tools, self.reliability = thinker, task, tools, reliability
         self.on_answer, self.on_abandoned, self.observe = on_answer, on_abandoned, observe
         self.on_event = on_event
-        self.context_tokens = context_tokens
-        self.queue: asyncio.Queue[DelegatedTask] = asyncio.Queue(maxsize=reliability.max_pending_delegations)
+        self.context_tokens, self.policy = context_tokens, policy or DelegationConfig()
+        self.pending: list[DelegatedTask] = []
+        self.last_replaced: str | None = None  # the id of the task the latest submit replaced, if any
+        self._wake = asyncio.Event()
         self.active: DelegatedTask | None = None
+        self.current: asyncio.Task | None = None  # the running task's coroutine, so it can be cancelled alone
         self.worker: asyncio.Task | None = None
         self.history: list[dict] = []
         self.previous_response_id: str | None = None
@@ -91,35 +102,87 @@ class DelegationWorker:
         self.worker = asyncio.create_task(self._run(), name="delegation-worker")
 
     @property
-    def has_newer(self) -> bool:
-        """Whether another task is waiting, so the running task's answer would be superseded."""
-        return not self.queue.empty()
+    def busy(self) -> bool:
+        """Whether a task is running or waiting."""
+        return self.active is not None or bool(self.pending)
 
-    async def submit(self, input_items: list[dict]) -> str:
-        """Queue a task and return its id."""
+    async def submit(self, input_items: list[dict], *, coalesce: bool = True) -> str:
+        """Queue a task and return its id.
+
+        Args:
+            input_items: The request, as input items.
+            coalesce: Join a task that is still waiting instead of queueing another (the returned id is then that
+                task's), and, with ``fold_before_acting``, restart the running task with this request folded in
+                if it has not acted yet. Typed input passes ``False``.
+        """
         if self.closed:
             raise DelegationError("Session is closing")
-        task = DelegatedTask(uid("item"), deepcopy(input_items))
-        try:
-            self.queue.put_nowait(task)
-        except asyncio.QueueFull as exc:
-            raise DelegationError("Delegation queue is full") from exc
-        self.observe("backend.queued", delegation_id=task.id, queue_depth=self.queue.qsize())
+        items = deepcopy(input_items)
+        if coalesce and self.policy.merge_pending and self.pending:
+            target = self.pending[-1]
+            target.input.extend(items)
+            self.observe("backend.merged", delegation_id=target.id, queue_depth=len(self.pending))
+            return target.id
+        replaced = self._cancel_running(allow_fold=self.policy.fold_before_acting and coalesce)
+        self.last_replaced = replaced.id if replaced else None
+        if len(self.pending) >= self.reliability.max_pending_delegations:
+            raise DelegationError("Delegation queue is full")
+        task = DelegatedTask(uid("item"), [*(replaced.input if replaced else []), *items])
+        task.folds = replaced.folds + 1 if replaced else 0
+        self.pending.append(task)
+        self._wake.set()
+        self.observe("backend.queued", delegation_id=task.id, queue_depth=len(self.pending))
         return task.id
+
+    def _cancel_running(self, *, allow_fold: bool) -> DelegatedTask | None:
+        """Stop the running task if nothing it did can be repeated or left half done; return it.
+
+        A task already restarted once is left to finish, so a caller who keeps talking cannot stall the work.
+        """
+        task = self.active
+        if not allow_fold or task is None or self.current is None or self.current.done():
+            return None
+        if task.acted or task.delivering or task.folds >= MAX_FOLDS:
+            return None
+        task.cancelled = True
+        self.current.cancel()
+        return task
+
+    async def _next(self) -> DelegatedTask:
+        while not self.pending:
+            self._wake.clear()
+            await self._wake.wait()
+        return self.pending.pop(0)
+
+    def _discard(self, task: DelegatedTask) -> None:
+        """Remove a cancelled task's traces so the next task starts from a valid history."""
+        del self.history[task.history_start :]
+        self.carry = [*task.carried, *self.carry]
+        self.on_abandoned(task.id)
+        self.observe("backend.cancelled", delegation_id=task.id, round=task.round)
 
     async def _run(self) -> None:
         while True:
-            task = await self.queue.get()
+            task = await self._next()
             self.active = task
             self.observe(
                 "backend.dequeue",
                 delegation_id=task.id,
                 duration_ms=round((time.monotonic() - task.queued_at) * 1000, 3),
             )
+            self.current = asyncio.create_task(self._task(task), name="delegated-task")
             try:
-                await self._task(task)
+                await asyncio.wait({self.current})
             except asyncio.CancelledError:
+                self.current.cancel()
+                await asyncio.gather(self.current, return_exceptions=True)
                 raise
+            try:
+                self.current.result()
+            except asyncio.CancelledError:
+                if not task.cancelled:
+                    raise
+                self._discard(task)
             except Exception as exc:
                 # Never retry a failed round automatically once a call was emitted: actions might have happened.
                 logger.warning(f"Delegated task {task.id} failed in round {task.round}: {type(exc).__name__}: {exc}")
@@ -136,7 +199,7 @@ class DelegationWorker:
                     self.observe("backend.recovered", delegation_id=task.id, action="apology")
                     await self._deliver(APOLOGY, task)
             finally:
-                self.active = None
+                self.active = self.current = None
 
     def _round_payload(self, task: DelegatedTask, incoming: list[dict]) -> dict:
         """Build one round's request: a stored chain for stateful backends, the full history otherwise."""
@@ -165,7 +228,7 @@ class DelegationWorker:
                         if raw.get("item", {}).get("type") == "function_call" or kind.startswith(
                             "response.function_call"
                         ):
-                            task.emitted_function = True
+                            task.emitted_function = task.acted = True
                         if kind == "response.output_item.done":
                             output_items.append(raw["item"])
                             if raw["item"].get("type") == "function_call":
@@ -218,6 +281,7 @@ class DelegationWorker:
         return list(results)
 
     async def _task(self, task: DelegatedTask) -> None:
+        task.history_start, task.carried = len(self.history), list(self.carry)
         incoming = [*self.carry, *task.input]
         self.carry = []
         for index in range(self.reliability.max_tool_rounds):
@@ -254,13 +318,20 @@ class DelegationWorker:
                     self.on_abandoned(task.id)
                     await self._deliver(APOLOGY, task)
                 return
-            self.observe("tools.started", delegation_id=task.id, round=task.round, call_ids=list(calls))
+            self.observe(
+                "tools.started",
+                delegation_id=task.id,
+                round=task.round,
+                call_ids=list(calls),
+                names=[call.get("name", "") for call in calls.values()],
+            )
             incoming = await self._run_tools(calls)
             self.observe("tools.completed", delegation_id=task.id, round=task.round)
         raise RuntimeError("Maximum tool rounds exceeded")
 
     async def _deliver(self, text: str, task: DelegatedTask) -> None:
         """Hand a result to ``on_answer``; a failure there is logged and never stops the worker."""
+        task.delivering = True
         try:
             await self.on_answer(text, task)
         except asyncio.CancelledError:
@@ -303,8 +374,9 @@ class DelegationWorker:
         self.closed = True
         if self.active:
             self.on_abandoned(self.active.id)
-        while not self.queue.empty():
-            self.on_abandoned(self.queue.get_nowait().id)
+        for waiting in self.pending:
+            self.on_abandoned(waiting.id)
+        self.pending.clear()
         if self.worker:
             self.worker.cancel()
             await asyncio.gather(self.worker, return_exceptions=True)

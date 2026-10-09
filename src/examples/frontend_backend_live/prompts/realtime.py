@@ -40,12 +40,13 @@ DELEGATION_STARTED = (
     'Do not state any result until then."}'
 )
 RESULT_ITEM = "Verified backend result for delegation {delegation_id}:\n{text}"
-RESULT_SUPERSEDED_ITEM = (
-    "Backend result for an earlier request, now superseded by a newer one (do not announce it):\n{text}"
-)
 TOLD_NOTE = 'You already told the caller: "{told}". Do not repeat that; report only the result.'
 SPEAK_RESULT = (
     "Tell the caller this result now, in one or two short spoken sentences, using only what the result says. {note}"
+)
+NEWER_NOTE = (
+    "The caller has since asked something else, still in progress: {asked}. If it changes this result, say what was "
+    "found, briefly, and that you are updating it; otherwise report this result normally."
 )
 COMMENTARY_ITEM = "Update from the application:\n{text}"
 SPEAK_UPDATE = "Say this update to the caller in one or two short spoken sentences, using only what it says. {note}"

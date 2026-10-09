@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .schema import GuardConfig, LiveConfig, ReliabilityConfig, RoleConfig
+from .schema import DelegationConfig, GuardConfig, LiveConfig, ReliabilityConfig, RoleConfig
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
 PROMPT_VERSIONS = ("v1", "v2")
@@ -78,6 +79,7 @@ def parse_config(data: Any) -> LiveConfig:
         "prompt_version",
         "reliability",
         "guards",
+        "delegation",
         "backend_context_tokens",
         "chat_history_recent_turns",
     }
@@ -89,6 +91,7 @@ def parse_config(data: Any) -> LiveConfig:
         raise ConfigError(f"prompt_version must be one of {', '.join(PROMPT_VERSIONS)}")
     reliability = _section(data, "reliability", {f.name for f in fields(ReliabilityConfig)})
     guards = _section(data, "guards", {f.name for f in fields(GuardConfig)})
+    delegation = _section(data, "delegation", {f.name for f in fields(DelegationConfig)})
     extra = {}
     for key in ("backend_context_tokens", "chat_history_recent_turns"):
         if key in data:
@@ -102,13 +105,14 @@ def parse_config(data: Any) -> LiveConfig:
         prompt_version=version,
         reliability=ReliabilityConfig(**_typed("reliability", reliability, ReliabilityConfig)),
         guards=GuardConfig(**_typed("guards", guards, GuardConfig)),
+        delegation=DelegationConfig(**_typed("delegation", delegation, DelegationConfig)),
         **extra,
     )
 
 
 def load_live_config(path: Path | None = None) -> LiveConfig:
-    """Read and validate the example's configuration file."""
-    path = path or CONFIG_PATH
+    """Read and validate the example's configuration file (``LIVE_CONFIG_PATH`` overrides the bundled one)."""
+    path = path or Path(os.environ.get("LIVE_CONFIG_PATH") or CONFIG_PATH)
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:

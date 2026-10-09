@@ -65,6 +65,24 @@ class GuardConfig:
 
 
 @dataclass(frozen=True)
+class DelegationConfig:
+    """How one call's several delegations are handled."""
+
+    # A delegation that arrives while another is still waiting joins it, so one backend run answers both.
+    merge_pending: bool = True
+    # A request that arrives while the running delegation has not called a tool yet is folded into it: the run
+    # restarts once with both requests, so no model judgement is needed to notice a correction.
+    fold_before_acting: bool = True
+    # A short "any update?" turn is answered from the work in progress instead of starting a delegation.
+    status_from_ledger: bool = True
+    # Speak a short status line when work has run this long without the assistant saying anything.
+    progress_speech: bool = True
+    progress_after_seconds: float = 8.0
+    progress_interval_seconds: float = 12.0
+    progress_max_per_delegation: int = 1
+
+
+@dataclass(frozen=True)
 class LiveConfig:
     """Everything ``config.yaml`` controls."""
 
@@ -73,6 +91,7 @@ class LiveConfig:
     prompt_version: str = "v1"
     reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
     guards: GuardConfig = field(default_factory=GuardConfig)
+    delegation: DelegationConfig = field(default_factory=DelegationConfig)
     # Backend (thinker) token budget for the delegate's resent history, per session.
     backend_context_tokens: int = 100_000
     # Conversation turns kept in the talker's context.

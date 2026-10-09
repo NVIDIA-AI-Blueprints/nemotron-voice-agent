@@ -294,8 +294,8 @@ class DelegationTests(RealtimeHarness):
             task = type("Task", (), {"id": "item_1"})()
             engine = self.engines[0]
             both = asyncio.gather(
-                engine.on_result("First result.", task, None, superseded=False),
-                engine.on_result("Second result.", task, None, superseded=False),
+                engine.on_result("First result.", task, None, newer_requests=[]),
+                engine.on_result("Second result.", task, None, newer_requests=[]),
             )
             await asyncio.sleep(0.2)
             await fake.finish("One moment", response_id)  # both are released at the same moment
@@ -313,7 +313,7 @@ class DelegationTests(RealtimeHarness):
             await fake.connected()
             fake.active = True  # a response the client does not know about
             task = type("Task", (), {"id": "item_1"})()
-            await self.engines[0].on_result("The result.", task, None, superseded=False)
+            await self.engines[0].on_result("The result.", task, None, newer_requests=[])
             await fake.wait_for("response.create")
             await asyncio.sleep(0.3)
             fake.active = False
@@ -324,16 +324,16 @@ class DelegationTests(RealtimeHarness):
                     await asyncio.sleep(0.05)
             self.assertEqual(fake.refused, 1)
 
-    async def test_a_superseded_result_is_recorded_without_being_spoken(self):
+    async def test_a_result_is_spoken_knowing_the_newer_requests_in_progress(self):
         async with FakeRealtimeServer() as fake:
             await self.serve(RESPONSES_SESSION, fake)
             await self.ws.wait_for("session.started")
             await fake.connected()
-            await self.engines[0].on_result("Old answer.", type("T", (), {"id": "item_1"})(), None, superseded=True)
-            note = await fake.wait_for("conversation.item.create", where=lambda e: e["item"].get("role") == "system")
-            self.assertIn("superseded", note["item"]["content"][0]["text"])
-            await asyncio.sleep(0.2)
-            self.assertEqual([e for e in fake.events if e["type"] == "response.create"], [])
+            task = type("T", (), {"id": "item_1"})()
+            await self.engines[0].on_result("Old answer.", task, None, newer_requests=["make it Friday"])
+            request = await fake.wait_for("response.create")
+            self.assertIn("make it Friday", request["response"]["instructions"])
+            self.assertIn("updating", request["response"]["instructions"])
 
 
 if __name__ == "__main__":

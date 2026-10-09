@@ -4,8 +4,9 @@
 """Delegation, independent of whichever frontend speaks to the caller.
 
 The coordinator owns everything about delegated work: the backend worker, delegation ids, the client-owned
-mode, the voice turns the delegate is shown, what the caller was already told, and whether an answer has been
-superseded. A frontend talks to it in two directions:
+mode, the voice turns the delegate is shown, what the caller was already told, and the ledger of open work.
+Every delegation gets its own answer, delivered as it arrives; an answer that a newer request changes is
+flagged so the frontend can say so. A frontend talks to it in two directions:
 
 * it calls :meth:`delegate` when the caller's request needs the backend, and reports the caller-visible
   conversation with :meth:`remember_voice`;
@@ -25,7 +26,8 @@ from loguru import logger
 
 from examples.frontend_backend_live.common.ids import uid
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
-from examples.frontend_backend_live.delegation.tasks import RESPONSES, BackendTask, DelegatedTask
+from examples.frontend_backend_live.delegation.ledger import DelegationLedger
+from examples.frontend_backend_live.delegation.tasks import RESPONSES, BackendTask, DelegatedTask, backend_task_for
 from examples.frontend_backend_live.delegation.thinker import Thinker
 from examples.frontend_backend_live.delegation.worker import DelegationWorker
 
@@ -40,14 +42,15 @@ def log_observation(kind: str, **fields) -> None:
 class ResultSink(Protocol):
     """The frontend's side of a delegation: it receives each backend result."""
 
-    async def on_result(self, text: str, task: DelegatedTask, told: str | None, *, superseded: bool) -> None:
-        """Handle a verified backend result (or the recovery apology).
+    async def on_result(self, text: str, task: DelegatedTask, told: str | None, *, newer_requests: list[str]) -> None:
+        """Handle a verified backend result (or the recovery apology). Every result is meant to be spoken.
 
         Args:
             text: The result text.
             task: The delegation it answers.
             told: What the caller was already told for this delegation, if anything.
-            superseded: True when a newer delegation is queued, so the result should be recorded but not spoken.
+            newer_requests: The requests made after this delegation that are still in progress. They may change
+                this result, so the frontend can say it is being updated.
         """
 
 
@@ -83,6 +86,7 @@ class DelegationCoordinator:
         """
         self.thinker, self.sink, self.observe, self.mode = thinker, sink, observe, mode
         self.on_client_delegation = on_client_delegation
+        self.ledger = DelegationLedger()
         self.worker = (
             DelegationWorker(
                 thinker,
@@ -90,10 +94,11 @@ class DelegationCoordinator:
                 tools,
                 config.reliability,
                 on_answer=self.on_answer,
-                on_abandoned=lambda task_id: self.told.pop(task_id, None),
+                on_abandoned=self._abandoned,
                 on_event=on_event,
-                observe=observe,
+                observe=self._observe,
                 context_tokens=config.backend_context_tokens,
+                policy=config.delegation,
             )
             if mode == RESPONSES
             else None
@@ -104,6 +109,21 @@ class DelegationCoordinator:
         self.client_delegations: set[str] = set()
         # Voice turns since the previous delegation, for the delegate's context.
         self.pending_voice: list[dict] = []
+        # Application context (``session.thinking.append``) the delegate has not seen yet.
+        self.pending_context: list[str] = []
+
+    def _observe(self, kind: str, **fields) -> None:
+        """Keep the ledger current from the worker's observations, then pass them on."""
+        if kind == "backend.dequeue":
+            self.ledger.start(fields["delegation_id"])
+        elif kind == "tools.started":
+            self.ledger.step(fields["delegation_id"], fields.get("names", []))
+        self.observe(kind, **fields)
+
+    def _abandoned(self, delegation_id: str) -> None:
+        """A delegation will never answer."""
+        self.told.pop(delegation_id, None)
+        self.ledger.cancelled(delegation_id)
 
     def validate_model(self, model: str) -> None:
         """Raise ``ValueError`` if the backend cannot serve ``model``."""
@@ -124,9 +144,15 @@ class DelegationCoordinator:
         """Record one caller-visible turn for the next delegation's context."""
         self.pending_voice.append({"role": role, "content": text})
 
+    def remember_context(self, text: str) -> None:
+        """Record silent application context so the next delegation carries it to the backend."""
+        self.pending_context.append(text)
+
     def _delegate_input(self, text: str, *, instruction: bool = False) -> list[dict]:
-        """The delegate's input: the voice turns since its last delegation, then the current request."""
+        """The delegate's input: application context and the voice turns since its last delegation, then the request."""
         context = "Voice conversation context (reference data):\n" + json.dumps(self.pending_voice)
+        if self.pending_context:
+            context = "Application context (reference data):\n" + json.dumps(self.pending_context) + "\n" + context
         label = "Current instruction" if instruction else "Current request"
         return [
             {
@@ -141,35 +167,52 @@ class DelegationCoordinator:
 
         In ``responses`` mode the backend worker takes the task; in ``client`` mode the delegation is announced
         and the client does the work. ``record=False`` is for a frontend that has already recorded the caller's
-        words itself, so ``text`` is only the request.
+        words itself, so ``text`` is only the request. The returned id may be that of a waiting delegation the
+        request joined.
         """
         if record and not instruction:
             self.remember_voice("user", text)
         if self.mode == RESPONSES:
             delegation_id = await self.worker.submit(self._delegate_input(text, instruction=instruction))
+            replaced = self.worker.last_replaced
+            if delegation_id in self.ledger.entries:
+                self.ledger.merge(delegation_id, text)
+            elif replaced and replaced in self.ledger.entries:
+                # The running request was restarted with this one folded in: this entry covers both.
+                self.ledger.add(delegation_id, f"{self.ledger.entries[replaced].request} / {text}")
+            else:
+                self.ledger.add(delegation_id, text)
         else:
             delegation_id = uid("item")
             self.client_delegations.add(delegation_id)
             if self.on_client_delegation:
                 await self.on_client_delegation(delegation_id)
         self.pending_voice.clear()
+        self.pending_context.clear()
         return delegation_id
 
     async def submit_items(self, items: list[dict]) -> str:
         """Start a backend task from typed input items (``response.create`` with queued messages)."""
-        task_id = await self.worker.submit(items)
+        task_id = await self.worker.submit(items, coalesce=False)
+        self.ledger.add(task_id, "a typed request")
         self.pending_voice.clear()
         return task_id
+
+    def update_settings(self, config, fallback_model: str, default_instructions: str) -> None:
+        """Apply a ``session.update`` to the backend settings used from the next round on (``responses`` mode)."""
+        task = backend_task_for(config, fallback_model, default_instructions)
+        if task is not None and self.worker is not None:
+            self.worker.task = task
 
     @property
     def backend_busy(self) -> bool:
         """Whether a backend task is running or queued."""
-        return bool(self.worker) and (self.worker.active is not None or not self.worker.queue.empty())
+        return bool(self.worker) and self.worker.busy
 
     async def on_answer(self, text: str, task: DelegatedTask) -> None:
-        """Hand a backend result to the frontend, noting whether a newer delegation supersedes it."""
-        superseded = self.worker.has_newer
-        if superseded:
-            # The newer delegation's answer supersedes this one; the frontend still records the verified text.
-            self.observe("commentary.suppressed", delegation_id=task.id, reason="newer_delegation")
-        await self.sink.on_result(text, task, self.told.pop(task.id, None), superseded=superseded)
+        """Hand a backend result to the frontend, with the newer requests still in progress."""
+        self.ledger.answered(task.id)
+        newer = [entry.request for entry in self.ledger.open_after(task.id)]
+        if newer:
+            self.observe("answer.with_newer_requests", delegation_id=task.id, newer=len(newer))
+        await self.sink.on_result(text, task, self.told.pop(task.id, None), newer_requests=newer)

@@ -48,7 +48,13 @@ class DelegatedTask:
     id: str
     input: list[dict]
     round: int = 0
-    emitted_function: bool = False
+    emitted_function: bool = False  # this round: its calls are not run yet
+    acted: bool = False  # any round: a function call was emitted, so the task can no longer be cancelled safely
+    delivering: bool = False  # the answer is being handed to the frontend
+    cancelled: bool = False  # replaced by a newer request before it acted
+    folds: int = 0  # how many times this task was restarted with a newer request folded in
+    history_start: int = 0  # where its items begin in the worker's history
+    carried: list = field(default_factory=list)  # tool outputs a failed task left owing, which it took on
     queued_at: float = field(default_factory=time.monotonic)
 
 

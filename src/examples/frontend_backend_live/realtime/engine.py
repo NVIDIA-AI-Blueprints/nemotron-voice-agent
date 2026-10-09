@@ -24,8 +24,8 @@ from examples.frontend_backend_live.prompts.realtime import (
     DELEGATE_INSTRUCTIONS,
     DELEGATION_STARTED,
     INSTRUCTION_ITEM,
+    NEWER_NOTE,
     RESULT_ITEM,
-    RESULT_SUPERSEDED_ITEM,
     SPEAK_RESULT,
     SPEAK_UPDATE,
     THINKING_ITEM,
@@ -199,12 +199,11 @@ class RealtimeLiveEngine(PipelineLiveEngine):
         delegation_id = await self.coordinator.delegate(request, record=False)
         return DELEGATION_STARTED % delegation_id
 
-    async def on_result(self, text: str, task: DelegatedTask, told: str | None, *, superseded: bool) -> None:
-        """Give the model a backend result; it speaks it unless a newer delegation supersedes it."""
-        if superseded:
-            await self.frontend.inject(RESULT_SUPERSEDED_ITEM.format(text=text), respond=False)
-            return
+    async def on_result(self, text: str, task: DelegatedTask, told: str | None, *, newer_requests: list[str]) -> None:
+        """Give the model a backend result; it speaks it, as being updated if a newer request may change it."""
         note = TOLD_NOTE.format(told=told) if told else ""
+        if newer_requests:
+            note = f"{note} {NEWER_NOTE.format(asked='; '.join(newer_requests))}".strip()
         await self.frontend.inject(
             RESULT_ITEM.format(delegation_id=task.id, text=text),
             respond=True,

@@ -19,8 +19,8 @@ class RecordingSink:
     def __init__(self):
         self.results = []
 
-    async def on_result(self, text, task, told, *, superseded):
-        self.results.append((text, told, superseded))
+    async def on_result(self, text, task, told, *, newer_requests):
+        self.results.append((text, told, newer_requests))
 
 
 class ClientModeTests(unittest.IsolatedAsyncioTestCase):

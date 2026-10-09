@@ -43,6 +43,7 @@ from examples.frontend_backend_live.cascade.talker.talker import never_silent
 from examples.frontend_backend_live.common.history import BACKEND_RESULT_PREFIX
 from examples.frontend_backend_live.config_manager.loader import ConfigError, load_live_config, parse_config
 from examples.frontend_backend_live.config_manager.schema import (
+    DelegationConfig,
     LiveConfig,
     ModelEndpoint,
     ReliabilityConfig,
@@ -738,22 +739,28 @@ class RouterModeTests(_SessionCase):
 
 
 class AnswerDeliveryTests(_SessionCase):
-    async def test_an_answer_is_dropped_only_when_a_newer_delegation_is_queued(self):
+    async def test_every_delegations_answer_is_spoken(self):
         self.make(
-            [TalkerDecision("delegate", ""), TalkerDecision("delegate", ""), TalkerDecision("speak", "Both done.")],
+            [
+                TalkerDecision("delegate", ""),
+                TalkerDecision("delegate", ""),
+                TalkerDecision("speak", "The latte is added."),
+                TalkerDecision("speak", "The muffin is added."),
+            ],
             [_text_round("first"), _text_round("second")],
             _messages(("user", "Add a latte.")),
+            config=_config(delegation=DelegationConfig(merge_pending=False)),
         )
         self.backend.gate = asyncio.Event()
         await self.session.on_turn()
         self.conversation.add({"role": "user", "content": "And a muffin."})
         await self.session.on_turn()
         self.backend.gate.set()
-        await _settle(self.session, self.spoken, 1)
-        suppressed = [fields for kind, fields in self.events if kind == "commentary.suppressed"]
-        self.assertEqual([f["reason"] for f in suppressed], ["newer_delegation"])
-        self.assertEqual(self.spoken, ["Both done."])
-        self.assertIn(BACKEND_RESULT_PREFIX + "first", [m["content"] for m in self.conversation.messages()])
+        await _settle(self.session, self.spoken, 2)
+        self.assertEqual(self.spoken, ["The latte is added.", "The muffin is added."])
+        self.assertNotIn("commentary.suppressed", self.kinds())
+        results = [m["content"] for m in self.conversation.messages()]
+        self.assertEqual(results.count(BACKEND_RESULT_PREFIX + "first"), 1)
 
     async def test_a_backchannel_in_the_meantime_does_not_discard_the_answer(self):
         self.make(
@@ -836,7 +843,7 @@ class AnswerDeliveryTests(_SessionCase):
 
 # --------------------------------------------------------------------------- delegation worker
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
-    def worker(self, rounds, tools=None, reliability=FAST):
+    def worker(self, rounds, tools=None, reliability=FAST, policy=None):
         self.backend = ScriptedBackend(rounds, reliability=reliability)
         self.answers: list[str] = []
         self.abandoned: list[str] = []
@@ -852,6 +859,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             reliability,
             on_answer=on_answer,
             on_abandoned=self.abandoned.append,
+            policy=policy,
         )
         worker.start()
         self.addAsyncCleanup(worker.close)
@@ -887,13 +895,15 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_only_one_backend_round_runs_at_a_time_and_the_queue_is_bounded(self):
         worker = self.worker(
-            [_text_round("one"), _text_round("two")], reliability=replace(FAST, max_pending_delegations=1)
+            [_text_round("one"), _text_round("two")],
+            reliability=replace(FAST, max_pending_delegations=1),
+            policy=DelegationConfig(merge_pending=False),
         )
         self.backend.gate = asyncio.Event()
         first = await worker.submit(self.user("a"))
         await asyncio.sleep(0.02)
         await worker.submit(self.user("b"))
-        self.assertTrue(worker.has_newer)
+        self.assertEqual(len(worker.pending), 1)
         with self.assertRaisesRegex(Exception, "full"):
             await worker.submit(self.user("c"))
         self.assertIsNotNone(first)
@@ -960,6 +970,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             FAST,
             on_answer=on_answer,
             on_abandoned=lambda task_id: None,
+            policy=DelegationConfig(merge_pending=False),
         )
         worker.start()
         self.addAsyncCleanup(worker.close)
@@ -1044,7 +1055,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.backend.payloads, [])
 
     async def test_closing_marks_unfinished_tasks_abandoned(self):
-        worker = self.worker([_text_round("a"), _text_round("b")])
+        worker = self.worker([_text_round("a"), _text_round("b")], policy=DelegationConfig(merge_pending=False))
         self.backend.gate = asyncio.Event()
         first = await worker.submit(self.user("a"))
         await asyncio.sleep(0.02)
