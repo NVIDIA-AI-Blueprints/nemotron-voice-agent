@@ -326,15 +326,15 @@ These are operator-supplied results, not authenticated hardware or image
 provenance. They prove the earlier manual installation and local readiness, not
 an agent/model response or full voice conversation. The earlier pending
 HTTP-descriptor coordination was completed on the NemoClaw side; it is not a
-remaining parser-only blocker. The upstream adaptation still needs a rebuilt
-image and a new complete-input startup test.
+remaining parser-only blocker. For each PR candidate, record source-pinned
+image and complete-input startup evidence.
 
 Record focused test and hook results for the actual reviewed commit in the PR.
 Do not transfer historical test counts or image results to this revision.
 Fixture success proves only its assertions. A missing-input image smoke does
 not prove complete-input startup.
 
-Remaining qualification requires these distinct results:
+Qualification requires these distinct results:
 
 1. Build and verify the adapted image, source/package/license/client provenance,
    architecture, and selected-engine manifest resolution.
