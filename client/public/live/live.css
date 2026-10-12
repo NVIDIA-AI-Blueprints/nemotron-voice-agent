@@ -206,6 +206,36 @@ button.toggle.on { border-color: var(--nv-green); color: var(--nv-green); }
 .flow { display: flex; gap: 4px; align-items: center; font-size: 9px; color: var(--dim); margin-top: 3px; flex-wrap: wrap; }
 .flow span { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
 
+/* ------------------------------------------------------------ history */
+.grid { grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
+.panel.history { grid-column: 1 / -1; }
+.hist-cols { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); min-height: 0; }
+.hist-col { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.hist-col h3 { margin: 0; padding: 6px 12px; font-size: 11px; font-weight: 600; border-bottom: 1px solid var(--line); }
+.hist-col.talker h3 { color: var(--talker); }
+.hist-col.thinker h3 { color: var(--thinker); }
+.hist-col h3 code { font-weight: 400; color: var(--dim); margin-left: 4px; }
+.hist-col h3 small { font-weight: 400; color: var(--faint); margin-left: 4px; }
+.hist { flex: 1; overflow-y: auto; padding: 6px 10px; font-size: 11.5px; }
+.hist .empty { color: var(--faint); text-align: center; padding: 14px; }
+.hmsg { margin: 4px 0; padding: 4px 8px; border-left: 2px solid var(--line); background: var(--panel2); border-radius: 4px; }
+.hmsg .hrole { display: block; font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); font-family: var(--mono); }
+.hmsg .htext { white-space: pre-wrap; overflow-wrap: anywhere; }
+.hmsg.user { border-left-color: var(--user); }
+.hmsg.assistant { border-left-color: var(--talker); }
+.hist-col.thinker .hmsg.assistant { border-left-color: var(--thinker); }
+.hmsg.system, .hmsg.developer { border-left-color: #8a6d00; }
+.hmsg.context { border-left-color: var(--client); }
+.hmsg.call, .hmsg.output { border-left-color: var(--client); background: #15121c; font-family: var(--mono); font-size: 10.5px; }
+.hmsg.reasoning .htext { color: #b5dcf0; font-style: italic; }
+.hmsg.pending { border-left-style: dashed; opacity: .75; }
+.hmsg.prompt { background: #141208; }
+.hmsg.prompt.client { border-left-color: var(--client); }
+.hmsg.prompt.config { border-left-color: #e0b000; }
+.hmsg.prompt.server { border-left-color: #777; }
+.hmsg.prompt .hrole { color: #c9b25a; }
+.hmsg details summary { cursor: pointer; color: var(--dim); }
+
 /* ----------------------------------------------------------- controls */
 .controls { display: flex; gap: 18px; padding: 8px 16px; background: var(--panel2); border-top: 1px solid var(--line); flex-wrap: wrap; }
 .ctl-group { flex: 1 1 320px; min-width: 0; }

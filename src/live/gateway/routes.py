@@ -6,6 +6,7 @@
   POST      /v1/live/sessions                 - WebRTC session creation (JSON SDP offer and answer, 201)
   WebSocket /v1/live/sessions                 - Primary WebSocket (``session.start`` first, base64 audio events)
   WebSocket /v1/live/sessions/{id}/attach     - Sideband observer and trusted control channel
+  GET       /v1/live/sessions/{id}/history    - What the engine's models hold now (engines with ``history()``)
 
 An example supplies an engine factory that builds the voice pipeline for each session. Nothing here knows about
 models or prompts.
@@ -53,5 +54,16 @@ def create_live_router(
     @router.websocket("/v1/live/sessions/{session_id}/attach")
     async def attach(ws: WebSocket, session_id: str):
         await gateway.run_sideband(ws, session_id)
+
+    @router.get("/v1/live/sessions/{session_id}/history")
+    async def history(request: Request, session_id: str) -> dict:
+        gateway.authorize(request)
+        session = gateway.sessions.get(session_id)
+        if session is None:
+            raise HTTPException(404, "Unknown session")
+        describe = getattr(session.engine, "history", None)
+        if describe is None:
+            raise HTTPException(404, "This engine does not expose its conversation history")
+        return describe()
 
     return router, gateway

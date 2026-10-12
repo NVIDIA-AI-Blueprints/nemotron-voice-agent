@@ -16,12 +16,13 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
 from examples.frontend_backend_live.cascade.agent import LiveAgent, build_agent
-from examples.frontend_backend_live.cascade.conversation import ContextConversation
+from examples.frontend_backend_live.cascade.conversation import ContextConversation, message_text
 from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.common.ids import approx_tokens
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
 from examples.frontend_backend_live.engine.pipeline_host import PipelineLiveEngine
+from examples.frontend_backend_live.models.chat_completions.frontend import JSON_RULES, ChatCompletionsFrontend
 from examples.shared.pipeline_utils import build_user_aggregator_params
 from live.media.processors import LiveInputGate
 from live.protocol import SessionConfig
@@ -136,6 +137,83 @@ class CascadeLiveEngine(PipelineLiveEngine):
         if self.cascade is None:
             return None
         return approx_tokens(json.dumps(self.cascade.conversation.messages(), default=str))
+
+    def history(self) -> dict:
+        """What the talker and the backend hold now, as plain JSON for the live console.
+
+        ``frontend.messages`` is the talker's context. ``backend.items`` is the history the backend resends each
+        round; ``backend.pending`` is what the next delegation will carry (voice turns and application context).
+        Each role's ``prompt`` is the system prompt its next call uses, as ``{source, text}`` parts in order.
+        In client delegation the server runs no backend, so ``backend`` is ``None``.
+        """
+        if self.cascade is None:
+            return {"frontend": None, "backend": None}
+        worker = self.coordinator.worker
+        backend = None
+        if worker is not None:
+            backend = {
+                "model": worker.task.model,
+                "busy": worker.busy,
+                "prompt": self._backend_prompt(worker.task.instructions),
+                "items": worker.history,
+                "pending": {
+                    "voice": self.coordinator.pending_voice,
+                    "context": self.coordinator.pending_context,
+                },
+            }
+        messages = self.cascade.conversation.messages()
+        snapshot = {
+            "frontend": {
+                "model": self.frontend_endpoint.model,
+                "prompt": self._talker_prompt(messages),
+                "messages": messages,
+            },
+            "backend": backend,
+        }
+        return json.loads(json.dumps(snapshot, default=str))
+
+    def _talker_prompt(self, messages: list[dict]) -> list[dict]:
+        """The talker's routing system prompt by source: the base instructions, appends, then the server's rules."""
+        base = (
+            "session.instructions"
+            if self.config.instructions
+            else f"prompts.yaml: {self.live_config.frontend.prompt} + channel"
+        )
+        parts = [{"source": base, "text": self.instructions}]
+        # The seed's system message is the base; later system or developer messages are instruction appends.
+        parts += [
+            {"source": "session.instructions.append", "text": message_text(m)}
+            for m in messages[1:]
+            if m.get("role") in ("system", "developer")
+        ]
+        parts.append(
+            {
+                "source": f"prompt set {self.live_config.prompt_version}: routing rules",
+                "text": self.agent.prompts.routing,
+            }
+        )
+        work = self.coordinator.ledger.describe()
+        if work:
+            parts.append({"source": "open delegations (runtime)", "text": work})
+        if isinstance(self.agent.frontend, ChatCompletionsFrontend):
+            parts.append({"source": "reply format (chat-completions frontend)", "text": JSON_RULES})
+        return parts
+
+    def _backend_prompt(self, instructions: str) -> list[dict]:
+        """The backend's system prompt by source: the session's or the static instructions, then the voice notes."""
+        responses = self.config.delegation.responses if self.config.delegation else None
+        base = (
+            "delegation.responses.instructions"
+            if responses is not None and responses.instructions
+            else f"prompts.yaml: {self.live_config.backend.prompt} + channel"
+        )
+        parts = [{"source": base, "text": instructions}]
+        notes = self.agent.prompts.backend_notes.strip()
+        if notes:
+            parts.append(
+                {"source": f"prompt set {self.live_config.prompt_version}: backend voice notes", "text": notes}
+            )
+        return parts
 
     # ----------------------------------------------------------------------------- shutdown
     async def close(self) -> None:

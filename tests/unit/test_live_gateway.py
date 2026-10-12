@@ -196,6 +196,26 @@ class SidebandTests(unittest.TestCase):
             ws.receive_json()
 
 
+class HistoryTests(unittest.TestCase):
+    def test_history_is_served_for_a_running_session_whose_engine_reports_it(self):
+        app, _, engines = make_app()
+        with TestClient(app) as client, client.websocket_connect("/v1/live/sessions") as primary:
+            primary.send_json(START)
+            session_id = primary.receive_json()["session"]["id"]
+            missing = client.get(f"/v1/live/sessions/{session_id}/history")
+            engines[0].history = lambda: {"frontend": {"messages": []}, "backend": None}
+            served = client.get(f"/v1/live/sessions/{session_id}/history")
+            unknown = client.get("/v1/live/sessions/live_unknown/history")
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(served.json(), {"frontend": {"messages": []}, "backend": None})
+        self.assertEqual(unknown.status_code, 404)
+
+    def test_history_requires_the_bearer_token_when_one_is_configured(self):
+        app, _, _ = make_app(LiveSettings(api_token="secret"))
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/v1/live/sessions/live_x/history").status_code, 401)
+
+
 class MountTests(unittest.TestCase):
     def test_the_engine_factory_spec_must_be_module_and_function(self):
         with self.assertRaises(ValueError):
