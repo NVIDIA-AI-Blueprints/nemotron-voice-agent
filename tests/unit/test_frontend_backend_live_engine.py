@@ -330,6 +330,56 @@ class ClientToolsEndToEndTests(EngineHarness):
             self.ws.kinds()[: self.ws.kinds().index("session.input_transcript.delta")],
         )
 
+    async def test_history_shows_what_the_talker_and_the_backend_hold(self):
+        await self.serve(
+            RESPONSES_SESSION,
+            [
+                _decision_chunks('{"action":"delegate","speech":"Let me check."}'),
+                [chunk("We have Earl Grey.", finish="stop")],
+                _decision_chunks('{"action":"speak","speech":"We have Earl Grey."}'),
+            ],
+        )
+        self.ws.send({"type": "session.thinking.append", "delegation_id": None, "content": "The caller is a regular."})
+        await self.stt.say("What teas do you have?")
+        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "Grey" in e["delta"])
+
+        history = self.engines[0].history()
+        self.assertEqual(history, json.loads(json.dumps(history)))
+        frontend = [m["content"] for m in history["frontend"]["messages"]]
+        self.assertEqual(history["frontend"]["model"], ENDPOINT.model)
+        self.assertTrue(any("What teas do you have?" in text for text in frontend))
+        self.assertTrue(any("The caller is a regular." in text for text in frontend))
+        backend = history["backend"]
+        request = json.dumps(backend["items"][0])
+        self.assertIn("The caller is a regular.", request)
+        self.assertIn("Current request", request)
+        self.assertIn("We have Earl Grey.", json.dumps(backend["items"][1:]))
+        self.assertEqual(backend["pending"]["context"], [])
+
+    async def test_history_names_where_each_part_of_each_prompt_comes_from(self):
+        await self.serve(RESPONSES_SESSION, [])
+        self.ws.send({"type": "session.instructions.append", "delegation_id": None, "content": "Be brief."})
+        async with asyncio.timeout(3):
+            while not any(m["role"] == "developer" for m in self.engines[0].history()["frontend"]["messages"]):
+                await asyncio.sleep(0.01)
+        history = self.engines[0].history()
+        talker = [part["source"] for part in history["frontend"]["prompt"]]
+        self.assertEqual(talker[0], "session.instructions")
+        self.assertEqual(history["frontend"]["prompt"][0]["text"], RESPONSES_SESSION["instructions"])
+        self.assertIn("session.instructions.append", talker)
+        self.assertTrue(any("routing rules" in source for source in talker))
+        thinker = history["backend"]["prompt"]
+        self.assertEqual(thinker[0], {"source": "delegation.responses.instructions", "text": "Look things up."})
+
+        self.ws.send(
+            {
+                "type": "session.update",
+                "session": {"delegation": {"type": "responses", "responses": {"instructions": "Use the tools."}}},
+            }
+        )
+        await self.ws.wait_for("session.updated")
+        self.assertEqual(self.engines[0].history()["backend"]["prompt"][0]["text"], "Use the tools.")
+
 
 class ClientModeEndToEndTests(EngineHarness):
     """The client owns delegated work: the server announces it and phrases what the client reports."""
@@ -386,6 +436,12 @@ class ClientModeEndToEndTests(EngineHarness):
         await self.ws.wait_for("session.commentary.appended", timeout=3)
         await self.ws.wait_for("session.output_transcript.delta", timeout=3)
         self.assertEqual(" ".join(self.tts.spoken), "Background fact.")
+
+    async def test_history_has_no_backend_when_the_client_runs_it(self):
+        await self.serve(self.CLIENT_SESSION, [])
+        history = self.engines[0].history()
+        self.assertIsNone(history["backend"])
+        self.assertEqual(history["frontend"]["messages"][0]["role"], "system")
 
     async def test_response_commands_are_refused_in_client_mode(self):
         await self.serve(self.CLIENT_SESSION, [])

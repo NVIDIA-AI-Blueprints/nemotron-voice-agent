@@ -6,6 +6,9 @@
 The protocol layer (``session``, ``gateway``) knows nothing about models, prompts or Pipecat. An example
 supplies a :class:`LiveEngine`: the protocol session forwards client commands to it, and the engine reports
 events back through the session it was started with.
+
+An engine may also define ``history() -> dict``, returning plain JSON of what its models hold now; the gateway
+serves it at ``GET /v1/live/sessions/{id}/history`` for clients such as the live console.
 """
 
 from __future__ import annotations

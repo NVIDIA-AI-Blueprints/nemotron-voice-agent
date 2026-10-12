@@ -15,7 +15,7 @@ It is a React and TypeScript single-page app built with [Vite](https://vite.dev/
 - **Metrics dashboard**: time-to-first-byte latency charts, token usage, and connection status.
 - **Conversation transcript**: live ASR and bot-response display.
 - **Webcam vision panel**: live webcam input for the multimodal Omni Subagents example.
-- **Live Console** (`/live.html`): a developer console for the [Frontend/Backend Live](../src/examples/frontend_backend_live/README.md) example. It is a static page in `public/live/` (no build step of its own) that starts live sessions over WebRTC, edits the session config, shows every protocol event and delegation, runs client-side delegation, and sends steering commands.
+- **Live Console** (`/live.html`): a developer console for the [Frontend/Backend Live](../src/examples/frontend_backend_live/README.md) example. It is a static page in `public/live/` (no build step of its own) that starts live sessions over WebRTC, edits the session config, shows every protocol event and delegation, shows the talker's and the backend's live conversation history and system prompts (each part marked as coming from the client, the config, or the server), runs client-side delegation, and sends steering commands.
 
 ## Getting started
 

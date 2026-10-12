@@ -36,6 +36,9 @@ const els = {
   filters: $("filters"), hideDeltas: $("hideDeltas"), search: $("search"), log: $("log"),
   btnAutoscroll: $("btnAutoscroll"), btnClear: $("btnClear"), btnExport: $("btnExport"),
   delegations: $("delegations"),
+  histFrontend: $("histFrontend"), histBackend: $("histBackend"),
+  histFrontendModel: $("histFrontendModel"), histBackendModel: $("histBackendModel"),
+  histFrontendCount: $("histFrontendCount"), histBackendCount: $("histBackendCount"),
   ctlKind: $("ctlKind"), ctlPreset: $("ctlPreset"), ctlContent: $("ctlContent"), btnAppend: $("btnAppend"),
   ctlUpdModel: $("ctlUpdModel"), ctlUpdEffort: $("ctlUpdEffort"), ctlUpdToolChoice: $("ctlUpdToolChoice"),
   btnUpdate: $("btnUpdate"), rawEvent: $("rawEvent"), btnRaw: $("btnRaw"),
@@ -71,6 +74,8 @@ const app = {
   mode: "responses",
   transcript: [],               // rolling [{role, text, at}] we must keep ourselves
   clientHistory: [],            // the conversation we send to the backend, round after round
+  historyTimer: null,           // polls GET /v1/live/sessions/{id}/history while connected
+  historyShown: "",             // the last snapshot rendered, so an unchanged one is not redrawn
 };
 
 /**
@@ -620,6 +625,163 @@ async function runClientDelegation(d) {
 }
 
 // ---------------------------------------------------------------------------------
+// Live conversation history: what the talker and the backend hold now
+// ---------------------------------------------------------------------------------
+const HISTORY_POLL_MS = 1000;
+const CONTEXT_PREFIX = "Application context (reference data): ";
+
+function startHistory() {
+  stopHistory();
+  app.historyShown = "";
+  refreshHistory();
+  app.historyTimer = setInterval(refreshHistory, HISTORY_POLL_MS);
+}
+
+function stopHistory() {
+  clearInterval(app.historyTimer);
+  app.historyTimer = null;
+}
+
+async function refreshHistory() {
+  if (!app.sessionId) return;
+  let snapshot;
+  try {
+    const response = await fetch(`/v1/live/sessions/${encodeURIComponent(app.sessionId)}/history`, { headers: authHeaders() });
+    if (!response.ok) {
+      // The session is gone (closed) or its engine does not report history: keep what is shown.
+      if (response.status === 404) stopHistory();
+      return;
+    }
+    snapshot = await response.json();
+  } catch {
+    return;
+  }
+  // In client delegation the server runs no backend; this page's own backend conversation is the history.
+  if (!snapshot.backend && app.mode === "client") {
+    snapshot.backend = { model: `${backendModel()} (ours)`, items: app.clientHistory, local: true };
+  }
+  const key = JSON.stringify(snapshot);
+  if (key === app.historyShown) return;
+  app.historyShown = key;
+  renderHistory(snapshot);
+}
+
+function renderHistory({ frontend, backend }) {
+  const talker = frontend?.messages || [];
+  els.histFrontendModel.textContent = frontend?.model || "";
+  els.histFrontendCount.textContent = `${talker.length} messages`;
+  fillHistory(els.histFrontend, [...promptEntries(frontend?.prompt), ...talker.filter((m, i) => !(i === 0 && m.role === "system")).map(talkerEntry)], "The talker holds no messages yet.");
+
+  els.histBackendModel.textContent = backend?.model || "";
+  if (!backend) {
+    els.histBackendCount.textContent = "";
+    fillHistory(els.histBackend, [], "No server backend in this session.");
+    return;
+  }
+  const items = backend.items || [];
+  const pending = [
+    ...(backend.pending?.context || []).map((text) => ({ cls: "context pending", role: "next delegation · application context", text })),
+    ...(backend.pending?.voice || []).map((m) => ({ cls: `${m.role} pending`, role: `next delegation · ${m.role}`, text: m.content })),
+  ];
+  els.histBackendCount.textContent =
+    `${items.length} items${backend.busy ? " · working" : ""}${pending.length ? ` · ${pending.length} waiting` : ""}`;
+  fillHistory(
+    els.histBackend,
+    [...promptEntries(backend.prompt), ...items.map(backendEntry), ...pending],
+    "The backend has not been delegated anything yet.",
+  );
+}
+
+/** Where a prompt part comes from: the client over the session, the server's config, or the server's code. */
+function promptOrigin(source) {
+  if (source.startsWith("session.") || source.startsWith("delegation.")) return "client";
+  if (source.startsWith("prompts.yaml")) return "config";
+  return "server";
+}
+
+/** The system prompt of the role's next call, one collapsed entry per part. */
+function promptEntries(parts) {
+  return (parts || []).map((part) => {
+    const origin = promptOrigin(part.source);
+    return {
+      cls: `prompt ${origin}`,
+      role: `system prompt · ${origin} · ${part.source}`,
+      text: part.text,
+      collapsed: `${part.text.split("\n")[0].slice(0, 90)} … (${part.text.length} characters)`,
+    };
+  });
+}
+
+function talkerEntry(message) {
+  const text = contentText(message.content);
+  if (message.role === "system" || message.role === "developer") {
+    return { cls: "system", role: `${message.role} message`, text, collapsed: `${text.length} characters` };
+  }
+  if (message.role === "user" && text.startsWith(CONTEXT_PREFIX)) {
+    return { cls: "context", role: "application context", text: text.slice(CONTEXT_PREFIX.length) };
+  }
+  return { cls: message.role, role: message.role, text };
+}
+
+function backendEntry(item) {
+  switch (item.type) {
+    case "function_call":
+      return { cls: "call", role: `function_call · ${item.call_id || ""}`, text: `${item.name}(${item.arguments || ""})` };
+    case "function_call_output":
+      return { cls: "output", role: `function_call_output · ${item.call_id || ""}`, text: String(item.output ?? "") };
+    case "reasoning":
+      return { cls: "reasoning", role: "reasoning", text: (item.summary || []).map((s) => s.text || "").join("\n") || "(hidden)" };
+    case "message":
+    case undefined:
+      return { cls: item.role || "message", role: item.role || "message", text: contentText(item.content) };
+    default:
+      return { cls: "message", role: item.type, text: JSON.stringify(item) };
+  }
+}
+
+function contentText(content) {
+  if (typeof content === "string") return content;
+  return (content || []).map((part) => (typeof part === "string" ? part : part.text ?? JSON.stringify(part))).join("\n");
+}
+
+function fillHistory(container, entries, emptyText) {
+  const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+  const open = new Set([...container.querySelectorAll("details[open]")].map((d) => d.dataset.index));
+  container.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = emptyText;
+    container.appendChild(empty);
+    return;
+  }
+  entries.forEach((entry, index) => {
+    const row = document.createElement("div");
+    row.className = `hmsg ${entry.cls}`;
+    const role = document.createElement("span");
+    role.className = "hrole";
+    role.textContent = entry.role;
+    const text = document.createElement("div");
+    text.className = "htext";
+    text.textContent = entry.text;
+    row.appendChild(role);
+    if (entry.collapsed) {
+      const details = document.createElement("details");
+      details.dataset.index = String(index);
+      details.open = open.has(String(index));
+      const summary = document.createElement("summary");
+      summary.textContent = entry.collapsed;
+      details.append(summary, text);
+      row.appendChild(details);
+    } else {
+      row.appendChild(text);
+    }
+    container.appendChild(row);
+  });
+  if (atBottom) container.scrollTop = container.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------------
 // Server event router
 // ---------------------------------------------------------------------------------
 function onServerEvent(ev) {
@@ -632,6 +794,7 @@ function onServerEvent(ev) {
       setConnState("live", `Connected · ${app.sessionId}`);
       logEvent({ cat: "lifecycle", dir: "in", actor: "talker", type: ev.type, text: `session ${app.sessionId} active`, payload: ev });
       enableControls(true);
+      startHistory();
       break;
     }
 
@@ -945,6 +1108,7 @@ function gracefulClose() {
 
 function cleanup() {
   clearTimeout(app.closeTimer);
+  stopHistory();
   app.mic?.getTracks().forEach((t) => t.stop());
   try { app.dc?.close(); } catch {}
   try { app.pc?.close(); } catch {}

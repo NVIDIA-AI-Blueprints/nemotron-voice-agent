@@ -126,6 +126,20 @@ SPDX-License-Identifier: Apache-2.0
           <p class="empty">No delegation yet. Ask about the menu once connected.</p>
         </div>
       </section>
+
+      <section class="panel history" id="panelHistory">
+        <h2>Live conversation history <small>each model's system prompt by source (client · config · server), then what it holds now; refreshed every second</small></h2>
+        <div class="hist-cols">
+          <div class="hist-col talker">
+            <h3>Frontend · talker <code id="histFrontendModel"></code> <small id="histFrontendCount"></small></h3>
+            <div class="hist" id="histFrontend"><p class="empty">Start a conversation to see the talker's context.</p></div>
+          </div>
+          <div class="hist-col thinker">
+            <h3>Backend · thinker <code id="histBackendModel"></code> <small id="histBackendCount"></small></h3>
+            <div class="hist" id="histBackend"><p class="empty">Start a conversation to see the backend's history.</p></div>
+          </div>
+        </div>
+      </section>
     </main>
 
     <footer class="controls">
