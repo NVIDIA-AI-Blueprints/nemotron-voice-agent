@@ -29,11 +29,36 @@ This example differs from the [Frontend/Backend Agent](../frontend_backend_agent
 ## How a Turn Works
 
 ```text
-transport -> STT -> user aggregator -> LiveTalkerProcessor -> TTS -> transport -> assistant aggregator
-                                              |
-                          Talker --- speak ---+---> spoken reply
-                             |
-                          delegate ---> Thinker (backend model + tools) ---> CommentaryWriter ---> spoken answer
+ Live Console / live session client                                Repository UI (/)
+   POST or WS /v1/live/sessions, WS .../attach, GET .../history       pipeline.py bot, cafe tools on the server
+                 |                                                                  |
+ src/live: gateway -> LiveProtocolSession                                           |
+   events, appends, session.update, tool results                                    |
+                 |  LiveEngine                                                      |
+ CascadeLiveEngine  (provider "realtime": RealtimeLiveEngine, a remote talker)      |
+                 |                                                                  |
+                 +-----------------------------+------------------------------------+
+                                               |
+ transport -> (live: input gate) -> STT -> user aggregator -> LiveTalkerProcessor -> TTS -> transport -> assistant aggregator
+                                                             |
+                                                       CascadeSession
+          +--------------------------------------------------+-----------------------------------------+
+          |                                                  |                                         |
+        Talker: speak | delegate                     ApplicationInput                          Coordinator
+        (turn router, repeat guard)                  instructions / thinking /                 ledger of open work, merge,
+          |                                          commentary appends                        fold, status, progress speech
+          +-- speak ------------> spoken reply                                                           |
+          +-- delegate (+ lead-in) ---------------------------------------------------------------------->+
+                                                                                                         |
+                                            responses mode: DelegationWorker, one task at a time         |
+                                              Thinker (backend model) -> function calls -> tools ->      |
+                                              next round. Live: the client runs them (response.event     |
+                                              out, response.item.create back). UI: the cafe tools.       |
+                                            client mode: session.delegation.created, the client runs it  |
+                                                                                                         |
+        CommentaryWriter (+ guards) <------------------------------------------------ answer -----------+
+          |
+          +--> spoken answer, after the caller finishes their sentence
 ```
 
 `LiveTalkerProcessor` sits where the LLM service normally sits. It receives the context frame for each user turn and pushes the same response frames an LLM service pushes, so TTS and the assistant aggregator need no changes.
