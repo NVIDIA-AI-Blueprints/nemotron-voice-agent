@@ -65,3 +65,4 @@ normalizer:
 
 backend_context_tokens: 100000   # budget for the history the backend is resent each round
 chat_history_recent_turns: 20    # conversation turns kept in the talker's context
+tts_preroll_ms: 300              # reply audio held before playback starts, absorbing uneven TTS chunks (0: off)

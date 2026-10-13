@@ -19,6 +19,7 @@ from examples.frontend_backend_live.cascade.agent import LiveAgent, build_agent
 from examples.frontend_backend_live.cascade.conversation import ContextConversation, message_text
 from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.cascade.session import CascadeSession
+from examples.frontend_backend_live.cascade.speech import SpeechPreroll
 from examples.frontend_backend_live.common.ids import approx_tokens
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
 from examples.frontend_backend_live.engine.pipeline_host import PipelineLiveEngine
@@ -124,7 +125,7 @@ class CascadeLiveEngine(PipelineLiveEngine):
         self.live.attach(self.cascade)
         self.gate = LiveInputGate(session)
         processors = self.audio_pipeline(
-            [self.gate, self.stt, user_aggregator, self.live, self.tts],
+            [self.gate, self.stt, user_aggregator, self.live, self.tts, SpeechPreroll(self.live_config.tts_preroll_ms)],
             transport=self.transport,
             connection=self.connection,
             audio_in_rate=LIVE_AUDIO_IN_RATE,

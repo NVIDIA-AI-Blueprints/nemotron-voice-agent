@@ -108,3 +108,5 @@ class LiveConfig:
     backend_context_tokens: int = 100_000
     # Conversation turns kept in the talker's context.
     chat_history_recent_turns: int = 20
+    # Reply audio held before playback starts, so uneven TTS chunks do not stall it (0 sends audio at once).
+    tts_preroll_ms: int = 300
