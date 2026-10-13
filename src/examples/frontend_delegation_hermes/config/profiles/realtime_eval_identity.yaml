@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm "identity" of fix-plan-f1-f2-f4-f8.md (F8): the control profiles/realtime_eval_124acf7.yaml with the
+# identification ledger. Gateway: gateway.eval_124acf7.yaml.
+
+extends: realtime_eval_124acf7.yaml
+
+voice_profile: ../voice/realtime_eval_identity.yaml

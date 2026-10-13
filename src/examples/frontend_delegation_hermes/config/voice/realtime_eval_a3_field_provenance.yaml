@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of a tau3-geval-failure-fixes-plan.md arm: voice/realtime_eval_control.yaml (the control) plus
+# A3: from the second miss of a person lookup on, the note also says which values the user
+# spelled and which were only heard (field and turn association, otherwise unknown).
+
+extends: realtime_eval_control.yaml
+
+normalization:
+  tool_arguments:
+    result_hints:
+      field_provenance: true

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm M3 (tau3-failure-fixes-plan.md section 3), airline: spelled-run joining and escalating local
+# "invalid ID" wording (voice/tau3_spelling.yaml), the evidence-gated spelling hold with the
+# airline reservation-code pattern, and the backend prompt variant spelling_v2.
+# Gateway: gateway.spelling_v2.yaml.
+
+extends: tau3_eval_baseline.yaml
+
+voice_profile: ../voice/tau3_spelling.yaml
+
+delegation:
+  spelling_hold:
+    enabled: true
+    hold_ms: 1500
+    complete_patterns: ['^[A-Za-z0-9]{6}$']   # a 6-character code (e.g. XB7TP2)

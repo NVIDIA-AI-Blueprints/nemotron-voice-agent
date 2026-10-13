@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of profiles/realtime_eval_124acf7.yaml (the fix-plan-f1-f2-f4-f8.md control): voice/realtime_eval.yaml
+# without the F8 identification ledger, with A3's field provenance and 3 notes, as at agent 124acf7.
+
+extends: realtime_eval.yaml
+
+normalization:
+  tool_arguments:
+    result_hints:
+      ledger: false
+      field_provenance: true
+      max_hints: 3

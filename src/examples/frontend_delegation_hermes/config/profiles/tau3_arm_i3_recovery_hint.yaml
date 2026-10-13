@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm I3 (tau3-identity-fixes-plan.md section 4.1): the identity control plus the recovery note appended to
+# a failed airline or retail identity lookup's result, the same note on every miss (voice/tau3_recovery_hint.yaml).
+# Gateway: gateway.identity_control.yaml (no backend change).
+
+extends: tau3_identity_control.yaml
+
+voice_profile: ../voice/tau3_recovery_hint.yaml

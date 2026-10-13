@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm "liveness" of fix-plan-f1-f2-f4-f8.md (F1 + F2, no dead air): the control profiles/realtime_eval_124acf7.yaml
+# plus the three F2 guards and the F1 replay triggers. Gateway: gateway.eval_124acf7.yaml.
+
+extends: realtime_eval_124acf7.yaml
+
+delegation:
+  guards:
+    liveness_reply: true          # R1: a silent reply to a ping or a repeat request is delegated (or replayed)
+    question_never_silent: true   # R2: a silent reply to a question is delegated
+    ping_as_status: true          # R3: a ping while WORKING is a status request, never a steer
+  replay_unheard_answer: {enabled: true, ttl_s: 60, triggers: [backchannel, ping, repeat], whole_if_heard_below: 0.2}

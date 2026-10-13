@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Control arm of the tau3-identity-fixes-plan.md evaluations (section 7.3): the deployment the plan's runs
+# used, tau3_eval.yaml with every tau3-failure-fixes-plan.md fix on except M2, but without the identity
+# fixes (voice/tau3_spelling.yaml: no I3/I4 recovery notes). Pair it with gateway.identity_control.yaml
+# (no I1 note). Arms: I1 = this profile with gateway.yaml; I3 and I4 = tau3_arm_i3_recovery_hint.yaml and
+# tau3_arm_i4_word_spelling.yaml with gateway.identity_control.yaml.
+
+extends: tau3_eval.yaml
+
+voice_profile: ../voice/tau3_spelling.yaml

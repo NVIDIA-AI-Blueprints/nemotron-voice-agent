@@ -1,0 +1,17 @@
+{
+  "source": "tau2 OpenAIRealtimeProvider.configure_session",
+  "tau2_commit": "1690edd4daf8fb67920a8101eafb3c36479bc0d8",
+  "domains": [
+    "mock",
+    "airline",
+    "retail",
+    "telecom"
+  ],
+  "additional": {
+    "banking_knowledge": {
+      "tau2_commit": "4f8ef9db7c7a8e81d462a709dd128f64e901609c",
+      "retrieval_variant": "grep_only",
+      "note": "captured with capture_session_updates._capture and get_environment(retrieval_variant='grep_only') (the default variant needs an embeddings API); the variant selects the knowledge-retrieval tools (here: grep)"
+    }
+  }
+}

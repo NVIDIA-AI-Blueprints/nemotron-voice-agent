@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# No-GPU, no-LLM smoke run: pair with --stub-speech. Rule-based frontend decider and an
+# in-process gateway with a fake backend agent (no Hermes, no network).
+
+extends: tau3_eval.yaml
+
+frontend:
+  decider: scripted
+backend:
+  link: in_process_fake
+  status_verbalizer: {mode: template}

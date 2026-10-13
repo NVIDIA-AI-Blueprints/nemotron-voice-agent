@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Control of fix-plan-f1-f2-f4-f8.md: gateway.eval.yaml without the F4 and F8 backend variants, as at agent 124acf7.
+# Pair with profiles/realtime_eval_124acf7.yaml.
+
+extends: gateway.eval.yaml
+
+prompt_features:
+  situational_facts: false
+  identity_from_identifier: false
+  domain_notes: false             # the telecom note came after 124acf7

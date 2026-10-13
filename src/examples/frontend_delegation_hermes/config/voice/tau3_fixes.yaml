@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Default voice profile: voice/tau3_recovery_hint.yaml (M3 + I3) plus I4 (tau3-identity-fixes-plan.md
+# section 4.2): the second and later misses get the word-assisted spelling note ("S as in Sam") instead
+# of the I3 note again. Voice profile of tau3_eval.yaml and of the I4 arm.
+
+extends: tau3_recovery_hint.yaml
+
+normalization:
+  tool_arguments:
+    result_hints:
+      escalate_message_key: lookup_not_found_hint_words     # I4: later misses

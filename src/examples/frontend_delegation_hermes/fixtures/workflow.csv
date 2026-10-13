@@ -1,0 +1,25 @@
+User Queries,Backend State,Frontend Action Description,Frontend Tool Call,Backend Action Description,Hermes Backend Action,Example,Notes
+Gives a new valid Task (new session),No Agent Session is started,"Should give acknowledgement
+delegate the task to backend",delegate,Backend should start the task as new session,agent = AIAgent(new_id),,
+Gives a new valid Task (new session),Agent Session is mid-conversation and idle,"Should give acknowledgement
+delegate the task to backend",delegate,"Backend should start the task as existing session, it should go ahead with the conversation",agent.run_conversation(),,
+Gives a new valid Task (new session),Agent Session is working on a task,"Should give acknowledgement
+delegate the task to backend",delegate,Backend should steer the task in existing session,agent.steer()/agent.redirect(),,agent.soft/hard_interrupt() can only be used in-case of additonal LLM layer in backend
+Ask for a follow-up to the existing Task,No Agent Session is started,"Should give acknowledgement
+delegate the task to backend",delegate,Backend should start the task as new session,agent = AIAgent(new_id),,
+Ask for a follow-up to the existing Task,Agent Session is mid-conversation and idle,"Should give acknowledgement
+delegate the task to backend",delegate,"Backend should start the follow-up task as existing session, it should go ahead with the conversation",agent.run_conversation(),,
+Ask for a follow-up to the existing Task,Agent Session is working on a task,"Should give acknowledgement
+delegate the task to backend",delegate,Backend should steer the task in existing session,agent.steer()/agent.redirect(),,
+Acknowledges Frontend’s filler text,No Agent Session is started,"Frontend to answer directly and 
+not delegate anything to backend",NA,NA,NA,,
+Acknowledges Frontend’s filler text,Agent Session is mid-conversation and idle,"Frontend to answer directly only if required based on query and 
+not delegate anything to backend",NA,NA,NA,,
+Acknowledges Frontend’s filler text,Agent Session is working on a task,"Frontend to answer directly only if required based on query and 
+not delegate anything to backend",NA,NA,NA,,
+Asks for updates,No Agent Session is started,"Should give acknowledgement
+delegate the task to backend",delegate,"Backend should start the task as new session, with this query",agent = AIAgent(new_id),,
+Asks for updates,Agent Session is mid-conversation and idle,"Should give acknowledgement
+delegate the task to backend",delegate,This should go as a follow-up query to the backend,agent.run_conversation(),,
+Asks for updates,Agent Session is working on a task,"Should give acknowledgement
+delegate the task to backend",delegate,"Get status from backend, but backend task would not be hampered",agent.get_activity_summary(),,

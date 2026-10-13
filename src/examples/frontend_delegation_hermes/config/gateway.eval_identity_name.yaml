@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sub-arm "identity_name" of fix-plan-f1-f2-f4-f8.md (F8, section 4.4): the control gateway.eval_124acf7.yaml with
+# the line on identifiers that contain a name. Pair with profiles/realtime_eval_124acf7.yaml.
+
+extends: gateway.eval_124acf7.yaml
+
+prompt_features:
+  identity_from_identifier: true

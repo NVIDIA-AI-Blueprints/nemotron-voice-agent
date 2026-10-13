@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Control of tau3-geval-failure-fixes-plan.md (G2, G4): gateway.eval.yaml with every fix of that plan off,
+# so the backend prompts are those of the geval runs (agent 66f6c67). Pair with profiles/realtime_eval_control.yaml.
+# The gateway.eval_<fix>.yaml arms extend this file and turn one fix on.
+
+extends: gateway.eval.yaml
+
+prompt_features:
+  format_correction: false
+  write_consent_v2: false
+  policy_check: false
+  request_scope: false
+  transfer_check: false
+  capability_check: false
+  situational_facts: false        # fix-plan-f1-f2-f4-f8.md variants: off in the geval runs' control too
+  identity_from_identifier: false
+  domain_notes: false             # the telecom note (analysis/2026-10-11_fdh-telecom-gpt55-deep): off in the control

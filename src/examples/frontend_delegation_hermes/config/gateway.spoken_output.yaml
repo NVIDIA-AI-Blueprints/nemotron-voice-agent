@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# gateway.baseline.yaml (every variant off) with only the backend prompt variant spoken_output: one arm of
+# tau3-failure-fixes-plan.md.
+# Every other setting, including the environment variables, is the same as gateway.yaml.
+
+extends: gateway.baseline.yaml
+
+prompt_features:
+  spoken_output: true

@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of a tau3-geval-failure-fixes-plan.md arm: voice/realtime_eval_control.yaml (the control) plus
+# A1: a not-found lookup by a phone field is tried once more with the same digits in the
+# other format: by the relay on tools that declare read-only, idempotent semantics, else as a hint (A1-lite).
+
+extends: realtime_eval_control.yaml
+
+normalization:
+  tool_arguments:
+    format_retry: {enabled: true, mode: call, fields: phone}

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of a tau3-geval-failure-fixes-plan.md arm: voice/realtime_eval_control.yaml (the control) plus
+# A2: the first recovery note says a value that may only be in the wrong format is looked up
+# once in the other format (hint-catalog variant); the gateway arm changes the spelling_v2 wording.
+
+extends: realtime_eval_control.yaml
+
+normalization:
+  tool_arguments:
+    result_hints:
+      message_key: lookup_not_found_hint_format

@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# No-GPU tau3 Gate A / contract smoke: stub.yaml with a fake backend that calls the first tool on
+# every run (pair with --stub-speech).
+
+extends: stub.yaml
+
+backend:
+  gateway_config: ../gateway.stub_gate.yaml

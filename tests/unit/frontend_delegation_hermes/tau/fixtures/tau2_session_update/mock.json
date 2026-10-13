@@ -1,0 +1,128 @@
+{
+  "type": "session.update",
+  "session": {
+    "type": "realtime",
+    "instructions": "You are a customer service agent handling a VOICE CALL with a customer.\n\n# Important Voice Call Considerations\n\n1. Respond naturally and conversationally as you would in a real phone call\n\n2. Try to be helpful and always follow the policy.\n\n# User authentication and user information collection\n\n1. When collecting customer information (e.g. names, emails, IDs), ask the customer to spell it out letter by letter (e.g. \"J, O, H, N\") to ensure you have the correct information and accomodate for customer audio being unclear or background noise.\n\n2. If authenticating the user fails based on user provided information, ALWAYS explicitly ask the customer to SPELL THINGS OUT or provide information LETTER BY LETTER (e.g. \"first name J, O, H, N last name S, M, I, T, H\").\n\n# Mock Domain Policy\n\n1. Each task must have a title\n2. Task status can only be \"pending\" or \"completed\"\n3. Only existing users can create tasks \n4. You are not allowed to delete tasks. You should transfer the a human agent.\n5. If the user asks for a compliment, compliment them",
+    "output_modalities": [
+      "audio"
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "create_task",
+        "description": "Create a new task for a user.",
+        "parameters": {
+          "properties": {
+            "user_id": {
+              "description": "The ID of the user creating the task",
+              "title": "User Id",
+              "type": "string"
+            },
+            "title": {
+              "description": "The title of the task",
+              "title": "Title",
+              "type": "string"
+            },
+            "description": {
+              "default": null,
+              "description": "Optional description of the task",
+              "title": "Description",
+              "type": "string"
+            }
+          },
+          "required": [
+            "user_id",
+            "title"
+          ],
+          "title": "parameters",
+          "type": "object"
+        }
+      },
+      {
+        "type": "function",
+        "name": "get_users",
+        "description": "Get all users in the database.",
+        "parameters": {
+          "properties": {},
+          "title": "parameters",
+          "type": "object"
+        }
+      },
+      {
+        "type": "function",
+        "name": "update_task_status",
+        "description": "Update the status of a task.",
+        "parameters": {
+          "properties": {
+            "task_id": {
+              "description": "The ID of the task to update",
+              "title": "Task Id",
+              "type": "string"
+            },
+            "status": {
+              "description": "The new status of the task",
+              "enum": [
+                "pending",
+                "completed"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "status"
+          ],
+          "title": "parameters",
+          "type": "object"
+        }
+      },
+      {
+        "type": "function",
+        "name": "transfer_to_human_agents",
+        "description": "Transfer the user to a human agent, with a summary of the user's issue.\n\nOnly transfer if\n -  the user explicitly asks for a human agent\n -  given the policy and the available tools, you cannot solve the user's issue.",
+        "parameters": {
+          "properties": {
+            "summary": {
+              "description": "A summary of the user's issue.",
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "summary"
+          ],
+          "title": "parameters",
+          "type": "object"
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "audio": {
+      "input": {
+        "format": {
+          "type": "audio/pcmu"
+        },
+        "transcription": {
+          "model": "gpt-4o-transcribe",
+          "language": "en"
+        },
+        "noise_reduction": {
+          "type": "near_field"
+        },
+        "turn_detection": {
+          "type": "server_vad",
+          "threshold": 0.5,
+          "prefix_padding_ms": 300,
+          "silence_duration_ms": 500
+        }
+      },
+      "output": {
+        "format": {
+          "type": "audio/pcmu"
+        },
+        "voice": "alloy"
+      }
+    }
+  }
+}

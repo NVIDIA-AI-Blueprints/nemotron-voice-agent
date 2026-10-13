@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# voice/tau3_spelling.yaml (M3) plus I3 (tau3-identity-fixes-plan.md section 4.1): after a failed identity
+# lookup of the listed tools the backend gets a recovery note in the tool result (fix the most doubtful
+# field first, one at a time). Historical: selected by tool names; profiles/realtime_eval.yaml selects
+# by the result text instead. Voice profile of the I3 arm; voice/tau3_fixes.yaml adds I4.
+
+extends: tau3_spelling.yaml
+
+normalization:
+  tool_arguments:
+    result_hints:
+      enabled: true
+      tools: [find_user_id_by_name_zip, find_user_id_by_email, get_user_details]
+      failure_pattern: '^Error: .*\bnot found\b'
+      count_local_invalid: true       # an incomplete user ID answered locally counts as a miss
+      max_hints: 3
+      message_key: lookup_not_found_hint                   # I3: the first miss
+      escalate_message_key: ""        # I3 alone: later misses get the same note (tau3_fixes.yaml adds I4)

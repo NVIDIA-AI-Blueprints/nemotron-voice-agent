@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Control arm of every tau3-failure-fixes-plan.md evaluation: tau3_eval.yaml with every new switch
+# pinned off (the defaults turn them on), so a later default change cannot move the control. Pair it
+# with gateway.baseline.yaml (every backend prompt_features off). Prompts are byte-identical to agent commit 3a7e04a
+# (tests/unit/frontend_delegation_hermes/core/test_fdh_golden_prompts.py).
+
+extends: tau3_eval.yaml
+
+voice_profile: ../voice/tau3.yaml
+
+delegation:
+  spelling_hold: {enabled: false, complete_patterns: []}
+  replay_unheard_answer: {enabled: false}
+  filler_dedupe: {enabled: false}
+output:
+  proactive_status: {enabled: false}
+  clean_answers: false
+prompt_features:
+  replay_intent: false

@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of the tau3-geval-failure-fixes-plan.md control: voice/realtime_eval.yaml with A1, A2 and A3
+# off (the geval runs' voice side). The arm voice profiles extend this file and turn one fix on.
+
+extends: realtime_eval.yaml
+
+normalization:
+  tool_arguments:
+    format_retry: {enabled: false}
+    result_hints:
+      message_key: lookup_not_found_hint
+      field_provenance: false
+      ledger: false                   # fix-plan-f1-f2-f4-f8.md F8 off in the geval runs' control
+      max_hints: 3

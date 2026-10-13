@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Control gateway of the tau3-identity-fixes-plan.md arms (section 7.3): gateway.yaml (every
+# tau3-failure-fixes-plan.md backend variant on) with the phone-number variant off (I1; the
+# domain note it replaced was removed). Pair it with profiles/tau3_identity_control.yaml. The I1 arm is
+# that profile with gateway.yaml.
+
+extends: gateway.yaml
+
+prompt_features:
+  domain_notes: false
+  phone_format: false
+  format_correction: false
+  write_consent_v2: false
+  policy_check: false
+  request_scope: false
+  transfer_check: false
+  capability_check: false
+  situational_facts: false
+  identity_from_identifier: false

@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm I4 (tau3-identity-fixes-plan.md section 4.2), on top of I3: the second and later misses get the
+# word-assisted spelling note (voice/tau3_fixes.yaml, the default voice profile). Compare it with
+# tau3_arm_i3_recovery_hint.yaml. Gateway: gateway.identity_control.yaml (no backend change).
+
+extends: tau3_identity_control.yaml
+
+voice_profile: ../voice/tau3_fixes.yaml

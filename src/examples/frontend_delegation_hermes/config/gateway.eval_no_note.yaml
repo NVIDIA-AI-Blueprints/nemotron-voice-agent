@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Ablation of the telecom domain note (analysis/2026-10-11_fdh-telecom-gpt55-deep/telecom-domain-note-plan.md):
+# gateway.eval.yaml with domain_notes off and nothing else changed. Pair with profiles/realtime_eval.yaml.
+
+extends: gateway.eval.yaml
+
+prompt_features:
+  domain_notes: false

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Airline canary (tau3-failure-fixes-plan.md steps 1-2): M1 and M3 together, for the run after each
+# passed its own arm. Gateway: gateway.spelling_v2.yaml.
+
+extends: tau3_arm_m3_spelling.yaml
+
+output:
+  proactive_status:
+    enabled: true
+    after_s: "${FDH_PROACTIVE_AFTER_S:-15}"
+    max_per_run: 1

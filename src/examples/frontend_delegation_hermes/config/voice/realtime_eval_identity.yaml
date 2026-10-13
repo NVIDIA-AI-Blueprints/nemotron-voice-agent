@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of arm "identity" of fix-plan-f1-f2-f4-f8.md (F8): voice/realtime_eval_124acf7.yaml (the control)
+# plus the identification ledger, which replaces A3's line, with up to 6 notes.
+
+extends: realtime_eval_124acf7.yaml
+
+normalization:
+  tool_arguments:
+    result_hints:
+      ledger: true
+      identification_tools: auto   # derived from the session's tool schemas (logged in session_rules)
+      field_provenance: false
+      max_hints: 6

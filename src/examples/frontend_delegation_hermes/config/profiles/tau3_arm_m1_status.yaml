@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm M1 (tau3-failure-fixes-plan.md section 2): one short proactive status line per backend run
+# after after_s seconds of silence while WORKING. Gateway: gateway.baseline.yaml (no backend change).
+# Calibrate FDH_PROACTIVE_AFTER_S on the target host first (plan section 2, "Calibration").
+
+extends: tau3_eval_baseline.yaml
+
+output:
+  proactive_status:
+    enabled: true
+    after_s: "${FDH_PROACTIVE_AFTER_S:-15}"
+    max_per_run: 1

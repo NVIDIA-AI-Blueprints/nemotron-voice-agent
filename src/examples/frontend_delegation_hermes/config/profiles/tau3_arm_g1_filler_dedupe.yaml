@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm G1 (tau3-failure-fixes-plan.md section 5): a delegated filler that repeats one of the last three
+# is dropped while WORKING, else replaced from filler_alternatives. Gateway: gateway.baseline.yaml.
+
+extends: tau3_eval_baseline.yaml
+
+delegation:
+  filler_dedupe: {enabled: true, recent: 3}

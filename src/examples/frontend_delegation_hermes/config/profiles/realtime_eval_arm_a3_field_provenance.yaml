@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm of tau3-geval-failure-fixes-plan.md (G4): profiles/realtime_eval_control.yaml, the control, with
+# A3 field provenance. Gateway: gateway.eval_control.yaml (no backend change).
+
+extends: realtime_eval_control.yaml
+
+voice_profile: ../voice/realtime_eval_a3_field_provenance.yaml

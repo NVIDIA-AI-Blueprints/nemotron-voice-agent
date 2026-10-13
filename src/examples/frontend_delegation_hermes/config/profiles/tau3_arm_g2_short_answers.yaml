@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm G2 (tau3-failure-fixes-plan.md section 6): answer cleanup before TTS here, the backend prompt
+# variant spoken_output in the gateway. Gateway: gateway.spoken_output.yaml.
+
+extends: tau3_eval_baseline.yaml
+
+output:
+  clean_answers: true

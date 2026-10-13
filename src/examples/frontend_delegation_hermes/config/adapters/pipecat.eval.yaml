@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pipecat head, eval mode (τ² against the Pipecat head): identical to pipecat.yaml except a VAD
+# silence of 2.5 s (VADParams.stop_secs). The user-turn stop timeout keeps Pipecat's default, so a
+# turn ends after about 3.1 s of silence. Select with FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml.
+
+vad:
+  confidence: null
+  start_secs: null
+  stop_secs: 2.5
+  min_volume: null
+
+turn:
+  user_speech_timeout: null
+  user_turn_stop_timeout: null
+
+audio:
+  in_sample_rate: 16000
+  out_sample_rate: 24000
+  out_10ms_chunks: 10
+  write_timeout_s: 120.0
+
+tts:
+  synthesis_mode: per_sentence

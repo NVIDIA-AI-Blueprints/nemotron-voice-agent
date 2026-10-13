@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Control of fix-plan-f1-f2-f4-f8.md: the deployment the 2026-10-07/08 runs measured (agent 124acf7, every geval
+# fix on, the F1 + F2 and F8 switches off). Pair with gateway.eval_124acf7.yaml. It renders and decides exactly as
+# 124acf7 (tests/unit/frontend_delegation_hermes/core/fixtures/golden_eval_124acf7.json).
+
+extends: realtime_eval.yaml
+
+voice_profile: ../voice/realtime_eval_124acf7.yaml
+
+delegation:
+  guards: {liveness_reply: false, question_never_silent: false, ping_as_status: false}
+  replay_unheard_answer: {enabled: false, ttl_s: 30, triggers: [status_intent], whole_if_heard_below: 0}

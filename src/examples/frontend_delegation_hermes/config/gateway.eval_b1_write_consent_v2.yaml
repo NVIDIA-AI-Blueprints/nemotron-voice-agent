@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm of tau3-geval-failure-fixes-plan.md (G4): gateway.eval_control.yaml, the control, with
+# B1: consent to the exact change, as the policy requires.
+# Pair with profiles/realtime_eval_control.yaml.
+
+extends: gateway.eval_control.yaml
+
+prompt_features:
+  write_consent_v2: true

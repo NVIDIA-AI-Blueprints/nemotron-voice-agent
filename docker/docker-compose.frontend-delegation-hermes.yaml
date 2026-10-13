@@ -1,0 +1,139 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Frontend Delegation Hermes example (src/examples/frontend_delegation_hermes): two services built from
+# one Python 3.14 image (docker/Dockerfile.fdh). Each container runs its own backend gateway and Hermes
+# workers inside it. Standalone file; run it from the repository root after nemo-speech (it joins the
+# root project's network):
+#
+#   docker compose --profile frontend-backend-agent/single-gpu up -d nemo-speech
+#
+#   # Pipecat adapter (default, demo on https://<host>:8776/):
+#   docker compose --env-file .env -f docker/docker-compose.frontend-delegation-hermes.yaml up -d --build fdh-voice
+#
+#   # τ³ adapter (benchmarking only, ws://<host>:8775/v1/realtime). Always name the service:
+#   # `--profile tau up` without a name starts both services.
+#   docker compose --env-file .env -f docker/docker-compose.frontend-delegation-hermes.yaml --profile tau up -d --build fdh-tau
+#
+#   # Stop: pass --profile tau so fdh-tau is stopped as well.
+#   docker compose -f docker/docker-compose.frontend-delegation-hermes.yaml --profile tau down
+#
+# Set HERMES_AGENT_DIR in .env to an absolute path of a clean Hermes checkout at the commit recorded in
+# docker/fdh/requirements.txt. The τ³ service keeps every variable name of the earlier fdh-voice
+# container (FDH_PROFILE, FDH_GATEWAY_CONFIG, FDH_EVENT_LOG, FDH_CONTAINER_NAME, FDH_VOICE_HOST_PORT, ...),
+# so arm switches and second containers work as before; the Pipecat service reads only FDH_PIPECAT_*.
+# Deployment guide: .agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md.
+
+name: nemotron-voice-agent-fdh
+
+x-fdh-build: &fdh-build
+  context: ..
+  dockerfile: docker/Dockerfile.fdh
+  additional_contexts:
+    hermes: ${HERMES_AGENT_DIR:-../../hermes-agent-smasurekar}
+
+x-fdh-common: &fdh-common
+  image: nemotron-voice-agent-fdh:latest
+  init: true
+  env_file:
+    - ../.env
+  extra_hosts:
+    - "host.docker.internal:127.0.0.1"
+  volumes:
+    - ../src:/app/src:ro
+    - ../logs:/app/logs
+  # The gateway closes open sessions one after another (about 15 s each); 4 sessions fit in 75 s.
+  stop_grace_period: 75s
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "3"
+
+services:
+  # Pipecat adapter: the default service (demo; τ² evaluation with the FDH_PIPECAT_* eval settings).
+  fdh-voice:
+    <<: *fdh-common
+    build: *fdh-build
+    container_name: ${FDH_PIPECAT_CONTAINER_NAME:-fdh-voice}
+    ports:
+      - "${FDH_PIPECAT_HOST_PORT:-8776}:7860"
+    environment:
+      PYTHONPATH: /app/src
+      FDH_ADAPTER: pipecat
+      FDH_PROFILE: ${FDH_PIPECAT_PROFILE:-pipecat_demo.yaml}
+      FDH_GATEWAY_CONFIG: ${FDH_PIPECAT_GATEWAY_CONFIG:-gateway.yaml}
+      FDH_PIPECAT_SETTINGS: ${FDH_PIPECAT_SETTINGS:-adapters/pipecat.yaml}
+      FDH_PIPECAT_TLS: ${FDH_PIPECAT_TLS:-true}
+      FDH_PIPECAT_TLS_CERT: ${FDH_PIPECAT_TLS_CERT:-}
+      FDH_PIPECAT_TLS_KEY: ${FDH_PIPECAT_TLS_KEY:-}
+      FDH_MAX_SESSIONS: ${FDH_PIPECAT_MAX_SESSIONS:-4}
+      FDH_GATEWAY_MAX_SESSIONS: ${FDH_PIPECAT_GATEWAY_MAX_SESSIONS:-8}
+      FDH_BACKEND_URL: ${FDH_PIPECAT_BACKEND_URL:-ws://host.docker.internal:8790/v1/backend}
+      FDH_BACKEND_DELAY_S: ${FDH_PIPECAT_BACKEND_DELAY_S:-5}
+      FDH_PROACTIVE_AFTER_S: ${FDH_PIPECAT_PROACTIVE_AFTER_S:-15}
+      FRONTEND_LLM_MODEL: ${FDH_PIPECAT_FRONTEND_LLM_MODEL:-nvidia/nvidia/nemotron-3.5-lightning}
+      FRONTEND_LLM_BASE_URL: ${FDH_PIPECAT_FRONTEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}
+      BACKEND_LLM_MODEL: ${FDH_PIPECAT_BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}
+      BACKEND_LLM_BASE_URL: ${FDH_PIPECAT_BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}
+      FDH_EVENT_LOG: ${FDH_PIPECAT_EVENT_LOG:-logs/fdh_voice_events.pipecat.jsonl}
+      FDH_GATEWAY_LOG: ${FDH_PIPECAT_GATEWAY_LOG:-logs/fdh_gateway_events.pipecat.jsonl}
+      FDH_WORKER_LOG_DIR: ${FDH_PIPECAT_WORKER_LOG_DIR:-logs/fdh_workers_pipecat}
+    volumes:
+      - ../src:/app/src:ro
+      - ../logs:/app/logs
+      - fdh_certs:/app/.certs
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - >-
+          if [ "$${FDH_PIPECAT_TLS}" = true ]; then s=https; else s=http; fi;
+          curl -fsk -m 5 "$$s://localhost:7860/health" || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    # Never restarts by itself, so it cannot come back in the middle of a τ³ campaign after a reboot.
+    restart: "no"
+
+  # τ³ adapter: benchmarking only, started with --profile tau. Today's eval configs and variable names.
+  fdh-tau:
+    <<: *fdh-common
+    build: *fdh-build
+    profiles: ["tau"]
+    container_name: ${FDH_CONTAINER_NAME:-fdh-tau}
+    ports:
+      - "${FDH_VOICE_HOST_PORT:-8775}:7860"
+    environment:
+      PYTHONPATH: /app/src
+      FDH_ADAPTER: tau
+      FDH_PROFILE: ${FDH_PROFILE:-realtime_eval.yaml}
+      FDH_GATEWAY_CONFIG: ${FDH_GATEWAY_CONFIG:-gateway.eval.yaml}
+      FDH_MAX_SESSIONS: ${FDH_MAX_SESSIONS:-4}
+      FDH_GATEWAY_MAX_SESSIONS: ${FDH_GATEWAY_MAX_SESSIONS:-8}
+      # Same string as a host run so config_hash matches; resolved to the in-container gateway below.
+      FDH_BACKEND_URL: ${FDH_BACKEND_URL:-ws://host.docker.internal:8790/v1/backend}
+      PIPELINE_TLS: "false"
+      FRONTEND_LLM_MODEL: ${FRONTEND_LLM_MODEL:-nvidia/nvidia/nemotron-3.5-lightning}
+      FRONTEND_LLM_BASE_URL: ${FRONTEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}
+      BACKEND_LLM_MODEL: ${BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}
+      BACKEND_LLM_BASE_URL: ${BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}
+      FDH_PROACTIVE_AFTER_S: ${FDH_PROACTIVE_AFTER_S:-15}
+      FDH_EVENT_LOG: ${FDH_EVENT_LOG:-logs/fdh_voice_events.realtime_eval.jsonl}
+      FDH_GATEWAY_LOG: ${FDH_GATEWAY_LOG:-logs/fdh_gateway_events.realtime_eval.jsonl}
+      FDH_WORKER_LOG_DIR: ${FDH_WORKER_LOG_DIR:-logs/fdh_workers}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -m 5 http://localhost:7860/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+
+volumes:
+  fdh_certs:
+
+networks:
+  default:
+    external: true
+    name: nemotron-voice-agent_default

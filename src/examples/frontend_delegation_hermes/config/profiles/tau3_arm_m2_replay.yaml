@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Arm M2 (tau3-failure-fixes-plan.md section 4, experimental): replay an unheard answer on an explicit
+# "status" request while the backend is IDLE (RC2), with the frontend prompt variant replay_intent.
+# Gateway: gateway.baseline.yaml (no backend change).
+
+extends: tau3_eval_baseline.yaml
+
+delegation:
+  replay_unheard_answer: {enabled: true, ttl_s: 30}
+prompt_features:
+  replay_intent: true

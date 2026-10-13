@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3.yaml plus M3 (tau3-failure-fixes-plan.md sections 3.1 and 3.3): spelled letters and digits are
+# joined in the text the agents see (ASR case kept: QUENTIN, XB7TP2), and a local "invalid ID" answer
+# asks for a read-back first, then for the whole ID spelled out. Invalid IDs are never sent to a tool.
+
+extends: tau3.yaml
+
+normalization:
+  transcript:
+    spelled_runs: {enabled: true, min_tokens: 3, case: keep}
+  tool_arguments:
+    invalid_message_key: tool_argument_invalid_readback
+    escalate_invalid_message_key: tool_argument_invalid_spell_all

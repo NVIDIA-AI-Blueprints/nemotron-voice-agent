@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# tau3-bench voice evaluation (OpenAI Realtime server on 8775). The defaults already target tau3;
+# this profile pins the eval-relevant keys so a later edit to the defaults cannot change an eval.
+# Every tau3-failure-fixes-plan.md fix is on (delegation_agent.yaml) except M2, and every
+# tau3-identity-fixes-plan.md fix (I3/I4 in voice/tau3_fixes.yaml, I1 in gateway.yaml); pair with gateway.yaml.
+# The control is tau3_eval_baseline.yaml with gateway.baseline.yaml.
+
+extends: ../delegation_agent.yaml
+
+voice_profile: ../voice/tau3_fixes.yaml
+
+delegation:
+  speak_when_delegating: true
+  spelling_hold:
+    complete_patterns: ['^[A-Za-z0-9]{6}$']   # a 6-character code (e.g. XB7TP2)
+backend:
+  link: websocket
+  simulated_delay: {seconds: 0, where: per_delegation}
+tools:
+  executor: wire

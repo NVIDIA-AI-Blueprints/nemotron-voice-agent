@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of a tau3-geval-failure-fixes-plan.md arm: voice/realtime_eval_control.yaml (the control) plus
+# A1-lite: the hint only (the backend decides); the relay never calls a tool itself.
+
+extends: realtime_eval_control.yaml
+
+normalization:
+  tool_arguments:
+    format_retry: {enabled: true, mode: hint, fields: phone}
