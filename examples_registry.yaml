@@ -95,14 +95,18 @@ examples:
   frontend-backend-live:
     label: Frontend Backend Live
     services:
-      llm: [nemotron-lightning]
-      thinker-llm: [nemotron-lightning, nemotron-super]
+      llm: [nemotron-super, nemotron-lightning]
+      thinker-llm: [nemotron-super, nemotron-lightning]
       asr: [nemotron-asr-streaming-english, parakeet-ctc]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     categories:
       thinker-llm: llm
     settings:
       llm:
+        nemotron-super:
+          temperature: 0.0
+          max_tokens: 512
+          enable_thinking: false
         nemotron-lightning:
           temperature: 0.0
           max_tokens: 512
