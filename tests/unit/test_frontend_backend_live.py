@@ -35,7 +35,7 @@ from examples.frontend_backend_live.cascade.commentary.guards import (
     plain_speech,
     safe_lead_in,
 )
-from examples.frontend_backend_live.cascade.conversation import ContextConversation, split_messages
+from examples.frontend_backend_live.cascade.conversation import ContextConversation, caller_turn_index, split_messages
 from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.cascade.talker.router import TurnRouter
@@ -147,6 +147,11 @@ class ListConversation:
 
     def trim(self, limit):
         pass
+
+    def replace_caller_turn(self, original, text):
+        index = caller_turn_index(self._messages, original)
+        if index is not None:
+            self._messages[index] = {**self._messages[index], "content": text}
 
 
 class RecordingTools:

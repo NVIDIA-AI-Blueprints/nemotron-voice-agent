@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from examples.frontend_backend_live.cascade.commentary.writer import CommentaryWriter
+from examples.frontend_backend_live.cascade.normalizer import TurnNormalizer
 from examples.frontend_backend_live.cascade.talker.talker import Talker
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
 from examples.frontend_backend_live.delegation.thinker import Thinker
@@ -25,6 +26,7 @@ class LiveAgent:
     talker: Talker
     writer: CommentaryWriter
     thinker: Thinker
+    normalizer: TurnNormalizer | None = None
 
     async def close(self) -> None:
         """Release both models' connections."""
@@ -74,4 +76,5 @@ def build_agent(
         Talker(frontend, prompts),
         CommentaryWriter(frontend, prompts),
         Thinker(backend, prompts),
+        TurnNormalizer(frontend, config.normalizer) if config.normalizer.enabled else None,
     )

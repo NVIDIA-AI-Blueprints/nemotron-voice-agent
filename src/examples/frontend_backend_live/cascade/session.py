@@ -20,6 +20,8 @@ Behavior:
   turn that corrects work in flight replaces it (see the worker). Work that runs silently for a while gets a
   short status line.
 * The delegate receives only the voice turns since its previous delegation, never backend results.
+* An optional normalizer rewrites a caller turn that carries details (spelled IDs, numbers) into written form
+  before the talker reads it; the rewrite replaces the transcript, so the backend sees it too.
 * An optional turn router drops acknowledgment-only turns (or, in shadow mode, only traces them).
 
 Two delegation modes exist. In ``responses`` mode a server-owned backend does the work. In ``client`` mode the
@@ -182,7 +184,19 @@ class CascadeSession:
             self.observe("status.answered", open=len(self.coordinator.ledger.open()))
             await self._say(self._status_line())
             return
-        await self._act(text)
+        await self._act(await self._normalize(text))
+
+    async def _normalize(self, text: str) -> str:
+        """Return the caller's turn in written form, replacing the transcript in the conversation."""
+        normalizer = self.agent.normalizer
+        if normalizer is None or not normalizer.wanted(text):
+            return text
+        _, history = split_messages(self.conversation.messages())
+        normalized, diagnostics = await normalizer.normalize(history, text)
+        self.observe("normalizer.completed", heard=text, normalized=normalized, **diagnostics)
+        if normalized != text:
+            self.conversation.replace_caller_turn(text, normalized)
+        return normalized
 
     def _asks_for_status(self, text: str) -> bool:
         return (

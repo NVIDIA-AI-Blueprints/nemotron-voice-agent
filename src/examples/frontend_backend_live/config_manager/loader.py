@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from .schema import DelegationConfig, GuardConfig, LiveConfig, ReliabilityConfig, RoleConfig
+from .schema import DelegationConfig, GuardConfig, LiveConfig, NormalizerConfig, ReliabilityConfig, RoleConfig
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
 PROMPT_VERSIONS = ("v1", "v2")
@@ -80,6 +80,7 @@ def parse_config(data: Any) -> LiveConfig:
         "reliability",
         "guards",
         "delegation",
+        "normalizer",
         "backend_context_tokens",
         "chat_history_recent_turns",
     }
@@ -92,6 +93,7 @@ def parse_config(data: Any) -> LiveConfig:
     reliability = _section(data, "reliability", {f.name for f in fields(ReliabilityConfig)})
     guards = _section(data, "guards", {f.name for f in fields(GuardConfig)})
     delegation = _section(data, "delegation", {f.name for f in fields(DelegationConfig)})
+    normalizer = _section(data, "normalizer", {f.name for f in fields(NormalizerConfig)})
     extra = {}
     for key in ("backend_context_tokens", "chat_history_recent_turns"):
         if key in data:
@@ -106,6 +108,7 @@ def parse_config(data: Any) -> LiveConfig:
         reliability=ReliabilityConfig(**_typed("reliability", reliability, ReliabilityConfig)),
         guards=GuardConfig(**_typed("guards", guards, GuardConfig)),
         delegation=DelegationConfig(**_typed("delegation", delegation, DelegationConfig)),
+        normalizer=NormalizerConfig(**_typed("normalizer", normalizer, NormalizerConfig)),
         **extra,
     )
 
