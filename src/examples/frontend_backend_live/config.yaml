@@ -56,5 +56,12 @@ delegation:
   progress_interval_seconds: 12
   progress_max_per_delegation: 1
 
+# Rewrite the caller's turn into written form before the talker sees it: spelled IDs joined, numbers as digits,
+# a spelling that corrects a word applied. Uses the talker's model and the same conversation.
+normalizer:
+  enabled: false
+  every_turn: false        # false: only turns with digits, number words, spelled letters or spoken symbols
+  timeout_seconds: 4       # a slower normalization keeps the turn as heard
+
 backend_context_tokens: 100000   # budget for the history the backend is resent each round
 chat_history_recent_turns: 20    # conversation turns kept in the talker's context

@@ -22,6 +22,9 @@ class Conversation(Protocol):
     def trim(self, limit: int) -> None:
         """Keep the leading system messages and only the latest ``limit`` others."""
 
+    def replace_caller_turn(self, original: str, text: str) -> None:
+        """Replace the newest caller turn whose text is ``original`` with ``text``."""
+
 
 def trim_messages(messages: list[dict], preserve: int, limit: int) -> list[dict]:
     """Keep the first ``preserve`` messages (the prompt) and the latest ``limit`` of the rest."""
@@ -55,6 +58,14 @@ class ContextConversation:
         if trimmed is not messages:
             self.context.set_messages(trimmed)
 
+    def replace_caller_turn(self, original: str, text: str) -> None:
+        """Replace the newest caller turn whose text is ``original`` with ``text``."""
+        messages = list(self.context.get_messages())
+        index = caller_turn_index(messages, original)
+        if index is not None:
+            messages[index] = {**messages[index], "content": text}
+            self.context.set_messages(messages)
+
 
 def message_text(message: dict) -> str:
     """Return a message's text, joining content parts when the content is a list."""
@@ -86,6 +97,15 @@ def split_messages(messages: list[dict]) -> tuple[str, list[dict]]:
         elif role in ("user", "assistant"):
             history.append({"role": role, "content": text})
     return "\n\n".join(instructions), history
+
+
+def caller_turn_index(messages: list[dict], text: str) -> int | None:
+    """Return the index of the newest caller turn whose text is ``text``."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") == "user" and not is_reference_item(message) and message_text(message) == text:
+            return index
+    return None
 
 
 def last_caller_text(messages: list[dict]) -> str:

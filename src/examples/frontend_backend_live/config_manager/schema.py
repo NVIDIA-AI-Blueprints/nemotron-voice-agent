@@ -83,6 +83,17 @@ class DelegationConfig:
 
 
 @dataclass(frozen=True)
+class NormalizerConfig:
+    """Rewriting the caller's turn into written form before the talker sees it."""
+
+    enabled: bool = False
+    # Normalize every turn, not only turns that carry details (digits, number words, spelled letters).
+    every_turn: bool = False
+    # A slower normalization keeps the turn as heard.
+    timeout_seconds: float = 4.0
+
+
+@dataclass(frozen=True)
 class LiveConfig:
     """Everything ``config.yaml`` controls."""
 
@@ -92,6 +103,7 @@ class LiveConfig:
     reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
     guards: GuardConfig = field(default_factory=GuardConfig)
     delegation: DelegationConfig = field(default_factory=DelegationConfig)
+    normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)
     # Backend (thinker) token budget for the delegate's resent history, per session.
     backend_context_tokens: int = 100_000
     # Conversation turns kept in the talker's context.
