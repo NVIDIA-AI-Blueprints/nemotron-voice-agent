@@ -83,6 +83,7 @@ def parse_config(data: Any) -> LiveConfig:
         "normalizer",
         "backend_context_tokens",
         "chat_history_recent_turns",
+        "tts_preroll_ms",
     }
     unknown = set(data) - top
     if unknown:
@@ -101,6 +102,11 @@ def parse_config(data: Any) -> LiveConfig:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ConfigError(f"{key} must be a positive integer")
             extra[key] = value
+    if "tts_preroll_ms" in data:
+        value = data["tts_preroll_ms"]
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 2000:
+            raise ConfigError("tts_preroll_ms must be an integer from 0 to 2000")
+        extra["tts_preroll_ms"] = value
     return LiveConfig(
         frontend=_role(data, "frontend", "talker"),
         backend=_role(data, "backend", "thinker"),

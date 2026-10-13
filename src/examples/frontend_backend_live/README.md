@@ -130,6 +130,7 @@ A live session client sends its `instructions` (the talker prompt) and `delegati
 - **Voices.** Any voice name in the protocol is accepted, but the cascade speaks with the voice of its text-to-speech service. Send `{"id": "<voice id>"}` to choose one of that service's voices. A remote realtime frontend receives the name.
 - **Backend settings.** `delegation.responses.reasoning`, `text`, `service_tier`, and `parallel_tool_calls` reach a backend on the `openai-responses` provider. A `chat-completions` backend has no equivalent and ignores them; it applies `model`, `instructions`, `tools`, `tool_choice`, and `max_output_tokens`.
 - **Long calls.** The talker keeps the prompt and its latest `chat_history_recent_turns` messages, and the backend drops its oldest requests, whole, when its history outgrows `backend_context_tokens`.
+- **Reply audio pre-roll.** Text-to-speech runs faster than playback but delivers audio in uneven chunks, so the cascade holds the start of each reply until `tts_preroll_ms` of audio is ready (300 ms by default), then plays it on. A short reply plays as soon as it is complete, and an interruption drops what is held. Set it to `0` to send audio as it arrives.
 
 ## Running the Example
 
