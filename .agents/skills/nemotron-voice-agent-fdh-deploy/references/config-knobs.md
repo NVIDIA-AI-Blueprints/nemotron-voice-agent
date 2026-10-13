@@ -49,8 +49,9 @@ The Pipecat settings files are `config/adapters/pipecat.yaml` (demo) and `config
 | Key | Demo | Eval |
 | --- | --- | --- |
 | `vad.confidence`, `vad.start_secs`, `vad.min_volume` | `null` | `null` |
-| `vad.stop_secs` | `null` | 2.5 |
-| `turn.user_speech_timeout` (`SpeechTimeoutUserTurnStopStrategy`) | `null` | `null` |
+| `vad.stop_secs` | `null` | 0.8 |
+| `vad.audio_idle_timeout` (`VADProcessor`; 0 disables the wall-clock forced speech stop) | `null` | 0.0 |
+| `turn.user_speech_timeout` (`SpeechTimeoutUserTurnStopStrategy`) | `null` | 0.0 |
 | `turn.user_turn_stop_timeout` (`UserTurnProcessor`) | `null` | `null` |
 | `audio.in_sample_rate`, `audio.out_sample_rate` | 16000, 24000 | 16000, 24000 |
 | `audio.out_10ms_chunks` | 10 (100 ms output chunks) | 10 |

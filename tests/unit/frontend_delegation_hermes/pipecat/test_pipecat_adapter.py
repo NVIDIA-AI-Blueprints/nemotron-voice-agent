@@ -39,10 +39,16 @@ class PipecatContractTests(unittest.TestCase):
                 self.assertEqual(updated["session"]["audio"]["output"]["format"]["type"], "audio/pcmu")
                 self.assertEqual(session.of_type("error"), [])
 
-    def test_eval_settings_report_three_second_vad_silence(self) -> None:
+    def test_eval_settings_end_turns_on_audio_time_only(self) -> None:
         with TestClient(stub_app(settings="adapters/pipecat.eval.yaml")) as client:
             health = client.get("/health").json()
-        self.assertEqual(health["pipecat"]["vad"], {"stop_secs": 2.5})
+        self.assertEqual(health["pipecat"]["vad"], {"stop_secs": 0.8, "audio_idle_timeout": 0.0})
+        self.assertEqual(health["pipecat"]["turn"], {"user_speech_timeout": 0.0})
+
+    def test_demo_settings_keep_pipecat_defaults(self) -> None:
+        with TestClient(stub_app(settings="adapters/pipecat.yaml")) as client:
+            health = client.get("/health").json()
+        self.assertEqual((health["pipecat"]["vad"], health["pipecat"]["turn"]), ({}, {}))
 
     def test_turn_tool_round_trip_and_transcript_before_audio(self) -> None:
         with TestClient(stub_app()) as client, client.websocket_connect("/v1/realtime?model=pine-pipecat") as ws:

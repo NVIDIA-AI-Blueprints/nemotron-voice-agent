@@ -1,18 +1,24 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Pipecat head, eval mode (τ² against the Pipecat head): identical to pipecat.yaml except a VAD
-# silence of 2.5 s (VADParams.stop_secs). The user-turn stop timeout keeps Pipecat's default, so a
-# turn ends after about 3.1 s of silence. Select with FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml.
+# Pipecat head, eval mode (τ² against the Pipecat head). Only for evaluation; the demo keeps
+# Pipecat's defaults (pipecat.yaml). τ² pauses its input between ticks, sometimes for seconds, so
+# the end of a turn is measured in input audio only, like the τ³ head's 800 ms:
+#   - vad.stop_secs 0.8: Silero counts the silence in audio chunks.
+#   - vad.audio_idle_timeout 0: disables the VADProcessor's wall-clock forced speech stop, which
+#     cut users off mid-utterance whenever a τ² tick stalled for more than about 1.6 s.
+#   - turn.user_speech_timeout 0: no wall-clock wait after the VAD stop.
+# Select with FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml.
 
 vad:
   confidence: null
   start_secs: null
-  stop_secs: 2.5
+  stop_secs: 0.8
   min_volume: null
+  audio_idle_timeout: 0.0
 
 turn:
-  user_speech_timeout: null
+  user_speech_timeout: 0.0
   user_turn_stop_timeout: null
 
 audio:

@@ -11,6 +11,7 @@ vad:
   start_secs: null
   stop_secs: null
   min_volume: null
+  audio_idle_timeout: null       # VADProcessor default (1.0 s, wall-clock forced speech stop)
 
 turn:
   user_speech_timeout: null      # SpeechTimeoutUserTurnStopStrategy default

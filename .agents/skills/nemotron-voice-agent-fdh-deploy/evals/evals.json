@@ -39,11 +39,11 @@
       "id": "nemotron-voice-agent-fdh-deploy-pipecat-eval",
       "prompt": "Bring up the Pipecat adapter in eval mode so tau2 can evaluate it.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Starts fdh-voice with FDH_PIPECAT_PROFILE=pipecat_realtime_eval.yaml, FDH_PIPECAT_GATEWAY_CONFIG=gateway.eval.yaml, FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml, and FDH_PIPECAT_TLS=false, checks that /health shows vad stop_secs 2.5, and points τ² at ws://localhost:8776/v1/realtime with a pine-fdh-pipecat-* model tag.",
+      "expected_output": "Starts fdh-voice with FDH_PIPECAT_PROFILE=pipecat_realtime_eval.yaml, FDH_PIPECAT_GATEWAY_CONFIG=gateway.eval.yaml, FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml, and FDH_PIPECAT_TLS=false, checks that /health shows vad stop_secs 0.8 and audio_idle_timeout 0.0 and turn user_speech_timeout 0.0, and points τ² at ws://localhost:8776/v1/realtime with a pine-fdh-pipecat-* model tag.",
       "assertions": [
         "Set all four FDH_PIPECAT_* eval variables.",
-        "Used the 2.5 s VAD silence settings file adapters/pipecat.eval.yaml.",
-        "Verified \"stop_secs\": 2.5 in /health.",
+        "Used the eval settings file adapters/pipecat.eval.yaml (0.8 s audio-time turn end, no wall-clock idle stop).",
+        "Verified \"stop_secs\": 0.8, \"audio_idle_timeout\": 0.0 and \"user_speech_timeout\": 0.0 in /health.",
         "Used port 8776 and a pine-fdh-pipecat-* model tag, not the τ³ port 8775."
       ]
     },

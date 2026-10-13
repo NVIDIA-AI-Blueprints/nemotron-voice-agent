@@ -8,7 +8,7 @@ Demo (browser page at ``/``, demo tools in the server, greeting)::
     PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.server \
         --config src/examples/frontend_delegation_hermes/config/profiles/pipecat_demo.yaml --tls
 
-Evaluation by a τ² client (client-executed tools, external policy, 2 s VAD silence)::
+Evaluation by a τ² client (client-executed tools, external policy, 0.8 s VAD silence in audio time)::
 
     FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml PYTHONPATH=src uv run python -m \
         examples.frontend_delegation_hermes.server \

@@ -27,16 +27,26 @@ SETTINGS_ENV = "FDH_PIPECAT_SETTINGS"
 
 @dataclass(frozen=True, slots=True)
 class VadSettings:
-    """``VADParams`` overrides (``None`` keeps Pipecat's default)."""
+    """``VADParams`` overrides plus the ``VADProcessor`` idle timeout (``None`` keeps Pipecat's default).
+
+    ``audio_idle_timeout`` is wall-clock: when no input audio arrives for that long while the
+    user is speaking, Pipecat forces speech-stopped. ``0`` disables it, which a client that
+    pauses its input between ticks (τ²) needs, so the end of a turn is measured in audio only.
+    """
 
     confidence: float | None = None
     start_secs: float | None = None
     stop_secs: float | None = None
     min_volume: float | None = None
+    audio_idle_timeout: float | None = None
 
     def overrides(self) -> dict[str, float]:
-        """Only the keys that are set."""
-        return {key: value for key, value in asdict(self).items() if value is not None}
+        """The ``VADParams`` keys that are set."""
+        return {key: value for key, value in asdict(self).items() if value is not None and key != "audio_idle_timeout"}
+
+    def processor_kwargs(self) -> dict[str, float]:
+        """The ``VADProcessor`` keyword arguments that are set."""
+        return {} if self.audio_idle_timeout is None else {"audio_idle_timeout": self.audio_idle_timeout}
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +88,7 @@ class PipecatHeadSettings:
         """Logged in ``/health`` and ``session_start`` so a run shows which settings it used."""
         return {
             "settings_file": self.source,
-            "vad": self.vad.overrides(),
+            "vad": {**self.vad.overrides(), **self.vad.processor_kwargs()},
             "turn": {key: value for key, value in asdict(self.turn).items() if value is not None},
             "tts_synthesis_mode": self.tts.synthesis_mode,
             "smart_turn": False,

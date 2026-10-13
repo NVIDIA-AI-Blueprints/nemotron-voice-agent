@@ -95,8 +95,8 @@ The Pipecat adapter's turn settings live in their own files, outside the shared 
 
 | Settings File | Use |
 | --- | --- |
-| `config/adapters/pipecat.yaml` | Demo: every VAD and turn key is `null`, so Pipecat's defaults apply |
-| `config/adapters/pipecat.eval.yaml` | Eval: Silero `stop_secs: 2.5`, so a turn ends after about 3.1 s of silence |
+| `config/adapters/pipecat.yaml` | Demo and deployment: every VAD and turn key is `null`, so Pipecat's defaults apply |
+| `config/adapters/pipecat.eval.yaml` | Eval only: Silero `stop_secs: 0.8`, `audio_idle_timeout: 0` and `user_speech_timeout: 0`, so a turn ends after 0.8 s of silence counted in input audio, as on the τ³ adapter |
 
 Select a settings file with `FDH_PIPECAT_SETTINGS` or `--pipecat-settings`. The skill's `config-knobs.md` reference and its `tau.md` reference list every knob and every arm pair.
 

@@ -10,7 +10,9 @@ Turn disabled) and when to interrupt. The bridge only follows those decisions:
   onset on the input-audio clock; the frame is forwarded unchanged.
 * the ``InterruptionFrame`` that follows it is forwarded first; then, in a separate task
   that never blocks the pipeline, the bridge waits (bounded) for the output tagger to
-  confirm the agent's audio was cut and calls ``on_speech_started``.
+  confirm the agent's audio was cut and calls ``on_speech_started``. A turn that stops (or
+  is cleared) before that task runs settles it first, so the turn manager always sees
+  ``on_speech_started`` once, before the turn's ``on_user_input``, never after it.
 * final ``TranscriptionFrame``\\ s are collected; ``UserStoppedSpeakingFrame`` emits
   ``speech_stopped``, commits the user item, emits the transcription and calls
   ``on_user_input`` exactly as the τ³ head does after its ASR final.
@@ -58,7 +60,8 @@ class _UserTurn:
     turn_start: Stamp
     texts: list[str] = field(default_factory=list)
     interim: str = ""
-    told_turn_manager: bool = False
+    told_turn_manager: bool = False  # on_speech_started was called for this turn
+    ack_task: asyncio.Task[None] | None = None  # pending interruption acknowledgement
 
 
 class FdhTurnBridge(FrameProcessor):
@@ -102,16 +105,15 @@ class FdhTurnBridge(FrameProcessor):
         """Follow Pipecat's user-turn decisions; forward every frame."""
         await super().process_frame(frame, direction)
         if isinstance(frame, UserStartedSpeakingFrame):
-            self._start_turn()
+            turn = self._start_turn()
             await self.push_frame(frame, direction)
             if not self._interruptions:
-                await self._tell_speech_started()
+                await self._tell_speech_started(turn)
         elif isinstance(frame, InterruptionFrame):
             await self.push_frame(frame, direction)
             turn = self._turn
-            if turn is not None and not turn.told_turn_manager:
-                turn.told_turn_manager = True
-                self._spawn(self._after_interruption())
+            if turn is not None and not turn.told_turn_manager and turn.ack_task is None:
+                turn.ack_task = self._spawn(self._after_interruption(turn))
         elif isinstance(frame, TranscriptionFrame):
             if self._turn is not None and frame.text.strip():
                 self._turn.texts.append(frame.text.strip())
@@ -127,24 +129,33 @@ class FdhTurnBridge(FrameProcessor):
 
     # -- turn handling ------------------------------------------------------------------
 
-    def _start_turn(self) -> None:
+    def _start_turn(self) -> _UserTurn:
         self._tagger.interrupted.clear()  # wait for this turn's interruption, not an earlier one
         onset_ms, source = self._cursor.take_onset()
         item_id = new_item_id()
-        self._turn = _UserTurn(item_id=item_id, turn_start=Stamp.now(self._clock, onset_ms))
+        turn = self._turn = _UserTurn(item_id=item_id, turn_start=Stamp.now(self._clock, onset_ms))
         self._emit(ev.speech_started(int(onset_ms), item_id))
         self._log.write("speech_started", item_id=item_id, audio_start_ms=int(onset_ms), onset_source=source)
+        return turn
 
-    async def _after_interruption(self) -> None:
+    async def _after_interruption(self, turn: _UserTurn) -> None:
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._tagger.interrupted.wait(), timeout=INTERRUPTION_ACK_TIMEOUT_S)
-        await self._tell_speech_started()
+        await self._tell_speech_started(turn)
 
-    async def _tell_speech_started(self) -> None:
-        if self._turn is not None:
-            self._turn.told_turn_manager = True
+    async def _tell_speech_started(self, turn: _UserTurn) -> None:
+        """Call ``on_speech_started`` once per turn (the turn manager counts open utterances)."""
+        if turn.told_turn_manager:
+            return
+        turn.told_turn_manager = True
         if self._turns is not None:
             await self._turns.on_speech_started()
+
+    @staticmethod
+    def _cancel_ack(turn: _UserTurn) -> None:
+        """Drop a pending acknowledgement that has not told the turn manager yet."""
+        if turn.ack_task is not None and not turn.told_turn_manager:
+            turn.ack_task.cancel()
 
     def _interim(self, text: str) -> None:
         turn = self._turn
@@ -179,8 +190,11 @@ class FdhTurnBridge(FrameProcessor):
             self._emit(ev.input_transcription_completed(turn.item_id, transcript))
         if self._turns is None:
             return
-        if not turn.told_turn_manager:  # a turn Pipecat ended without an interruption frame
-            await self._tell_speech_started()
+        # A turn Pipecat ended without an interruption frame, or before the interruption was
+        # acknowledged: tell the turn manager now, so the acknowledgement never comes after
+        # on_user_input and leaves an utterance open (which would hold all output).
+        self._cancel_ack(turn)
+        await self._tell_speech_started(turn)
         self._turns.on_user_input(
             UserInput(
                 text=transcript,
@@ -195,12 +209,16 @@ class FdhTurnBridge(FrameProcessor):
     def clear(self) -> str | None:
         """``input_audio_buffer.clear``: drop the open user turn; its item id, if any."""
         turn, self._turn = self._turn, None
-        return None if turn is None else turn.item_id
+        if turn is None:
+            return None
+        self._cancel_ack(turn)
+        return turn.item_id
 
-    def _spawn(self, coroutine: object) -> None:
+    def _spawn(self, coroutine: object) -> asyncio.Task[None]:
         task = asyncio.get_running_loop().create_task(coroutine)  # type: ignore[arg-type]
         self._tasks.add(task)
         task.add_done_callback(self._done)
+        return task
 
     def _done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)

@@ -113,7 +113,7 @@ class SessionPipeline:
         self.pipeline = Pipeline(
             [
                 self.transport.input(),
-                VADProcessor(vad_analyzer=speech.vad),
+                VADProcessor(vad_analyzer=speech.vad, **settings.vad.processor_kwargs()),
                 self.cursor,
                 speech.stt,
                 self.user_turns,

@@ -1,7 +1,7 @@
 ---
 name: nemotron-voice-agent-fdh-deploy
 description: Build, deploy, and evaluate the Frontend Delegation Hermes (FDH) example with its Pipecat adapter (demo or τ² eval) or its τ³ benchmark adapter. Use when starting, switching arms, smoke testing, or troubleshooting the FDH containers.
-version: "2.2.0"
+version: "2.3.0"
 license: CC-BY-4.0 AND Apache-2.0
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
@@ -46,10 +46,10 @@ Follow this tree. Ask only when the request leaves the choice open.
 Request names an adapter?
 ├─ no      → ASK: "Which adapter: Pipecat (the default) or τ³?"
 ├─ Pipecat → ASK: "Demo or eval?"  (skip when the request already says)
-│    ├─ demo → fdh-voice: pipecat_demo.yaml + gateway.yaml + adapters/pipecat.yaml, https://<host>:8776/
+│    ├─ demo → fdh-voice: pipecat_demo.yaml + gateway.yaml + adapters/pipecat.yaml (Pipecat defaults), https://<host>:8776/
 │    │         → references/pipecat.md (Demo)
 │    └─ eval → fdh-voice: FDH_PIPECAT_PROFILE=pipecat_realtime_eval.yaml FDH_PIPECAT_GATEWAY_CONFIG=gateway.eval.yaml
-│              FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml (2.5 s VAD silence) FDH_PIPECAT_TLS=false,
+│              FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml (0.8 s audio-time turn end) FDH_PIPECAT_TLS=false,
 │              ws://<host>:8776/v1/realtime → references/pipecat.md (Eval)
 └─ τ³      → ask nothing more: fdh-tau with --profile tau, realtime_eval.yaml + gateway.eval.yaml
              (or the arm the user names), ws://<host>:8775/v1/realtime → references/tau.md

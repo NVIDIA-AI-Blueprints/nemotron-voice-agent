@@ -53,7 +53,17 @@ A check without a browser: `curl -sk https://localhost:8776/` returns the page.
 
 ## Eval
 
-The eval mode lets a τ² client evaluate the Pipecat adapter over OpenAI Realtime. It pairs `pipecat_realtime_eval.yaml` (client-executed tools with `tools.executor: wire`, the client's `session.update` instructions as the policy, no greeting) with `gateway.eval.yaml` and `config/adapters/pipecat.eval.yaml`. The eval settings set the Silero `stop_secs` to 2.5. The user-turn stop timeout keeps Pipecat's default, so a turn ends after about 3.1 s of silence. TLS is off.
+The eval mode lets a τ² client evaluate the Pipecat adapter over OpenAI Realtime. It pairs `pipecat_realtime_eval.yaml` (client-executed tools with `tools.executor: wire`, the client's `session.update` instructions as the policy, no greeting) with `gateway.eval.yaml` and `config/adapters/pipecat.eval.yaml`. TLS is off.
+
+The eval settings measure the end of a user turn in input audio only, like the τ³ adapter's 800 ms. τ² pauses its input between ticks, and about 3% of ticks stall for more than 2 s while its user simulator runs, so any wall-clock timer in turn ending cuts users off or adds latency. The demo keeps Pipecat's defaults. The eval settings change three keys:
+
+| Key | Demo (Pipecat default) | Eval | Why |
+| --- | --- | --- | --- |
+| `vad.stop_secs` | 0.2 | 0.8 | Silero counts the silence in audio chunks, the τ³ adapter's 800 ms |
+| `vad.audio_idle_timeout` | 1.0 (wall clock) | 0 (off) | `VADProcessor` forces speech-stopped after 1 s without input audio, which ends the turn mid-utterance when a τ² tick stalls |
+| `turn.user_speech_timeout` | 0.6 (wall clock) | 0 | `SpeechTimeoutUserTurnStopStrategy` waits this long after the VAD stop |
+
+`user_turn_stop_timeout` keeps its default (5 s, wall clock). It fires only while the user is not speaking, as a safety net. Do not raise `stop_secs` to make up for tick stalls: the stalls no longer end turns, and a longer wait only adds latency, which τ²'s user simulator answers with pings and talk-over.
 
 ### Start the Eval Mode
 
@@ -64,7 +74,7 @@ FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml FDH_PIPECAT_TLS=false \
 sleep 30; curl -s http://localhost:8776/health; echo
 ```
 
-`/health` must show `"settings_file"` naming `adapters/pipecat.eval.yaml` and `"vad": {"stop_secs": 2.5}`. Export the four variables instead of prefixing them when later commands in the same shell must keep the eval mode. Running `up -d fdh-voice` without them recreates the demo.
+`/health` must show `"settings_file"` naming `adapters/pipecat.eval.yaml` and `"vad": {"stop_secs": 0.8, "audio_idle_timeout": 0.0}` and `"turn": {"user_speech_timeout": 0.0}`. Export the four variables instead of prefixing them when later commands in the same shell must keep the eval mode. Running `up -d fdh-voice` without them recreates the demo.
 
 ### Point τ² at the Pipecat Adapter
 
@@ -120,13 +130,14 @@ PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.cli.voice_ch
   --ui plain --tools examples.frontend_delegation_hermes.core.text.demo_tools:TOOLS
 ```
 
-Pass `--tools` only in eval mode, where the client executes the tools. In the demo, the server runs them, so omit `--tools`. Expect a filler, the order status, nothing for "Okay, thanks," and a filler for order 5513. With the 2.5 s eval silence, each answer starts at least about 3.1 s after the end of speech.
+Pass `--tools` only in eval mode, where the client executes the tools. In the demo, the server runs them, so omit `--tools`. Expect a filler, the order status, nothing for "Okay, thanks," and a filler for order 5513. With the eval settings, each answer starts at least 0.8 s after the end of speech. `docker logs fdh-voice` must show no `forcing speech stop` warning in eval mode.
 
 ## Known Limits
 
 The Pipecat adapter supports a subset of OpenAI Realtime. The following limits apply:
 
 - **Heard audio is an estimate.** Pipecat's WebSocket output writes audio at twice real time. The adapter advances its playout estimate at real time from the first written chunk, capped at the written amount. A client that pauses playback, such as τ²'s tick loop, hears less than estimated.
+- **Demo turn ending uses wall-clock timers.** The demo keeps Pipecat's `audio_idle_timeout` (1 s) and `user_speech_timeout` (0.6 s), which suit a live microphone. Use the eval settings for any client that pauses its input.
 - **Speech onset is late.** `audio_start_ms` is the cursor at Pipecat's VAD confirmation minus `start_secs`. Stub measurements put it about 200 ms after the actual onset.
 - **Server VAD only.** A client that asks for `turn_detection: null` (manual turns) is accepted with a logged warning: text items work, Pipecat's VAD still ends audio turns, and `input_audio_buffer.commit` is rejected.
 - **Catalog voice only.** The TTS voice is the catalog voice. The client's requested voice is ignored with a warning.
