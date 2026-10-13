@@ -9,19 +9,18 @@ from dataclasses import replace
 
 import pytest
 from test_installer_inputs import connection, connection_value
-from test_openshell_fabric_adapter import _check_unsupported, _continued_success, _invoke_success, _request
+from test_openshell_fabric_adapter import _check_unsupported, _invoke_success, _request
 
 from voiceclaw.adapters.openshell_fabric.client import (
     OpenShellClientError,
     OpenShellFailureCode,
-    SandboxExecution,
     SandboxExecutor,
 )
 from voiceclaw.adapters.openshell_fabric.committed_turn import (
     FABRIC_AGENT_BINARY,
     OpenShellFabricAdapter,
+    OpenShellFabricRejected,
 )
-from voiceclaw.domain.models import BackendOperation
 from voiceclaw.domain.response_only import ResponseOnlyContextContinuity, ResponseOnlyTargetAvailability
 from voiceclaw.installer_executor import InstallerSandboxExecutor, compose_installer_backend
 from voiceclaw.installer_transport import ExecutionResult, TransportFailure
@@ -123,18 +122,16 @@ def test_executor_rejects_commands_outside_the_installer_binding(fault):
     assert transport.calls == []
 
 
-def test_installer_composes_the_upstream_adapter_and_keeps_verified_live_context(monkeypatch):
+def test_installer_composes_a_single_use_upstream_adapter(monkeypatch):
     binding = replace(connection(), agent="researcher")
     check = json.loads(_check_unsupported().stdout)
     check["result"]["applied_config"]["harness"]["settings"]["agent_name"] = "researcher"
     invoke = json.loads(_invoke_success().stdout)
     invoke["result"]["fabric_result"]["output"]["session_key"] = "agent:researcher:fabric-runtime-1"
-    followup = _continued_success(SandboxExecution(0, json.dumps(invoke) + "\n"))
     transport = Transport(
         [
             ExecutionResult(1, (json.dumps(check) + "\n").encode(), b""),
             ExecutionResult(0, (json.dumps(invoke) + "\n").encode(), b""),
-            ExecutionResult(0, followup.stdout.encode(), b""),
         ]
     )
     monkeypatch.setattr(
@@ -150,18 +147,17 @@ def test_installer_composes_the_upstream_adapter_and_keeps_verified_live_context
     result = asyncio.run(composition.turn_backend.commit_turn(_request()))
     assert result.display_text == "## Result\n\nDone."
     assert result.speak_text == "The result is ready."
-    next_result = asyncio.run(
-        composition.turn_backend.commit_turn(
-            CommittedTurnRequest("conversation-1", "commit-2", "Now explain the difference.")
-        )
-    )
-    assert next_result.backend_session_id == result.backend_session_id
-    assert next_result.display_text == "The follow-up result."
     final_backend = asyncio.run(composition.turn_backend.inspect())
-    assert final_backend.context_continuity is ResponseOnlyContextContinuity.SHARED_TARGET
-    assert final_backend.target_availability is ResponseOnlyTargetAvailability.AVAILABLE
-    assert final_backend.capabilities.operations == frozenset({BackendOperation.SUBMIT})
-    assert [call[1][1] for call in transport.calls] == ["check", "invoke", "invoke"]
+    assert final_backend.context_continuity is ResponseOnlyContextContinuity.UNQUALIFIED
+    assert final_backend.target_availability is ResponseOnlyTargetAvailability.CONSUMED
+    assert final_backend.capabilities.operations == frozenset()
+    with pytest.raises(OpenShellFabricRejected, match="target_context_consumed"):
+        asyncio.run(
+            composition.turn_backend.commit_turn(
+                CommittedTurnRequest("conversation-2", "commit-2", "Perform another request.")
+            )
+        )
+    assert [call[1][1] for call in transport.calls] == ["check", "invoke"]
     assert json.loads(transport.calls[-1][2])["agent"] == "researcher"
     asyncio.run(composition.shutdown())
 

@@ -74,15 +74,15 @@ backend_profiles:
       tool_copy:
         work.delegate:
           description: >-
-            Send the finalized user request to the selected agent. The agent
-            retains its verified live conversation across successful requests.
-            Preserve references to that conversation for the agent to resolve;
-            do not invent missing facts or answer on the agent's behalf.
+            Send one self-contained finalized user request to the selected
+            agent. Include the context needed to perform the work; do not
+            assume the agent can see earlier VoiceClaw turns, invent missing
+            facts, or answer on the agent's behalf.
           properties:
             goal: >-
-              The user's request, preserving their intent, constraints, and
-              references to the agent's live conversation. Do not replace an
-              unresolved reference with a guessed name or answer.
+              A standalone goal preserving the user's intent, constraints,
+              and relevant conversational context. Resolve references only
+              from known context; otherwise state what is missing.
     settings: {}
 default_backend: nemoclaw
 interaction:
@@ -90,7 +90,7 @@ interaction:
   context_character_budget: 24000
   request_summary_character_limit: 512
   retained_request_limit: 8
-  turn_routing_mode: agent
+  turn_routing_mode: model
 state:
   kind: sqlite
   path: /var/lib/voiceclaw/state/state.db

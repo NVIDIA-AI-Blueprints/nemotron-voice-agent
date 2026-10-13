@@ -59,9 +59,11 @@ fn failure(code: &'static str) -> Output {
 }
 
 fn status_code(status: &tonic::Status, dispatched: bool) -> &'static str {
+    if dispatched {
+        return "outcome_unconfirmed";
+    }
     match status.code() {
         tonic::Code::Unauthenticated | tonic::Code::PermissionDenied => "access_denied",
-        _ if dispatched => "outcome_unconfirmed",
         _ => "transport_unavailable",
     }
 }
@@ -507,11 +509,11 @@ mod tests {
     }
 
     #[test]
-    fn denied_expired_and_revoked_grants_fail_without_raw_details() {
+    fn denied_grants_are_retry_safe_only_before_dispatch() {
         for code in [tonic::Code::Unauthenticated, tonic::Code::PermissionDenied] {
             let status = tonic::Status::new(code, "fixture credentials must not escape");
             assert_eq!(status_code(&status, false), "access_denied");
-            assert_eq!(status_code(&status, true), "access_denied");
+            assert_eq!(status_code(&status, true), "outcome_unconfirmed");
         }
         assert_eq!(
             status_code(&tonic::Status::unavailable("disconnect"), true),

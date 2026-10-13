@@ -240,12 +240,12 @@ def test_installer_shutdown_cancels_its_executor_even_if_upstream_draining_fails
     terminate.assert_awaited_once()
 
 
-def test_installer_hosted_llm_does_not_advertise_provider_tokenization(tmp_path):
+def test_installer_profile_uses_model_routing_and_disables_provider_tokenization(tmp_path):
     resource = Path(installer_runtime.__file__).parent / "resources" / "nemoclaw_container_v1.yaml"
     config = load_config(resource, environ={})
     profile = config.selected_frontend
     assert profile.services.llm.supports_tokenize is False
-    assert config.interaction.turn_routing_mode == "agent"
+    assert config.interaction.turn_routing_mode == "model"
     assert "work.delegate" in config.backend_profiles[config.default_backend].tool_copy
 
     plan = materialize_frontend_runtime(

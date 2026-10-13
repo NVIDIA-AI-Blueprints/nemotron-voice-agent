@@ -71,7 +71,6 @@ from realtime.frames import (
 from realtime.lifecycle import announce_response, emit_events
 from realtime.mcp import RealtimeMCPRuntime
 from realtime.protocol import RealtimeProtocolError
-from realtime.provider_diagnostics import provider_error_param
 from realtime.vad import (
     RealtimeVADUserStartedSpeakingFrame,
     RealtimeVADUserStoppedSpeakingFrame,
@@ -485,14 +484,14 @@ class RealtimeLifecycleObserver(BaseObserver):
                     code = "llm_provider_error"
                     message = "The language model failed while generating this response"
                     error_type = "server_error"
-                    error_param = provider_error_param(frame.error, frame.exception)
+                    error_param = None
                     error_event_id = None
                 correlated = True
             elif tts_owner == active_response_id:
                 code = "tts_provider_error"
                 message = "The speech synthesizer failed while generating this response"
                 error_type = "server_error"
-                error_param = provider_error_param(frame.error, frame.exception)
+                error_param = None
                 error_event_id = None
                 correlated = True
             elif frame.fatal and active_response_id is not None:
@@ -1182,7 +1181,6 @@ class RealtimeLifecycleObserver(BaseObserver):
                     error_event(
                         "The speech synthesizer completed without producing output audio",
                         code=reason,
-                        param="provider.empty_audio",
                         error_type="server_error",
                     )
                 )

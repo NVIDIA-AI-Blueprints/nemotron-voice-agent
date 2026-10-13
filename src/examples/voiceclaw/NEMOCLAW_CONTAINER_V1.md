@@ -144,19 +144,12 @@ fixed `/usr/local/bin/fabric-agent check --agent ... --live` and
 `/usr/local/bin/fabric-agent invoke --agent ... --input -` operations. It runs
 no login shell or lifecycle command.
 
-The installer sets `interaction.turn_routing_mode: agent`, requiring
-`work.delegate` for every finalized voice or typed request, including follow-ups.
-The runtime checks the currently advertised operation before admission;
-unavailable or consumed backends reject the request. The private frontend model
-call selects the required delegation tool without speech. Acknowledgements and
-result speech use separate responses. Other configurations retain the default
-`model` routing mode.
-
-In `agent` mode, the runtime forwards the finalized user text directly to the
-agent, removing only outer whitespace. It does not substitute a model-proposed
-goal. The selected agent resolves references to its verified live conversation.
-Argument, source-text, readiness, and availability checks still apply. The
-default `model` mode retains frontend selection of a standalone delegation goal.
+The installer sets `interaction.turn_routing_mode: model`. The frontend selects
+direct conversation or the advertised `work.delegate` operation. Unavailable or
+consumed backends reject delegated requests before admission. Delegation sends
+the validated standalone goal produced by the frontend; acknowledgements and
+result speech use separate responses. Argument, source-text, readiness, and
+availability checks still apply.
 
 Requests use the `nvidia.fabric.openclaw` codec with `{agent, message}` input.
 The image selects this OpenClaw adapter; the descriptor adds no adapter override
@@ -193,23 +186,12 @@ newline. The response body and exact user prompt remain unchanged. The selected
 response still passes the strict result-envelope parser; JSON-equivalent
 rewrites are not accepted as matching history.
 
-The installer profile enables sequential non-durable turns in shared native
-context, with one concurrent VoiceClaw session. After full binding, correlation,
-history, and result-envelope validation, the target returns to the available
-state for another turn. The application retains a copy of verified history in
-memory, pins the runtime and native session identity, and rejects reused turn
-or response IDs. Each later result must preserve that exact history prefix and
-append one complete new turn with the same per-turn validation. Changed
-returned history or identities, unusable results, and ambiguous invocations
-consume the target and prevent further delegation.
-
-This is process-local shared context, not durable work or reconnect recovery.
-Restarting the application loses the verified history prefix and does not clear
-native conversation history. Existing native history fails the new process's
-first-turn check; provision a fresh target before delegating again. The generic
-OpenShell/Fabric adapter keeps its default single-turn behavior: a successful
-or ambiguous invocation consumes the target. There is no automatic replay,
-event streaming, steering, or confirmed remote cancellation.
+The installer profile permits one non-durable delegated turn against a fresh
+target. A successful or ambiguous invocation, an unusable result, or an
+abandoned in-flight invocation consumes the target and prevents another
+dispatch. VoiceClaw does not adopt existing native history or claim session
+continuity, reconnect recovery, replay, event streaming, steering, or confirmed
+remote cancellation. Provision a fresh target before delegating again.
 
 The executor bounds stdin and streamed output and enforces the descriptor's
 deadlines. Bearer control data enters the trusted SDK child through a private
@@ -352,10 +334,9 @@ Qualification requires these distinct results:
    Require transcript, display, and speech markers plus a captured result WAV
    for this evidence. The verifier saves generated audio and acknowledges zero
    playback; audible delivery requires separate observation. For installer
-   qualification, select `--context-continuity shared_target`. Then verify a
-   subsequent turn on the same running application, with unchanged prior native
-   history and no replay. Prove intended-agent invocation for each finalized
-   request, including follow-ups. Local tests do not establish this live result.
+   qualification, select `--context-continuity unqualified`. Prove intended-agent
+   invocation for the one request selected for delegation and also prove that a
+   greeting stays in the frontend. Local tests do not establish this live result.
 4. Test failed/revoked identity and TLS rejection, ambiguous invocation with no
    replay, secret-free export/reapply, and owned application removal without
    deleting the agent or retained inference storage.

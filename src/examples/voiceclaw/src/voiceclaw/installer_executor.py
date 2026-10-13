@@ -137,7 +137,7 @@ def compose_installer_backend(
             invoke_timeout_seconds=connection.invoke_seconds,
             check_timeout_seconds=connection.health_seconds,
             model_contracts=contracts,
-            allow_shared_context=True,
+            allow_shared_context=False,
         )
         return BackendComposition(turn_backend=adapter, turn_status="response_only", selected_agent_readiness=adapter)
     except BaseException:

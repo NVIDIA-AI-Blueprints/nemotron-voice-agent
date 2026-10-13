@@ -31,9 +31,9 @@ realtime frontend                 OpenShell adapter
 
 By default, the realtime frontend model chooses between a conversational reply
 and agent delegation, building a standalone goal for delegated work. The
-installer profile requires agent delegation for every finalized voice or typed
-request, including follow-ups. It forwards the finalized user text directly to
-the agent. The frontend selects the required operation and presents
+installer profile preserves that model-selected routing: greetings and direct
+conversation stay in the frontend, while delegated work uses the validated,
+standalone goal produced by the frontend. The frontend presents
 acknowledgements and result speech. The Interaction Manager invokes the
 configured agent and sends its rich Markdown result to the UI.
 
@@ -63,19 +63,17 @@ This profile preserves the upstream OpenShell/Fabric adapter, request codec,
 and result validation. A narrow installer executor supplies
 the protected descriptor and pinned SDK transport. It does not replace the
 default image supervisor, developer Compose recipe, or cloud configuration.
-The installer starts with a fresh target and permits sequential turns using
-verified shared native context while the application runs. Each new result
-must preserve the exact prior history, runtime, and session identity before
-another turn becomes available. Matched native tool calls and results can run
-within each invocation. The generic adapter retains its default single-turn
-behavior.
+The installer starts with a fresh target and permits one non-durable delegated
+turn. A successful or ambiguous invocation consumes that target; provision a
+fresh target for another delegated request. Matched native tool calls and
+results can run within the invocation, but VoiceClaw does not claim session
+continuity or reconnect recovery.
 
-The installer sets `interaction.turn_routing_mode: agent`. Delegation requires
+The installer sets `interaction.turn_routing_mode: model`. Delegation requires
 the currently advertised `work.delegate` operation; an unavailable or consumed
-backend rejects the request. The runtime forwards the finalized user text,
-removing only outer whitespace. A model-proposed goal does not replace that
-text. The selected agent resolves references to its verified live conversation.
-Argument, source-text, readiness, and availability checks still apply.
+backend rejects the request. The runtime sends the validated standalone goal
+selected by the frontend. Argument, source-text, readiness, and availability
+checks still apply.
 
 Use the following nonsecret environment inputs in the application declaration:
 
@@ -134,10 +132,9 @@ WebSocket share port `18790`; no separate browser server is required.
 3. Wait for **Session ready**, then select **Start listening** and grant
    microphone access. Follow the negotiated turn behavior shown below the
    composer, or enter a typed request and press **Enter**.
-4. Ask for a delegated agent task against a fresh target. Inspect the result in
-   **Backend turns** and check audible result playback separately. After a
-   verified successful agent result, you can submit another sequential task
-   using the same native context.
+4. Ask for one delegated agent task against a fresh target. Inspect the result
+   in **Backend turns** and check audible result playback separately. Provision
+   a fresh target before testing another delegated request.
 
 Microphone capture requires a secure browser context, such as localhost.
 Opening the remote host's plain HTTP address does not provide that context.
@@ -230,10 +227,11 @@ Use `kind: openai_realtime` to replace the bundled cascade with an external
 Realtime endpoint.
 
 `interaction.turn_routing_mode` accepts `model` or `agent`. The default `model`
-mode lets the frontend select a direct reply or delegation. The installer uses
-`agent` to require `work.delegate` for every finalized request. Its private
-structured model call is silent; acknowledgements and result speech follow
-separately after admission.
+mode, also used by the installer, lets the frontend select a direct reply or
+delegation. Explicit `agent` mode requires `work.delegate` for every finalized
+request and is intended for bounded qualification. Its private structured model
+call is silent; acknowledgements and result speech follow separately after
+admission.
 
 For remote OpenShell, use TLS, `client_credentials`, and an operator-owned
 credential file or environment reference. Do not store secret values directly
@@ -307,7 +305,7 @@ uv run --project src/examples/voiceclaw --extra server --extra openshell \
   python src/examples/voiceclaw/scripts/verify-realtime-delegation.py \
   --url 'ws://127.0.0.1:18790/v1/realtime?model=nvidia%2Fvoiceclaw' \
   --allow-loopback-ws \
-  --context-continuity shared_target \
+  --context-continuity unqualified \
   --input-audio-wav /absolute/path/agent-question.wav \
   --transcript-contains balanced \
   --display-contains balanced \
@@ -315,11 +313,9 @@ uv run --project src/examples/voiceclaw --extra server --extra openshell \
   --output-audio-wav /absolute/path/agent-result.wav
 ```
 
-For the developer stack, use port `7860` and `--context-continuity unqualified`.
-The default verifier contract is `unqualified`. The installer requires
-`shared_target`, which checks that a successful turn returns the target to the
-available state with delegation still enabled. Audio input and `--query`
-are mutually exclusive; the recorded-input check sends no typed fallback.
+For the developer stack, use port `7860`. The default verifier context contract
+is `unqualified`, including for the installer profile. Audio input and
+`--query` are mutually exclusive; the recorded-input check sends no typed fallback.
 The verifier sends paced 20 ms audio chunks and follows the session's
 negotiated automatic or manual turn behavior. It preserves the cascade's
 startup turn-detection mode.
@@ -340,12 +336,10 @@ The saved WAV records generated result audio. The verifier reports
 prove audible delivery. Listen to the saved result separately before reporting
 that you heard the reply.
 
-Start qualification with a fresh target. The generic adapter consumes the
-target after a successful or ambiguous invocation. The installer can accept
-another sequential turn after a fully verified agent result while the process
-retains its native history proof. Ambiguous outcomes still consume the target.
-Do not replay a recording after an uncertain invocation; use a fresh target.
-Restarting the installer cannot recover prior native history or pending work.
+Start qualification with a fresh target. A successful or ambiguous invocation
+consumes it. Do not replay a recording after an uncertain invocation; use a
+fresh target. Restarting the installer cannot recover prior native history or
+pending work.
 
 ### Troubleshoot Route Selection
 
@@ -369,19 +363,11 @@ or `tts_provider_error` codes. A language-model error identifies failed frontend
 generation. For a speech-provider error, inspect **Backend turns** for the text
 result before repeating agent work. Provider error details remain private.
 
-The application log warning `Realtime frontend rejected an event` can include
-a fixed `param` label. Examples include `provider.tool_call_missing` for a
-missing structured model call, `provider.grpc.deadline_exceeded` for a provider
-deadline, and `provider.empty_audio` for synthesis that completes without audio.
-These labels classify known failures without copying raw provider errors or
-credentials into the diagnostic.
-
 ## Current Limitations
 
 - The OpenShell profile supports one concurrent VoiceClaw session.
-- The generic OpenShell/Fabric adapter supports one non-durable delegated turn
-  for each fresh target. The installer profile enables sequential turns with
-  verified shared native history inside the running application.
+- The installer OpenShell/Fabric profile supports one non-durable delegated
+  turn for each fresh target.
 - Agent results are terminal responses. Backend event streaming, durable
   acceptance, replay, steering, confirmed remote cancellation, and reconnect
   recovery are not available yet.

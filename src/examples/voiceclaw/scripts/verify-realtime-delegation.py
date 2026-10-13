@@ -303,7 +303,7 @@ def _parser() -> argparse.ArgumentParser:
         "--context-continuity",
         choices=("unqualified", "shared_target"),
         default="unqualified",
-        help="required backend context contract; container-v1 uses shared_target (default: %(default)s)",
+        help="required backend context contract (default: %(default)s)",
     )
     parser.add_argument(
         "--display-contains",

@@ -244,6 +244,56 @@ def test_shared_context_accepts_a_correlated_followup_without_consuming_the_targ
     assert [call[0][1] for call in executor.calls] == ["invoke", "invoke", "check"]
 
 
+def test_shared_context_rejects_a_different_realtime_conversation_before_dispatch() -> None:
+    executor = _Executor([_invoke_success()])
+    adapter = _adapter(executor, allow_shared_context=True)
+    asyncio.run(adapter.commit_turn(_request()))
+
+    with pytest.raises(OpenShellFabricRejected, match="target_context_consumed"):
+        asyncio.run(
+            adapter.commit_turn(CommittedTurnRequest("conversation-2", "commit-2", "Inspect the prior result."))
+        )
+
+    descriptor = asyncio.run(adapter.inspect())
+    assert descriptor.target_availability is ResponseOnlyTargetAvailability.CONSUMED
+    assert len(executor.calls) == 1
+
+
+def test_cancelled_shared_invocation_cannot_reopen_the_target_for_another_conversation() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    executor = _Executor([_invoke_success()], started=started, release=release)
+    adapter = _adapter(executor, allow_shared_context=True)
+
+    async def exercise() -> None:
+        invocation = asyncio.create_task(adapter.commit_turn(_request()))
+        for _ in range(200):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+        invocation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await invocation
+        assert adapter._target_availability() is ResponseOnlyTargetAvailability.CONSUMED
+
+        release.set()
+        for _ in range(200):
+            if not adapter._invoke_gate.locked():
+                break
+            await asyncio.sleep(0.01)
+        assert not adapter._invoke_gate.locked()
+        assert adapter._target_availability() is ResponseOnlyTargetAvailability.CONSUMED
+
+        with pytest.raises(OpenShellFabricRejected, match="target_context_consumed"):
+            await adapter.commit_turn(
+                CommittedTurnRequest("conversation-2", "commit-2", "Inspect the abandoned result.")
+            )
+
+    asyncio.run(exercise())
+    assert len(executor.calls) == 1
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
