@@ -30,7 +30,8 @@ const els = {
   optTools: $("optTools"), optHistory: $("optHistory"),
   btnStart: $("btnStart"), btnStop: $("btnStop"), btnMute: $("btnMute"),
   btnShowConfig: $("btnShowConfig"), btnShowPrompts: $("btnShowPrompts"),
-  player: $("player"),
+  player: $("player"), setupOptions: $("setupOptions"), advanced: $("advanced"), actionHint: $("actionHint"),
+  panelHistory: $("panelHistory"), btnHistoryToggle: $("btnHistoryToggle"),
   captions: $("captions"), typedInput: $("typedInput"), btnTyped: $("btnTyped"),
   cartView: $("cartView"), menuView: $("menuView"),
   filters: $("filters"), hideDeltas: $("hideDeltas"), search: $("search"), log: $("log"),
@@ -43,6 +44,7 @@ const els = {
   ctlUpdModel: $("ctlUpdModel"), ctlUpdEffort: $("ctlUpdEffort"), ctlUpdToolChoice: $("ctlUpdToolChoice"),
   btnUpdate: $("btnUpdate"), rawEvent: $("rawEvent"), btnRaw: $("btnRaw"),
   modal: $("modal"), modalTitle: $("modalTitle"), modalBody: $("modalBody"), modalClose: $("modalClose"),
+  tokenModal: $("tokenModal"), tokenForm: $("tokenForm"), tokenInput: $("tokenInput"), tokenError: $("tokenError"),
 };
 
 const REASONING_EFFORTS = ["default", "minimal", "low", "medium", "high"];
@@ -791,7 +793,8 @@ function onServerEvent(ev) {
       app.sessionId = ev.session?.id;
       app.sessionSnapshot = ev.session;
       els.mSession.textContent = app.sessionId || "—";
-      setConnState("live", `Connected · ${app.sessionId}`);
+      setConnState("live", "Connected");
+      els.mSession.title = app.sessionId || "";
       logEvent({ cat: "lifecycle", dir: "in", actor: "talker", type: ev.type, text: `session ${app.sessionId} active`, payload: ev });
       enableControls(true);
       startHistory();
@@ -989,9 +992,17 @@ function updateBackendBadge() {
 function setConnState(kind, text) {
   els.statusDot.className = "dot" + (kind === "live" ? " live" : kind === "err" ? " err" : "");
   els.statusText.textContent = text;
+  document.body.dataset.conn = kind || "idle";
 }
 
 function enableControls(on) {
+  // The session's settings are fixed once it starts; lock them so they cannot look editable.
+  document.body.dataset.session = on ? "on" : "off";
+  els.setupOptions.disabled = on;
+  if (on) els.advanced.open = false;
+  els.actionHint.textContent = on
+    ? "Speak any time; you can interrupt the assistant. Steer it from the bar at the bottom."
+    : "Locks these settings for the session. Allow the microphone, then speak.";
   els.btnStop.disabled = !on;
   els.btnMute.disabled = !on;
   els.btnAppend.disabled = !on;
@@ -1014,7 +1025,10 @@ async function connect() {
 
     pc.addEventListener("track", (event) => {
       els.player.srcObject = new MediaStream([event.track]);
-      els.player.play().catch(() => setConnState("live", "Press play on the audio control to hear the assistant."));
+      els.player.play().catch(() => {
+        els.player.classList.add("needs-play");
+        setConnState("live", "Press play on the audio control to hear the assistant.");
+      });
       logEvent({ cat: "lifecycle", dir: "in", actor: "talker", type: "webrtc.track", text: "remote audio track attached (frontend speech)" });
     });
     pc.addEventListener("connectionstatechange", () => {
@@ -1113,6 +1127,7 @@ function cleanup() {
   try { app.dc?.close(); } catch {}
   try { app.pc?.close(); } catch {}
   els.player.srcObject = null;
+  els.player.classList.remove("needs-play");
   app.ready = false;
   app.dc = null;
   els.btnStart.disabled = false;
@@ -1126,10 +1141,10 @@ function renderCart() {
   const cart = cartSnapshot();
   const lines = cart.lines.map((l) =>
     `<div class="line"><span>${l.quantity}× ${l.size ? l.size + " " : ""}${l.name}` +
-    `${l.modifiers.length ? " (" + l.modifiers.join(", ") + ")" : ""} <span style="color:#626262">${l.line_id}</span></span>` +
+    `${l.modifiers.length ? " (" + l.modifiers.join(", ") + ")" : ""} <span style="color:var(--faint)">${l.line_id}</span></span>` +
     `<span>$${l.line_total.toFixed(2)}</span></div>`).join("");
   els.cartView.innerHTML =
-    (lines || `<div class="line" style="color:#626262">cart is empty</div>`) +
+    (lines || `<div class="line" style="color:var(--faint)">cart is empty</div>`) +
     `<div class="line tot"><span>subtotal</span><span>$${cart.subtotal.toFixed(2)}</span></div>` +
     `<div class="line"><span>tax</span><span>$${cart.tax.toFixed(2)}</span></div>` +
     `<div class="line"><span><b>total</b></span><span><b>$${cart.total.toFixed(2)}</b></span></div>` +
@@ -1140,7 +1155,7 @@ function renderCart() {
 
 function renderMenu() {
   els.menuView.innerHTML = MENU.map((m) =>
-    `<div class="mitem"><span>${m.id} · ${m.name} <span style="color:#626262">${m.category}</span></span><span>$${m.price.toFixed(2)}</span></div>`
+    `<div class="mitem"><span>${m.id} · ${m.name} <span style="color:var(--faint)">${m.category}</span></span><span>$${m.price.toFixed(2)}</span></div>`
   ).join("") +
     `<div class="mitem" style="margin-top:6px"><span>sizes</span><span>${Object.entries(SIZES).map(([k, v]) => `${k} +$${v.toFixed(2)}`).join(" · ")}</span></div>` +
     `<div class="mitem"><span>modifiers</span><span>${Object.entries(MODIFIERS).map(([k, v]) => `${k} +$${v.price.toFixed(2)}`).join(" · ")}</span></div>`;
@@ -1180,9 +1195,10 @@ function refreshPresets() {
 async function loadInfo() {
   const response = await fetch("/v1/live/info", { headers: authHeaders() });
   if (!response.ok) {
-    throw new Error(response.status === 401
+    throw Object.assign(new Error(response.status === 401
       ? "The server requires a bearer token: enter it above, then reload the defaults."
-      : `GET /v1/live/info failed (HTTP ${response.status}). Is the live example enabled on this server?`);
+      : `GET /v1/live/info failed (HTTP ${response.status}). Is the live example enabled on this server?`),
+    { status: response.status });
   }
   app.info = await response.json();
   applyInfo();
@@ -1196,14 +1212,53 @@ async function loadInfo() {
   });
 }
 
+/** Take a bearer token from `live.html#token=…` (the fragment never reaches the server), then drop it from the URL. */
+function tokenFromUrl() {
+  const token = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (!token) return;
+  els.optToken.value = token;
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+/** Ask for the bearer token in a dialog; resolves once the user submits one. */
+function askToken(message) {
+  els.tokenError.textContent = message;
+  els.tokenInput.value = "";
+  els.tokenModal.hidden = false;
+  els.tokenInput.focus();
+  return new Promise((resolve) => {
+    els.tokenForm.addEventListener("submit", function submit(event) {
+      event.preventDefault();
+      const token = els.tokenInput.value.trim();
+      if (!token) return;
+      els.tokenForm.removeEventListener("submit", submit);
+      els.tokenModal.hidden = true;
+      resolve(token);
+    });
+  });
+}
+
+/** Load the server defaults, asking for the bearer token for as long as the server refuses it. */
+async function loadInfoWithToken() {
+  for (;;) {
+    try {
+      return await loadInfo();
+    } catch (error) {
+      if (error.status !== 401) throw error;
+      els.optToken.value = await askToken(els.optToken.value ? "That token was refused. Try again." : "");
+    }
+  }
+}
+
 async function boot() {
+  tokenFromUrl();
   refreshPresets();
   renderMenu();
   renderCart();
   enableControls(false);
   els.btnStart.disabled = true;
   try {
-    await loadInfo();
+    await loadInfoWithToken();
   } catch (error) {
     logEvent({ cat: "error", dir: "in", type: "app.info", text: String(error.message || error) });
     setConnState("err", String(error.message || error));
@@ -1341,6 +1396,21 @@ async function boot() {
     els.modal.hidden = false;
   };
   els.modalClose.addEventListener("click", () => { els.modal.hidden = true; });
+  els.modal.addEventListener("click", (e) => { if (e.target === els.modal) els.modal.hidden = true; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") els.modal.hidden = true; });
+  els.player.addEventListener("playing", () => els.player.classList.remove("needs-play"));
+
+  const setHistoryOpen = (open) => {
+    els.panelHistory.classList.toggle("collapsed", !open);
+    document.body.classList.toggle("history-collapsed", !open);
+    els.btnHistoryToggle.textContent = open ? "hide" : "show";
+    els.btnHistoryToggle.setAttribute("aria-expanded", String(open));
+    try { localStorage.setItem("live.historyOpen", open ? "1" : "0"); } catch {}
+  };
+  let historyOpen = true;
+  try { historyOpen = localStorage.getItem("live.historyOpen") !== "0"; } catch {}
+  setHistoryOpen(historyOpen);
+  els.btnHistoryToggle.addEventListener("click", () => setHistoryOpen(els.panelHistory.classList.contains("collapsed")));
   els.btnShowConfig.addEventListener("click", () => {
     let config = app.sentConfig;
     let title = "Session config (as sent)";

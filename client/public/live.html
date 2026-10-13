@@ -14,10 +14,9 @@ SPDX-License-Identifier: Apache-2.0
   <body>
     <header class="topbar">
       <div class="brand">
-        <span class="mark">NVIDIA</span>
-        <h1>Live Console</h1>
-        <span class="dot" id="statusDot"></span>
-        <span class="sub" id="statusText">Idle</span>
+        <span class="mark" aria-hidden="true"></span>
+        <h1><b>NVIDIA</b> Live Console</h1>
+        <span class="status"><span class="dot" id="statusDot"></span><span id="statusText">Idle</span></span>
       </div>
 
       <div class="who">
@@ -26,13 +25,13 @@ SPDX-License-Identifier: Apache-2.0
           <span class="who-model" id="badgeFrontend">…</span>
           <span class="who-note" id="noteFrontend">speech in / speech out · decides when to delegate</span>
         </div>
-        <span class="who-arrow">delegates&nbsp;→</span>
+        <span class="who-arrow" title="delegates">→</span>
         <div class="who-card thinker" title="The backend: reasons, picks tools and returns verified facts.">
           <span class="who-role">BACKEND</span>
           <span class="who-model" id="badgeBackend">…</span>
           <span class="who-note" id="noteBackend">reasons · picks tools · returns facts</span>
         </div>
-        <span class="who-arrow">tool calls&nbsp;→</span>
+        <span class="who-arrow" title="tool calls">→</span>
         <div class="who-card client" title="This browser runs the cafe tools.">
           <span class="who-role">CLIENT</span>
           <span class="who-model">this browser</span>
@@ -50,12 +49,13 @@ SPDX-License-Identifier: Apache-2.0
     </header>
 
     <section class="setup" id="setup">
+      <fieldset class="setup-options" id="setupOptions">
       <div class="setup-row">
         <label>Delegation <select id="optMode">
           <option value="responses">responses — the server runs the backend</option>
           <option value="client">client — this browser runs it</option>
         </select></label>
-        <label>Backend model <input id="optBackend" list="backendModels" size="34" /></label>
+        <label>Backend model <input id="optBackend" list="backendModels" size="44" /></label>
         <datalist id="backendModels"></datalist>
         <label>Voice <select id="optVoice"></select></label>
         <label>Reasoning <select id="optEffort"></select></label>
@@ -63,8 +63,8 @@ SPDX-License-Identifier: Apache-2.0
         <label>Bearer token <input id="optToken" type="password" size="12" placeholder="if required" /></label>
         <label class="check"><input type="checkbox" id="optAutoCommentary" checked /> auto progress commentary</label>
       </div>
-      <details class="advanced">
-        <summary>Prompts, tools and earlier messages (what the session is created with)</summary>
+      <details class="advanced" id="advanced">
+        <summary>Prompts, tools and earlier messages</summary>
         <div class="advanced-grid">
           <label>Frontend instructions<textarea id="optInstructions" rows="7"></textarea></label>
           <label>Backend instructions<textarea id="optBackendInstructions" rows="7"></textarea></label>
@@ -72,47 +72,49 @@ SPDX-License-Identifier: Apache-2.0
           <label>Earlier messages (one per line, <code>role: text</code>)<textarea id="optHistory" rows="7" placeholder="user: hi&#10;assistant: Welcome to Bluebird Cafe."></textarea></label>
         </div>
       </details>
-      <div class="setup-row">
+      </fieldset>
+      <div class="setup-row actions">
         <button id="btnStart" class="primary">Start conversation</button>
-        <button id="btnStop" disabled>End conversation (graceful)</button>
+        <button id="btnStop" class="danger" disabled>End conversation</button>
         <button id="btnMute" disabled>Mute mic</button>
         <button id="btnShowConfig">Show session config</button>
         <button id="btnShowPrompts">Show prompts</button>
-        <audio id="player" autoplay controls></audio>
+        <span class="hint" id="actionHint">Locks these settings for the session. Allow the microphone, then speak.</span>
+        <audio id="player" autoplay controls title="The assistant's voice"></audio>
       </div>
     </section>
 
     <main class="grid">
       <section class="panel" id="panelConversation">
-        <h2>Conversation <small>full duplex — both sides can speak at once</small></h2>
-        <div class="captions" id="captions"></div>
+        <h2>Conversation <small>full duplex · both sides can speak at once</small></h2>
+        <div class="captions" id="captions" data-empty="Press Start conversation, allow the microphone, and speak. Try “what's on the menu?”"></div>
         <div class="typed">
-          <input id="typedInput" placeholder="Type exact text (sent as response.item.create + response.create)" />
+          <input id="typedInput" placeholder="Or type to the backend…" title="Sent as response.item.create + response.create" />
           <button id="btnTyped">Send to backend</button>
         </div>
 
-        <h2 class="mt">Client state <small>what the mock tools actually mutate</small></h2>
+        <h2 class="mt">Order state <small>what the client tools change</small></h2>
         <div class="cart" id="cartView"></div>
         <details class="menu">
-          <summary>Menu (mock data)</summary>
+          <summary>Menu</summary>
           <div id="menuView"></div>
         </details>
       </section>
 
       <section class="panel" id="panelConsole">
-        <h2>Live session event console <small>every frame on the <code>oai-events</code> data channel</small></h2>
+        <h2>Event stream <small>every frame on the <code>oai-events</code> data channel</small></h2>
         <div class="filters" id="filters">
           <label class="check"><input type="checkbox" data-cat="lifecycle" checked /> lifecycle</label>
           <label class="check"><input type="checkbox" data-cat="transcript" checked /> transcript</label>
           <label class="check"><input type="checkbox" data-cat="delegation" checked /> delegation</label>
-          <label class="check"><input type="checkbox" data-cat="backend" checked /> backend (response.event)</label>
+          <label class="check"><input type="checkbox" data-cat="backend" checked /> backend</label>
           <label class="check"><input type="checkbox" data-cat="tool" checked /> tools</label>
-          <label class="check"><input type="checkbox" data-cat="context" checked /> context appends</label>
-          <label class="check"><input type="checkbox" data-cat="app" checked /> app notes</label>
+          <label class="check"><input type="checkbox" data-cat="context" checked /> appends</label>
+          <label class="check"><input type="checkbox" data-cat="app" checked /> notes</label>
           <label class="check"><input type="checkbox" data-cat="error" checked /> errors</label>
-          <label class="check"><input type="checkbox" id="hideDeltas" checked /> hide streaming deltas</label>
+          <label class="check"><input type="checkbox" id="hideDeltas" checked /> hide deltas</label>
           <span class="spacer"></span>
-          <input id="search" placeholder="filter text…" />
+          <input id="search" placeholder="Filter…" />
           <button id="btnAutoscroll" class="toggle on">autoscroll</button>
           <button id="btnClear">clear</button>
           <button id="btnExport">export</button>
@@ -121,21 +123,23 @@ SPDX-License-Identifier: Apache-2.0
       </section>
 
       <section class="panel" id="panelDelegations">
-        <h2>Delegation timeline <small>one card per <code>session.delegation.created</code></small></h2>
+        <h2>Delegations <small>one card per <code>session.delegation.created</code></small></h2>
         <div class="delegations" id="delegations">
           <p class="empty">No delegation yet. Ask about the menu once connected.</p>
         </div>
       </section>
 
       <section class="panel history" id="panelHistory">
-        <h2>Live conversation history <small>each model's system prompt by source (client · config · server), then what it holds now; refreshed every second</small></h2>
+        <h2>Model context <small>each model's prompt by source, then what it holds now</small>
+          <span class="legend"><i class="client"></i>client <i class="config"></i>config <i class="server"></i>server</span>
+          <button class="collapse" id="btnHistoryToggle" aria-expanded="true" title="Show or hide the history">hide</button></h2>
         <div class="hist-cols">
           <div class="hist-col talker">
-            <h3>Frontend · talker <code id="histFrontendModel"></code> <small id="histFrontendCount"></small></h3>
+            <h3>Frontend <span class="role">talker</span> <code id="histFrontendModel"></code> <small id="histFrontendCount"></small></h3>
             <div class="hist" id="histFrontend"><p class="empty">Start a conversation to see the talker's context.</p></div>
           </div>
           <div class="hist-col thinker">
-            <h3>Backend · thinker <code id="histBackendModel"></code> <small id="histBackendCount"></small></h3>
+            <h3>Backend <span class="role">thinker</span> <code id="histBackendModel"></code> <small id="histBackendCount"></small></h3>
             <div class="hist" id="histBackend"><p class="empty">Start a conversation to see the backend's history.</p></div>
           </div>
         </div>
@@ -144,14 +148,12 @@ SPDX-License-Identifier: Apache-2.0
 
     <footer class="controls">
       <div class="ctl-group">
-        <span class="ctl-title">Steer the frontend from the client
-          <small>all three take <code>delegation_id: null</code> in responses delegation</small>
-        </span>
+        <span class="ctl-title">Steer the frontend <small><code>session.*.append</code></small></span>
         <div class="ctl-row">
           <select id="ctlKind">
-            <option value="session.instructions.append">session.instructions.append — behavior / exact wording</option>
-            <option value="session.thinking.append">session.thinking.append — silent context</option>
-            <option value="session.commentary.append">session.commentary.append — say this aloud</option>
+            <option value="session.instructions.append">instructions.append — steer behavior</option>
+            <option value="session.thinking.append">thinking.append — silent context</option>
+            <option value="session.commentary.append">commentary.append — say it aloud</option>
           </select>
           <select id="ctlPreset"></select>
           <input id="ctlContent" placeholder="content (≤ 500 tokens)" />
@@ -159,7 +161,7 @@ SPDX-License-Identifier: Apache-2.0
         </div>
       </div>
       <div class="ctl-group">
-        <span class="ctl-title">Reconfigure the backend mid-session <small><code>session.update</code></small></span>
+        <span class="ctl-title">Update the backend <small><code>session.update</code></small></span>
         <div class="ctl-row">
           <input id="ctlUpdModel" list="backendModels" placeholder="model" />
           <select id="ctlUpdEffort"></select>
@@ -168,7 +170,7 @@ SPDX-License-Identifier: Apache-2.0
         </div>
       </div>
       <div class="ctl-group">
-        <span class="ctl-title">Send any event <small>exactly as typed</small></span>
+        <span class="ctl-title">Send a raw event <small>exactly as typed</small></span>
         <div class="ctl-row">
           <input id="rawEvent" class="mono" value='{"type": "session.thinking.append", "delegation_id": null, "content": "…"}' />
           <button id="btnRaw" disabled>Send</button>
@@ -184,6 +186,17 @@ SPDX-License-Identifier: Apache-2.0
         </div>
         <pre id="modalBody"></pre>
       </div>
+    </div>
+
+    <div class="modal" id="tokenModal" hidden>
+      <form class="modal-box token-box" id="tokenForm">
+        <div class="modal-head"><h3>This server requires a bearer token</h3></div>
+        <div class="token-body">
+          <input id="tokenInput" type="password" autocomplete="off" placeholder="bearer token" />
+          <p class="token-error" id="tokenError"></p>
+          <button class="primary" type="submit">Continue</button>
+        </div>
+      </form>
     </div>
 
     <script type="module" src="/live/app.js"></script>
