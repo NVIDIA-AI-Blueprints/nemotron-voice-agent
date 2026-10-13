@@ -127,6 +127,7 @@ def collect_with_sessions(
             "ttft_vision": [],
             "prompt_tokens": [],
             "wer": defaultdict(lambda: [0, 0]),
+            "client": defaultdict(list),
         }
     )
     per_session: dict[str, dict[str, Any]] = {
@@ -166,6 +167,8 @@ def collect_with_sessions(
         elif metric["name"] == "ttfb" and (metric["value"] or 0) > 0:
             # Zero-valued samples are start-up artifacts of pipecat, not measurements.
             g["ttfb"][_service(metric["processor"])].append(metric["value"])
+        elif metric["processor"] == "client":
+            g["client"][metric["name"]].append(metric["value"])
     for call in llm_calls:
         g = groups[group_of[call["session_id"]]]
         if call["ttfb"] is not None:
@@ -317,6 +320,7 @@ def metrics_json(
                 "ttfb": {role: _dist(values) for role, values in sorted(ttfb.items())},
                 "ttft": {"text": _dist(g["ttft_text"]), "vision": _dist(g["ttft_vision"])},
                 "prompt_tokens_p50": _pct(g["prompt_tokens"], 50),
+                "client": {name: _dist(values) for name, values in sorted(g["client"].items())},
                 "wer": {
                     source: {"wer": errors / words if words else None, "ref_words": words}
                     for source, (errors, words) in sorted(g["wer"].items())

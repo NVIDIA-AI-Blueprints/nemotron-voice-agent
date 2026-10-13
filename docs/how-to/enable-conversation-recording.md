@@ -44,7 +44,9 @@ container (`docker compose exec dreamer …`), or `chown` the directory.
 
 Everything is keyed by the server `session_id`. The same id is passed to
 pipecat as the OpenTelemetry `conversation_id`, so Phoenix traces can be joined
-to these rows.
+to these rows. A client can choose the id with the `session_id` query parameter
+of `/api/offer`. The id can contain letters, digits, `_`, and `-`, up to 64
+characters. The recorder replaces any other value with a generated id.
 
 | Table | Content |
 |-------|---------|
@@ -54,7 +56,7 @@ to these rows.
 | `tool_calls` | One row per tool or intent call: name, trigger (`llm` or `intent`), target (`client` or `home_assistant`), send time, duration, outcome (`ok`, `error`, `timeout`, or `cancelled`), and the `perceivable` flag |
 | `system_samples` | Host-wide samples, one per second while a session is live, with the number of live sessions |
 | `events` | Timeline: VAD and bot speaking, interruptions, final ASR, function calls (requested, sent, result, cancelled), latency breakdowns, errors |
-| `metrics` | Flat numeric samples: `ttfb`, `processing`, `llm_usage.*`, `tts_usage`, `user_bot_latency`, `first_bot_speech_latency`, `turn_duration`, … Zero-valued `ttfb` and `processing` samples, which Pipecat emits at startup, are not stored. |
+| `metrics` | Flat numeric samples: `ttfb`, `processing`, `llm_usage.*`, `tts_usage`, `user_bot_latency`, `first_bot_speech_latency`, `turn_duration`, … Zero-valued `ttfb` and `processing` samples, which Pipecat emits at startup, are not stored; plus the client's own `client.*` metrics (processor `client`) | |
 | `llm_calls` | The full LLM input, tools, output, function calls, TTFT, tokens, and `n_images` / `image_pixels` for each call of the conversation LLM |
 | `media` | Audio clips, images and video, deduplicated by SHA-256. `source` is `context`, `tool:<name>`, `user_image` or `camera:<track>`. |
 | `annotations` | Job outputs and human labels: `(target, source, kind, value)` |
@@ -232,6 +234,32 @@ Each group shows:
 
 The turn-kind split reads the `turn_metrics` table. Run the backfill in
 [Per-Turn Metrics](#per-turn-metrics) for older sessions.
+
+### Client Metrics
+
+The multilingual assistant also stores the performance of the client itself.
+The client sends these metrics as an RTVI `client-message` of type
+`client-metrics`, as in the following example:
+
+```json
+{"metrics": [{"name": "client.voice_id.embed_s.p95", "value": 0.118}]}
+```
+
+The recorder applies the following rules:
+
+- A name starts with `client.` and contains only letters, digits, `_`, and `.`.
+- A value is a finite number.
+- A message carries up to 500 entries. The recorder skips invalid entries and
+  entries past the limit.
+- Each valid entry becomes one `metrics` row of the current turn, with the
+  processor `client`.
+
+The **Metrics** page shows these rows in the **Robot client** table, as the
+median and p90 of the stored values. The Reachy Mini client sends timings for
+voice ID, face ID, and event loop lag as aggregates per 10 second window
+(`.count`, `.mean`, `.p95`, and `.max`). It sends system load and queue depths
+as the last reading of each window. It sends tool call durations and startup
+timings as single values.
 
 ## Review in the web UI
 

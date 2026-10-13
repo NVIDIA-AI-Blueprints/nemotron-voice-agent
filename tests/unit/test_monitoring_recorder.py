@@ -38,7 +38,12 @@ from pipecat.processors.frame_processor import FrameDirection
 
 from monitoring.config import MonitoringConfig
 from monitoring.media import extract_inline_media
+<<<<<<< HEAD
 from monitoring.recorder import SessionRecorder, flatten_metrics, git_revision
+=======
+from monitoring.recorder import SessionRecorder, flatten_metrics
+from monitoring.report import metrics_json
+>>>>>>> b502395 (Store the client's performance metrics with the session)
 from monitoring.store import LocalArtifactStore, SessionStore
 
 
@@ -201,6 +206,7 @@ def test_disabled_recorder_returns_none(tmp_path):
     assert SessionRecorder.create(session_id="x", example="e", config={}, settings=settings) is None
 
 
+<<<<<<< HEAD
 def _message(content: str, interrupted: bool = False):
     return type("M", (), {"content": content, "interrupted": interrupted})()
 
@@ -346,3 +352,46 @@ def test_git_revision_handles_packed_refs_worktrees_and_env(tmp_path, monkeypatc
     assert git_revision(tmp_path / "nowhere") is None  # no .git, as in the app container
     monkeypatch.setenv("GIT_SHA", "from-env")
     assert git_revision(tmp_path / "nowhere") == "from-env"
+
+
+def test_client_metrics_are_stored_and_reported(tmp_path):
+    settings = _settings(tmp_path)
+    store = SessionStore(settings.db_url)
+    store.create_schema()
+
+    async def scenario():
+        recorder = SessionRecorder(
+            session_id="s2",
+            example="multilingual-assistant",
+            config={},
+            settings=settings,
+            store=store,
+            artifacts=LocalArtifactStore(settings.artifacts_dir),
+        )
+        await recorder.start()
+        recorder.on_client_metrics(
+            {
+                "metrics": [
+                    {"name": "client.voice_id.embed_s.p95", "value": 0.12},
+                    {"name": "ttfb", "value": 1.0},
+                    {"name": "client.loop.lag_s.max", "value": float("nan")},
+                    {"name": "client.voice_id.dropped_chunks", "value": True},
+                    "not an entry",
+                ]
+            }
+        )
+        recorder.on_client_metrics({"metrics": "not a list"})
+        await recorder.close()
+
+    asyncio.run(scenario())
+
+    stored = [(m["processor"], m["name"], m["value"]) for m in store.rows("metrics", "s2")]
+    assert stored == [("client", "client.voice_id.embed_s.p95", 0.12)]
+    (variant,) = metrics_json(store, since=None, group_by=[])["variants"]
+    assert variant["client"]["client.voice_id.embed_s.p95"]["p50"] == 0.12
+
+
+def test_invalid_client_session_id_is_replaced(tmp_path):
+    recorder = SessionRecorder.create(session_id="../escape", example="e", config={}, settings=_settings(tmp_path))
+    assert recorder is not None and recorder.session_id != "../escape"
+    assert "/" not in recorder.prefix.removeprefix("sessions/").split("/", 1)[1].rstrip("/")

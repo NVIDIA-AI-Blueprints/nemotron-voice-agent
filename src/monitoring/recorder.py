@@ -22,6 +22,7 @@ a turn ends and when the session closes.
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import time
@@ -69,6 +70,13 @@ RECORDING_SAMPLE_RATE = 16_000
 _STEREO_CHUNK_SECS = 10
 _KEYFRAME_MAX_WIDTH = 640
 _VIDEO_CHUNK_SECS = 30
+
+# RTVI client message carrying the client's own performance metrics, as {"metrics": [{"name", "value"}]}.
+CLIENT_METRICS_MESSAGE = "client-metrics"
+_CLIENT_METRIC_NAME = re.compile(r"client\.[A-Za-z0-9_.]{1,120}")
+_MAX_CLIENT_METRICS = 500
+# Client-supplied session ids become artifact path segments.
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 @cache
@@ -362,6 +370,9 @@ class SessionRecorder:
         settings = settings or load_monitoring_config()
         if not settings.enabled:
             return None
+        if session_id and not _SESSION_ID.fullmatch(session_id):
+            logger.warning(f"Ignoring invalid client session id {session_id!r}")
+            session_id = None
         try:
             store, artifacts = _stores_for(settings)
         except Exception as exc:
@@ -534,6 +545,23 @@ class SessionRecorder:
                 "value": float(value),
             },
         )
+
+    def on_client_metrics(self, payload: Any) -> None:
+        """Store the metrics of a ``client-metrics`` message, skipping malformed entries."""
+        entries = payload.get("metrics") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            logger.warning("Ignoring a client-metrics message without a metrics list")
+            return
+        skipped = max(0, len(entries) - _MAX_CLIENT_METRICS)
+        for entry in entries[:_MAX_CLIENT_METRICS]:
+            name, value = (entry.get("name"), entry.get("value")) if isinstance(entry, dict) else (None, None)
+            valid_value = isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+            if isinstance(name, str) and _CLIENT_METRIC_NAME.fullmatch(name) and valid_value:
+                self.metric(name, value, processor="client")
+            else:
+                skipped += 1
+        if skipped:
+            logger.warning(f"Skipped {skipped} invalid client metric(s)")
 
     # ------------------------------------------------------------------ turns
     def _start_user_turn(self) -> None:

@@ -388,6 +388,8 @@ export interface MetricsVariant {
   ttfb: Record<string, Distribution>;
   ttft: { text: Distribution; vision: Distribution };
   prompt_tokens_p50: number | null;
+  // Robot client metrics ("client.*"), each distributed over its reporting windows.
+  client: Record<string, Distribution>;
   wer: Record<string, { wer: number | null; ref_words: number }>;
 }
 

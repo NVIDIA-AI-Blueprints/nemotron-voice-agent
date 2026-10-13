@@ -79,7 +79,7 @@ from examples.shared.voice_id import (
     VoiceIdSession,
     voice_id_available,
 )
-from monitoring.recorder import SessionRecorder
+from monitoring.recorder import CLIENT_METRICS_MESSAGE, SessionRecorder
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -637,6 +637,10 @@ async def bot(runner_args: RunnerArguments) -> None:
     @task.rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, message):
         payload = message.data if isinstance(message.data, dict) else {}
+        if message.type == CLIENT_METRICS_MESSAGE:
+            if recorder:
+                recorder.on_client_metrics(payload)
+            return
         if message.type == SPEAKER_UPDATE_MESSAGE:
             if voice_id_session:
                 await voice_id_session.on_speaker_update(payload)

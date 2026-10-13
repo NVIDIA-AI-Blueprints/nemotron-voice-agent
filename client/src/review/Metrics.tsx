@@ -368,6 +368,48 @@ function SummaryTable({ variants }: Readonly<{ variants: MetricsVariant[] }>) {
   );
 }
 
+// Durations are named "<what>_s" (aggregates add ".mean", ".p95"...); they read best in milliseconds.
+function formatClientValue(name: string, value: number | null | undefined): string {
+  if (value === null || value === undefined) return "–";
+  if (/_s(\.|$)/.test(name)) return `${(value * 1000).toFixed(1)} ms`;
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function ClientTable({ variants }: Readonly<{ variants: MetricsVariant[] }>) {
+  const names = [...new Set(variants.flatMap((v) => Object.keys(v.client)))]
+    .filter((name) => !name.endsWith(".count"))
+    .sort();
+  if (!names.length) return <Empty what="robot client metrics" />;
+  return (
+    <div className="rv-table-scroll">
+      <table className="rv-table rv-table-static rv-num">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            {variants.map((v, i) => (
+              <th key={v.label} title={v.label}>
+                <span className="rv-swatch" style={{ background: variantColor(v.label) }} /> {short(i)} p50 / p90
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {names.map((name) => (
+            <tr key={name}>
+              <td>{name.replace(/^client\./, "")}</td>
+              {variants.map((v) => (
+                <td key={v.label}>
+                  {formatClientValue(name, v.client[name]?.p50)} / {formatClientValue(name, v.client[name]?.p90)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function MetricsView() {
   const [days, setDays] = useState<number | null>(7);
   const [groupBy, setGroupBy] = useState<string[]>(DEFAULT_GROUP);
@@ -537,6 +579,13 @@ export function MetricsView() {
 
           <h3 className="text-sm font-semibold rv-section-head">All numbers</h3>
           <SummaryTable variants={variants} />
+
+          <h3 className="text-sm font-semibold">Robot client</h3>
+          <p className="text-xs text-muted">
+            Sent by the robot every 10 s (window aggregates and last readings) or per event; p50 / p90 are taken
+            over the reported values.
+          </p>
+          <ClientTable variants={variants} />
         </div>
       )}
     </section>
