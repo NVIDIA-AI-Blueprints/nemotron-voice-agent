@@ -3,6 +3,19 @@
 
 # Build from the repository root:
 # docker build -f src/examples/voiceclaw/Dockerfile -t voiceclaw .
+FROM docker.io/library/rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS openshell-client-builder
+RUN apt-get update && apt-get install -y --no-install-recommends cmake clang pkg-config git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /client
+COPY src/examples/voiceclaw/openshell-client/ ./
+RUN cargo build --release --locked \
+    && install -d /client/legal \
+    && cp /usr/local/cargo/git/checkouts/openshell-*/6648bd0/LICENSE /client/legal/OpenShell-LICENSE \
+    && cp Cargo.lock /client/legal/Cargo.lock \
+    && rustc -vV > /client/legal/compiler.txt \
+    && voiceclaw_target="$(rustc -vV | sed -n 's/^host: //p')" \
+    && cargo metadata --locked --format-version=1 --filter-platform "${voiceclaw_target}" > /client/legal/Cargo-metadata.json
+
 FROM nvcr.io/nvidia/base/ubuntu:noble-20260610@sha256:a6015cf73597a174b8624ef0a9f78937f79a0862c078df4922dc35f26cec8fad AS voiceclaw-base
 
 ARG VOICECLAW_VERSION=0.1.0
@@ -131,6 +144,32 @@ RUN uv sync \
     && install -o root -g root -m 0644 \
       /app/src/examples/voiceclaw/src/voiceclaw/resources/voiceclaw.container.yaml \
       /etc/voiceclaw/voiceclaw.yaml
+
+# Installer entry path; the default upstream runtime remains below.
+FROM voiceclaw-base AS nemoclaw-container-v1
+ARG VOICECLAW_SOURCE_REVISION
+RUN test "${#VOICECLAW_SOURCE_REVISION}" -eq 40 \
+    && case "${VOICECLAW_SOURCE_REVISION}" in *[!0-9a-f]*) false ;; *) true ;; esac
+COPY --from=openshell-client-builder /client/target/release/voiceclaw-openshell-exec /usr/local/bin/voiceclaw-openshell-exec
+COPY --from=openshell-client-builder /client/legal/ /app/legal/openshell/
+LABEL com.nvidia.voiceclaw.install-contract="voiceclaw.nemoclaw.container.v1" \
+    com.nvidia.voiceclaw.openshell-revision="6648bd0c290efbc41ba131ee9831ee45cd431f94"
+ENV VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1
+RUN groupadd --gid 65532 voiceclaw-managed \
+    && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin voiceclaw-managed \
+    && chown 65532:65532 /var/lib/voiceclaw /var/lib/voiceclaw/config /var/lib/voiceclaw/credentials /var/lib/voiceclaw/state \
+    && chmod 0700 /var/lib/voiceclaw /var/lib/voiceclaw/config /var/lib/voiceclaw/credentials /var/lib/voiceclaw/state \
+    && install -d -o 65532 -g 65532 -m 0700 /run/voiceclaw-managed \
+    && touch /etc/voiceclaw-nemoclaw-container-v1 \
+    && chmod 0444 /etc/voiceclaw-nemoclaw-container-v1
+USER 65532:65532
+VOLUME ["/var/lib/voiceclaw"]
+EXPOSE 18790/tcp
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=10s --timeout=20s --start-period=180s --retries=3 \
+    CMD ["/usr/local/bin/voiceclaw-runtime", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/voiceclaw-runtime"]
+CMD ["serve"]
 
 FROM voiceclaw-base AS voiceclaw-runtime
 

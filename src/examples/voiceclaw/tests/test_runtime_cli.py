@@ -30,3 +30,25 @@ def test_runtime_cli_forwards_typed_arguments_to_the_supervisor() -> None:
     with patch("voiceclaw.runtime_cli.container.main") as supervisor:
         main(["healthcheck"])
     supervisor.assert_called_once_with(["--healthcheck"])
+
+
+def test_runtime_cli_dispatches_installer_marker_without_changing_the_default() -> None:
+    with (
+        patch("voiceclaw.runtime_cli.Path.is_file", return_value=True),
+        patch("voiceclaw.runtime_cli.installer_runtime.main") as installer,
+        patch("voiceclaw.runtime_cli.container.main") as supervisor,
+    ):
+        main(["serve"])
+        installer.assert_called_once_with()
+        supervisor.assert_not_called()
+        with pytest.raises(SystemExit):
+            main(["serve", "--ui"])
+        with pytest.raises(SystemExit):
+            main(["serve", "--config", "/tmp/config.yaml"])
+
+    with (
+        patch("voiceclaw.runtime_cli.Path.is_file", return_value=True),
+        patch("voiceclaw.runtime_cli.installer_runtime.run_healthcheck") as health,
+    ):
+        main(["healthcheck"])
+        health.assert_called_once_with()

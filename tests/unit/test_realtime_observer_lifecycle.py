@@ -222,6 +222,7 @@ class ObserverAudioLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         error = next(event for event in recorder.events if event["type"] == "error")
         self.assertEqual(error["error"]["code"], "tts_provider_error")
+        self.assertNotIn("param", error["error"])
         done = next(event for event in recorder.events if event["type"] == "response.done")
         self.assertEqual(done["response"]["status"], "failed")
         self.assertEqual(done["response"]["status_details"]["error"]["code"], "tts_provider_error")

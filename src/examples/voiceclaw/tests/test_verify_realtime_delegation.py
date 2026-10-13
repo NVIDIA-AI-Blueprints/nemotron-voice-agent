@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.util
 import json
+import os
+import wave
 from pathlib import Path
 
 import pytest
@@ -345,6 +348,37 @@ def test_target_contract_validates_initial_binding_and_terminal_tool_withdrawal(
     )
 
 
+def test_shared_target_contract_keeps_delegation_available_only_when_explicitly_selected() -> None:
+    """A live shared target must advertise the explicitly selected continuation contract."""
+    projection = {"backend_name": "NemoClaw", "backend_mode": "response_only", "target_ref": "workspace/sandbox/agent"}
+    payload = {
+        "backend": "NemoClaw",
+        "mode": "response_only",
+        "target": "workspace/sandbox/agent",
+        "agent_readiness": "unknown",
+        "capabilities": ["work.submit"],
+        "frontend_tools": ["work.delegate"],
+        "durability": "none",
+        "event_delivery": "response_only",
+        "max_parallel_work": 1,
+        "context_continuity": "shared_target",
+        "target_state": "available",
+    }
+    parameters = dict(
+        expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
+        expected_capabilities=frozenset({"work.submit"}),
+        expected_tools=frozenset({"work.delegate"}),
+    )
+    with pytest.raises(RuntimeError, match="qualified response-only contract"):
+        _VERIFIER._target_contract_payload(json.dumps(payload), projection, **parameters)
+    assert (
+        _VERIFIER._target_contract_payload(
+            json.dumps(payload), projection, expected_continuity="shared_target", **parameters
+        )
+        == payload
+    )
+
+
 def test_target_contract_rejects_a_consumed_target_that_still_advertises_delegation() -> None:
     """A terminal one-shot target cannot leave a stale delegate action visible."""
     projection = {
@@ -463,3 +497,416 @@ def test_noncompleted_response_diagnostic_does_not_echo_unbounded_prose() -> Non
 
     assert message == "the frontend failure delivery did not complete (status=failed, type=failed)"
     assert "secret" not in message
+
+
+def _recording(path: Path, *, rate: int = 24_000, channels: int = 1, width: int = 2, frames: int = 960) -> bytes:
+    pcm = b"\x01" * (frames * channels * width)
+    with wave.open(str(path), "wb") as recording:
+        recording.setnchannels(channels)
+        recording.setsampwidth(width)
+        recording.setframerate(rate)
+        recording.writeframes(pcm)
+    return pcm
+
+
+def _voice_arguments(tmp_path: Path, *extra: str):
+    recording = tmp_path / "input.wav"
+    _recording(recording)
+    return _VERIFIER._parser().parse_args(["--input-audio-wav", str(recording), *extra])
+
+
+def test_verifier_requires_exactly_one_text_or_recorded_voice_input(tmp_path: Path) -> None:
+    """Choose one input channel without permitting a typed fallback for audio."""
+    parser = _VERIFIER._parser()
+    assert parser.parse_args(["--query", "Use the agent"]).input_audio_wav is None
+    arguments = _voice_arguments(tmp_path, "--transcript-contains", "agent")
+    assert arguments.query is None
+    assert arguments.transcript_contains == ["agent"]
+    with pytest.raises(SystemExit):
+        parser.parse_args([])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--query", "Use the agent", "--input-audio-wav", "input.wav"])
+
+
+@pytest.mark.parametrize(
+    "recording_options",
+    [{"rate": 16_000}, {"channels": 2}, {"width": 1}, {"frames": 0}, {"frames": 24_000 * 60 + 1}],
+)
+def test_voice_input_rejects_unsupported_or_unbounded_wav_before_connecting(tmp_path: Path, recording_options) -> None:
+    """Reject formats and durations the public PCM stream cannot represent."""
+    arguments = _voice_arguments(tmp_path)
+    _recording(arguments.input_audio_wav, **recording_options)
+    with pytest.raises(ValueError, match="PCM16|60 seconds"):
+        _VERIFIER._VoiceProbe(arguments)
+
+
+def test_voice_input_rejects_truncated_pcm(tmp_path: Path) -> None:
+    """The WAV header cannot substitute for the actual recorded samples."""
+    arguments = _voice_arguments(tmp_path)
+    data = arguments.input_audio_wav.read_bytes()
+    arguments.input_audio_wav.write_bytes(data[:-2])
+    with pytest.raises(ValueError, match="truncated"):
+        _VERIFIER._VoiceProbe(arguments)
+
+
+@pytest.mark.parametrize(
+    "turn_detection", [None, {"type": "semantic_vad"}, {"type": "server_vad", "create_response": False}]
+)
+def test_recorded_voice_uses_audio_only_and_negotiated_response_creation(tmp_path: Path, turn_detection) -> None:
+    """Preserve each supported commit/create mode and the original PCM."""
+    arguments = _voice_arguments(tmp_path, "--transcript-contains", "agent")
+    probe = _VERIFIER._VoiceProbe(arguments)
+    events = []
+
+    class _Socket:
+        async def send(self, raw: str) -> None:
+            events.append(json.loads(raw))
+
+    async def submit() -> None:
+        async with probe:
+            await probe.submit(_Socket(), turn_detection)
+            while not probe.input_sent:
+                await asyncio.sleep(0.001)
+            needs_response = probe.observe_input({"type": "input_audio_buffer.committed", "item_id": "audio-1"})
+            if needs_response:
+                await _VERIFIER._send(_Socket(), {"type": "response.create", "response": {}})
+            probe.observe_input(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "audio-1",
+                    "transcript": "Use the agent",
+                }
+            )
+            await probe.sender
+
+    asyncio.run(submit())
+    assert not any(event["type"] == "conversation.item.create" for event in events)
+    input_pcm = b"".join(
+        base64.b64decode(event["audio"]) for event in events if event["type"] == "input_audio_buffer.append"
+    )
+    assert input_pcm.startswith(b"\x01" * 1920)
+    assert sum(event["type"] == "input_audio_buffer.commit" for event in events) == (turn_detection is None)
+    assert sum(event["type"] == "response.create" for event in events) == (
+        turn_detection is None or turn_detection.get("create_response") is False
+    )
+    result = probe.finish({"status": "succeeded"})
+    assert result["query"] == "Use the agent"
+    assert result["input"]["kind"] == "recorded_audio"
+    assert result["input"]["duration_ms"] == 40
+
+
+@pytest.mark.parametrize(
+    "transcription",
+    [
+        {"item_id": "different", "transcript": "Use the agent"},
+        {"item_id": "audio-1", "transcript": ""},
+        {"item_id": "audio-1", "transcript": "Hello there"},
+    ],
+)
+def test_voice_success_requires_nonempty_correlated_transcription_with_expected_content(
+    tmp_path: Path, transcription
+) -> None:
+    """An unrelated, empty, or incorrect ASR result cannot establish voice input."""
+    probe = _VERIFIER._VoiceProbe(_voice_arguments(tmp_path, "--transcript-contains", "agent"))
+    probe.input_sent = True
+    with pytest.raises(RuntimeError, match="transcription|transcript"):
+        probe.observe_input({"type": "input_audio_buffer.committed", "item_id": "audio-1"})
+        probe.observe_input({"type": "conversation.item.input_audio_transcription.completed", **transcription})
+        probe.finish({"status": "succeeded"})
+
+
+def test_voice_probe_rejects_early_or_multiple_commits_and_transcription_failure(tmp_path: Path) -> None:
+    """Reject segmented or failed recordings instead of replaying a native target."""
+    probe = _VERIFIER._VoiceProbe(_voice_arguments(tmp_path))
+    with pytest.raises(RuntimeError, match="before the recording"):
+        probe.observe_input({"type": "input_audio_buffer.committed", "item_id": "early"})
+    probe.input_sent = True
+    probe.observe_input({"type": "input_audio_buffer.committed", "item_id": "audio-1"})
+    with pytest.raises(RuntimeError, match="more than one"):
+        probe.observe_input({"type": "input_audio_buffer.committed", "item_id": "audio-2"})
+    with pytest.raises(RuntimeError, match="transcription failed"):
+        probe.observe_input({"type": "conversation.item.input_audio_transcription.failed", "item_id": "audio-1"})
+
+
+def test_requested_output_captures_only_result_audio_in_a_private_wav(tmp_path: Path) -> None:
+    """Acknowledgement PCM must never stand in for the agent result recording."""
+    output = tmp_path / "result.wav"
+    arguments = _VERIFIER._parser().parse_args(["--query", "Use the agent", "--output-audio-wav", str(output)])
+    probe = _VERIFIER._VoiceProbe(arguments)
+    probe.observe_audio({"response_id": "ack", "delta": "AAAA"}, "result-1")
+    pcm = b"\x01\x00\x02\x00" * 240
+    probe.observe_audio({"response_id": "result-1", "delta": base64.b64encode(pcm).decode()}, "result-1")
+    result = probe.finish({"status": "succeeded", "speech_source": "backend_authored", "result_speech_generated": True})
+    with wave.open(str(output), "rb") as recording:
+        assert recording.getparams()[:3] == (1, 2, 24_000)
+        assert recording.readframes(recording.getnframes()) == pcm
+    assert os.stat(output).st_mode & 0o777 == 0o600
+    assert result["result_audio_wav"]["response_id"] == "result-1"
+    assert result["result_audio_wav"]["duration_ms"] == 20
+
+
+@pytest.mark.parametrize("speech_source", ["none", "backend_authored"])
+def test_requested_result_recording_cannot_pass_without_result_pcm(tmp_path: Path, speech_source: str) -> None:
+    """A declared speech source or display-only result cannot substitute for PCM."""
+    output = tmp_path / "result.wav"
+    probe = _VERIFIER._VoiceProbe(
+        _VERIFIER._parser().parse_args(["--query", "Use the agent", "--output-audio-wav", str(output)])
+    )
+    with pytest.raises(RuntimeError, match="result audio"):
+        probe.finish({"status": "succeeded", "speech_source": speech_source})
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("delta", ["not base64!", base64.b64encode(b"\x01").decode()])
+def test_result_recording_rejects_malformed_pcm(tmp_path: Path, delta: str) -> None:
+    """Invalid encoding and partial samples cannot produce a successful WAV."""
+    output = tmp_path / "result.wav"
+    probe = _VERIFIER._VoiceProbe(
+        _VERIFIER._parser().parse_args(["--query", "Use the agent", "--output-audio-wav", str(output)])
+    )
+    with pytest.raises(RuntimeError, match="result audio"):
+        probe.observe_audio({"response_id": "result-1", "delta": delta}, "result-1")
+        probe.finish({"status": "succeeded", "speech_source": "backend_authored"})
+    assert not output.exists()
+
+
+def test_result_recording_refuses_existing_files_before_dispatch_and_at_write(tmp_path: Path) -> None:
+    """Preserve existing recordings even when a file appears during delegation."""
+    output = tmp_path / "result.wav"
+    arguments = _VERIFIER._parser().parse_args(["--query", "Use the agent", "--output-audio-wav", str(output)])
+    output.write_bytes(b"keep")
+    with pytest.raises(FileExistsError):
+        _VERIFIER._VoiceProbe(arguments)
+    output.unlink()
+    probe = _VERIFIER._VoiceProbe(arguments)
+    probe.observe_audio({"response_id": "result-1", "delta": "AAAAAA=="}, "result-1")
+    output.write_bytes(b"keep")
+    with pytest.raises(FileExistsError):
+        probe.finish({"status": "succeeded", "speech_source": "backend_authored"})
+    assert output.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("frontend_only", [False, True])
+def test_full_verifier_requires_agent_lifecycle_after_recorded_audio(
+    tmp_path: Path, monkeypatch, frontend_only: bool
+) -> None:
+    """Exercise the public event loop; synthetic events are protocol evidence only."""
+    output = tmp_path / "result.wav"
+    arguments = _voice_arguments(
+        tmp_path,
+        "--transcript-contains",
+        "balanced",
+        "--display-contains",
+        "balanced",
+        "--speech-contains",
+        "balanced",
+        "--output-audio-wav",
+        str(output),
+        "--timeout",
+        "2",
+    )
+    session = {"id": "session-1", "audio": {"input": {"turn_detection": {"type": "semantic_vad"}}}}
+    base = {"local_request_id": "request-1"}
+    result_identity = {**base, "backend_session_id": "backend-1", "turn_id": "turn-1", "response_id": "native-result-1"}
+    binding = {"backend_name": "NemoClaw", "backend_mode": "response_only", "target_ref": "workspace/sandbox/main"}
+    target = {
+        "backend": "NemoClaw",
+        "mode": "response_only",
+        "target": "workspace/sandbox/main",
+        "agent_readiness": "unknown",
+        "capabilities": ["work.submit"],
+        "frontend_tools": ["work.delegate"],
+        "durability": "none",
+        "event_delivery": "response_only",
+        "max_parallel_work": 1,
+        "context_continuity": "unqualified",
+        "target_state": "available",
+    }
+
+    def metadata(kind: str, phase: str, **correlation):
+        return {
+            f"voiceclaw_{key}": value
+            for key, value in {
+                "schema": _VERIFIER.REALTIME_PROJECTION_SCHEMA,
+                "session_id": "session-1",
+                "kind": kind,
+                "phase": phase,
+                "title": phase,
+                **correlation,
+            }.items()
+        }
+
+    def response(event_type: str, response_id: str, meta: dict, text: str, *, audio: bool = False):
+        return {
+            "type": event_type,
+            "response": {
+                "id": response_id,
+                "metadata": meta,
+                "conversation_id": None,
+                "status": "completed" if event_type == "response.done" else "in_progress",
+                "output_modalities": ["audio" if audio else "text"],
+                "output": []
+                if event_type == "response.created"
+                else [
+                    {
+                        "content": [
+                            {
+                                "type": "output_audio" if audio else "output_text",
+                                "transcript" if audio else "text": text,
+                            }
+                        ]
+                    }
+                ],
+            },
+        }
+
+    def projection(kind: str, phase: str, text: str = "", **correlation):
+        return response("response.done", f"{kind}-{phase}-{text}", metadata(kind, phase, **correlation), text)
+
+    pcm = b"\x01\x00" * 480
+
+    def speech(response_id: str, purpose: str, text: str):
+        meta = {
+            **_receipt_metadata(receipt_id=f"receipt-{response_id}", presentation_id=f"presentation-{response_id}"),
+            "voiceclaw_speech_purpose": purpose,
+        }
+        if purpose == "result_delivery":
+            meta["voiceclaw_delivery"] = "true"
+        return [
+            response("response.created", response_id, meta, "", audio=True),
+            {
+                "type": "response.output_audio.delta",
+                "response_id": response_id,
+                "item_id": f"item-{response_id}",
+                "content_index": 0,
+                "delta": base64.b64encode(pcm if purpose == "result_delivery" else b"\x00\x00").decode(),
+            },
+            {
+                "type": "response.output_audio.done",
+                "response_id": response_id,
+                "item_id": f"item-{response_id}",
+                "content_index": 0,
+            },
+            response("response.done", response_id, meta, text, audio=True),
+        ]
+
+    display = "Balanced trees provide logarithmic lookups."
+    delegated_events = [
+        projection("delivery_queue", "queued", json.dumps({"queue_depth": 1})),
+        *(
+            projection("backend_turn", phase, **base)
+            for phase in ("locally_queued", "dispatching", "waiting_for_response")
+        ),
+        *speech("ack-1", "delegation_ack", "I will ask the connected agent."),
+        projection("delivery_queue", "drained", json.dumps({"queue_depth": 0})),
+        response("response.created", "display-1", metadata("result_display", "display_delta", **result_identity), ""),
+        {"type": "response.output_text.delta", "response_id": "display-1", "delta": display},
+        {"type": "response.output_text.done", "response_id": "display-1", "text": display},
+        response("response.done", "display-1", metadata("result_display", "completed", **result_identity), display),
+        projection("backend_turn", "succeeded", **result_identity, speech_source="backend_authored"),
+        projection(
+            "backend_target",
+            "verified",
+            json.dumps({**target, "capabilities": [], "frontend_tools": [], "target_state": "consumed"}),
+            **binding,
+        ),
+        projection("delivery_queue", "queued", json.dumps({"queue_depth": 1})),
+        *speech("result-1", "result_delivery", "Balanced trees provide logarithmic lookups."),
+        projection("delivery_queue", "drained", json.dumps({"queue_depth": 0})),
+    ]
+
+    class _Socket:
+        def __init__(self):
+            self.sent = []
+            self.queue = asyncio.Queue()
+            for event in [
+                {"type": "session.created", "session": session},
+                {"type": "session.updated", "session": session},
+                projection("backend_target", "verified", json.dumps(target), **binding),
+            ]:
+                self.queue.put_nowait(event)
+            self.committed = False
+
+        async def send(self, raw):
+            event = json.loads(raw)
+            self.sent.append(event)
+            if (
+                event["type"] == "input_audio_buffer.append"
+                and base64.b64decode(event["audio"]) == bytes(960)
+                and not self.committed
+            ):
+                self.committed = True
+                for incoming in [
+                    {"type": "input_audio_buffer.committed", "item_id": "input-1"},
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "item_id": "input-1",
+                        "transcript": "Use the agent to compare balanced trees.",
+                    },
+                    *(
+                        [response("response.created", "frontend-only", {}, "", audio=True)]
+                        if frontend_only
+                        else delegated_events
+                    ),
+                ]:
+                    self.queue.put_nowait(incoming)
+            if event["type"] == "conversation.item.truncate":
+                self.queue.put_nowait(
+                    {
+                        "type": "conversation.item.truncated",
+                        **{key: event[key] for key in ("item_id", "content_index", "audio_end_ms")},
+                    }
+                )
+
+        async def recv(self):
+            return json.dumps(await self.queue.get())
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            pass
+
+    socket = _Socket()
+    monkeypatch.setattr(_VERIFIER, "connect", lambda *_args, **_kwargs: socket)
+    if frontend_only:
+        with pytest.raises(RuntimeError, match="unmarked conversational response"):
+            asyncio.run(_VERIFIER._verify(arguments))
+        assert not output.exists()
+    else:
+        result = asyncio.run(_VERIFIER._verify(arguments))
+        assert result["status"] == "succeeded"
+        assert result["query"] == "Use the agent to compare balanced trees."
+        assert result["backend_turn_phases"] == ["locally_queued", "dispatching", "waiting_for_response", "succeeded"]
+        assert result["backend_response_id"] == "native-result-1"
+        assert result["playback_receipts_acknowledged"] == 2
+        assert result["audio_played_ms"] == 0
+        assert result["result_audio_wav"]["response_id"] == "result-1"
+        with wave.open(str(output), "rb") as recording:
+            assert recording.readframes(recording.getnframes()) == pcm
+    assert not any(
+        event["type"] in {"conversation.item.create", "response.create", "input_audio_buffer.commit"}
+        for event in socket.sent
+    )
+
+
+def test_voice_sender_failure_interrupts_receive_and_reaps_the_task(tmp_path: Path) -> None:
+    """A failed input transport cannot hide behind the overall receive deadline."""
+    probe = _VERIFIER._VoiceProbe(_voice_arguments(tmp_path))
+
+    class _Socket:
+        async def send(self, _raw):
+            raise OSError("input transport closed")
+
+        async def recv(self):
+            await asyncio.Event().wait()
+
+    async def run():
+        with pytest.raises(OSError, match="input transport closed"):
+            async with probe:
+                await probe.submit(_Socket(), {"type": "semantic_vad"})
+                async with asyncio.timeout(0.5):
+                    await probe.receive(_Socket())
+
+    asyncio.run(run())
+    assert probe.sender.done()

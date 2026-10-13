@@ -813,8 +813,8 @@ def parse_config(raw: Mapping[str, Any]) -> VoiceClawConfig:
         interaction_raw.get("turn_routing_mode", "model"),
         "interaction.turn_routing_mode",
     )
-    if turn_routing_mode != "model":
-        raise ConfigurationError("interaction.turn_routing_mode must be model")
+    if turn_routing_mode not in {"model", "agent"}:
+        raise ConfigurationError("interaction.turn_routing_mode must be model or agent")
     interaction = InteractionPolicy(
         max_pending_speech=max_pending_speech,
         context_character_budget=context_character_budget,

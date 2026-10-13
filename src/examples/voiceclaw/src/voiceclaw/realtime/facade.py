@@ -1532,9 +1532,20 @@ class VoiceClawRealtimeFacade:
             await self._handle_client_item_create_error(value)
             await self._handle_manual_audio_commit_error(value)
             await self._handle_response_create_error(value)
+            provider_messages = {
+                "llm_provider_error": "The language model failed while generating this response.",
+                "tts_provider_error": (
+                    "Speech playback could not be generated. Check the backend turn for its text result."
+                ),
+            }
+            provider_code = (
+                upstream_code
+                if isinstance(upstream_code, str) and upstream_code in provider_messages
+                else "upstream_error"
+            )
             await self._send_public_error(
-                "upstream_error",
-                "The realtime frontend rejected an event.",
+                provider_code,
+                provider_messages.get(provider_code, "The realtime frontend rejected an event."),
                 event_id=failed_client_event_id,
             )
             return
@@ -1587,7 +1598,7 @@ class VoiceClawRealtimeFacade:
             response_id = _identifier(response.get("id"), "upstream response id")
             self._registry.declare_response(response_id)
             is_delivery = await self._mark_response_created(response_id)
-            if response_id in self._response_model_route_selection:
+            if self._is_private_route_response(response_id):
                 # The structured selector is internal control-plane work. Its
                 # response envelope and any model output never cross the
                 # browser boundary; only the chosen public path does.
@@ -1677,7 +1688,7 @@ class VoiceClawRealtimeFacade:
             return
 
         associated_response_id = value.get("response_id")
-        if isinstance(associated_response_id, str) and associated_response_id in self._response_model_route_selection:
+        if isinstance(associated_response_id, str) and self._is_private_route_response(associated_response_id):
             return
 
         if event_type == "response.output_audio.delta":
@@ -2145,6 +2156,12 @@ class VoiceClawRealtimeFacade:
             # defaults.
             response["tools"] = list(copy.deepcopy(self._tools.schemas()))
             response["tool_choice"] = {"type": "function", "name": protected.value}
+            # Routing is private. Acknowledgement and backend result speech
+            # have their own responses after the tool has been admitted.
+            response.pop("audio", None)
+            response["output_modalities"] = ["text"]
+            response["max_output_tokens"] = _MAX_REALTIME_RESPONSE_TOKENS
+            response["parallel_tool_calls"] = False
             queued.expected_protected_tool = protected
         elif directive.kind is TurnDirectiveKind.AUTO:
             # Run classification as a silent structured model turn. A mixed
@@ -2550,13 +2567,13 @@ class VoiceClawRealtimeFacade:
                 finalized_turn = (self._id_factory("turn_vc"), self._pending_finalized_user_text)
                 self._pending_finalized_user_text = None
             is_delivery = self._active_upstream_response_purpose is _ResponsePurpose.DELIVERY
-            model_route_selection = upstream_response_id in self._response_model_route_selection
+            private_route = self._is_private_route_response(upstream_response_id)
             presentation_id = self._active_presentation_id
             receipt_id = self._active_playback_receipt_id
             local_request_id = self._active_speech_local_request_id
             speech_purpose = self._active_speech_purpose
 
-        if not model_route_selection and presentation_id is not None and receipt_id is not None:
+        if not private_route and presentation_id is not None and receipt_id is not None:
             if len(self._playback_leases_by_response) >= _MAX_TRACKED_RESPONSES:
                 raise FacadeProtocolError(
                     "session_capacity_exceeded", "The realtime session has too many pending playback receipts."
@@ -2573,6 +2590,12 @@ class VoiceClawRealtimeFacade:
         if finalized_turn is not None:
             self._record_user_turn(*finalized_turn)
         return is_delivery
+
+    def _is_private_route_response(self, response_id: str) -> bool:
+        """Keep both model-selected and required backend routing off the public stream."""
+        return (
+            response_id in self._response_model_route_selection or response_id in self._response_expected_protected_tool
+        )
 
     def _record_user_turn(self, item_id: str, text: str) -> None:
         """Record one finalized public user turn exactly once."""
@@ -3133,7 +3156,7 @@ class VoiceClawRealtimeFacade:
                 "required_tool_not_called",
                 "The realtime frontend did not return exactly one structured VoiceClaw route.",
             )
-        model_route_selection = response_id in self._response_model_route_selection
+        private_route = self._is_private_route_response(response_id)
         rewritten = self._rewrite_upstream_event(event)
         rewritten_response = rewritten.get("response")
         if self._active_upstream_response_purpose is _ResponsePurpose.DELIVERY and isinstance(rewritten_response, dict):
@@ -3148,7 +3171,7 @@ class VoiceClawRealtimeFacade:
                 for item in rewritten_response["output"]
                 if not (isinstance(item, dict) and self._is_protected_item(item, ids_are_local=True))
             ]
-        if not model_route_selection:
+        if not private_route:
             await self._send_downstream(rewritten)
         if playback_lease is not None and playback_lease.generated_samples > 0:
             self._record_assistant_turn(playback_lease)
@@ -3173,7 +3196,34 @@ class VoiceClawRealtimeFacade:
                 phase=delivery_phase,
                 reason=f"frontend_response_{delivery_phase}",
             )
-            if model_route_selection:
+            if private_route:
+                details = response.get("status_details")
+                details = details if isinstance(details, dict) else {}
+                error = details.get("error")
+                error = error if isinstance(error, dict) else {}
+
+                def diagnostic(value: object, allowed: set[str]) -> str:
+                    return value if isinstance(value, str) and value in allowed else "unrecognized"
+
+                _LOGGER.warning(
+                    "Realtime route selection did not complete status=%s type=%s reason=%s code=%s",
+                    diagnostic(response_status, {"incomplete", "failed", "cancelled", "canceled"}),
+                    diagnostic(details.get("type"), {"incomplete", "failed", "cancelled"}),
+                    diagnostic(
+                        details.get("reason"),
+                        {"max_output_tokens", "content_filter", "turn_detected", "client_cancelled"},
+                    ),
+                    diagnostic(
+                        error.get("code"),
+                        {
+                            "llm_provider_error",
+                            "tts_provider_error",
+                            "pipeline_error",
+                            "lifecycle_error",
+                            "response_failed",
+                        },
+                    ),
+                )
                 await self._send_public_error(
                     "routing_unavailable",
                     "VoiceClaw could not select a safe response route for this turn.",

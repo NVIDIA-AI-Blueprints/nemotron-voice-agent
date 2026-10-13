@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import math
 import re
 import threading
@@ -132,6 +133,7 @@ class OpenShellFabricAdapter:
         result_display_budget_bytes: int = MAX_RESULT_DISPLAY_BYTES,
         result_speech_budget_bytes: int = DEFAULT_RESULT_SPEECH_BUDGET_BYTES,
         model_contracts: ModelContractCatalog | None = None,
+        allow_shared_context: bool = False,
     ) -> None:
         """Bind one service identity to one deployed agent target."""
         if not isinstance(executor, SandboxExecutor):
@@ -191,6 +193,14 @@ class OpenShellFabricAdapter:
         self._result_display_budget_bytes = result_display_budget_bytes
         self._result_speech_budget_bytes = result_speech_budget_bytes
         self._model_contracts = model_contracts or load_model_contract_catalog()
+        if not isinstance(allow_shared_context, bool):
+            raise ValueError("allow_shared_context must be boolean")
+        self._allow_shared_context = allow_shared_context
+        self._qualified_conversation_id: str | None = None
+        self._qualified_history: list[dict[str, object]] | None = None
+        self._qualified_runtime_id: str | None = None
+        self._qualified_turn_ids: set[str] = set()
+        self._qualified_response_ids: set[str] = set()
         self._invoke_gate = threading.Lock()
         self._invocation_state_lock = threading.Lock()
         self._invocation_state = ResponseOnlyTargetAvailability.AVAILABLE
@@ -237,7 +247,11 @@ class OpenShellFabricAdapter:
             ),
             capability_source=CapabilitySource.OPERATOR_CONFIGURED,
             capability_source_id="openshell_fabric",
-            context_continuity=ResponseOnlyContextContinuity.UNQUALIFIED,
+            context_continuity=(
+                ResponseOnlyContextContinuity.SHARED_TARGET
+                if self._allow_shared_context
+                else ResponseOnlyContextContinuity.UNQUALIFIED
+            ),
             target_availability=availability,
         )
 
@@ -290,10 +304,16 @@ class OpenShellFabricAdapter:
         """Execute one invocation exactly once and return one terminal result."""
         if not isinstance(request, CommittedTurnRequest):
             raise OpenShellFabricError("invalid_request")
-        return await _run_daemon(
-            lambda: self._commit_sync(request),
-            name="voiceclaw-fabric-invoke",
-        )
+        try:
+            return await _run_daemon(
+                lambda: self._commit_sync(request),
+                name="voiceclaw-fabric-invoke",
+            )
+        except asyncio.CancelledError:
+            # The native invocation runs on a worker thread and may still
+            # complete. Fence its context before releasing the caller.
+            self._consume_target()
+            raise
 
     async def stream_turn(self, request: CommittedTurnRequest) -> AsyncIterator[CommittedTurnEvent]:
         """Expose the terminal-only bridge through the committed-turn stream port."""
@@ -384,6 +404,13 @@ class OpenShellFabricAdapter:
             raise OpenShellFabricError("backend_busy")
         dispatched = False
         try:
+            if (
+                self._allow_shared_context
+                and self._qualified_conversation_id is not None
+                and request.runtime_conversation_id != self._qualified_conversation_id
+            ):
+                self._consume_target()
+                raise OpenShellFabricRejected("target_context_consumed")
             self._claim_target()
             try:
                 request_bytes = request.text.encode("utf-8")
@@ -448,11 +475,20 @@ class OpenShellFabricAdapter:
             try:
                 runtime_id, fabric_result = successful_fabric_result(response)
                 turn_id, response_id = self._validate_correlation(runtime_id, fabric_result)
-                backend_session_id = self._codec.validate_first_turn_result(
+                if self._qualified_runtime_id is not None and (
+                    runtime_id != self._qualified_runtime_id
+                    or turn_id in self._qualified_turn_ids
+                    or response_id in self._qualified_response_ids
+                ):
+                    raise FabricFirstTurnQualificationError(
+                        "Fabric result changed runtime or reused invocation identity"
+                    )
+                backend_session_id = self._codec.validate_turn_result(
                     fabric_result=fabric_result,
                     native_agent=self._native_agent,
                     runtime_id=runtime_id,
                     prompt=prompt,
+                    prior_messages=self._qualified_history,
                 )
                 pointer = self._result_pointer or self._codec.default_result_pointer
                 text = resolve_json_pointer(fabric_result, pointer)
@@ -471,7 +507,19 @@ class OpenShellFabricAdapter:
             except (FabricProtocolError, ResultEnvelopeProtocolError, TypeError, ValueError) as error:
                 self._consume_target()
                 raise OpenShellFabricAmbiguous("invocation_result_unusable") from error
-            self._consume_target()
+            if self._allow_shared_context:
+                # Retain only fully validated native evidence, independently of
+                # delivery or model-authored narration, and bind it to the
+                # Realtime conversation that established the native context.
+                if self._qualified_conversation_id is None:
+                    self._qualified_conversation_id = request.runtime_conversation_id
+                self._qualified_history = copy.deepcopy(fabric_result["output"]["messages"])
+                self._qualified_runtime_id = runtime_id
+                self._qualified_turn_ids.add(turn_id)
+                self._qualified_response_ids.add(response_id)
+                self._release_target()
+            else:
+                self._consume_target()
             return CommittedTurnResult(
                 backend_session_id=backend_session_id,
                 turn_id=turn_id,

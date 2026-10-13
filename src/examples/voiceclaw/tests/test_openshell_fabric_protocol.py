@@ -112,6 +112,204 @@ def test_openclaw_codec_accepts_only_fresh_single_turn_history() -> None:
     result["output"]["session_key"] = "agent:default:fabric-runtime-1"
 
 
+def _tool_history() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "assistant",
+            "content": "\n\n",
+            "tool_calls": [
+                {
+                    "id": "call-memory",
+                    "type": "function",
+                    "function": {"name": "memory_get", "arguments": '{"path":"USER.md","from":1,"lines":1}'},
+                }
+            ],
+        },
+        {"role": "tool", "content": '{"text":"# USER.md"}', "tool_call_id": "call-memory", "is_error": False},
+    ]
+
+
+@pytest.mark.parametrize("mutation", [None, "changed-answer", "tool-error-type", "truncated-prefix"])
+def test_shared_context_requires_the_exact_typed_prefix_before_a_new_tool_turn(mutation: str | None) -> None:
+    prior = _first_turn_result()["output"]["messages"]
+    prior[1:1] = _tool_history()
+    result = _first_turn_result(messages=json.loads(json.dumps(prior)), response="new result")
+    result["output"]["messages"].extend(
+        [
+            {"role": "user", "content": "new request"},
+            *_tool_history(),
+            {"role": "assistant", "content": "new result", "tool_calls": []},
+        ]
+    )
+    if mutation == "changed-answer":
+        result["output"]["messages"][3]["content"] = "changed result"
+    elif mutation == "tool-error-type":
+        result["output"]["messages"][2]["is_error"] = 0
+    elif mutation == "truncated-prefix":
+        del result["output"]["messages"][0]
+    codec = adapter_codec("nvidia.fabric.openclaw")
+    parameters = dict(
+        fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="new request", prior_messages=prior
+    )
+    if mutation is None:
+        assert codec.validate_turn_result(**parameters) == "agent:default:fabric-runtime-1"
+    else:
+        with pytest.raises(FabricFirstTurnQualificationError, match="previously verified history"):
+            codec.validate_turn_result(**parameters)
+
+
+@pytest.mark.parametrize("is_error", [False, True])
+def test_openclaw_codec_accepts_a_completed_memory_tool_in_the_first_turn(is_error: bool) -> None:
+    result = _first_turn_result()
+    history = _tool_history()
+    history[1]["is_error"] = is_error
+    result["output"]["messages"][1:1] = history
+
+    assert (
+        adapter_codec("nvidia.fabric.openclaw").validate_first_turn_result(
+            fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="do the work"
+        )
+        == "agent:default:fabric-runtime-1"
+    )
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_openclaw_codec_matches_every_tool_result_across_batches(parallel: bool) -> None:
+    result = _first_turn_result()
+    first, second = _tool_history(), _tool_history()
+    second[0]["tool_calls"][0]["id"] = "call-second"
+    second[1]["tool_call_id"] = "call-second"
+    if parallel:
+        first[0]["tool_calls"].extend(second[0]["tool_calls"])
+        history = [first[0], second[1], first[1]]
+    else:
+        history = first + second
+    result["output"]["messages"][1:1] = history
+
+    assert (
+        adapter_codec("nvidia.fabric.openclaw").validate_first_turn_result(
+            fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="do the work"
+        )
+        == "agent:default:fabric-runtime-1"
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing-result",
+        "unknown-result",
+        "duplicate-result",
+        "result-before-call",
+        "reused-call-id",
+        "duplicate-call-id",
+        "unfinished-batch",
+        "extra-user",
+        "extra-system",
+        "extra-assistant",
+        "missing-calls",
+        "calls-not-list",
+        "call-not-object",
+        "extra-call-field",
+        "wrong-call-type",
+        "empty-call-id",
+        "nonstring-call-id",
+        "null-call-id",
+        "function-not-object",
+        "extra-function-field",
+        "empty-function-name",
+        "nonstring-arguments",
+        "nonstring-assistant-content",
+        "extra-assistant-field",
+        "missing-error-flag",
+        "extra-result-field",
+        "nonboolean-error-flag",
+        "nonstring-result-id",
+        "nonstring-result-content",
+        "wrong-final-response",
+        "unfinished-final-call",
+        "wrong-session",
+        "wrong-prompt",
+    ],
+)
+def test_openclaw_codec_rejects_unqualified_tool_chains(case: str) -> None:
+    result = _first_turn_result()
+    history = _tool_history()
+    assistant, tool = history
+    call = assistant["tool_calls"][0]
+    function = call["function"]
+    if case == "missing-result":
+        history.pop()
+    elif case == "unknown-result":
+        tool["tool_call_id"] = "unrelated"
+    elif case == "duplicate-result":
+        history.append(dict(tool))
+    elif case == "result-before-call":
+        history.reverse()
+    elif case == "reused-call-id":
+        history.extend(_tool_history())
+    elif case == "duplicate-call-id":
+        assistant["tool_calls"].append(dict(call))
+    elif case == "unfinished-batch":
+        history.insert(1, _tool_history()[0])
+    elif case in {"extra-user", "extra-system", "extra-assistant"}:
+        history.append({"role": case.removeprefix("extra-"), "content": "unrelated", "tool_calls": []})
+    elif case == "missing-calls":
+        assistant.pop("tool_calls")
+    elif case == "calls-not-list":
+        assistant["tool_calls"] = {}
+    elif case == "call-not-object":
+        assistant["tool_calls"] = ["call-memory"]
+    elif case == "extra-call-field":
+        call["extra"] = True
+    elif case == "wrong-call-type":
+        call["type"] = "custom"
+    elif case == "empty-call-id":
+        call["id"] = ""
+    elif case == "nonstring-call-id":
+        call["id"] = []
+    elif case == "null-call-id":
+        call["id"] = "call\x00memory"
+    elif case == "function-not-object":
+        call["function"] = "memory_get"
+    elif case == "extra-function-field":
+        function["extra"] = True
+    elif case == "empty-function-name":
+        function["name"] = ""
+    elif case == "nonstring-arguments":
+        function["arguments"] = {}
+    elif case == "nonstring-assistant-content":
+        assistant["content"] = None
+    elif case == "extra-assistant-field":
+        assistant["extra"] = True
+    elif case == "missing-error-flag":
+        tool.pop("is_error")
+    elif case == "extra-result-field":
+        tool["extra"] = True
+    elif case == "nonboolean-error-flag":
+        tool["is_error"] = 0
+    elif case == "nonstring-result-id":
+        tool["tool_call_id"] = []
+    elif case == "nonstring-result-content":
+        tool["content"] = {}
+    elif case == "wrong-final-response":
+        result["output"]["messages"][-1]["content"] = "different"
+    elif case == "unfinished-final-call":
+        result["output"]["messages"][-1]["tool_calls"] = [dict(call)]
+    elif case == "wrong-session":
+        result["output"]["session_key"] = "agent:default:fabric-wrong"
+    elif case == "wrong-prompt":
+        result["output"]["messages"][0]["content"] = "different"
+    else:
+        raise AssertionError(case)
+    result["output"]["messages"][1:1] = history
+
+    with pytest.raises(FabricProtocolError):
+        adapter_codec("nvidia.fabric.openclaw").validate_first_turn_result(
+            fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="do the work"
+        )
+
+
 @pytest.mark.parametrize(
     ("messages", "response", "expected_error"),
     [
@@ -258,6 +456,51 @@ def test_openclaw_codec_requires_a_message_list(messages: object) -> None:
             native_agent="default",
             runtime_id="runtime-1",
             prompt="do the work",
+        )
+
+
+@pytest.mark.parametrize(
+    ("response_padding", "history_padding"),
+    [("", "\n"), ("\n", ""), (" \t\r\n", "\n\r\t "), ("", "\t\r\n ")],
+)
+def test_openclaw_codec_accepts_only_outer_json_whitespace_differences(
+    response_padding: str, history_padding: str
+) -> None:
+    body = '{"schema":"voiceclaw.result.v1","speech":null,"display":"Done."}'
+    response = response_padding + body + response_padding
+    result = _first_turn_result(response=response)
+    result["output"]["messages"][1]["content"] = history_padding + body + history_padding
+
+    assert (
+        adapter_codec("nvidia.fabric.openclaw").validate_first_turn_result(
+            fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="do the work"
+        )
+        == "agent:default:fabric-runtime-1"
+    )
+    assert result["output"]["response"] == response
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        '{"display":"different"}',
+        '{ "display":"Done."}',
+        '{"display":" Done."}',
+        '\u00a0{"display":"Done."}\u00a0',
+        '\v{"display":"Done."}\v',
+        '\f{"display":"Done."}\f',
+        None,
+        [],
+    ],
+    ids=("different-value", "internal-format", "inside-string", "nbsp", "vertical-tab", "form-feed", "null", "list"),
+)
+def test_openclaw_codec_rejects_body_changes_and_non_json_whitespace(history: object) -> None:
+    result = _first_turn_result(response='{"display":"Done."}')
+    result["output"]["messages"][1]["content"] = history
+
+    with pytest.raises(FabricProtocolError, match="qualification"):
+        adapter_codec("nvidia.fabric.openclaw").validate_first_turn_result(
+            fabric_result=result, native_agent="default", runtime_id="runtime-1", prompt="do the work"
         )
 
 

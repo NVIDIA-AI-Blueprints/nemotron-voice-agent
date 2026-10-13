@@ -19,3 +19,11 @@ def test_model_selected_policy_keeps_automatic_tool_selection() -> None:
 
     assert directive.kind is TurnDirectiveKind.AUTO
     assert directive.logical_tool is None
+
+
+@pytest.mark.parametrize("text", ["Hello", "Convert Ada to binary", "Now do the same in hexadecimal"])
+def test_agent_policy_routes_all_finalized_requests_to_delegation(text: str) -> None:
+    directive = build_turn_routing_policy("agent").decide(text)
+
+    assert directive.kind is TurnDirectiveKind.TOOL
+    assert directive.logical_tool == "work.delegate"

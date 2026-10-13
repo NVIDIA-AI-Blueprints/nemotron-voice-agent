@@ -9,7 +9,7 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from voiceclaw import container
+from voiceclaw import container, installer_runtime
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -32,6 +32,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Dispatch one of the image-owned runtime operations."""
     parser = _parser()
     arguments = parser.parse_args(argv)
+    if Path("/etc/voiceclaw-nemoclaw-container-v1").is_file():
+        if arguments.command == "healthcheck":
+            installer_runtime.run_healthcheck()
+        else:
+            if arguments.config is not None or arguments.ui:
+                parser.error("the installer profile does not accept configuration or UI overrides")
+            installer_runtime.main()
+        return
     if arguments.command == "healthcheck":
         container.main(["--healthcheck"])
         return

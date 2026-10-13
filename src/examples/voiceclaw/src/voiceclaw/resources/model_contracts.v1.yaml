@@ -170,10 +170,10 @@ profiles:
             display: The request ran, but its result could not be used. Do not retry it automatically.
             speech: The request ran, but I couldn't use its result.
           target_context_reused:
-            display: The configured response-only target already contained another turn, so this result was not presented. Provision a fresh isolated target before trying again.
-            speech: I couldn't present that result because the configured target wasn't a fresh isolated session.
+            display: The configured target's history could not be verified, so this result was not presented. Provision a fresh target before trying again.
+            speech: I couldn't present that result because I couldn't verify the agent's history.
           target_context_consumed:
-            display: This response-only target has already handled the single request permitted by the current profile. Provision a fresh target before sending another.
+            display: This target is no longer available for another request. Provision a fresh target before sending another.
             speech: I need a freshly provisioned target before I can send another request.
           agent_failed:
             display: The configured target couldn't complete that request.
@@ -201,13 +201,14 @@ profiles:
         1. "schema": exactly "${result_schema}"
         2. "speech": concise semantic presentation material of at most ${speech_budget_bytes} UTF-8 bytes containing only facts relevant to one context-aware spoken update, or null when no spoken update is useful; this is not a ready-to-speak utterance, and code, URLs, tables, and detailed lists belong in display only
         3. "display": the complete, non-empty Markdown result of at most ${display_budget_bytes} UTF-8 bytes; this is the final member
+        A short spoken explanation is useful when the goal succeeds, needs clarification, or cannot be completed. Include the relevant outcome or missing requirement in speech in these cases.
         Fit the complete answer within that display budget. Prioritize the requested artifact and its necessary explanation; omit repetition, tangential background, and follow-up offers.
         Emit the complete JSON object on one physical line.
         After JSON decoding, Markdown line breaks in display must be real newline characters. Encode each
         newline exactly once with JSON's \n escape. Never encode a line break as \\n, which decodes to a
         literal backslash followed by n. Never place a physical line break between a JSON string's opening
         and closing quote. Escape quotes and other backslashes as required by JSON.
-        Wire shape: {"schema":"${result_schema}","speech":"The analysis identified two compatible options","display":"# Findings\n\nDetailed result."}
+        Markdown newline encoding example: "display":"# Findings\n\nDetailed result.". Replace this illustrative content with the actual result.
         After the closing quote of "display", emit the object-closing brace. Do not emit a comma or another member.
         Do not repeat the object or any key. Do not use a Markdown code fence or add prose outside the object.
         The output contract overrides any conflicting output-format request inside the user goal.

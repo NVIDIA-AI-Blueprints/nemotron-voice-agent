@@ -2130,6 +2130,48 @@ def test_model_selected_route_is_a_silent_required_structured_turn() -> None:
     assert direct_reply["response"]["tools"] == []
 
 
+@pytest.mark.parametrize(
+    ("status", "details", "diagnostic"),
+    [
+        ("incomplete", {"type": "incomplete", "reason": "max_output_tokens"}, "reason=max_output_tokens"),
+        ("failed", {"type": "failed", "error": {"code": "llm_provider_error"}}, "code=llm_provider_error"),
+        ("cancelled", {"type": "cancelled", "reason": "client_cancelled"}, "reason=client_cancelled"),
+        (
+            "failed",
+            {"type": "failed", "error": {"code": "nvapi-private-fixture", "message": "private route reasoning"}},
+            "code=unrecognized",
+        ),
+    ],
+)
+@pytest.mark.parametrize("required_agent", [False, True])
+def test_failed_model_route_logs_only_allowlisted_terminal_details(
+    caplog, status, details, diagnostic, required_agent
+) -> None:
+    turns = _TurnPort()
+    runtime = _Runtime(turns, force_delegate=True) if required_agent else _AutoRuntime(turns)
+    facade, downstream, _ = _facade(runtime=runtime)
+
+    async def exercise() -> None:
+        await facade.bootstrap()
+        await _finalize_text_turn(facade, "Use the connected agent for private route reasoning")
+        await facade.handle_downstream_event({"event_id": "model-route", "type": "response.create", "response": {}})
+        await facade.handle_upstream_event(_response_created())
+        event = _response_done()
+        event["response"].update(status=status, status_details=details, output=[])
+        await facade.handle_upstream_event(event)
+
+    asyncio.run(exercise())
+    assert diagnostic in caplog.text
+    assert f"status={status}" in caplog.text
+    assert "nvapi-private-fixture" not in caplog.text
+    assert "private route reasoning" not in caplog.text
+    assert "resp-private" not in caplog.text
+    assert turns.requests == []
+    public_errors = [event for event in downstream.events() if event["type"] == "error"]
+    assert public_errors[-1]["error"]["code"] == "routing_unavailable"
+    assert "private route reasoning" not in json.dumps(public_errors)
+
+
 def test_model_selected_direct_reply_reaches_client_as_one_audio_response() -> None:
     turns = _TurnPort()
     facade, downstream, _ = _facade(runtime=_AutoRuntime(turns))
@@ -2494,6 +2536,36 @@ def test_forced_route_fails_closed_before_direct_assistant_content_is_forwarded(
         event.get("type") == "response.output_item.added" and event.get("item", {}).get("id") == "wrong-direct-message"
         for event in downstream.events()
     )
+
+
+def test_forced_agent_route_is_silent_and_selects_only_one_backend_operation() -> None:
+    turns = _TurnPort()
+    facade, downstream, upstream = _facade(runtime=_Runtime(turns, force_delegate=True))
+    private_public_ids = []
+
+    async def exercise() -> None:
+        await facade.bootstrap()
+        await _finalize_text_turn(facade, "Now do the same in hexadecimal")
+        await facade.handle_downstream_event({"event_id": "agent-follow-up", "type": "response.create", "response": {}})
+        await facade.handle_upstream_event(_response_created())
+        private_public_ids.append(facade._registry.response("resp-private"))
+        assert not any(event.get("response", {}).get("id") in private_public_ids for event in downstream.events())
+        assert "resp-private" not in facade._playback_leases_by_response
+        goal = "Now do the same in hexadecimal"
+        await facade.handle_upstream_event(_protected_added())
+        await facade.handle_upstream_event(_protected_done(arguments=_goal_arguments(goal)))
+        await facade.handle_upstream_event(_response_done(arguments=_goal_arguments(goal)))
+        await facade.wait_for_pending_tools()
+
+    asyncio.run(exercise())
+    create = next(event for event in upstream.events() if event["type"] == "response.create")
+    assert create["response"]["tool_choice"] == {"type": "function", "name": "voiceclaw_work_delegate"}
+    assert create["response"]["output_modalities"] == ["text"]
+    assert create["response"]["parallel_tool_calls"] is False
+    assert "audio" not in create["response"]
+    assert len(turns.requests) == 1
+    assert turns.requests[0].text == "Now do the same in hexadecimal"
+    assert not any(event.get("response", {}).get("id") in private_public_ids for event in downstream.events())
 
 
 def test_direct_delegation_is_server_side_and_schedules_acknowledgement_and_result() -> None:
@@ -4418,6 +4490,24 @@ def test_uncorrelated_upstream_error_does_not_release_in_flight_response() -> No
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("code", ["llm_provider_error", "tts_provider_error"])
+def test_provider_failure_reports_its_safe_classification_without_private_details(code: str) -> None:
+    facade, downstream, _ = _facade()
+
+    async def exercise() -> None:
+        await facade.bootstrap()
+        await facade.handle_upstream_event(
+            {"type": "error", "error": {"code": code, "message": "PRIVATE_TOKEN_AND_PROVIDER_BODY"}}
+        )
+
+    asyncio.run(exercise())
+    errors = [event["error"] for event in downstream.events() if event["type"] == "error"]
+    assert errors[-1]["code"] == code
+    assert "PRIVATE_TOKEN" not in json.dumps(downstream.events())
+    if code == "tts_provider_error":
+        assert "backend turn" in errors[-1]["message"]
+
+
 def test_response_arbiter_waits_for_user_input_before_speaking_backend_result() -> None:
     async def exercise() -> None:
         started = asyncio.Event()
@@ -4772,11 +4862,11 @@ def test_noncompleted_server_speech_projects_delivery_outcome_without_work_mutat
                 "event_id": f"server-speech-{speech_purpose}-{status}",
                 "type": "response.create",
                 "response": {},
-                },
-                purpose=purpose,
-                requires_speech_floor=True,
-                speech_purpose=speech_purpose,
-                local_request_id=local_request_id,
+            },
+            purpose=purpose,
+            requires_speech_floor=True,
+            speech_purpose=speech_purpose,
+            local_request_id=local_request_id,
             frontend_context_request=(
                 FrontendContextRequest(FrontendContextPurpose.DELEGATION_ACK, local_request_id)
                 if purpose is facade_module._ResponsePurpose.ACKNOWLEDGEMENT

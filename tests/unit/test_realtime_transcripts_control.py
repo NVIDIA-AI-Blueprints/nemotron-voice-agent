@@ -3149,6 +3149,34 @@ class ObserverResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(controller.response_in_progress)
         observer.shutdown()
 
+    async def test_correlated_provider_error_uses_safe_fields_without_a_parameter_path(self) -> None:
+        recorder = _Recorder()
+        controller = _controller(output_kind="text")
+        controller.start_response()
+        response_id = controller.active_response_id
+        self.assertIsNotNone(response_id)
+        observer = _observer(recorder, controller)
+        await _push(
+            observer,
+            RealtimeOwnedLLMFullResponseStartFrame(response_id=response_id or ""),
+            source=self.source,
+            destination=self.destination,
+        )
+
+        await _push(
+            observer,
+            ErrorFrame(error="private provider detail", exception=RuntimeError("private provider detail")),
+            source=self.source,
+            destination=self.destination,
+        )
+
+        error = next(event for event in recorder.events if event["type"] == "error")
+        self.assertEqual(error["error"]["code"], "llm_provider_error")
+        self.assertEqual(error["error"]["message"], "The language model failed while generating this response")
+        self.assertNotIn("param", error["error"])
+        self.assertNotIn("private provider detail", str(error))
+        observer.shutdown()
+
     async def test_fatal_pipeline_error_finishes_active_response_as_failed(self) -> None:
         recorder = _Recorder()
         controller = _controller()

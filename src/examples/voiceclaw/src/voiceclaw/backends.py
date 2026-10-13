@@ -208,6 +208,7 @@ class BackendComposition:
             state_store=state_store,
             committed_turns=self.turn_backend,
             turn_routing_policy=build_turn_routing_policy(turn_routing_mode),
+            delegate_original_text=turn_routing_mode == "agent",
             request_summary_character_limit=request_summary_character_limit,
             retained_request_limit=retained_request_limit,
             model_contracts=model_contracts,

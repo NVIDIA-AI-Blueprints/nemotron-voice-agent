@@ -24,6 +24,8 @@ from urllib.parse import urlsplit
 
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
+_MANIFEST_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
+_OPEN_SHELL_REVISION = "6648bd0c290efbc41ba131ee9831ee45cd431f94"
 _MAX_WHEEL_BYTES = 16 * 1024 * 1024
 _MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 _MAX_PACKAGE_MEMBER_BYTES = 8 * 1024 * 1024
@@ -44,6 +46,9 @@ _INPUT_FILES = (
     "src/examples/voiceclaw/Dockerfile.dockerignore",
     "src/examples/voiceclaw/pyproject.toml",
     "src/examples/voiceclaw/uv.lock",
+    "src/examples/voiceclaw/openshell-client/Cargo.toml",
+    "src/examples/voiceclaw/openshell-client/Cargo.lock",
+    "src/examples/voiceclaw/openshell-client/src/main.rs",
     "third_party_oss_license.txt",
     "uv.lock",
 )
@@ -95,6 +100,59 @@ print(response.status)
 """
 
 
+_INSTALLER_FILESYSTEM_PROBE = """\
+import errno
+import json
+import os
+import stat
+import sys
+
+def has_access_acl(path):
+    try:
+        return bool(os.getxattr(path, "system.posix_acl_access", follow_symlinks=False))
+    except OSError as error:
+        if error.errno in {errno.ENODATA, errno.ENOTSUP, getattr(errno, "ENOATTR", errno.ENODATA)}:
+            return False
+        raise
+
+def inspect(path):
+    metadata = os.lstat(path)
+    if stat.S_ISREG(metadata.st_mode):
+        kind = "file"
+    elif stat.S_ISDIR(metadata.st_mode):
+        kind = "directory"
+    elif stat.S_ISLNK(metadata.st_mode):
+        kind = "symlink"
+    else:
+        kind = "other"
+    return {
+        "access_acl": has_access_acl(path),
+        "kind": kind,
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": stat.S_IMODE(metadata.st_mode),
+        "size": metadata.st_size,
+    }
+
+print(json.dumps({
+    "process": {"uid": os.geteuid(), "gid": os.getegid()},
+    "root": inspect(sys.argv[1]),
+    "config": inspect(sys.argv[2]),
+    "credentials": inspect(sys.argv[3]),
+    "state": inspect(sys.argv[4]),
+    "runtime_root": inspect(sys.argv[5]),
+}, separators=(",", ":"), sort_keys=True))
+"""
+_EXPECTED_INSTALLER_FILESYSTEM = {
+    "process": {"uid": 65_532, "gid": 65_532},
+    "root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "config": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "credentials": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "runtime_root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+    "state": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
+}
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", help="exact local image reference to verify")
@@ -102,6 +160,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--expect-revision", required=True, help="required full lowercase Git revision")
     parser.add_argument("--expect-source", required=True, help="required OCI source URL")
     parser.add_argument("--expect-architecture", help="required Docker architecture, for example arm64")
+    parser.add_argument("--runtime-profile", choices=("standalone", "nemoclaw-container-v1"), default="standalone")
     parser.add_argument("--repository-root", type=Path, help="include digests for the build inputs below this root")
     parser.add_argument("--wheel", type=Path, help="exact verified wheel whose package payload must match the image")
     parser.add_argument("--wheel-evidence", type=Path, help="evidence emitted by verify-wheel.py for --wheel")
@@ -304,6 +363,7 @@ def _verify_contract(
     revision: str,
     source: str,
     architecture: str | None = None,
+    runtime_profile: str = "standalone",
 ) -> dict[str, Any]:
     image_id = inspect.get("Id")
     if not isinstance(image_id, str) or not _IMAGE_ID.fullmatch(image_id):
@@ -327,14 +387,23 @@ def _verify_contract(
         raise ValueError("VoiceClaw image architecture does not match the requested artifact platform")
 
     config = _mapping(inspect.get("Config"), "Config")
+    if runtime_profile not in {"standalone", "nemoclaw-container-v1"}:
+        raise ValueError("unknown VoiceClaw runtime profile")
+    installer = runtime_profile == "nemoclaw-container-v1"
+    if installer and not _REVISION.fullmatch(revision):
+        raise ValueError("installer image requires a full source revision")
     image_user = config.get("User") or ""
-    if image_user not in {"", "0", "0:0", "root"}:
+    if installer and image_user != "65532:65532":
+        raise ValueError("installer image must run as UID:GID 65532:65532")
+    if not installer and image_user not in {"", "0", "0:0", "root"}:
         raise ValueError("runtime image must start its split-identity supervisor as root")
     if config.get("Entrypoint") != _EXPECTED_ENTRYPOINT or config.get("Cmd") != _EXPECTED_COMMAND:
         raise ValueError("image entrypoint or default command does not match the runtime contract")
     exposed_ports = _mapping(config.get("ExposedPorts"), "exposed ports")
     volumes = _mapping(config.get("Volumes"), "volumes")
-    if set(exposed_ports) != {"7860/tcp"}:
+    if installer and set(exposed_ports) != {"18790/tcp"}:
+        raise ValueError("installer image must expose only 18790/tcp")
+    if not installer and set(exposed_ports) != {"7860/tcp"}:
         raise ValueError("runtime image must expose only 7860/tcp")
     if set(volumes) != {"/var/lib/voiceclaw"}:
         raise ValueError("runtime image must declare only the VoiceClaw state volume")
@@ -351,6 +420,23 @@ def _verify_contract(
         "org.opencontainers.image.revision": revision,
         "org.opencontainers.image.source": source,
     }
+    if installer:
+        expected_labels.update(
+            {
+                "com.nvidia.voiceclaw.install-contract": "voiceclaw.nemoclaw.container.v1",
+                "com.nvidia.voiceclaw.openshell-revision": _OPEN_SHELL_REVISION,
+            }
+        )
+        expected_health = {
+            "Interval": 10_000_000_000,
+            "Timeout": 20_000_000_000,
+            "StartPeriod": 180_000_000_000,
+            "Retries": 3,
+        }
+        if any(healthcheck.get(name) != value for name, value in expected_health.items()):
+            raise ValueError("installer health timing does not match the contract")
+        if "VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1" not in (config.get("Env") or []):
+            raise ValueError("installer image must select its runtime profile")
     for name, expected in expected_labels.items():
         if labels.get(name) != expected:
             raise ValueError(f"image label {name} does not match the verified build input")
@@ -510,6 +596,115 @@ def _smoke(image: str, *, version: str, ui: bool, timeout: float) -> dict[str, i
             _docker("rm", "--force", "--volumes", name, check=False)
 
 
+def _validate_installer_filesystem_contract(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict) or set(payload) != set(_EXPECTED_INSTALLER_FILESYSTEM):
+        raise RuntimeError("managed image filesystem evidence is malformed")
+    for name, expected in _EXPECTED_INSTALLER_FILESYSTEM.items():
+        actual = payload.get(name)
+        if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in expected.items()):
+            raise RuntimeError(f"managed image filesystem contract failed for {name}")
+    return payload
+
+
+def _installer_filesystem_contract(container: str) -> dict[str, object]:
+    result = _docker(
+        "exec",
+        container,
+        "/app/src/examples/voiceclaw/.venv/bin/python",
+        "-c",
+        _INSTALLER_FILESYSTEM_PROBE,
+        "/var/lib/voiceclaw",
+        "/var/lib/voiceclaw/config",
+        "/var/lib/voiceclaw/credentials",
+        "/var/lib/voiceclaw/state",
+        "/run/voiceclaw-managed",
+    )
+    if len(result.stdout.encode("utf-8")) > 4096:
+        raise RuntimeError("managed image filesystem evidence exceeds its bound")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("managed image filesystem evidence is malformed") from error
+    return _validate_installer_filesystem_contract(payload)
+
+
+def _installer_smoke(image: str, *, version: str, timeout: float) -> dict[str, object]:
+    """Check image layout and rejected incomplete activation without live services.
+
+    This is negative bootstrap evidence. Complete-input image startup and native
+    readiness qualification must be recorded separately by the joint owners.
+    """
+    if timeout <= 0 or timeout > 300:
+        raise ValueError("smoke timeout must be greater than zero and no more than 300 seconds")
+    name = f"voiceclaw-container-artifact-{uuid.uuid4().hex}"
+    try:
+        _docker(
+            "run",
+            "--detach",
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--name",
+            name,
+            "--cap-drop",
+            "ALL",
+            "--memory",
+            "1g",
+            "--security-opt",
+            "no-new-privileges:true",
+            "--entrypoint",
+            "/app/src/examples/voiceclaw/.venv/bin/python",
+            image,
+            "-c",
+            "import time; time.sleep(60)",
+        )
+        installed_version = _package_version(name)
+        if installed_version != version:
+            raise RuntimeError("installed package version does not match the verified image label")
+        _assert_test_harness_absent(name)
+        filesystem = _installer_filesystem_contract(name)
+        client = _docker("exec", name, "/usr/local/bin/voiceclaw-openshell-exec", "--version")
+        if client.stdout.strip() != f"voiceclaw-openshell-exec 0.1.0 openshell@{_OPEN_SHELL_REVISION}":
+            raise RuntimeError("bundled OpenShell client provenance does not match its image label")
+        missing = _docker(
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges:true",
+            image,
+            check=False,
+        )
+        if missing.returncode == 0 or missing.stdout or missing.stderr.strip() != "container-input-invalid":
+            raise RuntimeError("container-v1 image did not reject missing inputs before activation")
+        return {
+            "package_version": installed_version,
+            "source_harness_absent": True,
+            "managed_filesystem": filesystem,
+            "missing_inputs_rejected": True,
+            "openshell_client_revision": _OPEN_SHELL_REVISION,
+            "complete_input_bootstrap": "pending",
+            "live_qualified": False,
+        }
+    finally:
+        _docker("rm", "--force", "--volumes", name, check=False)
+
+
+def _manifest_reference(reference: str, inspect: dict[str, Any]) -> str:
+    """Require a repository manifest identity already resolved by this engine."""
+    if _MANIFEST_REFERENCE.fullmatch(reference) is None:
+        raise ValueError("container-v1 requires repository@sha256 manifest identity")
+    if reference not in (inspect.get("RepoDigests") or []):
+        raise ValueError("manifest reference is not resolved in the selected Docker engine")
+    return reference
+
+
 def _input_digests(root: Path | None) -> dict[str, str]:
     if root is None:
         return {}
@@ -581,12 +776,19 @@ def main() -> int:
             source_tree=source_tree,
         )
         build_inputs = _input_digests(arguments.repository_root)
+        inspected = _inspect(arguments.image)
+        manifest = (
+            _manifest_reference(arguments.image, inspected)
+            if arguments.runtime_profile == "nemoclaw-container-v1"
+            else None
+        )
         image = _verify_contract(
-            _inspect(arguments.image),
+            inspected,
             version=arguments.expect_version,
             revision=arguments.expect_revision,
             source=arguments.expect_source,
             architecture=arguments.expect_architecture,
+            runtime_profile=arguments.runtime_profile,
         )
         immutable_image = image["id"]
         if not isinstance(immutable_image, str):  # pragma: no cover - established by _verify_contract
@@ -598,12 +800,16 @@ def main() -> int:
                 raise ValueError("image VoiceClaw package payload does not match the verified wheel")
             image_package = {"manifest_sha256": manifest_sha256, "member_count": member_count}
         smoke: dict[str, object] = {}
+        if arguments.runtime_profile == "nemoclaw-container-v1" and arguments.smoke_ui:
+            raise ValueError("installer verification does not accept developer UI overrides")
         if arguments.smoke or arguments.smoke_ui:
-            smoke["headless"] = _smoke(
+            probe = _installer_smoke if arguments.runtime_profile == "nemoclaw-container-v1" else _smoke
+            options = {} if arguments.runtime_profile == "nemoclaw-container-v1" else {"ui": False}
+            smoke["headless"] = probe(
                 immutable_image,
                 version=arguments.expect_version,
-                ui=False,
                 timeout=arguments.timeout,
+                **options,
             )
         if arguments.smoke_ui:
             smoke["ui"] = _smoke(
@@ -615,6 +821,7 @@ def main() -> int:
         evidence = {
             "schema": "voiceclaw.image_evidence.v1",
             "reference": arguments.image,
+            "manifest_reference": manifest,
             "source_revision": arguments.expect_revision,
             "source_tree": source_tree,
             "build_inputs": build_inputs,
