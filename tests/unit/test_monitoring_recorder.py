@@ -6,26 +6,39 @@
 import asyncio
 import base64
 import io
+import time
 import wave
 from dataclasses import replace
 
+import pytest
 from PIL import Image
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    FunctionCallInProgressFrame,
     FunctionCallResultFrame,
+    InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMTextFrame,
     MetricsFrame,
     UserImageRawFrame,
+    UserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
-from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData, TTFBMetricsData
+from pipecat.metrics.metrics import (
+    LLMTokenUsage,
+    LLMUsageMetricsData,
+    ProcessingMetricsData,
+    TTFBMetricsData,
+)
 from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 
 from monitoring.config import MonitoringConfig
 from monitoring.media import extract_inline_media
-from monitoring.recorder import SessionRecorder, flatten_metrics
+from monitoring.recorder import SessionRecorder, flatten_metrics, git_revision
 from monitoring.store import LocalArtifactStore, SessionStore
 
 
@@ -186,3 +199,150 @@ def test_recorder_end_to_end(tmp_path):
 def test_disabled_recorder_returns_none(tmp_path):
     settings = replace(_settings(tmp_path), enabled=False)
     assert SessionRecorder.create(session_id="x", example="e", config={}, settings=settings) is None
+
+
+def _message(content: str, interrupted: bool = False):
+    return type("M", (), {"content": content, "interrupted": interrupted})()
+
+
+def test_recorder_speech_times_barge_in_and_turn_metrics(tmp_path):
+    settings = _settings(tmp_path)
+    store = SessionStore(settings.db_url)
+    store.create_schema()
+    llm, upstream, tts = FakeProcessor("NvidiaLLMService#0"), FakeProcessor("reminder"), FakeProcessor("tts")
+    stamps = {}
+
+    async def scenario():
+        recorder = SessionRecorder(
+            session_id="s1",
+            example="multilingual-assistant",
+            config={"client_tools_perceivable": ["move_head"]},
+            settings=settings,
+            store=store,
+            artifacts=LocalArtifactStore(settings.artifacts_dir),
+            llm=llm,
+        )
+        user_agg, assistant_agg = FakeEmitter(), FakeEmitter()
+        recorder.attach(object(), user_agg, assistant_agg)
+        await recorder.start()
+        observer = recorder.observers()[0]
+
+        async def push(frame, source=upstream, destination=llm):
+            await _push(observer, frame, source, destination)
+
+        async def llm_answer(text):
+            await push(LLMContextFrame(context=LLMContext([{"role": "user", "content": "hi"}])))
+            await assistant_agg.emit("on_assistant_turn_started")
+            await push(MetricsFrame(data=[TTFBMetricsData(processor=llm.name, value=0.2)]), llm, tts)
+            await push(LLMTextFrame(text=text), llm, tts)
+
+        # Start-up artifacts: zero-valued ttfb/processing samples are not measurements.
+        await push(
+            MetricsFrame(
+                data=[
+                    TTFBMetricsData(processor=llm.name, value=0.0),
+                    ProcessingMetricsData(processor=llm.name, value=0.0),
+                ]
+            ),
+            llm,
+            tts,
+        )
+
+        # Turn 1: a tool call, then the answer is spoken.
+        await push(UserStartedSpeakingFrame())
+        await user_agg.emit("on_user_turn_started", None)
+        stamps["speech_end_1"] = time.time() - 0.2
+        await push(VADUserStoppedSpeakingFrame(stop_secs=0.2, timestamp=stamps["speech_end_1"] + 0.2))
+        await user_agg.emit("on_user_turn_stopped", None, _message("tourne la tête"))
+        await push(
+            FunctionCallInProgressFrame(function_name="move_head", tool_call_id="c1", arguments={"direction": "left"}),
+            llm,
+            tts,
+        )
+        await push(FunctionCallResultFrame(function_name="move_head", tool_call_id="c1", arguments={}, result={}))
+        await llm_answer("answer one")
+        await push(LLMFullResponseEndFrame(), llm, tts)
+        await push(BotStartedSpeakingFrame())
+        stamps["audio_1"] = time.time()
+
+        # Turn 2: the user barges in. The next turn starts before the interrupted
+        # assistant turn reports its text. (Turns are attributed by time: keep them apart.)
+        await asyncio.sleep(0.2)
+        await push(UserStartedSpeakingFrame())
+        await push(InterruptionFrame())
+        await user_agg.emit("on_user_turn_started", None)
+        await assistant_agg.emit("on_assistant_turn_stopped", _message("answer one", interrupted=True))
+        await push(BotStoppedSpeakingFrame())
+        await push(VADUserStoppedSpeakingFrame(stop_secs=0.2, timestamp=time.time()))
+        await user_agg.emit("on_user_turn_stopped", None, _message("stop"))
+        # The LLM is cancelled before its first token: the TTFB pipecat emits while
+        # stopping its metrics is the time until the interruption.
+        await push(LLMContextFrame(context=LLMContext([{"role": "user", "content": "stop"}])))
+        await push(InterruptionFrame())
+        await push(MetricsFrame(data=[TTFBMetricsData(processor=llm.name, value=0.5)]), llm, tts)
+        await llm_answer("answer two")
+        await push(LLMFullResponseEndFrame(), llm, tts)
+        await push(BotStartedSpeakingFrame())
+        await assistant_agg.emit("on_assistant_turn_stopped", _message("answer two"))
+        await recorder.close()
+
+    asyncio.run(scenario())
+
+    _, first, second = store.rows("turns", "s1")
+    assert first["bot_text"] == "answer one" and first["interrupted"] is True
+    assert second["bot_text"] == "answer two" and second["interrupted"] is False
+    assert first["user_speech_stopped_at"] == pytest.approx(stamps["speech_end_1"])
+    assert first["bot_speech_started_at"] == pytest.approx(stamps["audio_1"], abs=0.05)
+    assert first["user_stopped_at"] > first["user_speech_stopped_at"]  # existing column keeps its meaning
+    assert (first["barge_in"], second["barge_in"]) == (False, True)
+
+    samples = [m for m in store.rows("metrics", "s1") if m["name"] in ("ttfb", "processing")]
+    assert samples and all(m["value"] > 0 for m in samples)
+    calls = store.rows("llm_calls", "s1")
+    assert [(c["interrupted"], c["ttfb"], c["output_text"]) for c in calls] == [
+        (False, 0.2, "answer one"),
+        (True, None, ""),
+        (False, 0.2, "answer two"),
+    ]
+
+    kinds = [e["kind"] for e in store.rows("events", "s1")]
+    assert "function_call_in_progress" in kinds
+    (tool_call,) = store.rows("tool_calls", "s1")
+    assert (tool_call["name"], tool_call["outcome"], tool_call["perceivable"]) == ("move_head", "ok", True)
+    assert tool_call["turn_idx"] == 1 and tool_call["trigger"] == "llm" and tool_call["target"] == "client"
+
+    one, two = store.rows("turn_metrics", "s1")
+    assert (one["kind"], one["response_via"], one["barge_in"]) == ("tool", "tool", False)
+    assert one["voice_latency"] == pytest.approx(stamps["audio_1"] - stamps["speech_end_1"], abs=0.05)
+    assert one["response_latency"] <= one["voice_latency"]
+    assert (two["kind"], two["barge_in"], two["n_llm_calls"]) == ("plain", True, 2)
+    assert two["voice_latency"] is not None and store.system_samples_between(0, time.time()) == []
+
+
+def test_git_revision_handles_packed_refs_worktrees_and_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("GIT_SHA", raising=False)
+    repo = tmp_path / "repo"
+    (repo / ".git" / "refs" / "heads").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    assert git_revision(repo) is None  # ref not found anywhere
+    (repo / ".git" / "packed-refs").write_text(
+        "# pack-refs with: peeled\nabc123 refs/heads/main\ndef456 refs/heads/dev\n"
+    )
+    assert git_revision(repo) == "abc123"
+    (repo / ".git" / "refs" / "heads" / "main").write_text("fff999\n")
+    assert git_revision(repo) == "fff999"  # a loose ref is newer than the packed one
+
+    worktree_git = repo / ".git" / "worktrees" / "wt"
+    worktree_git.mkdir(parents=True)
+    (worktree_git / "HEAD").write_text("ref: refs/heads/dev\n")
+    (worktree_git / "commondir").write_text("../..\n")
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {worktree_git}\n")
+    assert git_revision(worktree) == "def456"
+
+    (repo / ".git" / "HEAD").write_text("0123abc\n")
+    assert git_revision(repo) == "0123abc"  # detached HEAD
+    assert git_revision(tmp_path / "nowhere") is None  # no .git, as in the app container
+    monkeypatch.setenv("GIT_SHA", "from-env")
+    assert git_revision(tmp_path / "nowhere") == "from-env"

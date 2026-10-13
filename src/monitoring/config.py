@@ -11,6 +11,7 @@ Environment variables:
   - RECORD_AUDIO_STEREO     Whole-call stereo WAV, user left / bot right (default: true)
   - RECORD_VIDEO            off | keyframes | full (default: off)
   - RECORD_VIDEO_FPS        Keyframe sampling rate for RECORD_VIDEO=keyframes (default: 1.0)
+  - RECORD_SYSTEM_METRICS   Host GPU/CPU/RAM/power samples while a session is live (default: true)
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ class MonitoringConfig:
     record_audio_stereo: bool
     record_video: str
     video_fps: float
+    # Off unless loaded from the environment, so configs built in code and tests do not sample the host.
+    record_system_metrics: bool = False
 
     @property
     def artifacts_dir(self) -> Path:
@@ -58,4 +61,5 @@ def load_monitoring_config() -> MonitoringConfig:
         record_audio_stereo=parse_env_bool("RECORD_AUDIO_STEREO", default=True),
         record_video=record_video,
         video_fps=parse_env_float("RECORD_VIDEO_FPS", 1.0, min_value=0.1),
+        record_system_metrics=parse_env_bool("RECORD_SYSTEM_METRICS", default=True),
     )

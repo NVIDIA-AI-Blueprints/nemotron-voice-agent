@@ -30,6 +30,8 @@ Set these in `.env`:
 | `RECORD_AUDIO_STEREO` | `true` | Whole-call `conversation.wav`, user on the left channel and bot on the right, written in 10 s chunks |
 | `RECORD_VIDEO` | `off` | `off`, `keyframes` (JPEG snapshots of the input video) or `full` (chunked MP4, for development only). Only takes effect once the transport enables video input (`video_in_enabled`); the multilingual transport doesn't enable it yet. Images in the LLM context and images returned by tools are recorded regardless. |
 | `RECORD_VIDEO_FPS` | `1.0` | Keyframe rate for `RECORD_VIDEO=keyframes` |
+| `RECORD_SYSTEM_METRICS` | `true` | Sample host GPU load, GPU temperature, power, RAM, and CPU load once per second while a session is live. Refer to [System Metrics](#system-metrics). |
+| `GIT_SHA` | unset | Code revision stored in each session snapshot. Set it for the app container, which does not contain `.git`. On a host checkout, the recorder reads the revision from `.git`. Refer to [Record the Code Revision](#record-the-code-revision). |
 
 When recording is enabled, it replaces the legacy `ENABLE_*_AUDIO_DUMP` recorder
 for the multilingual assistant.
@@ -47,9 +49,12 @@ to these rows.
 | Table | Content |
 |-------|---------|
 | `sessions` | Start and end, `end_reason`, heartbeat, and a **config snapshot** (models, servers, language, voice, turn detection, client tools, git sha). The snapshot is the A/B key. |
-| `turns` | One row per exchange: user and bot text, timestamps, interrupted. Turn 0 is the greeting. |
-| `events` | Timeline: VAD and bot speaking, interruptions, final ASR, function calls and results, latency breakdowns, errors |
-| `metrics` | Flat numeric samples: `ttfb`, `processing`, `llm_usage.*`, `tts_usage`, `user_bot_latency`, `first_bot_speech_latency`, `turn_duration`, … |
+| `turns` | One row per exchange: user and bot text, timestamps, `interrupted`, and `barge_in`. Turn 0 is the greeting. Refer to [Turn Timestamps and Flags](#turn-timestamps-and-flags). |
+| `turn_metrics` | One row per user turn, written when the turn ends: turn kind, response and voice latency, the stage breakdown, token and call counts, and GPU load. Refer to [Per-Turn Metrics](#per-turn-metrics). |
+| `tool_calls` | One row per tool or intent call: name, trigger (`llm` or `intent`), target (`client` or `home_assistant`), send time, duration, outcome (`ok`, `error`, `timeout`, or `cancelled`), and the `perceivable` flag |
+| `system_samples` | Host-wide samples, one per second while a session is live, with the number of live sessions |
+| `events` | Timeline: VAD and bot speaking, interruptions, final ASR, function calls (requested, sent, result, cancelled), latency breakdowns, errors |
+| `metrics` | Flat numeric samples: `ttfb`, `processing`, `llm_usage.*`, `tts_usage`, `user_bot_latency`, `first_bot_speech_latency`, `turn_duration`, … Zero-valued `ttfb` and `processing` samples, which Pipecat emits at startup, are not stored. |
 | `llm_calls` | The full LLM input, tools, output, function calls, TTFT, tokens, and `n_images` / `image_pixels` for each call of the conversation LLM |
 | `media` | Audio clips, images and video, deduplicated by SHA-256. `source` is `context`, `tool:<name>`, `user_image` or `camera:<track>`. |
 | `annotations` | Job outputs and human labels: `(target, source, kind, value)` |
@@ -78,6 +83,138 @@ data/
     └── video/0000.mp4            # RECORD_VIDEO=full only
 ```
 
+### Turn Timestamps and Flags
+
+The `turns` table keeps two pairs of timestamps. Use the pair that matches your
+question.
+
+| Column | Meaning |
+|--------|---------|
+| `user_speech_stopped_at` | The user stopped speaking: the voice activity detection (VAD) decision minus its silence window |
+| `user_stopped_at` | The turn was released to the LLM, after turn detection and ASR finalization |
+| `bot_started_at` | The LLM response started |
+| `bot_speech_started_at` | The first bot audio was sent |
+| `interrupted` | The assistant response of this turn was cut short: an interruption arrived while the response was open, or the session ended during it |
+| `barge_in` | The user started this turn while the bot was still speaking |
+
+Every user turn sends an interruption through the pipeline, so an `interruption`
+event is not a barge-in.
+
+### Per-Turn Metrics
+
+Each `turn_metrics` row carries two latencies:
+
+- **Voice latency** runs from the end of user speech to the first bot audio.
+- **Response latency** runs from the end of user speech to the first perceivable
+  response. That is the first bot audio, or the moment a perceivable tool call is
+  sent, whichever comes first. Both latencies are equal when the turn has no
+  perceivable action. Refer to
+  [Client-Executed Tools](../../src/examples/multilingual/README.md#client-executed-tools)
+  for the `perceivable` flag.
+
+The stages split the time up to the first response along the critical path.
+Stages never overlap, and `unexplained_secs` holds the time that no stage owns,
+so the stages and the remainder add up to `total_secs`.
+
+| Column | Stage |
+|--------|-------|
+| `asr_secs` | End of speech to the final transcript |
+| `turn_detection_secs` | The rest of the wait until the turn is released. ASR finalization and turn detection run concurrently, and the time goes to whichever finishes last. |
+| `intent_match_secs` | Intent engine matching, when the engine is enabled |
+| `llm_first_secs` | First LLM call: start to first token, or start to the tool call when the call ends in one |
+| `tool_secs` | Tool round trips and intent target calls |
+| `llm_later_secs` | Later LLM calls, up to the first token of the call that speaks |
+| `text_aggregation_secs` | First token to the first sentence handed to the TTS |
+| `tts_secs` | TTS time to first byte |
+| `unexplained_secs` | Remainder |
+
+The turn `kind` lets you compare like with like. The first matching rule wins:
+`intent` (the intent engine answered), `vision` (an LLM call of the turn had
+image input), `tool` (at least one tool or intent call), and `plain`.
+
+The recorder writes these rows when a turn ends and again when the session
+closes. To fill them for sessions recorded before this table existed, run the
+backfill. It is idempotent and uses the same code as the live recorder.
+
+```bash
+PYTHONPATH=src uv run python -m monitoring.turn_metrics                 # every session
+PYTHONPATH=src uv run python -m monitoring.turn_metrics --session <id>  # one session
+```
+
+Backfilled sessions have no `perceivable` flags, so their response latency
+equals their voice latency.
+
+### Repair Sessions From Earlier Recorders
+
+Earlier recorders stored the text of an interrupted assistant response on the
+following turn, together with `interrupted` and `bot_stopped_at`. The recorder
+now keeps them on the turn that opened the response, and marks new sessions with
+`recorder_version: 2` in the config snapshot. To repair older sessions, preview
+the changes and then apply them:
+
+```bash
+PYTHONPATH=src uv run python -m monitoring.turn_metrics --repair-attribution --dry-run
+PYTHONPATH=src uv run python -m monitoring.turn_metrics --repair-attribution
+```
+
+The command prints each changed turn before and after, moves the response back
+to its own turn, and then recomputes the per-turn metrics. For a response that
+was cut, `bot_stopped_at` becomes the start of the next user turn. You can run
+the command again safely: each repaired session gets a
+`turn_attribution_repair` annotation that lists what moved, and the command
+skips sessions that have one. Memories extracted earlier by the `dream` job are
+not updated. Re-run `dream` from the session page if you want it to read the
+corrected turns.
+
+When the database lives in a root-owned `data/` directory, run the commands in
+a container, for example `docker compose exec dreamer uv run python -m
+monitoring.turn_metrics --repair-attribution`.
+
+### System Metrics
+
+The sampler runs in its own thread, only while at least one session is live.
+All values are host-wide. The sampler skips a source that is not available and
+logs one line that lists the active and missing sources.
+
+| Metric | Source | On the host | In the app container |
+|--------|--------|-------------|----------------------|
+| CPU load | `/proc/stat` | Yes | Yes |
+| RAM used | `/proc/meminfo` (`MemTotal - MemAvailable`; includes GPU memory on Jetson) | Yes | Yes |
+| GPU temperature | `/sys/class/thermal` zone `gpu-thermal`, else `nvidia-smi` | Jetson, or any host with `nvidia-smi` | Jetson, or a local recipe |
+| Board input power | `/sys/class/hwmon` INA238 monitor (`VIN`): the power drawn by the whole module | Jetson Thor | Jetson Thor |
+| GPU power | `nvidia-smi` power draw of GPU 0, used only when no board monitor exists | Hosts with `nvidia-smi` | Local recipes |
+| GPU load | `nvidia-smi` utilization of GPU 0 | Hosts with `nvidia-smi` | Local recipes |
+
+Board input power and GPU power are different quantities. Each sample stores
+which one it holds in `power_source` (`board` or `gpu`), and the review UI labels
+the value **Board input power** or **GPU power** accordingly. Do not compare the
+two across hosts.
+
+The app services of the local recipes (`<example>/server` and
+`<example>/single-gpu`) reserve the NVIDIA devices with
+`NVIDIA_DRIVER_CAPABILITIES=utility`, which makes `nvidia-smi` available in the
+container without CUDA libraries. The app allocates no GPU memory. The cloud
+recipes do not request the NVIDIA runtime, so they start on hosts without a GPU
+and record CPU load and RAM only. When `nvidia-smi` is missing or fails, the
+sampler drops that source and keeps the others.
+
+### Record the Code Revision
+
+Each session snapshot stores the code revision as `git_sha`, which the
+**Metrics** page uses for the per-revision trend. A server started on the host
+reads it from `.git`. The app container has no `.git`, so pass the revision
+through `GIT_SHA`:
+
+```bash
+GIT_SHA=$(git rev-parse HEAD) docker compose --profile multilingual-assistant/single-gpu up -d
+```
+
+The local recipes forward `GIT_SHA` from your shell or from `.env`. The cloud
+recipes read it from `.env` only. When `GIT_SHA` is unset, the deployment starts
+normally and sessions are recorded without a revision. Because Compose mounts
+`./src` into the container, set the value again after you update the checkout
+and restart the service.
+
 ## Compare pipeline variants
 
 ```bash
@@ -88,10 +225,13 @@ PYTHONPATH=src uv run python -m monitoring.report --since-days 7 \
 
 Each group shows:
 
-- user→bot latency (p50/p90) and first-speech latency;
+- user→bot latency (p50/p90), also split by turn kind (`turns[tool]`, `user_bot_p50[tool]`, …), and first-speech latency;
 - per-service TTFB, with LLM TTFT reported separately for text-only and image-bearing calls;
 - prompt tokens and interruption rate;
 - WER per ASR source, once `reasr` has run.
+
+The turn-kind split reads the `turn_metrics` table. Run the backfill in
+[Per-Turn Metrics](#per-turn-metrics) for older sessions.
 
 ## Review in the web UI
 
@@ -101,6 +241,11 @@ API (`/api/review/*`) is only served when `MONITORING_ENABLED=true`.
 
 - **Sessions.** Recorded conversations with their models, review progress and
   live WER. Opening a session shows each turn with:
+  - a summary of the host load during the session: GPU and CPU load, GPU
+    temperature, RAM, and board input power or GPU power, depending on the source;
+  - the response and voice latency, the turn kind, a barge-in badge, and a
+    timeline of the latency stages next to the GPU and CPU load during the turn;
+  - the tool and intent calls with their duration and outcome;
   - the user audio, every transcript diffed against the reference, and the human reference;
   - images, and the LLM calls (the full stored input on click);
   - the assistant reply, plus the whole-call stereo recording;
@@ -136,10 +281,19 @@ API (`/api/review/*`) is only served when `MONITORING_ENABLED=true`.
     `source="human:<name>"`.
 - **Metrics.** Compares pipeline variants over a time range (24 h, 7 days,
   30 days, all). A variant is the combination of the config fields you
-  compare by: LLM, ASR, TTS, voice, language, turn detection, transport. Each
-  variant keeps its color across filter changes. The page shows:
-  - user→bot latency: median with a p10–p90 whisker, plus a per-session trend
-    (click a point to open the session);
+  compare by: LLM, ASR, TTS, voice, language, turn detection, transport, git
+  revision, intent engine, prompt. Each variant keeps its color across filter
+  changes. A turn-kind filter (all, plain, tool, intent-handled, vision) applies
+  to the latency views, and every view shows its sample count. The page shows:
+  - response latency as the headline number, with voice latency next to it;
+  - response latency per variant: median with a p10–p90 whisker, plus a
+    per-session trend (click a point to open the session);
+  - the stage breakdown per variant, and a table per variant and turn kind;
+  - a trend per day and per git revision with latency and stage percentiles. A
+    day or revision is marked "slower" when its median response latency is more
+    than 20% and 0.1 s above the previous one, with at least 5 turns in both;
+  - tool and intent calls: count, duration, and failure, timeout, and
+    cancellation rates;
   - time to first byte per service;
   - LLM time to first token, text-only vs with images;
   - ASR WER per transcript source;

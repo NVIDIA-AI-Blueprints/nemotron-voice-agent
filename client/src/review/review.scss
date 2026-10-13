@@ -526,6 +526,62 @@
   margin-left: auto;
 }
 
+.rv-section-head {
+  margin: var(--space-6) 0 var(--space-3);
+}
+
+.rv-stage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.rv-stage-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.rv-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rv-timeline-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.rv-timeline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.rv-stage-track {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 14px;
+  gap: 2px;
+}
+
+.rv-stage-seg {
+  flex-basis: 0;
+  min-width: 2px;
+  border-radius: 2px;
+}
+
+.rv-load {
+  flex-shrink: 0;
+}
+
 .rv-refetching {
   opacity: 0.6;
   transition: opacity var(--transition-base);

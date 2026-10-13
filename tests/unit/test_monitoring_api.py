@@ -206,3 +206,153 @@ def test_metrics_endpoint(env):
     assert set(variant["ttfb"]) == {"ASR", "LLM"}
     assert data["sessions"][0]["variant"] == 0 and data["sessions"][0]["latency_p50"] == pytest.approx(1.0)
     assert client.get("/api/review/metrics", params={"group_by": "bad field!"}).status_code == 422
+
+
+def _turn_metric(session_id, idx, kind, response, *, voice=None, **extra):
+    return (
+        "turn_metrics",
+        {
+            "session_id": session_id,
+            "idx": idx,
+            "kind": kind,
+            "response_latency": response,
+            "voice_latency": response if voice is None else voice,
+            "total_secs": response,
+            "asr_secs": 0.5,
+            "llm_first_secs": response - 0.6,
+            "unexplained_secs": 0.1,
+            "segments": [{"stage": "asr", "start": 1.0, "end": 1.5}],
+            "n_llm_calls": 1,
+            "computed_at": 1.0,
+            **extra,
+        },
+    )
+
+
+def _session(store, session_id, started_at, git_sha):
+    store.create_session(
+        {
+            "id": session_id,
+            "example": "multilingual-assistant",
+            "started_at": started_at,
+            "last_seen_at": started_at + 60,
+            "ended_at": started_at + 60,
+            "config": {"language": "fr-FR", "asr": {"model": "nemo"}, "git_sha": git_sha},
+            "artifact_prefix": f"sessions/{session_id}/",
+        }
+    )
+
+
+def test_metrics_by_kind_trend_and_tools(env):
+    client, store = env
+    now = time.time()
+    _session(store, "old", now - 3 * 86400, "aaaaaaaa1111")
+    _session(store, "new", now - 3600, "bbbbbbbb2222")
+    rows = [_turn_metric("old", idx, "plain", 1.0 + idx / 100) for idx in range(1, 7)]
+    rows += [_turn_metric("new", idx, "plain", 2.0 + idx / 100, barge_in=idx == 1) for idx in range(1, 7)]
+    rows += [_turn_metric("new", 7, "tool", 1.5, voice=3.0, tool_secs=0.4, gpu_load_mean=40.0, gpu_load_peak=90.0)]
+    call = {
+        "session_id": "new",
+        "turn_idx": 7,
+        "trigger": "llm",
+        "target": "client",
+        "sent_at": now,
+        "perceivable": True,
+    }
+    rows += [
+        ("tool_calls", {**call, "call_id": "c1", "name": "move_head", "duration_secs": 0.1, "outcome": "ok"}),
+        ("tool_calls", {**call, "call_id": "c2", "name": "move_head", "duration_secs": 5.0, "outcome": "timeout"}),
+        ("tool_calls", {**call, "call_id": "c3", "name": "move_head", "duration_secs": 0.3, "outcome": "error"}),
+        ("tool_calls", {**call, "call_id": "c4", "name": "move_head", "duration_secs": None, "outcome": "cancelled"}),
+        # Zero-valued samples recorded before the recorder dropped them are ignored.
+        ("metrics", {"session_id": "new", "ts": 1.0, "processor": "NvidiaLLMService#2", "name": "ttfb", "value": 0.0}),
+        ("metrics", {"session_id": "new", "ts": 1.0, "processor": "NvidiaLLMService#2", "name": "ttfb", "value": 0.4}),
+    ]
+    store.write_batch(rows)
+
+    data = client.get("/api/review/metrics", params={"group_by": "git_sha"}).json()
+    assert data["kinds"] == ["plain", "tool"] and "unexplained" in data["stages"]
+    totals = data["totals"]["by_kind"]
+    assert totals["all"]["turns"] == 13 and totals["plain"]["turns"] == 12 and totals["tool"]["turns"] == 1
+    assert totals["tool"]["response"]["p50"] == pytest.approx(1.5) and totals["tool"]["voice"]["p50"] == pytest.approx(
+        3.0
+    )
+    assert totals["tool"]["stages"]["tool"] == {"n": 1, "p10": 0.4, "p50": 0.4, "p90": 0.4}
+    assert totals["tool"]["gpu_load_mean"] == 40.0 and totals["tool"]["gpu_load_peak"] == 90.0
+    assert totals["plain"]["barge_in_rate"] == pytest.approx(1 / 6)  # only turns with a known flag count
+
+    by_label = {variant["label"]: variant for variant in data["variants"]}
+    assert by_label["bbbbbbbb2222"]["by_kind"]["plain"]["response"]["n"] == 6
+    assert by_label["bbbbbbbb2222"]["ttfb"]["LLM"] == {"n": 1, "p10": 0.4, "p50": 0.4, "p90": 0.4}
+
+    revisions = [bucket for bucket in data["trend"]["by_revision"] if bucket["key"]]
+    assert [bucket["label"] for bucket in revisions] == ["aaaaaaaa", "bbbbbbbb"]  # in order of first appearance
+    assert revisions[0]["by_kind"]["plain"]["regression"] is None
+    assert revisions[1]["by_kind"]["plain"]["regression"]["previous"] == "aaaaaaaa"
+    assert revisions[1]["by_kind"]["tool"]["regression"] is None  # too few turns to judge
+    assert revisions[1]["by_kind"]["plain"]["stages"]["asr"]["p50"] == 0.5
+    days = data["trend"]["by_day"]
+    assert len(days) >= 2 and sum(bucket["by_kind"]["all"]["turns"] for bucket in days) == 13
+
+    (tool,) = data["tools"]
+    assert (tool["name"], tool["trigger"], tool["target"], tool["perceivable"]) == ("move_head", "llm", "client", True)
+    assert tool["calls"] == 4 and tool["duration"]["n"] == 3
+    assert (tool["failure_rate"], tool["timeout_rate"], tool["error_rate"], tool["cancelled_rate"]) == (
+        0.75,
+        0.25,
+        0.25,
+        0.25,
+    )
+    assert {s["id"]: s["response_p50"] for s in data["sessions"]}["old"] == pytest.approx(1.035)
+
+
+def test_session_detail_has_turn_metrics_tool_calls_and_system_samples(env):
+    client, store = env
+    session = store.get_session("s1")
+    store.write_batch(
+        [
+            _turn_metric("s1", 1, "tool", 1.5),
+            (
+                "tool_calls",
+                {
+                    "session_id": "s1",
+                    "call_id": "c1",
+                    "turn_idx": 1,
+                    "name": "move_head",
+                    "trigger": "llm",
+                    "target": "client",
+                    "sent_at": session["started_at"] + 12,
+                    "duration_secs": 0.1,
+                    "outcome": "ok",
+                    "perceivable": False,
+                },
+            ),
+        ]
+    )
+    for offset, load in ((-30, 1.0), (10, 55.0), (20, 65.0), (500, 2.0)):
+        store.add_system_sample({"ts": session["started_at"] + offset, "live_sessions": 1, "gpu_load": load})
+    detail = client.get("/api/review/sessions/s1").json()
+    first, second = (next(t for t in detail["turns"] if t["idx"] == idx) for idx in (1, 2))
+    assert first["metrics"]["kind"] == "tool" and first["metrics"]["segments"][0]["stage"] == "asr"
+    assert [call["name"] for call in first["tool_calls"]] == ["move_head"]
+    assert second["metrics"] is None and second["tool_calls"] == []
+    assert [sample["gpu_load"] for sample in detail["system_samples"]] == [55.0, 65.0]  # the session window only
+
+
+def test_report_cli_splits_latency_by_turn_kind(env):
+    from monitoring.report import collect, summarize
+
+    _, store = env
+    store.write_batch(
+        [
+            ("metrics", {"session_id": "s1", "turn_idx": 1, "ts": 1.0, "name": "user_bot_latency", "value": 0.8}),
+            ("metrics", {"session_id": "s1", "turn_idx": 2, "ts": 2.0, "name": "user_bot_latency", "value": 2.8}),
+            _turn_metric("s1", 1, "plain", 0.8),
+            _turn_metric("s1", 2, "tool", 2.8),
+        ]
+    )
+    (row,) = summarize(collect(store, since=None, session_ids=None, group_by=["language"]), ["language"])
+    assert row["user_bot_p50"] == "1.800s"
+    assert (row["turns[plain]"], row["user_bot_p50[plain]"]) == ("1", "0.800s")
+    assert (row["turns[tool]"], row["user_bot_p50[tool]"], row["user_bot_p90[tool]"]) == ("1", "2.800s", "2.800s")
+    assert not any("[vision]" in key or "response" in key for key in row)

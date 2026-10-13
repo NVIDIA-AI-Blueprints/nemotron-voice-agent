@@ -14,8 +14,11 @@ import {
   type LlmCallBrief,
   type MemoryRow,
   type Person,
+  type SystemSample,
   type TurnDetail,
 } from "./api";
+import { powerLabel } from "./chartTheme";
+import { TurnTimeline } from "./TurnTimeline";
 import { MemoryStatusBadge } from "./Memories";
 import { AudioClips, ImageStrip, StatusLine, TranscriptTable, WerBadge } from "./components";
 import { formatDate, formatDuration, formatSecs, reviewHref, useAnnotator } from "./utils";
@@ -190,16 +193,53 @@ function MemoryList({ title, memories }: Readonly<{ title: string; memories: Mem
   );
 }
 
+/** Host-wide load while the session was live (samples of src/monitoring/system_metrics.py). */
+function SystemSummary({ samples }: Readonly<{ samples: SystemSample[] }>) {
+  if (!samples.length) return null;
+  const stat = (key: "gpu_load" | "cpu_load" | "gpu_temp_c" | "ram_used_mb", power?: string | null) => {
+    const values = samples
+      .filter((sample) => power === undefined || sample.power_source === power)
+      .map((sample) => (power === undefined ? sample[key] : sample.power_w))
+      .filter((value): value is number => value !== null);
+    if (!values.length) return null;
+    return { mean: values.reduce((sum, value) => sum + value, 0) / values.length, max: Math.max(...values) };
+  };
+  const parts: string[] = [];
+  const gpu = stat("gpu_load");
+  if (gpu) parts.push(`GPU load ${gpu.mean.toFixed(0)}% mean, ${gpu.max.toFixed(0)}% peak`);
+  const cpu = stat("cpu_load");
+  if (cpu) parts.push(`CPU load ${cpu.mean.toFixed(0)}% mean, ${cpu.max.toFixed(0)}% peak`);
+  const temp = stat("gpu_temp_c");
+  if (temp) parts.push(`GPU temperature ${temp.max.toFixed(0)} °C max`);
+  // Board input power and GPU power are different quantities: never merged under one label.
+  for (const source of [...new Set(samples.map((sample) => sample.power_source))]) {
+    const power = stat("gpu_load", source);
+    if (power) parts.push(`${powerLabel(source)} ${power.mean.toFixed(1)} W mean, ${power.max.toFixed(1)} W peak`);
+  }
+  const ram = stat("ram_used_mb");
+  if (ram) parts.push(`RAM used ${(ram.max / 1024).toFixed(1)} GB peak`);
+  const sessions = Math.max(...samples.map((sample) => sample.live_sessions));
+  if (!parts.length) return null;
+  return (
+    <p className="text-xs text-muted">
+      Host during the session ({samples.length} samples, up to {sessions} live session{sessions === 1 ? "" : "s"}):{" "}
+      {parts.join(" · ")}
+    </p>
+  );
+}
+
 function TurnCard({
   sessionId,
   liveSource,
   turn,
   people,
   sessionSpeaker,
+  samples,
 }: Readonly<{
   sessionId: string;
   liveSource: string;
   turn: TurnDetail;
+  samples: SystemSample[];
   people: Person[];
   sessionSpeaker: string | null;
 }>) {
@@ -212,11 +252,19 @@ function TurnCard({
         <span className="rv-badge rv-badge-muted">turn {turn.idx}</span>
         {turn.idx === 0 && <span className="text-xs text-muted">greeting</span>}
         {liveWer && <WerBadge value={liveWer.wer} title={`vs ${liveWer.reference_source}`} />}
-        {turn.user_bot_latency !== null && (
+        {!turn.metrics && turn.user_bot_latency !== null && (
           <span className="rv-badge rv-badge-muted">user→bot {formatSecs(turn.user_bot_latency)}</span>
         )}
-        {turn.interrupted && <span className="rv-badge rv-badge-warn">interrupted</span>}
+        {turn.interrupted && (
+          <span
+            className="rv-badge rv-badge-warn"
+            title="The assistant's response was cut short (interruption or end of session)"
+          >
+            interrupted
+          </span>
+        )}
       </div>
+      <TurnTimeline turn={turn} samples={samples} />
       {(turn.user_text || turn.audio.user.length > 0) && (
         <div className="rv-side rv-side-user">
           <span className="rv-label">User</span>
@@ -309,6 +357,7 @@ export function SessionDetailView({ sessionId }: Readonly<{ sessionId: string }>
               Jobs: {data.jobs.map((j) => `${j.kind} ${j.status}${j.error ? ` (${j.error})` : ""}`).join(" · ")}
             </p>
           )}
+          <SystemSummary samples={data.system_samples ?? []} />
           {data.conversation_audio && (
             <div className="rv-audio">
               <span className="rv-label">Whole call (user left · assistant right)</span>
@@ -323,6 +372,7 @@ export function SessionDetailView({ sessionId }: Readonly<{ sessionId: string }>
               turn={turn}
               people={peopleList}
               sessionSpeaker={data.speakers.session}
+              samples={data.system_samples ?? []}
             />
           ))}
         </>

@@ -290,6 +290,14 @@ class ReviewService:
                     }
                 )
 
+        turn_metrics = {
+            row["idx"]: {k: v for k, v in row.items() if k != "session_id"}
+            for row in self.store.rows("turn_metrics", session_id)
+        }
+        tool_calls: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for call in sorted(self.store.rows("tool_calls", session_id), key=lambda c: c["sent_at"]):
+            tool_calls[call["turn_idx"]].append({k: v for k, v in call.items() if k != "session_id"})
+
         latency: dict[int, float] = {}
         for metric in self.store.rows("metrics", session_id, name="user_bot_latency"):
             if metric["turn_idx"] is not None:
@@ -318,6 +326,8 @@ class ReviewService:
                     "human_reference": human,
                     "wer": wer_by_turn.get(idx, {}),
                     "user_bot_latency": latency.get(idx),
+                    "metrics": turn_metrics.get(idx),
+                    "tool_calls": tool_calls.get(idx, []),
                 }
             )
         jobs = [job for job in self.store.jobs() if job["target"] == session_id]
@@ -332,9 +342,17 @@ class ReviewService:
             "reference_source": self._reference_name,
             "conversation_audio": conversation_audio,
             "turns": out_turns,
+            "system_samples": self._system_samples(session),
             "wer_summary": wer_summary,
             "jobs": [{k: job[k] for k in ("kind", "status", "error", "attempts", "finished_at")} for job in jobs],
         }
+
+    def _system_samples(self, session: dict[str, Any], *, max_points: int = 1800) -> list[dict[str, Any]]:
+        """Host-wide samples over the session, thinned to ``max_points`` for long sessions."""
+        end = session.get("ended_at") or time.time()
+        samples = self.store.system_samples_between(session["started_at"], end)
+        step = max(1, -(-len(samples) // max_points))
+        return [{k: v for k, v in sample.items() if k != "id"} for sample in samples[::step]]
 
     def _session_memories(self, session_id: str) -> dict[str, Any]:
         """Memories injected in this session and those extracted from it."""

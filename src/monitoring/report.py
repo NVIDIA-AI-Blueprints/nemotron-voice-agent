@@ -4,9 +4,13 @@
 """Compare recorded sessions grouped by pipeline variant.
 
 Groups sessions by fields of their config snapshot (default: LLM, ASR and TTS
-models plus language) and prints, per group, latency percentiles (user→bot,
-per-service TTFB, LLM TTFT split text-only vs. with images), interruption rate
-and ASR WER from ``reasr`` annotations.
+models plus language) and prints, per group, latency percentiles (user→bot, also
+split by turn kind, per-service TTFB, LLM TTFT split text-only vs. with images),
+interruption rate and ASR WER from ``reasr`` annotations.
+
+The turn-kind split needs the per-turn rows of ``monitoring.turn_metrics``
+(written at the end of each recorded turn; run ``python -m monitoring.turn_metrics``
+once for sessions recorded before they existed).
 
 Usage::
 
@@ -24,14 +28,23 @@ import statistics
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from monitoring import schema
 from monitoring.config import load_monitoring_config
 from monitoring.store import SessionStore
+from monitoring.turn_metrics import KINDS, STAGES, service_role
+
+# A trend bucket is flagged when its median response latency is clearly worse than
+# the previous bucket's: both ratio and absolute difference, on enough turns.
+REGRESSION_RATIO = 1.2
+REGRESSION_MIN_DELTA_SECS = 0.1
+REGRESSION_MIN_TURNS = 5
+_TURN_METRIC_COLUMNS = [c.name for c in schema.turn_metrics.columns if c.name != "segments"]
 
 DEFAULT_GROUP_BY = "llm.model,asr.model,tts.model,language"
 
@@ -85,7 +98,11 @@ def collect_with_sessions(
             query = select(*(table.c[c] for c in columns)).where(table.c.session_id.in_(ids))
             return [dict(r) for r in conn.execute(query).mappings()]
 
-        metrics = rows(schema.metrics, "session_id", "processor", "name", "value")
+        metrics = rows(schema.metrics, "session_id", "turn_idx", "processor", "name", "value")
+        # A database not yet migrated to schema 4 simply has no per-turn rows.
+        derived = inspect(conn).has_table(schema.turn_metrics.name)
+        turn_metrics = rows(schema.turn_metrics, *_TURN_METRIC_COLUMNS) if derived else []
+        tool_calls = rows(schema.tool_calls, *(c.name for c in schema.tool_calls.columns)) if derived else []
         turns = rows(schema.turns, "session_id", "idx", "user_text", "interrupted")
         llm_calls = rows(schema.llm_calls, "session_id", "ttfb", "n_images", "prompt_tokens", "completion_tokens")
         wers = [
@@ -101,6 +118,9 @@ def collect_with_sessions(
             "turns": 0,
             "interrupted": 0,
             "latency": [],
+            "latency_by_kind": defaultdict(list),
+            "turn_metrics": [],
+            "tool_calls": [],
             "first_latency": [],
             "ttfb": defaultdict(list),
             "ttft_text": [],
@@ -110,8 +130,22 @@ def collect_with_sessions(
         }
     )
     per_session: dict[str, dict[str, Any]] = {
-        s["id"]: {"started_at": s["started_at"], "group": group_of[s["id"]], "latency": [], "wer": {}} for s in sessions
+        s["id"]: {
+            "started_at": s["started_at"],
+            "group": group_of[s["id"]],
+            "git_sha": (s["config"] or {}).get("git_sha"),
+            "latency": [],
+            "turn_metrics": [],
+            "wer": {},
+        }
+        for s in sessions
     }
+    kind_of = {(row["session_id"], row["idx"]): row["kind"] for row in turn_metrics}
+    for row in turn_metrics:
+        groups[group_of[row["session_id"]]]["turn_metrics"].append(row)
+        per_session[row["session_id"]]["turn_metrics"].append(row)
+    for call in tool_calls:
+        groups[group_of[call["session_id"]]]["tool_calls"].append(call)
     for session in sessions:
         groups[group_of[session["id"]]]["sessions"] += 1
     for turn in turns:
@@ -124,9 +158,13 @@ def collect_with_sessions(
         if metric["name"] == "user_bot_latency":
             g["latency"].append(metric["value"])
             per_session[metric["session_id"]]["latency"].append(metric["value"])
+            kind = kind_of.get((metric["session_id"], metric["turn_idx"]))
+            if kind:
+                g["latency_by_kind"][kind].append(metric["value"])
         elif metric["name"] == "first_bot_speech_latency":
             g["first_latency"].append(metric["value"])
-        elif metric["name"] == "ttfb":
+        elif metric["name"] == "ttfb" and (metric["value"] or 0) > 0:
+            # Zero-valued samples are start-up artifacts of pipecat, not measurements.
             g["ttfb"][_service(metric["processor"])].append(metric["value"])
     for call in llm_calls:
         g = groups[group_of[call["session_id"]]]
@@ -145,16 +183,112 @@ def collect_with_sessions(
     return groups, per_session
 
 
-def _service_role(service: str) -> str:
-    """ASR / LLM / TTS for pipecat service class names, else the name itself."""
-    for marker, role in (("STT", "ASR"), ("ASR", "ASR"), ("LLM", "LLM"), ("TTS", "TTS")):
-        if marker in service:
-            return role
-    return service
-
-
 def _dist(values: list[float]) -> dict[str, float | int | None]:
     return {"n": len(values), "p10": _pct(values, 10), "p50": _pct(values, 50), "p90": _pct(values, 90)}
+
+
+def _values(rows: list[dict[str, Any]], column: str) -> list[float]:
+    return [row[column] for row in rows if row.get(column) is not None]
+
+
+def _kind_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Latency and stage distributions of a set of ``turn_metrics`` rows (``turns`` is the sample count)."""
+    flagged = [row["barge_in"] for row in rows if row.get("barge_in") is not None]
+    loads, peaks = _values(rows, "gpu_load_mean"), _values(rows, "gpu_load_peak")
+    return {
+        "turns": len(rows),
+        "response": _dist(_values(rows, "response_latency")),
+        "voice": _dist(_values(rows, "voice_latency")),
+        "stages": {stage: _dist(_values(rows, f"{stage}_secs")) for stage in (*STAGES, "unexplained")},
+        "barge_in_rate": sum(map(bool, flagged)) / len(flagged) if flagged else None,
+        "llm_calls_mean": statistics.fmean(_values(rows, "n_llm_calls")) if rows else None,
+        "prompt_tokens_p50": _pct(_values(rows, "prompt_tokens"), 50),
+        "completion_tokens_p50": _pct(_values(rows, "completion_tokens"), 50),
+        "gpu_load_mean": statistics.fmean(loads) if loads else None,
+        "gpu_load_peak": max(peaks) if peaks else None,
+    }
+
+
+def _by_kind(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """``{"all": stats, <kind>: stats}`` for the kinds present, so like is compared with like."""
+    out = {"all": _kind_stats(rows)}
+    for kind in KINDS:
+        subset = [row for row in rows if row["kind"] == kind]
+        if subset:
+            out[kind] = _kind_stats(subset)
+    return out
+
+
+def _trend(buckets: list[tuple[str, str, list[dict[str, Any]]]]) -> list[dict[str, Any]]:
+    """Per-bucket stats in order, flagging a bucket whose p50 is clearly worse than the previous one."""
+    out: list[dict[str, Any]] = []
+    previous: dict[str, tuple[str, float]] = {}  # kind -> (bucket label, response p50)
+    for key, label, sessions in buckets:
+        rows = [row for session in sessions for row in session["turn_metrics"]]
+        by_kind = _by_kind(rows)
+        for kind, stats in by_kind.items():
+            response = stats["response"]
+            stats["regression"] = None
+            if response["n"] < REGRESSION_MIN_TURNS:
+                continue
+            before = previous.get(kind)
+            if (
+                before
+                and response["p50"] > before[1] * REGRESSION_RATIO
+                and response["p50"] - before[1] > REGRESSION_MIN_DELTA_SECS
+            ):
+                stats["regression"] = {"previous": before[0], "previous_p50": before[1]}
+            previous[kind] = (label, response["p50"])
+        out.append(
+            {
+                "key": key,
+                "label": label,
+                "started_at": min(session["started_at"] for session in sessions),
+                "sessions": len(sessions),
+                "by_kind": by_kind,
+            }
+        )
+    return out
+
+
+def _trends(per_session: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    ordered = sorted(per_session.values(), key=lambda s: s["started_at"])
+    days: dict[str, list] = defaultdict(list)
+    revisions: dict[str, list] = defaultdict(list)  # insertion order = first time a revision was seen
+    for session in ordered:
+        days[datetime.fromtimestamp(session["started_at"]).strftime("%Y-%m-%d")].append(session)
+        revisions[session["git_sha"] or ""].append(session)
+    return {
+        "by_day": _trend([(day, day, sessions) for day, sessions in days.items()]),
+        "by_revision": _trend([(sha, sha[:8] or "unknown", sessions) for sha, sessions in revisions.items()]),
+    }
+
+
+def _tool_table(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per (tool, trigger, target): calls, durations, failure and timeout rates."""
+    grouped: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    for call in calls:
+        grouped[(call["name"], call["trigger"], call["target"])].append(call)
+    table = []
+    for (name, trigger, target), rows in sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0])):
+        outcomes = defaultdict(int)
+        for row in rows:
+            outcomes[row["outcome"]] += 1
+        table.append(
+            {
+                "name": name,
+                "trigger": trigger,
+                "target": target,
+                "perceivable": any(row["perceivable"] for row in rows),
+                "calls": len(rows),
+                "duration": _dist(_values(rows, "duration_secs")),
+                "failure_rate": (len(rows) - outcomes["ok"]) / len(rows),
+                "error_rate": outcomes["error"] / len(rows),
+                "timeout_rate": outcomes["timeout"] / len(rows),
+                "cancelled_rate": outcomes["cancelled"] / len(rows),
+            }
+        )
+    return table
 
 
 def metrics_json(
@@ -169,7 +303,7 @@ def metrics_json(
         g = groups[key]
         ttfb: dict[str, list[float]] = defaultdict(list)
         for service, values in g["ttfb"].items():
-            ttfb[_service_role(service)].extend(values)
+            ttfb[service_role(service)].extend(values)
         variants.append(
             {
                 "key": dict(zip(group_by, key, strict=True)),
@@ -178,6 +312,7 @@ def metrics_json(
                 "turns": g["turns"],
                 "interrupt_rate": g["interrupted"] / g["turns"] if g["turns"] else None,
                 "latency": _dist(g["latency"]),
+                "by_kind": _by_kind(g["turn_metrics"]),
                 "first_speech": _dist(g["first_latency"]),
                 "ttfb": {role: _dist(values) for role, values in sorted(ttfb.items())},
                 "ttft": {"text": _dist(g["ttft_text"]), "vision": _dist(g["ttft_vision"])},
@@ -191,15 +326,21 @@ def metrics_json(
     all_latency = [v for g in groups.values() for v in g["latency"]]
     live_errors = sum(e for g in groups.values() for s, (e, _) in g["wer"].items() if s.startswith("live:"))
     live_words = sum(w for g in groups.values() for s, (_, w) in g["wer"].items() if s.startswith("live:"))
+    all_turn_metrics = [row for g in groups.values() for row in g["turn_metrics"]]
     return {
         "group_by": group_by,
+        "kinds": [kind for kind in KINDS if any(row["kind"] == kind for row in all_turn_metrics)],
+        "stages": [*STAGES, "unexplained"],
         "totals": {
             "sessions": sum(g["sessions"] for g in groups.values()),
             "turns": sum(g["turns"] for g in groups.values()),
             "latency_p50": _pct(all_latency, 50),
+            "by_kind": _by_kind(all_turn_metrics),
             "live_wer": live_errors / live_words if live_words else None,
         },
         "variants": variants,
+        "trend": _trends(per_session),
+        "tools": _tool_table([call for g in groups.values() for call in g["tool_calls"]]),
         "sessions": sorted(
             (
                 {
@@ -207,6 +348,7 @@ def metrics_json(
                     "started_at": s["started_at"],
                     "variant": index[s["group"]],
                     "latency_p50": _pct(s["latency"], 50),
+                    "response_p50": _pct(_values(s["turn_metrics"], "response_latency"), 50),
                     "live_wer": next((w for src, w in s["wer"].items() if src.startswith("live:")), None),
                 }
                 for sid, s in per_session.items()
@@ -234,6 +376,12 @@ def summarize(groups, group_by: list[str]) -> list[dict[str, str]]:
                 "prompt_tokens_p50": str(int(_pct(g["prompt_tokens"], 50))) if g["prompt_tokens"] else "-",
             }
         )
+        for kind in KINDS:
+            values = g["latency_by_kind"].get(kind)
+            if values:
+                row[f"turns[{kind}]"] = str(len(values))
+                row[f"user_bot_p50[{kind}]"] = _fmt(_pct(values, 50))
+                row[f"user_bot_p90[{kind}]"] = _fmt(_pct(values, 90))
         for service, values in sorted(g["ttfb"].items()):
             row[f"ttfb_p50[{service}]"] = _fmt(_pct(values, 50))
             row[f"ttfb_p90[{service}]"] = _fmt(_pct(values, 90))

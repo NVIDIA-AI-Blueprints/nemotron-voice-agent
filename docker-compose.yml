@@ -97,6 +97,28 @@ x-app-env: &app-env
   TRANSPORT_SELECTION: ${TRANSPORT_SELECTION:-}
   PIPELINE_TLS: ${PIPELINE_TLS:-true}
 
+# App services of the local recipes (`*/server`, `*/single-gpu`). They run next to the
+# GPU services on the same host, so they get read-only GPU visibility: `nvidia-smi`
+# for the session recorder's GPU load samples (MONITORING_ENABLED=true). The
+# `utility` capability mounts no CUDA libraries and the app allocates no GPU memory.
+# Cloud recipes keep `app-base`: they must start on hosts without an NVIDIA runtime.
+x-app-local: &app-local
+  <<: *app-base
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+x-app-local-env: &app-local-env
+  <<: *app-env
+  NVIDIA_DRIVER_CAPABILITIES: utility
+  # Code revision stored with each recorded session (the container has no `.git`).
+  # Pass it from the host: GIT_SHA=$(git rev-parse HEAD) docker compose ... up -d
+  GIT_SHA: ${GIT_SHA:-}
+
 services:
   generic-assistant:
     <<: *app-base
@@ -107,27 +129,27 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
   generic-assistant-server:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - generic-assistant/server
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
   generic-assistant-single-gpu:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - generic-assistant/single-gpu
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-generic-assistant}
 
   generic-assistant-server-perf:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - generic-assistant/server-perf
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: generic-assistant
       UVICORN_WORKERS: "200"
       PROMPT_FILE_PATH: ${PROMPT_FILE_PATH:-}
@@ -146,19 +168,19 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
   multilingual-assistant-server:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - multilingual-assistant/server
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
   multilingual-assistant-single-gpu:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - multilingual-assistant/single-gpu
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-multilingual-assistant}
 
   omni-assistant:
@@ -170,19 +192,19 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
   omni-assistant-server:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - omni-assistant/server
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
   omni-assistant-single-gpu:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - omni-assistant/single-gpu
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant}
 
   omni-assistant-subagents:
@@ -194,19 +216,19 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
   omni-assistant-subagents-server:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - omni-assistant-subagents/server
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
   omni-assistant-subagents-single-gpu:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - omni-assistant-subagents/single-gpu
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
 
   frontend-backend-agent:
@@ -218,18 +240,18 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
 
   frontend-backend-agent-server:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - frontend-backend-agent/server
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
 
   frontend-backend-agent-single-gpu:
-    <<: *app-base
+    <<: *app-local
     profiles:
       - frontend-backend-agent/single-gpu
     environment:
-      <<: *app-env
+      <<: *app-local-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       THINKER_TOOL_TIMEOUT_SECONDS: ${THINKER_TOOL_TIMEOUT_SECONDS:-90}

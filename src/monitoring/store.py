@@ -20,14 +20,18 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from sqlalchemy import Engine, create_engine, event, func, select, update
+from sqlalchemy import Engine, create_engine, delete, event, func, inspect, select, text, update
 from sqlalchemy.dialects import postgresql, sqlite
 
 from monitoring import schema
 from monitoring.config import MonitoringConfig
 
 # Tables written through ``write_batch`` and how conflicts are resolved.
-_UPSERT_TABLES = {"turns": ("session_id", "idx")}
+_UPSERT_TABLES = {
+    "turns": ("session_id", "idx"),
+    "turn_metrics": ("session_id", "idx"),
+    "tool_calls": ("session_id", "call_id"),
+}
 _IGNORE_CONFLICT_TABLES = {"media"}
 
 
@@ -105,7 +109,7 @@ def _configure_sqlite(engine: Engine) -> None:
 
 
 class SessionStore:
-    """Relational store for sessions, turns, timelines, annotations and jobs."""
+    """Relational store for sessions, turns, timelines, metrics, annotations and jobs."""
 
     def __init__(self, db_url: str):
         """Connect to ``db_url`` (tables are created by ``create_schema``)."""
@@ -120,11 +124,35 @@ class SessionStore:
     def create_schema(self) -> None:
         """Create missing tables and record the schema version."""
         schema.metadata.create_all(self.engine)
+        self._add_missing_columns()
         with self.engine.begin() as conn:
             current = conn.execute(select(func.max(schema.schema_version.c.version))).scalar()
-            # Schema changes so far only add tables, which ``create_all`` handles.
+            # Schema changes so far only add tables (``create_all``) and nullable
+            # columns (``_add_missing_columns``); neither needs a data migration.
+            # Rows derived from older recordings are filled by
+            # ``python -m monitoring.turn_metrics``.
             if current is None or current < schema.SCHEMA_VERSION:
                 conn.execute(schema.schema_version.insert().values(version=schema.SCHEMA_VERSION))
+
+    def _add_missing_columns(self) -> None:
+        """Add columns declared in the schema but missing from an older database.
+
+        Idempotent, and safe when two processes (server and dreamer) start together:
+        a column the other process added first is skipped.
+        """
+        inspector = inspect(self.engine)
+        for table in schema.metadata.sorted_tables:
+            existing = {column["name"] for column in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing or column.primary_key or not column.nullable:
+                    continue
+                column_type = column.type.compile(dialect=self.engine.dialect)
+                try:
+                    with self.engine.begin() as conn:
+                        conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column_type}'))
+                except Exception:
+                    if column.name not in {c["name"] for c in inspect(self.engine).get_columns(table.name)}:
+                        raise
 
     # ---------------------------------------------------------------- sessions
     def create_session(self, row: dict[str, Any]) -> None:
@@ -231,6 +259,69 @@ class SessionStore:
                     .order_by(schema.sessions.c.started_at)
                 ).scalars()
             )
+
+    # ---------------------------------------------------------- derived metrics
+    def write_derived(
+        self,
+        session_id: str,
+        *,
+        turn_rows: Sequence[dict[str, Any]],
+        call_rows: Sequence[dict[str, Any]],
+        turn_updates: dict[int, dict[str, Any]],
+        replace: bool,
+    ) -> None:
+        """Store derived turn metrics and tool calls and patch the turn rows.
+
+        ``replace`` drops the session's previous derived rows first (whole-session
+        recompute); otherwise rows are upserted (one finished turn).
+        """
+        with self.engine.begin() as conn:
+            if replace:
+                for table in (schema.turn_metrics, schema.tool_calls):
+                    conn.execute(delete(table).where(table.c.session_id == session_id))
+            for table, keys, rows in (
+                (schema.turn_metrics, ("session_id", "idx"), turn_rows),
+                (schema.tool_calls, ("session_id", "call_id"), call_rows),
+            ):
+                for row in rows:
+                    changes = {k: v for k, v in row.items() if k not in keys}
+                    stmt = self._insert(table).values(**row)
+                    conn.execute(stmt.on_conflict_do_update(index_elements=list(keys), set_=changes))
+            for idx, values in turn_updates.items():
+                if values:
+                    conn.execute(
+                        update(schema.turns)
+                        .where(schema.turns.c.session_id == session_id, schema.turns.c.idx == idx)
+                        .values(**values)
+                    )
+
+    def add_system_sample(self, row: dict[str, Any], *, min_gap_secs: float = 0.0) -> bool:
+        """Insert one host-wide system sample.
+
+        With ``min_gap_secs`` the sample is skipped when a newer one is already
+        stored, so several server workers sampling the same host do not duplicate
+        rows. Returns whether the row was inserted.
+        """
+        t = schema.system_samples
+        with self.engine.begin() as conn:
+            if min_gap_secs > 0:
+                latest = conn.execute(select(func.max(t.c.ts))).scalar()
+                if latest is not None and latest > row["ts"] - min_gap_secs:
+                    return False
+            conn.execute(t.insert().values(**row))
+        return True
+
+    def system_samples_between(self, start: float, end: float) -> list[dict[str, Any]]:
+        """Return the system samples with ``start <= ts <= end``, oldest first."""
+        t = schema.system_samples
+        stmt = select(t).where(t.c.ts >= start, t.c.ts <= end).order_by(t.c.ts)
+        with self.engine.connect() as conn:
+            return [dict(r) for r in conn.execute(stmt).mappings()]
+
+    def all_session_ids(self) -> list[str]:
+        """Return every session id, oldest first."""
+        with self.engine.connect() as conn:
+            return list(conn.execute(select(schema.sessions.c.id).order_by(schema.sessions.c.started_at)).scalars())
 
     # ------------------------------------------------------------ annotations
     def add_annotations(self, rows: Iterable[dict[str, Any]]) -> None:

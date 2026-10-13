@@ -66,13 +66,80 @@ export interface HumanReference {
   at: number;
 }
 
+export type TurnKind = "plain" | "tool" | "intent" | "vision";
+
+/** One stretch of the turn timeline owned by a stage (epoch seconds). */
+export interface StageSegment {
+  stage: string;
+  start: number;
+  end: number;
+}
+
+/** Row of ``turn_metrics`` (src/monitoring/turn_metrics.py); stage columns are ``<stage>_secs``. */
+export interface TurnMetrics {
+  kind: TurnKind;
+  barge_in: boolean | null;
+  voice_latency: number | null;
+  response_latency: number | null;
+  response_via: "audio" | "tool" | null;
+  total_secs: number | null;
+  unexplained_secs: number | null;
+  segments: StageSegment[] | null;
+  n_llm_calls: number | null;
+  n_tool_calls: number | null;
+  n_images: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  gpu_load_mean: number | null;
+  gpu_load_peak: number | null;
+  [stageSecs: `${string}_secs`]: number | null;
+}
+
+export interface ToolCall {
+  call_id: string;
+  turn_idx: number | null;
+  name: string;
+  trigger: "llm" | "intent";
+  target: "client" | "home_assistant";
+  sent_at: number;
+  duration_secs: number | null;
+  outcome: "ok" | "error" | "timeout" | "cancelled";
+  perceivable: boolean;
+}
+
+/** Host-wide sample taken once per second while a session is live. */
+export interface SystemSample {
+  ts: number;
+  live_sessions: number;
+  gpu_load: number | null;
+  gpu_temp_c: number | null;
+  power_w: number | null;
+  /** What power_w measures: whole-board input power, or GPU power draw only. */
+  power_source: "board" | "gpu" | null;
+  ram_used_mb: number | null;
+  cpu_load: number | null;
+}
+
 export interface TurnDetail {
   idx: number;
   user_text?: string | null;
   bot_text?: string | null;
   user_started_at?: number | null;
+  /** Turn released to the LLM (after turn detection and ASR), not the end of speech. */
+  user_stopped_at?: number | null;
+  /** The user actually stopped speaking. */
+  user_speech_stopped_at?: number | null;
+  /** LLM response start, not the first audio. */
   bot_started_at?: number | null;
+  /** First bot audio. */
+  bot_speech_started_at?: number | null;
+  bot_stopped_at?: number | null;
+  /** The bot's response was cut (interruption or session end while it was open). */
   interrupted?: boolean;
+  /** The user started this turn while the bot was still speaking. */
+  barge_in?: boolean | null;
+  metrics: TurnMetrics | null;
+  tool_calls: ToolCall[];
   language?: string | null;
   audio: { user: MediaRef[]; bot: MediaRef[] };
   images: MediaRef[];
@@ -99,6 +166,7 @@ export interface SessionDetail {
   reference_source: string | null;
   conversation_audio: MediaRef | null;
   turns: TurnDetail[];
+  system_samples: SystemSample[];
   wer_summary: Record<string, { wer: number | null; turns: number; reference_sources: string[] }>;
   jobs: JobBrief[];
   speakers: { session: string | null };
@@ -268,11 +336,52 @@ export interface Distribution {
   p90: number | null;
 }
 
+/** Latency and stage distributions of a set of turns; ``turns`` is the sample count. */
+export interface KindStats {
+  turns: number;
+  response: Distribution;
+  voice: Distribution;
+  stages: Record<string, Distribution>;
+  barge_in_rate: number | null;
+  llm_calls_mean: number | null;
+  prompt_tokens_p50: number | null;
+  completion_tokens_p50: number | null;
+  gpu_load_mean: number | null;
+  gpu_load_peak: number | null;
+  /** Trend buckets only: set when the median response is clearly worse than the previous bucket. */
+  regression?: { previous: string; previous_p50: number } | null;
+}
+
+/** Keyed by "all" and by each turn kind present. */
+export type ByKind = Partial<Record<TurnKind | "all", KindStats>>;
+
+export interface TrendBucket {
+  key: string;
+  label: string;
+  started_at: number;
+  sessions: number;
+  by_kind: ByKind;
+}
+
+export interface ToolStats {
+  name: string;
+  trigger: "llm" | "intent";
+  target: "client" | "home_assistant";
+  perceivable: boolean;
+  calls: number;
+  duration: Distribution;
+  failure_rate: number;
+  error_rate: number;
+  timeout_rate: number;
+  cancelled_rate: number;
+}
+
 export interface MetricsVariant {
   key: Record<string, string>;
   label: string;
   sessions: number;
   turns: number;
+  by_kind: ByKind;
   interrupt_rate: number | null;
   latency: Distribution;
   first_speech: Distribution;
@@ -284,9 +393,20 @@ export interface MetricsVariant {
 
 export interface MetricsResponse {
   group_by: string[];
-  totals: { sessions: number; turns: number; latency_p50: number | null; live_wer: number | null };
+  kinds: TurnKind[];
+  stages: string[];
+  totals: { sessions: number; turns: number; latency_p50: number | null; live_wer: number | null; by_kind: ByKind };
   variants: MetricsVariant[];
-  sessions: { id: string; started_at: number; variant: number; latency_p50: number | null; live_wer: number | null }[];
+  trend: { by_day: TrendBucket[]; by_revision: TrendBucket[] };
+  tools: ToolStats[];
+  sessions: {
+    id: string;
+    started_at: number;
+    variant: number;
+    latency_p50: number | null;
+    response_p50: number | null;
+    live_wer: number | null;
+  }[];
 }
 
 export interface ReferenceItem {

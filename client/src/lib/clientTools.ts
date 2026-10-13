@@ -18,6 +18,13 @@ export type ClientToolDeclaration = {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  /**
+   * True when running the tool is itself something the user sees or hears (a
+   * robot moving, a sound playing). Recorded sessions then count the moment the
+   * call is sent as the turn's first response. Metadata only: the server never
+   * forwards it to the LLM. Absent means false.
+   */
+  perceivable?: boolean;
 };
 
 export type ClientTool = ClientToolDeclaration & {
@@ -81,5 +88,10 @@ export const CLIENT_TOOLS: ClientTool[] = [
 
 /** Declarations only (no handlers) — what gets sent to the bot at connect time. */
 export function clientToolDeclarations(): ClientToolDeclaration[] {
-  return CLIENT_TOOLS.map(({ name, description, parameters }) => ({ name, description, parameters }));
+  return CLIENT_TOOLS.map(({ name, description, parameters, perceivable }) => ({
+    name,
+    description,
+    parameters,
+    ...(perceivable ? { perceivable: true } : {}),
+  }));
 }

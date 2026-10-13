@@ -97,13 +97,28 @@ Tools demonstrate Pipecat's RTVI client-side function calling: the LLM calls a t
 Both are defined once, client-side, in `client/src/lib/clientTools.ts` (name, description, JSON-schema parameters, and the handler that implements them). The flow:
 
 1. On connect, the client sends its tool declarations as `requestData.tools` (WebRTC: `webrtcRequestParams.requestData` on `client.connect(...)`, carried through to the `/api/offer` POST body as `request_data`/`requestData`; WebSocket: a `client_tools` query parameter on the `/api/ws` URL, since that transport has no HTTP request to hang `requestData` on).
-2. `tools.py`'s `build_client_tools` validates that untrusted, client-supplied JSON (name pattern, description length, parameter shape, dedup, a cap on tool count) and turns it into a `ToolsSchema`. Invalid entries are dropped with a warning rather than reaching the LLM.
+2. `tools.py`'s `build_client_tools` validates that untrusted, client-supplied JSON (name pattern, description length, parameter shape, dedup, a cap on tool count) and turns it into a `ToolsSchema`. Only the name, description, and parameters reach the LLM. Invalid entries are dropped with a warning rather than reaching the LLM.
 3. The LLM decides to call one of the declared tools. `NvidiaLLMService` broadcasts a function-call-in-progress frame before invoking the registered server handler (`tool_handlers.py`, registered per-session for each name the client declared).
 4. `RTVIObserverParams.function_call_report_level` is set to `FULL` for each declared tool name, so the RTVI observer turns that frame into an `llm-function-call-in-progress` message carrying the function name and arguments.
 5. The client SDK's `registerFunctionCallHandler(...)` (wired up in `client/src/App.tsx` from the same `clientTools.ts` list) reacts to that event, runs the tool locally, and replies with an `llm-function-call-result` message on its own — no custom protocol needed.
 6. `RTVIProcessor` turns that reply directly into a result frame that the assistant context aggregator matches by `tool_call_id` and folds into the conversation.
 
 The server-side handler in `tool_handlers.py` never computes a result itself — it only keeps the call open (`cancel_on_interruption=True`, the plain sync tool pattern) and applies its own `CLIENT_FUNCTION_TIMEOUT_SECS` (default 5s) timeout so a client that never answers can't stall the conversation. `cancel_on_interruption=False` (Pipecat's async-tool pattern, used elsewhere for genuinely long-running backend work) was tried and rejected here: it injects the final result as a `role="developer"` message, which Nemotron 3.5 Lightning doesn't recognize — it kept telling the user the tool was "still running" even with the real result sitting in context. Add a new client-executed tool entirely in `client/src/lib/clientTools.ts`; nothing on the server needs to change.
+
+#### Perceivable Tools
+
+A tool declaration accepts an optional boolean field named `perceivable`. Set it to `true` when running the tool is something the user sees or hears by itself, such as a robot that moves its head or plays a sound. Leave it out, or set it to `false`, for tools that only return data, such as a clock or a web search.
+
+```json
+{
+  "name": "move_head",
+  "description": "Turn the robot head left, right, up, or down.",
+  "parameters": {"type": "object", "properties": {"direction": {"type": "string"}}},
+  "perceivable": true
+}
+```
+
+The flag only affects recorded sessions (`MONITORING_ENABLED=true`). For a turn that calls a perceivable tool, the response latency stops when the server sends the call, instead of waiting for the first bot audio. Refer to [Per-Turn Metrics](../../../docs/how-to/enable-conversation-recording.md#per-turn-metrics). The server stores the flag with the session snapshot (`client_tools_perceivable`) and never forwards it to the LLM. A value that is not a boolean is ignored with a warning, and the tool stays available. There is no server-side list of perceivable tools: a client that does not send the flag gets a response latency equal to its voice latency. External clients, such as the Reachy Mini conversation app, send the field in the same `tools` list they already declare at connect time.
 
 If a client-executed tool "does nothing," check two things: that the client actually declared it at connect time (see step 1 above), and the prompt catalog — the tool result must be summarized in natural spoken text, not read back verbatim (raw JSON read aloud by TTS sounds like a broken response).
 

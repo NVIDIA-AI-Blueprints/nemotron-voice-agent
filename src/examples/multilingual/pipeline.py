@@ -47,7 +47,7 @@ from examples.multilingual.multilingual_processor import (
     with_reasoning,
 )
 from examples.multilingual.tool_handlers import ClientToolResultBridge, build_client_tool_handler
-from examples.multilingual.tools import build_client_tools
+from examples.multilingual.tools import build_client_tools, perceivable_client_tools
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.person_memory import PERSON_MEMORY_ADDON_KEY, load_person_context, record_person_session
@@ -468,6 +468,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         language=fixed_session_language,
         prompt_key=prompt_key,
         client_tools=client_tool_names,
+        client_tools_perceivable=perceivable_client_tools(body.get("tools"), client_tool_names),
         asr={"server": asr_server, "model": asr_model, "function_id": asr_function_id},
         llm={"model": model_id, "base_url": base_url, "temperature": llm_temperature, "extra": base_extra},
         tts={

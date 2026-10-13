@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ReactNode } from "react";
 import { artifactUrl, type MediaRef } from "./api";
 import { formatPct, wordDiff } from "./utils";
 
@@ -93,4 +94,24 @@ export function TranscriptTable({
       </tbody>
     </table>
   );
+}
+
+export function ChartCard({
+  title,
+  subtitle,
+  children,
+}: Readonly<{ title: string; subtitle?: string; children: ReactNode }>) {
+  return (
+    <figure className="card rv-chart">
+      <figcaption>
+        <span className="text-sm font-semibold">{title}</span>
+        {subtitle && <span className="text-xs text-muted"> {subtitle}</span>}
+      </figcaption>
+      {children}
+    </figure>
+  );
+}
+
+export function Empty({ what }: Readonly<{ what: string }>) {
+  return <p className="text-xs text-muted rv-chart-empty">No {what} recorded in this range.</p>;
 }

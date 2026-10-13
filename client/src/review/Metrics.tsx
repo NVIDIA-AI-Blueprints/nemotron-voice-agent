@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import {
   Bar,
   BarChart,
@@ -17,24 +17,20 @@ import {
   ZAxis,
 } from "recharts";
 import type { ScatterPointItem } from "recharts/types/cartesian/Scatter";
-import { useMetrics, type Distribution, type MetricsResponse, type MetricsVariant } from "./api";
-import { StatusLine } from "./components";
+import { useMetrics, type Distribution, type MetricsResponse, type MetricsVariant, type TurnKind } from "./api";
+import {
+  INK,
+  KIND_LABELS,
+  SERIES,
+  axisTick,
+  secondsTick,
+  short,
+  tooltipStyle,
+  variantColor,
+} from "./chartTheme";
+import { ChartCard, Empty, StatusLine } from "./components";
+import { KindTable, StageBars, ToolsTable, TrendSection } from "./MetricsBreakdown";
 import { formatDate, formatPct, formatSecs, reviewHref } from "./utils";
-
-// Dark-mode categorical steps of the dataviz reference palette, validated on the
-// card surface #1a1a1a (all checks pass). Slot order is the CVD-safety mechanism.
-const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
-const OVERFLOW = "#898781"; // past 8 variants: muted, never a generated hue
-const INK = { primary: "#ffffff", secondary: "#c3c2b7", muted: "#898781", grid: "#2c2c2a", axis: "#383835" };
-
-// Color follows the variant, not its rank: a label keeps its slot for the whole
-// page lifetime even when a filter removes or reorders variants.
-const slotByLabel = new Map<string, number>();
-function variantColor(label: string): string {
-  if (!slotByLabel.has(label)) slotByLabel.set(label, slotByLabel.size);
-  const slot = slotByLabel.get(label) ?? SERIES.length;
-  return SERIES[slot] ?? OVERFLOW;
-}
 
 const RANGES: { label: string; days: number | null }[] = [
   { label: "24 h", days: 1 },
@@ -49,49 +45,13 @@ const GROUP_FIELDS: { field: string; label: string }[] = [
   { field: "tts.model", label: "TTS" },
   { field: "tts.voice", label: "Voice" },
   { field: "language", label: "Language" },
-  { field: "turn_detection.silero_vad_only", label: "VAD-only turns" },
+  { field: "turn_detection.silero_vad_only", label: "Turn detection (VAD only)" },
   { field: "transport", label: "Transport" },
+  { field: "git_sha", label: "Git revision" },
+  { field: "intent_engine.enabled", label: "Intent engine" },
+  { field: "prompt_key", label: "Prompt" },
 ];
 const DEFAULT_GROUP = ["llm.model", "asr.model", "tts.model", "language"];
-
-const tooltipStyle = {
-  background: "#252525",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 6,
-  color: INK.primary,
-  fontSize: 12,
-};
-const axisTick = { fill: INK.muted, fontSize: 11 };
-
-/** Seconds axis ticks: milliseconds below 1 s so sub-second ticks don't round together. */
-function secondsTick(value: number): string {
-  if (value === 0) return "0";
-  return Math.abs(value) < 1 ? `${Math.round(value * 1000)} ms` : `${Number(value.toFixed(2))} s`;
-}
-
-function short(index: number): string {
-  return `V${index + 1}`;
-}
-
-function ChartCard({
-  title,
-  subtitle,
-  children,
-}: Readonly<{ title: string; subtitle?: string; children: ReactNode }>) {
-  return (
-    <figure className="card rv-chart">
-      <figcaption>
-        <span className="text-sm font-semibold">{title}</span>
-        {subtitle && <span className="text-xs text-muted"> {subtitle}</span>}
-      </figcaption>
-      {children}
-    </figure>
-  );
-}
-
-function Empty({ what }: Readonly<{ what: string }>) {
-  return <p className="text-xs text-muted rv-chart-empty">No {what} recorded in this range.</p>;
-}
 
 /** Tooltip body shared by the grouped bar charts. */
 function VariantTooltip({
@@ -183,22 +143,23 @@ function GroupedBars({
   );
 }
 
-/** Median bar with a p10–p90 whisker per variant (horizontal). */
-function LatencyRange({ variants }: Readonly<{ variants: MetricsVariant[] }>) {
+/** Median response latency with a p10–p90 whisker per variant (horizontal); voice latency in the tooltip. */
+function LatencyRange({ variants, kind }: Readonly<{ variants: MetricsVariant[]; kind: TurnKind | "all" }>) {
   const rows = variants
-    .map((variant, i) => ({ variant, i }))
-    .filter(({ variant }) => variant.latency.p50 !== null)
-    .map(({ variant, i }) => {
-      const d = variant.latency;
+    .map((variant, i) => ({ variant, i, stats: variant.by_kind[kind] }))
+    .filter(({ stats }) => stats && stats.response.p50 !== null)
+    .map(({ variant, i, stats }) => {
+      const d = stats!.response;
       return {
-        name: short(i),
+        name: `${short(i)} · n=${d.n}`,
         label: variant.label,
         p50: d.p50,
         range: [(d.p50 ?? 0) - (d.p10 ?? d.p50 ?? 0), (d.p90 ?? d.p50 ?? 0) - (d.p50 ?? 0)],
         dist: d,
+        voice: stats!.voice,
       };
     });
-  if (!rows.length) return <Empty what="user→bot latency" />;
+  if (!rows.length) return <Empty what="timed turns of this kind" />;
   return (
     <ResponsiveContainer width="100%" height={Math.max(240, rows.length * 34 + 40)}>
       <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
@@ -210,7 +171,7 @@ function LatencyRange({ variants }: Readonly<{ variants: MetricsVariant[] }>) {
           axisLine={{ stroke: INK.axis }}
           tickFormatter={secondsTick}
         />
-        <YAxis type="category" dataKey="name" tick={axisTick} tickLine={false} axisLine={false} width={36} />
+        <YAxis type="category" dataKey="name" tick={axisTick} tickLine={false} axisLine={false} width={84} />
         <Tooltip
           cursor={{ fill: "rgba(255,255,255,0.04)" }}
           content={({ active, payload }) => {
@@ -218,11 +179,13 @@ function LatencyRange({ variants }: Readonly<{ variants: MetricsVariant[] }>) {
             if (!active || !row) return null;
             return (
               <div style={tooltipStyle} className="rv-tooltip">
-                <strong>
-                  {row.name} · {row.label}
-                </strong>
+                <strong>{row.label}</strong>
                 <div>
-                  median {formatSecs(row.dist.p50)} · p10 {formatSecs(row.dist.p10)} · p90 {formatSecs(row.dist.p90)}
+                  response: median {formatSecs(row.dist.p50)} · p10 {formatSecs(row.dist.p10)} · p90{" "}
+                  {formatSecs(row.dist.p90)}
+                </div>
+                <div>
+                  voice: median {formatSecs(row.voice.p50)} · p90 {formatSecs(row.voice.p90)}
                 </div>
                 <div className="text-muted">{row.dist.n} turns</div>
               </div>
@@ -243,8 +206,9 @@ function LatencyRange({ variants }: Readonly<{ variants: MetricsVariant[] }>) {
 /** Per-session median latency over time; one variant emphasized, the rest muted. */
 function LatencyTrend({ data, highlight }: Readonly<{ data: MetricsResponse; highlight: number }>) {
   const points = data.sessions
-    .filter((s) => s.latency_p50 !== null)
-    .map((s) => ({ x: s.started_at, y: s.latency_p50, id: s.id, variant: s.variant }));
+    .map((s) => ({ ...s, y: s.response_p50 ?? s.latency_p50 }))
+    .filter((s) => s.y !== null)
+    .map((s) => ({ x: s.started_at, y: s.y, id: s.id, variant: s.variant }));
   if (points.length < 2) return <Empty what="sessions with latency" />;
   const focus = points.filter((p) => p.variant === highlight);
   const rest = points.filter((p) => p.variant !== highlight);
@@ -286,7 +250,7 @@ function LatencyTrend({ data, highlight }: Readonly<{ data: MetricsResponse; hig
               <div style={tooltipStyle} className="rv-tooltip">
                 <strong>{p.id}</strong>
                 <div>
-                  {short(p.variant)} · median user→bot {formatSecs(p.y)}
+                  {short(p.variant)} · median response {formatSecs(p.y)}
                 </div>
                 <div className="text-muted">{formatDate(p.x)} · click to open</div>
               </div>
@@ -361,7 +325,7 @@ function SummaryTable({ variants }: Readonly<{ variants: MetricsVariant[] }>) {
             <th>Sessions</th>
             <th>Turns</th>
             <th>Interrupted</th>
-            <th>User→bot p50</th>
+            <th>Voice p50</th>
             <th>p90</th>
             <th>First speech p50</th>
             {services.map((s) => (
@@ -408,6 +372,7 @@ export function MetricsView() {
   const [days, setDays] = useState<number | null>(7);
   const [groupBy, setGroupBy] = useState<string[]>(DEFAULT_GROUP);
   const [highlight, setHighlight] = useState(0);
+  const [kindChoice, setKindChoice] = useState<TurnKind | "all">("all");
   const metrics = useMetrics(days, groupBy);
   const data = metrics.data;
   const variants = data?.variants ?? [];
@@ -415,6 +380,9 @@ export function MetricsView() {
   const sources = [...new Set(variants.flatMap((v) => Object.keys(v.wer)))].sort();
   const hasTtft = variants.some((v) => v.ttft.text.n + v.ttft.vision.n > 0);
   const focus = Math.min(highlight, Math.max(variants.length - 1, 0));
+  const kinds: (TurnKind | "all")[] = ["all", ...(data?.kinds ?? [])];
+  const kind = kinds.includes(kindChoice) ? kindChoice : "all";
+  const headline = data?.totals.by_kind[kind];
 
   const toggleField = (field: string) => {
     setGroupBy((current) =>
@@ -447,6 +415,13 @@ export function MetricsView() {
             </button>
           ))}
         </div>
+        <div className="rv-segmented" role="group" aria-label="Turn kind">
+          {kinds.map((k) => (
+            <button key={k} className={`tab-btn ${kind === k ? "active" : ""}`} onClick={() => setKindChoice(k)}>
+              {KIND_LABELS[k] ?? k}
+            </button>
+          ))}
+        </div>
         <div className="rv-chips" role="group" aria-label="Compare by">
           <span className="text-xs text-muted">Compare by</span>
           {GROUP_FIELDS.map(({ field, label }) => (
@@ -467,9 +442,18 @@ export function MetricsView() {
       {data && data.totals.sessions > 0 && (
         <div className={metrics.isPlaceholderData ? "rv-refetching" : ""}>
           <div className="rv-stats-grid">
+            <Tile
+              label="Median response latency"
+              value={formatSecs(headline?.response.p50)}
+              hint={`user stops → first perceivable response · n=${headline?.response.n ?? 0} ${KIND_LABELS[kind].toLowerCase()}`}
+            />
+            <Tile
+              label="Median voice latency"
+              value={formatSecs(headline?.voice.p50)}
+              hint={`user stops → first bot audio · n=${headline?.voice.n ?? 0}`}
+            />
             <Tile label="Sessions" value={String(data.totals.sessions)} />
             <Tile label="User turns" value={String(data.totals.turns)} />
-            <Tile label="Median user→bot" value={formatSecs(data.totals.latency_p50)} hint="user stops → bot speaks" />
             <Tile label="Live ASR WER" value={formatPct(data.totals.live_wer)} hint="vs human or reference" />
           </div>
 
@@ -481,10 +465,25 @@ export function MetricsView() {
           )}
 
           <div className="rv-chart-grid">
-            <ChartCard title="User → bot latency" subtitle="median, whisker p10–p90">
-              <LatencyRange variants={variants} />
+            <ChartCard
+              title="Response latency"
+              subtitle={`${KIND_LABELS[kind].toLowerCase()} · median, whisker p10–p90 · voice latency in the tooltip`}
+            >
+              <LatencyRange variants={variants} kind={kind} />
             </ChartCard>
-            <ChartCard title="Latency per session" subtitle={`median; ${short(focus)} highlighted (pick in legend)`}>
+            <ChartCard
+              title="Stage breakdown"
+              subtitle={`${KIND_LABELS[kind].toLowerCase()} · median of each stage up to the first response`}
+            >
+              <StageBars
+                rows={variants.map((v, i) => ({ name: short(i), title: v.label, stats: v.by_kind[kind] }))}
+                what="timed turns of this kind"
+              />
+            </ChartCard>
+            <ChartCard
+              title="Response latency per session"
+              subtitle={`all turns · median; ${short(focus)} highlighted (pick in legend)`}
+            >
               <LatencyTrend data={data} highlight={focus} />
             </ChartCard>
             <ChartCard title="Time to first byte by service" subtitle="median">
@@ -528,7 +527,15 @@ export function MetricsView() {
             </ChartCard>
           </div>
 
-          <h3 className="text-sm font-semibold">All numbers</h3>
+          <h3 className="text-sm font-semibold rv-section-head">Latency by variant and turn kind</h3>
+          <KindTable variants={variants} kinds={kinds} selected={kind} />
+
+          <TrendSection trend={data.trend} kind={kind} />
+
+          <h3 className="text-sm font-semibold rv-section-head">Tools and intents</h3>
+          <ToolsTable tools={data.tools} />
+
+          <h3 className="text-sm font-semibold rv-section-head">All numbers</h3>
           <SummaryTable variants={variants} />
         </div>
       )}

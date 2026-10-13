@@ -15,11 +15,14 @@ Wiring (see ``examples/multilingual/pipeline.py``)::
 
 Hot-path rule: every hook only copies references into a dict and hands it to
 ``RecordWriter``; serialization, hashing, encoding and I/O happen in the writer
-thread.
+thread. Per-turn metrics (``monitoring.turn_metrics``) are derived there too, when
+a turn ends and when the session closes.
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 import time
 import uuid
@@ -35,6 +38,8 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     ErrorFrame,
+    FunctionCallCancelFrame,
+    FunctionCallInProgressFrame,
     FunctionCallResultFrame,
     FunctionCallsStartedFrame,
     InputImageRawFrame,
@@ -47,12 +52,14 @@ from pipecat.frames.frames import (
     UserImageRawFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.services.llm_service import LLMService
 
 from monitoring import media as media_utils
+from monitoring import system_metrics, turn_metrics
 from monitoring.config import MonitoringConfig, load_monitoring_config
 from monitoring.store import ArtifactStore, SessionStore, open_stores
 from monitoring.writer import RecordWriter
@@ -69,20 +76,42 @@ def _stores_for(config: MonitoringConfig) -> tuple[SessionStore, ArtifactStore]:
     return open_stores(config)
 
 
-def git_revision() -> str | None:
-    """Best-effort git sha of the running code (env ``GIT_SHA`` wins)."""
-    import os
+# Metric samples pipecat emits with a zero value (one per service at start-up): they
+# are not measurements and would drag percentiles down.
+_DROP_ZERO_METRICS = frozenset({"ttfb", "processing"})
+_KEPT_TURNS = 4
 
+
+def git_revision(root: Path = PROJECT_ROOT) -> str | None:
+    """Best-effort git sha of the running code (env ``GIT_SHA`` wins).
+
+    Handles a detached HEAD, loose and packed refs, and git worktrees. Returns
+    None when ``root`` has no ``.git`` (for example in the app container, which
+    only mounts ``src``): set ``GIT_SHA`` there.
+    """
     if os.getenv("GIT_SHA"):
         return os.getenv("GIT_SHA")
-    head = PROJECT_ROOT / ".git" / "HEAD"
     try:
-        ref = head.read_text().strip()
-        if ref.startswith("ref: "):
-            return (PROJECT_ROOT / ".git" / ref[5:]).read_text().strip()
-        return ref
+        git_dir = root / ".git"
+        if git_dir.is_file():  # worktree: ".git" is a "gitdir: <path>" pointer
+            git_dir = (root / git_dir.read_text().strip().removeprefix("gitdir: ")).resolve()
+        head = (git_dir / "HEAD").read_text().strip()
+        if not head.startswith("ref: "):
+            return head
+        ref = head[5:]
+        common = git_dir
+        if (git_dir / "commondir").is_file():
+            common = (git_dir / (git_dir / "commondir").read_text().strip()).resolve()
+        for base in (git_dir, common):
+            if (base / ref).is_file():
+                return (base / ref).read_text().strip()
+        for line in (common / "packed-refs").read_text().splitlines():
+            sha, _, name = line.partition(" ")
+            if name == ref:
+                return sha
     except OSError:
-        return None
+        pass
+    return None
 
 
 def _metric_base_name(data: Any) -> str:
@@ -230,6 +259,17 @@ class _RecorderObserver(BaseObserver):
         elif isinstance(frame, FunctionCallResultFrame):
             if self._first_sight(frame):
                 rec.on_function_result(frame)
+        elif isinstance(frame, FunctionCallInProgressFrame):
+            if self._first_sight(frame):
+                # Broadcast right before the handler runs; RTVI forwards the call to the
+                # client on this frame, so this is the server send time.
+                rec.event("function_call_in_progress", name=frame.function_name, tool_call_id=frame.tool_call_id)
+        elif isinstance(frame, FunctionCallCancelFrame):
+            if self._first_sight(frame):
+                rec.event("function_call_cancelled", name=frame.function_name, tool_call_id=frame.tool_call_id)
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            if self._first_sight(frame):
+                rec.on_vad_stopped(frame)
         elif isinstance(
             frame,
             UserStartedSpeakingFrame
@@ -284,6 +324,11 @@ class SessionRecorder:
         self.turn_idx = 0
         self._bot_turn_idx = 0
         self._turn: dict[str, Any] = {"idx": 0}
+        # Recent turns by index: an interrupted assistant turn reports its text after
+        # the next user turn has started, and must still land on its own turn.
+        self._turns: dict[int, dict[str, Any]] = {0: self._turn}
+        self._assistant_turn_idx: int | None = None
+        self._sampling = False
         self._audio_segments: dict[tuple[int, str], int] = {}
         self._llm_call: dict[str, Any] | None = None
         self._last_keyframe_at = 0.0
@@ -353,23 +398,29 @@ class SessionRecorder:
             text = getattr(message, "content", None) or ""
             previous = self._turn.get("user_text")
             self._turn["user_text"] = f"{previous} {text}".strip() if previous else text
+            # When the turn is released to the LLM (after turn detection and ASR), not
+            # when the user stopped speaking: see ``on_vad_stopped``.
             self._turn["user_stopped_at"] = time.time()
             self._save_turn()
 
         @assistant_aggregator.event_handler("on_assistant_turn_started")
         async def _on_assistant_turn_started(aggregator):
+            # Start of the LLM response, not of the bot audio: see ``on_speech_event``.
+            self._assistant_turn_idx = self.turn_idx
             self._turn.setdefault("bot_started_at", time.time())
 
         @assistant_aggregator.event_handler("on_assistant_turn_stopped")
         async def _on_assistant_turn_stopped(aggregator, message):
+            # On a barge-in the next user turn starts before this fires: write to the
+            # turn the response belongs to, not to the current one.
+            idx, self._assistant_turn_idx = self._assistant_turn_idx, None
+            turn = self._turns.get(self.turn_idx if idx is None else idx, self._turn)
             text = getattr(message, "content", None) or ""
-            previous = self._turn.get("bot_text")
-            self._turn["bot_text"] = f"{previous} {text}".strip() if previous else text
-            self._turn["interrupted"] = bool(self._turn.get("interrupted")) or bool(
-                getattr(message, "interrupted", False)
-            )
-            self._turn["bot_stopped_at"] = time.time()
-            self._save_turn()
+            previous = turn.get("bot_text")
+            turn["bot_text"] = f"{previous} {text}".strip() if previous else text
+            turn["interrupted"] = bool(turn.get("interrupted")) or bool(getattr(message, "interrupted", False))
+            turn["bot_stopped_at"] = time.time()
+            self._save_turn(turn)
 
         turn_tracker = getattr(worker, "turn_tracking_observer", None)
         if turn_tracker is not None:
@@ -397,8 +448,6 @@ class SessionRecorder:
 
     async def start(self) -> None:
         """Create the session row and start the background writer."""
-        import asyncio
-
         row = {
             "id": self.session_id,
             "example": self.example,
@@ -406,12 +455,17 @@ class SessionRecorder:
             "last_seen_at": self.started_at,
             "ended_at": None,
             "end_reason": None,
-            "config": media_utils.to_jsonable({**self._config, "git_sha": git_revision()}),
+            "config": media_utils.to_jsonable(
+                {**self._config, "git_sha": git_revision(), "recorder_version": turn_metrics.RECORDER_VERSION}
+            ),
             "artifact_prefix": self.prefix,
         }
         await asyncio.to_thread(self._store.create_session, row)
         self.writer.start()
         self._save_turn()
+        if self.settings.record_system_metrics:
+            await asyncio.to_thread(system_metrics.sampler().acquire, self._store)
+            self._sampling = True
         logger.info(f"Recording session {self.session_id} → {self.settings.data_dir}")
 
     async def on_session_started(self) -> None:
@@ -429,13 +483,17 @@ class SessionRecorder:
         if self._closed:
             return
         self._closed = True
-        import asyncio
-
         await self.stop_audio()
         self.on_llm_call_finished()
         self._save_turn()
         self.writer.put_task(self._finalize_artifacts)
+        # Whole-session pass: same code as the backfill, so live and backfilled rows agree.
+        session_id = self.session_id
+        self.writer.put_post_commit(lambda store: turn_metrics.recompute_session(store, session_id))
         await self.writer.close()
+        if self._sampling:
+            self._sampling = False
+            await asyncio.to_thread(system_metrics.sampler().release)
         await asyncio.to_thread(self._store.end_session, self.session_id, time.time(), reason)
         if self.writer.dropped:
             logger.warning(f"Recorder dropped {self.writer.dropped} item(s) for session {self.session_id}")
@@ -480,23 +538,36 @@ class SessionRecorder:
     # ------------------------------------------------------------------ turns
     def _start_user_turn(self) -> None:
         self._save_turn()
+        finished = self.turn_idx
         self.turn_idx += 1
         self._turn = {"idx": self.turn_idx, "user_started_at": time.time()}
+        self._turns[self.turn_idx] = self._turn
+        self._turns.pop(self.turn_idx - _KEPT_TURNS, None)
         self._save_turn()
+        if finished > 0:
+            # Turn end: derive its metrics row once everything queued so far is stored.
+            session_id = self.session_id
+            self.writer.put_post_commit(
+                lambda store: turn_metrics.recompute_session(store, session_id, only_turn=finished)
+            )
 
-    def _save_turn(self) -> None:
+    def _save_turn(self, turn: dict[str, Any] | None = None) -> None:
+        turn = self._turn if turn is None else turn
+        # ``barge_in`` is not listed: it is written by ``monitoring.turn_metrics``.
         self.writer.put_row(
             "turns",
             {
                 "session_id": self.session_id,
-                "idx": self._turn["idx"],
-                "user_text": self._turn.get("user_text"),
-                "user_started_at": self._turn.get("user_started_at"),
-                "user_stopped_at": self._turn.get("user_stopped_at"),
-                "bot_text": self._turn.get("bot_text"),
-                "bot_started_at": self._turn.get("bot_started_at"),
-                "bot_stopped_at": self._turn.get("bot_stopped_at"),
-                "interrupted": bool(self._turn.get("interrupted")),
+                "idx": turn["idx"],
+                "user_text": turn.get("user_text"),
+                "user_started_at": turn.get("user_started_at"),
+                "user_stopped_at": turn.get("user_stopped_at"),
+                "user_speech_stopped_at": turn.get("user_speech_stopped_at"),
+                "bot_text": turn.get("bot_text"),
+                "bot_started_at": turn.get("bot_started_at"),
+                "bot_speech_started_at": turn.get("bot_speech_started_at"),
+                "bot_stopped_at": turn.get("bot_stopped_at"),
+                "interrupted": bool(turn.get("interrupted")),
                 "language": self._language,
             },
         )
@@ -505,7 +576,7 @@ class SessionRecorder:
     def on_metrics(self, frame: MetricsFrame) -> None:
         """Persist a ``MetricsFrame`` and fill in the pending LLM call's TTFB/usage."""
         for data in frame.data:
-            pairs = flatten_metrics(data)
+            pairs = [(n, v) for n, v in flatten_metrics(data) if v != 0 or n not in _DROP_ZERO_METRICS]
             for name, value in pairs:
                 self.metric(name, value, processor=data.processor, model=data.model)
             call = self._llm_call
@@ -523,10 +594,26 @@ class SessionRecorder:
         """Record VAD / bot speaking / interruption events."""
         if isinstance(frame, BotStartedSpeakingFrame):
             self._bot_turn_idx = self.turn_idx
+            if "bot_speech_started_at" not in self._turn:
+                self._turn["bot_speech_started_at"] = time.time()  # first bot audio of the turn
+                self._save_turn()
         elif isinstance(frame, InterruptionFrame) and self._llm_call is not None:
+            # The interruption cancels the completion: close the call now. The TTFB
+            # sample pipecat emits while stopping its metrics is the time until the
+            # interruption, not a first token, and must not be attached to the call.
             self._llm_call["interrupted"] = True
+            self.on_llm_call_finished()
         kind = re.sub(r"(?<!^)(?=[A-Z])", "_", type(frame).__name__.removesuffix("Frame")).lower()
         self.event(kind)
+
+    def on_vad_stopped(self, frame: VADUserStoppedSpeakingFrame) -> None:
+        """Record when the user really stopped speaking (VAD decision minus its silence window).
+
+        The VAD can stop several times within one turn; the last stop before the bot
+        answers is the one the latency is measured from.
+        """
+        if "bot_speech_started_at" not in self._turn:
+            self._turn["user_speech_stopped_at"] = frame.timestamp - frame.stop_secs
 
     def on_llm_call_started(self, context, llm) -> None:
         """Snapshot the LLM input when a context reaches the conversation LLM."""

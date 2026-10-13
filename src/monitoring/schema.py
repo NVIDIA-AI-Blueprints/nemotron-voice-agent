@@ -61,8 +61,100 @@ turns = Table(
     Column("bot_text", Text),
     Column("bot_started_at", Float),
     Column("bot_stopped_at", Float),
+    # An interruption reached the assistant aggregator while its response was open
+    # (LLM response start until its audio finished playing), or the session was
+    # cancelled mid-response. Not a barge-in: see ``barge_in``.
     Column("interrupted", Boolean, default=False),
     Column("language", String(32)),
+    # --- schema 4 -------------------------------------------------------------
+    # ``user_stopped_at`` is when the turn was released to the LLM and
+    # ``bot_started_at`` when the LLM response started. The two columns below are
+    # the real speech times: end of user speech (VAD stop minus its silence window)
+    # and first bot audio sent to the transport.
+    Column("user_speech_stopped_at", Float),
+    Column("bot_speech_started_at", Float),
+    # The user started this turn while the bot was still speaking.
+    Column("barge_in", Boolean),
+)
+
+# One row per user turn, derived at turn end by ``monitoring.turn_metrics`` (also
+# the backfill). Stage columns split ``total_secs`` along the critical path to the
+# first response; ``unexplained_secs`` is what no stage accounts for.
+turn_metrics = Table(
+    "turn_metrics",
+    metadata,
+    Column("session_id", String(64), primary_key=True),
+    Column("idx", Integer, primary_key=True),
+    # plain | tool | intent | vision
+    Column("kind", String(16), nullable=False),
+    Column("barge_in", Boolean),
+    # User stopped speaking -> first bot audio.
+    Column("voice_latency", Float),
+    # User stopped speaking -> first perceivable response (first bot audio or the
+    # send time of the first perceivable tool call, whichever comes first).
+    Column("response_latency", Float),
+    # audio | tool: what the first perceivable response was.
+    Column("response_via", String(16)),
+    Column("turn_detection_secs", Float),
+    Column("asr_secs", Float),
+    Column("intent_match_secs", Float),
+    Column("llm_first_secs", Float),
+    Column("tool_secs", Float),
+    Column("llm_later_secs", Float),
+    Column("text_aggregation_secs", Float),
+    Column("tts_secs", Float),
+    Column("unexplained_secs", Float),
+    Column("total_secs", Float),
+    # [{"stage", "start", "end"}] in epoch seconds, for the session timeline.
+    Column("segments", JSON),
+    Column("n_llm_calls", Integer),
+    Column("n_tool_calls", Integer),
+    Column("n_images", Integer),
+    Column("prompt_tokens", Integer),
+    Column("completion_tokens", Integer),
+    Column("gpu_load_mean", Float),
+    Column("gpu_load_peak", Float),
+    Column("computed_at", Float, nullable=False),
+)
+
+# One row per tool or intent call.
+tool_calls = Table(
+    "tool_calls",
+    metadata,
+    Column("session_id", String(64), primary_key=True),
+    # The tool_call_id, or ``intent-ha-<event id>`` for Home Assistant intent calls.
+    Column("call_id", String(128), primary_key=True),
+    Column("turn_idx", Integer),
+    Column("name", String(128), nullable=False),
+    # llm | intent
+    Column("trigger", String(16), nullable=False),
+    # client | home_assistant
+    Column("target", String(32), nullable=False),
+    # Server send time.
+    Column("sent_at", Float, nullable=False),
+    Column("duration_secs", Float),
+    # ok | error | timeout | cancelled
+    Column("outcome", String(16), nullable=False),
+    Column("perceivable", Boolean, nullable=False, default=False),
+    Index("ix_tool_calls_turn", "session_id", "turn_idx"),
+)
+
+# Host-wide samples taken once per second while at least one session is live.
+system_samples = Table(
+    "system_samples",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", Float, nullable=False),
+    Column("live_sessions", Integer, nullable=False),
+    Column("gpu_load", Float),  # percent
+    Column("gpu_temp_c", Float),
+    Column("power_w", Float),
+    # What ``power_w`` measures: ``board`` (whole-module input power, Jetson INA238)
+    # or ``gpu`` (GPU power draw reported by nvidia-smi).
+    Column("power_source", String(16)),
+    Column("ram_used_mb", Float),
+    Column("cpu_load", Float),  # percent of all cores
+    Index("ix_system_samples_ts", "ts"),
 )
 
 events = Table(

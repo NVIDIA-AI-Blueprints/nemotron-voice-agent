@@ -22,6 +22,8 @@ from monitoring.store import ArtifactStore, SessionStore
 
 # A deferred unit of work run in the writer thread; returns rows to insert.
 WriterTask = Callable[[ArtifactStore], list[tuple[str, dict[str, Any]]]]
+# Work that needs everything queued before it to be committed (derived metrics).
+PostCommitTask = Callable[[SessionStore], None]
 
 _STOP = object()
 
@@ -65,6 +67,10 @@ class RecordWriter:
     def put_task(self, fn: WriterTask) -> None:
         """Queue a deferred artifact task (never blocks)."""
         self._put(("task", fn))
+
+    def put_post_commit(self, fn: PostCommitTask) -> None:
+        """Queue work run in the writer thread once everything queued before it is stored (never blocks)."""
+        self._put(("post", fn))
 
     def _put(self, item: Any) -> None:
         try:
@@ -131,16 +137,27 @@ class RecordWriter:
 
     def _process(self, batch: list[Any]) -> None:
         rows: list[tuple[str, dict[str, Any]]] = []
+
+        def flush() -> None:
+            if rows:
+                self._store.write_batch(rows)
+                rows.clear()
+
         for item in batch:
             if item[0] == "row":
                 rows.append((item[1], item[2]))
+            elif item[0] == "post":
+                flush()
+                try:
+                    item[1](self._store)
+                except Exception as exc:
+                    logger.opt(exception=exc).error("Recorder post-commit task failed")
             else:
                 try:
                     rows.extend(item[1](self._artifacts))
                 except Exception as exc:
                     logger.opt(exception=exc).error("Recorder artifact task failed")
-        if rows:
-            self._store.write_batch(rows)
+        flush()
         now = time.time()
         if now - self._last_heartbeat >= self._heartbeat_secs:
             self._store.touch_session(self.session_id, now)
