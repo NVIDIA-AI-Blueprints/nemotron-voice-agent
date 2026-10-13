@@ -35,7 +35,6 @@ from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
-from examples.generic.tool_call_reminder import ToolCallReminderProcessor
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
@@ -250,7 +249,6 @@ async def bot(runner_args: RunnerArguments) -> None:
             transport.input(),
             stt,
             user_aggregator,
-            *([ToolCallReminderProcessor()] if tools_enabled else []),
             llm,
             tts,
             transport.output(),
