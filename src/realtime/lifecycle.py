@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from realtime.conversation import ConversationState, ResponseSnapshot
+from realtime.conversation import ConversationState, ResponseSnapshot, new_item_id
 from realtime.events import (
     SERVER_CONTENT_PART_ADDED,
     SERVER_CONTENT_PART_DONE,
+    SERVER_FUNCTION_CALL_ARGUMENTS_DONE,
     SERVER_ITEM_CREATED,
     SERVER_OUTPUT_AUDIO_DONE,
     SERVER_OUTPUT_AUDIO_TRANSCRIPT_DONE,
@@ -26,8 +27,16 @@ from realtime.events import (
 from realtime.metrics import RealtimeResponseTelemetry
 
 
-async def announce_response(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
+async def announce_response(
+    conversation: ConversationState,
+    emit: EmitFn,
+    *,
+    message_item: bool = True,
+) -> tuple[str, bool]:
     """Ensure ``response.created`` + assistant item / content_part are on the wire.
+
+    With ``message_item=False`` only ``response.created`` is ensured, for a
+    response whose first output is a function call.
 
     Returns ``(response_id, newly_created)``.
     """
@@ -40,6 +49,8 @@ async def announce_response(conversation: ConversationState, emit: EmitFn) -> tu
                 response=response_created_body(response_id),
             ),
         )
+    if not message_item:
+        return response_id, created
     if not conversation.output_item_announced:
         conversation.output_item_announced = True
         item_id = conversation.assistant_item_id
@@ -80,6 +91,61 @@ async def announce_response(conversation: ConversationState, emit: EmitFn) -> tu
     return response_id, created
 
 
+async def announce_function_call(
+    conversation: ConversationState,
+    emit: EmitFn,
+    *,
+    call_id: str,
+    name: str,
+    arguments: str,
+) -> str:
+    """Emit one client function call as a completed ``function_call`` output item.
+
+    Returns the item id. The item is also recorded on the active response so
+    ``response.done`` lists it.
+    """
+    response_id, _created = await announce_response(conversation, emit, message_item=False)
+    item_id = new_item_id()
+    output_index = len(conversation.function_call_items) + (1 if conversation.output_item_announced else 0)
+    item = {
+        "id": item_id,
+        "object": "realtime.item",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments,
+    }
+    conversation.function_call_items.append(item)
+    await emit_with_aliases(
+        emit,
+        server_event(
+            SERVER_OUTPUT_ITEM_ADDED,
+            response_id=response_id,
+            output_index=output_index,
+            item={**item, "status": "in_progress", "arguments": ""},
+        ),
+    )
+    await emit_with_aliases(emit, server_event(SERVER_ITEM_CREATED, previous_item_id=None, item=item))
+    await emit_with_aliases(
+        emit,
+        server_event(
+            SERVER_FUNCTION_CALL_ARGUMENTS_DONE,
+            response_id=response_id,
+            item_id=item_id,
+            output_index=output_index,
+            call_id=call_id,
+            name=name,
+            arguments=arguments,
+        ),
+    )
+    await emit_with_aliases(
+        emit,
+        server_event(SERVER_OUTPUT_ITEM_DONE, response_id=response_id, output_index=output_index, item=item),
+    )
+    return item_id
+
+
 async def finish_response(
     conversation: ConversationState,
     emit: EmitFn,
@@ -115,6 +181,12 @@ async def emit_finish_from_snapshot(
     transcript = snap.transcript
     # Item statuses are in_progress|completed|incomplete; cancelled is response-only.
     item_status = "completed" if snap.status == "completed" else "incomplete"
+    function_calls = [dict(item) for item in snap.function_call_items]
+
+    if function_calls and not snap.message_item_announced:
+        # Function-call-only response: the call items are already done.
+        await _emit_response_done(response_id, snap.status, function_calls, emit, telemetry=telemetry)
+        return
 
     if not snap.audio_done_emitted:
         await emit_with_aliases(
@@ -165,19 +237,25 @@ async def emit_finish_from_snapshot(
             },
         ),
     )
-    response: dict[str, Any] = {
-        "id": response_id,
-        "status": snap.status,
-        "output": [
-            {
-                "id": item_id,
-                "type": "message",
-                "role": "assistant",
-                "status": item_status,
-                "content": [{"type": "output_audio", "transcript": transcript}],
-            }
-        ],
+    message = {
+        "id": item_id,
+        "type": "message",
+        "role": "assistant",
+        "status": item_status,
+        "content": [{"type": "output_audio", "transcript": transcript}],
     }
+    await _emit_response_done(response_id, snap.status, [message, *function_calls], emit, telemetry=telemetry)
+
+
+async def _emit_response_done(
+    response_id: str,
+    status: str,
+    output: list[dict[str, Any]],
+    emit: EmitFn,
+    *,
+    telemetry: RealtimeResponseTelemetry | None,
+) -> None:
+    response: dict[str, Any] = {"id": response_id, "status": status, "output": output}
     if telemetry is not None:
         if telemetry.usage is not None:
             response["usage"] = telemetry.usage

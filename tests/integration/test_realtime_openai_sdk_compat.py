@@ -10,7 +10,8 @@ Covers:
 * OpenAI Python SDK multi-turn (OpenAI session fields only)
 * Mapped fields: Magpie ``voice``, ``instructions``, ``temperature``,
   ``max_output_tokens``, Nemotron welcome gate, audio + transcript events
-* Ignores client ``session.tools``; catalog tools follow ``prompt.id`` / ``prompt_key``
+* Echoes client ``session.tools`` (Generic runs them client-side); catalog tools follow
+  ``prompt.id`` / ``prompt_key``
 * Soft voice fallback for unknown ids (e.g. ``alloy``); accepts transcription
   selectors as no-ops and rejects text-only modalities
 
@@ -72,8 +73,7 @@ FEATURE_SESSION: dict[str, Any] = {
         "- When asked for a secret code word, reply with exactly: NEMO-SMOKE-OK\n"
     ),
     "voice": NEMOTRON_VOICE,
-    # Client-registered tools are ignored by the gateway; include a sample so we
-    # assert the public session does not activate them.
+    # Client-registered tools; include a sample so we assert the public session echoes them.
     "tools": SAMPLE_TOOLS,
     "tool_choice": "auto",
     "temperature": 0.8,
@@ -494,7 +494,8 @@ async def _run_feature_checks(
         assert voice_ok, session_obj
         assert session_obj.get("temperature") == 0.8, session_obj
         assert session_obj.get("max_output_tokens") == 4096, session_obj
-        assert session_obj.get("tools") == [], session_obj.get("tools")
+        echoed_tools = [tool.get("name") for tool in session_obj.get("tools") or []]
+        assert echoed_tools == [tool["name"] for tool in SAMPLE_TOOLS], session_obj.get("tools")
         summary["session"] = {
             "voice": session_obj.get("voice"),
             "temperature": session_obj.get("temperature"),
@@ -645,7 +646,9 @@ def test_realtime_mapped_fields_and_tools() -> None:
     assert summary.get("post_handoff_instructions_rejected") is True
     assert summary.get("response_override_rejected") is True
     assert summary.get("unknown_voice_soft_fallback") is True
-    assert summary.get("session", {}).get("tools") == []
+    assert [tool.get("name") for tool in summary.get("session", {}).get("tools") or []] == [
+        tool["name"] for tool in SAMPLE_TOOLS
+    ]
 
 
 def test_realtime_rejects_incompatible_session_fields() -> None:

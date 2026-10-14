@@ -6,6 +6,7 @@
 import asyncio
 
 from loguru import logger
+from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -100,6 +101,32 @@ def with_realtime_observers(*observers, transport=None) -> list:
     if realtime_obs is not None:
         out.append(realtime_obs)
     return out
+
+
+def add_realtime_client_tools(llm, transport, tools_schema: ToolsSchema | None) -> ToolsSchema | None:
+    """Offer the Realtime client's ``session.tools`` to ``llm`` and register their handler.
+
+    Client tools run on the Realtime client: the handler waits for the client's
+    ``function_call_output``. Returns ``tools_schema`` with the client tools
+    added, or unchanged when the session registered none (always for RTVI).
+    """
+    if getattr(transport, "_realtime_client_tools", None) is None:
+        return tools_schema
+    from realtime.client_tools import to_openai_tools
+    from realtime.transport import realtime_client_tool_bridge
+
+    bridge = realtime_client_tool_bridge(transport)
+    if bridge is None:
+        return tools_schema
+    standard_tools = list(tools_schema.standard_tools) if tools_schema is not None else []
+    custom_tools = dict(tools_schema.custom_tools or {}) if tools_schema is not None else {}
+    openai_tools = list(custom_tools.get(AdapterType.OPENAI, []))
+    openai_tools.extend(to_openai_tools(bridge.tools))
+    custom_tools[AdapterType.OPENAI] = openai_tools
+    for name in sorted(bridge.names):
+        llm.register_function(name, bridge.handle_call)
+    logger.info(f"Registered Realtime client tools: {sorted(bridge.names)}")
+    return ToolsSchema(standard_tools=standard_tools, custom_tools=custom_tools)
 
 
 def register_session_start_handlers(

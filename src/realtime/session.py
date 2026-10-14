@@ -13,9 +13,12 @@ from typing import Any
 from loguru import logger
 
 from realtime.audio import validate_session_audio_config
+from realtime.client_tools import normalize_client_tools
 from utils import _SLOT_AGNOSTIC_KEYS, _SLOT_CONFIG_KEYS, SESSION_CONFIG_KEYS
 
 DEFAULT_PIPELINE_MODE = "generic-assistant"
+# Model id advertised in session events when the client did not request one.
+DEFAULT_REALTIME_MODEL = "nvidia/nemotron-voice-agent"
 DEFAULT_PROMPT_KEY = "generic_assistant_without_tools"
 
 # Flat keys owned by OpenAI top-level session fields — not accepted under ``session.nvidia``.
@@ -242,8 +245,9 @@ def map_session_update_to_flat_config(
 
     OpenAI top-level fields (``instructions``, ``voice``, ``temperature``, …) map onto
     the cascaded pipeline. ``session.nvidia`` holds catalog fields with no OpenAI
-    equivalent. OpenAI ``model`` and ``tools`` (client-registered schemas) are
-    ignored — catalog tools follow ``prompt.id`` / ``prompt_key`` only.
+    equivalent. OpenAI ``model`` is ignored. ``tools`` become ``client_tools``:
+    client-executed functions offered to the LLM alongside the catalog tools
+    that follow ``prompt.id`` / ``prompt_key``.
     """
     if not isinstance(session_patch, dict):
         raise ValueError("session must be a JSON object")
@@ -253,11 +257,7 @@ def map_session_update_to_flat_config(
             f"Ignoring session.model={session_patch.get('model')!r}; using Nemotron Voice Agent cascaded pipeline"
         )
 
-    if "tools" in session_patch:
-        logger.info(
-            "Ignoring session.tools; client-registered tool schemas are not supported as of now. "
-            "Catalog tools follow prompt.id / prompt_key / prompts.yaml tools_available"
-        )
+    client_tools = normalize_client_tools(session_patch.get("tools")) if "tools" in session_patch else None
 
     _validate_modalities_field(session_patch.get("output_modalities"), field="output_modalities")
     _validate_modalities_field(session_patch.get("modalities"), field="modalities")
@@ -313,6 +313,9 @@ def map_session_update_to_flat_config(
     if "tool_choice" in session_patch and session_patch.get("tool_choice") is not None:
         flat["tool_choice"] = _map_tool_choice(session_patch.get("tool_choice"))
 
+    if client_tools is not None:
+        flat["client_tools"] = client_tools
+
     if not flat.get("pipeline_mode"):
         flat["pipeline_mode"] = default_pipeline_mode
 
@@ -330,8 +333,13 @@ def nvidia_public_view(nvidia: dict[str, Any]) -> dict[str, Any]:
 class RealtimeSession:
     """In-memory OpenAI-shaped session view plus last sanitized flat config."""
 
-    def __init__(self, *, default_pipeline_mode: str = DEFAULT_PIPELINE_MODE) -> None:
-        """Create a session with OpenAI-shaped defaults."""
+    def __init__(self, *, default_pipeline_mode: str = DEFAULT_PIPELINE_MODE, model: str = "") -> None:
+        """Create a session with OpenAI-shaped defaults.
+
+        ``model`` is the client's requested model id (for example the connect
+        URL's ``?model=``). It does not select a pipeline and is only echoed;
+        without one the session advertises :data:`DEFAULT_REALTIME_MODEL`.
+        """
         self.id = f"sess_{uuid.uuid4().hex}"
         self.default_pipeline_mode = default_pipeline_mode
         self.view: dict[str, Any] = {
@@ -343,6 +351,7 @@ class RealtimeSession:
             "audio": copy.deepcopy(_DEFAULT_AUDIO),
             "tools": [],
             "tool_choice": "auto",
+            "model": model or DEFAULT_REALTIME_MODEL,
             "nvidia": {
                 "pipeline_mode": default_pipeline_mode,
                 "prompt_key": DEFAULT_PROMPT_KEY,
@@ -421,9 +430,12 @@ class RealtimeSession:
         if session_patch.get("instructions") is not None:
             self.view["instructions"] = session_patch.get("instructions") or ""
 
-        # Client-registered tools are ignored; public session always reports no client tools.
         if "tools" in session_patch:
-            self.view["tools"] = []
+            self.view["tools"] = copy.deepcopy(sanitized_flat.get("client_tools") or [])
+
+        model = session_patch.get("model")
+        if isinstance(model, str) and model.strip():
+            self.view["model"] = model.strip()
 
         if sanitized_flat.get("tts_voice_id"):
             audio = dict(self.view.get("audio") or {})
@@ -539,6 +551,14 @@ def unsupported_live_session_fields(
         if key not in current:
             # Newly introduced non-live field after handoff — reject (do not silent-drop).
             bad.append(key)
+            continue
+        if key == "tools":
+            # Compare normalized tools so a client echo of its own schemas matches.
+            try:
+                if not _jsonish_equal(normalize_client_tools(value), normalize_client_tools(current[key])):
+                    bad.append(key)
+            except ValueError:
+                bad.append(key)
             continue
         if not _jsonish_equal(value, current[key]):
             bad.append(key)
