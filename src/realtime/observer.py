@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from typing import Any
 
@@ -32,6 +33,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.transports.base_output import BaseOutputTransport
 
+from realtime.client_tools import ClientToolBridge
 from realtime.conversation import ConversationState
 from realtime.events import (
     SERVER_AUDIO_COMMITTED,
@@ -48,7 +50,7 @@ from realtime.events import (
     error_event,
     server_event,
 )
-from realtime.lifecycle import announce_response, finish_response
+from realtime.lifecycle import announce_function_call, announce_response, finish_response
 from realtime.metrics import RealtimeMetricsAccumulator, RealtimeResponseTelemetry
 
 # Frames this observer maps to Realtime events (ignore the rest for dedupe).
@@ -75,7 +77,9 @@ class RealtimeLifecycleObserver(BaseObserver):
 
     Spoken turns finish on the output transport's re-pushed ``TTSStoppedFrame``
     after queued audio has been serialized. Pipeline barge-in finishes on
-    ``InterruptionFrame``.
+    ``InterruptionFrame``. Calls to client tools are emitted as ``function_call``
+    output items; a response that only calls client tools finishes on
+    ``LLMFullResponseEndFrame``.
     """
 
     def __init__(
@@ -83,6 +87,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         *,
         emit: EmitFn,
         conversation: ConversationState,
+        client_tools: ClientToolBridge | None = None,
         max_frames: int = 4096,
         **kwargs: Any,
     ) -> None:
@@ -90,6 +95,8 @@ class RealtimeLifecycleObserver(BaseObserver):
         super().__init__(**kwargs)
         self._emit_fn = emit
         self._conversation = conversation
+        self._client_tools = client_tools
+        self._client_tool_names = client_tools.names if client_tools is not None else frozenset()
         self._processed_frames: set[int] = set()
         self._frame_history: deque[int] = deque(maxlen=max_frames)
         self._processed_metric_frames: set[int] = set()
@@ -346,18 +353,31 @@ class RealtimeLifecycleObserver(BaseObserver):
         if isinstance(frame, LLMFullResponseEndFrame):
             if frame.skip_tts is True:
                 await self._finish_response(status="completed")
+            elif self._conversation.function_call_items and not self._conversation.output_item_announced:
+                # Nothing to speak: the response is only client tool calls.
+                await self._finish_response(status="completed")
             return
 
         if isinstance(frame, FunctionCallsStartedFrame):
             for call in frame.function_calls or []:
+                function_name = getattr(call, "function_name", "") or ""
+                if function_name in self._client_tool_names:
+                    await self._emit_client_function_call(
+                        tool_call_id=getattr(call, "tool_call_id", "") or "",
+                        function_name=function_name,
+                        arguments=getattr(call, "arguments", None),
+                    )
+                    continue
                 await self._emit_server_tool_started(
                     tool_call_id=getattr(call, "tool_call_id", "") or "",
-                    function_name=getattr(call, "function_name", "") or "",
+                    function_name=function_name,
                     arguments=getattr(call, "arguments", None),
                 )
             return
 
         if isinstance(frame, FunctionCallInProgressFrame):
+            if frame.function_name in self._client_tool_names:
+                return
             await self._emit_server_tool_started(
                 tool_call_id=frame.tool_call_id or "",
                 function_name=frame.function_name or "",
@@ -366,6 +386,8 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, FunctionCallResultFrame):
+            if frame.function_name in self._client_tool_names:
+                return
             await self._emit_event(
                 server_event(
                     SERVER_NVIDIA_TOOL_COMPLETED,
@@ -385,6 +407,32 @@ class RealtimeLifecycleObserver(BaseObserver):
 
     async def _ensure_response_announced(self) -> tuple[str, bool]:
         return await announce_response(self._conversation, self._emit_fn)
+
+    async def _emit_client_function_call(
+        self,
+        *,
+        tool_call_id: str,
+        function_name: str,
+        arguments: Any,
+    ) -> None:
+        if not tool_call_id or self._client_tools is None:
+            logger.warning(f"Realtime client tool call without call id: {function_name}")
+            return
+        if tool_call_id in self._emitted_function_calls:
+            return
+        self._emitted_function_calls.add(tool_call_id)
+        if isinstance(arguments, str):
+            arguments_json = arguments or "{}"
+        else:
+            arguments_json = json.dumps(arguments if arguments is not None else {}, default=str)
+        self._client_tools.expect(tool_call_id)
+        await announce_function_call(
+            self._conversation,
+            self._emit_fn,
+            call_id=tool_call_id,
+            name=function_name,
+            arguments=arguments_json,
+        )
 
     async def _emit_server_tool_started(
         self,

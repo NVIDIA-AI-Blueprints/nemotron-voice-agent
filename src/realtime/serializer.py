@@ -35,6 +35,7 @@ from realtime.audio import (
     extract_client_pcm_rate,
     validate_session_audio_config,
 )
+from realtime.client_tools import ClientToolBridge
 from realtime.conversation import ConversationState, new_item_id
 from realtime.events import (
     CLIENT_AUDIO_APPEND,
@@ -101,6 +102,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._emit: EmitFn | None = None
         self._on_response_cancel: CancelHook | None = None
         self._take_response_telemetry: TelemetryHook | None = None
+        self._client_tools: ClientToolBridge | None = None
         self._bytes_since_commit = 0
 
     @property
@@ -120,6 +122,10 @@ class RealtimeFrameSerializer(FrameSerializer):
     def set_on_response_cancel(self, hook: CancelHook | None) -> None:
         """Register a sync hook that drains observer state on ``response.cancel``."""
         self._on_response_cancel = hook
+
+    def set_client_tool_bridge(self, bridge: ClientToolBridge | None) -> None:
+        """Register the bridge that receives client ``function_call_output`` items."""
+        self._client_tools = bridge
 
     def set_response_telemetry_provider(self, hook: TelemetryHook | None) -> None:
         """Register an optional passive telemetry snapshot provider."""
@@ -520,15 +526,7 @@ class RealtimeFrameSerializer(FrameSerializer):
 
         item_type = item.get("type") or "message"
         if item_type == "function_call_output":
-            await self._emit_event(
-                error_event(
-                    "Client function_call_output is not supported; server catalog tools run internally",
-                    code="unsupported_item",
-                    event_id=echo_id,
-                    param="item.type",
-                )
-            )
-            return None
+            return await self._deserialize_function_call_output(item, echo_id)
 
         role = item.get("role") or "user"
         if item_type != "message" or role != "user":
@@ -586,6 +584,54 @@ class RealtimeFrameSerializer(FrameSerializer):
             messages=[{"role": "user", "content": text}],
             run_llm=False,
         )
+
+    async def _deserialize_function_call_output(self, item: dict[str, Any], echo_id: str | None) -> Frame | None:
+        if self._client_tools is None:
+            await self._emit_event(
+                error_event(
+                    "function_call_output requires client tools registered through session.tools",
+                    code="unsupported_item",
+                    event_id=echo_id,
+                    param="item.type",
+                )
+            )
+            return None
+        call_id = item.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            await self._emit_event(
+                error_event(
+                    "function_call_output requires call_id",
+                    code="invalid_item",
+                    event_id=echo_id,
+                    param="item.call_id",
+                )
+            )
+            return None
+        if not self._client_tools.is_known(call_id):
+            await self._emit_event(
+                error_event(
+                    f"unknown call_id for function_call_output: {call_id}",
+                    code="invalid_item",
+                    event_id=echo_id,
+                    param="item.call_id",
+                )
+            )
+            return None
+        if "output" not in item:
+            await self._emit_event(
+                error_event(
+                    "function_call_output requires output",
+                    code="invalid_item",
+                    event_id=echo_id,
+                    param="item.output",
+                )
+            )
+            return None
+        item_id = item.get("id") if isinstance(item.get("id"), str) and item.get("id") else new_item_id()
+        # The bridge acknowledges with conversation.item.created once the output
+        # is in the LLM context; the client then sends response.create.
+        await self._client_tools.submit_output(call_id=call_id, item_id=item_id, output=item.get("output"))
+        return None
 
     async def _serialize_output_audio(self, frame: OutputAudioRawFrame) -> None:
         pcm = frame.audio or b""

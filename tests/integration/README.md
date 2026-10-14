@@ -8,7 +8,7 @@ CI (`pytest tests/unit`).
 The integration test covers the following behavior against `WS /v1/realtime`:
 
 1. OpenAI Python SDK multi-turn (GA-shaped session fields)
-2. Mapped fields — instructions, Magpie voice, temperature, ignored client tools,
+2. Mapped fields — instructions, Magpie voice, temperature, echoed client tools,
    Nemotron welcome gate, soft unknown-voice fallback, post-handoff / `response.create` rejects
 3. Compatibility no-op for the Whisper transcription selector, plus rejection of text-only modalities
 
