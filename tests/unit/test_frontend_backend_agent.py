@@ -496,6 +496,9 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         thinker_prompt = frontend_backend_pipeline._load_required_catalog_prompt("thinker")
 
         self.assertIn("never enumerate absent fields", talker_prompt)
+        self.assertIn('"P N R" followed by three letter tokens', talker_prompt)
+        self.assertIn('"P N R A B C one two three"', talker_prompt)
+        self.assertIn("never ask the user to", talker_prompt)
         self.assertIn("Flight search requires only origin, destination, and travel date.", thinker_prompt)
         self.assertIn("New York maps to JFK and Boston maps to BOS", thinker_prompt)
         self.assertIn('"params_needed": ["date"]', thinker_prompt)
