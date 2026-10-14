@@ -155,7 +155,11 @@ async def replay_session(
     base, new = wires
     retries = [data for kind, data in new.logs if kind == "format_retry"]
     triggered = {data["call_id"] for data in retries}
-    changed = sorted(call_id for call_id in new.results if new.results[call_id] != base.results.get(call_id))
+    changed = sorted(
+        call_id
+        for call_id in set(new.results) | set(base.results)
+        if new.results.get(call_id) != base.results.get(call_id)
+    )
     unexpected = [call_id for call_id in changed if call_id not in triggered]
     found = [
         {"call_id": d["call_id"], "tool": d["tool"], "after": d["after"], "output": new.results.get(d["call_id"], "")}

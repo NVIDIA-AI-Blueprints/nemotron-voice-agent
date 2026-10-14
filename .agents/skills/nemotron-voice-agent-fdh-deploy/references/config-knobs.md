@@ -1,6 +1,6 @@
 # Configuration Knobs
 
-Profiles and gateway configs are in `src/examples/frontend_delegation_hermes/config/`. Unknown keys fail at load time. `src/` is mounted read-only into the containers, so a configuration change needs `up -d` to recreate the container, not a rebuild.
+Profiles and gateway configs are in `src/examples/frontend_delegation_hermes/config/`. Unknown keys fail at load time. `src/` is mounted read-only into the containers, so a configuration change needs a restart, not a rebuild. An edit to a file under `src/` does not make `up -d` recreate the container: run `docker compose -f $F restart <service>`, or `up -d --force-recreate <service>`. A changed environment variable, such as a new profile, does make `up -d` recreate it.
 
 ## Containers and Ports
 

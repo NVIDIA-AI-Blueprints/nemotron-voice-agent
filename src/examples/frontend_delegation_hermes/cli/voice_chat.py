@@ -192,6 +192,7 @@ class VoiceChatClient:
                 await self._response_done(event["response"])
             elif kind == "error":
                 self._view.error(f"{event['error'].get('code')}: {event['error'].get('message')}")
+                self._turn_done.set()
         self._closed.set()
 
     async def _response_done(self, response: dict[str, Any]) -> None:
@@ -237,7 +238,12 @@ class VoiceChatClient:
                 }
             )
             await self.send({"type": "response.create"})
-            await self._turn_done.wait()
+            # Also return to the prompt when the socket closes before the turn ends.
+            done = asyncio.ensure_future(self._turn_done.wait())
+            closed = asyncio.ensure_future(self._closed.wait())
+            _, pending = await asyncio.wait({done, closed}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
 
 
 def _build_io(args: argparse.Namespace, fmt: AudioFormat) -> AudioIO:

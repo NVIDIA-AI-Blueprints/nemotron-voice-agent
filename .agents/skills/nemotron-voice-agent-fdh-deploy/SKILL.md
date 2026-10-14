@@ -27,7 +27,7 @@ Do not use this skill for the registered examples (use `nemotron-voice-agent-dep
 - Run one adapter per reportable run. Before a reportable τ³ run, check `docker ps` and stop `fdh-voice` if it runs. Both adapters share `nemo-speech` and the Inference Hub.
 - The Hermes checkout in `HERMES_AGENT_DIR` must be clean and at the commit in the header of `docker/fdh/requirements.txt`.
 - Preserve the existing `.env`. Never commit `.env`, `logs/`, traces, or Hermes homes.
-- `src/` is mounted read-only. Code and prompt changes need a container restart (`up -d` recreates it), not a rebuild. Rebuild only for the triggers in `references/prerequisites.md`.
+- `src/` is mounted read-only. Code and prompt changes need a container restart, not a rebuild. `up -d` does not recreate a container when only a mounted file changed, so run `docker compose -f $F restart <service>`, or `up -d --force-recreate <service>`. Rebuild only for the triggers in `references/prerequisites.md`.
 
 ## Adapters
 

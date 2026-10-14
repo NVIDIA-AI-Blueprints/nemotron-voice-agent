@@ -76,8 +76,7 @@ class WireWriter:
         if self._task is None:
             self._closed = True
             return
-        if not self._closed:
-            self._queue.put_nowait(None)
+        self._queue.put_nowait(None)  # also wakes a sender that stopped after a send failure
         try:
             await asyncio.wait_for(self._task, timeout=5.0)
         except (TimeoutError, asyncio.CancelledError):

@@ -404,7 +404,7 @@ class RealtimeSessionView:
         if kind == "semantic_vad":
             eagerness = value.get("eagerness", "auto")
             _require(
-                eagerness in SEMANTIC_EAGERNESS_SILENCE_MS,
+                isinstance(eagerness, str) and eagerness in SEMANTIC_EAGERNESS_SILENCE_MS,
                 f"eagerness must be one of {sorted(SEMANTIC_EAGERNESS_SILENCE_MS)}",
                 f"{param}.eagerness",
             )

@@ -152,28 +152,30 @@ def build_app(
             await websocket.close(code=1013, reason=reason)
             return
         state.slots.acquire()
-        assert state.services is not None  # noqa: S101 - built in lifespan
-
-        async def receive() -> str | None:
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                return None
-            return message.get("text") if message.get("text") is not None else message.get("bytes")
-
-        session = RealtimeSession(
-            config=config,
-            transport=CallbackTransport(websocket.send_text),
-            services=state.services,
-            turn_manager_factory=hooks.turn_manager_factory,
-            routing_sink=state.routing_sink,
-            filler_log=state.filler_log,
-            model=websocket.query_params.get("model", ""),
-            show_silent_filler=show_silent_filler(websocket.query_params),
-        )
+        session: RealtimeSession | None = None
         try:
+            assert state.services is not None  # noqa: S101 - built in lifespan
+
+            async def receive() -> str | None:
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    return None
+                return message.get("text") if message.get("text") is not None else message.get("bytes")
+
+            # Built inside the try so a constructor failure still releases the slot.
+            session = RealtimeSession(
+                config=config,
+                transport=CallbackTransport(websocket.send_text),
+                services=state.services,
+                turn_manager_factory=hooks.turn_manager_factory,
+                routing_sink=state.routing_sink,
+                filler_log=state.filler_log,
+                model=websocket.query_params.get("model", ""),
+                show_silent_filler=show_silent_filler(websocket.query_params),
+            )
             await session.run(receive)
         except Exception:  # noqa: BLE001 - log and drop this connection only
-            logger.exception(f"[{session.session_id}] session crashed")
+            logger.exception(f"[{session.session_id if session else '-'}] session crashed")
         finally:
             state.slots.release()
             with contextlib.suppress(Exception):

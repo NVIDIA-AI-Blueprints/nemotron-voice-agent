@@ -11,6 +11,7 @@ OpenAI Realtime client sees (bearer check, ``server_busy``, ``?model=`` tag,
 from __future__ import annotations
 
 import contextlib
+import hmac
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,8 @@ def bearer_ok(headers: Mapping[str, str], config: VoiceConfig) -> bool:
         return True
     header = headers.get("authorization", "")
     token = header[7:].strip() if header.lower().startswith("bearer ") else ""
-    return bool(config.server.bearer_token) and token == config.server.bearer_token
+    expected = config.server.bearer_token
+    return bool(expected) and hmac.compare_digest(token.encode(), expected.encode())
 
 
 def realtime_subprotocol(headers: Mapping[str, str]) -> str | None:

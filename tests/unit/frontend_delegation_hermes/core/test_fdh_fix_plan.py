@@ -719,10 +719,6 @@ class IdentityProfileTests(unittest.TestCase):
         self.assertEqual({k for k in arm if arm[k] != base[k]}, {"identity_from_identifier"})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # -- step 0 joins and the G2 comparison ----------------------------------------------------------------------
 
 
@@ -793,3 +789,7 @@ class DefaultsTests(unittest.TestCase):
             with self.subTest(control=control):
                 features = gc.load_gateway_config(config / control).prompt_features
                 self.assertFalse(any(features[k] for k in new))
+
+
+if __name__ == "__main__":
+    unittest.main()

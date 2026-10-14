@@ -518,10 +518,6 @@ class FingerprintTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(configured["backend_features"]["spelling_v2"], False)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FingerprintCheckTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_harness_session_passes_its_own_arm_and_fails_another(self) -> None:
         from examples.frontend_delegation_hermes.cli import fingerprint_check as fc
@@ -540,3 +536,7 @@ class FingerprintCheckTests(unittest.IsolatedAsyncioTestCase):
         control = fc.check(prints, {"features": profile_config("tau3_eval_baseline.yaml").features})
         self.assertTrue(control and "the arm declares" in control[0])
         self.assertTrue(fc.check({}))
+
+
+if __name__ == "__main__":
+    unittest.main()
