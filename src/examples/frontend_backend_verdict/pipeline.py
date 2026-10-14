@@ -21,6 +21,8 @@ route's ``llm`` (frontend) and ``thinker-llm`` (backend) catalog entries.
 
 from __future__ import annotations
 
+import json
+
 from loguru import logger
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
@@ -28,10 +30,11 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 from pipecat.workers.runner import WorkerRunner
 
-from examples.frontend_backend_verdict.bridge.runtime import runtime_for
+from examples.frontend_backend_verdict.bridge.runtime import ProfileError, runtime_for
 from examples.frontend_backend_verdict.bridge.session_processor import PrototypeSessionProcessor
 from examples.frontend_backend_verdict.bridge.wire import PrototypeClientMessageFrame, PrototypeWireSerializer
 from examples.frontend_backend_verdict.voice.server import SHOW_FILLER_PARAM
+from examples.frontend_backend_verdict.voice.wire import server_events as ev
 from examples.shared.pipeline_utils import build_pipeline_params
 
 
@@ -48,7 +51,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     model = query.get("model", "")
     show_silent_filler = query.get(SHOW_FILLER_PARAM, "").lower() in ("1", "true")
 
-    runtime = runtime_for(body)
+    try:
+        runtime = runtime_for(body)
+    except ProfileError as exc:
+        # Tell the client why before the socket closes, as admission does for server_busy.
+        logger.error(f"frontend-backend-verdict-agent: {exc}")
+        await websocket.send_text(json.dumps(ev.error(str(exc), code="server_error", error_type="server_error")))
+        await websocket.close(code=1011, reason="profile error")
+        return
     if not await runtime.admit(websocket):
         return
     try:

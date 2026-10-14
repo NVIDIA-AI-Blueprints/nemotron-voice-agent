@@ -5,8 +5,8 @@
 
 """Rule 13: exact prompts per tau2 domain, tool-derived capabilities, placements, the voice catalog.
 
-Snapshots live in ``fixtures/prompt_snapshots``; regenerate them after a reviewed prompt
-change with ``UPDATE_PROMPT_SNAPSHOTS=1 uv run pytest tests/unit/prototypes/voice/test_voice_instructions.py``.
+Snapshots live in ``fixtures/prompt_snapshots``; regenerate them after a reviewed prompt change with
+``UPDATE_PROMPT_SNAPSHOTS=1 uv run pytest tests/unit/frontend_backend_verdict/test_fbv_voice_instructions.py``.
 """
 
 from __future__ import annotations
@@ -65,7 +65,8 @@ def _session(domain: str) -> dict:
 class ExactPromptTests(unittest.TestCase):
     def test_snapshots_for_every_domain_and_apply_to(self) -> None:
         update = os.environ.get("UPDATE_PROMPT_SNAPSHOTS") == "1"
-        SNAPSHOTS.mkdir(parents=True, exist_ok=True)
+        if update:
+            SNAPSHOTS.mkdir(parents=True, exist_ok=True)
         for domain in DOMAINS:
             session = _session(domain)
             for apply_to in (("backend",), ("backend", "frontend")):
@@ -77,8 +78,11 @@ class ExactPromptTests(unittest.TestCase):
                     name = f"{domain}__{'+'.join(apply_to)}__{role}.json"
                     with self.subTest(snapshot=name):
                         path = SNAPSHOTS / name
-                        if update or not path.exists():
-                            path.write_text(json.dumps({"prompt": prompt}, indent=2, ensure_ascii=False) + "\n")
+                        if update:
+                            path.write_text(
+                                json.dumps({"prompt": prompt}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+                            )
+                        self.assertTrue(path.exists(), f"missing snapshot {name}; set UPDATE_PROMPT_SNAPSHOTS=1")
                         self.assertEqual(prompt, json.loads(path.read_text(encoding="utf-8"))["prompt"])
 
     def test_default_frontend_gets_capabilities_not_policy(self) -> None:

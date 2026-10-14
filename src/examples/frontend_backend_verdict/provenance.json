@@ -1,6 +1,10 @@
 {
   "files": {
     "prompts.yaml": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): stale prototype path in the header comment now names the example's text catalog (kept identical to voice/config/prompts.voice.yaml)."
+      },
       "sha256": "776f252dd9bb87fc3685f0faa4b0e977418f1aaeebc39e47a6aea7c9f395478e",
       "source": "src/prototypes/voice_frontend_backend_agent/config/prompts.voice.yaml"
     },
@@ -89,6 +93,10 @@
       "source": "tests/unit/prototypes/voice/test_normalization_rules.py"
     },
     "tests/test_fbv_prompt_templates.py": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): tau2-bench policies come from TAU2_BENCH_ROOT instead of a personal checkout path."
+      },
       "kind": "test",
       "sha256": "4c5951bdf46589d7bfc82962b38b15686d89f83d4921a9c7b5332dac7d5947e7",
       "source": "tests/unit/prototypes/test_prompt_templates.py"
@@ -167,6 +175,10 @@
       "source": "tests/unit/prototypes/voice/test_voice_history_repair.py"
     },
     "tests/test_fbv_voice_instructions.py": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): snapshots are written only with UPDATE_PROMPT_SNAPSHOTS=1 (UTF-8), a missing snapshot fails, and the regenerate command names this test."
+      },
       "kind": "test",
       "sha256": "094c203109719855fd8181ce2a93ffbe09c6ea3c4114521ee2c32214a40ff8c6",
       "source": "tests/unit/prototypes/voice/test_voice_instructions.py"
@@ -254,14 +266,26 @@
       "source": "src/prototypes/text_frontend_backend_agent/config/agent.yaml"
     },
     "text/config/examples/backend_history.yaml": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): removed the text REPL command (text.cli.chat is not part of this example)."
+      },
       "sha256": "397a948e36c935b15e72446f0ec1f1d739750d1b79587eba6abfb6c15da2994c",
       "source": "src/prototypes/text_frontend_backend_agent/config/examples/backend_history.yaml"
     },
     "text/config/examples/backend_only.yaml": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): removed the text REPL command (text.cli.chat is not part of this example)."
+      },
       "sha256": "e9d9978d24f733648e8282d2aa0ee966217fc5a621c614940dc706dc8a074ec1",
       "source": "src/prototypes/text_frontend_backend_agent/config/examples/backend_only.yaml"
     },
     "text/config/examples/echo_tools.yaml": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): removed the text REPL command (text.cli.chat is not part of this example)."
+      },
       "sha256": "bcfc10a46e7952275bac0f69477d7ccfa67090596f5aa5d3db55b05e4dede5e5",
       "source": "src/prototypes/text_frontend_backend_agent/config/examples/echo_tools.yaml"
     },
@@ -335,8 +359,8 @@
     },
     "text/session.py": {
       "diverged": {
-        "change": "R1",
-        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. PendingTurn records caller_inputs; meta is serialized."
+        "change": "R1+CR149",
+        "reason": "R1 (tau-airline-20261007 report): resume after tool results when the caller's turn commits, carrying the caller's words. PendingTurn records caller_inputs; meta is serialized. CR149 (PR #149 CodeRabbit review): SessionState.to_dict/from_dict round-trip usage totals."
       },
       "sha256": "23e2f447b5497dc8c7fa7ae9d26c0f72961f84d1515b773acd1e64d891f911fd",
       "source": "src/prototypes/text_frontend_backend_agent/session.py"
@@ -445,6 +469,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/cli/client_tools.py"
     },
     "voice/cli/normalization_replay.py": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): usage example points at the example's profile path."
+      },
       "sha256": "86ef9d09b4c26b8c3fa7c47df05c9167e530d4b6aed260d7e906c18c04a9a86e",
       "source": "src/prototypes/voice_frontend_backend_agent/cli/normalization_replay.py"
     },
@@ -453,10 +481,18 @@
       "source": "src/prototypes/voice_frontend_backend_agent/cli/tau2_replay.py"
     },
     "voice/cli/verdict_replay.py": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): usage example points at the example's profile path."
+      },
       "sha256": "53429adb056cf87ccdfdde3175b5b20af4d0d4f8da5d9e530f2b65aa650b69c0",
       "source": "src/prototypes/voice_frontend_backend_agent/cli/verdict_replay.py"
     },
     "voice/cli/voice_chat.py": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): inlines clock and rich_available because text.cli.ui is not copied."
+      },
       "sha256": "4f9dc4503da7d8e1cf1b019a8f8c0d0ec35818b9c8749945682f7f0af78099dd",
       "source": "src/prototypes/voice_frontend_backend_agent/cli/voice_chat.py"
     },
@@ -489,6 +525,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/browser_demo_slow_backend.yaml"
     },
     "voice/config/profiles/cloud_speech.yaml": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): comment points at this example's services.cloud.yaml."
+      },
       "sha256": "f461d1797987a24ebb6190eeb78e698c237de2cbf61389264f79f3013ab18d99",
       "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/cloud_speech.yaml"
     },
@@ -532,6 +572,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_normalization.yaml"
     },
     "voice/config/prompts.voice.yaml": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): stale prototype path in the header comment now names the example's text catalog."
+      },
       "sha256": "776f252dd9bb87fc3685f0faa4b0e977418f1aaeebc39e47a6aea7c9f395478e",
       "source": "src/prototypes/voice_frontend_backend_agent/config/prompts.voice.yaml"
     },
@@ -562,6 +606,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/engine/__init__.py"
     },
     "voice/engine/input_path.py": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): carries an odd trailing PCM16 byte to the next append so samples stay aligned."
+      },
       "sha256": "7cfa9ef8bcb53caaaeb6f5c5d7412c3226f07983d875244af82b83e73066b3da",
       "source": "src/prototypes/voice_frontend_backend_agent/engine/input_path.py"
     },
@@ -623,8 +671,8 @@
     },
     "voice/server.py": {
       "diverged": {
-        "change": "R4",
-        "reason": "R4 (tau-airline-20261007 report): write gate. passes write_gate to the runner."
+        "change": "R4+CR149",
+        "reason": "R4 (tau-airline-20261007 report): write gate. passes write_gate to the runner. CR149 (PR #149 CodeRabbit review): constant-time bearer comparison; session count released when session construction fails; docstring config path."
       },
       "sha256": "9314ae5787c86eef1c9f5acfeaa91dcbb00091ac6f862beea5bc74ed882dbb01",
       "source": "src/prototypes/voice_frontend_backend_agent/server.py"
@@ -658,6 +706,10 @@
       "source": "src/prototypes/voice_frontend_backend_agent/speech/text_normalizer.py"
     },
     "voice/speech/tts_riva.py": {
+      "diverged": {
+        "change": "CR149",
+        "reason": "CR149 (PR #149 CodeRabbit review): worker_threads is a bounded deque."
+      },
       "sha256": "83a710ee36ecf4516e1cd3c9a99a64c1581b2b9f533bc80e65c9653e3925bd8b",
       "source": "src/prototypes/voice_frontend_backend_agent/speech/tts_riva.py"
     },

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import unittest
 from pathlib import Path
@@ -23,7 +24,9 @@ CATALOGS = [
     REPO_ROOT / "src" / "examples" / "frontend_backend_verdict" / "text" / "config" / "prompts.yaml",
     REPO_ROOT / "src" / "examples" / "frontend_backend_verdict" / "voice" / "config" / "prompts.voice.yaml",
 ]
-TAU2_DOMAINS = REPO_ROOT.parent / "tau2-bench-smasurekar" / "data" / "tau2" / "domains"
+#: A tau2-bench checkout, from ``TAU2_BENCH_ROOT``; the policy test skips when it is unset.
+_TAU2_ROOT = os.environ.get("TAU2_BENCH_ROOT", "").strip()
+TAU2_DOMAINS = Path(_TAU2_ROOT) / "data" / "tau2" / "domains" if _TAU2_ROOT else None
 JINJA = re.compile(r"\{[{%#]")
 #: Catalog entries that are only ever included by another template (they need its context).
 INCLUDED_ONLY = {"frontend_task_in_progress"}
@@ -87,9 +90,9 @@ class TemplateTests(unittest.TestCase):
                 self.assertEqual(render(literal(text), config), substitute(text, config).strip())
 
     def test_literal_on_tau2_policies(self) -> None:
-        policies = sorted(TAU2_DOMAINS.glob("*/**/*.md")) if TAU2_DOMAINS.is_dir() else []
+        policies = sorted(TAU2_DOMAINS.glob("*/**/*.md")) if TAU2_DOMAINS and TAU2_DOMAINS.is_dir() else []
         if not policies:
-            self.skipTest("tau2-bench checkout not found next to this repository")
+            self.skipTest("set TAU2_BENCH_ROOT to a tau2-bench checkout to run this test")
         config = make_config()
         with_markers = [path for path in policies if JINJA.search(path.read_text(encoding="utf-8"))]
         self.assertTrue(with_markers)  # the reason literal() exists

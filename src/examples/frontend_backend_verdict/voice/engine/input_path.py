@@ -57,6 +57,8 @@ class InputPath:
         self._turn = turn_detection
         self._segmenter = UtteranceSegmenter(self._params(turn_detection))
         self._carry = b""
+        #: An odd trailing PCM16 byte held for the next append, so samples stay aligned.
+        self._partial = b""
         self._manual_buffer = bytearray()
 
     def _params(self, turn: TurnDetectionSettings) -> SegmenterParams:
@@ -85,11 +87,15 @@ class InputPath:
             self._format = input_format
             self._resampler = StreamResampler(input_format.rate, self._engine_rate)
             self._carry = b""
+            self._partial = b""
         self._turn = turn
         self._segmenter.reconfigure(self._params(turn))
 
     def feed(self, payload: bytes) -> FeedResult:
         """Consume one ``input_audio_buffer.append`` payload."""
+        payload = self._partial + payload
+        whole = len(payload) - len(payload) % self._format.bytes_per_sample
+        payload, self._partial = payload[:whole], payload[whole:]
         samples = self._format.samples_in(payload)
         step = self.clock.advance(samples, self._format.rate)
         pcm = self._resampler.process(self._format.decode(payload))
@@ -119,6 +125,7 @@ class InputPath:
         """Drop unfinished input (``input_audio_buffer.clear``)."""
         self._manual_buffer.clear()
         self._carry = b""
+        self._partial = b""
         self._segmenter.clear()
 
     @property

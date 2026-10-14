@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Demo configuration for the REPL, paired with
+# Demo configuration, paired with
 # `examples.frontend_backend_verdict.text.demo_tools:TOOLS`.
-#
-#   uv run python -m examples.frontend_backend_verdict.text.cli.chat \
-#     --config src/prototypes/text_frontend_backend_agent/config/examples/echo_tools.yaml \
-#     --tools examples.frontend_backend_verdict.text.demo_tools:TOOLS
 
 agent:
   name: "Order Assistant"

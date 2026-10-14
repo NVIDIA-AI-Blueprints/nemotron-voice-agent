@@ -8,7 +8,7 @@ Before you begin, ensure you have the following:
 
 - Docker Compose v2.20 or newer. Check the version with `docker compose version`.
 - **Cloud (`<example>`), Server (`*/server`), and Performance Server (`generic-assistant/server-perf`):** an NVIDIA API key (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server and Performance Server also need NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
-- **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
+- **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family, except that `frontend-backend-verdict-agent/single-gpu` also needs `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key for its LLMs.
 
 For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
@@ -41,7 +41,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     cd nemotron-voice-agent
     ```
 
-2. Configure the environment. Copy the example environment file [.env.example](../.env.example) only if `.env` is missing. Set the key for the recipe family you will run. Do not mix these.
+2. Configure the environment. Copy the example environment file [.env.example](../.env.example) only if `.env` is missing. Set the keys the table lists for the recipe family you will run.
 
     | Recipe family | Required `.env` key | `docker login nvcr.io` |
     | --- | --- | --- |
@@ -49,8 +49,9 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     | Server (`<example>/server`) | `NVIDIA_API_KEY` | Yes, before `up` |
     | Performance Server (`generic-assistant/server-perf`) | `NVIDIA_API_KEY` | Yes, before `up` |
     | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` | No |
+    | Frontend/Backend Verdict Agent (`frontend-backend-verdict-agent/single-gpu`) | `HF_TOKEN` and `NVIDIA_API_KEY` (Inference Hub key) | No |
 
-    `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. `HF_TOKEN` is required for Single-GPU. Do not mix these.
+    `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. `HF_TOKEN` is required for Single-GPU. Do not mix these, except for `frontend-backend-verdict-agent/single-gpu`, which needs both because its LLMs run on the NVIDIA Inference Hub.
 
     ```bash
     test -f .env || cp .env.example .env

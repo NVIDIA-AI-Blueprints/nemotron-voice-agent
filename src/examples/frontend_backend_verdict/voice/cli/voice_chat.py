@@ -24,18 +24,32 @@ import base64
 import contextlib
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 import websockets
 
-from examples.frontend_backend_verdict.text.cli.ui import clock, rich_available
 from examples.frontend_backend_verdict.voice.audio.formats import AudioFormat
 from examples.frontend_backend_verdict.voice.cli.audio_io import AudioIO, MicSpeakerIO, TextIO, WavFileIO
 from examples.frontend_backend_verdict.voice.cli.client_tools import ClientToolbox, load_tools
 
 FORMATS = {"pcm24k": AudioFormat("audio/pcm", 24000), "pcmu": AudioFormat("audio/pcmu", 8000)}
 _QUIET_EVENTS = frozenset({"response.output_audio.delta", "input_audio_buffer.append"})
+
+
+def clock(timestamp: float) -> str:
+    """Format an event's emission time as ``HH:MM:SS.mmm`` (the text REPL's ``ui.clock``)."""
+    return time.strftime("%H:%M:%S", time.localtime(timestamp)) + f".{int(timestamp % 1 * 1000):03d}"
+
+
+def rich_available() -> bool:
+    """Whether ``rich`` can be imported (the text REPL's ``ui.rich_available``)."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 class ChatView:

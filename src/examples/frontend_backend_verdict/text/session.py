@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from examples.frontend_backend_verdict.text.errors import StateReplayError
 from examples.frontend_backend_verdict.text.history import History
-from examples.frontend_backend_verdict.text.messages import Message, ToolCall, UsageTotals
+from examples.frontend_backend_verdict.text.messages import Message, RoleTotals, ToolCall, Usage, UsageTotals
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +73,7 @@ class SessionState:
                 else None,
                 "caller_inputs": [_message_to_dict(m) for m in self.pending.caller_inputs],
             },
+            "usage": asdict(self.usage),
         }
 
     @classmethod
@@ -97,6 +98,7 @@ class SessionState:
             frontend_history=History(tuple(_message_from_dict(m) for m in data.get("frontend_history", []))),
             backend_history=History(tuple(_message_from_dict(m) for m in data.get("backend_history", []))),
             pending=pending,
+            usage=_usage_totals_from_dict(data["usage"]) if data.get("usage") else UsageTotals(),
         )
 
     @classmethod
@@ -140,6 +142,23 @@ def _reject_unresolved_tail(messages: Sequence[Message]) -> None:
             answered.add(message.tool_call_id)
     if missing := [call_id for call_id in called if call_id not in answered]:
         raise StateReplayError(f"transcript ends with unresolved tool calls: {sorted(missing)}")
+
+
+def _role_totals_from_dict(data: dict[str, Any]) -> RoleTotals:
+    return RoleTotals(
+        calls=int(data.get("calls", 0)),
+        usage=Usage(**{key: int(value) for key, value in (data.get("usage") or {}).items()}),
+        latency_ms=float(data.get("latency_ms", 0.0)),
+        cost_known_subtotal=float(data.get("cost_known_subtotal", 0.0)),
+        cost_unknown_calls=int(data.get("cost_unknown_calls", 0)),
+    )
+
+
+def _usage_totals_from_dict(data: dict[str, Any]) -> UsageTotals:
+    return UsageTotals(
+        frontend=_role_totals_from_dict(data.get("frontend") or {}),
+        backend=_role_totals_from_dict(data.get("backend") or {}),
+    )
 
 
 def _message_to_dict(message: Message) -> dict[str, Any]:

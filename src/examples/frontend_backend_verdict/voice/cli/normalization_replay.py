@@ -19,7 +19,7 @@ unknown). Run from the repository root::
 
     PYTHONPATH=src uv run python -m examples.frontend_backend_verdict.voice.cli.normalization_replay \
         --events logs/fba_voice_events.jsonl \
-        --config src/prototypes/voice_frontend_backend_agent/config/profiles/tau3_eval_normalization.yaml \
+        --config src/examples/frontend_backend_verdict/voice/config/profiles/tau3_eval_normalization.yaml \
         --model pine-fba-voice-paired-airline-regular-sil800 --out /tmp/replay.jsonl
 
 A summary goes to stderr. The log must not have been written with

@@ -3,7 +3,7 @@
 #
 # Voice prompt catalog for the voice Frontend/Backend Agent prototype.
 #
-# Derived from the text catalog (src/prototypes/text_frontend_backend_agent/config/prompts.yaml):
+# Derived from the text catalog (src/examples/frontend_backend_verdict/text/config/prompts.yaml):
 # same structure, same rules and the same six domain-neutral examples, adapted
 # for a cascade (speech recognition in, text-to-speech out). The text catalog is
 # not edited. Placeholders are substituted at load time: {persona},

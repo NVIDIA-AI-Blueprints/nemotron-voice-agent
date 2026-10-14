@@ -4,10 +4,6 @@
 # Demo configuration with the frontend switched off: one backend agent, its own
 # conversation history, no delegation. Pairs with
 # `examples.frontend_backend_verdict.text.demo_tools:TOOLS`.
-#
-#   PYTHONPATH=src uv run python -m examples.frontend_backend_verdict.text.cli.chat \
-#     --config src/prototypes/text_frontend_backend_agent/config/examples/backend_only.yaml \
-#     --tools examples.frontend_backend_verdict.text.demo_tools:TOOLS
 
 agent:
   name: "Order Assistant"

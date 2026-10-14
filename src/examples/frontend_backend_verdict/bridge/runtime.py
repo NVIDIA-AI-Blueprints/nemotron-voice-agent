@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -80,8 +81,17 @@ def profile_path(name: str) -> Path:
 
 
 def _float_env(env: Mapping[str, str], key: str, default: float) -> float:
+    """Parse ``key`` the way ``uvicorn_ws_ping_kwargs`` does: invalid values fall back, negatives clamp to 0."""
     raw = (env.get(key) or "").strip()
-    return float(raw) if raw else default
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if not math.isfinite(value):
+        return default
+    return max(value, 0.0)
 
 
 def keepalive_mismatch(config: VoiceConfig, environ: Mapping[str, str] | None = None) -> str:

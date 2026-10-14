@@ -120,9 +120,15 @@ class KeepaliveTests(unittest.TestCase):
         self.assertIn("UVICORN_WS_PING_INTERVAL=0", message)
 
     def test_runtime_for_refuses_a_mismatched_server(self) -> None:
-        rt._RUNTIMES.clear()
-        with self.assertRaises(rt.ProfileError):
+        with mock.patch.dict(rt._RUNTIMES, clear=True), self.assertRaises(rt.ProfileError):
             rt.runtime_for({}, {})
+
+    def test_keepalive_values_parse_like_uvicorn_ws_ping_kwargs(self) -> None:
+        self.assertEqual(rt._float_env({"K": "not-a-number"}, "K", 20.0), 20.0)
+        self.assertEqual(rt._float_env({"K": "inf"}, "K", 20.0), 20.0)
+        self.assertEqual(rt._float_env({"K": "-5"}, "K", 20.0), 0.0)
+        self.assertEqual(rt._float_env({"K": " 7.5 "}, "K", 20.0), 7.5)
+        self.assertEqual(rt._float_env({}, "K", 20.0), 20.0)
 
 
 class AdmissionTests(unittest.IsolatedAsyncioTestCase):

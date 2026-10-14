@@ -6,7 +6,7 @@ r"""FastAPI app: ``WS /v1/realtime`` (OpenAI Realtime GA) and ``GET /health``.
 Run from the repository root (or ``/app`` in the container)::
 
     PYTHONPATH=src uv run python -m examples.frontend_backend_verdict.voice.server \
-        --config src/prototypes/voice_frontend_backend_agent/config/voice_agent.yaml
+        --config src/examples/frontend_backend_verdict/voice/config/voice_agent.yaml
 
 ``--stub-speech`` replaces Riva ASR/TTS with deterministic stand-ins and
 ``--stub-agent scripted`` replaces the LLM agent with a script; together they
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hmac
 import json
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -141,7 +142,7 @@ def _bearer_ok(websocket: WebSocket, config: VoiceConfig) -> bool:
         return True
     header = websocket.headers.get("authorization", "")
     token = header[7:].strip() if header.lower().startswith("bearer ") else ""
-    return bool(config.server.bearer_token) and token == config.server.bearer_token
+    return bool(config.server.bearer_token) and hmac.compare_digest(token.encode(), config.server.bearer_token.encode())
 
 
 def build_app(
@@ -252,29 +253,30 @@ def build_app(
             return
         state.sessions += 1
         state.total_sessions += 1
-        assert state.services is not None  # noqa: S101 - built in lifespan
-
-        async def receive() -> str | None:
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                return None
-            return message.get("text") if message.get("text") is not None else message.get("bytes")
-
-        session = RealtimeSession(
-            config=config,
-            transport=CallbackTransport(websocket.send_text),
-            services=state.services,
-            agent_factory=factory,
-            turn_manager_factory=hooks.turn_manager_factory if hooks is not None else None,
-            routing_sink=state.routing_sink,
-            filler_log=state.filler_log,
-            model=websocket.query_params.get("model", ""),
-            show_silent_filler=websocket.query_params.get(SHOW_FILLER_PARAM, "").lower() in ("1", "true"),
-        )
+        session: RealtimeSession | None = None
         try:
+            assert state.services is not None  # noqa: S101 - built in lifespan
+
+            async def receive() -> str | None:
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    return None
+                return message.get("text") if message.get("text") is not None else message.get("bytes")
+
+            session = RealtimeSession(
+                config=config,
+                transport=CallbackTransport(websocket.send_text),
+                services=state.services,
+                agent_factory=factory,
+                turn_manager_factory=hooks.turn_manager_factory if hooks is not None else None,
+                routing_sink=state.routing_sink,
+                filler_log=state.filler_log,
+                model=websocket.query_params.get("model", ""),
+                show_silent_filler=websocket.query_params.get(SHOW_FILLER_PARAM, "").lower() in ("1", "true"),
+            )
             await session.run(receive)
         except Exception:  # noqa: BLE001 - log and drop this connection only
-            logger.exception(f"[{session.session_id}] session crashed")
+            logger.exception(f"[{session.session_id if session is not None else '-'}] session crashed")
         finally:
             state.sessions -= 1
             with contextlib.suppress(Exception):

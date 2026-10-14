@@ -1,14 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Demo configuration for the REPL with the backend conversation history on:
+# Demo configuration with the backend conversation history on:
 # paired mode, and the backend keeps its own earlier requests, tool calls,
 # results and answers, plus the user's own words each turn. Paired with
 # `examples.frontend_backend_verdict.text.demo_tools:TOOLS`.
-#
-#   PYTHONPATH=src uv run python -m examples.frontend_backend_verdict.text.cli.chat \
-#     --config src/prototypes/text_frontend_backend_agent/config/examples/backend_history.yaml \
-#     --tools examples.frontend_backend_verdict.text.demo_tools:TOOLS
 
 agent:
   name: "Order Assistant"

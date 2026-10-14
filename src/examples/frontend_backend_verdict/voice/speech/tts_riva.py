@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import threading
 import time
+from collections import deque
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -27,6 +28,7 @@ from examples.frontend_backend_verdict.voice.errors import SpeechServiceError
 from examples.frontend_backend_verdict.voice.speech.catalog import SpeechEndpoint
 
 _BACKPRESSURE_LOG_MS = 50.0
+_WORKER_THREAD_HISTORY = 64
 
 
 class RivaSynthesizer:
@@ -39,7 +41,8 @@ class RivaSynthesizer:
         self._auth = riva.client.Auth(None, endpoint.use_ssl, endpoint.server, endpoint.metadata())
         self._service = riva.client.SpeechSynthesisService(self._auth)
         self._executor = ThreadPoolExecutor(max_workers=max(1, max_streams), thread_name_prefix="riva-tts")
-        self.worker_threads: list[str] = []
+        #: Names of the most recent worker threads (bounded so a long-lived channel does not grow).
+        self.worker_threads: deque[str] = deque(maxlen=_WORKER_THREAD_HISTORY)
         logger.info(f"TTS channel ready: {endpoint.describe()} sample_rate={sample_rate} max_streams={max_streams}")
 
     @property
