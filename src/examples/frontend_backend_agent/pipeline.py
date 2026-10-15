@@ -22,7 +22,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.nvidia.stt import NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
@@ -36,7 +36,6 @@ from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from examples.shared.pipeline_utils import (
     build_pipeline_params,
     build_user_aggregator_params,
@@ -139,7 +138,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if asr_language_code:
         asr_kwargs["settings"].language = asr_language_code
-    stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
+    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
