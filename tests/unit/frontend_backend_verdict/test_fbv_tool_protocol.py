@@ -13,10 +13,10 @@ import unittest
 import pytest
 from _fbv_fakes import FakeChatClient, echo_tool, make_agent, text_response, tool_response
 
-from examples.frontend_backend_verdict.text.errors import ToolProtocolError, ToolResultSerializationError
-from examples.frontend_backend_verdict.text.messages import ToolCall, ToolResult
-from examples.frontend_backend_verdict.text.protocol import ensure_ids, validate_tool_results
-from examples.frontend_backend_verdict.text.tools import error_payload, serialize_result
+from examples.frontend_backend_verdict.core.agent.errors import ToolProtocolError, ToolResultSerializationError
+from examples.frontend_backend_verdict.core.agent.messages import ToolCall, ToolResult
+from examples.frontend_backend_verdict.core.backend.tool_protocol import ensure_ids, validate_tool_results
+from examples.frontend_backend_verdict.core.tools.tools import error_payload, serialize_result
 
 OUTSTANDING = ("call_a", "call_b")
 

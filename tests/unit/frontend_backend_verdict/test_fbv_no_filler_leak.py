@@ -12,8 +12,8 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, delegate_response, make_agent, text_response
 
-from examples.frontend_backend_verdict.text import events
-from examples.frontend_backend_verdict.text.messages import AgentTurn
+from examples.frontend_backend_verdict.core.agent import events
+from examples.frontend_backend_verdict.core.agent.messages import AgentTurn
 
 FILLER = "Give me one moment."
 

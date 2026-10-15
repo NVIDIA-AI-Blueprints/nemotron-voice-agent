@@ -11,7 +11,7 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, delegate_response, echo_tool, make_agent, text_response, tool_response
 
-from examples.frontend_backend_verdict.text.messages import Usage, UsageTotals
+from examples.frontend_backend_verdict.core.agent.messages import Usage, UsageTotals
 
 
 def test_unknown_cost_is_contagious() -> None:

@@ -11,9 +11,9 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, delegate_response, make_agent, text_response, tool_response
 
-from examples.frontend_backend_verdict.text import events
-from examples.frontend_backend_verdict.text.errors import FrontendContractError
-from examples.frontend_backend_verdict.text.history import group_is_complete
+from examples.frontend_backend_verdict.core.agent import events
+from examples.frontend_backend_verdict.core.agent.errors import FrontendContractError
+from examples.frontend_backend_verdict.core.backend.history import group_is_complete
 
 
 class FrontendToolSurfaceTests(unittest.IsolatedAsyncioTestCase):

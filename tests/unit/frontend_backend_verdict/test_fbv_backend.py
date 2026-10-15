@@ -21,8 +21,8 @@ from _fbv_fakes import (
     tool_response,
 )
 
-from examples.frontend_backend_verdict.text import events
-from examples.frontend_backend_verdict.text.backend import ERROR_TEXT, ITERATION_CAP_TEXT
+from examples.frontend_backend_verdict.core.agent import events
+from examples.frontend_backend_verdict.core.backend.backend import ERROR_TEXT, ITERATION_CAP_TEXT
 
 
 class FailingClient:
@@ -60,7 +60,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         frontend = FakeChatClient([delegate_response("look it up")])
         backend = FakeChatClient([tool_response(("lookup", {"value": "x"})), text_response("done")])
         agent, _ = make_agent(frontend=frontend, backend=backend, tools=[echo_tool()], config=config)
-        with mock.patch("examples.frontend_backend_verdict.text.agent.asyncio.sleep") as sleep:
+        with mock.patch("examples.frontend_backend_verdict.core.agent.agent.asyncio.sleep") as sleep:
             turn, _ = await agent.send("find x", agent.new_session())
         assert turn.final_text == "done"
         sleep.assert_awaited_once_with(2.0)

@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from _fbv_voice_fakes import (
-    PACKAGE_DIR,
+from _fbv_core_fakes import (
+    BACKEND_ONLY_PROFILE,
+    CONFIG_DIR,
     FakeChatClient,
-    SessionHarness,
     base_config,
     delegate_response,
     pcmu_silence,
@@ -30,18 +30,19 @@ from _fbv_voice_fakes import (
     text_response,
     voice_config,
 )
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase
 
-from examples.frontend_backend_verdict.text.config import ConversationHistoryConfig
-from examples.frontend_backend_verdict.text.history import History
-from examples.frontend_backend_verdict.text.messages import Message, ToolCall
-from examples.frontend_backend_verdict.text.session import SessionState
-from examples.frontend_backend_verdict.voice.agent.history_repair import repair_interrupted_answer
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
-from examples.frontend_backend_verdict.voice.agent.sinks import EventLog
-from examples.frontend_backend_verdict.voice.config import load_voice_config
-from examples.frontend_backend_verdict.voice.errors import HistoryRepairError
+from examples.frontend_backend_verdict.core.agent.messages import Message, ToolCall
+from examples.frontend_backend_verdict.core.agent.session import SessionState
+from examples.frontend_backend_verdict.core.backend.history import History
+from examples.frontend_backend_verdict.core.config.agent import ConversationHistoryConfig
+from examples.frontend_backend_verdict.core.config.voice import load_voice_config
+from examples.frontend_backend_verdict.core.engine.event_log import EventLog
+from examples.frontend_backend_verdict.core.engine.history_repair import repair_interrupted_answer
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
+from examples.frontend_backend_verdict.core.errors import HistoryRepairError
 
-PROFILES = PACKAGE_DIR / "config" / "profiles"
+PROFILES = CONFIG_DIR / "profiles"
 FULL = "Your refund is approved. It arrives in five days."
 HEARD = "Your refund is approved. [interrupted by the user]"
 MARKER = "[interrupted by the user]"
@@ -104,11 +105,11 @@ class DualRepairTests(unittest.TestCase):
         self.assertEqual(state.backend_history.messages[-1].content, "something else")
 
 
-class PairedHistorySessionTests(unittest.IsolatedAsyncioTestCase):
+class PairedHistorySessionTests(PipecatTestCase):
     async def test_second_spoken_turn_reaches_the_backend_with_the_first(self) -> None:
         frontend = FakeChatClient([delegate_response("First request."), delegate_response("Second request.")])
         backend = FakeChatClient([text_response("First answer."), text_response("Second answer.")])
-        harness = SessionHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
+        harness = PipecatHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
         await harness.start(tau2_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
@@ -130,7 +131,7 @@ class PairedHistorySessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_barge_in_repairs_the_backend_copy_too(self) -> None:
         frontend = FakeChatClient([delegate_response("Confirm the booking.")])
         backend = FakeChatClient([text_response(ANSWER)])
-        harness = SessionHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
+        harness = PipecatHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
         await harness.start(tau2_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
@@ -148,7 +149,7 @@ class PairedHistorySessionTests(unittest.IsolatedAsyncioTestCase):
         frontend = FakeChatClient([delegate_response("First request."), delegate_response("Merged request.")])
         backend = FakeChatClient([text_response("Merged answer.")])
         backend.gates[0] = asyncio.Event()  # the first backend call hangs and is cancelled
-        harness = SessionHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
+        harness = PipecatHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
         await harness.start(tau2_session_update())
         await harness.speak()
         await asyncio.sleep(0.05)
@@ -166,7 +167,7 @@ class PairedHistorySessionTests(unittest.IsolatedAsyncioTestCase):
             path = Path(tmp) / "events.jsonl"
             frontend = FakeChatClient([delegate_response("Request.")])
             backend = FakeChatClient([text_response("Answer.")])
-            harness = SessionHarness(
+            harness = PipecatHarness(
                 config=_history_config(guidance_key=""),
                 clients=AgentClients(backend=backend, frontend=frontend),
                 event_log=EventLog(str(path)),
@@ -183,7 +184,7 @@ class PairedHistorySessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rendered_prompts_end_with_the_history_note_after_the_cascade_addendum(self) -> None:
         backend = FakeChatClient([text_response("Answer.")])
-        harness = SessionHarness(
+        harness = PipecatHarness(
             config=_history_config(), clients=AgentClients(backend=backend, frontend=FakeChatClient())
         )
         await harness.start(tau2_update_with([], "Policy text."))
@@ -232,7 +233,7 @@ class ProfileTests(unittest.TestCase):
 
     def test_eval_and_backend_only_profiles_ignore_the_environment_default(self) -> None:
         with mock.patch.dict(os.environ, {"FBA_BACKEND_HISTORY": "true"}):
-            self.assertTrue(load_voice_config(PACKAGE_DIR / "config" / "voice_agent.yaml").agent.backend.stateful)
-            for name in ("tau3_eval.yaml", "backend_only.yaml"):
-                config = load_voice_config(PROFILES / name)
-                self.assertFalse(config.agent.backend.conversation_history.enabled, name)
+            self.assertTrue(load_voice_config(CONFIG_DIR / "voice_agent.yaml").agent.backend.stateful)
+            for path in (PROFILES / "tau3_eval.yaml", BACKEND_ONLY_PROFILE):
+                config = load_voice_config(path)
+                self.assertFalse(config.agent.backend.conversation_history.enabled, path.name)

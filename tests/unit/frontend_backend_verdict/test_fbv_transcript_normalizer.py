@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from examples.frontend_backend_verdict.voice.normalization.transcript import (
+from examples.frontend_backend_verdict.core.normalization.transcript import (
     SpelledRunSettings,
     TranscriptNormalizer,
     TranscriptSettings,

@@ -8,17 +8,13 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
 
-from examples.frontend_backend_verdict.text.messages import RoleTotals, Usage, UsageTotals
-from examples.frontend_backend_verdict.text.session import SessionState
-from examples.frontend_backend_verdict.voice.audio.formats import PCM, AudioFormat
-from examples.frontend_backend_verdict.voice.engine.input_path import InputPath
-from examples.frontend_backend_verdict.voice.server import _bearer_ok
-from examples.frontend_backend_verdict.voice.speech.vad_energy import EnergyVad
-from examples.frontend_backend_verdict.voice.wire.session_view import TurnDetectionSettings
+from _fbv_pipecat_fakes import PipecatHarness
 
-MANUAL = TurnDetectionSettings(mode="manual", requested_type=None)
+from examples.frontend_backend_verdict.core.agent.messages import RoleTotals, Usage, UsageTotals
+from examples.frontend_backend_verdict.core.agent.session import SessionState
+from examples.frontend_backend_verdict.core.audio.formats import PCM, AudioFormat
+from examples.frontend_backend_verdict.core.engine.scripted import ScriptedAgentPort
 
 
 class SessionUsageTests(unittest.TestCase):
@@ -36,36 +32,31 @@ class SessionUsageTests(unittest.TestCase):
         self.assertEqual(SessionState.from_dict(data).usage, UsageTotals())
 
 
-class InputAlignmentTests(unittest.TestCase):
-    def _path(self) -> InputPath:
-        fmt = AudioFormat(PCM, 16000)
-        return InputPath(
-            engine_rate=16000, vad=EnergyVad(16000), input_format=fmt, turn_detection=MANUAL, min_speech_ms=120
-        )
+class InputAlignmentTests(unittest.IsolatedAsyncioTestCase):
+    """The Pipecat session's input decode keeps PCM16 sample alignment (v1's ``InputPath`` fix, B6)."""
 
-    def test_odd_pcm16_chunks_keep_sample_alignment(self) -> None:
+    def _session(self):  # noqa: ANN202
+        harness = PipecatHarness(agent_factory=lambda _: ScriptedAgentPort([]))
+        session = harness.session
+        session._configure_input(AudioFormat(PCM, 16000))
+        return session
+
+    @staticmethod
+    def _feed(session, chunk: bytes) -> tuple[bytes, float]:  # noqa: ANN001
+        session._on_append(chunk)
+        audio, session._pending_audio = session._pending_audio, None
+        return audio or (b"", 0.0)
+
+    async def test_odd_pcm16_chunks_keep_sample_alignment(self) -> None:
         audio = bytes(range(1, 41))
-        whole, split = self._path(), self._path()
-        whole.feed(audio)
-        for chunk in (audio[:3], audio[3:20], audio[20:21], audio[21:]):
-            split.feed(chunk)
-        self.assertEqual(split.commit(), whole.commit())
+        whole, split = self._session(), self._session()
+        expected = self._feed(whole, audio)
+        parts = [self._feed(split, chunk) for chunk in (audio[:3], audio[3:20], audio[20:21], audio[21:])]
+        self.assertEqual(b"".join(pcm for pcm, _ in parts), expected[0])
+        self.assertEqual(sum(step for _, step in parts), expected[1])
 
-    def test_clear_drops_a_held_byte(self) -> None:
-        path = self._path()
-        path.feed(b"\x01")
-        path.clear()
-        path.feed(b"\x02\x03")
-        self.assertEqual(path.buffered_ms, 1000.0 / 16000)
-
-
-class BearerTests(unittest.TestCase):
-    def _ok(self, header: str, token: str = "secret") -> bool:
-        config = SimpleNamespace(server=SimpleNamespace(require_bearer=True, bearer_token=token))
-        return _bearer_ok(SimpleNamespace(headers={"authorization": header}), config)
-
-    def test_bearer_token_checks(self) -> None:
-        self.assertTrue(self._ok("Bearer secret"))
-        self.assertFalse(self._ok("Bearer wrong"))
-        self.assertFalse(self._ok(""))
-        self.assertFalse(self._ok("Bearer ", token=""))
+    async def test_clear_drops_a_held_byte(self) -> None:
+        session = self._session()
+        self.assertEqual(self._feed(session, b"\x01"), (b"", 0.0))
+        session._clear_input()
+        self.assertEqual(self._feed(session, b"\x02\x03"), (b"\x02\x03", 1000.0 / 16000))

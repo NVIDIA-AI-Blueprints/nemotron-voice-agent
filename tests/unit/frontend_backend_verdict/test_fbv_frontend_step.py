@@ -11,13 +11,13 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, delegate_response, make_agent, text_response, tool_response
 
-from examples.frontend_backend_verdict.text import events
-from examples.frontend_backend_verdict.text.delegation import (
+from examples.frontend_backend_verdict.core.agent import events
+from examples.frontend_backend_verdict.core.frontend.delegation import (
     CALL_BACKEND_TOOL,
     FRONTEND_TOOLS,
     FRONTEND_TOOLS_IN_PROGRESS,
 )
-from examples.frontend_backend_verdict.text.frontend import Delegate, DirectAnswer
+from examples.frontend_backend_verdict.core.frontend.frontend import Delegate, DirectAnswer
 
 IN_PROGRESS = {"query": "check order 7", "filler": "One moment.", "filler_heard": True, "new_words": "okay"}
 

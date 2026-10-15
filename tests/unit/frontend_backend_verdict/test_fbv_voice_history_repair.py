@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import unittest
 
-from examples.frontend_backend_verdict.text.history import History
-from examples.frontend_backend_verdict.text.messages import Message, ToolCall
-from examples.frontend_backend_verdict.text.session import SessionState
-from examples.frontend_backend_verdict.voice.agent.history_repair import repair_interrupted_answer
-from examples.frontend_backend_verdict.voice.errors import HistoryRepairError
+from examples.frontend_backend_verdict.core.agent.messages import Message, ToolCall
+from examples.frontend_backend_verdict.core.agent.session import SessionState
+from examples.frontend_backend_verdict.core.backend.history import History
+from examples.frontend_backend_verdict.core.engine.history_repair import repair_interrupted_answer
+from examples.frontend_backend_verdict.core.errors import HistoryRepairError
 
 FULL = "Your refund is approved. It arrives in five days."
 HEARD = "Your refund is approved. [interrupted by the user]"

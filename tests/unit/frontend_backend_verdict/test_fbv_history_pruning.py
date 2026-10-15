@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
-from examples.frontend_backend_verdict.text.history import History, group_is_complete, validate_tool_pairing
-from examples.frontend_backend_verdict.text.messages import Message, ToolCall
+from examples.frontend_backend_verdict.core.agent.messages import Message, ToolCall
+from examples.frontend_backend_verdict.core.backend.history import History, group_is_complete, validate_tool_pairing
 
 
 def _single_call_group(index: int) -> list[Message]:

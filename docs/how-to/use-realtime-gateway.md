@@ -97,7 +97,7 @@ The repository defines these profiles:
 | `nvidia/nemotron-realtime-omni-subagents` | Omni multi-agent pipeline without client-defined functions |
 | `nvidia/nemotron-realtime-frontend-backend` | Airline Frontend/Backend Agent with trusted delegation functions |
 | `nvidia/nemotron-realtime-generic-frontend-backend` | Generic Frontend/Backend Agent with server and client tools planned by its hidden Thinker |
-| `nvidia/nemotron-realtime-frontend-backend-verdict` | Voice Frontend/Backend Agent prototype that owns the whole Realtime session. Refer to the [Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md). |
+| `nvidia/nemotron-realtime-frontend-backend-verdict` | Voice Frontend/Backend Verdict Agent that owns the whole Realtime session. Refer to the [Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md) and [Deploy the Frontend/Backend Verdict Agent](deploy-frontend-backend-verdict-agent.md). |
 
 Select a model in the WebSocket URL:
 

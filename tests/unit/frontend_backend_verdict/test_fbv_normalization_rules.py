@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from examples.frontend_backend_verdict.voice.normalization.rules import (
+from examples.frontend_backend_verdict.core.normalization.rules import (
     EN,
     apply_case,
     digits_from_words,

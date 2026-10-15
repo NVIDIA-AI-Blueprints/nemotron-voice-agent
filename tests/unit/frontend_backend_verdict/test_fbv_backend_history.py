@@ -22,17 +22,17 @@ from _fbv_fakes import (
     tool_response,
 )
 
-from examples.frontend_backend_verdict.text import events
-from examples.frontend_backend_verdict.text.backend_context import (
+from examples.frontend_backend_verdict.core.agent import events
+from examples.frontend_backend_verdict.core.agent.errors import ConfigError
+from examples.frontend_backend_verdict.core.agent.messages import Message, ToolResult
+from examples.frontend_backend_verdict.core.agent.session import SessionState
+from examples.frontend_backend_verdict.core.backend.context import (
     DISCARDED_RESULT_TEXT,
     DISCARDED_TURN_TEXT,
     undelegated_turns,
 )
-from examples.frontend_backend_verdict.text.config import parse_bool
-from examples.frontend_backend_verdict.text.errors import ConfigError
-from examples.frontend_backend_verdict.text.history import History, validate_tool_pairing
-from examples.frontend_backend_verdict.text.messages import Message, ToolResult
-from examples.frontend_backend_verdict.text.session import SessionState
+from examples.frontend_backend_verdict.core.backend.history import History, validate_tool_pairing
+from examples.frontend_backend_verdict.core.config.agent import parse_bool
 
 FULL = {"enabled": True, "include": "full"}
 

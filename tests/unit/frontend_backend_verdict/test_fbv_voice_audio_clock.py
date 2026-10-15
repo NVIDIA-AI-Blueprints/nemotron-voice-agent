@@ -3,81 +3,37 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Rules 3, 4, 11b: segmentation on the audio clock, and the playout cursor."""
+"""Rules 3, 4, 11b: turns on the input-audio clock, and the playout cursor.
+
+v1's segmenter cases went with v1's host; the input clock itself is tested in
+``test_fbv_pipecat_timing``. Here the whole Pipecat session runs on the clock.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import unittest
 
-from _fbv_voice_fakes import PCMU, SessionHarness, append_event, pcmu_silence, pcmu_speech, tau2_session_update
+from _fbv_core_fakes import append_event, pcmu_silence, pcmu_speech, tau2_session_update
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase
 
-from examples.frontend_backend_verdict.voice.agent.scripted import ScriptedAgentPort
-from examples.frontend_backend_verdict.voice.audio.pcm import tone
-from examples.frontend_backend_verdict.voice.audio.resample import StreamResampler
-from examples.frontend_backend_verdict.voice.engine.input_path import InputPath
-from examples.frontend_backend_verdict.voice.engine.playback import ResponseProgress, SentenceSpan, heard_prefix
-from examples.frontend_backend_verdict.voice.engine.segmenter import (
-    SegmenterParams,
-    SpeechEnd,
-    SpeechStart,
-    UtteranceSegmenter,
-)
-from examples.frontend_backend_verdict.voice.speech.vad_energy import EnergyVad
-from examples.frontend_backend_verdict.voice.wire.session_view import TurnDetectionSettings
-
-TURN = TurnDetectionSettings(mode="server_vad", threshold=0.5, prefix_padding_ms=300, silence_duration_ms=500)
+from examples.frontend_backend_verdict.core.audio.pcm import tone
+from examples.frontend_backend_verdict.core.audio.resample import StreamResampler
+from examples.frontend_backend_verdict.core.engine.playback import ResponseProgress, SentenceSpan, heard_prefix
+from examples.frontend_backend_verdict.core.engine.scripted import ScriptedAgentPort
 
 
-def _input_path() -> InputPath:
-    return InputPath(engine_rate=16000, vad=EnergyVad(16000), input_format=PCMU, turn_detection=TURN, min_speech_ms=120)
-
-
-def _stream(path: InputPath, audio: bytes) -> list:
-    events = []
-    for offset in range(0, len(audio), 160):
-        events.extend(path.feed(audio[offset : offset + 160]).events)
-    return events
-
-
-class SegmenterTests(unittest.TestCase):
-    def test_audio_start_ms_is_on_the_cumulative_input_clock(self) -> None:
-        path = _input_path()
-        audio = pcmu_silence(3000) + pcmu_speech(800) + pcmu_silence(1000) + pcmu_speech(600) + pcmu_silence(1000)
-        events = _stream(path, audio)
-        starts = [e.start_ms for e in events if isinstance(e, SpeechStart)]
-        ends = [e.end_ms for e in events if isinstance(e, SpeechEnd)]
-        self.assertEqual(len(starts), 2)
-        self.assertAlmostEqual(starts[0], 3000, delta=25)
-        self.assertAlmostEqual(ends[0], 3800, delta=25)
-        self.assertAlmostEqual(starts[1], 4800, delta=25)
-        self.assertAlmostEqual(path.clock.now_ms, 6400, delta=0.01)
-
-    def test_prefix_padding_and_min_speech(self) -> None:
-        params = SegmenterParams(
-            rate=16000, frame_samples=320, prefix_padding_ms=100, silence_duration_ms=100, min_speech_ms=60
-        )
-        seg = UtteranceSegmenter(params)
-        frame = b"\x01\x00" * 320
-        for _ in range(10):
-            self.assertEqual(seg.process(frame, 0.0), [])
-        self.assertEqual(seg.process(frame, 1.0), [])  # 20 ms: pending
-        self.assertEqual(seg.process(frame, 0.0), [])  # burst shorter than min_speech: noise, no event
-        for _ in range(2):
-            seg.process(frame, 1.0)
-        start = seg.process(frame, 1.0)[0]
-        self.assertIsInstance(start, SpeechStart)
-        self.assertEqual(start.start_ms, 12 * 20)
-        self.assertEqual(len(start.audio), (5 + 3) * len(frame))  # 100 ms prefix + the confirmed run
-
-    def test_wall_clock_gaps_do_not_matter(self) -> None:
+class InputClockTests(PipecatTestCase):
+    async def test_wall_clock_gaps_do_not_matter(self) -> None:
+        """Tau pauses its input between ticks; turns are measured in input audio only (Tau settings)."""
         audio = pcmu_silence(1000) + pcmu_speech(700) + pcmu_silence(900) + pcmu_speech(500) + pcmu_silence(900)
 
         async def run(gap_every: int, gap_s: float) -> list[tuple[str, int]]:
-            harness = SessionHarness(agent_factory=lambda _: ScriptedAgentPort([{"say": "ok."}]))
+            harness = PipecatHarness(agent_factory=lambda _: ScriptedAgentPort([{"say": "ok."}, {"say": "ok."}]))
             await harness.start(tau2_session_update())
             for index, offset in enumerate(range(0, len(audio), 160)):
-                await harness.session.handle_message(append_event(audio[offset : offset + 160]))
+                harness.websocket.put_text(append_event(audio[offset : offset + 160]))
+                await harness._drain_frame()
                 if gap_every and index % gap_every == 0:
                     await asyncio.sleep(gap_s)  # tau2's user simulator blocks its tick loop
             await harness.settle()
@@ -89,10 +45,8 @@ class SegmenterTests(unittest.TestCase):
             await harness.close()
             return marks
 
-        async def both() -> tuple[list, list]:
-            return await run(0, 0.0), await run(25, 0.15)
-
-        smooth, gappy = asyncio.run(both())
+        smooth = await run(0, 0.0)
+        gappy = await run(25, 0.15)
         self.assertEqual(len(smooth), 4)
         self.assertEqual(smooth, gappy)
 

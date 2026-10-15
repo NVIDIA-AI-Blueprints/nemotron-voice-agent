@@ -13,15 +13,15 @@ import random
 import unittest
 
 import numpy as np
-from _fbv_voice_fakes import tau2_session_update
+from _fbv_core_fakes import tau2_session_update
 
-from examples.frontend_backend_verdict.voice.audio import g711
-from examples.frontend_backend_verdict.voice.audio.formats import AudioFormat, parse_format
-from examples.frontend_backend_verdict.voice.errors import WireProtocolError
-from examples.frontend_backend_verdict.voice.wire import client_events as ce
-from examples.frontend_backend_verdict.voice.wire import server_events as ev
-from examples.frontend_backend_verdict.voice.wire.response_writer import ConversationOrder, ResponseWriter
-from examples.frontend_backend_verdict.voice.wire.session_view import RealtimeSessionView, SessionDefaults
+from examples.frontend_backend_verdict.adapters.pipecat import client_events as ce
+from examples.frontend_backend_verdict.core.audio import g711
+from examples.frontend_backend_verdict.core.audio.formats import AudioFormat, parse_format
+from examples.frontend_backend_verdict.core.engine import server_events as ev
+from examples.frontend_backend_verdict.core.engine.response_writer import ConversationOrder, ResponseWriter
+from examples.frontend_backend_verdict.core.engine.session_settings import RealtimeSessionView, SessionDefaults
+from examples.frontend_backend_verdict.core.errors import WireProtocolError
 
 
 class G711Tests(unittest.TestCase):

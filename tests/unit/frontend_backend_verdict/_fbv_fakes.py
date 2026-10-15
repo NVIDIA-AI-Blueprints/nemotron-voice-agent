@@ -10,12 +10,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from examples.frontend_backend_verdict.text.agent import FrontendBackendAgent, assemble_agent
-from examples.frontend_backend_verdict.text.config import Config, build_config
-from examples.frontend_backend_verdict.text.events import CollectingSink
-from examples.frontend_backend_verdict.text.llm import ChatResponse
-from examples.frontend_backend_verdict.text.messages import Message, ToolCall, Usage, canonical_json
-from examples.frontend_backend_verdict.text.tools import ToolSpec
+from examples.frontend_backend_verdict.core.agent.agent import FrontendBackendAgent, assemble_agent
+from examples.frontend_backend_verdict.core.agent.events import CollectingSink
+from examples.frontend_backend_verdict.core.agent.llm import ChatResponse
+from examples.frontend_backend_verdict.core.agent.messages import Message, ToolCall, Usage, canonical_json
+from examples.frontend_backend_verdict.core.config.agent import Config, build_config
+from examples.frontend_backend_verdict.core.tools.tools import ToolSpec
 
 FRONTEND_PROMPT = "You are the frontend. {persona} {capabilities} {unsupported_reply}"
 BACKEND_PROMPT = "You are the backend. {domain_policy}"

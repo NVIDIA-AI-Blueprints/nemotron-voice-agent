@@ -1,0 +1,1689 @@
+{
+ "events": [
+  {
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "noise_reduction": null,
+      "transcription": null,
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<SESS1>",
+    "instructions": "",
+    "max_output_tokens": "inf",
+    "model": "pine-test",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [],
+    "type": "realtime"
+   },
+   "type": "session.created"
+  },
+  {
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "noise_reduction": {
+       "type": "near_field"
+      },
+      "transcription": {
+       "language": "en",
+       "model": "gpt-4o-transcribe"
+      },
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<SESS1>",
+    "instructions": "You are a customer service agent handling a VOICE CALL with a customer.\n\n# Important Voice Call Considerations\n\n1. Respond naturally and conversationally as you would in a real phone call\n\n2. Try to be helpful and always follow the policy.\n\n# User authentication and user information collection\n\n1. When collecting customer information (e.g. names, emails, IDs), ask the customer to spell it out letter by letter (e.g. \"J, O, H, N\") to ensure you have the correct information and accomodate for customer audio being unclear or background noise.\n\n2. If authenticating the user fails based on user provided information, ALWAYS explicitly ask the customer to SPELL THINGS OUT or provide information LETTER BY LETTER (e.g. \"first name J, O, H, N last name S, M, I, T, H\").\n\n# Airline Agent Policy\n\nThe current time is 2024-05-15 15:00:00 EST.\n\nAs an airline agent, you can help users **book**, **modify**, or **cancel** flight reservations. You also handle **refunds and compensation**.\n\nBefore taking any actions that update the booking database (booking, modifying flights, editing baggage, changing cabin class, or updating passenger information), you must list the action details and obtain explicit user confirmation (yes) to proceed.\n\nYou should not provide any information, knowledge, or procedures not provided by the user or available tools, or give subjective recommendations or comments.\n\nYou should only make one tool call at a time, and if you make a tool call, you should not respond to the user simultaneously. If you respond to the user, you should not make a tool call at the same time.\n\nYou should deny user requests that are against this policy.\n\nYou should transfer the user to a human agent if and only if the request cannot be handled within the scope of your actions. To transfer, first make a tool call to transfer_to_human_agents, and then send the message 'YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON.' to the user.\n\n## Domain Basic\n\n### User\nEach user has a profile containing:\n- user id\n- email\n- addresses\n- date of birth\n- payment methods\n- membership level\n- reservation numbers\n\nThere are three types of payment methods: **credit card**, **gift card**, **travel certificate**.\n\nThere are three membership levels: **regular**, **silver**, **gold**.\n\n### Flight\nEach flight has the following attributes:\n- flight number\n- origin\n- destination\n- scheduled departure and arrival time (local time)\n\nA flight can be available at multiple dates. For each date:\n- If the status is **available**, the flight has not taken off, available seats and prices are listed.\n- If the status is **delayed** or **on time**, the flight has not taken off, cannot be booked.\n- If the status is **flying**, the flight has taken off but not landed, cannot be booked.\n\nThere are three cabin classes: **basic economy**, **economy**, **business**. **basic economy** is its own class, completely distinct from **economy**.\n\nSeat availability and prices are listed for each cabin class.\n\n### Reservation\nEach reservation specifies the following:\n- reservation id\n- user id\n- trip type\n- flights\n- passengers\n- payment methods\n- created time\n- baggages\n- travel insurance information\n\nThere are two types of trip: **one way** and **round trip**.\n\n## Book flight\n\nThe agent must first obtain the user id from the user. \n\nThe agent should then ask for the trip type, origin, destination.\n\nCabin:\n- Cabin class must be the same across all the flights in a reservation. \n\nPassengers: \n- Each reservation can have at most five passengers. \n- The agent needs to collect the first name, last name, and date of birth for each passenger. \n- All passengers must fly the same flights in the same cabin.\n\nPayment: \n- Each reservation can use at most one travel certificate, at most one credit card, and at most three gift cards. \n- The remaining amount of a travel certificate is not refundable. \n- All payment methods must already be in user profile for safety reasons.\n\nChecked bag allowance: \n- If the booking user is a regular member:\n  - 0 free checked bag for each basic economy passenger\n  - 1 free checked bag for each economy passenger\n  - 2 free checked bags for each business passenger\n- If the booking user is a silver member:\n  - 1 free checked bag for each basic economy passenger\n  - 2 free checked bag for each economy passenger\n  - 3 free checked bags for each business passenger\n- If the booking user is a gold member:\n  - 2 free checked bag for each basic economy passenger\n  - 3 free checked bag for each economy passenger\n  - 4 free checked bags for each business passenger\n- Each extra baggage is 50 dollars.\n\nDo not add checked bags that the user does not need.\n\nTravel insurance: \n- The agent should ask if the user wants to buy the travel insurance.\n- The travel insurance is 30 dollars per passenger and enables full refund if the user needs to cancel the flight given health or weather reasons.\n\n## Modify flight\n\nFirst, the agent must obtain the user id and reservation id. \n- The user must provide their user id. \n- If the user doesn't know their reservation id, the agent should help locate it using available tools.\n\nChange flights: \n- Basic economy flights cannot be modified.\n- Other reservations can be modified without changing the origin, destination, and trip type.\n- Some flight segments can be kept, but their prices will not be updated based on the current price.\n- The API does not check these for the agent, so the agent must make sure the rules apply before calling the API!\n\nChange cabin: \n- Cabin cannot be changed if any flight in the reservation has already been flown.\n- In other cases, all reservations, including basic economy, can change cabin without changing the flights.\n- Cabin class must remain the same across all the flights in the same reservation; changing cabin for just one flight segment is not possible.\n- If the price after cabin change is higher than the original price, the user is required to pay for the difference.\n- If the price after cabin change is lower than the original price, the user is should be refunded the difference.\n\nChange baggage and insurance: \n- The user can add but not remove checked bags.\n- The user cannot add insurance after initial booking.\n\nChange passengers:\n- The user can modify passengers but cannot modify the number of passengers.\n- Even a human agent cannot modify the number of passengers.\n\nPayment: \n- If the flights are changed, the user needs to provide a single gift card or credit card for payment or refund method. The payment method must already be in user profile for safety reasons.\n\n## Cancel flight\n\nFirst, the agent must obtain the user id and reservation id. \n- The user must provide their user id. \n- If the user doesn't know their reservation id, the agent should help locate it using available tools.\n\nThe agent must also obtain the reason for cancellation (change of plan, airline cancelled flight, or other reasons)\n\nIf any portion of the flight has already been flown, the agent cannot help and transfer is needed.\n\nOtherwise, flight can be cancelled if any of the following is true:\n- The booking was made within the last 24 hrs\n- The flight is cancelled by airline\n- It is a business flight\n- The user has travel insurance and the reason for cancellation is covered by insurance.\n\nThe API does not check that cancellation rules are met, so the agent must make sure the rules apply before calling the API!\n\nRefund:\n- The refund will go to original payment methods within 5 to 7 business days.\n\n## Refunds and Compensation\nDo not proactively offer a compensation unless the user explicitly asks for one.\n\nDo not compensate if the user is regular member and has no travel insurance and flies (basic) economy.\n\nAlways confirms the facts before offering compensation.\n\nOnly compensate if the user is a silver/gold member or has travel insurance or flies business.\n\n- If the user complains about cancelled flights in a reservation, the agent can offer a certificate as a gesture after confirming the facts, with the amount being $100 times the number of passengers.\n\n- If the user complains about delayed flights in a reservation and wants to change or cancel the reservation, the agent can offer a certificate as a gesture after confirming the facts and changing or cancelling the reservation, with the amount being $50 times the number of passengers.\n\nDo not offer compensation for any other reason than the ones listed above.",
+    "max_output_tokens": "inf",
+    "model": "pine-test",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [
+     {
+      "description": "Book a reservation.",
+      "name": "book_reservation",
+      "parameters": {
+       "$defs": {
+        "FlightInfo": {
+         "properties": {
+          "date": {
+           "description": "The date for the flight in the format 'YYYY-MM-DD', such as '2024-05-01'.",
+           "title": "Date",
+           "type": "string"
+          },
+          "flight_number": {
+           "description": "Flight number, such as 'HAT001'.",
+           "title": "Flight Number",
+           "type": "string"
+          }
+         },
+         "required": [
+          "flight_number",
+          "date"
+         ],
+         "title": "FlightInfo",
+         "type": "object"
+        },
+        "Passenger": {
+         "properties": {
+          "dob": {
+           "description": "Date of birth in YYYY-MM-DD format",
+           "title": "Dob",
+           "type": "string"
+          },
+          "first_name": {
+           "description": "Passenger's first name",
+           "title": "First Name",
+           "type": "string"
+          },
+          "last_name": {
+           "description": "Passenger's last name",
+           "title": "Last Name",
+           "type": "string"
+          }
+         },
+         "required": [
+          "first_name",
+          "last_name",
+          "dob"
+         ],
+         "title": "Passenger",
+         "type": "object"
+        },
+        "Payment": {
+         "properties": {
+          "amount": {
+           "description": "Payment amount in dollars",
+           "title": "Amount",
+           "type": "integer"
+          },
+          "payment_id": {
+           "description": "Unique identifier for the payment",
+           "title": "Payment Id",
+           "type": "string"
+          }
+         },
+         "required": [
+          "payment_id",
+          "amount"
+         ],
+         "title": "Payment",
+         "type": "object"
+        }
+       },
+       "properties": {
+        "cabin": {
+         "description": "The cabin class such as 'basic_economy', 'economy', or 'business'.",
+         "enum": [
+          "business",
+          "economy",
+          "basic_economy"
+         ],
+         "title": "Cabin",
+         "type": "string"
+        },
+        "destination": {
+         "description": "The IATA code for the destination city such as 'JFK'.",
+         "title": "Destination",
+         "type": "string"
+        },
+        "flight_type": {
+         "description": "The type of flight such as 'one_way' or 'round_trip'.",
+         "enum": [
+          "round_trip",
+          "one_way"
+         ],
+         "title": "Flight Type",
+         "type": "string"
+        },
+        "flights": {
+         "description": "An array of objects containing details about each piece of flight.",
+         "items": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/FlightInfo"
+           },
+           {
+            "additionalProperties": true,
+            "type": "object"
+           }
+          ]
+         },
+         "title": "Flights",
+         "type": "array"
+        },
+        "insurance": {
+         "description": "Whether the reservation has insurance.",
+         "enum": [
+          "yes",
+          "no"
+         ],
+         "title": "Insurance",
+         "type": "string"
+        },
+        "nonfree_baggages": {
+         "description": "The number of non-free baggage items to book the reservation.",
+         "title": "Nonfree Baggages",
+         "type": "integer"
+        },
+        "origin": {
+         "description": "The IATA code for the origin city such as 'SFO'.",
+         "title": "Origin",
+         "type": "string"
+        },
+        "passengers": {
+         "description": "An array of objects containing details about each passenger.",
+         "items": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/Passenger"
+           },
+           {
+            "additionalProperties": true,
+            "type": "object"
+           }
+          ]
+         },
+         "title": "Passengers",
+         "type": "array"
+        },
+        "payment_methods": {
+         "description": "An array of objects containing details about each payment method.",
+         "items": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/Payment"
+           },
+           {
+            "additionalProperties": true,
+            "type": "object"
+           }
+          ]
+         },
+         "title": "Payment Methods",
+         "type": "array"
+        },
+        "total_baggages": {
+         "description": "The total number of baggage items to book the reservation.",
+         "title": "Total Baggages",
+         "type": "integer"
+        },
+        "user_id": {
+         "description": "The ID of the user to book the reservation such as 'sara_doe_496'`.",
+         "title": "User Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_id",
+        "origin",
+        "destination",
+        "flight_type",
+        "cabin",
+        "flights",
+        "passengers",
+        "payment_methods",
+        "total_baggages",
+        "nonfree_baggages",
+        "insurance"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Calculate the result of a mathematical expression.",
+      "name": "calculate",
+      "parameters": {
+       "properties": {
+        "expression": {
+         "description": "The mathematical expression to calculate, such as '2 + 2'. The expression can contain numbers, operators (+, -, *, /), parentheses, and spaces.",
+         "title": "Expression",
+         "type": "string"
+        }
+       },
+       "required": [
+        "expression"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Cancel the whole reservation.",
+      "name": "cancel_reservation",
+      "parameters": {
+       "properties": {
+        "reservation_id": {
+         "description": "The reservation ID, such as 'ZFA04Y'.",
+         "title": "Reservation Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reservation_id"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Get the details of a reservation.",
+      "name": "get_reservation_details",
+      "parameters": {
+       "properties": {
+        "reservation_id": {
+         "description": "The reservation ID, such as '8JX2WO'.",
+         "title": "Reservation Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reservation_id"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Get the details of a user, including their reservations.",
+      "name": "get_user_details",
+      "parameters": {
+       "properties": {
+        "user_id": {
+         "description": "The user ID, such as 'sara_doe_496'.",
+         "title": "User Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_id"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Returns a list of all available airports.",
+      "name": "list_all_airports",
+      "parameters": {
+       "properties": {},
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Search for direct flights between two cities on a specific date.",
+      "name": "search_direct_flight",
+      "parameters": {
+       "properties": {
+        "date": {
+         "description": "The date of the flight in the format 'YYYY-MM-DD', such as '2024-01-01'.",
+         "title": "Date",
+         "type": "string"
+        },
+        "destination": {
+         "description": "The destination city airport in three letters, such as 'LAX'.",
+         "title": "Destination",
+         "type": "string"
+        },
+        "origin": {
+         "description": "The origin city airport in three letters, such as 'JFK'.",
+         "title": "Origin",
+         "type": "string"
+        }
+       },
+       "required": [
+        "origin",
+        "destination",
+        "date"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Search for one-stop flights between two cities on a specific date.",
+      "name": "search_onestop_flight",
+      "parameters": {
+       "properties": {
+        "date": {
+         "description": "The date of the flight in the format 'YYYY-MM-DD', such as '2024-05-01'.",
+         "title": "Date",
+         "type": "string"
+        },
+        "destination": {
+         "description": "The destination city airport in three letters, such as 'LAX'.",
+         "title": "Destination",
+         "type": "string"
+        },
+        "origin": {
+         "description": "The origin city airport in three letters, such as 'JFK'.",
+         "title": "Origin",
+         "type": "string"
+        }
+       },
+       "required": [
+        "origin",
+        "destination",
+        "date"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Send a certificate to a user. Be careful!",
+      "name": "send_certificate",
+      "parameters": {
+       "properties": {
+        "amount": {
+         "description": "The amount of the certificate to send.",
+         "title": "Amount",
+         "type": "integer"
+        },
+        "user_id": {
+         "description": "The ID of the user to book the reservation, such as 'sara_doe_496'.",
+         "title": "User Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_id",
+        "amount"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Transfer the user to a human agent, with a summary of the user's issue.\n\nOnly transfer if\n -  the user explicitly asks for a human agent\n -  given the policy and the available tools, you cannot solve the user's issue.",
+      "name": "transfer_to_human_agents",
+      "parameters": {
+       "properties": {
+        "summary": {
+         "description": "A summary of the user's issue.",
+         "title": "Summary",
+         "type": "string"
+        }
+       },
+       "required": [
+        "summary"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Update the baggage information of a reservation.",
+      "name": "update_reservation_baggages",
+      "parameters": {
+       "properties": {
+        "nonfree_baggages": {
+         "description": "The updated number of non-free baggage items included in the reservation.",
+         "title": "Nonfree Baggages",
+         "type": "integer"
+        },
+        "payment_id": {
+         "description": "The payment id stored in user profile, such as 'credit_card_7815826', 'gift_card_7815826', 'certificate_7815826'.",
+         "title": "Payment Id",
+         "type": "string"
+        },
+        "reservation_id": {
+         "description": "The reservation ID, such as 'ZFA04Y'",
+         "title": "Reservation Id",
+         "type": "string"
+        },
+        "total_baggages": {
+         "description": "The updated total number of baggage items included in the reservation.",
+         "title": "Total Baggages",
+         "type": "integer"
+        }
+       },
+       "required": [
+        "reservation_id",
+        "total_baggages",
+        "nonfree_baggages",
+        "payment_id"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Update the flight information of a reservation.",
+      "name": "update_reservation_flights",
+      "parameters": {
+       "$defs": {
+        "FlightInfo": {
+         "properties": {
+          "date": {
+           "description": "The date for the flight in the format 'YYYY-MM-DD', such as '2024-05-01'.",
+           "title": "Date",
+           "type": "string"
+          },
+          "flight_number": {
+           "description": "Flight number, such as 'HAT001'.",
+           "title": "Flight Number",
+           "type": "string"
+          }
+         },
+         "required": [
+          "flight_number",
+          "date"
+         ],
+         "title": "FlightInfo",
+         "type": "object"
+        }
+       },
+       "properties": {
+        "cabin": {
+         "description": "The cabin class of the reservation",
+         "enum": [
+          "business",
+          "economy",
+          "basic_economy"
+         ],
+         "title": "Cabin",
+         "type": "string"
+        },
+        "flights": {
+         "description": "An array of objects containing details about each piece of flight in the ENTIRE new reservation. Even if the a flight segment is not changed, it should still be included in the array.",
+         "items": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/FlightInfo"
+           },
+           {
+            "additionalProperties": true,
+            "type": "object"
+           }
+          ]
+         },
+         "title": "Flights",
+         "type": "array"
+        },
+        "payment_id": {
+         "description": "The payment id stored in user profile, such as 'credit_card_7815826', 'gift_card_7815826', 'certificate_7815826'.",
+         "title": "Payment Id",
+         "type": "string"
+        },
+        "reservation_id": {
+         "description": "The reservation ID, such as 'ZFA04Y'.",
+         "title": "Reservation Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reservation_id",
+        "cabin",
+        "flights",
+        "payment_id"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Update the passenger information of a reservation.",
+      "name": "update_reservation_passengers",
+      "parameters": {
+       "$defs": {
+        "Passenger": {
+         "properties": {
+          "dob": {
+           "description": "Date of birth in YYYY-MM-DD format",
+           "title": "Dob",
+           "type": "string"
+          },
+          "first_name": {
+           "description": "Passenger's first name",
+           "title": "First Name",
+           "type": "string"
+          },
+          "last_name": {
+           "description": "Passenger's last name",
+           "title": "Last Name",
+           "type": "string"
+          }
+         },
+         "required": [
+          "first_name",
+          "last_name",
+          "dob"
+         ],
+         "title": "Passenger",
+         "type": "object"
+        }
+       },
+       "properties": {
+        "passengers": {
+         "description": "An array of objects containing details about each passenger.",
+         "items": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/Passenger"
+           },
+           {
+            "additionalProperties": true,
+            "type": "object"
+           }
+          ]
+         },
+         "title": "Passengers",
+         "type": "array"
+        },
+        "reservation_id": {
+         "description": "The reservation ID, such as 'ZFA04Y'.",
+         "title": "Reservation Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reservation_id",
+        "passengers"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Get the status of a flight.",
+      "name": "get_flight_status",
+      "parameters": {
+       "properties": {
+        "date": {
+         "description": "The date of the flight.",
+         "title": "Date",
+         "type": "string"
+        },
+        "flight_number": {
+         "description": "The flight number.",
+         "title": "Flight Number",
+         "type": "string"
+        }
+       },
+       "required": [
+        "flight_number",
+        "date"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     }
+    ],
+    "type": "realtime"
+   },
+   "type": "session.updated"
+  },
+  {
+   "audio_start_ms": 0,
+   "item_id": "<ITEM1>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 600,
+   "item_id": "<ITEM1>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "item_id": "<ITEM1>",
+   "previous_item_id": null,
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM1>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.added"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM1>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 1",
+   "item_id": "<ITEM1>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM1>",
+   "transcript": "utterance 1",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "response": {
+    "id": "<RESP1>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "item": {
+    "content": [],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_item.added"
+  },
+  {
+   "item": {
+    "content": [],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "previous_item_id": "<ITEM1>",
+   "type": "conversation.item.added"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "part": {
+    "transcript": "",
+    "type": "audio"
+   },
+   "response_id": "<RESP1>",
+   "type": "response.content_part.added"
+  },
+  {
+   "content_index": 0,
+   "delta": "Here is the change.",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "5bWmn5ycnqay5TcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntHw1Jh8cHB4mMmW3p5+dnJ6ksdM2",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": " Update reservation baggages, with reservation id: ZFA04Y; total baggages: 3; nonfree baggages: 1; payment id: credit_card_7815826.",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "5bWmn5ycnqay5TcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJyfp7dlMiYeHBwfJjU=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": " Shall I go ahead?",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "5bWmn5ycnqay5TcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7R+NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo63KPiohHRwdIixGwquinZydoqvBRS0iHhs=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.done"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "transcript": "Here is the change. Update reservation baggages, with reservation id: ZFA04Y; total baggages: 3; nonfree baggages: 1; payment id: credit_card_7815826. Shall I go ahead?",
+   "type": "response.output_audio_transcript.done"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "part": {
+    "transcript": "Here is the change. Update reservation baggages, with reservation id: ZFA04Y; total baggages: 3; nonfree baggages: 1; payment id: credit_card_7815826. Shall I go ahead?",
+    "type": "audio"
+   },
+   "response_id": "<RESP1>",
+   "type": "response.content_part.done"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": "Here is the change. Update reservation baggages, with reservation id: ZFA04Y; total baggages: 3; nonfree baggages: 1; payment id: credit_card_7815826. Shall I go ahead?",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_item.done"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": "Here is the change. Update reservation baggages, with reservation id: ZFA04Y; total baggages: 3; nonfree baggages: 1; payment id: credit_card_7815826. Shall I go ahead?",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "response": {
+    "id": "<RESP1>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "content": [
+       {
+        "transcript": "Here is the change. Update reservation baggages, with reservation id: ZFA04Y; total baggages: 3; nonfree baggages: 1; payment id: credit_card_7815826. Shall I go ahead?",
+        "type": "output_audio"
+       }
+      ],
+      "id": "<ITEM2>",
+      "object": "realtime.item",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 30
+     },
+     "input_tokens": 30,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 30
+     },
+     "output_tokens": 30,
+     "total_tokens": 60
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "audio_start_ms": 5300,
+   "item_id": "<ITEM3>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 5900,
+   "item_id": "<ITEM3>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "item_id": "<ITEM3>",
+   "previous_item_id": "<ITEM2>",
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM3>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<ITEM2>",
+   "type": "conversation.item.added"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM3>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<ITEM2>",
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 2",
+   "item_id": "<ITEM3>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM3>",
+   "transcript": "utterance 2",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "response": {
+    "id": "<RESP2>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "item": {
+    "arguments": "",
+    "call_id": "C2",
+    "id": "<ITEM4>",
+    "name": "update_reservation_baggages",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_item.added"
+  },
+  {
+   "item": {
+    "arguments": "",
+    "call_id": "C2",
+    "id": "<ITEM4>",
+    "name": "update_reservation_baggages",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "previous_item_id": "<ITEM3>",
+   "type": "conversation.item.added"
+  },
+  {
+   "call_id": "C2",
+   "delta": "{\"nonfree_baggages\": 1, \"payment_id\": \"credit_card_7815826\", \"reservation_id\": \"ZFA04Y\", \"total_baggages\": 3}",
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.function_call_arguments.delta"
+  },
+  {
+   "arguments": "{\"nonfree_baggages\": 1, \"payment_id\": \"credit_card_7815826\", \"reservation_id\": \"ZFA04Y\", \"total_baggages\": 3}",
+   "call_id": "C2",
+   "item_id": "<ITEM4>",
+   "name": "update_reservation_baggages",
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.function_call_arguments.done"
+  },
+  {
+   "item": {
+    "arguments": "{\"nonfree_baggages\": 1, \"payment_id\": \"credit_card_7815826\", \"reservation_id\": \"ZFA04Y\", \"total_baggages\": 3}",
+    "call_id": "C2",
+    "id": "<ITEM4>",
+    "name": "update_reservation_baggages",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_item.done"
+  },
+  {
+   "item": {
+    "arguments": "{\"nonfree_baggages\": 1, \"payment_id\": \"credit_card_7815826\", \"reservation_id\": \"ZFA04Y\", \"total_baggages\": 3}",
+    "call_id": "C2",
+    "id": "<ITEM4>",
+    "name": "update_reservation_baggages",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "response": {
+    "id": "<RESP2>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "arguments": "{\"nonfree_baggages\": 1, \"payment_id\": \"credit_card_7815826\", \"reservation_id\": \"ZFA04Y\", \"total_baggages\": 3}",
+      "call_id": "C2",
+      "id": "<ITEM4>",
+      "name": "update_reservation_baggages",
+      "object": "realtime.item",
+      "status": "completed",
+      "type": "function_call"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 20
+     },
+     "input_tokens": 20,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 20
+     },
+     "output_tokens": 20,
+     "total_tokens": 40
+    }
+   },
+   "type": "response.done"
+  }
+ ],
+ "filler": [
+  {
+   "asr_final": {
+    "since_turn_end_ms": 0
+   },
+   "backend_done": {
+    "since_filler_ms": 0,
+    "since_turn_end_ms": 0
+   },
+   "filler_audio_start": null,
+   "filler_ready": {
+    "frontend_latency_ms": 0,
+    "since_session_start_ms": 0,
+    "since_turn_end_ms": 0,
+    "since_turn_start_ms": 0
+   },
+   "first_answer_audio": {
+    "since_filler_ms": 0,
+    "since_turn_end_ms": 0
+   },
+   "kind": "filler",
+   "mode": "log_only",
+   "outcome": "answer",
+   "session_id": "<SESS1>",
+   "speak_after_ms": 300,
+   "spoken": false,
+   "text": "Let me check.",
+   "turn_end": {
+    "audio_ms": 600
+   },
+   "turn_id": 1,
+   "turn_start": {
+    "audio_ms": 0
+   },
+   "would_have_spoken": false
+  },
+  {
+   "asr_final": {
+    "since_turn_end_ms": 0
+   },
+   "backend_done": null,
+   "filler_audio_start": null,
+   "filler_ready": {
+    "frontend_latency_ms": 0,
+    "since_session_start_ms": 0,
+    "since_turn_end_ms": 0,
+    "since_turn_start_ms": 0
+   },
+   "first_answer_audio": null,
+   "kind": "filler",
+   "mode": "log_only",
+   "outcome": "tool_calls",
+   "session_id": "<SESS1>",
+   "speak_after_ms": 300,
+   "spoken": false,
+   "text": "One moment.",
+   "turn_end": {
+    "audio_ms": 5900
+   },
+   "turn_id": 2,
+   "turn_start": {
+    "audio_ms": 5300
+   },
+   "would_have_spoken": null
+  }
+ ],
+ "records": [
+  {
+   "audio_ms": 0,
+   "backend_history": "off",
+   "backend_history_guidance": "",
+   "kind": "session_start",
+   "model": "pine-test",
+   "normalization": {
+    "retry_guard": false,
+    "tool_arguments": [],
+    "transcript": false
+   },
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 0,
+   "input_format": {
+    "type": "audio/pcmu"
+   },
+   "instructions_chars": 8446,
+   "kind": "session_updated",
+   "output_format": {
+    "type": "audio/pcmu"
+   },
+   "session_id": "<SESS1>",
+   "tools": [
+    "book_reservation",
+    "calculate",
+    "cancel_reservation",
+    "get_reservation_details",
+    "get_user_details",
+    "list_all_airports",
+    "search_direct_flight",
+    "search_onestop_flight",
+    "send_certificate",
+    "transfer_to_human_agents",
+    "update_reservation_baggages",
+    "update_reservation_flights",
+    "update_reservation_passengers",
+    "get_flight_status"
+   ],
+   "turn_detection": {
+    "mode": "server_vad",
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 500,
+    "threshold": 0.5,
+    "type": "server_vad"
+   }
+  },
+  {
+   "audio_ms": 220,
+   "audio_start_ms": 0,
+   "item_id": "<ITEM1>",
+   "kind": "speech_started",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_end_ms": 600,
+   "audio_ms": 1160,
+   "item_id": "<ITEM1>",
+   "kind": "speech_stopped",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 1160,
+   "item_id": "<ITEM1>",
+   "kind": "asr_final",
+   "session_id": "<SESS1>",
+   "transcript": "utterance 1"
+  },
+  {
+   "audio_ms": 1160,
+   "kind": "agent_turn_start",
+   "session_id": "<SESS1>",
+   "text": "utterance 1",
+   "turn_id": 1
+  },
+  {
+   "kind": "delegation",
+   "query": "Add bags to reservation ZFA04Y.",
+   "session_id": "<SESS1>"
+  },
+  {
+   "kind": "filler",
+   "session_id": "<SESS1>",
+   "text": "Let me check."
+  },
+  {
+   "earlier_turns": 0,
+   "enabled": false,
+   "guidance": "",
+   "history_groups": 0,
+   "history_messages": 0,
+   "include": "off",
+   "kind": "backend_context",
+   "request_chars": 31,
+   "session_id": "<SESS1>"
+  },
+  {
+   "calls": [
+    {
+     "arguments": {
+      "nonfree_baggages": 1,
+      "payment_id": "credit_card_7815826",
+      "reservation_id": "ZFA04Y",
+      "total_baggages": 3
+     },
+     "id": "C1",
+     "name": "update_reservation_baggages"
+    }
+   ],
+   "kind": "backend_tool_calls",
+   "session_id": "<SESS1>"
+  },
+  {
+   "calls": 2,
+   "cost": 0.0,
+   "kind": "step_usage",
+   "session_calls": 2,
+   "session_id": "<SESS1>",
+   "step": "2 calls · 40 tok · 0.00 s · cost $0.0000",
+   "total_tokens": 40
+  },
+  {
+   "arguments": {
+    "nonfree_baggages": 1,
+    "payment_id": "credit_card_7815826",
+    "reservation_id": "ZFA04Y",
+    "total_baggages": 3
+   },
+   "call_id": "C1",
+   "fields": [
+    [
+     "reservation_id",
+     "ZFA04Y"
+    ],
+    [
+     "total_baggages",
+     "3"
+    ],
+    [
+     "nonfree_baggages",
+     "1"
+    ],
+    [
+     "payment_id",
+     "credit_card_7815826"
+    ]
+   ],
+   "kind": "write_proposed",
+   "proposal_id": "P1",
+   "session_id": "<SESS1>",
+   "summary": "Update reservation baggages, with reservation id: ZFA04Y; total baggages: 3; nonfree baggages: 1; payment id: credit_card_7815826.",
+   "tool": "update_reservation_baggages"
+  },
+  {
+   "kind": "backend_final",
+   "session_id": "<SESS1>",
+   "text": "Here is the change."
+  },
+  {
+   "calls": 1,
+   "cost": 0.0,
+   "kind": "step_usage",
+   "session_calls": 3,
+   "session_id": "<SESS1>",
+   "step": "1 calls · 20 tok · 0.00 s · cost $0.0000",
+   "total_tokens": 20
+  },
+  {
+   "kind": "write_presented",
+   "presentation_id": "pres_P1",
+   "proposal_id": "P1",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 1180,
+   "backend": {
+    "cached_tokens": 0,
+    "calls": 2,
+    "completion_tokens": 20,
+    "prompt_tokens": 20,
+    "total_tokens": 40
+   },
+   "frontend": {
+    "cached_tokens": 0,
+    "calls": 1,
+    "completion_tokens": 10,
+    "prompt_tokens": 10,
+    "total_tokens": 20
+   },
+   "input_tokens": 30,
+   "kind": "agent_turn_done",
+   "outcome": "text",
+   "output_tokens": 30,
+   "session_id": "<SESS1>",
+   "step": "respond",
+   "turn_id": 1
+  },
+  {
+   "audio_ms": 1240,
+   "kind": "filler_skipped",
+   "reason": "skipped_backend_fast",
+   "session_id": "<SESS1>",
+   "turn_id": 1
+  },
+  {
+   "audio_ms": 1240,
+   "kind": "turn_latency",
+   "session_id": "<SESS1>",
+   "turn_id": 1
+  },
+  {
+   "audio_ms": 1300,
+   "heard_ms": 60,
+   "kind": "response_done",
+   "response_id": "<RESP1>",
+   "sent_ms": 1660,
+   "session_id": "<SESS1>",
+   "status": "completed"
+  },
+  {
+   "audio_ms": 5520,
+   "audio_start_ms": 5300,
+   "item_id": "<ITEM2>",
+   "kind": "speech_started",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_end_ms": 5900,
+   "audio_ms": 6460,
+   "item_id": "<ITEM2>",
+   "kind": "speech_stopped",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 6460,
+   "item_id": "<ITEM2>",
+   "kind": "asr_final",
+   "session_id": "<SESS1>",
+   "transcript": "utterance 2"
+  },
+  {
+   "audio_ms": 6460,
+   "complete": true,
+   "heard_at_speech_ms": 1660,
+   "item_id": "<ITEM3>",
+   "kind": "write_presentation",
+   "proposal_id": "P1",
+   "session_id": "<SESS1>",
+   "summary_end_ms": 1660
+  },
+  {
+   "complete": true,
+   "kind": "write_presentation_heard",
+   "proposal_id": "P1",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 6460,
+   "kind": "agent_turn_start",
+   "session_id": "<SESS1>",
+   "text": "utterance 2",
+   "turn_id": 2
+  },
+  {
+   "confirmation": "yes",
+   "kind": "write_confirmation",
+   "proposal_id": "P1",
+   "session_id": "<SESS1>"
+  },
+  {
+   "kind": "delegation",
+   "query": "Add the bags to reservation ZFA04Y.\n\n{\"confirmation\": \"yes\", \"proposal_id\": \"P1\", \"tool\": \"update_reservation_baggages\", \"arguments\": {\"nonfree_baggages\": 1, \"payment_id\": \"credit_card_7815826\", \"reservation_id\": \"ZFA04Y\", \"total_baggages\": 3}}",
+   "session_id": "<SESS1>"
+  },
+  {
+   "kind": "filler",
+   "session_id": "<SESS1>",
+   "text": "One moment."
+  },
+  {
+   "earlier_turns": 0,
+   "enabled": false,
+   "guidance": "",
+   "history_groups": 0,
+   "history_messages": 0,
+   "include": "off",
+   "kind": "backend_context",
+   "request_chars": 244,
+   "session_id": "<SESS1>"
+  },
+  {
+   "calls": [
+    {
+     "arguments": {
+      "nonfree_baggages": 1,
+      "payment_id": "credit_card_7815826",
+      "reservation_id": "ZFA04Y",
+      "total_baggages": 3
+     },
+     "id": "C2",
+     "name": "update_reservation_baggages"
+    }
+   ],
+   "kind": "backend_tool_calls",
+   "session_id": "<SESS1>"
+  },
+  {
+   "calls": 2,
+   "cost": 0.0,
+   "kind": "step_usage",
+   "session_calls": 5,
+   "session_id": "<SESS1>",
+   "step": "2 calls · 40 tok · 0.00 s · cost $0.0000",
+   "total_tokens": 40
+  },
+  {
+   "call_id": "C2",
+   "kind": "write_confirmed",
+   "proposal_id": "P1",
+   "session_id": "<SESS1>",
+   "tool": "update_reservation_baggages"
+  },
+  {
+   "audio_ms": 6480,
+   "backend": {
+    "cached_tokens": 0,
+    "calls": 1,
+    "completion_tokens": 10,
+    "prompt_tokens": 10,
+    "total_tokens": 20
+   },
+   "frontend": {
+    "cached_tokens": 0,
+    "calls": 1,
+    "completion_tokens": 10,
+    "prompt_tokens": 10,
+    "total_tokens": 20
+   },
+   "input_tokens": 20,
+   "kind": "agent_turn_done",
+   "outcome": "tool_calls",
+   "output_tokens": 20,
+   "session_id": "<SESS1>",
+   "step": "respond",
+   "turn_id": 2
+  },
+  {
+   "audio_ms": 6480,
+   "calls": [
+    "update_reservation_baggages"
+   ],
+   "kind": "tool_calls_out",
+   "session_id": "<SESS1>",
+   "turn_id": 2
+  },
+  {
+   "audio_ms": 6500,
+   "heard_ms": 1660,
+   "kind": "response_done",
+   "response_id": "<RESP2>",
+   "sent_ms": 1660,
+   "session_id": "<SESS1>",
+   "status": "completed"
+  },
+  {
+   "audio_ms": 6540,
+   "kind": "filler_skipped",
+   "reason": "skipped_backend_fast",
+   "session_id": "<SESS1>",
+   "turn_id": 2
+  },
+  {
+   "audio_ms": 7100,
+   "kind": "session_end",
+   "session_id": "<SESS1>"
+  }
+ ]
+}

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from examples.frontend_backend_verdict.text.errors import StateReplayError
-from examples.frontend_backend_verdict.text.messages import Message, ToolCall
-from examples.frontend_backend_verdict.text.session import SessionState
+from examples.frontend_backend_verdict.core.agent.errors import StateReplayError
+from examples.frontend_backend_verdict.core.agent.messages import Message, ToolCall
+from examples.frontend_backend_verdict.core.agent.session import SessionState
 
 CALL = ToolCall.create("lookup", {"a": 1}, id="c1")
 TRANSCRIPT = [

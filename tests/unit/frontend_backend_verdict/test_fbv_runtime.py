@@ -3,7 +3,7 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""Profile selection, LLM endpoints, keepalive check, and admission of the Pipecat host."""
+"""Profile selection, LLM endpoints, keepalive check, and admission of the Pipecat adapter (S12)."""
 
 from __future__ import annotations
 
@@ -11,13 +11,18 @@ import asyncio
 import json
 import unittest
 from dataclasses import replace
+from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
-from _fbv_voice_fakes import base_config
+from _fbv_core_fakes import base_config
 
-from examples.frontend_backend_verdict.bridge import runtime as rt
-from examples.frontend_backend_verdict.voice.config import load_voice_config
-from examples.frontend_backend_verdict.voice.server import ServerOptions
+from examples.frontend_backend_verdict.adapters.pipecat import runtime as prt
+from examples.frontend_backend_verdict.adapters.pipecat import warmup
+from examples.frontend_backend_verdict.core.agent.factory import ServerOptions
+from examples.frontend_backend_verdict.core.config import profiles as rt
+from examples.frontend_backend_verdict.core.config.voice import load_voice_config
+from examples.frontend_backend_verdict.core.errors import SpeechServiceError
 
 _KEEPALIVE_OFF = {"UVICORN_WS_PING_INTERVAL": "0", "UVICORN_WS_PING_TIMEOUT": "20"}
 
@@ -43,15 +48,14 @@ class ProfileTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(rt.ProfileError):
                 rt.profile_name({rt.PROFILE_ENV: name})
 
-    def test_every_shipped_profile_has_the_prototype_tau3_turn_taking(self) -> None:
-        for name in rt.SHIPPED_PROFILES:
+    def test_every_served_profile_has_the_tau3_turn_taking(self) -> None:
+        for name in rt.SERVED_PROFILES:
             with self.subTest(profile=name):
                 config = load_voice_config(rt.profile_path(name))
                 self.assertEqual(config.turn_detection.silence_duration_ms, 800)
                 self.assertFalse(config.turn_detection.honor_client_values)
                 self.assertEqual(config.turn_detection.threshold, 0.5)
                 self.assertEqual(config.turn_detection.prefix_padding_ms, 300)
-                self.assertEqual(config.turn_detection.min_speech_ms, 120)
                 self.assertEqual(config.server.ws_ping_interval_s, 0)
 
     def test_default_profile_values(self) -> None:
@@ -120,8 +124,8 @@ class KeepaliveTests(unittest.TestCase):
         self.assertIn("UVICORN_WS_PING_INTERVAL=0", message)
 
     def test_runtime_for_refuses_a_mismatched_server(self) -> None:
-        with mock.patch.dict(rt._RUNTIMES, clear=True), self.assertRaises(rt.ProfileError):
-            rt.runtime_for({}, {})
+        with mock.patch.dict(prt._RUNTIMES, clear=True), self.assertRaises(rt.ProfileError):
+            prt.runtime_for({}, {})
 
     def test_keepalive_values_parse_like_uvicorn_ws_ping_kwargs(self) -> None:
         self.assertEqual(rt._float_env({"K": "not-a-number"}, "K", 20.0), 20.0)
@@ -132,10 +136,12 @@ class KeepaliveTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.IsolatedAsyncioTestCase):
-    def _runtime(self, max_sessions: int = 1) -> rt.VerdictRuntime:
+    def _runtime(self, max_sessions: int = 1) -> prt.PipecatRuntime:
         config = base_config()
         config = replace(config, server=replace(config.server, warmup=False, max_sessions=max_sessions))
-        return rt.VerdictRuntime(config, profile="test", options=ServerOptions(stub_speech=True, stub_agent="scripted"))
+        return prt.PipecatRuntime(
+            config, profile="test", options=ServerOptions(stub_speech=True, stub_agent="scripted")
+        )
 
     async def test_capacity_follows_the_prototype_rule(self) -> None:
         runtime = self._runtime(max_sessions=1)
@@ -149,22 +155,106 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_warmup_is_server_busy_and_retried(self) -> None:
         config = replace(base_config(), server=replace(base_config().server, warmup=True))
-        runtime = rt.VerdictRuntime(config, profile="test", options=ServerOptions(stub_agent="scripted"))
-        services = mock.Mock()
-        services.warmup = mock.AsyncMock(side_effect=[RuntimeError("asr down"), None])
-        runtime.state.services = services
+        runtime = prt.PipecatRuntime(config, profile="test", options=ServerOptions(stub_agent="scripted"))
+        warm_up = mock.AsyncMock(side_effect=[RuntimeError("asr down"), None])
         socket = _Socket()
-        self.assertFalse(await runtime.admit(socket))
-        self.assertEqual(socket.sent[0]["error"]["code"], "server_busy")
-        self.assertEqual(socket.closed[0], 1013)
-        self.assertTrue(await runtime.admit(_Socket()))
+        with mock.patch.object(prt, "warm_up", warm_up):
+            self.assertFalse(await runtime.admit(socket))
+            self.assertEqual(socket.sent[0]["error"]["code"], "server_busy")
+            self.assertEqual(socket.closed[0], 1013)
+            self.assertEqual(runtime.state.startup_error, "asr down")
+            self.assertTrue(await runtime.admit(_Socket()))
+        self.assertEqual(warm_up.await_count, 2)
 
     async def test_concurrent_first_sessions_warm_up_once(self) -> None:
         config = replace(base_config(), server=replace(base_config().server, warmup=True))
-        runtime = rt.VerdictRuntime(config, profile="test", options=ServerOptions(stub_agent="scripted"))
-        services = mock.Mock()
-        services.warmup = mock.AsyncMock(return_value=None)
-        runtime.state.services = services
-        results = await asyncio.gather(*(runtime.ensure_ready() for _ in range(5)))
+        runtime = prt.PipecatRuntime(config, profile="test", options=ServerOptions(stub_agent="scripted"))
+        warm_up = mock.AsyncMock(return_value=None)
+        with mock.patch.object(prt, "warm_up", warm_up):
+            results = await asyncio.gather(*(runtime.ensure_ready() for _ in range(5)))
         self.assertEqual(results, [True] * 5)
-        services.warmup.assert_awaited_once()
+        warm_up.assert_awaited_once()
+
+    async def test_stub_speech_skips_the_warmup(self) -> None:
+        config = replace(base_config(), server=replace(base_config().server, warmup=True))
+        runtime = prt.PipecatRuntime(
+            config, profile="test", options=ServerOptions(stub_speech=True, stub_agent="scripted")
+        )
+        warm_up = mock.AsyncMock(return_value=None)
+        with mock.patch.object(prt, "warm_up", warm_up):
+            self.assertTrue(await runtime.ensure_ready())
+        warm_up.assert_not_awaited()
+
+
+class _FakeRiva:
+    """Enough of ``riva.client`` for the warm-up probes."""
+
+    def __init__(self, *, tts_audio: bytes = b"\x00\x01", asr_error: Exception | None = None) -> None:
+        self.auth: list[tuple] = []
+        self.asr_configs: list[Any] = []
+        self.tts_calls: list[tuple[str, dict]] = []
+        self._tts_audio = tts_audio
+        self._asr_error = asr_error
+        fake = self
+
+        class ASRService:
+            def __init__(self, auth: Any) -> None:
+                pass
+
+            def streaming_response_generator(self, *, audio_chunks: Any, streaming_config: Any) -> Any:
+                fake.asr_configs.append(streaming_config)
+                if fake._asr_error is not None:
+                    raise fake._asr_error
+                yield from ()
+
+        class SpeechSynthesisService:
+            def __init__(self, auth: Any) -> None:
+                pass
+
+            def synthesize(self, text: str, **kwargs: Any) -> Any:
+                fake.tts_calls.append((text, kwargs))
+                return SimpleNamespace(audio=fake._tts_audio)
+
+        self.module = SimpleNamespace(
+            Auth=lambda *args: self.auth.append(args) or object(),
+            ASRService=ASRService,
+            SpeechSynthesisService=SpeechSynthesisService,
+            StreamingRecognitionConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            RecognitionConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+            AudioEncoding=SimpleNamespace(LINEAR_PCM="LINEAR_PCM"),
+        )
+
+
+class WarmupTests(unittest.IsolatedAsyncioTestCase):
+    """The speech warm-up probes ASR, then TTS, on the profile's endpoints (S12)."""
+
+    async def _warm(self, fake: _FakeRiva) -> None:
+        import riva  # noqa: PLC0415
+
+        with (
+            mock.patch.object(riva, "client", fake.module, create=True),
+            mock.patch.dict("sys.modules", {"riva.client": fake.module}),
+        ):
+            await warmup.warm_up(base_config())
+
+    async def test_probes_asr_then_tts_on_the_profile_endpoints(self) -> None:
+        fake = _FakeRiva()
+        config = base_config()
+        await self._warm(fake)
+        asr, tts = config.asr.endpoint, config.tts.endpoint
+        self.assertEqual(fake.auth[0], (None, asr.use_ssl, asr.server, asr.metadata()))
+        self.assertEqual(fake.auth[1], (None, tts.use_ssl, tts.server, tts.metadata()))
+        self.assertEqual(fake.asr_configs[0].config.sample_rate_hertz, 16000)
+        self.assertEqual(fake.tts_calls[0][0], "Hello.")
+        self.assertEqual(fake.tts_calls[0][1]["sample_rate_hz"], config.tts.sample_rate)
+
+    async def test_asr_failure_names_the_endpoint(self) -> None:
+        with self.assertRaises(SpeechServiceError) as caught:
+            await self._warm(_FakeRiva(asr_error=RuntimeError("connection refused")))
+        self.assertIn("ASR warm-up failed", str(caught.exception))
+        self.assertIn(base_config().asr.endpoint.server, str(caught.exception))
+
+    async def test_tts_without_audio_fails(self) -> None:
+        with self.assertRaises(SpeechServiceError) as caught:
+            await self._warm(_FakeRiva(tts_audio=b""))
+        self.assertIn("TTS warm-up failed", str(caught.exception))

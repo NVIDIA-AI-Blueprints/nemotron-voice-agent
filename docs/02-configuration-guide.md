@@ -24,6 +24,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | Configure and use the OpenAI Realtime-compatible WebSocket endpoint |
+| [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md) | Deploy the Frontend/Backend Verdict Agent, choose its profile and prompt variant, and verify it |
 
 ## Welcome Message
 

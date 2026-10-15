@@ -1,6 +1,6 @@
 # Frontend/Backend Verdict Agent Example
 
-The Frontend/Backend Verdict Agent serves the voice Frontend/Backend Agent prototype on the repository's OpenAI Realtime WebSocket endpoint. A fast frontend large language model (LLM) talks to the user and decides whether to answer or delegate. A reasoning backend LLM does the delegated work with the tools that the Realtime client defines.
+The Frontend/Backend Verdict Agent serves a voice Frontend/Backend Agent on the repository's OpenAI Realtime WebSocket endpoint. A fast frontend large language model (LLM) talks to the user and decides whether to answer or delegate. A reasoning backend LLM does the delegated work with the tools that the Realtime client defines.
 
 This example adds the following behaviors to the cascaded voice loop:
 
@@ -10,7 +10,10 @@ This example adds the following behaviors to the cascaded voice loop:
 - Caller speech while client tool calls are outstanding resumes the tool continuation with the caller's words.
 - An optional write gate holds every consequential tool call until the caller confirms a spoken summary of it.
 
-The behavior code is a copy of the prototype from the `nemotron-voice-agent-smasurekar` fork at commit `66f6c67`, with the local changes that `provenance.json` records. Refer to [Provenance](#provenance). Pipecat only hosts the prototype session on the socket that the Realtime gateway authenticated. This example is separate from the [Frontend/Backend Agent](../frontend_backend_agent/README.md) example and does not import its Talker/Thinker planner.
+The agent logic lives in `core/`. The `adapters/pipecat/` package runs that logic on the repository's shared Pipecat speech stack. This example is separate from the [Frontend/Backend Agent](../frontend_backend_agent/README.md) example and does not import its Talker/Thinker planner.
+
+To deploy this example on a single-GPU host, follow [Deploy the Frontend/Backend Verdict Agent](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md).
+For evaluation runs, such as Tau, deploy it in [eval mode](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md#deploy-in-eval-mode), which serves plain `ws://` and writes the agent's event and filler logs to `logs/` on the host.
 
 ## Realtime Model
 
@@ -20,6 +23,7 @@ The `realtime_models` section of [`examples_registry.yaml`](../../../examples_re
 | --- | --- |
 | Realtime model ID | `nvidia/nemotron-realtime-frontend-backend-verdict` |
 | Example ID and pipeline mode | `frontend-backend-verdict-agent` |
+| Registry entry point | `examples.frontend_backend_verdict.pipeline:bot` |
 | Transport | OpenAI Realtime WebSocket only (`WS /v1/realtime?model=nvidia/nemotron-realtime-frontend-backend-verdict`) |
 | Registry prompt | `frontend` |
 
@@ -38,50 +42,55 @@ Realtime gateway (src/realtime/gateway.py)
   - resolves ?model= to frontend-backend-verdict-agent
   - hands the socket to the pipeline before it sends any event
   v
-Pipecat pipeline (pipeline.py)
-  FastAPIWebsocketTransport.input()      client events, in arrival order
-    -> PrototypeSessionProcessor         bridge/: runs the prototype RealtimeSession
-         wire            GA event parsing, session.created, session.updated
-         input path      Silero VAD + prototype segmenter
-                         -> one Riva ASR stream per utterance
-                         -> transcript identifier normalization
-         turn manager    turns, barge-in, frontend verdict, filler
-         text agent      frontend LLM -> backend LLM -> client function calls
-                         -> tool-argument normalization
-         output path     Riva TTS, one request per sentence
-  FastAPIWebsocketTransport.output()     server events, in the session's order
+Pipecat pipeline (adapters/pipecat/pipeline.py)
+  FastAPIWebsocketTransport.input()   client events, input audio decoded to 16 kHz PCM16
+    -> VADProcessor (Silero)          shared Pipecat VAD
+    -> InputCursor                    input-audio clock, speech onset and offset
+    -> NvidiaForceEouSTTService       shared streaming ASR (src/examples/shared/)
+    -> UserTurnProcessor              Pipecat user turns
+    -> FbvTurnBridge                  drives the core turn manager:
+                                        frontend LLM -> backend LLM -> client function calls,
+                                        barge-in verdict, filler, identifier normalization
+    -> NvidiaTTSService               Pipecat TTS, one request per sentence
+    -> OutputTagger                   transcript and audio order, playout progress
+  FastAPIWebsocketTransport.output()  server events and output audio deltas
 ```
 
 The example has the following parts.
 
 | Path | Role |
 | --- | --- |
-| `pipeline.py` | Pipecat entry point. It rejects non-Realtime transports, applies session admission, and builds the pipeline. |
-| `bridge/runtime.py` | Process-wide state for one profile: event log, speech services, LLM clients, speech warm-up, and the session cap. It also validates `FBV_PROFILE` and the WebSocket keepalive. |
-| `bridge/session_processor.py` | Pipecat processor that runs one prototype `RealtimeSession` per connection. |
-| `bridge/wire.py` | Pass-through serializer. The prototype session parses and builds every Realtime event itself. |
-| `text/` | Text Frontend/Backend Agent copied from the prototype: frontend, backend, delegation, conversation history, and prompts. |
-| `voice/` | Voice layer copied from the prototype: wire protocol, engine, speech adapters, normalization, and configuration profiles. It also contains the example's own write gate (`voice/agent/write_gate.py`). |
-| `prompts.yaml` | Registry-facing copy of the prototype voice prompt catalog (`voice/config/prompts.voice.yaml`). |
+| `pipeline.py` | Registry entry point. It re-exports `bot` from `adapters/pipecat/pipeline.py`. |
+| `core/agent/` | Frontend/Backend agent, LLM clients, prompt loading, and agent session. |
+| `core/frontend/`, `core/backend/` | Frontend delegation and the backend with its conversation history and tool protocol. |
+| `core/engine/` | Turn manager, filler, barge-in history repair, write gate, response writer, and the Realtime server events. |
+| `core/normalization/` | Transcript and tool-argument identifier normalization. |
+| `core/tools/` | Tool specifications and Realtime client tools. |
+| `core/audio/` | PCM16 and G.711 audio formats and resampling. |
+| `core/config/` | Configuration loader, `voice_agent.yaml`, `agent.yaml`, the behavior profiles (`profiles/`), and the prompt variants (`prompts/`). `profiles.py` validates `FBV_PROFILE` and the WebSocket keepalive. |
+| `adapters/pipecat/` | Pipecat host: pipeline, session, serializer, turn bridge, speech warm-up, the session cap, and the shared speech services. |
+| `adapters/pipecat/settings/eval.yaml` | Pipecat VAD, user-turn, transport-audio, and TTS settings. Refer to [Pipecat Voice Settings](#pipecat-voice-settings). |
+| `prompts.yaml` | Registry-facing prompt catalog. It mirrors `core/config/prompts/generic.yaml`. |
 | `services.cloud.yaml`, `services.local.yaml` | Example-local service catalogs. |
-| `provenance.json` | SHA-256 hash and source path of every copied prototype file, and a `diverged` record for every file that the example changes or adds. |
+
+The example has no command-line client, browser page, or standalone server of its own. Use a Realtime client against the repository server.
 
 ## Default Models
 
-The LLM endpoints come from the example's service catalogs. The `llm` entry is the frontend, and the `thinker-llm` entry is the backend. Every request parameter comes from the prototype's `text/config/agent.yaml`. The ASR and TTS endpoints come from the prototype speech loader, which reads the `singlegpu` section of `services.local.yaml`.
+The LLM endpoints come from the example's service catalogs. The `llm` entry is the frontend, and the `thinker-llm` entry is the backend. Every other request parameter comes from `core/config/agent.yaml`. The ASR and TTS endpoints come from the example's speech loader, which reads the `singlegpu` section of `services.local.yaml`.
 
 | Role | Model | Endpoint | Request settings |
 | --- | --- | --- | --- |
 | Frontend LLM | `nvidia/nvidia/nemotron-3.5-lightning` | NVIDIA Inference Hub, `https://inference-api.nvidia.com/v1` | Reasoning off, `max_tokens` 1,024, `temperature` 0 |
 | Backend LLM | `nvidia/nvidia/nemotron-3-ultra` | NVIDIA Inference Hub, `https://inference-api.nvidia.com/v1` | Reasoning on, `reasoning_budget` 1,024, `max_tokens` 4,096, `temperature` 0 |
-| ASR | `nemotron-speech-streaming-en-0.6b` | NeMo-Speech.cpp, `nemo-speech:50051` | Interim results on |
-| TTS | Magpie TTS Multilingual, voice `John` | NeMo-Speech.cpp, `nemo-speech:50051` | One `SynthesizeOnline` request per sentence at 22,050 Hz, resampled to the client format |
+| ASR | `nemotron-speech-streaming-en-0.6b` | NeMo-Speech.cpp, `nemo-speech:50051` | Shared `NvidiaForceEouSTTService` |
+| TTS | Magpie TTS Multilingual, voice `John` | NeMo-Speech.cpp, `nemo-speech:50051` | Pipecat `NvidiaTTSService`, one request per sentence at 22,050 Hz, resampled to the client format |
 
 Both LLMs use `NVIDIA_API_KEY`. For this example, set it to an NVIDIA Inference Hub key. The doubled `nvidia/nvidia/` prefix in the model IDs is the Inference Hub naming and is intentional.
 
 ## Run the Example
 
-Run commands from the repository root. This example has one Compose recipe. It has no cloud or server recipe.
+Run commands from the repository root. This example has one Compose recipe, `frontend-backend-verdict-agent/single-gpu`. It has no cloud or server recipe. For the full procedure, including credentials, profile selection, verification, and troubleshooting, refer to [Deploy the Frontend/Backend Verdict Agent](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md).
 
 ### Configure Credentials
 
@@ -117,7 +126,7 @@ The recipe starts the following services.
 | --- | --- | --- |
 | `frontend-backend-verdict-agent/single-gpu` | `frontend-backend-verdict-agent-single-gpu` | `nemo-speech` (ASR and TTS) |
 
-The app service sets `EXAMPLE_SELECTION=frontend-backend-verdict-agent`, `REALTIME_SERVICE_PLATFORM=singlegpu`, `FBV_PROFILE=tau3_eval_frontend_verdict_speak_history`, `UVICORN_WS_PING_INTERVAL=0`, and `UVICORN_WS_PING_TIMEOUT=20`. You can override `EXAMPLE_SELECTION`, `FBV_PROFILE`, and both keepalive values from `.env` or the shell.
+The app service sets `EXAMPLE_SELECTION=frontend-backend-verdict-agent`, `REALTIME_SERVICE_PLATFORM=singlegpu`, `FBV_PROFILE=tau3_eval_frontend_verdict_speak_history`, `FBV_PIPECAT_SETTINGS=eval.yaml`, `UVICORN_WS_PING_INTERVAL=0`, and `UVICORN_WS_PING_TIMEOUT=20`. You can override `EXAMPLE_SELECTION`, `FBV_PROFILE`, `FBV_PIPECAT_SETTINGS`, and both keepalive values from `.env` or the shell.
 
 Connect a Realtime client to `wss://<host>:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-backend-verdict`. Use `ws://` when `PIPELINE_TLS=false`.
 
@@ -135,7 +144,7 @@ Start only the speech sidecar. It publishes port `50051` on the host.
 docker compose --profile frontend-backend-verdict-agent/single-gpu up -d nemo-speech
 ```
 
-Then start the server and point the prototype speech loader at the host port:
+Then start the server and point the example's speech loader at the host port:
 
 ```bash
 EXAMPLE_SELECTION=frontend-backend-verdict-agent \
@@ -154,31 +163,72 @@ uv run python src/server.py --host 0.0.0.0 --port 7860
 
 ### Behavior Profiles
 
-The `FBV_PROFILE` environment variable selects one prototype profile from `voice/config/profiles/`. The default is `tau3_eval_frontend_verdict_speak_history`. Each served profile extends `tau3_eval.yaml`, and `tau3_eval.yaml` extends `voice/config/voice_agent.yaml`.
+The `FBV_PROFILE` environment variable selects one profile from `core/config/profiles/`. When `FBV_PROFILE` is unset, the example uses `tau3_eval_frontend_verdict_speak_history`, and Compose sets the same default. Each `tau3_eval*` profile extends `tau3_eval.yaml`, and `tau3_eval.yaml` extends `core/config/voice_agent.yaml`.
 
 The following table lists the served profiles and what each one changes.
 
-| Profile | Changes |
-| --- | --- |
-| `tau3_eval` | Base evaluation arm. It pins server-owned turn detection with 800 ms silence, turns off the server WebSocket keepalive ping, turns off backend conversation history, logs filler without speaking it, cancels and merges on barge-in during backend work, and turns on identifier normalization. |
-| `tau3_eval_normalization` | Same as `tau3_eval`. The profile remains for existing commands. |
-| `tau3_eval_backend_history` | `tau3_eval` plus backend conversation history with `include: full`. |
-| `tau3_eval_backend_history_noguide` | `tau3_eval_backend_history` without the behavioral guidance (`guidance_key: ""`). The context note remains. |
-| `tau3_eval_frontend_verdict` | `tau3_eval` plus `barge_in.while_thinking: frontend_verdict`. |
-| `tau3_eval_frontend_verdict_speak` | `tau3_eval_frontend_verdict` plus spoken filler (`filler.mode: speak`). |
-| `tau3_eval_frontend_verdict_speak_history` | `tau3_eval_frontend_verdict_speak` plus backend conversation history with `include: full`. This is the default. |
-| `tau3_eval_frontend_verdict_speak_history_write_gate` | `tau3_eval_frontend_verdict_speak_history` plus the write gate, with `transfer_to_human_agents` exempt. It also overrides the backend history guidance prompt. The added guidance tells the backend to re-check the policy before a call that changes data and how to handle a held call. |
+| Profile | Prompt catalog | Changes |
+| --- | --- | --- |
+| `tau3_eval` | `tau.yaml` | Base evaluation arm. It pins server-owned turn detection with 800 ms silence, turns off the server WebSocket keepalive ping, turns off backend conversation history, logs filler without speaking it, cancels and merges on barge-in during backend work, and turns on identifier normalization. |
+| `tau3_eval_normalization` | `tau.yaml` | Same as `tau3_eval`. The profile remains for existing commands. |
+| `tau3_eval_backend_history` | `tau.yaml` | `tau3_eval` plus backend conversation history with `include: full`. |
+| `tau3_eval_backend_history_noguide` | `tau.yaml` | `tau3_eval_backend_history` without the behavioral guidance (`guidance_key: ""`). The context note remains. |
+| `tau3_eval_frontend_verdict` | `tau.yaml` | `tau3_eval` plus `barge_in.while_thinking: frontend_verdict`. |
+| `tau3_eval_frontend_verdict_speak` | `tau.yaml` | `tau3_eval_frontend_verdict` plus spoken filler (`filler.mode: speak`). |
+| `tau3_eval_frontend_verdict_speak_history` | `tau.yaml` | `tau3_eval_frontend_verdict_speak` plus backend conversation history with `include: full`. This is the default Tau arm. |
+| `tau3_eval_frontend_verdict_speak_history_write_gate` | `tau.yaml` | `tau3_eval_frontend_verdict_speak_history` plus the write gate, with `transfer_to_human_agents` exempt. It also overrides the backend history guidance prompt. The added guidance tells the backend to re-check the policy before a call that changes data and how to handle a held call. |
+| `default` | `generic.yaml` | `tau3_eval_frontend_verdict_speak_history` with the generic prompt catalog. The agent, turn taking, and Realtime settings are the same as the default Tau arm. |
 
-An unknown profile name raises an error that lists the served profiles. The `SHIPPED_PROFILES` tuple in `bridge/runtime.py` defines the list.
+An unknown profile name fails the session with an error that lists the served profiles. The `SERVED_PROFILES` tuple in `core/config/profiles.py` defines the list.
+
+### Prompt Variants
+
+The profile selects the prompt catalog. The example ships two variants in `core/config/prompts/`.
+
+| Variant | File | Used by | Change rule |
+| --- | --- | --- | --- |
+| Tau | `core/config/prompts/tau.yaml` | Every `tau3_eval*` profile | Pinned by SHA-256 in `tests/unit/frontend_backend_verdict/test_fbv_prompt_variants.py`. A change requires a new pin and an attached Tau A/B evaluation run. |
+| Generic | `core/config/prompts/generic.yaml` | `default` | Free to tune. It currently has the same content as `tau.yaml`. |
+
+The root `prompts.yaml` mirrors `generic.yaml`, and a unit test checks that the two files are identical. To switch variants, change `FBV_PROFILE`. Do not edit the prompt files to switch.
+
+The `FBA_VOICE_PROMPTS` environment variable replaces the catalog path for the profiles that do not set their own path, that is, every `tau3_eval*` profile. The `default` profile sets `generic.yaml` itself. A relative path resolves against `core/config/`. The example loads its configuration when the first session connects. A missing or invalid catalog then fails the session, and the application log shows an error that names `agent.overrides.prompts.path`.
+
+The example becomes ready when the first session connects. The application log then records the profile in the `frontend/backend verdict agent ready` line and the catalog in a line of the following form:
+
+```text
+prompts <catalog path> (sha256 <hash>)
+```
+
+The `session_start` record of the event log carries `prompts` with the catalog file name (`catalog`) and its SHA-256 hash (`sha256`), `adapter: "pipecat"`, and the Pipecat settings summary (`pipecat`).
+
+### Pipecat Voice Settings
+
+The `FBV_PIPECAT_SETTINGS` environment variable selects the Pipecat settings file. The value is an absolute path or a file name relative to `adapters/pipecat/settings/`. The default is `eval.yaml`, which holds the Tau evaluation settings. The comments in that file give the reason for each value.
+
+The following table lists the values in `eval.yaml`.
+
+| Key | Value | Effect |
+| --- | --- | --- |
+| `vad.stop_secs` | `0.8` | Silero counts 800 ms of silence in audio, matching the profiles' server-owned silence. |
+| `vad.audio_idle_timeout` | `0` | Turns off the wall-clock forced speech stop, so a client that pauses its input does not end a turn. |
+| `turn.user_speech_timeout` | `0` | Adds no wall-clock wait after the VAD stop. |
+| `turn.stt_ttfs_p99` | `3.0` | After the VAD stop, the turn waits up to `3.0 - stop_secs` seconds for the final transcript. The final transcript ends the wait as soon as it arrives. |
+| `turn.wait_for_transcript` | `false` | A turn with no transcript, such as noise, ends after that wait with an empty transcript. |
+| `audio.out_sample_rate` | `null` | The output transport runs at the TTS rate, so the agent's audio is resampled once, to the client format. |
+| `audio.out_10ms_chunks` | `2` | The output transport sends 20 ms chunks. |
+| `tts.synthesis_mode` | `per_sentence` | The TTS service sends one request per sentence. |
+
+The session applies the effective `silence_duration_ms` of its turn detection as the VAD `stop_secs`. Other `VADParams` keep Pipecat's defaults unless the settings file sets them. A missing or malformed settings file fails the session, and the application log shows an error that names the file.
 
 ### Default Behavior
 
-The default profile resolves to the following effective values. The profile files and `voice/config/voice_agent.yaml` are the sources of truth.
+The default profile resolves to the following effective values. The profile files, `core/config/voice_agent.yaml`, and `adapters/pipecat/settings/eval.yaml` are the sources of truth.
 
 | Area | Value |
 | --- | --- |
-| Turn detection | `server_vad` with Silero VAD, `threshold` 0.5, `prefix_padding_ms` 300, and `silence_duration_ms` 800. The server owns these values (`honor_client_values: false`), so `session.updated` echoes 800 ms whatever the client sends. |
-| Minimum speech | Bursts shorter than 120 ms are discarded as noise. They start no turn and no barge-in. |
+| Turn detection | `server_vad` with `threshold` 0.5, `prefix_padding_ms` 300, and `silence_duration_ms` 800. The server owns these values (`honor_client_values: false`), so `session.updated` echoes 800 ms whatever the client sends. Turns end on the Pipecat Silero VAD with an 800 ms stop. |
+| Speech start | Pipecat's Silero VAD confirms speech after its default `start_secs` of 200 ms. Pipecat's VAD also decides when caller speech interrupts agent audio. |
 | Barge-in during backend work | `frontend_verdict`. The frontend decides whether the new speech continues the running task. The verdict deadline is 4,000 ms, after which `cancel_and_merge` applies. A query equal to the running one counts as a continuation (`same_query_guard: true`). |
 | Barge-in history | `truncate_heard`. The history keeps only the heard part of the reply and appends ` [interrupted by the user]`. |
 | Backend history | On, with `include: full` and the default guidance. |
@@ -189,7 +239,8 @@ The default profile resolves to the following effective values. The profile file
 | Tools | Client-owned. The client declares tools in `session.update` and returns each function call output. A call with no output after 120 seconds receives a synthesized error result. |
 | Instructions | Client `session.instructions` fill the backend prompt's domain-policy slot. |
 | Greeting | Off. The session seeds its history with the client greeting `Hi! How can I help you today?`. |
-| Audio | PCM16 at 24,000 Hz by default, with 100 ms output audio deltas, sent as synthesized without real-time pacing. |
+| Audio | PCM16 at 24,000 Hz by default. Output audio deltas follow Pipecat's 20 ms transport chunks, and Pipecat's WebSocket output transport sends them at playback pace. |
+| Voice | The catalog voice. A client-requested voice is ignored, and the application log shows a warning. |
 | Admission | At most 8 concurrent sessions (`server.max_sessions`). |
 
 ### Environment Variables
@@ -199,7 +250,9 @@ The example reads the following environment variables.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `NVIDIA_API_KEY` | None | NVIDIA Inference Hub key for both LLMs. |
-| `FBV_PROFILE` | `tau3_eval_frontend_verdict_speak_history` | Selects the served behavior profile. |
+| `FBV_PROFILE` | `tau3_eval_frontend_verdict_speak_history` | Selects the served behavior profile and, with it, the prompt variant. |
+| `FBV_PIPECAT_SETTINGS` | `eval.yaml` | Selects the Pipecat settings file, as an absolute path or a file name in `adapters/pipecat/settings/`. |
+| `FBA_VOICE_PROMPTS` | Empty | Replaces the prompt catalog path of the `tau3_eval*` profiles. |
 | `FBA_ASR_SERVER` | Empty | Replaces the ASR catalog server, for example `localhost:50051` for a host-native run. |
 | `FBA_TTS_SERVER` | Empty | Replaces the TTS catalog server, for example `localhost:50051` for a host-native run. |
 | `FBA_VOICE_EVENT_LOG` | Empty | Path of a JSONL event log. Empty turns the log off. |
@@ -209,7 +262,7 @@ The example reads the following environment variables.
 
 Relative log paths resolve against the working directory. That directory is the repository root for a host-native run and `/app` in the container.
 
-The served profiles set `server.ws_ping_interval_s: 0` and `server.ws_ping_timeout_s: 20`. The example compares these values with `UVICORN_WS_PING_INTERVAL` and `UVICORN_WS_PING_TIMEOUT` when it builds a profile's runtime. If they differ, the session fails and the error names the values to set. The keepalive variables apply to the whole server process, so they also change the keepalive for every other example in that process.
+The served profiles set `server.ws_ping_interval_s: 0` and `server.ws_ping_timeout_s: 20`. The example compares these values with `UVICORN_WS_PING_INTERVAL` and `UVICORN_WS_PING_TIMEOUT` when it builds a profile's runtime. If they differ, the server sends an `error` event with code `server_error`, closes the socket with code 1011, and logs the values to set. The keepalive variables apply to the whole server process, so they also change the keepalive for every other example in that process.
 
 ### Tool Continuation Resume
 
@@ -233,7 +286,7 @@ The gate works as follows:
 
 The gate checks consent and argument consistency. It does not check whether the policy allows the action. That decision stays with the model.
 
-The following `write_gate` keys in `voice/config/voice_agent.yaml` configure the gate.
+The following `write_gate` keys in `core/config/voice_agent.yaml` configure the gate.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
@@ -247,16 +300,17 @@ The following `write_gate` keys in `voice/config/voice_agent.yaml` configure the
 
 ### Change the LLM Endpoints
 
-To change an LLM model or base URL, edit the `llm` or `thinker-llm` entry in the catalog section that `REALTIME_SERVICE_PLATFORM` selects. The example uses only `model_id` and `base_url` from the catalog. Other request settings, such as `temperature`, `max_tokens`, and reasoning switches, come from `text/config/agent.yaml`.
+To change an LLM model or base URL, edit the `llm` or `thinker-llm` entry in the catalog section that `REALTIME_SERVICE_PLATFORM` selects. The example uses only `model_id` and `base_url` from the catalog. Other request settings, such as `temperature`, `max_tokens`, and reasoning switches, come from `core/config/agent.yaml`.
 
 ### Change the Speech Endpoints
 
-The prototype speech loader resolves ASR and TTS from the `singlegpu` section of `services.local.yaml`. Set `FBA_ASR_SERVER` or `FBA_TTS_SERVER` to point at another Riva-compatible gRPC server. The application log shows a warning when the Realtime route's ASR or TTS selection differs from the server that the speech loader uses.
+The example's speech loader resolves ASR and TTS from the `singlegpu` section of `services.local.yaml`. Set `FBA_ASR_SERVER` or `FBA_TTS_SERVER` to point at another Riva-compatible gRPC server. The application log shows a warning when the Realtime route's ASR or TTS selection differs from the server that the speech loader uses.
 
 ## Event Log
 
-Set `FBA_VOICE_EVENT_LOG` to record one JSONL record per internal, voice, and timing event. Each record contains `timestamp`, `kind`, and `session_id`, plus event fields. The record kinds use the prototype event names, for example:
+Set `FBA_VOICE_EVENT_LOG` to record one JSONL record per internal, voice, and timing event. Each record contains `timestamp`, `kind`, and `session_id`, plus event fields. The following list shows some of the record kinds:
 
+- `session_start`: the session's model, backend history settings, normalization summary, adapter, Pipecat settings summary, and prompt catalog with its SHA-256 hash.
 - `barge_in_verdict`: the frontend verdict for speech during backend work.
 - `backend_context`: the history settings and history size of each delegated backend request.
 - `transcript_normalized`: an ASR transcript after identifier normalization.
@@ -269,50 +323,40 @@ The log can record transcripts and tool payloads. Treat it as sensitive data.
 
 ## Protocol Notes
 
-The session implements the OpenAI Realtime protocol in the prototype's `voice/wire/` package. Note the following behavior:
+The session implements the OpenAI Realtime protocol. Note the following behavior:
 
 - The session accepts the GA schema only. A `session.update` with a beta field, such as `turn_detection` at the top level or the `pcm16` format string, is rejected as a whole. The error names each field and its GA replacement.
 - A `semantic_vad` request is approximated by silence-based `server_vad`. Eagerness `high` maps to 300 ms of silence, `medium` and `auto` map to 500 ms, and `low` maps to 800 ms. The echoed object carries `x_nvidia_effective` with the effective values. Turns end on silence, not on semantic completeness.
-- `turn_detection: null` selects manual mode, in which the client commits audio and requests responses.
+- `input_audio_buffer.commit` is refused with error code `unsupported_event`. Turns end on the server VAD, so manual turn mode is not available.
+- A `response.create` with per-response `instructions`, `tools`, or `tool_choice` is refused with error code `unsupported_response_override`.
 - Add `?x_nvidia_filler=1` to the WebSocket URL to receive unspoken filler as non-standard `x_nvidia.filler` events. The default profile speaks its filler, so these events apply to profiles with `filler.mode: log_only`.
-- Over the session cap, or before the speech warm-up succeeds, the server sends an `error` event with code `server_busy` and closes the socket with code 1013. The next session retries the warm-up.
-
-## Provenance
-
-The `text/` and `voice/` directories are copies of the prototype's `src/prototypes/text_frontend_backend_agent` and `src/prototypes/voice_frontend_backend_agent` directories, with the following exceptions:
-
-- The package prefix is rewritten to `examples.frontend_backend_verdict.text` and `examples.frontend_backend_verdict.voice`.
-- `voice/config/voice_agent.yaml` has two listed value edits. They point the text agent configuration at `text/config/agent.yaml` and the speech catalogs at this example's `services.*.yaml`.
-- The text terminal UI (`text/cli`), the voice `cli/tau2_gates` scripts, and the prototype READMEs are not copied.
-- Files that the example changes for the tool continuation resume (`R1`) or the write gate (`R4`) carry a `diverged` record in `provenance.json` with the change ID and a reason. The two files that the example adds, `voice/agent/write_gate.py` and the `tau3_eval_frontend_verdict_speak_history_write_gate.yaml` profile, are recorded as `diverged` with `"source": null`.
-
-The ported unit tests in `tests/unit/frontend_backend_verdict/` are also prototype copies, and some of them are diverged as well. The `provenance.json` file records the prototype repository, commit, and SHA-256 hash of every original file. The `test_fbv_provenance.py` test reverses the rewrites and checks every hash that is not diverged, so an unrecorded edit to a copied file fails CI. Each diverged entry must have a reason and a change ID, such as `R1` or `R1+R4`.
-
-When updating copied files from a newer prototype commit, update `provenance.json` and preserve the recorded local changes. Run the provenance test below to verify the resulting file hashes.
+- The first session warms up speech with one short ASR request and one short TTS request. Over the session cap, or when the speech warm-up fails, the server sends an `error` event with code `server_busy` and closes the socket with code 1013. The next session retries the warm-up.
 
 ## Test the Example
 
-Run the example's unit tests, including the provenance check:
+Run the example's unit tests:
 
 ```bash
-uv run pytest tests/unit/frontend_backend_verdict -v
+uv run pytest tests/unit/frontend_backend_verdict -q
 ```
 
-The unit tests use fake speech and LLM services. A live session requires the NeMo-Speech.cpp sidecar, a GPU, and an Inference Hub key.
+The unit tests use fake speech and LLM services. They include the prompt-variant pin in `test_fbv_prompt_variants.py` and the golden comparisons in `test_fbv_golden.py`. A live session requires the NeMo-Speech.cpp sidecar, a GPU, and an Inference Hub key.
 
 ## Evaluate With Tau
 
-Run tau-bench evaluation through `voice-agent-evaluation` with `execution.backend: evaluator_realtime` and `product.profile: openai`. The `tau_native` lane cannot select this model ID and expects a 500 ms turn-detection echo, while this example echoes 800 ms.
+Run tau-bench evaluation through `voice-agent-evaluation` with `execution.backend: evaluator_realtime` and `product.profile: openai`. The `tau_native` lane cannot select this model ID and expects a 500 ms turn-detection echo, while this example echoes 800 ms. Use a `tau3_eval*` profile, so the run uses the pinned Tau prompt catalog. For the deployment steps, refer to [Run a Tau Evaluation](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md#run-a-tau-evaluation).
 
 ## Limitations
 
-This example differs from the prototype server in the following ways:
+This example has the following limitations:
 
-- The repository's `REALTIME_API_KEY` Bearer authentication replaces the prototype's optional Bearer token.
+- The repository's `REALTIME_API_KEY` Bearer authentication applies.
 - `ek_` client-secret session templates are not applied for this model, because the pipeline owns the session.
-- The prototype's browser page at `/` and its `/health` session counters are not served. The repository's `/health` route applies.
+- The repository's `/health` route applies. It does not report the example's speech warm-up or session count.
 - Speech warm-up runs on the first session instead of at server start.
 - On a newly created container, Pipecat downloads the NLTK `punkt_tab` data while it sets up the first pipeline. Sessions that start during the download wait for it, and they fail if it takes longer than 120 seconds. Download the data once after you start the container, for example with `docker compose exec <service> .venv/bin/python -c "import nltk; nltk.download('punkt_tab')"`, or keep `/root/nltk_data` on a volume.
-- The `browser_demo`, `browser_demo_frontend_verdict`, `browser_demo_slow_backend`, `live_demo`, `cloud_speech`, and `backend_only` profiles are not served.
+- Manual turn mode is not available. `input_audio_buffer.commit` returns the `unsupported_event` error.
+- The client's requested voice is ignored. The TTS service uses the catalog voice and logs a warning.
+- No served profile uses the agent's `backend_only` mode (`agent.mode` in `core/config/agent.yaml`). The unit tests cover that mode with a test profile.
 - The example supports only the OpenAI Realtime WebSocket. WebRTC, RTVI, and the browser UI are not supported.
-- The example has no cloud or server Compose recipe. The prototype speech loader does not read `services.cloud.yaml`.
+- The example has no cloud or server Compose recipe. The speech loader does not read `services.cloud.yaml`.

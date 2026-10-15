@@ -11,8 +11,8 @@ import json
 import unittest
 from dataclasses import replace
 
-from examples.frontend_backend_verdict.text.messages import ToolCall, canonical_json
-from examples.frontend_backend_verdict.voice.normalization.arguments import (
+from examples.frontend_backend_verdict.core.agent.messages import ToolCall, canonical_json
+from examples.frontend_backend_verdict.core.normalization.arguments import (
     REASON_ALREADY_FAILED,
     REASON_INVALID,
     ArgumentNormalizer,
@@ -21,7 +21,7 @@ from examples.frontend_backend_verdict.voice.normalization.arguments import (
     ToolArgumentSettings,
     render_message,
 )
-from examples.frontend_backend_verdict.voice.normalization.transcript import TranscriptSettings
+from examples.frontend_backend_verdict.core.normalization.transcript import TranscriptSettings
 
 RULE = ArgumentRule(
     tool="get_user_details",

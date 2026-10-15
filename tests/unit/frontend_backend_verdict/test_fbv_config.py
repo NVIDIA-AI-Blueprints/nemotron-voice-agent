@@ -13,15 +13,15 @@ from pathlib import Path
 import pytest
 from _fbv_fakes import make_config
 
-from examples.frontend_backend_verdict.text.config import (
+from examples.frontend_backend_verdict.core.agent.errors import ConfigError
+from examples.frontend_backend_verdict.core.config.agent import (
     build_config,
     interpolate_env,
     load_config,
     resolve_runtime_modes,
 )
-from examples.frontend_backend_verdict.text.errors import ConfigError
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[3] / "src" / "examples" / "frontend_backend_verdict" / "text"
+PACKAGE_ROOT = Path(__file__).resolve().parents[3] / "src" / "examples" / "frontend_backend_verdict" / "core"
 FORBIDDEN_IMPORT_ROOTS = {"pipecat"}
 
 

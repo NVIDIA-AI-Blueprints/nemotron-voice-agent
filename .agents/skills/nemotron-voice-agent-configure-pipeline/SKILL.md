@@ -58,6 +58,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 - Preserve unrelated keys, comments, and entries while editing.
 - Alternate local ASR/TTS use Compose profiles where needed (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`, `magpie-zeroshot-tts`). Magpie Multilingual uses `magpie-multilingual-tts-service`. Magpie Zeroshot uses `magpie-zeroshot-tts-service`.
 - Per-example slot defaults live in `examples_registry.yaml` `defaults`. The catalog file ordering only affects UI listings. The actual default is whatever `defaults` declares.
+- Frontend/Backend Verdict: switch the prompt variant by changing `FBV_PROFILE` in `.env` (`default` for `generic.yaml`, a `tau3_eval*` profile for `tau.yaml`), not by editing prompt files. Editing `src/examples/frontend_backend_verdict/core/config/prompts/tau.yaml` needs a new SHA-256 pin and a Tau A/B run.
 
 ## Examples
 

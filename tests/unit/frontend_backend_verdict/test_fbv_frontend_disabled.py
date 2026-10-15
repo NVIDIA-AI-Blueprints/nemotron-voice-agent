@@ -11,7 +11,7 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, echo_tool, make_agent, text_response, tool_response
 
-from examples.frontend_backend_verdict.text.history import group_is_complete
+from examples.frontend_backend_verdict.core.backend.history import group_is_complete
 
 
 class BackendOnlyTests(unittest.IsolatedAsyncioTestCase):

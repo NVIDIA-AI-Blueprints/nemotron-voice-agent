@@ -19,9 +19,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import yaml
-from _fbv_voice_fakes import (
+from _fbv_core_fakes import (
+    CONFIG_DIR,
     FIXTURES,
-    PACKAGE_DIR,
     FakeChatClient,
     base_config,
     delegate_response,
@@ -29,8 +29,8 @@ from _fbv_voice_fakes import (
     text_response,
 )
 
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients, TextAgentRunner
-from examples.frontend_backend_verdict.voice.agent.sinks import SessionRoutingSink
+from examples.frontend_backend_verdict.core.engine.event_log import SessionRoutingSink
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients, TextAgentRunner
 
 DOMAINS = ("mock", "airline", "retail", "telecom")
 IN_SCOPE_REQUEST = {
@@ -86,7 +86,7 @@ class ExactPromptTests(unittest.TestCase):
                         self.assertEqual(prompt, json.loads(path.read_text(encoding="utf-8"))["prompt"])
 
     def test_default_frontend_gets_capabilities_not_policy(self) -> None:
-        addendum = yaml.safe_load((PACKAGE_DIR / "config" / "prompts.voice.yaml").read_text())["cascade_voice_addendum"]
+        addendum = yaml.safe_load((CONFIG_DIR / "prompts" / "tau.yaml").read_text())["cascade_voice_addendum"]
         for domain in DOMAINS:
             with self.subTest(domain=domain):
                 session = _session(domain)
@@ -167,7 +167,7 @@ class ScriptedDelegationTests(unittest.IsolatedAsyncioTestCase):
 
 class VoiceCatalogTests(unittest.TestCase):
     def test_voice_catalog_keeps_the_text_contract_and_stays_domain_neutral(self) -> None:
-        catalog = yaml.safe_load((PACKAGE_DIR / "config" / "prompts.voice.yaml").read_text())
+        catalog = yaml.safe_load((CONFIG_DIR / "prompts" / "tau.yaml").read_text())
         history_keys = {
             "backend_history_request",
             *(
@@ -201,4 +201,4 @@ class VoiceCatalogTests(unittest.TestCase):
                 self.assertIsNone(re.search(rf"\b{name}", item["content"].lower()), f"{name} in {key}")
 
     def test_text_catalog_is_not_referenced_by_the_voice_default(self) -> None:
-        self.assertEqual(base_config().agent.prompts_path, Path(PACKAGE_DIR / "config" / "prompts.voice.yaml"))
+        self.assertEqual(base_config().agent.prompts_path, Path(CONFIG_DIR / "prompts" / "tau.yaml"))

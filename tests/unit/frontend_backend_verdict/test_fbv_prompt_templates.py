@@ -14,15 +14,21 @@ from pathlib import Path
 
 from _fbv_fakes import FakeChatClient, delegate_response, make_config
 
-from examples.frontend_backend_verdict.text.agent import assemble_agent
-from examples.frontend_backend_verdict.text.errors import ConfigError
-from examples.frontend_backend_verdict.text.events import CollectingSink
-from examples.frontend_backend_verdict.text.prompts import PromptCatalog, literal, load_catalog, render, substitute
+from examples.frontend_backend_verdict.core.agent.agent import assemble_agent
+from examples.frontend_backend_verdict.core.agent.errors import ConfigError
+from examples.frontend_backend_verdict.core.agent.events import CollectingSink
+from examples.frontend_backend_verdict.core.agent.prompts import (
+    PromptCatalog,
+    literal,
+    load_catalog,
+    render,
+    substitute,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CATALOGS = [
-    REPO_ROOT / "src" / "examples" / "frontend_backend_verdict" / "text" / "config" / "prompts.yaml",
-    REPO_ROOT / "src" / "examples" / "frontend_backend_verdict" / "voice" / "config" / "prompts.voice.yaml",
+    REPO_ROOT / "src" / "examples" / "frontend_backend_verdict" / "core" / "config" / "prompts" / "generic.yaml",
+    REPO_ROOT / "src" / "examples" / "frontend_backend_verdict" / "core" / "config" / "prompts" / "tau.yaml",
 ]
 #: A tau2-bench checkout, from ``TAU2_BENCH_ROOT``; the policy test skips when it is unset.
 _TAU2_ROOT = os.environ.get("TAU2_BENCH_ROOT", "").strip()

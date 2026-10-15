@@ -18,25 +18,25 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from _fbv_voice_fakes import (
-    PACKAGE_DIR,
+from _fbv_core_fakes import (
+    BACKEND_ONLY_PROFILE,
+    CONFIG_DIR,
     FakeChatClient,
-    SessionHarness,
     base_config,
     delegate_response,
     tau2_update_with,
     text_response,
     tool_response,
 )
+from _fbv_normalization_replay import replay
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase, StubRecognizer
 
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
-from examples.frontend_backend_verdict.voice.agent.sinks import EventLog
-from examples.frontend_backend_verdict.voice.cli.normalization_replay import replay
-from examples.frontend_backend_verdict.voice.config import load_voice_config
-from examples.frontend_backend_verdict.voice.errors import VoiceConfigError
-from examples.frontend_backend_verdict.voice.speech.stubs import StubRecognizer
+from examples.frontend_backend_verdict.core.config.voice import load_voice_config
+from examples.frontend_backend_verdict.core.engine.event_log import EventLog
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
+from examples.frontend_backend_verdict.core.errors import VoiceConfigError
 
-PROFILES = PACKAGE_DIR / "config" / "profiles"
+PROFILES = CONFIG_DIR / "profiles"
 SPOKEN = "my user ID is Jordan underscore Lee underscore eight two six four"
 WRITTEN = "my user ID is jordan_lee_8264"
 NOT_FOUND = "Error: User jordan_lee_8264 not found"
@@ -62,7 +62,7 @@ def _env() -> Any:
 
 with _env():
     PROFILE = load_voice_config(PROFILES / "tau3_eval_normalization.yaml")
-    BACKEND_ONLY = load_voice_config(PROFILES / "backend_only.yaml")
+    BACKEND_ONLY = load_voice_config(BACKEND_ONLY_PROFILE)
 
 
 def _config(base: Any = None, *, max_local_rounds: int | None = None) -> Any:
@@ -84,14 +84,14 @@ def output_event(call_id: str, output: str) -> dict[str, Any]:
     }
 
 
-class _Base(unittest.IsolatedAsyncioTestCase):
+class _Base(PipecatTestCase):
     async def start(
         self, *, config: Any = None, transcripts: list[str] | None = None, event_log: EventLog | None = None
     ):
         self.frontend = FakeChatClient()
         self.backend = FakeChatClient()
         cfg = config or _config()
-        self.harness = SessionHarness(
+        self.harness = PipecatHarness(
             config=cfg,
             clients=AgentClients(backend=self.backend, frontend=self.frontend if cfg.agent.frontend_enabled else None),
             recognizer=StubRecognizer(transcripts),
@@ -320,7 +320,7 @@ class ConfigTests(unittest.TestCase):
 
     def load(self, body: str) -> Any:
         path = Path(self._tmp.name) / "profile.yaml"
-        path.write_text(f"extends: {PACKAGE_DIR / 'config' / 'voice_agent.yaml'}\n{body}", encoding="utf-8")
+        path.write_text(f"extends: {CONFIG_DIR / 'voice_agent.yaml'}\n{body}", encoding="utf-8")
         return load_voice_config(path)
 
     def test_unknown_ruleset(self) -> None:
@@ -329,7 +329,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_tool_arguments_need_client_tools(self) -> None:
         body = (
-            "tools: {source: config, config_tools: 'examples.frontend_backend_verdict.text.demo_tools:TOOLS'}\n"
+            "tools: {source: config, config_tools: '_fbv_demo_tools:TOOLS'}\n"
             "normalization: {tool_arguments: {enabled: true, rules: [{tool: t, argument: a}]}}\n"
         )
         with self.assertRaisesRegex(VoiceConfigError, "requires tools.source: client"):
@@ -373,15 +373,15 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(base.normalization.tool_arguments.retry_guard.enabled)
 
     def test_normalization_on_in_every_tau3_arm_and_off_in_the_base(self) -> None:
-        for name in (
-            "backend_only.yaml",
-            "tau3_eval_backend_history.yaml",
-            "tau3_eval_backend_history_noguide.yaml",
-            "tau3_eval_frontend_verdict.yaml",
-            "tau3_eval_frontend_verdict_speak.yaml",
+        for path in (
+            BACKEND_ONLY_PROFILE,
+            PROFILES / "tau3_eval_backend_history.yaml",
+            PROFILES / "tau3_eval_backend_history_noguide.yaml",
+            PROFILES / "tau3_eval_frontend_verdict.yaml",
+            PROFILES / "tau3_eval_frontend_verdict_speak.yaml",
         ):
-            with self.subTest(profile=name):
-                config = load_voice_config(PROFILES / name)
+            with self.subTest(profile=path.name):
+                config = load_voice_config(path)
                 self.assertTrue(config.normalization.transcript.enabled)
                 self.assertEqual(config.normalization.transcript.case, "lower")
                 self.assertTrue(config.normalization.tool_arguments.enabled)

@@ -12,8 +12,8 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, delegate_response, echo_tool, make_agent, text_response, tool_response
 
-from examples.frontend_backend_verdict.text.messages import ToolResult
-from examples.frontend_backend_verdict.text.tools import ToolSpec
+from examples.frontend_backend_verdict.core.agent.messages import ToolResult
+from examples.frontend_backend_verdict.core.tools.tools import ToolSpec
 
 
 def _ordered_tool(name: str, log: list[str], delay: float = 0.0) -> ToolSpec:

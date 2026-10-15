@@ -13,18 +13,12 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from _fbv_voice_fakes import (
-    FakeChatClient,
-    SessionHarness,
-    delegate_response,
-    tau2_session_update,
-    text_response,
-    tool_response,
-)
+from _fbv_core_fakes import FakeChatClient, delegate_response, tau2_session_update, text_response, tool_response
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase
 
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
-from examples.frontend_backend_verdict.voice.agent.scripted import ScriptedAgentPort
-from examples.frontend_backend_verdict.voice.agent.sinks import EventLog
+from examples.frontend_backend_verdict.core.engine.event_log import EventLog
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
+from examples.frontend_backend_verdict.core.engine.scripted import ScriptedAgentPort
 
 ROLE_KEYS = {"calls", "prompt_tokens", "completion_tokens", "cached_tokens", "total_tokens", "latency_ms"}
 
@@ -34,13 +28,13 @@ def _turn_records(path: Path) -> list[dict[str, Any]]:
     return [record for record in records if record["kind"] == "agent_turn_done"]
 
 
-class UsageLogTests(unittest.IsolatedAsyncioTestCase):
+class UsageLogTests(PipecatTestCase):
     async def test_paired_steps_split_usage_by_role(self) -> None:
         frontend = FakeChatClient([delegate_response("Look up the users.")])
         backend = FakeChatClient([tool_response(("get_users", {}), ids=["call_1"]), text_response("Found them.", 7)])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "events.jsonl"
-            harness = SessionHarness(
+            harness = PipecatHarness(
                 clients=AgentClients(backend=backend, frontend=frontend), event_log=EventLog(str(path))
             )
             await harness.start(tau2_session_update())
@@ -73,7 +67,7 @@ class UsageLogTests(unittest.IsolatedAsyncioTestCase):
     async def test_scripted_agent_logs_zeroed_roles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "events.jsonl"
-            harness = SessionHarness(
+            harness = PipecatHarness(
                 agent_factory=lambda _session_id: ScriptedAgentPort([{"say": "Hello there."}]),
                 event_log=EventLog(str(path)),
             )

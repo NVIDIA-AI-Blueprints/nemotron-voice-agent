@@ -12,9 +12,9 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, delegate_response, make_agent, text_response
 
-from examples.frontend_backend_verdict.text.history import History
-from examples.frontend_backend_verdict.text.messages import Message, ToolCall
-from examples.frontend_backend_verdict.text.session import PendingTurn, SessionState
+from examples.frontend_backend_verdict.core.agent.messages import Message, ToolCall
+from examples.frontend_backend_verdict.core.agent.session import PendingTurn, SessionState
+from examples.frontend_backend_verdict.core.backend.history import History
 
 
 def test_round_trip_preserves_state() -> None:

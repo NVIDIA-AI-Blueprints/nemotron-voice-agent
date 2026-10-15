@@ -5,6 +5,8 @@
 
 """Rule: shipped prompts carry no target-domain assumptions (regression guard).
 
+Checked on the generic catalog, the one tuned without a Tau run (``tau.yaml`` is pinned by hash).
+
 This is a guard, not proof: a fixed noun list cannot show that every domain
 assumption is absent. Human prompt review is the actual gate (plan section 11).
 """
@@ -21,9 +23,10 @@ CATALOG = (
     / "src"
     / "examples"
     / "frontend_backend_verdict"
-    / "text"
+    / "core"
     / "config"
-    / "prompts.yaml"
+    / "prompts"
+    / "generic.yaml"
 )
 
 EXAMPLE_DOMAINS = {

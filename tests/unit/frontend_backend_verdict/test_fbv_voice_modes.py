@@ -8,12 +8,10 @@
 from __future__ import annotations
 
 import asyncio
-import unittest
 
-from _fbv_voice_fakes import (
-    PACKAGE_DIR,
+from _fbv_core_fakes import (
+    BACKEND_ONLY_PROFILE,
     FakeChatClient,
-    SessionHarness,
     delegate_response,
     pcmu_silence,
     pcmu_speech,
@@ -22,19 +20,20 @@ from _fbv_voice_fakes import (
     text_response,
     tool_response,
 )
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase
 
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
-from examples.frontend_backend_verdict.voice.config import load_voice_config
+from examples.frontend_backend_verdict.core.config.voice import load_voice_config
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
 
-BACKEND_ONLY = load_voice_config(PACKAGE_DIR / "config" / "profiles" / "backend_only.yaml")
+BACKEND_ONLY = load_voice_config(BACKEND_ONLY_PROFILE)
 
 
-class BackendOnlyTests(unittest.IsolatedAsyncioTestCase):
+class BackendOnlyTests(PipecatTestCase):
     async def test_stateful_backend_full_contract_without_a_frontend(self) -> None:
         backend = FakeChatClient(
             [tool_response(("get_users", {}), ids=["call_1"]), text_response("You are Ann."), text_response("Bye now.")]
         )
-        harness = SessionHarness(config=BACKEND_ONLY, clients=AgentClients(backend=backend, frontend=None))
+        harness = PipecatHarness(config=BACKEND_ONLY, clients=AgentClients(backend=backend, frontend=None))
         await harness.start(tau2_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
@@ -62,7 +61,7 @@ class BackendOnlyTests(unittest.IsolatedAsyncioTestCase):
     async def test_barge_in_repairs_the_backend_history(self) -> None:
         answer = "First part is here. Second part is much longer and nobody will hear it."
         backend = FakeChatClient([text_response(answer)])
-        harness = SessionHarness(config=BACKEND_ONLY, clients=AgentClients(backend=backend))
+        harness = PipecatHarness(config=BACKEND_ONLY, clients=AgentClients(backend=backend))
         await harness.start(tau2_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
@@ -75,7 +74,7 @@ class BackendOnlyTests(unittest.IsolatedAsyncioTestCase):
         await harness.close()
 
 
-class IsolationTests(unittest.IsolatedAsyncioTestCase):
+class IsolationTests(PipecatTestCase):
     async def test_concurrent_sessions_never_cross(self) -> None:
         tools_a = [
             {"type": "function", "name": "alpha_tool", "description": "Alpha.", "parameters": {"type": "object"}}
@@ -88,7 +87,7 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
         ):
             frontend = FakeChatClient([delegate_response(f"Request for {answer}")])
             backend = FakeChatClient([text_response(answer)])
-            harness = SessionHarness(clients=AgentClients(backend=backend, frontend=frontend))
+            harness = PipecatHarness(clients=AgentClients(backend=backend, frontend=frontend))
             await harness.start(tau2_update_with(tools, policy))
             sessions.append((harness, frontend, backend, tools, policy, answer))
         await asyncio.gather(*(harness.speak() for harness, *_ in sessions))

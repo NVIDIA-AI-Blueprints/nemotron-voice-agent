@@ -19,9 +19,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from _fbv_voice_fakes import (
+from _fbv_core_fakes import (
     FakeChatClient,
-    SessionHarness,
     delegate_response,
     normalize_trace,
     pcmu_silence,
@@ -31,15 +30,14 @@ from _fbv_voice_fakes import (
     tool_response,
     voice_config,
 )
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase
 from test_fbv_tool_resume import NO_OVERLAP_TRACE_SHA256
 
-from examples.frontend_backend_verdict.text.delegation import FORCE_CALL_BACKEND, FRONTEND_TOOLS_CONFIRMATION
-from examples.frontend_backend_verdict.text.messages import ToolCall, canonical_json
-from examples.frontend_backend_verdict.text.tools import ToolSpec
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients, TextAgentRunner
-from examples.frontend_backend_verdict.voice.agent.sinks import EventLog, SessionRoutingSink
-from examples.frontend_backend_verdict.voice.agent.tools import realtime_tools_to_specs
-from examples.frontend_backend_verdict.voice.agent.write_gate import (
+from examples.frontend_backend_verdict.core.agent.messages import ToolCall, canonical_json
+from examples.frontend_backend_verdict.core.config.voice import prompt_context
+from examples.frontend_backend_verdict.core.engine.event_log import EventLog, SessionRoutingSink
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients, TextAgentRunner
+from examples.frontend_backend_verdict.core.engine.write_gate import (
     CONFIRM_QUESTION,
     GateState,
     ToolGateSettings,
@@ -48,10 +46,12 @@ from examples.frontend_backend_verdict.voice.agent.write_gate import (
     resolve_gate,
     summarize,
 )
-from examples.frontend_backend_verdict.voice.config import prompt_context
-from examples.frontend_backend_verdict.voice.errors import VoiceConfigError
-from examples.frontend_backend_verdict.voice.normalization import NormalizationSettings
-from examples.frontend_backend_verdict.voice.normalization.arguments import ArgumentRule, ToolArgumentSettings
+from examples.frontend_backend_verdict.core.errors import VoiceConfigError
+from examples.frontend_backend_verdict.core.frontend.delegation import FORCE_CALL_BACKEND, FRONTEND_TOOLS_CONFIRMATION
+from examples.frontend_backend_verdict.core.normalization import NormalizationSettings
+from examples.frontend_backend_verdict.core.normalization.arguments import ArgumentRule, ToolArgumentSettings
+from examples.frontend_backend_verdict.core.tools.realtime_tools import realtime_tools_to_specs
+from examples.frontend_backend_verdict.core.tools.tools import ToolSpec
 
 AIRLINE_TOOLS = tau2_session_update("airline")["session"]["tools"]
 SPECS = {spec.name: spec for spec in realtime_tools_to_specs(AIRLINE_TOOLS)}
@@ -277,7 +277,7 @@ class RunnerTests(_LogCase):
         self.assertEqual(reply.presentation, "P1")
 
 
-class RunnerFlowTests(RunnerTests, unittest.IsolatedAsyncioTestCase):
+class RunnerFlowTests(RunnerTests, PipecatTestCase):
     async def test_hold_full_summary_yes_then_the_matching_reissue_goes_out(self) -> None:
         runner, frontend, backend = self.make()
         self.assertFalse(runner._normalization.tool_arguments.enabled)  # gate holds without normalization
@@ -470,17 +470,17 @@ class RunnerFlowTests(RunnerTests, unittest.IsolatedAsyncioTestCase):
 # -- through the session: the binding to playback --------------------------------------------
 
 
-class PlaybackBindingTests(_LogCase, unittest.IsolatedAsyncioTestCase):
-    def make(self, gate: WriteGateSettings = GATE) -> tuple[SessionHarness, FakeChatClient, FakeChatClient]:
+class PlaybackBindingTests(_LogCase, PipecatTestCase):
+    def make(self, gate: WriteGateSettings = GATE) -> tuple[PipecatHarness, FakeChatClient, FakeChatClient]:
         frontend, backend = FakeChatClient(), FakeChatClient()
-        harness = SessionHarness(
+        harness = PipecatHarness(
             config=replace(voice_config(), write_gate=gate),
             clients=AgentClients(backend=backend, frontend=frontend),
             event_log=EventLog(str(self.log_path)),
         )
         return harness, frontend, backend
 
-    async def presented(self) -> tuple[SessionHarness, FakeChatClient, FakeChatClient]:
+    async def presented(self) -> tuple[PipecatHarness, FakeChatClient, FakeChatClient]:
         harness, frontend, backend = self.make()
         frontend.queue(delegate_response("Add bags to reservation ZFA04Y."))
         backend.queue(bags_call("C1"), text_response("Here is the change."))
@@ -490,7 +490,7 @@ class PlaybackBindingTests(_LogCase, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(harness.of_type("response.function_call_arguments.done"))
         return harness, frontend, backend
 
-    def function_calls(self, harness: SessionHarness) -> list[str]:
+    def function_calls(self, harness: PipecatHarness) -> list[str]:
         return [event["call_id"] for event in harness.of_type("response.function_call_arguments.done")]
 
     async def test_fully_heard_summary_then_yes_sends_exactly_the_stored_call(self) -> None:

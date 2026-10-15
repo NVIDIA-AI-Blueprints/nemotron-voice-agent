@@ -19,11 +19,11 @@ from typing import Any
 from unittest import mock
 
 import yaml
-from _fbv_voice_fakes import (
+from _fbv_core_fakes import (
+    BACKEND_ONLY_PROFILE,
     BASE_CONFIG,
-    PACKAGE_DIR,
+    CONFIG_DIR,
     FakeChatClient,
-    SessionHarness,
     delegate_response,
     pcmu_silence,
     pcmu_speech,
@@ -32,13 +32,14 @@ from _fbv_voice_fakes import (
     tool_response,
     voice_config,
 )
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase, StubRecognizer, ToneSynthesizer
 
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
-from examples.frontend_backend_verdict.voice.agent.sinks import EventLog
-from examples.frontend_backend_verdict.voice.config import FrontendVerdictConfig, VoiceConfig, load_voice_config
-from examples.frontend_backend_verdict.voice.errors import VoiceConfigError
-from examples.frontend_backend_verdict.voice.server import ServerOptions, _agent_factory, _AppState
-from examples.frontend_backend_verdict.voice.speech.stubs import StubRecognizer, ToneSynthesizer
+from examples.frontend_backend_verdict.adapters.pipecat.runtime import PipecatState
+from examples.frontend_backend_verdict.core.agent.factory import ServerOptions, _agent_factory
+from examples.frontend_backend_verdict.core.config.voice import FrontendVerdictConfig, VoiceConfig, load_voice_config
+from examples.frontend_backend_verdict.core.engine.event_log import EventLog
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
+from examples.frontend_backend_verdict.core.errors import VoiceConfigError
 
 FILLER = "Let me check."
 
@@ -47,22 +48,9 @@ def verdict_config(**sections: Any) -> VoiceConfig:
     return voice_config(barge_in_while_thinking="frontend_verdict", **sections)
 
 
-class FailingRecognizer(StubRecognizer):
+def FailingRecognizer(fail: set[int], transcripts: list[str] | None = None) -> StubRecognizer:  # noqa: N802
     """A stub recognizer whose N-th utterance (1-based) fails to transcribe."""
-
-    def __init__(self, fail: set[int], transcripts: list[str] | None = None) -> None:
-        super().__init__(transcripts)
-        self.fail = fail
-
-    def open(self, **kwargs: Any):
-        stream = super().open(**kwargs)
-        if self.count in self.fail:
-
-            async def finish() -> str:
-                raise RuntimeError("ASR endpoint unavailable")
-
-            stream.finish = finish
-        return stream
+    return StubRecognizer(transcripts, fail=fail)
 
 
 async def until(condition: Callable[[], bool], timeout: float = 3.0) -> None:
@@ -74,7 +62,7 @@ async def until(condition: Callable[[], bool], timeout: float = 3.0) -> None:
         await asyncio.sleep(0.005)
 
 
-class VerdictTestCase(unittest.IsolatedAsyncioTestCase):
+class VerdictTestCase(PipecatTestCase):
     redact = False
 
     async def asyncSetUp(self) -> None:
@@ -84,9 +72,9 @@ class VerdictTestCase(unittest.IsolatedAsyncioTestCase):
 
     def make(
         self, *, config: VoiceConfig | None = None, **harness: Any
-    ) -> tuple[SessionHarness, FakeChatClient, FakeChatClient]:
+    ) -> tuple[PipecatHarness, FakeChatClient, FakeChatClient]:
         frontend, backend = FakeChatClient(), FakeChatClient()
-        session = SessionHarness(
+        session = PipecatHarness(
             config=config or verdict_config(),
             clients=AgentClients(backend=backend, frontend=frontend),
             event_log=EventLog(str(self.log_path), redact_content=self.redact),
@@ -105,15 +93,15 @@ class VerdictTestCase(unittest.IsolatedAsyncioTestCase):
         return lambda: bool(self.records(kind))
 
     @staticmethod
-    def spoken(harness: SessionHarness) -> str:
+    def spoken(harness: PipecatHarness) -> str:
         return "".join(e["delta"] for e in harness.of_type("response.output_audio_transcript.delta"))
 
     @staticmethod
-    def users(harness: SessionHarness) -> list[str]:
+    def users(harness: PipecatHarness) -> list[str]:
         return [m.content for m in harness.runners[0].state.frontend_history.messages if m.role == "user"]
 
     async def start_running_turn(
-        self, harness: SessionHarness, frontend: FakeChatClient, backend: FakeChatClient
+        self, harness: PipecatHarness, frontend: FakeChatClient, backend: FakeChatClient
     ) -> asyncio.Event:
         """Utterance 1 delegates; the backend call hangs until the returned gate is set."""
         gate = backend.gates.setdefault(0, asyncio.Event())
@@ -260,7 +248,7 @@ class SameQueryGuardTests(VerdictTestCase):
 
 
 class StagedTests(VerdictTestCase):
-    async def _staged(self, probe_task: str) -> tuple[SessionHarness, FakeChatClient, FakeChatClient]:
+    async def _staged(self, probe_task: str) -> tuple[PipecatHarness, FakeChatClient, FakeChatClient]:
         harness, frontend, backend = self.make()
         frontend.queue(delegate_response("Check order 1151."), delegate_response("Check order 1152.", task=probe_task))
         backend.queue(text_response("Order 1151 has shipped."), text_response("Order 1152 is pending."))
@@ -514,7 +502,7 @@ class ReviewClosingTests(VerdictTestCase):
         await harness.close()
         self.assertEqual(self.records("barge_in_closed")[0]["reason"], "session_closed")
 
-    async def _failing_turn(self, harness: SessionHarness, frontend: FakeChatClient) -> asyncio.Event:
+    async def _failing_turn(self, harness: PipecatHarness, frontend: FakeChatClient) -> asyncio.Event:
         """Utterance 1 delegates, then the agent step itself raises once the returned gate is set.
 
         (Backend LLM errors are turned into a final text by the text agent; this is a failure that escapes.)
@@ -683,7 +671,7 @@ class WiringAndConfigTests(unittest.TestCase):
 
     def _runner(self, config: VoiceConfig):
         clients = AgentClients(backend=FakeChatClient(), frontend=FakeChatClient())
-        state = _AppState(config=config, options=ServerOptions(), clients=clients)
+        state = PipecatState(config=config, options=ServerOptions(), clients=clients)
         return _agent_factory(state)("sess_test")
 
     def test_server_factory_passes_the_verdict_settings(self) -> None:
@@ -709,7 +697,7 @@ class WiringAndConfigTests(unittest.TestCase):
     def test_a_broken_template_fails_at_load_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            catalog = yaml.safe_load((PACKAGE_DIR / "config" / "prompts.voice.yaml").read_text(encoding="utf-8"))
+            catalog = yaml.safe_load((CONFIG_DIR / "prompts" / "tau.yaml").read_text(encoding="utf-8"))
             catalog["frontend_task_in_progress"]["content"] += "{{ in_progress.no_such_field }}"
             (root / "prompts.yaml").write_text(yaml.safe_dump(catalog), encoding="utf-8")
             body = (
@@ -721,9 +709,8 @@ class WiringAndConfigTests(unittest.TestCase):
                 load_voice_config(root / "broken.yaml")
 
     def test_profiles(self) -> None:
-        profiles = PACKAGE_DIR / "config" / "profiles"
+        profiles = CONFIG_DIR / "profiles"
         for name, filler in (
-            ("browser_demo_frontend_verdict", "speak"),
             ("tau3_eval_frontend_verdict", "log_only"),
             ("tau3_eval_frontend_verdict_speak", "speak"),
         ):
@@ -750,7 +737,7 @@ class WiringAndConfigTests(unittest.TestCase):
                 load_voice_config(
                     profile("zero.yaml", f"extends: {BASE_CONFIG}\n{on}, frontend_verdict: {{timeout_ms: 0}}}}\n")
                 )
-            backend_only = PACKAGE_DIR / "config" / "profiles" / "backend_only.yaml"
+            backend_only = BACKEND_ONLY_PROFILE
             with self.assertRaisesRegex(VoiceConfigError, "backend_only"):
                 load_voice_config(profile("bo.yaml", f"extends: {backend_only}\n{on}}}\n"))
             with self.assertRaisesRegex(VoiceConfigError, "while_thinking"):

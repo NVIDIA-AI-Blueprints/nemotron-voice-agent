@@ -26,7 +26,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
 | [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`generic-frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Shared Talker/Thinker pipeline with grounded generic tools | Set `EXAMPLE_SELECTION=generic-frontend-backend-agent` with a Frontend/Backend Agent profile |
-| [`frontend-backend-verdict-agent`](../src/examples/frontend_backend_verdict/README.md) | Voice Frontend/Backend Agent prototype with a frontend barge-in verdict, served on the OpenAI Realtime WebSocket only | `frontend-backend-verdict-agent/single-gpu` |
+| [`frontend-backend-verdict-agent`](../src/examples/frontend_backend_verdict/README.md) | Voice Frontend/Backend Agent with a frontend barge-in verdict on the shared Pipecat speech stack, served on the OpenAI Realtime WebSocket only | `frontend-backend-verdict-agent/single-gpu` |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
 
@@ -109,7 +109,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile frontend-backend-verdict-agent/single-gpu up -d  # Frontend/Backend Verdict Agent (OpenAI Realtime only)
     ```
 
-    The `frontend-backend-verdict-agent/single-gpu` recipe runs only speech locally. Its LLMs use the NVIDIA Inference Hub, so it also requires `NVIDIA_API_KEY` set to an Inference Hub key. Refer to the [Frontend/Backend Verdict Agent README](../src/examples/frontend_backend_verdict/README.md).
+    The `frontend-backend-verdict-agent/single-gpu` recipe runs only speech locally. Its LLMs use the NVIDIA Inference Hub, so it also requires `NVIDIA_API_KEY` set to an Inference Hub key. Before you start it, choose a prompt variant with `FBV_PROFILE`. Refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md).
 
     To verify all services are healthy, run `docker compose ps`.
 

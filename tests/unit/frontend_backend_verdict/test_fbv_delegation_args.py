@@ -11,10 +11,10 @@ import unittest
 
 from _fbv_fakes import FakeChatClient, delegate_response, make_agent, text_response, tool_response
 
-from examples.frontend_backend_verdict.text import events
-from examples.frontend_backend_verdict.text.delegation import CALL_BACKEND_TOOL, FRONTEND_TOOLS
-from examples.frontend_backend_verdict.text.messages import ToolCall, canonical_json
-from examples.frontend_backend_verdict.text.tools import decode_arguments
+from examples.frontend_backend_verdict.core.agent import events
+from examples.frontend_backend_verdict.core.agent.messages import ToolCall, canonical_json
+from examples.frontend_backend_verdict.core.frontend.delegation import CALL_BACKEND_TOOL, FRONTEND_TOOLS
+from examples.frontend_backend_verdict.core.tools.tools import decode_arguments
 
 
 def test_only_delegation_tool_is_published() -> None:

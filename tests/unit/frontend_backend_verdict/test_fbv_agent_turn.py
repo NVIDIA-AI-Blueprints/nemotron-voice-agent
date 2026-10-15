@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from examples.frontend_backend_verdict.text.messages import AgentTurn, ToolCall
+from examples.frontend_backend_verdict.core.agent.messages import AgentTurn, ToolCall
 
 
 def test_text_only_turn_is_valid() -> None:

@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Rules 17, 18, 20: config loading semantics, layering, declared imports, text prototype untouched."""
+"""Rules 17, 18, 20: config loading semantics, layering, declared imports, and the core/ import rule."""
 
 from __future__ import annotations
 
@@ -16,12 +16,24 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _fbv_voice_fakes import BASE_CONFIG, PACKAGE_DIR, REPO_ROOT
+from _fbv_core_fakes import BACKEND_ONLY_PROFILE, BASE_CONFIG, CONFIG_DIR, PACKAGE_ROOT, REPO_ROOT
 
-from examples.frontend_backend_verdict.voice.config import IN_PATH_KEYS, deep_merge, load_voice_config
-from examples.frontend_backend_verdict.voice.errors import VoiceConfigError
+from examples.frontend_backend_verdict.core.config.voice import IN_PATH_KEYS, deep_merge, load_voice_config
+from examples.frontend_backend_verdict.core.errors import VoiceConfigError
 
-SHIPPED = [BASE_CONFIG, *sorted((PACKAGE_DIR / "config" / "profiles").glob("*.yaml"))]
+SHIPPED = [BASE_CONFIG, *sorted((CONFIG_DIR / "profiles").glob("*.yaml"))]
+
+
+def _cloud_speech_profile(directory: Path) -> Path:
+    """The former ``cloud_speech.yaml`` profile (deleted in R0), written for the NVCF catalog checks."""
+    path = directory / "cloud_speech.yaml"
+    path.write_text(
+        f"extends: {BASE_CONFIG}\n"
+        "asr:\n  catalog: {services: cloud, platform: ''}\n"
+        "tts:\n  catalog: {services: cloud, platform: ''}\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _load_from(cwd: Path, path: Path):
@@ -40,7 +52,7 @@ class ShippedConfigTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_every_shipped_file_loads_identically_from_two_working_directories(self) -> None:
-        self.assertEqual(len(SHIPPED), 15)  # R4 added tau3_eval_frontend_verdict_speak_history_write_gate.yaml
+        self.assertEqual(len(SHIPPED), 10)  # base + 8 Tau profiles + the generic "default"
         with tempfile.TemporaryDirectory() as elsewhere:
             for path in SHIPPED:
                 with self.subTest(path=path.name):
@@ -61,37 +73,24 @@ class ShippedConfigTests(unittest.TestCase):
         self.assertFalse(config.protocol.greeting_enabled)
         self.assertEqual(config.asr.endpoint.server, "nemo-speech:50051")
         self.assertFalse(config.asr.endpoint.use_ssl)
-        self.assertEqual(config.agent.prompts_path, PACKAGE_DIR / "config" / "prompts.voice.yaml")
+        self.assertEqual(config.agent.prompts_path, CONFIG_DIR / "prompts" / "tau.yaml")
         self.assertEqual(config.agent.logging.event_sink, "none")
 
     def test_profiles_change_only_their_keys(self) -> None:
-        profiles = PACKAGE_DIR / "config" / "profiles"
-        self.assertEqual(load_voice_config(profiles / "backend_only.yaml").agent.mode, "backend_only")
-        cloud = load_voice_config(profiles / "cloud_speech.yaml")
+        self.assertEqual(load_voice_config(BACKEND_ONLY_PROFILE).agent.mode, "backend_only")
+        with tempfile.TemporaryDirectory() as tmp:
+            cloud = load_voice_config(_cloud_speech_profile(Path(tmp)))
         self.assertTrue(cloud.asr.endpoint.use_ssl)
         self.assertTrue(cloud.tts.endpoint.function_id)
         self.assertIn(["function-id", cloud.asr.endpoint.function_id], cloud.asr.endpoint.metadata())
-        live = load_voice_config(profiles / "live_demo.yaml")
-        self.assertEqual(live.filler.mode, "speak")
-        self.assertEqual(live.tools.source, "config")
-        self.assertEqual(live.agent.backend.tools.execution, "internal")
-        self.assertEqual([t.name for t in live.tools.config_tool_specs], ["get_order", "cancel_order"])
-        browser = load_voice_config(profiles / "browser_demo.yaml")
-        self.assertEqual(browser.filler.mode, "log_only")  # silent; the page shows it in gray
-        self.assertEqual(browser.tools.source, "config")  # a browser cannot execute tools
-        self.assertTrue(browser.protocol.greeting_enabled)
-        self.assertTrue(browser.audio.pace_output)
-        slow = load_voice_config(profiles / "browser_demo_slow_backend.yaml")
-        self.assertEqual(slow.filler.mode, "speak")  # the frontend's filler is heard
-        self.assertEqual(slow.agent.backend.simulated_delay_s, 5.0)
-        self.assertEqual(browser.agent.backend.simulated_delay_s, 0.0)
 
     def test_nvcf_without_api_key_fails_at_load_time(self) -> None:
         with (
             mock.patch.dict(os.environ, {"NVIDIA_API_KEY": ""}),
+            tempfile.TemporaryDirectory() as tmp,
             self.assertRaisesRegex(VoiceConfigError, "NVIDIA_API_KEY"),
         ):
-            load_voice_config(PACKAGE_DIR / "config" / "profiles" / "cloud_speech.yaml")
+            load_voice_config(_cloud_speech_profile(Path(tmp)))
 
     def test_server_override_replaces_only_the_server(self) -> None:
         with mock.patch.dict(os.environ, {"FBA_ASR_SERVER": "localhost:50051"}):
@@ -168,7 +167,10 @@ class MergeRuleTests(unittest.TestCase):
 
 
 FORBIDDEN_IN_PURE_LAYERS = ("pipecat", "riva", "fastapi")
-PURE = ["wire", "agent", "audio", "engine/segmenter.py", "engine/turn_manager.py", "engine/playback.py"]
+#: core/ holds all FBV logic and stays Pipecat-free (plan shared-stack-plan.md §8).
+PURE = ["core"]
+#: What core/ must never import (plan §8, import rule).
+FORBIDDEN_IN_CORE = ("pipecat", "fastapi", "starlette", "realtime", "examples.frontend_backend_verdict.adapters")
 ALLOWED_TOP_LEVEL = {
     "prototypes",
     "realtime",
@@ -188,6 +190,8 @@ ALLOWED_TOP_LEVEL = {
     "rich",
     "sounddevice",
     "dotenv",
+    # the agent's prompt templates (core/agent/prompts.py; was text/prompts.py, outside the old voice/ scan)
+    "jinja2",
 }
 
 
@@ -205,21 +209,19 @@ def _imports(path: Path) -> set[str]:
 class LayeringTests(unittest.TestCase):
     def test_pure_layers_import_no_pipecat_riva_or_fastapi(self) -> None:
         for entry in PURE:
-            target = PACKAGE_DIR / entry
+            target = PACKAGE_ROOT / entry
             files = [target] if target.is_file() else sorted(target.rglob("*.py"))
             for path in files:
                 for name in _imports(path):
-                    with self.subTest(file=str(path.relative_to(PACKAGE_DIR)), module=name):
+                    with self.subTest(file=str(path.relative_to(PACKAGE_ROOT)), module=name):
                         self.assertNotIn(name.split(".")[0], FORBIDDEN_IN_PURE_LAYERS)
 
     def test_every_import_is_stdlib_repo_or_declared(self) -> None:
         stdlib = set(sys.stdlib_module_names)
-        for path in PACKAGE_DIR.rglob("*.py"):
-            if "tau2_gates" in path.parts:
-                continue  # run with the tau2 checkout's interpreter; they import tau2 by design
+        for path in PACKAGE_ROOT.rglob("*.py"):
             for name in _imports(path):
                 top = name.split(".")[0]
-                with self.subTest(file=str(path.relative_to(PACKAGE_DIR)), module=name):
+                with self.subTest(file=str(path.relative_to(PACKAGE_ROOT)), module=name):
                     self.assertTrue(top in stdlib or top in ALLOWED_TOP_LEVEL, f"undeclared import {name}")
 
     @unittest.skip("prototype-repository packaging: this repository declares the dependencies itself")
@@ -229,23 +231,27 @@ class LayeringTests(unittest.TestCase):
             self.assertIn(dist, pyproject)
         self.assertIn('prototypes-voice-mic = ["nemotron-voice-agent[prototypes-voice]", "sounddevice', pyproject)
 
-    def test_text_prototype_is_imported_never_modified(self) -> None:
-        text_pkg = REPO_ROOT / "src" / "examples" / "frontend_backend_verdict" / "text"
-        for path in text_pkg.rglob("*.py"):
+    def test_core_imports_no_adapter_pipecat_or_realtime(self) -> None:
+        """The core/ import rule (plan §8): core/ imports no voice stack and no adapter."""
+        for path in sorted((PACKAGE_ROOT / "core").rglob("*.py")):
             for name in _imports(path):
-                self.assertFalse(name.startswith("examples.frontend_backend_verdict.voice"), f"{path} imports voice")
+                with self.subTest(file=str(path.relative_to(PACKAGE_ROOT)), module=name):
+                    self.assertFalse(
+                        any(name == root or name.startswith(f"{root}.") for root in FORBIDDEN_IN_CORE),
+                        f"{path} imports {name}",
+                    )
         used = set()
-        for path in PACKAGE_DIR.rglob("*.py"):
-            used.update(name for name in _imports(path) if name.startswith("examples.frontend_backend_verdict.text"))
-        self.assertIn("examples.frontend_backend_verdict.text.agent", used)
-        self.assertIn("examples.frontend_backend_verdict.text.session", used)
+        for path in PACKAGE_ROOT.rglob("*.py"):
+            used.update(name for name in _imports(path) if name.startswith("examples.frontend_backend_verdict.core"))
+        self.assertIn("examples.frontend_backend_verdict.core.agent.agent", used)
+        self.assertIn("examples.frontend_backend_verdict.core.agent.session", used)
 
 
 class KeepaliveTests(unittest.TestCase):
     def test_tau3_profiles_disable_the_websocket_keepalive(self) -> None:
-        for name in ("tau3_eval", "backend_only"):
-            config = load_voice_config(PACKAGE_DIR / "config" / "profiles" / f"{name}.yaml")
-            self.assertEqual(config.server.ws_ping_interval_s, 0.0, name)
+        for path in (CONFIG_DIR / "profiles" / "tau3_eval.yaml", BACKEND_ONLY_PROFILE):
+            config = load_voice_config(path)
+            self.assertEqual(config.server.ws_ping_interval_s, 0.0, path.name)
 
     def test_base_config_keeps_the_uvicorn_default(self) -> None:
         config = load_voice_config(BASE_CONFIG)

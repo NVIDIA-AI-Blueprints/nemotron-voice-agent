@@ -8,12 +8,9 @@
 from __future__ import annotations
 
 import asyncio
-import unittest
-from collections.abc import AsyncIterator
 
-from _fbv_voice_fakes import (
+from _fbv_core_fakes import (
     FakeChatClient,
-    SessionHarness,
     delegate_response,
     pcmu_silence,
     pcmu_speech,
@@ -21,42 +18,26 @@ from _fbv_voice_fakes import (
     text_response,
     tool_response,
 )
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase, StubRecognizer, ToneSynthesizer
 
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
-from examples.frontend_backend_verdict.voice.audio.pcm import tone
-from examples.frontend_backend_verdict.voice.speech.stubs import StubRecognizer, ToneSynthesizer
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
 
 MARKER = " [interrupted by the user]"
 ANSWER = "Your booking is confirmed. The total is two hundred dollars. Anything else?"
 
 
-class BlockingSynthesizer(ToneSynthesizer):
-    """Tone audio, but blocks forever on sentences containing ``block_on``."""
-
-    def __init__(self, block_on: str) -> None:
-        super().__init__(sample_rate=16000, ms_per_char=10.0)
-        self.block_on = block_on
-        self.started: list[str] = []
-
-    async def synthesize(self, text: str, *, voice: str | None = None) -> AsyncIterator[bytes]:
-        self.started.append(text)
-        if self.block_on in text:
-            try:
-                await asyncio.Event().wait()
-            except (asyncio.CancelledError, GeneratorExit):
-                self.cancelled.append(text)
-                raise
-        for _ in range(3):
-            yield tone(100, 16000)
+def BlockingSynthesizer(block_on: str) -> ToneSynthesizer:  # noqa: N802
+    """Tone audio, but blocks until cancelled on sentences containing ``block_on``."""
+    return ToneSynthesizer(sample_rate=16000, ms_per_char=10.0, block_on=block_on)
 
 
-def paired(harness_kwargs: dict | None = None, **clients) -> tuple[SessionHarness, FakeChatClient, FakeChatClient]:
+def paired(harness_kwargs: dict | None = None, **clients) -> tuple[PipecatHarness, FakeChatClient, FakeChatClient]:
     frontend, backend = FakeChatClient(), FakeChatClient()
-    harness = SessionHarness(clients=AgentClients(backend=backend, frontend=frontend), **(harness_kwargs or {}))
+    harness = PipecatHarness(clients=AgentClients(backend=backend, frontend=frontend), **(harness_kwargs or {}))
     return harness, frontend, backend
 
 
-class BargeInWhileSpeakingTests(unittest.IsolatedAsyncioTestCase):
+class BargeInWhileSpeakingTests(PipecatTestCase):
     async def test_barge_in_repairs_both_paired_copies(self) -> None:
         harness, frontend, backend = paired()
         frontend.queue(delegate_response("Confirm the booking."))
@@ -96,7 +77,9 @@ class BargeInWhileSpeakingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(progress.active)
         item_id = harness.of_type("response.output_audio.delta")[0]["item_id"]
         deltas_before = len(harness.of_type("response.output_audio.delta"))
-        await harness.feed(pcmu_speech(300))
+        # The input resampler releases audio in blocks, so a little input after the speech
+        # carries its end to Pipecat's VAD (200 ms start confirmation); 200 ms < the 500 ms stop.
+        await harness.feed(pcmu_speech(300) + pcmu_silence(200))
         done = await harness.wait_for("response.done")
         self.assertEqual(done["response"]["status"], "cancelled")
         self.assertEqual(done["response"]["status_details"]["reason"], "turn_detected")
@@ -129,7 +112,7 @@ class BargeInWhileSpeakingTests(unittest.IsolatedAsyncioTestCase):
         await harness.close()
 
 
-class WhileThinkingTests(unittest.IsolatedAsyncioTestCase):
+class WhileThinkingTests(PipecatTestCase):
     async def test_speech_while_thinking_cancels_and_merges(self) -> None:
         harness, frontend, backend = paired()
         frontend.queue(delegate_response("First request."), delegate_response("Merged request."))
@@ -186,7 +169,7 @@ class WhileThinkingTests(unittest.IsolatedAsyncioTestCase):
         await harness.close()
 
     async def test_noise_shorter_than_min_speech_never_interrupts(self) -> None:
-        harness = SessionHarness(
+        harness = PipecatHarness(
             clients=AgentClients(
                 backend=FakeChatClient([text_response(ANSWER)]), frontend=FakeChatClient([text_response(ANSWER)])
             ),

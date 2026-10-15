@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The generic-prompt version of the default Tau arm (tau3_eval_frontend_verdict_speak_history):
+# the same agent, turn taking and Realtime settings (800 ms server-owned turn detection,
+# keepalive 0, seed greeting), with the generic prompt catalog instead of the Tau one. Tune
+# generic.yaml freely; tau.yaml changes only under the Tau tuning rule (a pinned hash and an
+# attached Tau A/B run). Select it with FBV_PROFILE=default.
+
+extends: tau3_eval_frontend_verdict_speak_history.yaml
+
+agent:
+  overrides:
+    prompts: {path: "../prompts/generic.yaml"}   # [in-path] -> core/config/prompts/generic.yaml

@@ -24,9 +24,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from _fbv_voice_fakes import (
+from _fbv_core_fakes import (
     FakeChatClient,
-    SessionHarness,
     delegate_response,
     normalize_trace,
     pcmu_silence,
@@ -36,16 +35,17 @@ from _fbv_voice_fakes import (
     tool_response,
     voice_config,
 )
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase, StubRecognizer
 
-from examples.frontend_backend_verdict.text.llm import to_wire_messages
-from examples.frontend_backend_verdict.text.messages import CONTINUES_TURN
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
-from examples.frontend_backend_verdict.voice.agent.sinks import EventLog
-from examples.frontend_backend_verdict.voice.speech.stubs import StubRecognizer
+from examples.frontend_backend_verdict.core.agent.llm import to_wire_messages
+from examples.frontend_backend_verdict.core.agent.messages import CONTINUES_TURN
+from examples.frontend_backend_verdict.core.engine.event_log import EventLog
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
 
 #: SHA-256 of the normalized wire trace of a tool round trip with no caller speech during the
-#: wait, produced by the turn manager before R1 (commit 4271cac). R1 must not change it.
-NO_OVERLAP_TRACE_SHA256 = "3411ef9a037ca96ef1c9e42a942698e59b60b75146bf40e1b702d5fa4f9072d2"
+#: wait. Pinned before R1 (commit 4271cac) on v1's host as 3411ef9a...; re-pinned on the
+#: Pipecat adapter's harness, whose audio deltas are 20 ms chunks (B10). It must not change.
+NO_OVERLAP_TRACE_SHA256 = "4524bad5b59c72dc92facc69c0530f4df03c9819b6daf13d9efda67470b4b629"
 
 
 async def until(condition: Callable[[], bool], timeout: float = 3.0) -> None:
@@ -64,7 +64,7 @@ def output(call_id: str, value: str = "ok") -> dict[str, Any]:
     }
 
 
-class ToolResumeTestCase(unittest.IsolatedAsyncioTestCase):
+class ToolResumeTestCase(PipecatTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.log_path = Path(self._tmp.name) / "events.jsonl"
@@ -72,9 +72,9 @@ class ToolResumeTestCase(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def make(self, **harness: Any) -> tuple[SessionHarness, FakeChatClient, FakeChatClient]:
+    def make(self, **harness: Any) -> tuple[PipecatHarness, FakeChatClient, FakeChatClient]:
         frontend, backend = FakeChatClient(), FakeChatClient()
-        session = SessionHarness(
+        session = PipecatHarness(
             clients=AgentClients(backend=backend, frontend=frontend),
             event_log=EventLog(str(self.log_path)),
             **harness,
@@ -88,10 +88,10 @@ class ToolResumeTestCase(unittest.IsolatedAsyncioTestCase):
         return [record for record in map(json.loads, lines) if record["kind"] == kind]
 
     @staticmethod
-    def spoken(harness: SessionHarness) -> str:
+    def spoken(harness: PipecatHarness) -> str:
         return "".join(e["delta"] for e in harness.of_type("response.output_audio_transcript.delta"))
 
-    async def tool_wait(self, harness: SessionHarness, *, update: dict[str, Any] | None = None) -> None:
+    async def tool_wait(self, harness: PipecatHarness, *, update: dict[str, Any] | None = None) -> None:
         """Utterance 1 delegates and the backend's tool call goes out; the turn now waits on tools."""
         await harness.start(update or tau2_session_update())
         await harness.speak()
@@ -163,7 +163,8 @@ class ResumeTriggerTests(ToolResumeTestCase):
         await harness.close()
 
     async def test_result_timeout_resumes_with_available_outputs_and_the_words(self) -> None:
-        harness, frontend, backend = self.make(config=voice_config(tools_result_timeout_s=0.2))
+        # The timeout is wall-clock; 1 s outlasts the harness's speak() (about 0.2 s on Pipecat).
+        harness, frontend, backend = self.make(config=voice_config(tools_result_timeout_s=1.0))
         frontend.queue(delegate_response("Look up both."))
         backend.queue(
             tool_response(("get_users", {}), ("get_orders", {}), ids=["call_a", "call_b"]),
@@ -223,7 +224,7 @@ class ResumeTriggerTests(ToolResumeTestCase):
 
 
 class LateResponseCreateTests(ToolResumeTestCase):
-    async def inbox_resume(self) -> tuple[SessionHarness, FakeChatClient, FakeChatClient, asyncio.Event]:
+    async def inbox_resume(self) -> tuple[PipecatHarness, FakeChatClient, FakeChatClient, asyncio.Event]:
         """Speech during the wait, then the output: the wait resumes and the resumed step is held."""
         harness, frontend, backend = self.make()
         frontend.queue(delegate_response("Look up the user."), delegate_response("Next."))
@@ -239,7 +240,7 @@ class LateResponseCreateTests(ToolResumeTestCase):
         self.assertEqual(harness.session.turns.state, "THINKING")
         return harness, frontend, backend, gate
 
-    def errors(self, harness: SessionHarness) -> list[str]:
+    def errors(self, harness: PipecatHarness) -> list[str]:
         return [event["error"].get("code") for event in harness.of_type("error")]
 
     def rules(self) -> list[tuple[int, str]]:

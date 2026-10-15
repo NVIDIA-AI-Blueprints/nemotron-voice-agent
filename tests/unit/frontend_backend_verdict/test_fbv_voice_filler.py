@@ -10,12 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
-import unittest
 from pathlib import Path
 
-from _fbv_voice_fakes import (
+from _fbv_core_fakes import (
     FakeChatClient,
-    SessionHarness,
     delegate_response,
     normalize_trace,
     pcmu_silence,
@@ -24,9 +22,11 @@ from _fbv_voice_fakes import (
     tool_response,
     voice_config,
 )
+from _fbv_parity import WINDOW_MS
+from _fbv_pipecat_fakes import PipecatHarness, PipecatTestCase
 
-from examples.frontend_backend_verdict.voice.agent.filler import FillerLog
-from examples.frontend_backend_verdict.voice.agent.runner import AgentClients
+from examples.frontend_backend_verdict.core.engine.filler import FillerLog
+from examples.frontend_backend_verdict.core.engine.runner import AgentClients
 
 
 async def _delegated_turn(
@@ -41,7 +41,7 @@ async def _delegated_turn(
     backend = FakeChatClient([text_response("It is all set.")])
     if gate is not None:
         backend.gates[0] = gate
-    harness = SessionHarness(
+    harness = PipecatHarness(
         config=config,
         clients=AgentClients(backend=backend, frontend=frontend),
         filler_log=log or FillerLog(),
@@ -52,7 +52,7 @@ async def _delegated_turn(
     return harness
 
 
-class LogOnlyTests(unittest.IsolatedAsyncioTestCase):
+class LogOnlyTests(PipecatTestCase):
     async def test_log_only_is_invisible(self) -> None:
         with_filler = await _delegated_turn("Let me check.")
         await with_filler.wait_for("response.done")
@@ -106,7 +106,7 @@ class LogOnlyTests(unittest.IsolatedAsyncioTestCase):
             )
             backend = FakeChatClient([text_response("First answer."), tool_response(("get_users", {}), ids=["c1"])])
             log = FillerLog(str(path))
-            harness = SessionHarness(
+            harness = PipecatHarness(
                 config=config, clients=AgentClients(backend=backend, frontend=frontend), filler_log=log
             )
             await harness.start(tau2_session_update())
@@ -129,12 +129,13 @@ class LogOnlyTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(record["turn_end"]["audio_ms"], record["turn_start"]["audio_ms"])
             self.assertIsNotNone(record["filler_ready"]["since_session_start_ms"])
             self.assertIsNotNone(record["filler_ready"]["since_turn_end_ms"])
-        self.assertAlmostEqual(first["turn_start"]["audio_ms"], 1000, delta=40)
+        # B1: Pipecat's VAD confirms the start a few frames after start_secs (v1: within 40 ms).
+        self.assertAlmostEqual(first["turn_start"]["audio_ms"], 1000, delta=WINDOW_MS)
         self.assertIsNotNone(first["first_answer_audio"])
         self.assertIn("would_have_spoken", first)
 
 
-class SpeakTests(unittest.IsolatedAsyncioTestCase):
+class SpeakTests(PipecatTestCase):
     async def test_filler_audio_goes_out_while_the_backend_is_still_pending(self) -> None:
         gate = asyncio.Event()
         config = voice_config(filler_mode="speak", filler_speak_after_ms=0)

@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Cloud service catalog for the Frontend/Backend Verdict example. The LLM entries are the
-# prototype's Inference Hub defaults (see services.local.yaml). The ASR and TTS entries
-# exist for the registry's per-platform validation only: the prototype speech loader of
-# every served profile reads services.local.yaml (`singlegpu`), and this example has no
-# cloud recipe.
+# Inference Hub defaults (see services.local.yaml). The ASR and TTS entries exist for the
+# registry's per-platform validation only: every served profile takes its speech endpoints
+# from core/config/voice_agent.yaml (the `singlegpu` NeMo-Speech sidecar), and this example
+# has no cloud recipe.
 
 llm:
   nemotron-3.5-lightning:
