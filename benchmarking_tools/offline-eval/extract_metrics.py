@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Extract observed execution and source-timeline metrics from saved offline runs.
 
 This reads recorded traces only. Missing timers stay null. Conversation gaps and
