@@ -910,6 +910,41 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
 
     # ---- WebSocket transport ----
 
+    @app.websocket("/api/ws/offline")
+    async def offline_websocket_endpoint(websocket: WebSocket, session_id: str = Query(default="")):
+        """Evaluate a sealed generic session using source offsets instead of playback waits."""
+        from examples.generic.offline.factory import build_runtime
+        from examples.generic.offline.websocket import serve_offline_session
+
+        if session_id and _multi_worker_mode_enabled():
+            await websocket.close(code=1013, reason=_MULTI_WORKER_SESSION_CONFIG_MESSAGE)
+            return
+
+        async def runtime_factory(start):
+            config = _resolve_config(
+                session_id, fallback_example_key="generic-assistant", pipeline_mode="generic-assistant"
+            )
+            config = _sanitize_session_config(
+                {**config, **start.get("config", {}), "pipeline_mode": "generic-assistant"},
+                fallback_example_key="generic-assistant",
+            )
+            if _resolve_example(config)["bot"] != "examples.generic.pipeline:bot":
+                raise ValueError("Offline execution currently supports the generic assistant only")
+            initialization = asyncio.create_task(asyncio.to_thread(build_runtime, config))
+            try:
+                return await asyncio.shield(initialization)
+            except asyncio.CancelledError:
+
+                def close_late(task):
+                    if not task.cancelled() and task.exception() is None:
+                        asyncio.create_task(task.result().aclose())
+
+                initialization.add_done_callback(close_late)
+                raise
+
+        record_root = Path(os.getenv("OFFLINE_AUDIO_DUMP_PATH", str(PROJECT_ROOT / "audio_dumps" / "offline")))
+        await serve_offline_session(websocket, runtime_factory, record_root)
+
     @app.websocket("/api/ws")
     async def websocket_endpoint(
         websocket: WebSocket,
