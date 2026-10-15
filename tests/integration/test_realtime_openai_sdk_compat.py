@@ -9,7 +9,8 @@ Covers:
 
 * OpenAI Python SDK multi-turn (OpenAI session fields only)
 * Mapped fields: Magpie ``voice``, ``instructions``, ``temperature``,
-  ``max_output_tokens``, Nemotron welcome gate, audio + transcript events
+  ``max_output_tokens``, audio + transcript events
+* Client-driven start (no greeting) and the idle ``response.cancel`` error
 * Ignores client ``session.tools``; catalog tools follow ``prompt.id`` / ``prompt_key``
 * Soft voice fallback for unknown ids (e.g. ``alloy``); accepts transcription
   selectors as no-ops and rejects text-only modalities
@@ -325,7 +326,7 @@ async def run_openai_sdk_compat(
     api_key: str | None = None,
     texts: tuple[str, ...] | list[str] = DEFAULT_TEXTS,
     instructions: str = "You are a helpful voice assistant. Keep every reply to one short sentence.",
-    wait_intro: bool = True,
+    wait_intro: bool = False,
     intro_timeout_s: float = 90.0,
     turn_timeout_s: float = 120.0,
     turn_gap_s: float = 0.5,
@@ -391,7 +392,7 @@ async def run_openai_sdk_compat(
                 label="intro",
             )
             assert intro.matched and intro.saw_done, (
-                "timed out waiting for welcome response.done (server welcome enabled by default on many examples)"
+                "timed out waiting for welcome response.done (Generic Assistant Realtime sessions never greet)"
             )
             assert intro.status == "completed", f"intro: response.status={intro.status!r}"
             await asyncio.sleep(turn_gap_s)
@@ -458,7 +459,6 @@ async def _settle(ws: Any, *, transcript: str = "", min_s: float = 1.0) -> None:
 
 async def _run_feature_checks(
     *,
-    intro_timeout_s: float = 90.0,
     turn_timeout_s: float = 120.0,
 ) -> dict[str, Any]:
     """Mapped fields, instructions, both tools, post-handoff reject."""
@@ -501,37 +501,32 @@ async def _run_feature_checks(
             "tools": session_obj.get("tools"),
         }
 
-        # Welcome gate: reject text until first assistant response.done.
-        # `_send_user_text` also sends response.create; both reject codes are expected.
-        pre_intro_codes = frozenset({"item_rejected_pre_intro", "response_create_rejected_pre_intro"})
-        await _send_user_text(ws, "Hello!")
-        pre = await _ws_wait_until(
+        # Client-driven start: there is no greeting, so an immediate text turn is answered.
+        first_user = "Hello!"
+        await _send_user_text(ws, first_user)
+        first_turn = await _ws_wait_until(
             ws,
-            predicate=lambda t, _e: any(err.get("code") == "item_rejected_pre_intro" for err in t.errors) or t.saw_done,
-            timeout_s=intro_timeout_s,
-            label="pre-intro",
-            allow_error_codes=pre_intro_codes,
+            predicate=lambda t, _e: _is_spoken(t),
+            timeout_s=turn_timeout_s,
+            label="first-turn",
         )
-        assert any(err.get("code") == "item_rejected_pre_intro" for err in pre.errors), pre.errors
-        summary["pre_intro_rejected"] = True
+        assert first_turn.matched and _is_spoken(first_turn), "first text turn: no spoken response.done"
+        assert first_turn.status == "completed", f"first turn status={first_turn.status!r}"
+        _log_turn(first_user, first_turn.transcript, kind="first-turn")
+        summary["client_driven_start"] = True
+        await _settle(ws, transcript=first_turn.transcript, min_s=1.5)
 
-        if not pre.saw_done:
-            intro = await _ws_wait_until(
-                ws,
-                predicate=lambda t, _e: _is_spoken(t),
-                timeout_s=intro_timeout_s,
-                label="intro",
-                allow_error_codes=pre_intro_codes,
-            )
-            assert intro.matched and _is_spoken(intro), "timed out waiting for welcome spoken response.done"
-            assert intro.status == "completed", f"intro status={intro.status!r}"
-            summary["intro_transcript"] = intro.transcript
-        else:
-            summary["intro_transcript"] = pre.transcript
-        await asyncio.sleep(0.5)
-        if summary.get("intro_transcript"):
-            _log_turn("(welcome)", str(summary["intro_transcript"]), kind="intro")
-        await _settle(ws, transcript=str(summary.get("intro_transcript") or ""), min_s=1.5)
+        # An idle response.cancel is answered with response_cancel_not_active.
+        await ws.send(json.dumps({"type": "response.cancel"}))
+        idle_cancel = await _ws_wait_until(
+            ws,
+            predicate=lambda t, _e: any(err.get("code") == "response_cancel_not_active" for err in t.errors),
+            timeout_s=30.0,
+            label="idle-cancel",
+            allow_error_codes=frozenset({"response_cancel_not_active"}),
+        )
+        assert any(err.get("code") == "response_cancel_not_active" for err in idle_cancel.errors), idle_cancel.errors
+        summary["idle_cancel_rejected"] = True
 
         # Instructions mapped at connect: secret code word.
         instr_user = "What is the secret code word?"
@@ -630,7 +625,7 @@ def test_openai_realtime_sdk_three_turn_conversation() -> None:
 
 
 def test_realtime_mapped_fields_and_tools() -> None:
-    """Instructions, welcome gate, soft voice fallback, post-handoff rejects."""
+    """Instructions, client-driven start, idle cancel, soft voice fallback, post-handoff rejects."""
     summary = asyncio.run(_run_feature_checks())
     print("\n=== Realtime mapped-fields conversation ===")
     for i, turn in enumerate(summary.get("turns") or [], start=1):
@@ -640,7 +635,8 @@ def test_realtime_mapped_fields_and_tools() -> None:
     print("--- checks ---")
     print(json.dumps({k: v for k, v in summary.items() if k != "turns"}, indent=2))
     print("=== end ===\n")
-    assert summary.get("pre_intro_rejected") is True
+    assert summary.get("client_driven_start") is True
+    assert summary.get("idle_cancel_rejected") is True
     assert summary.get("instructions_ok") is True
     assert summary.get("post_handoff_instructions_rejected") is True
     assert summary.get("response_override_rejected") is True

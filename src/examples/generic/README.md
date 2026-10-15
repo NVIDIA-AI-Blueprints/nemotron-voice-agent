@@ -68,6 +68,10 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
 
 To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.
 
+## OpenAI Realtime Sessions
+
+Sessions on the [OpenAI Realtime–compatible gateway](../../../docs/how-to/use-realtime-gateway.md) (`WS /v1/realtime`) are client-driven. The assistant does not greet or run proactive activity checks, and it does not reply on its own to a voice turn that ends without a transcript. The [welcome message settings](../../../docs/02-configuration-guide.md#welcome-message) and the `activity_check` settings in [`examples_registry.yaml`](../../../examples_registry.yaml) apply only to RTVI sessions over WebRTC and `WS /api/ws`. To have the assistant speak first, send `response.create`.
+
 ## Customization
 
 | Path | Role |

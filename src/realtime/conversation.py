@@ -30,6 +30,7 @@ class ResponseSnapshot:
     status: str
     audio_done_emitted: bool
     transcript_done_emitted: bool
+    output_item_announced: bool = True
 
 
 @dataclass
@@ -62,6 +63,10 @@ class ConversationState:
     # False during welcome window; True after first assistant response.done
     # (or immediately when welcome is disabled).
     assistant_has_responded: bool = False
+    # A committed user turn's reply that has not become a response yet.
+    reply_pending: bool = False
+    # InterruptionFrame ids that already finished their response in the serializer.
+    applied_interruption_ids: set[int] = field(default_factory=set)
 
     def open_client_text(self) -> None:
         """Allow client user-text items."""
@@ -144,6 +149,7 @@ class ConversationState:
         if self.response_id and self.response_status == "in_progress":
             return self.response_id, False
         self.response_requested = False
+        self.reply_pending = False
         self.response_generation += 1
         self.response_id = new_response_id()
         self.response_status = "in_progress"
@@ -194,6 +200,7 @@ class ConversationState:
             status=status,
             audio_done_emitted=self.audio_done_emitted,
             transcript_done_emitted=self.transcript_done_emitted,
+            output_item_announced=self.output_item_announced,
         )
         self.response_status = status
         self.open_client_text()

@@ -26,7 +26,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 
 ## Welcome Message
 
-When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, Omni Assistant Subagents, and Frontend/Backend Agent examples.
+When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, Omni Assistant Subagents, and Frontend/Backend Agent examples. Generic Assistant sessions on the OpenAI Realtime gateway (`WS /v1/realtime`) never greet, and the following settings do not apply to them. For details, refer to [Session Lifecycle Notes](how-to/use-realtime-gateway.md#session-lifecycle-notes).
 
 - **Per example (backend-only):** set `welcome_message: false` on an example in [`examples_registry.yaml`](../examples_registry.yaml). The default is `true` when the key is omitted.
 - **Global override:** set `ENABLE_WELCOME_MESSAGE` in `.env`. When set, `ENABLE_WELCOME_MESSAGE` overrides every example's registry value. For example, the `generic-assistant/server-perf` profile uses it to disable the greeting.

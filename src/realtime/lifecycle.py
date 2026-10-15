@@ -26,8 +26,8 @@ from realtime.events import (
 from realtime.metrics import RealtimeResponseTelemetry
 
 
-async def announce_response(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
-    """Ensure ``response.created`` + assistant item / content_part are on the wire.
+async def announce_response_created(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
+    """Ensure ``response.created`` is on the wire without announcing an output item.
 
     Returns ``(response_id, newly_created)``.
     """
@@ -40,6 +40,15 @@ async def announce_response(conversation: ConversationState, emit: EmitFn) -> tu
                 response=response_created_body(response_id),
             ),
         )
+    return response_id, created
+
+
+async def announce_response(conversation: ConversationState, emit: EmitFn) -> tuple[str, bool]:
+    """Ensure ``response.created`` + assistant item / content_part are on the wire.
+
+    Returns ``(response_id, newly_created)``.
+    """
+    response_id, created = await announce_response_created(conversation, emit)
     if not conversation.output_item_announced:
         conversation.output_item_announced = True
         item_id = conversation.assistant_item_id
@@ -111,6 +120,12 @@ async def emit_finish_from_snapshot(
 ) -> None:
     """Emit audio/item/response done events for a completed snapshot."""
     response_id = snap.response_id
+    if not snap.output_item_announced:
+        # Nothing was spoken (e.g. an empty reply to response.create), so there
+        # is no assistant item to close; the response finishes with no output.
+        await _emit_response_done(emit, {"id": response_id, "status": snap.status, "output": []}, telemetry)
+        return
+
     item_id = snap.item_id
     transcript = snap.transcript
     # Item statuses are in_progress|completed|incomplete; cancelled is response-only.
@@ -178,6 +193,14 @@ async def emit_finish_from_snapshot(
             }
         ],
     }
+    await _emit_response_done(emit, response, telemetry)
+
+
+async def _emit_response_done(
+    emit: EmitFn,
+    response: dict[str, Any],
+    telemetry: RealtimeResponseTelemetry | None,
+) -> None:
     if telemetry is not None:
         if telemetry.usage is not None:
             response["usage"] = telemetry.usage
