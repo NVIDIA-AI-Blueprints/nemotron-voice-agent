@@ -1,5 +1,5 @@
-# Eval mode for the Frontend/Backend Verdict agent: apply on top of the
-# frontend-backend-verdict-agent/single-gpu recipe for evaluation runs.
+# Eval mode for the Frontend/Backend Verdict agent: the `eval` profile. Apply on top of the
+# frontend-backend-verdict-agent/single-gpu recipe for evaluation runs (single-gpu only).
 #
 #   docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml \
 #     --profile frontend-backend-verdict-agent/single-gpu up -d
@@ -9,6 +9,10 @@
 services:
   frontend-backend-verdict-agent-single-gpu:
     environment:
+      # OpenAI Realtime sessions only: browser UI sessions are refused, so they cannot take
+      # resources from an evaluation run. Realtime sessions use the `eval` agent settings in every
+      # profile.
+      FBV_PROFILE: eval
       # Plain HTTP and ws://, so the evaluation client connects without TLS.
       PIPELINE_TLS: "false"
       # Per-turn event log and filler timing log, written to the mounted directory.

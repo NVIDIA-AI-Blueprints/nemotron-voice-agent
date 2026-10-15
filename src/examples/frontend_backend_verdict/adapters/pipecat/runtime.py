@@ -8,7 +8,12 @@ The same rules as v1's ``VerdictRuntime`` (``adapters/prototype/runtime.py`` at 
 one runtime per (profile, LLM endpoints) configuration, with one event log, routing sink and
 filler log, one LLM client per role (``core/agent/factory.py``), the speech warm-up
 (``warmup.py``) and the ``server.max_sessions`` cap (``server_busy`` and close code 1013).
-Profiles, LLM endpoints and the keepalive check come from ``core/config/profiles.py``.
+Profiles, LLM endpoints, the speech platform remap and the keepalive check come from
+``core/config/profiles.py``.
+
+OpenAI Realtime sessions always get the ``eval`` profile's runtime (:func:`runtime_for`), whichever
+profile ``FBV_PROFILE`` selects; browser UI sessions have their own runtimes and admission
+(``ui_session.py``).
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,10 +33,15 @@ from examples.frontend_backend_verdict.adapters.pipecat.settings import PipecatS
 from examples.frontend_backend_verdict.adapters.pipecat.warmup import warm_up
 from examples.frontend_backend_verdict.core.agent.factory import ServerOptions, _agent_factory, build_clients
 from examples.frontend_backend_verdict.core.config.profiles import (
+    DEFAULT_PROFILE,
+    PROFILE_ENV,
+    REALTIME_PROFILE,
     LLMEndpoints,
     ProfileError,
     apply_llm_endpoints,
+    apply_speech_platform,
     keepalive_mismatch,
+    pipecat_settings_file,
     profile_name,
     profile_path,
     speech_selection_warnings,
@@ -156,20 +167,41 @@ class PipecatRuntime:
 
 
 _RUNTIMES: dict[tuple[str, LLMEndpoints], PipecatRuntime] = {}
+_NOTED_DEFAULT_CHANGE = False
+
+
+def _note_default_change(environ: Mapping[str, str] | None) -> None:
+    """Say once that an explicit ``FBV_PROFILE=default`` no longer changes Realtime sessions."""
+    global _NOTED_DEFAULT_CHANGE  # noqa: PLW0603 - one log line per process
+    env = os.environ if environ is None else environ
+    if _NOTED_DEFAULT_CHANGE or (env.get(PROFILE_ENV) or "").strip() != DEFAULT_PROFILE:
+        return
+    _NOTED_DEFAULT_CHANGE = True
+    logger.info(
+        f"{PROFILE_ENV}={DEFAULT_PROFILE} selects the browser UI profile; OpenAI Realtime sessions use the "
+        f"{REALTIME_PROFILE!r} profile (the Tau prompt catalog)"
+    )
 
 
 def runtime_for(body: Mapping[str, Any], environ: Mapping[str, str] | None = None) -> PipecatRuntime:
-    """The shared runtime for the selected profile and the route's LLM endpoints."""
-    name = profile_name(environ)
+    """The shared runtime for OpenAI Realtime sessions and the route's LLM endpoints.
+
+    Realtime sessions always run with the ``eval`` profile and its Pipecat settings
+    (``settings/eval.yaml``). ``FBV_PROFILE`` is still checked, so an unknown value is refused.
+    """
+    profile_name(environ)
+    _note_default_change(environ)
+    name = REALTIME_PROFILE
     endpoints = LLMEndpoints.from_body(body)
     key = (name, endpoints)
     runtime = _RUNTIMES.get(key)
     if runtime is None:
         config = apply_llm_endpoints(load_voice_config(profile_path(name)), endpoints)
+        config = apply_speech_platform(config, environ)
         mismatch = keepalive_mismatch(config, environ)
         if mismatch:
             raise ProfileError(mismatch)
-        runtime = PipecatRuntime(config, profile=name)
+        runtime = PipecatRuntime(config, profile=name, settings=load_pipecat_settings(pipecat_settings_file(name)))
         _RUNTIMES[key] = runtime
         for warning in speech_selection_warnings(config, body):
             logger.warning(warning)

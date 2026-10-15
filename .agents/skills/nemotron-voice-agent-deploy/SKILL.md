@@ -35,9 +35,9 @@ Do not use this skill to edit `.env`, prompts, or service catalogs of an already
 | Cloud (`<example>`) | `NVIDIA_API_KEY` (NVCF) | **No** |
 | Server (`<example>/server`, including `server-perf`) | `NVIDIA_API_KEY` (NGC + NIM) | **Yes**, before `up` |
 | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` (Hugging Face download speed / rate limits) | **No**. Do not use `NVIDIA_API_KEY`. |
-| Exception: `frontend-backend-verdict-agent/single-gpu` | `HF_TOKEN` (speech weights) **and** `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key (both LLMs). `REALTIME_API_KEY` for client auth. Not `NVIDIA_SPEECH_API_KEY`. | **No** |
+| Exception: `frontend-backend-verdict-agent` (all three recipes) | `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key (both LLMs) on every recipe, plus the family's own rule: cloud sends the same key to NVCF speech (unverified that one key works for both), `/server` also uses it for `docker login nvcr.io` and the NIM sidecars (unverified for an Inference Hub key), `/single-gpu` also needs `HF_TOKEN`. `REALTIME_API_KEY` for Realtime client auth. Optional browser-tool keys: `WEATHERAPI_KEY`, `FINNHUB_API_KEY`, `PERPLEXITY_API_KEY`. Not `NVIDIA_SPEECH_API_KEY`. | Only for `/server` |
 
-`HF_TOKEN` is not a substitute for `NVIDIA_API_KEY`. The reverse is also false. The Frontend/Backend Verdict recipe is the only single-GPU recipe that uses `NVIDIA_API_KEY`. Every other `*/single-gpu` recipe keeps the rule above. `TURN_USERNAME` and `TURN_PASSWORD` are required only with `--profile turn`.
+`HF_TOKEN` is not a substitute for `NVIDIA_API_KEY`. The reverse is also false. `frontend-backend-verdict-agent/single-gpu` is the only single-GPU recipe that uses `NVIDIA_API_KEY`. Every other `*/single-gpu` recipe keeps the rule above. `TURN_USERNAME` and `TURN_PASSWORD` are required only with `--profile turn`.
 
 Server NGC login:
 
@@ -65,7 +65,7 @@ Choose **one** recipe from `references/recipes.md`. Hardware only tells you what
 - `server`: workstation NIM only. **Not supported on DGX Spark or Jetson Thor.** If the hardware readout is Spark or Thor, do not open `references/server.md`. Use `single-gpu` or cloud. On a workstation: NGC login + `references/server.md`.
 - `single-gpu`: one GPU (workstation, DGX Spark, Jetson Thor). Needs `HF_TOKEN` + `references/single-gpu.md`. Exception: `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor**. Use cloud.
 
-For `frontend-backend-verdict-agent/single-gpu`, determine the prompt variant (`generic` or `tau`) before `up`. If the current request does not state it, ask and wait for the answer. Do not assume a default, and do not treat an existing `FBV_PROFILE` in `.env` as the choice: show it and ask the user to confirm or change it. For `tau`, ask which `tau3_eval*` profile and suggest `tau3_eval_frontend_verdict_speak_history`. Set `FBV_PROFILE` (`generic` → `default`) without overwriting other `.env` keys, and after the first session report the profile, catalog path, and SHA-256 from the app log. Refer to `docs/how-to/deploy-frontend-backend-verdict-agent.md`.
+For any `frontend-backend-verdict-agent` recipe, determine the profile before `up`. If the current request does not say it, ask "Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?" and wait. Do not choose silently, even though `default` is used when unset, and do not treat an existing `FBV_PROFILE` in `.env` as the answer: show it and ask the user to confirm or change it. `default`: the plain recipe command for the Compose profile the user wants (cloud, `/server`, or `/single-gpu`); do not write `FBV_PROFILE` to `.env`. `eval`: `/single-gpu` only, with `-f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml` in every Compose command. Old values (`tau3_eval*`) are not supported. After the first session, report the profile, prompt catalog path, and SHA-256 from the app log. Refer to `docs/how-to/deploy-frontend-backend-verdict-agent.md`.
 
 If more than one family is viable, present the options and let the user pick. Auto-select only when a single option is viable (for example no usable GPU → cloud).
 

@@ -8,7 +8,8 @@
 # ${VAR} and ${VAR:-default} are resolved from the environment, per file.
 # [in-path] keys resolve against THIS file's directory; [out-path] keys resolve
 # against the working directory (the repository root, or /app in the container).
-# Profiles in profiles/ extend this file; see the plan, section 6.1.
+# The two profiles in profiles/ extend this file: eval.yaml (OpenAI Realtime sessions, Tau) and
+# default.yaml (browser UI sessions), which extends eval.yaml.
 
 server:                            # the Realtime gateway serves the socket and checks the client key
   max_sessions: 8                  # concurrent sessions; more get server_busy (close 1013)
@@ -106,8 +107,8 @@ logging:
   redact_content: false                     # true: omit transcripts/tool payloads from the event log
 
 # Identifier normalization between speech and the agent (all off in this base config). See
-# misc/prototypes/voice/normalization-plan.md. The tau3 eval profiles
-# (profiles/tau3_eval.yaml and everything extending it, and profiles/backend_only.yaml) turn it on.
+# misc/prototypes/voice/normalization-plan.md. The profiles (profiles/eval.yaml, and default.yaml
+# for transcripts only) and the backend_only test profile turn it on.
 normalization:
   transcript:                       # ASR hook: spoken identifiers -> written form, for the agent only
     enabled: false                  # the wire keeps the raw transcript
@@ -143,7 +144,7 @@ normalization:
       escalate_message_key: ""      # later misses ("" = message_key again)
 
 write_gate:                         # hold consequential tool calls until the caller confirms the exact call
-  enabled: false                    # needs the frontend (it judges the confirmation); see tau3_eval_..._write_gate.yaml
+  enabled: false                    # needs the frontend (it judges the confirmation) and client tools (tools.source: client)
   default: non_read                 # non_read (every tool schema_rules.is_read_tool does not call a read) | none
   exempt: []                        # tool names never held (e.g. a handoff tool); must be offered by the session
   include: []                       # tool names held even if classified as reads

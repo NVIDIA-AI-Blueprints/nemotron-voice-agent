@@ -52,7 +52,7 @@ class ShippedConfigTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_every_shipped_file_loads_identically_from_two_working_directories(self) -> None:
-        self.assertEqual(len(SHIPPED), 10)  # base + 8 Tau profiles + the generic "default"
+        self.assertEqual(len(SHIPPED), 3)  # base + the "default" (browser) and "eval" profiles
         with tempfile.TemporaryDirectory() as elsewhere:
             for path in SHIPPED:
                 with self.subTest(path=path.name):
@@ -192,6 +192,8 @@ ALLOWED_TOP_LEVEL = {
     "dotenv",
     # the agent's prompt templates (core/agent/prompts.py; was text/prompts.py, outside the old voice/ scan)
     "jinja2",
+    # the browser profile's tool handlers (tool_handlers.py, copied from frontend_backend_agent/generic)
+    "httpx",
 }
 
 
@@ -248,8 +250,9 @@ class LayeringTests(unittest.TestCase):
 
 
 class KeepaliveTests(unittest.TestCase):
-    def test_tau3_profiles_disable_the_websocket_keepalive(self) -> None:
-        for path in (CONFIG_DIR / "profiles" / "tau3_eval.yaml", BACKEND_ONLY_PROFILE):
+    def test_profiles_disable_the_websocket_keepalive(self) -> None:
+        profiles = CONFIG_DIR / "profiles"
+        for path in (profiles / "eval.yaml", profiles / "default.yaml", BACKEND_ONLY_PROFILE):
             config = load_voice_config(path)
             self.assertEqual(config.server.ws_ping_interval_s, 0.0, path.name)
 

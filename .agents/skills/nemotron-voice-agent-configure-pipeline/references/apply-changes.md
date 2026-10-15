@@ -62,8 +62,13 @@ docker compose --profile multilingual-assistant/single-gpu up -d
 docker compose --profile omni-assistant/single-gpu up -d
 docker compose --profile frontend-backend-agent/single-gpu up -d
 
-# Frontend/Backend Verdict Agent (single-GPU speech, Inference Hub LLMs, OpenAI Realtime only)
-docker compose --profile frontend-backend-verdict-agent/single-gpu up -d
+# Frontend/Backend Verdict Agent (Inference Hub LLMs; browser UI and OpenAI Realtime)
+docker compose --profile frontend-backend-verdict-agent up -d             # cloud speech
+docker compose --profile frontend-backend-verdict-agent/server up -d      # NIM speech
+docker compose --profile frontend-backend-verdict-agent/single-gpu up -d  # NeMo-Speech.cpp
+# Eval profile (evaluation runs, Realtime only): pass the override in every command
+docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml \
+  --profile frontend-backend-verdict-agent/single-gpu up -d
 
 # Resource-heavy single-GPU path (workstation or DGX Spark)
 docker compose --profile omni-assistant-subagents/single-gpu up -d

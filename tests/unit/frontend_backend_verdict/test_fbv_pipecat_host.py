@@ -32,6 +32,7 @@ from fastapi.testclient import TestClient
 
 from examples.frontend_backend_verdict import pipeline
 from examples.frontend_backend_verdict.adapters.pipecat import runtime as pipecat_runtime
+from examples.frontend_backend_verdict.adapters.pipecat import ui_session
 from examples.frontend_backend_verdict.adapters.pipecat.pipeline import SpeechStack
 from examples.frontend_backend_verdict.adapters.pipecat.runtime import PipecatRuntime
 from examples.frontend_backend_verdict.adapters.pipecat.settings import load_pipecat_settings
@@ -251,11 +252,27 @@ class _Socket:
 
 
 class BotAdmissionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_only_the_realtime_protocol_is_served(self) -> None:
-        with self.assertRaises(RuntimeError):
-            await pipeline.bot(SimpleNamespace(websocket=_Socket(), body={"protocol": "webrtc"}))
+    async def test_eval_profile_serves_only_the_realtime_protocol(self) -> None:
+        with mock.patch.dict("os.environ", {"FBV_PROFILE": "eval"}), self.assertRaises(RuntimeError) as caught:
+            await pipeline.bot(SimpleNamespace(websocket=_Socket(), body={"protocol": "rtvi"}))
+        self.assertIn("FBV_PROFILE=default", str(caught.exception))
         with self.assertRaises(RuntimeError):
             await pipeline.bot(SimpleNamespace(websocket=None, body={"protocol": "realtime"}))
+
+    async def test_default_profile_serves_browser_sessions(self) -> None:
+        args = SimpleNamespace(websocket=None, body={"protocol": "rtvi"})
+        for value in ("", "default"):
+            with (
+                self.subTest(FBV_PROFILE=value),
+                mock.patch.dict("os.environ", {"FBV_PROFILE": value}),
+                mock.patch.object(ui_session, "serve_ui") as serve_ui,
+            ):
+                await pipeline.bot(args)
+            serve_ui.assert_awaited_once_with(args)
+
+    async def test_an_unknown_profile_refuses_browser_sessions(self) -> None:
+        with mock.patch.dict("os.environ", {"FBV_PROFILE": "tau3_eval"}), self.assertRaises(ProfileError):
+            await pipeline.bot(SimpleNamespace(websocket=None, body={"protocol": "rtvi"}))
 
     async def test_profile_error_is_reported_and_closes_1011(self) -> None:
         socket = _Socket()

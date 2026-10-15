@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The adapter's Pipecat pipeline, and ``bot()`` for the session-owned Realtime route.
+"""The adapter's Pipecat pipeline, and ``bot()``: the session-owned Realtime route and the browser UI.
 
 Ported from FDH ``adapters/pipecat/pipeline.py`` (``a0ef50c``) plus v1's ``pipeline.py``
 admission (plan §2, §3.1)::
@@ -20,6 +20,11 @@ admission (plan §2, §3.1)::
 Barge-in (B9): Pipecat's user-turn start strategies broadcast the interruption; whether a turn
 interrupts is decided per turn by the same rule the turn manager applies
 (``barge_in.enabled`` and the client's ``interrupt_response``).
+
+That is the OpenAI Realtime pipeline (always the ``eval`` profile). Browser UI sessions run the
+same processors from VAD to the output tagger on the repository's UI transport, with RTVI
+(``ui_pipeline.py``, ``ui_session.py``); with ``smart_turn`` set in the settings file the user
+turn ends on the shared Smart Turn stop strategy instead of the speech-timeout stop.
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ if TYPE_CHECKING:
     from pipecat.audio.vad.vad_analyzer import VADAnalyzer
 
     from examples.frontend_backend_verdict.adapters.pipecat.session import PipecatSession
+    from examples.frontend_backend_verdict.adapters.pipecat.settings import PipecatSettings
     from examples.frontend_backend_verdict.core.engine.session_settings import TurnDetectionSettings
 
 
@@ -116,22 +122,71 @@ class GatedTranscriptionStart(_GatedStart, TranscriptionUserTurnStartStrategy):
 
 
 class SessionPipeline:
-    """Builds and owns one session's processors, transport and worker."""
+    """Builds and owns one OpenAI Realtime session's processors, transport and worker.
+
+    The processors between the transport's input and output are shared with the browser UI
+    pipeline (:class:`UiSessionPipeline`): :meth:`_build_turn_processors` and
+    :meth:`_middle_processors`. The Realtime transport, serializer and worker are built here
+    exactly as before the browser UI was added (``test_fbv_realtime_baseline``).
+    """
 
     def __init__(self, session: PipecatSession, websocket: WebSocket, speech: SpeechStack) -> None:
         """Assemble the pipeline (it starts in :meth:`PipecatSession.run`)."""
         settings = session.settings
+        self._build_turn_processors(session, speech)
+        audio = settings.audio
+        out_rate = audio.out_sample_rate or session.config.tts.sample_rate
+        self.serializer: RealtimeSerializer | None = RealtimeSerializer(session)
+        self.transport: Any = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                audio_in_enabled=True,
+                audio_in_sample_rate=audio.in_sample_rate,
+                audio_out_enabled=True,
+                audio_out_sample_rate=out_rate,
+                audio_out_10ms_chunks=audio.out_10ms_chunks,
+                audio_out_auto_silence=False,
+                audio_out_end_silence_secs=0,
+                audio_out_write_timeout_secs=audio.write_timeout_s,
+                serializer=self.serializer,
+                session_timeout=None,
+            ),
+        )
+        self.pipeline = Pipeline(
+            [self.transport.input(), *self._middle_processors(speech, settings), self.transport.output()]
+        )
+        self.worker = PipelineWorker(
+            self.pipeline,
+            params=PipelineParams(
+                audio_in_sample_rate=audio.in_sample_rate,
+                audio_out_sample_rate=out_rate,
+            ),
+            enable_rtvi=False,
+            idle_timeout_secs=None,
+            cancel_on_idle_timeout=False,
+        )
+        self._cancel_on_disconnect()
+
+    def _build_turn_processors(self, session: PipecatSession, speech: SpeechStack) -> None:
+        """The input cursor, user-turn processor, turn bridge, ASR error tap and output tagger."""
+        settings = session.settings
         self.cursor = InputCursor()
         self.tagger = OutputTagger()
         turn = settings.turn
-        stop_kwargs: dict[str, Any] = {}
-        if turn.user_speech_timeout is not None:
-            stop_kwargs["user_speech_timeout"] = turn.user_speech_timeout
-        if turn.wait_for_transcript is not None:
-            stop_kwargs["wait_for_transcript"] = turn.wait_for_transcript
-        stop = SpeechTimeoutUserTurnStopStrategy(**stop_kwargs)
+        if turn.smart_turn:
+            from examples.shared.pipeline_utils import build_smart_turn_stop_strategies  # noqa: PLC0415
+
+            wait = True if turn.wait_for_transcript is None else turn.wait_for_transcript
+            stops: list[Any] = list(build_smart_turn_stop_strategies(wait_for_transcript=wait))
+        else:
+            stop_kwargs: dict[str, Any] = {}
+            if turn.user_speech_timeout is not None:
+                stop_kwargs["user_speech_timeout"] = turn.user_speech_timeout
+            if turn.wait_for_transcript is not None:
+                stop_kwargs["wait_for_transcript"] = turn.wait_for_transcript
+            stops = [SpeechTimeoutUserTurnStopStrategy(**stop_kwargs)]
         start = [GatedVADStart(session.interruptions_allowed), GatedTranscriptionStart(session.interruptions_allowed)]
-        turn_kwargs: dict[str, Any] = {"user_turn_strategies": UserTurnStrategies(start=start, stop=[stop])}
+        turn_kwargs: dict[str, Any] = {"user_turn_strategies": UserTurnStrategies(start=start, stop=stops)}
         if turn.user_turn_stop_timeout is not None:
             turn_kwargs["user_turn_stop_timeout"] = turn.user_turn_stop_timeout
         self.user_turns = UserTurnProcessor(**turn_kwargs)
@@ -147,56 +202,30 @@ class SessionPipeline:
         )
         self.asr_errors = AsrErrorTap(self.bridge.on_asr_error)
         self.asr_errors.stt = speech.stt
-        audio = settings.audio
-        out_rate = audio.out_sample_rate or session.config.tts.sample_rate
-        self.serializer = RealtimeSerializer(session)
-        self.transport = FastAPIWebsocketTransport(
-            websocket=websocket,
-            params=FastAPIWebsocketParams(
-                audio_in_enabled=True,
-                audio_in_sample_rate=audio.in_sample_rate,
-                audio_out_enabled=True,
-                audio_out_sample_rate=out_rate,
-                audio_out_10ms_chunks=audio.out_10ms_chunks,
-                audio_out_auto_silence=False,
-                audio_out_end_silence_secs=0,
-                audio_out_write_timeout_secs=audio.write_timeout_s,
-                serializer=self.serializer,
-                session_timeout=None,
-            ),
-        )
         self.tts = speech.tts
         self.vad = speech.vad
         self._vad_overrides = settings.vad.overrides()
         self._vad_params: Any = None
         self._vad_pending = False
-        self.pipeline = Pipeline(
-            [
-                self.transport.input(),
-                VADProcessor(vad_analyzer=speech.vad, **settings.vad.processor_kwargs()),
-                self.cursor,
-                self.asr_errors,
-                speech.stt,
-                self.user_turns,
-                self.bridge,
-                speech.tts,
-                self.tagger,
-                self.transport.output(),
-            ]
-        )
-        self.worker = PipelineWorker(
-            self.pipeline,
-            params=PipelineParams(
-                audio_in_sample_rate=audio.in_sample_rate,
-                audio_out_sample_rate=out_rate,
-            ),
-            enable_rtvi=False,
-            idle_timeout_secs=None,
-            cancel_on_idle_timeout=False,
-        )
+
+    def _middle_processors(self, speech: SpeechStack, settings: PipecatSettings) -> list[FrameProcessor]:
+        """VAD, input cursor, ASR, user turns, the turn bridge, TTS and the output tagger, in order."""
+        return [
+            VADProcessor(vad_analyzer=speech.vad, **settings.vad.processor_kwargs()),
+            self.cursor,
+            self.asr_errors,
+            speech.stt,
+            self.user_turns,
+            self.bridge,
+            speech.tts,
+            self.tagger,
+        ]
+
+    def _cancel_on_disconnect(self) -> None:
+        """End the session when the client goes away."""
 
         @self.transport.event_handler("on_client_disconnected")
-        async def on_client_disconnected(_transport: Any, _websocket: Any) -> None:
+        async def on_client_disconnected(_transport: Any, _client: Any) -> None:
             await self.worker.cancel()
 
     def apply_turn_detection(self, turn: TurnDetectionSettings) -> None:
@@ -235,6 +264,30 @@ class SessionPipeline:
 
 
 async def bot(runner_args: RunnerArguments) -> None:
+    """Serve one session: OpenAI Realtime (always the ``eval`` profile) or the browser UI (``default``).
+
+    The standard example entry point (``examples_registry.yaml``): ``src/server.py`` marks the
+    Realtime route's sessions with ``protocol: "realtime"`` and browser sessions (WebRTC, the UI
+    WebSocket) with ``protocol: "rtvi"``. With ``FBV_PROFILE=eval`` browser sessions are refused.
+    """
+    body = getattr(runner_args, "body", None) or {}
+    if body.get("protocol") == "realtime":
+        await serve_realtime(runner_args)
+        return
+    from examples.frontend_backend_verdict.core.config.profiles import REALTIME_PROFILE, profile_name  # noqa: PLC0415
+
+    if profile_name() == REALTIME_PROFILE:
+        raise RuntimeError(
+            "frontend-backend-verdict-agent runs with FBV_PROFILE=eval, which serves the OpenAI Realtime "
+            "WebSocket only (model nvidia/nemotron-realtime-frontend-backend-verdict on /v1/realtime); "
+            "deploy with FBV_PROFILE=default (or unset) for the browser UI"
+        )
+    from examples.frontend_backend_verdict.adapters.pipecat.ui_session import serve_ui  # noqa: PLC0415
+
+    await serve_ui(runner_args)
+
+
+async def serve_realtime(runner_args: RunnerArguments) -> None:
     """Serve one OpenAI Realtime connection with the Pipecat adapter (v1's admission rules, S12)."""
     from examples.frontend_backend_verdict.adapters.pipecat.runtime import runtime_for  # noqa: PLC0415
     from examples.frontend_backend_verdict.adapters.pipecat.session import PipecatSession  # noqa: PLC0415

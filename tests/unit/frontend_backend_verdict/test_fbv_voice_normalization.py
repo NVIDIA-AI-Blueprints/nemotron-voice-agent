@@ -12,7 +12,7 @@ import json
 import os
 import tempfile
 import unittest
-from dataclasses import fields, replace
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -61,7 +61,7 @@ def _env() -> Any:
 
 
 with _env():
-    PROFILE = load_voice_config(PROFILES / "tau3_eval_normalization.yaml")
+    PROFILE = load_voice_config(PROFILES / "eval.yaml")
     BACKEND_ONLY = load_voice_config(BACKEND_ONLY_PROFILE)
 
 
@@ -362,24 +362,13 @@ class ConfigTests(unittest.TestCase):
         config = self.load(body)
         self.assertTrue(any("ruleset 'en'" in warning for warning in config.warnings))
 
-    def test_normalization_profile_equals_tau3_eval(self) -> None:
-        # Normalization is on in tau3_eval.yaml itself; the normalization profile is kept as an alias.
-        base = load_voice_config(PROFILES / "tau3_eval.yaml")
-        for field in fields(base):
-            if field.name not in ("source_files", "resolved_in_paths", "warnings"):
-                self.assertEqual(getattr(base, field.name), getattr(PROFILE, field.name), field.name)
-        self.assertTrue(base.normalization.transcript.enabled)
-        self.assertTrue(base.normalization.tool_arguments.enabled)
-        self.assertTrue(base.normalization.tool_arguments.retry_guard.enabled)
+    def test_normalization_is_on_in_the_eval_profile(self) -> None:
+        self.assertTrue(PROFILE.normalization.transcript.enabled)
+        self.assertTrue(PROFILE.normalization.tool_arguments.enabled)
+        self.assertTrue(PROFILE.normalization.tool_arguments.retry_guard.enabled)
 
-    def test_normalization_on_in_every_tau3_arm_and_off_in_the_base(self) -> None:
-        for path in (
-            BACKEND_ONLY_PROFILE,
-            PROFILES / "tau3_eval_backend_history.yaml",
-            PROFILES / "tau3_eval_backend_history_noguide.yaml",
-            PROFILES / "tau3_eval_frontend_verdict.yaml",
-            PROFILES / "tau3_eval_frontend_verdict_speak.yaml",
-        ):
+    def test_normalization_on_in_the_eval_profiles_and_off_in_the_base(self) -> None:
+        for path in (BACKEND_ONLY_PROFILE, PROFILES / "eval.yaml"):
             with self.subTest(profile=path.name):
                 config = load_voice_config(path)
                 self.assertTrue(config.normalization.transcript.enabled)

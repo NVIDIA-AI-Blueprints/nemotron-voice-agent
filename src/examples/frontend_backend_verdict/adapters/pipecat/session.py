@@ -54,6 +54,7 @@ from examples.frontend_backend_verdict.core.errors import WireProtocolError
 if TYPE_CHECKING:
     from fastapi import WebSocket
 
+    from examples.frontend_backend_verdict.adapters.pipecat.pipeline import SpeechStack
     from examples.frontend_backend_verdict.adapters.pipecat.runtime import PipecatRuntime, SpeechFactory
 
 # Turn-manager events that must not wait behind agent audio.
@@ -100,7 +101,7 @@ class PipecatSession:
         self.log = SessionLog(self._event_log, self.session_id, lambda: self.pipeline.cursor.now_ms)
         self.agent = runtime.agent_factory(self.session_id)
         self._queue: asyncio.Queue[Frame | None] = asyncio.Queue()
-        self.pipeline = SessionPipeline(self, websocket, (speech or real_speech)(self))
+        self.pipeline = self._build_pipeline(websocket, (speech or real_speech)(self))
         self._session_start = Stamp.now(self.clock, 0.0)
         output = PipecatSpeechOutput(
             push=self.pipeline.push_to_tts,
@@ -137,6 +138,10 @@ class PipecatSession:
         self._warned: set[str] = set()
         self._pump: asyncio.Task[None] | None = None
         self._update_timer: asyncio.Task[None] | None = None
+
+    def _build_pipeline(self, websocket: WebSocket, speech: SpeechStack) -> SessionPipeline:
+        """The Realtime pipeline (the browser UI session builds its own, see ``ui_session.py``)."""
+        return SessionPipeline(self, websocket, speech)
 
     # -- events -------------------------------------------------------------------------
 

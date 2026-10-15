@@ -3,17 +3,17 @@
 #
 # On-prem service catalog for the Frontend/Backend Verdict example.
 #
-# LLM endpoints (model and base URL) come from the `llm` (frontend) and `thinker-llm`
-# (backend) entries the Realtime route selects. The request parameters (temperature,
-# max_tokens, reasoning switches) are the profile's, from
-# core/config/agent.yaml; the catalog values below repeat them.
-# Both LLMs default to the NVIDIA Inference Hub; the API key is
-# NVIDIA_API_KEY (an Inference Hub `sk-...` key).
+# LLM endpoints (model and base URL) come from the `llm` (frontend) entry the session
+# selects (the browser UI's LLM menu, or the Realtime route's selector); the backend
+# (`thinker-llm`) is the profile's. The request parameters (temperature, max_tokens, reasoning
+# switches) are the profile's, from core/config/agent.yaml; the catalog values below repeat
+# them. Both LLMs default to the NVIDIA Inference Hub; the API key is NVIDIA_API_KEY (an
+# Inference Hub `sk-...` key).
 #
-# ASR and TTS are resolved by the example's own catalog loader from the `singlegpu`
-# section (core/config/voice_agent.yaml: asr/tts.catalog) and handed to the shared Pipecat
-# services. The `server` section exists for the registry's per-platform validation; this
-# example has only the single-GPU recipe.
+# ASR and TTS are resolved by the example's own catalog loader (core/config/catalog.py) and
+# handed to the shared Pipecat services: the `singlegpu` section for the single-GPU recipe
+# (the NeMo-Speech.cpp sidecar, nemo-speech:50051) and the `server` section for the server
+# recipe (the ASR and TTS NIM sidecars). FBA_ASR_SERVER / FBA_TTS_SERVER replace the server.
 # `synthesis_mode` is required by the repository catalog rules; this example does not
 # read it: its TTS mode comes from adapters/pipecat/settings (`per_sentence`, one request
 # per sentence).

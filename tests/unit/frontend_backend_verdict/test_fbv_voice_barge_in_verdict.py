@@ -710,13 +710,11 @@ class WiringAndConfigTests(unittest.TestCase):
 
     def test_profiles(self) -> None:
         profiles = CONFIG_DIR / "profiles"
-        for name, filler in (
-            ("tau3_eval_frontend_verdict", "log_only"),
-            ("tau3_eval_frontend_verdict_speak", "speak"),
-        ):
+        for name in ("eval", "default"):
             config = load_voice_config(profiles / f"{name}.yaml")
-            self.assertEqual((config.barge_in.while_thinking, config.filler.mode), ("frontend_verdict", filler))
-        self.assertEqual(load_voice_config(profiles / "tau3_eval.yaml").barge_in.while_thinking, "cancel_and_merge")
+            self.assertEqual((config.barge_in.while_thinking, config.filler.mode), ("frontend_verdict", "speak"))
+        base = load_voice_config(CONFIG_DIR / "voice_agent.yaml")
+        self.assertEqual((base.barge_in.while_thinking, base.filler.mode), ("cancel_and_merge", "log_only"))
 
     def test_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

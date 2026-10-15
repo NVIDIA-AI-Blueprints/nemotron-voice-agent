@@ -2,54 +2,99 @@
 
 ## Overview
 
-This guide takes you from a clean single-GPU host to a running and verified deployment of the [Frontend/Backend Verdict Agent](../../src/examples/frontend_backend_verdict/README.md). The deployment uses the `frontend-backend-verdict-agent/single-gpu` Docker Compose recipe.
+This guide takes you from a clean host to a running and verified deployment of the [Frontend/Backend Verdict Agent](../../src/examples/frontend_backend_verdict/README.md). The agent pairs a frontend large language model (LLM) that talks to the user with a backend LLM that does the delegated work. Both LLMs run on the NVIDIA Inference Hub.
 
-The recipe runs the following parts:
+The agent serves two kinds of sessions:
 
-- The `frontend-backend-verdict-agent-single-gpu` app service, which serves the agent on the OpenAI Realtime WebSocket at `/v1/realtime`.
-- The `nemo-speech` sidecar, which runs NeMo-Speech.cpp automatic speech recognition (ASR) and text-to-speech (TTS) on GPU 0.
-- Two large language models (LLMs) on the NVIDIA Inference Hub: a frontend LLM that talks to the caller, and a backend LLM that does the delegated work.
+- Browser UI sessions over WebRTC or the UI's WebSocket transport, with the Real-Time Voice Inference (RTVI) protocol, like the other examples in this repository.
+- OpenAI Realtime sessions on `/v1/realtime` with the model `nvidia/nemotron-realtime-frontend-backend-verdict`, for Realtime clients and evaluation runs such as tau-bench (Tau).
 
-The agent serves only the Realtime model `nvidia/nemotron-realtime-frontend-backend-verdict`. It does not serve the browser UI, WebRTC, or RTVI.
+The example has three Docker Compose recipes, which differ in where automatic speech recognition (ASR) and text-to-speech (TTS) run:
 
-For evaluation runs, deploy the same recipe in eval mode. Eval mode serves plain `ws://` and writes the agent's per-turn logs to the host. Refer to [Deploy in Eval Mode](#deploy-in-eval-mode).
+- `frontend-backend-verdict-agent` (cloud): ASR and TTS run on NVIDIA cloud functions (NVCF). The recipe has no sidecars and needs no local GPU.
+- `frontend-backend-verdict-agent/server`: ASR and TTS run in the `nemotron-asr-streaming-english` and `magpie-multilingual-tts-service` NIM sidecars on a workstation GPU.
+- `frontend-backend-verdict-agent/single-gpu`: ASR and TTS run in the `nemo-speech` NeMo-Speech.cpp sidecar on one GPU.
+
+The `FBV_PROFILE` setting decides what a deployment serves. Refer to [Choose a Profile](#choose-a-profile).
 
 > **Note:** The commands in this guide are checked against the repository's Compose files, `.env.example`, and source code. They were not run on GPU hardware for this revision of the guide.
 
 ## Instructions for AI Agents
 
-If you are an AI agent that deploys this recipe for a user, follow these rules:
+If you are an AI agent that deploys this example for a user, follow these rules:
 
-1. Before you start the deployment container, determine the prompt variant: `generic` or `tau`.
-2. If the user has not stated it in the current request, ask which prompt variant to use. Do not assume a default. Do not continue until the user answers.
-3. If an existing `.env` already sets `FBV_PROFILE`, do not treat it as the user's choice. Show the value and ask the user to confirm it or choose another.
-4. If the user chooses `tau`, ask which `tau3_eval*` profile to use, and suggest the default arm (`tau3_eval_frontend_verdict_speak_history`).
-5. Set the profile value from the [Choose a Prompt Variant](#choose-a-prompt-variant) table. Do not overwrite other keys in an existing `.env`.
-6. After startup, read the profile, catalog path, and SHA-256 from the log, and report them to the user.
+1. If the user's request does not say which profile to deploy, ask: "Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?" Wait for the answer. Do not choose one silently, even though the agent uses `default` when nothing is set.
+2. If an existing `.env` already sets `FBV_PROFILE`, do not treat it as the answer. Show the value, and ask the user to confirm it or change it.
+3. For `default`, use the plain recipe command for the Compose profile that the user wants: cloud (`frontend-backend-verdict-agent`), `frontend-backend-verdict-agent/server`, or `frontend-backend-verdict-agent/single-gpu`. For `eval`, use `frontend-backend-verdict-agent/single-gpu` with the `docker/docker-compose.fbv-eval.yaml` override. Refer to [Choose a Profile](#choose-a-profile).
+4. After startup and the first session, read the profile, the prompt catalog path, and its SHA-256 from the app log, and report them to the user. Refer to [Verify the Deployment](#verify-the-deployment).
+
+Do not overwrite other keys in an existing `.env`.
 
 ## Prerequisites
 
-Before you start, make sure the host meets the following requirements:
+Every recipe needs the following:
 
-- A host with one NVIDIA GPU that can run the `nemo-speech` sidecar of the `*/single-gpu` recipes. The recipe places `nemo-speech` on GPU 0. The LLMs do not use the local GPU.
-- NVIDIA driver 580.x or newer for NeMo-Speech.cpp.
-- Docker Compose v2.20 or newer, and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-- Python 3, and either the Hugging Face `hf` CLI or `uvx`, for the speech model download script.
+- Docker Compose v2.20 or newer.
 - Outbound HTTPS access from the host to the NVIDIA Inference Hub at `https://inference-api.nvidia.com/v1`.
-- Free host ports `7860` (app) and `50051` (`nemo-speech`).
+- A free host port `7860` for the app, or another port set with `PIPELINE_APP_PORT`.
 - A clone of this repository. Run every command in this guide from the repository root.
+
+Each Compose profile adds the requirements in the following table.
+
+| Compose profile | Hardware | Additional requirements |
+| --- | --- | --- |
+| `frontend-backend-verdict-agent` | No local GPU | Outbound access to `grpc.nvcf.nvidia.com:443` for ASR and TTS. |
+| `frontend-backend-verdict-agent/server` | One workstation GPU for both NIM sidecars (GPU 0). Not supported on DGX Spark or Jetson Thor. | The [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), NGC access to pull the NIM images, and free host ports `50151`, `9000`, `50152`, and `9001`. |
+| `frontend-backend-verdict-agent/single-gpu` | One NVIDIA GPU for the `nemo-speech` sidecar (GPU 0). The LLMs do not use the local GPU. | NVIDIA driver 580.x or newer, the NVIDIA Container Toolkit, Python 3 and either the Hugging Face `hf` CLI or `uvx` for the model download script, and a free host port `50051`. |
 
 ## Credentials
 
-The recipe uses the credentials in the following table. This recipe is the exception to the general single-GPU rule: other `*/single-gpu` recipes use only `HF_TOKEN`, but this recipe also needs `NVIDIA_API_KEY` because its LLMs run on the NVIDIA Inference Hub.
+The credentials depend on the Compose profile. The following table lists the required keys.
+
+| Compose profile | Required `.env` keys | `docker login nvcr.io` |
+| --- | --- | --- |
+| `frontend-backend-verdict-agent` | `NVIDIA_API_KEY` | No |
+| `frontend-backend-verdict-agent/server` | `NVIDIA_API_KEY` | Yes, before `up` |
+| `frontend-backend-verdict-agent/single-gpu` | `HF_TOKEN` and `NVIDIA_API_KEY` | No |
+
+Every recipe uses the keys in the following table.
 
 | `.env` key | Required | Purpose |
 | --- | --- | --- |
-| `HF_TOKEN` | Yes | Hugging Face token. The download script reads it to fetch the NeMo-Speech.cpp model weights. |
-| `NVIDIA_API_KEY` | Yes | An NVIDIA Inference Hub key. Both LLMs send it. |
-| `REALTIME_API_KEY` | Recommended | The Bearer credential that Realtime clients send. Leave it unset only for unauthenticated local development. |
+| `NVIDIA_API_KEY` | Yes | An NVIDIA Inference Hub key (`sk-...`). Both LLMs send it. |
+| `HF_TOKEN` | `/single-gpu` only | Hugging Face token. The download script reads it to fetch the NeMo-Speech.cpp model weights. |
+| `REALTIME_API_KEY` | Recommended | The Bearer credential that OpenAI Realtime clients send. Leave it unset only for unauthenticated local development. |
+| `WEATHERAPI_KEY` | No | Live results for the `get_weather` tool in browser UI sessions. |
+| `FINNHUB_API_KEY` | No | Live results for the `get_stock_price` tool in browser UI sessions. |
+| `PERPLEXITY_API_KEY` | No | Live results for the `web_search` tool in browser UI sessions. |
 
-The recipe does not use `NVIDIA_SPEECH_API_KEY`, because speech runs in the local `nemo-speech` sidecar. The recipe does not need `docker login nvcr.io`.
+Without its key, a tool returns an "unavailable" result, and the agent tells the user that it cannot do that. The `calculate_bmi` and `generate_random_number` tools need no key. Evaluation runs do not use these tools, because Realtime clients send their own tools.
+
+The same `NVIDIA_API_KEY` variable has other uses on the cloud and server recipes:
+
+- **Cloud recipe:** the ASR and TTS NVCF functions also authenticate with `NVIDIA_API_KEY`, so the recipe sends the same Inference Hub key to both the LLMs and NVCF speech. It has not been verified that one Inference Hub key also works for NVCF speech. If your key does not work for NVCF speech, the speech warm-up fails. In that case, use the `/server` or `/single-gpu` recipe, whose speech runs locally.
+- **Server recipe:** `docker login nvcr.io` and the NIM sidecars (`NGC_API_KEY`) also use `NVIDIA_API_KEY`. It has not been verified that one Inference Hub key also works for NGC. If the image pull or the NIM model download fails with an authorization error, use the `/single-gpu` recipe.
+
+The `/single-gpu` recipe is the exception to the general single-GPU rule. Other `*/single-gpu` recipes use only `HF_TOKEN`, but this recipe also needs `NVIDIA_API_KEY` for its LLMs. It does not use `NVIDIA_SPEECH_API_KEY` and does not need `docker login nvcr.io`.
+
+## Choose a Profile
+
+The agent has two profiles. When `FBV_PROFILE` is unset, the agent uses `default`. The following table compares them.
+
+| Profile | Use it for | What it serves | Compose profiles | Prompt catalog | Turn taking | TLS | Logs | Deploy command |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `default` | The browser UI, development, and prompt tuning | Browser UI sessions with the `default` settings, and OpenAI Realtime sessions with the `eval` settings | `frontend-backend-verdict-agent`, `frontend-backend-verdict-agent/server`, or `frontend-backend-verdict-agent/single-gpu` | `core/config/prompts/generic.yaml`, free to tune | Smart Turn v3: a 200 ms voice activity detection (VAD) stop hands the turn to Smart Turn, with a 1 s silence fallback | On (HTTPS and `wss://`) | App log only | `docker compose --profile <compose-profile> up -d` |
+| `eval` | Evaluation runs, such as Tau | OpenAI Realtime sessions only, with the `eval` settings. Browser UI sessions are refused. | `frontend-backend-verdict-agent/single-gpu` only | `core/config/prompts/tau.yaml`, pinned by SHA-256 | Server-owned 800 ms silence | Off (HTTP and `ws://`) | App log, plus the event and filler logs in `logs/` on the host | `docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml --profile frontend-backend-verdict-agent/single-gpu up -d` |
+
+OpenAI Realtime sessions use the `eval` settings in both profiles, so `FBV_PROFILE` never changes what a Realtime client sees. Those settings take the tools and instructions from the client's `session.update`, use the Tau prompt catalog, and end turns after 800 ms of silence.
+
+The `eval` profile refuses browser UI sessions, so they cannot take resources from an evaluation run. The UI shows no error: on WebRTC the session ends, and the app log shows the error.
+
+You do not need to set `FBV_PROFILE` in `.env`. Compose sets `default` when the key is unset, and the eval override file sets `eval`. As an advanced option, you can set `FBV_PROFILE=default` or `FBV_PROFILE=eval` in `.env`. The agent supports no other value. An old value, such as a `tau3_eval*` profile name, fails the first session with an error that names `default` and `eval`. The agent checks the value when the first session arrives, not when the container starts.
+
+The profile files are `src/examples/frontend_backend_verdict/core/config/profiles/default.yaml` and `eval.yaml`. Each profile's Pipecat settings file in `adapters/pipecat/settings/` is fixed in code: `default.yaml` for `default` and `eval.yaml` for `eval`. For every difference between the profiles, refer to [Profiles](../../src/examples/frontend_backend_verdict/README.md#profiles).
+
+The Tau catalog is pinned by SHA-256 in `tests/unit/frontend_backend_verdict/test_fbv_prompt_variants.py`. Do not edit `tau.yaml` to tune prompts. A change to it requires a new pin and an attached Tau A/B evaluation run. Tune `generic.yaml` instead.
 
 ## Configure the Environment
 
@@ -62,94 +107,78 @@ test -f .env || cp .env.example .env
 Open `.env` in an editor and set the keys from [Credentials](#credentials). Use your own values in place of the placeholders:
 
 ```env
-HF_TOKEN=<your-hugging-face-token>
 NVIDIA_API_KEY=<your-nvidia-inference-hub-key>
+HF_TOKEN=<your-hugging-face-token>
 REALTIME_API_KEY=<a-strong-random-secret>
 ```
+
+Set `HF_TOKEN` only for the `/single-gpu` recipe.
 
 The following optional keys change the deployment. Leave them unset to keep the defaults.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `FBV_PROFILE` | `tau3_eval_frontend_verdict_speak_history` | Behavior profile and prompt variant. Refer to [Select a Profile](#select-a-profile). |
-| `FBV_PIPECAT_SETTINGS` | `eval.yaml` | Pipecat voice settings file in `src/examples/frontend_backend_verdict/adapters/pipecat/settings/`. |
+| `FBV_PROFILE` | `default` | The profile: `default` or `eval`. Refer to [Choose a Profile](#choose-a-profile). |
 | `PIPELINE_APP_PORT` | `7860` | Host port of the app service. |
-| `PIPELINE_TLS` | `true` | `true` serves HTTPS and `wss://` with a self-signed certificate. `false` serves plain HTTP and `ws://`. |
-| `FBA_VOICE_EVENT_LOG` | Empty | Path of a JSONL event log inside the container, for example `/tmp/fbv-events.jsonl`. Eval mode sets it. |
-| `FBA_FILLER_LOG` | Empty | Path of a JSONL filler timing log inside the container. Eval mode sets it. |
-| `NEMO_SPEECH_MODEL_LOC` | `models/nemo-speech` | Host directory that holds the speech model weights. |
+| `PIPELINE_TLS` | `true` | `true` serves HTTPS and `wss://` with a self-signed certificate. `false` serves plain HTTP and `ws://`. Browsers need HTTPS for the microphone, except on `localhost`. |
+| `FBA_VOICE_EVENT_LOG` | Empty | Path of a JSONL event log inside the container for Realtime sessions, for example `/tmp/fbv-events.jsonl`. Eval mode sets it. Browser UI sessions never write it. |
+| `FBA_FILLER_LOG` | Empty | Path of a JSONL filler timing log inside the container for Realtime sessions. Eval mode sets it. |
+| `FBA_ASR_SERVER`, `FBA_TTS_SERVER` | Empty | Replace the ASR or TTS server of the selected catalog entry. |
+| `NEMO_SPEECH_MODEL_LOC` | `models/nemo-speech` | Host directory that holds the speech model weights for `/single-gpu`. |
 
-Do not set `UVICORN_WS_PING_INTERVAL` or `UVICORN_WS_PING_TIMEOUT` in `.env` for this recipe. Compose sets them to `0` and `20`, which every served profile requires.
-
-## Select a Profile
-
-The `FBV_PROFILE` key selects the behavior profile. The profile also selects the prompt catalog. The following table lists the served profiles.
-
-| Profile | Prompt catalog | Purpose |
-| --- | --- | --- |
-| `default` | `generic.yaml` | The default Tau arm with the generic prompt catalog. Use it for general use and prompt tuning. |
-| `tau3_eval_frontend_verdict_speak_history` | `tau.yaml` | The default Tau arm: frontend barge-in verdict, spoken filler, and backend conversation history. Compose uses it when `FBV_PROFILE` is unset. |
-| `tau3_eval_frontend_verdict_speak` | `tau.yaml` | Frontend verdict and spoken filler, without backend history. |
-| `tau3_eval_frontend_verdict` | `tau.yaml` | Frontend verdict with filler logged but not spoken. |
-| `tau3_eval_backend_history` | `tau.yaml` | Base evaluation arm plus backend conversation history. |
-| `tau3_eval_backend_history_noguide` | `tau.yaml` | Backend history without its behavioral guidance. |
-| `tau3_eval_normalization` | `tau.yaml` | Same as `tau3_eval`. It remains for existing commands. |
-| `tau3_eval` | `tau.yaml` | Base evaluation arm. |
-| `tau3_eval_frontend_verdict_speak_history_write_gate` | `tau.yaml` | The default Tau arm plus the write gate, which holds consequential tool calls until the caller confirms them. |
-
-Every profile uses 800 ms server-owned turn detection and requires the WebSocket keepalive to be off. For the exact differences, refer to [Behavior Profiles](../../src/examples/frontend_backend_verdict/README.md#behavior-profiles). The profile files are in `src/examples/frontend_backend_verdict/core/config/profiles/`.
-
-## Choose a Prompt Variant
-
-Choose the prompt variant first, and then set the matching profile. The following table maps each variant to its `FBV_PROFILE` value.
-
-| Prompt variant | Catalog | `FBV_PROFILE` value |
-| --- | --- | --- |
-| `generic` | `src/examples/frontend_backend_verdict/core/config/prompts/generic.yaml` | `default` |
-| `tau` | `src/examples/frontend_backend_verdict/core/config/prompts/tau.yaml` | A `tau3_eval*` profile, for example the default arm `tau3_eval_frontend_verdict_speak_history` |
-
-The Tau catalog is pinned by SHA-256 in `tests/unit/frontend_backend_verdict/test_fbv_prompt_variants.py`. Do not edit `tau.yaml` to tune prompts. A change to it requires a new pin and an attached Tau A/B evaluation run. Tune `generic.yaml` instead.
-
-Set the value in `.env` without changing other keys. The following command sets `FBV_PROFILE=default` and replaces an existing `FBV_PROFILE` line if there is one:
-
-```bash
-grep -q '^FBV_PROFILE=' .env \
-  && sed -i 's/^FBV_PROFILE=.*/FBV_PROFILE=default/' .env \
-  || echo 'FBV_PROFILE=default' >> .env
-```
-
-Replace `default` with a `tau3_eval*` profile name to select the Tau catalog.
+Do not set `UVICORN_WS_PING_INTERVAL` or `UVICORN_WS_PING_TIMEOUT` in `.env` for these recipes. Compose sets them to `0` and `20`. The keepalive applies to the whole server process, and Realtime sessions require it off.
 
 ## Start the Deployment Container
 
-Download the NeMo-Speech.cpp weights once, as your user. Do not use `sudo`. The script reads `HF_TOKEN` from `.env`:
+The following table lists the app service and the sidecars of each Compose profile. The later commands use these names in place of `<compose-profile>` and `<app-service>`.
 
-```bash
-bash scripts/download-nemo-speech-models.sh
-```
+| Compose profile | App service | Sidecars |
+| --- | --- | --- |
+| `frontend-backend-verdict-agent` | `frontend-backend-verdict-agent` | None |
+| `frontend-backend-verdict-agent/server` | `frontend-backend-verdict-agent-server` | `nemotron-asr-streaming-english` (ASR) and `magpie-multilingual-tts-service` (TTS) |
+| `frontend-backend-verdict-agent/single-gpu` | `frontend-backend-verdict-agent-single-gpu` | `nemo-speech` (ASR and TTS) |
+
+Complete the preparation step for your Compose profile:
+
+- For `/server`, log in to the NVIDIA NGC Docker Registry:
+
+    ```bash
+    set -a; . ./.env; set +a
+    printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+    ```
+
+- For `/single-gpu`, download the NeMo-Speech.cpp weights once, as your user. Do not use `sudo`. The script reads `HF_TOKEN` from `.env`:
+
+    ```bash
+    bash scripts/download-nemo-speech-models.sh
+    ```
+
+- The cloud recipe needs no preparation.
 
 Check that Compose accepts the recipe and your `.env`. The command prints nothing when the configuration is valid:
 
 ```bash
-docker compose --profile frontend-backend-verdict-agent/single-gpu config -q
+docker compose --profile <compose-profile> config -q
 ```
 
-Start the recipe:
+Start the recipe with the `default` profile:
 
 ```bash
-docker compose --profile frontend-backend-verdict-agent/single-gpu up -d
+docker compose --profile <compose-profile> up -d
 ```
 
-The first start builds the `nemotron-voice-agent:latest` image and pulls the `nemo-speech` image, so it can take several minutes. Use `--build` on later starts only after source or `Dockerfile` changes.
+For example, run `docker compose --profile frontend-backend-verdict-agent/single-gpu up -d`. For the `eval` profile, follow [Deploy in Eval Mode](#deploy-in-eval-mode) instead.
+
+The first start builds the `nemotron-voice-agent:latest` image and pulls the sidecar images, so it can take several minutes. On `/server`, the first start of the NIM sidecars downloads their models and can take much longer. Use `--build` on later starts only after source or `Dockerfile` changes.
 
 ## Verify the Deployment
 
 Run the following checks in order.
 
-1. Check that both services are running and that the app service becomes healthy:
+1. Check that the services are running and that the app service becomes healthy:
 
     ```bash
-    docker compose --profile frontend-backend-verdict-agent/single-gpu ps
+    docker compose --profile <compose-profile> ps
     ```
 
 2. Check the liveness route. Use `http://` when `PIPELINE_TLS=false`:
@@ -160,27 +189,40 @@ Run the following checks in order.
 
     The route returns `{"status":"ok"}`. It confirms that the server process is up. It does not check speech or the LLMs.
 
-3. Check the effective profile and Pipecat settings in the container:
+3. Check the effective profile in the container:
 
     ```bash
-    docker compose --profile frontend-backend-verdict-agent/single-gpu exec \
-      frontend-backend-verdict-agent-single-gpu printenv FBV_PROFILE FBV_PIPECAT_SETTINGS
+    docker compose --profile <compose-profile> exec <app-service> printenv FBV_PROFILE
     ```
 
-4. Connect one Realtime client, as [Connect a Client](#connect-a-client) shows. The agent loads its profile, builds its LLM clients, and warms up speech with one short ASR request and one short TTS request when the first session connects.
+4. Start one session. Open the browser UI, as [Use the Browser UI](#use-the-browser-ui) describes, or connect one Realtime client, as [Connect a Realtime Client](#connect-a-realtime-client) shows. When the first session of each kind arrives, the agent loads its profile, builds its LLM clients, and warms up speech with one short ASR request and one short TTS request.
 
 5. Read the ready line and the prompt catalog line from the app log:
 
     ```bash
-    docker compose --profile frontend-backend-verdict-agent/single-gpu logs \
-      frontend-backend-verdict-agent-single-gpu | grep -E 'verdict agent ready|prompts .*sha256'
+    docker compose --profile <compose-profile> logs <app-service> | grep -E 'verdict agent ready|prompts .*sha256'
     ```
 
-    The ready line contains `adapter=pipecat` and `profile=<profile>`. The prompt line has the form `prompts <catalog path> (sha256 <hash>)`. The catalog path ends in `generic.yaml` for the `default` profile and in `tau.yaml` for every `tau3_eval*` profile.
+    The ready line contains `adapter=pipecat` and `profile=<profile>`. The prompt line has the form `prompts <catalog path> (sha256 <hash>)`. A browser UI session logs `profile=default` and a catalog path that ends in `generic.yaml`. A Realtime session logs `profile=eval` and a catalog path that ends in `tau.yaml`, in both profiles. On a `default` container that serves both kinds of sessions, both pairs of lines appear.
 
 If a check fails, refer to [Troubleshooting](#troubleshooting).
 
-## Connect a Client
+## Use the Browser UI
+
+The browser UI works with the `default` profile only. Open `https://<host>:7860` in a browser. Replace `<host>` with the host name or IP address, or use `localhost` on the same machine. The server uses a self-signed certificate, so the browser shows a warning that you must accept once. For plain-HTTP browser access, refer to [Browser Access](../06-troubleshooting.md#browser-access).
+
+The Compose recipes pin `EXAMPLE_SELECTION=frontend-backend-verdict-agent`, so the UI shows only this example. When the server exposes several examples, select **Frontend Backend Verdict Agent**. Then start a session and speak. The agent greets you first.
+
+The UI offers the following controls and views for this example:
+
+- **LLM**, **ASR**, **TTS**, and the TTS voice: these choose the frontend LLM and the speech endpoints from the example's catalogs. The UI has no control for the backend LLM. The backend is always the profile's, Nemotron 3 Ultra on the NVIDIA Inference Hub.
+- **Prompt**: you can edit the `frontend` prompt for the session. The agent's other prompts stay hidden.
+- **Tools**: the read-only tools panel lists the five tools: `get_weather`, `get_stock_price`, `web_search`, `calculate_bmi`, and `generate_random_number`. All five are always enabled, and the server runs them. Refer to [Credentials](#credentials) for their keys.
+- **Transcripts and metrics**: the UI shows the transcripts of both sides and the user-to-bot latency. It does not show streamed LLM text, because the agent is not a Pipecat LLM service.
+
+The UI sessions share one cap of 8 concurrent sessions. That cap is separate from the cap of the Realtime sessions, so browser sessions never take an evaluation slot. Both kinds of sessions still share the speech sidecars and the LLM endpoints.
+
+## Connect a Realtime Client
 
 Connect a Realtime client to the following URL. Replace `<host>` with the host name or IP address, and use `ws://` when `PIPELINE_TLS=false`:
 
@@ -229,30 +271,31 @@ EOF
 
 The first event is `session.created`. A `response.done` event shows that the session, both LLMs, and TTS answered. An `error` event carries a code. Refer to [Troubleshooting](#troubleshooting).
 
-The agent has the following client-facing limitations:
+Realtime sessions have the following client-facing limitations:
 
 - Turns end on the server voice activity detection (VAD). The agent refuses `input_audio_buffer.commit` with error code `unsupported_event`.
 - The agent ignores the voice that the client requests and uses the catalog voice.
 - The agent refuses per-response `instructions`, `tools`, or `tool_choice` on `response.create` with error code `unsupported_response_override`.
-- At most 8 sessions run at the same time.
+- At most 8 Realtime sessions run at the same time.
 
 For the full event reference, refer to [Use the OpenAI Realtime-Compatible Gateway](use-realtime-gateway.md).
 
 ## Deploy in Eval Mode
 
-Eval mode is the deployment for evaluation runs, such as a Tau evaluation. It uses the same image, code, and profile as the standard deployment and changes three settings, which the following table lists.
+Eval mode deploys the `eval` profile for evaluation runs, such as a Tau evaluation. It uses the `frontend-backend-verdict-agent/single-gpu` recipe only. It uses the same image and code as the standard deployment and changes the settings in the following table.
 
 | Setting | Eval mode value | Reason |
 | --- | --- | --- |
+| `FBV_PROFILE` | `eval` | The container serves OpenAI Realtime sessions only and refuses browser UI sessions. |
 | `PIPELINE_TLS` | `false` | The server serves plain HTTP and `ws://`, so an evaluation client connects without a certificate. |
 | `FBA_VOICE_EVENT_LOG` and `FBA_FILLER_LOG` | `/app/logs/fbv_voice_events.jsonl` and `/app/logs/fbv_filler.jsonl` | The agent writes its per-turn event log and its filler timing log. Evaluation metrics read both. |
 | Volume | `./logs` mounted at `/app/logs` | The two logs reach the `logs/` directory of the repository on the host. |
 
-The `docker/docker-compose.fbv-eval.yaml` override file holds these settings. Pass it after `docker-compose.yml` in every Compose command for the deployment. A command without it recreates the container with the standard settings.
+The `docker/docker-compose.fbv-eval.yaml` override file holds these settings. Pass it after `docker-compose.yml` in every Compose command for the deployment. A command without it recreates the container with the standard settings and the `default` profile.
 
 To deploy in eval mode, complete the following steps:
 
-1. Complete [Configure the Environment](#configure-the-environment) and [Choose a Prompt Variant](#choose-a-prompt-variant). For a Tau evaluation, use a `tau3_eval*` profile.
+1. Complete [Configure the Environment](#configure-the-environment) and the `/single-gpu` preparation in [Start the Deployment Container](#start-the-deployment-container). You do not need to set `FBV_PROFILE`.
 
 2. Create the host log directory, so that it belongs to your user:
 
@@ -281,15 +324,15 @@ To deploy in eval mode, complete the following steps:
     curl -f http://localhost:7860/health
     ```
 
-6. Check the eval settings in the container:
+6. Check the eval settings in the container. The command prints `eval`, `false`, and the two log paths:
 
     ```bash
     docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml \
       --profile frontend-backend-verdict-agent/single-gpu exec frontend-backend-verdict-agent-single-gpu \
-      printenv PIPELINE_TLS FBA_VOICE_EVENT_LOG FBA_FILLER_LOG FBV_PROFILE
+      printenv FBV_PROFILE PIPELINE_TLS FBA_VOICE_EVENT_LOG FBA_FILLER_LOG
     ```
 
-7. Connect one client to `ws://localhost:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-backend-verdict`, as [Connect a Client](#connect-a-client) shows. Then check that the event log grew on the host:
+7. Connect one client to `ws://localhost:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-backend-verdict`, as [Connect a Realtime Client](#connect-a-realtime-client) shows. Then check that the event log grew on the host:
 
     ```bash
     tail -n 1 logs/fbv_voice_events.jsonl
@@ -297,25 +340,24 @@ To deploy in eval mode, complete the following steps:
 
     The `session_start` record of each session carries `adapter`, the Pipecat settings, the backend history and normalization settings, and the prompt catalog name and SHA-256 (`prompts`).
 
-The container writes the log files as `root`. The repository ignores the `logs/` directory. To switch back to the standard deployment, run the `up -d` command from [Start the Deployment Container](#start-the-deployment-container) without the override file. Compose then recreates the container with TLS and without the logs.
+The container writes the log files as `root`. The repository ignores the `logs/` directory. To switch back to the standard deployment, run the `up -d` command from [Start the Deployment Container](#start-the-deployment-container) without the override file. Compose then recreates the container with the `default` profile, TLS, and no evaluation logs.
 
 ## Run a Tau Evaluation
 
-The tau-bench (Tau) evaluation harness, `voice-agent-evaluation`, is not part of this repository. Use the following steps to point it at this deployment:
+The Tau evaluation harness, `voice-agent-evaluation`, is not part of this repository. Use the following steps to point it at this deployment:
 
-1. Deploy with a `tau3_eval*` profile, so the run uses the pinned Tau prompt catalog. The default arm is `tau3_eval_frontend_verdict_speak_history`.
-2. Deploy in eval mode, as [Deploy in Eval Mode](#deploy-in-eval-mode) describes. The agent's event and filler logs then reach `logs/` on the host.
-3. Keep the Compose keepalive values (`UVICORN_WS_PING_INTERVAL=0` and `UVICORN_WS_PING_TIMEOUT=20`).
-4. Configure the harness with `execution.backend: evaluator_realtime` and `product.profile: openai`, the base URL `http://localhost:7860` or the WebSocket URL `ws://localhost:7860/v1/realtime`, and your `REALTIME_API_KEY`. The `tau_native` lane cannot select this model ID.
-5. Run with a concurrency of 1. The `tau3_eval.yaml` profile asks for this until `server.max_sessions` is measured.
-6. Record the profile and the prompt catalog SHA-256 from the app log with the results. The `session_start` record of the event log also carries the catalog name and SHA-256.
+1. Deploy in eval mode, as [Deploy in Eval Mode](#deploy-in-eval-mode) describes. The run then uses the `eval` profile and the pinned Tau prompt catalog, and the agent's event and filler logs reach `logs/` on the host.
+2. Keep the Compose keepalive values (`UVICORN_WS_PING_INTERVAL=0` and `UVICORN_WS_PING_TIMEOUT=20`).
+3. Configure the harness with `execution.backend: evaluator_realtime` and `product.profile: openai`, the base URL `http://localhost:7860` or the WebSocket URL `ws://localhost:7860/v1/realtime`, and your `REALTIME_API_KEY`. The `tau_native` lane cannot select this model ID.
+4. Run with a concurrency of 1. The `eval.yaml` profile asks for this until `server.max_sessions` is measured.
+5. Record the profile and the prompt catalog SHA-256 from the app log with the results. The ready line shows `profile=eval`. Earlier runs recorded the profile name `tau3_eval_frontend_verdict_speak_history`, which had the same settings, prompts, and catalog SHA-256. The `session_start` record of the event log also carries the catalog name and SHA-256.
 
 ## Stop and Clean Up
 
-Stop the recipe with the same profile that started it:
+Stop the recipe with the same Compose profile that started it:
 
 ```bash
-docker compose --profile frontend-backend-verdict-agent/single-gpu down
+docker compose --profile <compose-profile> down
 ```
 
 For an eval-mode deployment, pass the override file as well:
@@ -325,25 +367,29 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml \
   --profile frontend-backend-verdict-agent/single-gpu down
 ```
 
-The command removes the containers. It keeps `.env`, the built image, the eval-mode logs in `logs/`, and the speech model weights in `models/nemo-speech`. Remove the weights only when you no longer need any single-GPU recipe that uses them.
+The command removes the containers. It keeps `.env`, the built image, the eval-mode logs in `logs/`, the NIM model caches, and the speech model weights in `models/nemo-speech`. Remove the weights only when you no longer need any single-GPU recipe that uses them.
 
 ## Troubleshooting
 
-The following table lists common failures for this recipe. For general startup issues, refer to [Troubleshooting](../06-troubleshooting.md).
+The following table lists common failures for these recipes. For general startup issues, refer to [Troubleshooting](../06-troubleshooting.md).
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The client receives an `error` event with code `server_error`, and the socket closes with code 1011. The app log shows `WebSocket keepalive differs from the profile`. | The server keepalive does not match the profile. Every served profile requires `UVICORN_WS_PING_INTERVAL=0` and `UVICORN_WS_PING_TIMEOUT=20`. | Remove the two keys from `.env` or set them to `0` and `20`, and then rerun the `up -d` command. |
-| The client receives an `error` event with code `server_error`, and the socket closes with code 1011. The app log names `FBV_PROFILE`. | `FBV_PROFILE` names a profile that the agent does not serve. | Set a profile from [Select a Profile](#select-a-profile), and then rerun the `up -d` command. |
-| The client receives an `error` event with code `server_busy`, and the socket closes with code 1013. | Either 8 sessions are already open (`server.max_sessions`), or the speech warm-up failed. The app log shows `speech warm-up failed` for a warm-up failure. | Close idle sessions, or wait and reconnect. For a warm-up failure, fix the speech service, and then reconnect. The next session retries the warm-up. |
-| The app log shows `ASR warm-up failed against` or `TTS warm-up failed against`. | The `nemo-speech` sidecar is not running, not ready, or has no model weights. | Run `docker compose --profile frontend-backend-verdict-agent/single-gpu logs nemo-speech`. If the weights are missing, run `bash scripts/download-nemo-speech-models.sh` as your user or set `NEMO_SPEECH_MODEL_LOC`. |
-| The WebSocket handshake fails, and the server closes it with code 1008 and reason `realtime authentication failed`. | `REALTIME_API_KEY` is set, and the client sent no credential or a different one. | Send `Authorization: Bearer <your-realtime-api-key>` with the value from `.env`. |
-| The session starts, but each turn returns an `error` event with code `agent_error`. | `NVIDIA_API_KEY` is missing, is not an Inference Hub key, or the host cannot reach the Inference Hub. | Set `NVIDIA_API_KEY` to an NVIDIA Inference Hub key, check outbound HTTPS access, and then rerun the `up -d` command. |
+| A browser UI session ends at once or never starts, and the UI shows no error. The app log shows `runs with FBV_PROFILE=eval`. | The container runs the `eval` profile, which refuses browser UI sessions. | Start the recipe without the eval override file, so that it uses the `default` profile. Remove `FBV_PROFILE=eval` from `.env` if you set it there. |
+| A browser UI session ends at once, and the app log shows `browser session refused`. | Either 8 browser UI sessions are already open, or the speech warm-up failed. | Close idle browser sessions. For a warm-up failure, fix the speech service as the warm-up row describes, and then start a new session. |
+| A Realtime client receives an `error` event with code `server_error`, and the socket closes with code 1011. The app log names `FBV_PROFILE`. A browser UI session ends, and the app log shows the same error. | `FBV_PROFILE` has a value other than `default` or `eval`, for example an old `tau3_eval*` profile name. | Remove `FBV_PROFILE` from `.env`, or set it to `default` or `eval`, and then rerun the `up -d` command. Refer to [Choose a Profile](#choose-a-profile). |
+| A Realtime client receives an `error` event with code `server_error`, and the socket closes with code 1011. The app log shows `WebSocket keepalive differs from the profile`. | The server keepalive does not match the `eval` profile, which every Realtime session uses. It requires `UVICORN_WS_PING_INTERVAL=0` and `UVICORN_WS_PING_TIMEOUT=20`. | Remove the two keys from `.env` or set them to `0` and `20`, and then rerun the `up -d` command. |
+| A Realtime client receives an `error` event with code `server_busy`, and the socket closes with code 1013. | Either 8 Realtime sessions are already open (`server.max_sessions`), or the speech warm-up failed. The app log shows `speech warm-up failed` for a warm-up failure. | Close idle sessions, or wait and reconnect. For a warm-up failure, fix the speech service, and then reconnect. The next session retries the warm-up. |
+| The app log shows `ASR warm-up failed against` or `TTS warm-up failed against`. | The speech service is not reachable or not ready. On `/single-gpu`, the `nemo-speech` sidecar is not running or has no model weights. On `/server`, a NIM sidecar is still starting. On the cloud recipe, NVCF rejected `NVIDIA_API_KEY` or is unreachable. | Run `docker compose --profile <compose-profile> logs <sidecar>` for the sidecar. If the `nemo-speech` weights are missing, run `bash scripts/download-nemo-speech-models.sh` as your user or set `NEMO_SPEECH_MODEL_LOC`. On the cloud recipe, if your key does not work for NVCF speech, use the `/server` or `/single-gpu` recipe. |
+| The WebSocket handshake fails, and the server closes it with code 1008 and reason `realtime authentication failed`. | `REALTIME_API_KEY` is set, and the Realtime client sent no credential or a different one. | Send `Authorization: Bearer <your-realtime-api-key>` with the value from `.env`. |
+| The session starts, but the agent does not answer. A Realtime client receives an `error` event with code `agent_error` on each turn. | `NVIDIA_API_KEY` is missing, is not an Inference Hub key, or the host cannot reach the Inference Hub. | Set `NVIDIA_API_KEY` to an NVIDIA Inference Hub key, check outbound HTTPS access, and then rerun the `up -d` command. |
+| A browser UI session says that it cannot get the weather, a stock price, or a web result. | The tool's key (`WEATHERAPI_KEY`, `FINNHUB_API_KEY`, or `PERPLEXITY_API_KEY`) is not set, or the upstream service failed. | Set the key in `.env`, and then rerun the `up -d` command. |
+| The browser does not ask for the microphone, or the microphone is blocked. | The page is served over plain HTTP from another machine. | Keep `PIPELINE_TLS=true` (the default) and open the `https://` URL. Do not use the eval override for browser sessions. |
 | The download script fails, or `nemo-speech` cannot find its models. | `HF_TOKEN` is missing or invalid, or the weights are in another directory. | Set `HF_TOKEN` in `.env` and rerun the script as your user, or point `NEMO_SPEECH_MODEL_LOC` at the weights. |
 | The session fails, and the app log shows an error that names `agent.overrides.prompts.path`. | `FBA_VOICE_PROMPTS` points at a missing or invalid prompt catalog. | Remove `FBA_VOICE_PROMPTS` from `.env` to use the profile's catalog, or point it at a valid catalog, and then rerun the `up -d` command. |
 | The client fails with `ssl argument is incompatible with a ws:// URI`, or a `wss://` handshake fails with an SSL error. | The client and the server disagree on TLS. Eval mode serves plain `ws://`. | Use `ws://` and no TLS context for an eval-mode deployment. Use `wss://` for the standard deployment. |
 | In eval mode, `logs/` stays empty or the container recreates without the eval settings. | A Compose command ran without `-f docker/docker-compose.fbv-eval.yaml`, or no session has connected yet. | Pass both `-f` files in every Compose command for the deployment, and connect one session. |
-| `up -d` fails with `port is already allocated` or `address already in use`. | Another process uses port `7860` or `50051`. | Set `PIPELINE_APP_PORT` to a free port for the app. For `50051`, stop the other process or the other recipe that runs a speech sidecar. |
+| `up -d` fails with `port is already allocated` or `address already in use`. | Another process uses the app port or a sidecar port. | Set `PIPELINE_APP_PORT` to a free port for the app. For a sidecar port, stop the other process or the other recipe that runs a speech sidecar. |
 
 ## Related Topics
 

@@ -141,7 +141,7 @@ UVICORN_WS_PING_INTERVAL=<seconds>
 UVICORN_WS_PING_TIMEOUT=<seconds>
 ```
 
-The values apply to every WebSocket session in the server process. The [Frontend/Backend Verdict Agent](../../src/examples/frontend_backend_verdict/README.md) requires the keepalive to match its behavior profile, which sets the interval to `0` and the timeout to `20`.
+The values apply to every WebSocket session in the server process. The [Frontend/Backend Verdict Agent](../../src/examples/frontend_backend_verdict/README.md) requires the keepalive to match its `eval` profile, which every OpenAI Realtime session uses. That profile sets the interval to `0` and the timeout to `20`, so a server that runs this example must turn the keepalive off for every session.
 
 ## Transport Selection
 

@@ -5,19 +5,18 @@
 
 """Prompt variants: the Tau catalog is pinned, the generic one is free to tune (plan §7.3).
 
-Every ``tau3_eval*`` profile uses ``core/config/prompts/tau.yaml``, which is v1's
-``voice/config/prompts.voice.yaml`` byte for byte. **Tau tuning rule:** changing ``tau.yaml``
-needs a new :data:`TAU_CATALOG_SHA256` and an attached Tau A/B run. The ``default`` profile is
-the default Tau arm with ``core/config/prompts/generic.yaml``, which any change may tune; the
-root ``prompts.yaml`` (registry and UI) mirrors it.
+The ``eval`` profile (OpenAI Realtime sessions, Tau) uses ``core/config/prompts/tau.yaml``, which
+is v1's ``voice/config/prompts.voice.yaml`` byte for byte. **Tau tuning rule:** changing
+``tau.yaml`` needs a new :data:`TAU_CATALOG_SHA256` and an attached Tau A/B run. The ``default``
+profile (browser UI sessions) uses ``core/config/prompts/generic.yaml``, which any change may tune;
+the root ``prompts.yaml`` (registry and UI) mirrors it.
 
-The Tau profiles' merged configs and rendered prompts are compared with v1's in
+The ``eval`` profile's merged config and rendered prompts are compared with v1's in
 ``test_fbv_golden`` (N4).
 """
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import os
 import re
@@ -31,9 +30,9 @@ from _fbv_golden import pinned_environment, to_plain
 
 from examples.frontend_backend_verdict.core.config.profiles import (
     DEFAULT_PROFILE,
-    GENERIC_PROFILE,
+    REALTIME_PROFILE,
     SERVED_PROFILES,
-    SHIPPED_PROFILES,
+    ProfileError,
     profile_name,
     profile_path,
 )
@@ -74,32 +73,43 @@ class CatalogTests(unittest.TestCase):
 
 class ProfileCatalogTests(unittest.TestCase):
     def test_each_profile_resolves_to_its_catalog(self) -> None:
+        expected = {DEFAULT_PROFILE: "generic.yaml", REALTIME_PROFILE: "tau.yaml"}
         with pinned_environment():
             for name in SERVED_PROFILES:
-                expected = "generic.yaml" if name == GENERIC_PROFILE else "tau.yaml"
                 with self.subTest(profile=name):
                     path = load_voice_config(profile_path(name)).agent.prompts_path
-                    self.assertEqual(path.resolve(), (PROMPTS_DIR / expected).resolve())
+                    self.assertEqual(path.resolve(), (PROMPTS_DIR / expected[name]).resolve())
 
-    def test_default_profile_is_the_default_tau_arm_with_generic_prompts(self) -> None:
+    def test_default_profile_keeps_the_eval_agent(self) -> None:
+        """The browser profile changes turn taking, greeting, tools and logs, not the agent itself."""
         with pinned_environment():
-            generic = load_voice_config(profile_path(GENERIC_PROFILE))
-            tau = load_voice_config(profile_path(DEFAULT_PROFILE))
-
-        def without_prompts_and_sources(config: Any) -> Any:
-            prompts = dataclasses.replace(config.agent.prompts, path="")
-            agent = dataclasses.replace(config.agent, prompts=prompts)
-            plain = to_plain(dataclasses.replace(config, agent=agent))
-            plain.pop("source_files")  # default.yaml adds one file to the extends chain
-            return plain
-
-        self.assertEqual(without_prompts_and_sources(generic), without_prompts_and_sources(tau))
+            browser = to_plain(load_voice_config(profile_path(DEFAULT_PROFILE)))
+            realtime = to_plain(load_voice_config(profile_path(REALTIME_PROFILE)))
+        for section in ("barge_in", "filler", "audio", "asr", "tts", "instructions"):
+            with self.subTest(section=section):
+                expected = dict(realtime[section])
+                actual = dict(browser[section])
+                if section == "filler":
+                    expected.pop("log_path")
+                    actual.pop("log_path")
+                self.assertEqual(actual, expected)
+        self.assertEqual(browser["normalization"]["transcript"], realtime["normalization"]["transcript"])
+        self.assertEqual(
+            browser["agent"]["backend"]["conversation_history"], realtime["agent"]["backend"]["conversation_history"]
+        )
 
     def test_served_profiles(self) -> None:
-        self.assertEqual(SERVED_PROFILES, (*SHIPPED_PROFILES, GENERIC_PROFILE))
-        self.assertEqual(profile_name({"FBV_PROFILE": "default"}), GENERIC_PROFILE)
-        self.assertEqual(profile_name({}), DEFAULT_PROFILE)  # an unset variable keeps the Tau arm
-        self.assertTrue(all(name.startswith("tau3_eval") for name in SHIPPED_PROFILES))
+        self.assertEqual(SERVED_PROFILES, ("default", "eval"))
+        self.assertEqual(profile_name({}), DEFAULT_PROFILE)  # unset: the browser profile
+        self.assertEqual(profile_name({"FBV_PROFILE": "eval"}), REALTIME_PROFILE)
+        self.assertEqual(profile_name({"FBV_PROFILE": "default"}), DEFAULT_PROFILE)
+
+    def test_old_profile_names_are_refused(self) -> None:
+        for name in ("tau3_eval_frontend_verdict_speak_history", "tau3_eval", "generic", "ui"):
+            with self.subTest(name=name), self.assertRaises(ProfileError) as caught:
+                profile_name({"FBV_PROFILE": name})
+            self.assertIn("'default'", str(caught.exception))
+            self.assertIn("'eval'", str(caught.exception))
 
     def test_a_bad_prompts_override_fails_at_load(self) -> None:
         with (
@@ -107,7 +117,7 @@ class ProfileCatalogTests(unittest.TestCase):
             mock.patch.dict(os.environ, {"FBA_VOICE_PROMPTS": "/nonexistent/prompts.yaml"}),
             self.assertRaises(VoiceConfigError) as caught,
         ):
-            load_voice_config(profile_path(DEFAULT_PROFILE))
+            load_voice_config(profile_path(REALTIME_PROFILE))
         self.assertIn("agent.overrides.prompts.path", str(caught.exception))
         self.assertIn("/nonexistent/prompts.yaml", str(caught.exception))
 

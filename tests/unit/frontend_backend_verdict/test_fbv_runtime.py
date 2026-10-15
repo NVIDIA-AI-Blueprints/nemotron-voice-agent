@@ -40,26 +40,59 @@ class _Socket:
 
 
 class ProfileTests(unittest.TestCase):
-    def test_default_profile_is_the_frontend_verdict_history_arm(self) -> None:
-        self.assertEqual(rt.profile_name({}), "tau3_eval_frontend_verdict_speak_history")
+    def test_unset_profile_is_the_browser_profile(self) -> None:
+        self.assertEqual(rt.profile_name({}), "default")
 
     def test_unshipped_profiles_are_refused(self) -> None:
-        for name in ("backend_only", "live_demo", "browser_demo", "cloud_speech", "voice_agent"):
+        for name in ("backend_only", "live_demo", "browser_demo", "cloud_speech", "voice_agent", "tau3_eval"):
             with self.subTest(name=name), self.assertRaises(rt.ProfileError):
                 rt.profile_name({rt.PROFILE_ENV: name})
 
-    def test_every_served_profile_has_the_tau3_turn_taking(self) -> None:
+    def test_eval_profile_has_the_tau3_turn_taking(self) -> None:
+        config = load_voice_config(rt.profile_path(rt.REALTIME_PROFILE))
+        self.assertEqual(config.turn_detection.silence_duration_ms, 800)
+        self.assertFalse(config.turn_detection.honor_client_values)
+        self.assertEqual(config.turn_detection.threshold, 0.5)
+        self.assertEqual(config.turn_detection.prefix_padding_ms, 300)
+
+    def test_every_served_profile_turns_the_keepalive_off(self) -> None:
+        # The uvicorn keepalive is process-wide and Realtime sessions (eval) need it off.
         for name in rt.SERVED_PROFILES:
             with self.subTest(profile=name):
-                config = load_voice_config(rt.profile_path(name))
-                self.assertEqual(config.turn_detection.silence_duration_ms, 800)
-                self.assertFalse(config.turn_detection.honor_client_values)
-                self.assertEqual(config.turn_detection.threshold, 0.5)
-                self.assertEqual(config.turn_detection.prefix_padding_ms, 300)
-                self.assertEqual(config.server.ws_ping_interval_s, 0)
+                self.assertEqual(load_voice_config(rt.profile_path(name)).server.ws_ping_interval_s, 0)
 
-    def test_default_profile_values(self) -> None:
+    def test_browser_profile_values(self) -> None:
         config = load_voice_config(rt.profile_path(rt.DEFAULT_PROFILE))
+        self.assertEqual(config.turn_detection.silence_duration_ms, 200)
+        self.assertFalse(config.turn_detection.honor_client_values)
+        self.assertTrue(config.protocol.greeting_enabled)
+        self.assertEqual(config.protocol.seed_history_with_client_greeting, "")
+        self.assertEqual(config.tools.source, "config")
+        self.assertEqual(
+            [tool.name for tool in config.tools.config_tool_specs],
+            ["get_weather", "get_stock_price", "web_search", "calculate_bmi", "generate_random_number"],
+        )
+        self.assertTrue(config.normalization.transcript.enabled)
+        self.assertFalse(config.normalization.tool_arguments.enabled)
+        self.assertFalse(config.write_gate.enabled)
+        self.assertEqual(config.barge_in.while_thinking, "frontend_verdict")
+        self.assertEqual(config.filler.mode, "speak")
+
+    def test_browser_profile_never_writes_the_eval_logs(self) -> None:
+        env = {"FBA_VOICE_EVENT_LOG": "/tmp/events.jsonl", "FBA_FILLER_LOG": "/tmp/filler.jsonl"}
+        with mock.patch.dict("os.environ", env):
+            browser = load_voice_config(rt.profile_path(rt.DEFAULT_PROFILE))
+            realtime = load_voice_config(rt.profile_path(rt.REALTIME_PROFILE))
+        self.assertEqual((browser.logging.event_log, browser.filler.log_path), ("", ""))
+        self.assertTrue(str(realtime.logging.event_log).endswith("events.jsonl"))
+        self.assertTrue(str(realtime.filler.log_path).endswith("filler.jsonl"))
+
+    def test_settings_file_per_profile(self) -> None:
+        self.assertEqual(rt.pipecat_settings_file(rt.REALTIME_PROFILE), "eval.yaml")
+        self.assertEqual(rt.pipecat_settings_file(rt.DEFAULT_PROFILE), "default.yaml")
+
+    def test_eval_profile_values(self) -> None:
+        config = load_voice_config(rt.profile_path(rt.REALTIME_PROFILE))
         self.assertEqual(config.barge_in.while_thinking, "frontend_verdict")
         self.assertEqual(config.barge_in.frontend_verdict.timeout_ms, 4000)
         self.assertTrue(config.barge_in.frontend_verdict.same_query_guard)
@@ -77,7 +110,7 @@ class ProfileTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=False) as env:
             for key in ("FRONTEND_LLM_MODEL", "BACKEND_LLM_MODEL", "FRONTEND_LLM_BASE_URL", "BACKEND_LLM_BASE_URL"):
                 env.pop(key, None)
-            agent = load_voice_config(rt.profile_path(rt.DEFAULT_PROFILE)).agent
+            agent = load_voice_config(rt.profile_path(rt.REALTIME_PROFILE)).agent
         self.assertEqual(agent.frontend.llm.model, "nvidia/nvidia/nemotron-3.5-lightning")
         self.assertEqual(agent.frontend.llm.max_tokens, 1024)
         self.assertEqual(agent.frontend.llm.extra_body, {"chat_template_kwargs": {"enable_thinking": False}})
@@ -115,11 +148,11 @@ class EndpointTests(unittest.TestCase):
 
 class KeepaliveTests(unittest.TestCase):
     def test_matching_keepalive_passes(self) -> None:
-        config = load_voice_config(rt.profile_path(rt.DEFAULT_PROFILE))
+        config = load_voice_config(rt.profile_path(rt.REALTIME_PROFILE))
         self.assertEqual(rt.keepalive_mismatch(config, _KEEPALIVE_OFF), "")
 
     def test_uvicorn_default_keepalive_is_reported(self) -> None:
-        config = load_voice_config(rt.profile_path(rt.DEFAULT_PROFILE))
+        config = load_voice_config(rt.profile_path(rt.REALTIME_PROFILE))
         message = rt.keepalive_mismatch(config, {})
         self.assertIn("UVICORN_WS_PING_INTERVAL=0", message)
 

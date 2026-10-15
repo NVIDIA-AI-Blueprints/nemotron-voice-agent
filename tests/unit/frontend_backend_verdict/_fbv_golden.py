@@ -73,6 +73,12 @@ INTERPOLATED_ENV = (
     "FBA_FILLER_LOG",
     "FBA_VOICE_EVENT_LOG",
     "FBV_PROFILE",
+    # Not interpolated, but read by the adapter: the deployment platform (speech remap, D2) and the
+    # removed settings selector (must have no effect).
+    "REALTIME_SERVICE_PLATFORM",
+    "FBV_PIPECAT_SETTINGS",
+    "UVICORN_WS_PING_INTERVAL",
+    "UVICORN_WS_PING_TIMEOUT",
 )
 PLACEHOLDER_KEY = "fixture-placeholder"
 

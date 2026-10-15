@@ -7,8 +7,13 @@
 
 Plan: ``misc/frontend-backend-verdict/shared-stack-plan.md`` §9.1 and §10.1. The merged profile configs,
 the ``agent.configure`` arguments and rendered prompts on the five Tau fixtures (N4, now through the
-Pipecat adapter) and the decoded input PCM (B6) must equal v1's. The scenario fixtures are compared at
-decision level by ``test_fbv_pipecat_wire_parity`` (G2).
+Pipecat adapter) and the decoded input PCM (B6) must equal v1's.
+
+The ``eval`` profile is v1's default Tau arm (``tau3_eval_frontend_verdict_speak_history``) with its
+``extends`` chain flattened into one file (``misc/frontend-backend-verdict/ui-transport-plan.md``,
+section 4.1), so it is compared with that arm's fixture entry, ignoring ``source_files`` (the list
+of files the chain was read from). The other v1 arms were deleted with their fixture entries.
+The scenario fixtures are compared at decision level by ``test_fbv_pipecat_wire_parity`` (G2).
 
 With ``FBV_GOLDEN_CAPTURE=1`` the test writes these fixtures instead of comparing (each capture runs
 twice and fails if the two normalized runs differ). The fixtures are v1's: capture only from the
@@ -35,10 +40,12 @@ from _fbv_golden import (
 )
 from _fbv_pipecat_fakes import PipecatHarness
 
-from examples.frontend_backend_verdict.core.config.profiles import DEFAULT_PROFILE, SHIPPED_PROFILES, profile_path
+from examples.frontend_backend_verdict.core.config.profiles import REALTIME_PROFILE, profile_path
 from examples.frontend_backend_verdict.core.config.voice import load_voice_config
 
 CAPTURE = os.environ.get("FBV_GOLDEN_CAPTURE") == "1"
+#: v1's default Tau arm: the ``eval`` profile's name in the v1 fixtures.
+V1_DEFAULT_ARM = "tau3_eval_frontend_verdict_speak_history"
 #: Settings only v1's own host read (its standalone server, segmenter, output pacing and Riva
 #: stream pools); they were removed from the config with that host. The merged configs must
 #: equal v1's apart from these keys.
@@ -57,13 +64,18 @@ def make_harness(**kwargs: Any) -> PipecatHarness:
 
 
 def served_profiles() -> dict[str, Path]:
-    profiles = {name: profile_path(name) for name in SHIPPED_PROFILES}
-    profiles["backend_only"] = BACKEND_ONLY_PROFILE
-    return profiles
+    """The profiles with a v1 fixture entry, under their v1 names."""
+    return {V1_DEFAULT_ARM: profile_path(REALTIME_PROFILE), "backend_only": BACKEND_ONLY_PROFILE}
+
+
+def _without_source_files(configs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        name: {key: value for key, value in config.items() if key != "source_files"} for name, config in configs.items()
+    }
 
 
 def _without_v1_host_keys(configs: dict[str, Any]) -> dict[str, Any]:
-    """v1's merged configs without :data:`REMOVED_WITH_V1_HOST` (each key must still be there)."""
+    """v1's merged configs without :data:`REMOVED_WITH_V1_HOST` (each key must still be there) and ``source_files``."""
     out: dict[str, Any] = {}
     for name, config in configs.items():
         config = dict(config)
@@ -71,7 +83,7 @@ def _without_v1_host_keys(configs: dict[str, Any]) -> dict[str, Any]:
             assert keys <= set(config[section]), f"{name}.{section}: {sorted(keys - set(config[section]))}"
             config[section] = {key: value for key, value in config[section].items() if key not in keys}
         out[name] = config
-    return out
+    return _without_source_files(out)
 
 
 def _dump(payload: Any) -> str:
@@ -98,13 +110,13 @@ class GoldenTestCase(unittest.IsolatedAsyncioTestCase):
 class ConfigGoldenTests(GoldenTestCase):
     async def test_merged_profile_configs(self) -> None:
         with pinned_environment():
-            first = merged_profile_configs(served_profiles())
-            second = merged_profile_configs(served_profiles()) if CAPTURE else None
+            first = _without_source_files(merged_profile_configs(served_profiles()))
+            second = _without_source_files(merged_profile_configs(served_profiles())) if CAPTURE else None
         self.check("merged_profile_configs", first, second, expected_view=_without_v1_host_keys)
 
     async def test_configure_and_rendered_prompts(self) -> None:
         with pinned_environment():
-            config = load_voice_config(profile_path(DEFAULT_PROFILE))
+            config = load_voice_config(profile_path(REALTIME_PROFILE))
             first = await configure_captures(make_harness, config)
             second = await configure_captures(make_harness, config) if CAPTURE else None
         self.check("configure_and_prompts", first, second)

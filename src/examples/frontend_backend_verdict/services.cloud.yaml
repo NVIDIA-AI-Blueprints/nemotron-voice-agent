@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Cloud service catalog for the Frontend/Backend Verdict example. The LLM entries are the
-# Inference Hub defaults (see services.local.yaml). The ASR and TTS entries exist for the
-# registry's per-platform validation only: every served profile takes its speech endpoints
-# from core/config/voice_agent.yaml (the `singlegpu` NeMo-Speech sidecar), and this example
-# has no cloud recipe.
+# Cloud service catalog for the Frontend/Backend Verdict example, used by the cloud recipe
+# (docker compose --profile frontend-backend-verdict-agent). The LLM entries are the Inference
+# Hub defaults (see services.local.yaml). The ASR and TTS entries are NVIDIA cloud functions
+# (NVCF): browser sessions and OpenAI Realtime sessions on the cloud recipe use them, keyed by the
+# same names as the single-GPU entries (core/config/profiles.py, apply_speech_platform). NVCF
+# needs NVIDIA_API_KEY; see docs/how-to/deploy-frontend-backend-verdict-agent.md for the key.
 
 llm:
   nemotron-3.5-lightning:

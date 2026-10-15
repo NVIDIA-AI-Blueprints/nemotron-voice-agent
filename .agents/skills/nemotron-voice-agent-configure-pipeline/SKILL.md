@@ -58,7 +58,7 @@ Edit the runtime configuration of the voice agent (built-in catalogs, prompts, f
 - Preserve unrelated keys, comments, and entries while editing.
 - Alternate local ASR/TTS use Compose profiles where needed (`parakeet-ctc-asr`, `parakeet-rnnt-asr`, `chatterbox-tts`, `magpie-zeroshot-tts`). Magpie Multilingual uses `magpie-multilingual-tts-service`. Magpie Zeroshot uses `magpie-zeroshot-tts-service`.
 - Per-example slot defaults live in `examples_registry.yaml` `defaults`. The catalog file ordering only affects UI listings. The actual default is whatever `defaults` declares.
-- Frontend/Backend Verdict: switch the prompt variant by changing `FBV_PROFILE` in `.env` (`default` for `generic.yaml`, a `tau3_eval*` profile for `tau.yaml`), not by editing prompt files. Editing `src/examples/frontend_backend_verdict/core/config/prompts/tau.yaml` needs a new SHA-256 pin and a Tau A/B run.
+- Frontend/Backend Verdict: `FBV_PROFILE` has two values, `default` (browser UI; prompts from `core/config/prompts/generic.yaml`, mirrored by the example's `prompts.yaml`) and `eval` (evaluation runs; set by `docker/docker-compose.fbv-eval.yaml`, not by `.env`). OpenAI Realtime sessions always use the `eval` settings and the pinned `tau.yaml`. Any other value, including old `tau3_eval*` names, fails the first session. `FBV_PIPECAT_SETTINGS` no longer exists; each profile's Pipecat settings file is fixed in code. Tune `generic.yaml` and `prompts.yaml` together for the browser UI. Editing `src/examples/frontend_backend_verdict/core/config/prompts/tau.yaml` or `core/config/profiles/eval.yaml` changes every Realtime session and needs a new SHA-256 pin (for `tau.yaml`) and a Tau A/B run. Keep `UVICORN_WS_PING_INTERVAL=0` for this example.
 
 ## Examples
 

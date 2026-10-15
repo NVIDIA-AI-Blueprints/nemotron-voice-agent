@@ -1,9 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# tau3-bench voice evaluation profile. Pins every eval-relevant key to its base
-# value explicitly, so a later edit to voice_agent.yaml cannot silently change
-# eval behaviour. Run tau2 with --max-concurrency 1 until max_sessions is measured.
+# The `eval` profile: the agent settings for OpenAI Realtime sessions and for Tau (tau3-bench)
+# voice evaluation runs. Every Realtime session uses it, whichever profile the container serves
+# (FBV_PROFILE only decides whether browser UI sessions are served too). It pins every
+# eval-relevant key explicitly, so a later edit to voice_agent.yaml cannot silently change eval
+# behaviour. Run tau2 with --max-concurrency 1 until max_sessions is measured.
+#
+# This is the former default Tau arm, tau3_eval_frontend_verdict_speak_history, with its extends
+# chain (tau3_eval -> _frontend_verdict -> _speak -> _speak_history) flattened into one file; its
+# merged config is unchanged (tests/unit/frontend_backend_verdict/test_fbv_golden.py). The prompt
+# catalog is the pinned Tau catalog (core/config/prompts/tau.yaml).
 
 extends: ../voice_agent.yaml
 
@@ -17,9 +24,9 @@ server:
 agent:
   overrides:
     backend:
-      # Pinned off: FBA_BACKEND_HISTORY must not change eval behaviour. The history
-      # arm is tau3_eval_backend_history.yaml.
-      conversation_history: {enabled: false}
+      # Backend conversation history, with the default guidance. Pinned here, so
+      # FBA_BACKEND_HISTORY cannot change eval behaviour.
+      conversation_history: {enabled: true, include: full}
 
 turn_detection:
   # tau2 sends silence_duration_ms 500, which splits spelled-out IDs into several
@@ -33,8 +40,9 @@ protocol:
   auto_response: true
   resume_on: response_create
 
+# The frontend's filler is spoken, so the tau2 user hears it and can answer it.
 filler:
-  mode: log_only
+  mode: speak
 
 tools:
   source: client
@@ -48,13 +56,13 @@ barge_in:
   enabled: true
   history: truncate_heard
   interruption_marker: " [interrupted by the user]"
-  while_thinking: cancel_and_merge
+  # The frontend decides whether a barge-in while the backend thinks cancels the request.
+  while_thinking: frontend_verdict
 
-# Identifier normalization, on for every tau3 arm (default since 2026-09-29; before, only
-# tau3_eval_normalization.yaml had it). The transcript hook writes spoken user IDs in lower-case
-# written form for the agent (the wire keeps the raw ASR text); the tool-argument hook canonicalizes
+# Identifier normalization. The transcript hook writes spoken user IDs in lower-case written form
+# for the agent (the wire keeps the raw ASR text); the tool-argument hook canonicalizes
 # get_user_details.user_id and answers a malformed or already-failed ID locally instead of sending
-# it to tau2. See misc/prototypes/voice/normalization-plan.md.
+# it to tau2.
 normalization:
   transcript:
     enabled: true

@@ -13,8 +13,8 @@ name: nemotron-voice-agent
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
 #   frontend-backend-agent               Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
-#   frontend-backend-verdict-agent       Voice Frontend/Backend agent with the frontend verdict
-#                                        (OpenAI Realtime only; Inference Hub LLMs)
+#   frontend-backend-verdict-agent       Cascaded Frontend/Backend agent with the frontend barge-in
+#                                        verdict (browser UI and OpenAI Realtime; Inference Hub LLMs)
 #
 # Hardware targets:
 #   server                    NIM ASR + LLM + TTS. Recommended for scaling
@@ -28,6 +28,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant up
 #   docker compose --profile omni-assistant-subagents up
 #   docker compose --profile frontend-backend-agent up
+#   docker compose --profile frontend-backend-verdict-agent up
 #
 # On-prem recipes:
 #   docker compose --profile generic-assistant/server up
@@ -41,6 +42,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-agent/server up
 #   docker compose --profile frontend-backend-agent/single-gpu up
+#   docker compose --profile frontend-backend-verdict-agent/server up
 #   docker compose --profile frontend-backend-verdict-agent/single-gpu up
 #
 # Observability profiles compose orthogonally with any recipe:
@@ -250,12 +252,38 @@ services:
       THINKER_TOOL_TIMEOUT_SECONDS: ${THINKER_TOOL_TIMEOUT_SECONDS:-90}
       REALTIME_SERVICE_PLATFORM: singlegpu
 
-  # The voice Frontend/Backend Verdict agent (frontend verdict, backend history, identifier
-  # normalization) on the OpenAI Realtime API and the shared Pipecat speech stack. LLMs:
-  # Inference Hub (NVIDIA_API_KEY holds the Inference Hub key); ASR/TTS: the NeMo-Speech.cpp
-  # sidecar. FBV_PROFILE selects a Tau profile (Tau prompts) or `default` (generic prompts).
-  # The profiles turn the server WebSocket keepalive off; the session checks that the server
-  # matches. FBV_PIPECAT_SETTINGS selects the Pipecat VAD/turn settings (default: eval.yaml).
+  # The Frontend/Backend Verdict agent (frontend barge-in verdict, backend history, identifier
+  # normalization) on the shared Pipecat speech stack, for the browser UI (WebRTC or WebSocket)
+  # and the OpenAI Realtime API. LLMs: Inference Hub (NVIDIA_API_KEY holds the Inference Hub
+  # key). FBV_PROFILE has two values: `default` (unset: browser UI sessions are served) and
+  # `eval` (evaluation runs: browser sessions are refused; set by docker/docker-compose.fbv-eval.yaml,
+  # single-gpu only). OpenAI Realtime sessions always use the `eval` agent settings. The
+  # uvicorn WebSocket keepalive must be off (UVICORN_WS_PING_INTERVAL=0) on every FBV service:
+  # Realtime sessions check that the server matches the `eval` profile.
+  frontend-backend-verdict-agent:
+    <<: *app-base
+    profiles:
+      - frontend-backend-verdict-agent
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-verdict-agent}
+      LOCAL_SERVICES_ENABLED: "false"
+      FBV_PROFILE: ${FBV_PROFILE:-default}
+      UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
+      UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
+
+  frontend-backend-verdict-agent-server:
+    <<: *app-base
+    profiles:
+      - frontend-backend-verdict-agent/server
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-verdict-agent}
+      REALTIME_SERVICE_PLATFORM: server
+      FBV_PROFILE: ${FBV_PROFILE:-default}
+      UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
+      UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
+
   frontend-backend-verdict-agent-single-gpu:
     <<: *app-base
     profiles:
@@ -264,7 +292,6 @@ services:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-verdict-agent}
       REALTIME_SERVICE_PLATFORM: singlegpu
-      FBV_PROFILE: ${FBV_PROFILE:-tau3_eval_frontend_verdict_speak_history}
-      FBV_PIPECAT_SETTINGS: ${FBV_PIPECAT_SETTINGS:-eval.yaml}
+      FBV_PROFILE: ${FBV_PROFILE:-default}
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}

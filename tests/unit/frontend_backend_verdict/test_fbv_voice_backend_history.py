@@ -12,7 +12,7 @@ import json
 import os
 import tempfile
 import unittest
-from dataclasses import fields, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -203,37 +203,19 @@ class ProfileTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_history_profile_differs_from_tau3_eval_only_by_the_flag(self) -> None:
-        base = load_voice_config(PROFILES / "tau3_eval.yaml")
-        hist = load_voice_config(PROFILES / "tau3_eval_backend_history.yaml")
-        for field in fields(base):
-            if field.name not in ("agent", "source_files", "resolved_in_paths", "warnings"):
-                self.assertEqual(getattr(base, field.name), getattr(hist, field.name), field.name)
-        self.assertEqual(replace(base.agent, backend=None), replace(hist.agent, backend=None))
-        differing = {
-            field.name
-            for field in fields(base.agent.backend)
-            if getattr(base.agent.backend, field.name) != getattr(hist.agent.backend, field.name)
-        }
-        self.assertEqual(differing, {"conversation_history", "stateful"})
-        self.assertEqual(hist.agent.backend.conversation_history.effective_include, "full")
-        self.assertTrue(hist.agent.backend.stateful)
+    def test_eval_profile_keeps_the_full_history_with_guidance(self) -> None:
+        config = load_voice_config(PROFILES / "eval.yaml")
+        history = config.agent.backend.conversation_history
+        self.assertTrue(history.enabled)
+        self.assertEqual(history.effective_include, "full")
+        self.assertTrue(history.resolved_guidance_key)
+        self.assertTrue(config.agent.backend.stateful)
 
-    def test_noguide_profile_differs_from_the_history_profile_only_by_guidance(self) -> None:
-        hist = load_voice_config(PROFILES / "tau3_eval_backend_history.yaml")
-        noguide = load_voice_config(PROFILES / "tau3_eval_backend_history_noguide.yaml")
-        history = hist.agent.backend.conversation_history
-        self.assertEqual(noguide.agent.backend.conversation_history, replace(history, guidance_key=""))
-        self.assertEqual(
-            replace(noguide.agent, backend=replace(noguide.agent.backend, conversation_history=history)), hist.agent
-        )
-        for field in fields(hist):
-            if field.name not in ("agent", "source_files", "resolved_in_paths", "warnings"):
-                self.assertEqual(getattr(hist, field.name), getattr(noguide, field.name), field.name)
-
-    def test_eval_and_backend_only_profiles_ignore_the_environment_default(self) -> None:
+    def test_profiles_ignore_the_environment_default(self) -> None:
+        for value in ("true", "false"):
+            with self.subTest(FBA_BACKEND_HISTORY=value), mock.patch.dict(os.environ, {"FBA_BACKEND_HISTORY": value}):
+                self.assertTrue(load_voice_config(PROFILES / "eval.yaml").agent.backend.conversation_history.enabled)
+                config = load_voice_config(BACKEND_ONLY_PROFILE)
+                self.assertFalse(config.agent.backend.conversation_history.enabled)
         with mock.patch.dict(os.environ, {"FBA_BACKEND_HISTORY": "true"}):
             self.assertTrue(load_voice_config(CONFIG_DIR / "voice_agent.yaml").agent.backend.stateful)
-            for path in (PROFILES / "tau3_eval.yaml", BACKEND_ONLY_PROFILE):
-                config = load_voice_config(path)
-                self.assertFalse(config.agent.backend.conversation_history.enabled, path.name)
