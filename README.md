@@ -183,6 +183,7 @@ npx skills add .
 | Reference | [LLM](docs/how-to/configure-llm.md) · [ASR](docs/how-to/configure-asr.md) · [TTS](docs/how-to/configure-tts.md) Models | NVIDIA model catalogs, VRAM usage and model configs |
 | How-to | [Jetson Thor](docs/03-jetson-thor.md) | Edge deployment guide for the `*/single-gpu` recipes |
 | Reference | [Evaluation & Performance](docs/04-evaluation-and-performance.md) | Accuracy and latency/scaling benchmarks |
+| Explanation | [Offline Generic-Assistant Evaluation](docs/12-offline-evaluation.md) | Experimental finite-session WebSocket evaluation with sample-aligned recordings and provider timing traces |
 | Explanation | [Best Practices](docs/05-best-practices.md) | Production latency, UX, and scaling guidance |
 | How-to | [Troubleshooting](docs/06-troubleshooting.md) | Startup & deployment known issues |
 | How-to | [Realtime Gateway](docs/how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime`: how it works and how to connect |
