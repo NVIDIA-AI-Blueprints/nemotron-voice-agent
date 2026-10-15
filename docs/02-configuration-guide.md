@@ -24,6 +24,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
+| [Offline Generic-Assistant Evaluation](12-offline-evaluation.md) | Configure a finite-session WebSocket upload, sample-aligned recordings, and latency extraction |
 
 ## Welcome Message
 
