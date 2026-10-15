@@ -867,7 +867,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(frame)
         self.assertEqual(emitted, [])
 
-    async def test_response_cancel_idle_is_noop(self) -> None:
+    async def test_response_cancel_idle_returns_not_active_error(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -875,9 +875,11 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
 
         ser = RealtimeFrameSerializer()
         ser.set_emit(emit)
-        frame = await ser.deserialize(json.dumps({"type": "response.cancel"}))
+        frame = await ser.deserialize(json.dumps({"type": "response.cancel", "event_id": "evt_cancel"}))
         self.assertIsNone(frame)
-        self.assertEqual(emitted, [])
+        self.assertEqual([event["type"] for event in emitted], ["error"])
+        self.assertEqual(emitted[0]["error"]["code"], "response_cancel_not_active")
+        self.assertEqual(emitted[0]["error"]["event_id"], "evt_cancel")
 
     async def test_response_create_returns_llm_run(self) -> None:
         emitted: list[dict[str, Any]] = []
@@ -1040,7 +1042,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(run, LLMRunFrame)
 
     async def test_finish_does_not_reset_newer_response(self) -> None:
-        from realtime.lifecycle import finish_response
+        from realtime.lifecycle import announce_response, finish_response
 
         emitted: list[dict[str, Any]] = []
 
@@ -1051,7 +1053,7 @@ class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
                 state.begin_response()
 
         state = ConversationState()
-        state.begin_response()
+        await announce_response(state, emit)
         state.append_assistant_transcript("hi")
         old_gen = state.response_generation
         await finish_response(state, emit, status="completed")
