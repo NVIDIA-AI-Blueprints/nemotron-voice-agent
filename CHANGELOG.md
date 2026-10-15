@@ -19,9 +19,8 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 - Upgraded Pipecat to version 1.12.0.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
 - UI selections (example, transport, services, prompt) no longer persist in browser localStorage. They survive disconnect and reconnect, and a page refresh resets them to the server defaults. Custom services and prompts stay saved.
-- Generic Assistant sessions on the OpenAI Realtime gateway (`WS /v1/realtime`) are client-driven. They never greet, even with `ENABLE_WELCOME_MESSAGE=true`, and they do not run proactive activity checks or reply on their own to a voice turn that ends without a transcript. Send `response.create` to have the assistant speak first. RTVI sessions and other examples keep their welcome behavior.
 - The Realtime gateway answers `response.create` with only `response.created`. The assistant item events follow when the reply first has speakable text or audio.
-- An idle `response.cancel` on the Realtime gateway returns the `response_cancel_not_active` error, as OpenAI Realtime does, instead of being ignored.
+- An idle `response.cancel` on the Realtime gateway returns the `response_cancel_not_active` error, as OpenAI Realtime does, instead of being ignored. A cancel sent while a committed voice turn's reply is still being prepared remains a no-op.
 
 ### Fixed
 
@@ -29,6 +28,7 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 - The Frontend/Backend Agent Thinker honors the Max Tokens setting.
 - Realtime responses that produce no speech, such as an empty reply or a tool round without a spoken answer, finish with a `response.done` that has an empty `output` list. The status is `completed`, or `failed` when the LLM request fails. Previously, these responses stayed in progress, and later `response.create` events returned `conversation_already_has_active_response`.
 - Realtime sessions no longer emit a stray second response after a spoken reply.
+- On the Realtime gateway, `response.cancel` followed immediately by `response.create` no longer cancels the new response.
 
 ### Removed
 

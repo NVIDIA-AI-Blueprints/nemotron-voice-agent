@@ -38,6 +38,7 @@ from pipecat.utils.text.base_text_aggregator import AggregationType
 
 import examples.generic.pipeline as generic_pipeline
 import server
+from utils import clear_service_context, set_active_services
 
 EVENT_TIMEOUT_SECS = 20.0
 
@@ -131,6 +132,9 @@ class GenericRealtimeEndToEndTests(unittest.IsolatedAsyncioTestCase):
         ScriptedLLM.requests = []
         patches = contextlib.ExitStack()
         self.addCleanup(patches.close)
+        # create_app() binds the selected example's services process-wide.
+        self.addCleanup(set_active_services, None)
+        self.addCleanup(clear_service_context)
         patches.enter_context(
             patch.dict(
                 os.environ,
@@ -138,8 +142,8 @@ class GenericRealtimeEndToEndTests(unittest.IsolatedAsyncioTestCase):
                     "SERVICE_RECIPE": "cloud",
                     "NVIDIA_API_KEY": "test-key",
                     "USE_SILERO_VAD_TURN_DETECTION": "true",
-                    # Realtime sessions must not greet even when the welcome message is on.
-                    "ENABLE_WELCOME_MESSAGE": "true",
+                    # Client-driven sessions; test_greets_first_when_welcome_is_enabled turns it on.
+                    "ENABLE_WELCOME_MESSAGE": "false",
                 },
             )
         )
@@ -202,6 +206,17 @@ class GenericRealtimeEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 while True:
                     events.append(json.loads(await ws.recv()))
         return events
+
+    async def test_greets_first_when_welcome_is_enabled(self) -> None:
+        ScriptedLLM.script = [text_turn("Hi, I am Nemotron. How can I help?")]
+        with patch.dict(os.environ, {"ENABLE_WELCOME_MESSAGE": "true"}):
+            ws = await self.connect()
+            events = await self.events_until(ws, "response.done")
+
+        self.assertNotIn("error", [event["type"] for event in events])
+        response = events[-1]["response"]
+        self.assertEqual(response["status"], "completed")
+        self.assertEqual(response["output"][0]["content"][0]["transcript"], "Hi, I am Nemotron. How can I help?")
 
     async def test_session_waits_for_the_client_and_answers_a_text_turn(self) -> None:
         ScriptedLLM.script = [text_turn("Hello! How can I help?")]

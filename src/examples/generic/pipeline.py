@@ -12,9 +12,6 @@ that flushes submitted ASR audio via ``force_eou`` when local VAD reports a stop
 A catalog LLM whose ``base_url`` is ``ws://`` / ``wss://`` swaps in
 NvidiaStreamingLLMService and StreamingLLMUserAggregator, which prefill the
 user's words while they are still speaking.
-
-OpenAI Realtime sessions are client-driven: the assistant does not greet, run
-proactive activity checks, or answer turns that end without a transcript.
 """
 
 import asyncio
@@ -51,7 +48,6 @@ from examples.shared.pipeline_utils import (
     build_user_aggregator_params,
     create_transport,
     register_session_start_handlers,
-    runner_protocol,
     with_realtime_observers,
 )
 from tracing import IS_TRACING_ENABLED
@@ -76,9 +72,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
-    # OpenAI Realtime clients start the conversation and request each response.
-    is_realtime = runner_protocol(runner_args) == "realtime"
-    welcome_enabled = not is_realtime and examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
+    welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
         __file__,
         body.get("prompt_content", ""),
@@ -227,9 +221,6 @@ async def bot(runner_args: RunnerArguments) -> None:
     preserve_prompt_messages = len(messages)
 
     user_params = build_user_aggregator_params(welcome_enabled)
-    if is_realtime:
-        # Pipecat would otherwise answer an empty barge-in with an unrequested reply.
-        user_params.empty_user_turn = None
     if streaming:
         user_aggregator = StreamingLLMUserAggregator(context, params=user_params)
         assistant_aggregator = LLMAssistantAggregator(context)
@@ -245,14 +236,12 @@ async def bot(runner_args: RunnerArguments) -> None:
     async def queue_activity_llm_run() -> None:
         await task.queue_frame(LLMRunFrame())
 
-    activity_check = None
-    if not is_realtime:
-        activity_check = create_activity_check_processor(
-            examples_registry.activity_check_config(body.get("pipeline_mode", "generic-assistant")),
-            context=context,
-            queue_llm_run=queue_activity_llm_run,
-            instruction_role="user",
-        )
+    activity_check = create_activity_check_processor(
+        examples_registry.activity_check_config(body.get("pipeline_mode", "generic-assistant")),
+        context=context,
+        queue_llm_run=queue_activity_llm_run,
+        instruction_role="user",
+    )
     logger.info(f"Proactive activity checks: {'enabled' if activity_check else 'disabled'}")
 
     pipeline = Pipeline(

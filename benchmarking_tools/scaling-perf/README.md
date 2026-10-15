@@ -85,24 +85,19 @@ a key.
 The repository's gateway is available at
 `wss://localhost:7860/v1/realtime`. It uses the development TLS certificate,
 so local runs need `--insecure`. Leave `OPENAI_REALTIME_API_KEY` unset for
-this command. The local gateway does not require a key. The following command
-targets a server that runs the Generic Assistant:
+this command. The local gateway does not require a key.
 
 ```bash
 uv run python3 benchmark.py \
   --protocol realtime \
   --ws-url wss://localhost:7860/v1/realtime \
-  --skip-bot-intro \
+  --drain-bot-intro \
   --insecure
 ```
 
-The client drains one welcome response by default for both protocols. Use
-`--skip-bot-intro` when the target does not greet. Generic Assistant sessions on
-the repository's Realtime gateway never greet, so use `--skip-bot-intro` with
-`--protocol realtime` against the Generic Assistant. With the default intro
-drain, the client waits `--bot-intro-timeout` seconds and sends
-`response.cancel`. It continues after the gateway answers with the
-`response_cancel_not_active` error.
+The client drains one welcome response by default for both protocols, matching
+the built-in examples. Use `--skip-bot-intro` when the target server has
+welcome messages disabled.
 For concurrency runs, use a server with the welcome message disabled so intro
 draining does not overlap the synchronized measurement window. The
 `generic-assistant/server-perf` Compose profile disables the welcome message.
@@ -240,7 +235,7 @@ wrapper and `benchmark.py` unless the description states otherwise:
 | `--connect-timeout` | RTVI: `30`; Realtime: `60` | WebSocket handshake timeout in seconds. In Realtime mode, the same value bounds the `session.updated` readiness wait. |
 | `--turn-response-timeout` | RTVI: `10`; Realtime: `45` | Seconds to wait for first response audio after the WAV ends. |
 | `--insecure` | off | Disable TLS certificate verification for Realtime or RTVI. Intended only for local development certificates. Realtime mode rejects an API key when this flag is set. |
-| `--skip-bot-intro` | off | Skip draining an initial assistant utterance. Use for targets that do not greet, such as servers with welcome messages disabled and Generic Assistant Realtime sessions. Mutually exclusive with `--drain-bot-intro`. |
+| `--skip-bot-intro` | off | Skip draining an initial assistant utterance. Use for targets with welcome messages disabled. Mutually exclusive with `--drain-bot-intro`. |
 | `--drain-bot-intro` | on | Wait for and discard an initial assistant utterance before opening the metric window. Mutually exclusive with `--skip-bot-intro`. |
 | `--bot-intro-timeout` | `5` | Seconds to wait for initial bot audio. Increase this for high-latency cloud deployments. |
 | `--test-duration` | `300` | Seconds of metric collection per level. |

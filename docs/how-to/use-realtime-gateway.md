@@ -21,7 +21,7 @@ The following table compares the hosted OpenAI Realtime service with this protoc
 | Voices | OpenAI voice names (`alloy`, …) | Magpie / catalog voice ids (unknown ids warn and fall back to catalog default) |
 | `session.model` | Selects a Realtime model | Ignored (logged only) |
 | Tools | Client-registered schemas + model-native calling | Client schemas are ignored; server catalog tools run internally |
-| Welcome | Client-driven | Generic Assistant: client-driven, with no greeting. Other examples: optional Nemotron welcome gate (RTVI parity) that rejects client text and `response.create` until the first assistant `response.done` |
+| Welcome | Client-driven | Optional Nemotron welcome gate (RTVI parity): client text / `response.create` rejected until first assistant `response.done` |
 | Turn detection | Several modes and tunable VAD | Server VAD only; no push-to-talk or VAD tuning |
 | Live `session.update` | Broad session mutation | Voice and PCM updates only; turn mode is immutable |
 | Transport | WebSocket, WebRTC, PCM16, and G.711 | WebSocket PCM16 only |
@@ -139,7 +139,7 @@ Clients can send the following events.
 | `conversation.item.create` | User text items; `function_call_output` is rejected |
 | `conversation.item.truncate` | Barge-in while a response is in progress. Idle truncate is ignored. Does not emit `conversation.item.truncated`. |
 | `response.create` | Start a model turn. The gateway emits `response.created` immediately; assistant item events follow when the reply first has speakable text or audio. Empty `response: {}` is accepted; non-empty per-response overrides are rejected. |
-| `response.cancel` | Cancel the in-progress response. Without an active response, the gateway returns an `error` with code `response_cancel_not_active`, as OpenAI Realtime does. |
+| `response.cancel` | Cancel the in-progress response. Without an active response, the gateway returns an `error` with code `response_cancel_not_active`, as OpenAI Realtime does. While a committed voice turn's reply is still being prepared, the cancel is ignored and the reply ends with its own `response.done`. |
 
 Conversation item delete/retrieve operations are not supported. There are no response-level instruction, tool, modality, audio, or generation overrides.
 
@@ -150,7 +150,7 @@ The gateway can emit the following events.
 | Event | Notes |
 |-------|--------|
 | `session.created` / `session.updated` | Session object (OpenAI-shaped + optional `nvidia`) |
-| `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `conversation_already_has_active_response`, `response_cancel_not_active`, `invalid_item`, `invalid_truncate`, and `pipeline_error`. Examples other than the Generic Assistant also return `item_rejected_pre_intro` and `response_create_rejected_pre_intro` during their welcome window. |
+| `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `item_rejected_pre_intro`, `response_create_rejected_pre_intro`, `conversation_already_has_active_response`, `response_cancel_not_active`, `invalid_item`, `invalid_truncate`, and `pipeline_error` |
 | `input_audio_buffer.*` | Server-VAD speech / commit / clear events |
 | `conversation.item.*` | Item created; cascaded ASR input transcription. `conversation.item.truncated` is not emitted. |
 | `response.*` | Response lifecycle, audio, and audio-transcript events. `response.done` includes standard token `usage` plus response-scoped NVIDIA timing metadata when available. |
@@ -178,8 +178,7 @@ top-level event type or duplicate these values in `session.nvidia`.
 
 ### Session Lifecycle Notes
 
-- Generic Assistant sessions are client-driven. The assistant does not greet or run proactive activity checks, and it does not reply on its own to a voice turn that ends without a transcript. The `welcome_message` and `activity_check` settings in `examples_registry.yaml` and the `ENABLE_WELCOME_MESSAGE` override apply only to its RTVI sessions. To have the assistant speak first, send `response.create`.
-- Other examples with the welcome message enabled greet first (RTVI parity). Until the first assistant `response.done`, client text returns `item_rejected_pre_intro` and `response.create` returns `response_create_rejected_pre_intro`. The gateway accepts `input_audio_buffer.append`, but the pipeline mutes user speech until the greeting finishes.
+- Welcome enabled (RTVI parity): client text and `response.create` are rejected until the first assistant `response.done`. The gateway accepts `input_audio_buffer.append`, but the pipeline mutes user speech until the greeting finishes. Set `ENABLE_WELCOME_MESSAGE=false` (or `welcome_message: false` in `examples_registry.yaml`) for client-driven sessions.
 - The gateway answers `response.create` with only `response.created`. The assistant item events (`conversation.item.created`, `response.output_item.added`, and `response.content_part.added`) follow when the reply first has speakable text or audio. For a server-VAD turn, `response.created` arrives together with those item events.
 - A response without speech, such as an empty, whitespace-only, or punctuation-only reply or a tool round with no spoken answer, emits no assistant item events. It ends with a `response.done` whose `output` list is empty. The status is `completed`, `failed` when the LLM request fails, or `cancelled` after `response.cancel` or barge-in. A failed LLM request also produces an `error` event with code `pipeline_error`. A server-VAD turn whose reply has no speech emits no response events.
 - Spoken turns complete after the output transport drains all queued TTS audio; only then does the gateway emit `response.done`.
