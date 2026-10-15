@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Client for the experimental nva.offline.v1 server contract.
 
 Use /api/ws/offline. The capability handshake refuses a stock real-time

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Upload individual canonical FDB recordings in bulk and preserve aligned audio.
 
 Each input must already be 16 kHz mono PCM16 WAV. Conversion is deliberately a
