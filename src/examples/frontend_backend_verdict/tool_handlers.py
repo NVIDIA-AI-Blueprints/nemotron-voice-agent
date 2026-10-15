@@ -3,8 +3,8 @@
 
 """The browser profile's tool handlers: weather, stock price, web search, BMI and a random number.
 
-Copied unchanged from ``src/examples/frontend_backend_agent/generic/services.py`` so this example
-does not depend on the Frontend/Backend Agent example. Each handler takes the tool arguments as
+Copied unchanged from the generic domain of the former Frontend/Backend Agent example (removed in
+release 2.3.0), so this example has its own copy. Each handler takes the tool arguments as
 one mapping and returns a JSON-serializable dict; a missing API key (``WEATHERAPI_KEY``,
 ``FINNHUB_API_KEY``, ``PERPLEXITY_API_KEY``) or an upstream failure returns an ``unavailable``
 result instead of raising. ``tools.py`` wraps them as the agent's ``ToolSpec`` callables.

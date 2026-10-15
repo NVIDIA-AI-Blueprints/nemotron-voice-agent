@@ -58,8 +58,6 @@ _MCP_ENDPOINT_FIELDS = frozenset({"server_url", "connector_id", "tunnel_id"})
 _SMART_TURN_PIPELINES = frozenset({"omni-assistant", "omni-assistant-subagents"})
 _CONFIGURABLE_CASCADE_PIPELINES = frozenset(
     {
-        "frontend-backend-agent",
-        "generic-frontend-backend-agent",
         "generic-assistant",
         "multilingual-assistant",
     }
@@ -326,8 +324,6 @@ def _controller_from_runtime(
     else:
         raise ValueError(f"Realtime turn detection is not defined for pipeline_mode {pipeline_mode!r}")
     manual_input_available = bool(transcription_model) and pipeline_mode in {
-        "frontend-backend-agent",
-        "generic-frontend-backend-agent",
         "generic-assistant",
         "multilingual-assistant",
     }

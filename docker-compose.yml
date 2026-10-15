@@ -12,7 +12,6 @@ name: nemotron-voice-agent
 #   multilingual-assistant       Cascaded Multilingual ASR + LLM + TTS Pipeline (Multilingual Assistant)
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
-#   frontend-backend-agent               Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
 #   frontend-backend-verdict-agent       Cascaded Frontend/Backend agent with the frontend barge-in
 #                                        verdict (browser UI and OpenAI Realtime; Inference Hub LLMs)
 #
@@ -27,7 +26,6 @@ name: nemotron-voice-agent
 #   docker compose --profile multilingual-assistant up
 #   docker compose --profile omni-assistant up
 #   docker compose --profile omni-assistant-subagents up
-#   docker compose --profile frontend-backend-agent up
 #   docker compose --profile frontend-backend-verdict-agent up
 #
 # On-prem recipes:
@@ -40,8 +38,6 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant/single-gpu up
 #   docker compose --profile omni-assistant-subagents/server up
 #   docker compose --profile omni-assistant-subagents/single-gpu up
-#   docker compose --profile frontend-backend-agent/server up
-#   docker compose --profile frontend-backend-agent/single-gpu up
 #   docker compose --profile frontend-backend-verdict-agent/server up
 #   docker compose --profile frontend-backend-verdict-agent/single-gpu up
 #
@@ -63,7 +59,6 @@ include:
   - path: docker/docker-compose.nemo-speech-cpp.yaml
   - path: docker/docker-compose.coturn.yaml
   - path: docker/docker-compose.phoenix.yaml
-  - path: src/examples/frontend_backend_agent/airline/database/docker-compose.yml
 
 x-app: &app-base
   build:
@@ -222,34 +217,6 @@ services:
     environment:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-omni-assistant-subagents}
-      REALTIME_SERVICE_PLATFORM: singlegpu
-
-  frontend-backend-agent:
-    <<: *app-base
-    profiles:
-      - frontend-backend-agent
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
-      LOCAL_SERVICES_ENABLED: "false"
-
-  frontend-backend-agent-server:
-    <<: *app-base
-    profiles:
-      - frontend-backend-agent/server
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
-      REALTIME_SERVICE_PLATFORM: server
-
-  frontend-backend-agent-single-gpu:
-    <<: *app-base
-    profiles:
-      - frontend-backend-agent/single-gpu
-    environment:
-      <<: *app-env
-      EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
-      THINKER_TOOL_TIMEOUT_SECONDS: ${THINKER_TOOL_TIMEOUT_SECONDS:-90}
       REALTIME_SERVICE_PLATFORM: singlegpu
 
   # The Frontend/Backend Verdict agent (frontend barge-in verdict, backend history, identifier

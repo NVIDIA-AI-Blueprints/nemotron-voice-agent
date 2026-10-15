@@ -78,29 +78,6 @@ realtime_models:
       llm_id: registry-default
       tts_id: registry-default
 
-  nvidia/nemotron-realtime-frontend-backend:
-    label: Nemotron Realtime Frontend Backend
-    pipeline_mode: frontend-backend-agent
-    default: true
-    selectors:
-      prompt_key: talker
-      llm_id: registry-default
-      thinker_llm_id: registry-default
-      asr_id: registry-default
-      tts_id: registry-default
-
-  nvidia/nemotron-realtime-generic-frontend-backend:
-    label: Nemotron Realtime Generic Frontend/Backend
-    pipeline_mode: generic-frontend-backend-agent
-    default: false
-    selectors:
-      prompt_key: generic_talker
-      thinker_prompt: generic_thinker
-      llm_id: nemotron-lightning-talker
-      thinker_llm_id: nemotron-super-reasoning
-      asr_id: registry-default
-      tts_id: registry-default
-
   # The voice Frontend/Backend Verdict agent with the frontend barge-in verdict, backend
   # conversation history and identifier normalization (src/examples/frontend_backend_verdict),
   # on the shared Pipecat speech stack. The pipeline owns the whole Realtime session, so its
@@ -164,47 +141,6 @@ examples:
       llm: [nemotron-omni-nvfp4]
       tts: [magpie-multilingual-tts]
     bot: examples.omni_assistant_subagents.pipeline:bot
-
-  frontend-backend-agent:
-    label: Airline Frontend Backend Agent
-    domain_profile: airline
-    thinker_prompt: thinker
-    agent_prompt_keys:
-      - thinker
-      - generic_talker
-      - generic_thinker
-    slots: [llm, thinker-llm, booking-server, asr, tts]
-    defaults:
-      prompt: [talker]
-      llm: [nemotron-lightning]
-      thinker-llm: [nemotron-lightning]
-      booking-server: [default]
-      asr: [nemotron-asr-streaming-english]
-      tts: [magpie-multilingual-tts]
-    bot: examples.frontend_backend_agent.pipeline:bot
-
-  generic-frontend-backend-agent:
-    label: Generic Frontend Backend Agent
-    domain_profile: generic
-    thinker_prompt: generic_thinker
-    tools:
-      - get_weather
-      - get_stock_price
-      - web_search
-      - calculate_bmi
-      - generate_random_number
-    agent_prompt_keys:
-      - talker
-      - thinker
-      - generic_thinker
-    slots: [llm, thinker-llm, asr, tts]
-    defaults:
-      prompt: [generic_talker]
-      llm: [nemotron-lightning-talker]
-      thinker-llm: [nemotron-super-reasoning]
-      asr: [nemotron-asr-streaming-english]
-      tts: [magpie-multilingual-tts]
-    bot: examples.frontend_backend_agent.pipeline:bot
 
   frontend-backend-verdict-agent:
     label: Frontend Backend Verdict Agent

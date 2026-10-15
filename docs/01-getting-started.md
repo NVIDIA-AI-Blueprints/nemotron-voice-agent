@@ -24,9 +24,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
-| [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
-| [`generic-frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Shared Talker/Thinker pipeline with grounded generic tools | Set `EXAMPLE_SELECTION=generic-frontend-backend-agent` with a Frontend/Backend Agent profile |
-| [`frontend-backend-verdict-agent`](../src/examples/frontend_backend_verdict/README.md) | Voice Frontend/Backend Agent with a frontend barge-in verdict on the shared Pipecat speech stack, served in the browser UI and on the OpenAI Realtime WebSocket | `frontend-backend-verdict-agent`, `frontend-backend-verdict-agent/server`, `frontend-backend-verdict-agent/single-gpu`. Evaluation runs use `/single-gpu` with the eval override. |
+| [`frontend-backend-verdict-agent`](../src/examples/frontend_backend_verdict/README.md) | Frontend LLM with a reasoning backend LLM, a frontend barge-in verdict, and the shared Pipecat speech stack, served in the browser UI and on the OpenAI Realtime WebSocket | `frontend-backend-verdict-agent`, `frontend-backend-verdict-agent/server`, `frontend-backend-verdict-agent/single-gpu`. Evaluation runs use `/single-gpu` with the eval override. |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
 
@@ -78,7 +76,6 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile multilingual-assistant up -d       # Multilingual Cascaded
     docker compose --profile omni-assistant up -d               # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents up -d     # Nemotron Omni Assistant Subagents
-    docker compose --profile frontend-backend-agent up -d       # Frontend/Backend Agent Airline Assistant
     docker compose --profile frontend-backend-verdict-agent up -d  # Frontend/Backend Verdict Agent
     ```
 
@@ -89,7 +86,6 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile multilingual-assistant/server up -d    # Multilingual Cascaded
     docker compose --profile omni-assistant/server up -d            # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/server up -d  # Nemotron Omni Assistant Subagents
-    docker compose --profile frontend-backend-agent/server up -d    # Frontend/Backend Agent Airline Assistant
     docker compose --profile frontend-backend-verdict-agent/server up -d  # Frontend/Backend Verdict Agent
     ```
 
@@ -108,11 +104,10 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile multilingual-assistant/single-gpu up -d     # Multilingual Cascaded
     docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
-    docker compose --profile frontend-backend-agent/single-gpu up -d     # Frontend/Backend Agent
     docker compose --profile frontend-backend-verdict-agent/single-gpu up -d  # Frontend/Backend Verdict Agent
     ```
 
-    The `frontend-backend-verdict-agent/single-gpu` recipe runs only speech locally. Its LLMs use the NVIDIA Inference Hub, so it also requires `NVIDIA_API_KEY` set to an Inference Hub key. The Frontend/Backend Verdict Agent has two profiles: `default` for the browser UI, which these commands use, and `eval` for evaluation runs such as Tau, which uses the `/single-gpu` recipe with the `docker/docker-compose.fbv-eval.yaml` override. Refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md).
+    The `frontend-backend-verdict-agent/single-gpu` recipe runs only speech locally. Its LLMs use the NVIDIA Inference Hub, so it also requires `NVIDIA_API_KEY` set to an Inference Hub key. The Frontend/Backend Verdict Agent has two profiles: `default` for the browser UI, which these commands use, and `eval` for evaluation runs such as Tau, which uses the `/single-gpu` recipe with the `docker/docker-compose.fbv-eval.yaml` override. To also run the frontend LLM on the host, add the `docker/docker-compose.fbv-local-llm.yaml` overlay. Refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md).
 
     To verify all services are healthy, run `docker compose ps`.
 
@@ -186,7 +181,6 @@ For development and debugging, you can run the server directly:
     | `multilingual-assistant` | Lock to Multilingual Assistant |
     | `omni-assistant` | Lock to Nemotron Omni Assistant |
     | `omni-assistant-subagents` | Lock to Nemotron Omni Assistant Subagents |
-    | `frontend-backend-agent` | Lock to Frontend Backend Agent |
     | `frontend-backend-verdict-agent` | Lock to Frontend Backend Verdict Agent. Host-native runs must set `UVICORN_WS_PING_INTERVAL=0`. |
 
     > **Note:** Docker Compose deployments pin `EXAMPLE_SELECTION=<example>` to a single example. You can set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.

@@ -38,7 +38,6 @@ services:
     <<: *nemotron-asr
     profiles:
       - generic-assistant/server
-      - frontend-backend-agent/server
       - frontend-backend-verdict-agent/server
     environment:
       <<: *nemotron-asr-env

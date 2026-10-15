@@ -187,7 +187,6 @@ class RealtimeVADPipelineProjectionTests(unittest.TestCase):
 class RealtimeVADPipelineCapabilityTests(unittest.TestCase):
     def test_all_cascaded_families_accept_exact_server_vad_controls(self) -> None:
         for pipeline_mode in (
-            "frontend-backend-agent",
             "generic-assistant",
             "multilingual-assistant",
         ):

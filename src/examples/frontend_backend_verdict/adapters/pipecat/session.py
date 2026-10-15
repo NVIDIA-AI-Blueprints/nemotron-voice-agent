@@ -31,6 +31,7 @@ from pipecat.frames.frames import Frame
 from pipecat.workers.runner import WorkerRunner
 
 from examples.frontend_backend_verdict.adapters.pipecat import client_events as ce
+from examples.frontend_backend_verdict.adapters.pipecat import switches, turn_modes
 from examples.frontend_backend_verdict.adapters.pipecat.frames import (
     ResponseEventFrame,
     StreamEventFrame,
@@ -83,6 +84,7 @@ class PipecatSession:
         self.settings = runtime.settings
         self._runtime_prompts = runtime.prompts
         self.session_id = session_id or new_session_id()
+        self._mcp: Any = None  # opt-in MCP tools (mcp_tools.py), set once the turn manager exists
         self.clock = clock or SystemClock()
         self._websocket = websocket
         self._routing_sink = runtime.state.routing_sink
@@ -126,6 +128,7 @@ class PipecatSession:
             event_log=self._event_log,
             show_silent_filler=show_silent_filler,
         )
+        self._mcp = self._create_mcp()
         self.pipeline.bridge.bind(self.turns, tts=self.pipeline.tts)
         self.pipeline.cursor.on_advance = self.turns.on_audio_advance
         self.pipeline.apply_turn_detection(self.view.settings.turn_detection)
@@ -151,10 +154,20 @@ class PipecatSession:
 
     def emit_urgent(self, event: dict[str, Any]) -> None:
         """Session, input-buffer, user-item and error events: never behind agent audio (B10)."""
+        if self._mcp is not None and self._mcp.running and event.get("type") == "input_audio_buffer.committed":
+            self._mcp.cancel_all("the caller spoke")  # barge-in: stop running MCP calls
         self._queue.put_nowait(UrgentEventFrame(message=event))
 
     def emit_turn(self, event: dict[str, Any]) -> None:
         """The turn manager's events, classified (see ``frames.py``)."""
+        if self._mcp is not None:
+            # Opt-in MCP: a hidden call's events never reach the client (mcp_tools.py).
+            for visible in self._mcp.outbound(event):
+                self._emit_turn_event(visible)
+            return
+        self._emit_turn_event(event)
+
+    def _emit_turn_event(self, event: dict[str, Any]) -> None:
         self.pipeline.tagger.note_event(event)
         kind = event_type(event)
         if kind in _URGENT_TURN_EVENTS:
@@ -205,7 +218,10 @@ class PipecatSession:
         if isinstance(command, ce.AudioAppend):
             self._on_append(command.audio)
         elif isinstance(command, ce.SessionUpdate):
-            self._on_session_update(command.session)
+            session = command.session
+            if self._mcp is not None:
+                session = await self._mcp.prepare_update(session)
+            self._on_session_update(session)
         elif isinstance(command, ce.ItemCreate):
             self._on_item_create(command)
         elif isinstance(command, ce.ResponseCreate):
@@ -218,11 +234,19 @@ class PipecatSession:
                 )
             self.turns.on_response_create()
         elif isinstance(command, ce.AudioCommit):
-            raise WireProtocolError(
-                "input_audio_buffer.commit is not supported: the Pipecat adapter ends turns with its own VAD",
-                code="unsupported_event",
-                param=None,
-            )
+            modes = self.pipeline.turn_modes
+            if modes is None or modes.mode != turn_modes.MANUAL:
+                raise WireProtocolError(
+                    "input_audio_buffer.commit is not supported: the Pipecat adapter ends turns with its own VAD",
+                    code="unsupported_event",
+                    param=None,
+                )
+            if not await modes.commit():
+                raise WireProtocolError(
+                    "cannot commit: the input audio buffer holds no speech",
+                    code="input_audio_buffer_commit_empty",
+                    param=None,
+                )
         elif isinstance(command, ce.AudioClear):
             cleared = self.pipeline.bridge.clear()
             self._clear_input()
@@ -240,6 +264,8 @@ class PipecatSession:
                 )
             self.emit_urgent(ev.item_deleted(command.item_id))
         elif isinstance(command, ce.ResponseCancel):
+            if self._mcp is not None and self._mcp.running:
+                self._mcp.cancel_all("response.cancel")
             await self._stopping_output(self.turns.on_response_cancel)
         elif isinstance(command, ce.OutputAudioBufferClear):
             await self._stopping_output(self.turns.on_output_audio_clear)
@@ -279,8 +305,10 @@ class PipecatSession:
             except Exception as exc:  # noqa: BLE001 - a bad tool schema must not kill the session
                 raise WireProtocolError(f"cannot configure the agent: {exc}", param="session") from exc
         self._configure_input(settings.input_format)
-        self.pipeline.apply_turn_detection(settings.turn_detection)
-        if settings.turn_detection.mode == "manual" and "manual" not in self._warned:
+        active = self._select_turn_mode(settings.turn_detection)
+        stop_secs = turn_modes.SMART_TURN_VAD_STOP_SECS if active == turn_modes.SEMANTIC_VAD else None
+        self.pipeline.apply_turn_detection(settings.turn_detection, stop_secs=stop_secs)
+        if settings.turn_detection.mode == "manual" and active != turn_modes.MANUAL and "manual" not in self._warned:
             self._warned.add("manual")
             logger.warning(f"[{self.session_id}] manual turn detection requested; Pipecat's VAD still ends audio turns")
         self._configured = True
@@ -292,7 +320,7 @@ class PipecatSession:
             tools=[tool.get("name") for tool in settings.tools],
             instructions_chars=len(settings.instructions),
         )
-        self.emit_urgent(ev.session_updated(self.view.public()))
+        self.emit_urgent(ev.session_updated(self._public_session(active)))
         if first and self.config.protocol.greeting_enabled:
             self.turns.speak_greeting()
 
@@ -341,6 +369,64 @@ class PipecatSession:
     def output_format(self) -> AudioFormat:
         """The client's current output format."""
         return self.view.settings.output_format
+
+    def mcp_allowed(self) -> bool:
+        """Whether this session's client may declare MCP tools (``FBV_REALTIME_MCP``, never in eval mode)."""
+        return switches.realtime_switch(switches.REALTIME_MCP_ENV)
+
+    def _create_mcp(self) -> Any:
+        """The session's MCP tools (``mcp_tools.py``), or ``None`` when MCP is off."""
+        if not self.mcp_allowed():
+            return None
+        from examples.frontend_backend_verdict.adapters.pipecat import mcp_tools  # noqa: PLC0415
+
+        if not mcp_tools.configured():
+            logger.warning(f"{switches.REALTIME_MCP_ENV}=true needs REALTIME_MCP_ALLOWED_SERVER_URLS; MCP stays off")
+            return None
+        return mcp_tools.McpTools(
+            feed_output=self.turns.on_function_output,
+            resume=lambda: asyncio.get_running_loop().call_soon(self._resume_after_mcp),
+            log=self.log.write,
+        )
+
+    def _resume_after_mcp(self) -> None:
+        """A response held only MCP calls: ask for the continuation the client would have asked for."""
+        try:
+            self.turns.on_response_create()
+        except WireProtocolError as exc:
+            logger.info(f"[{self.session_id}] no continuation after MCP calls: {exc}")
+
+    def allowed_turn_modes(self) -> frozenset[str]:
+        """The turn modes this session's client may select (``switches.realtime_turn_modes``)."""
+        return switches.realtime_turn_modes()
+
+    def _select_turn_mode(self, turn: Any) -> str | None:
+        """Switch the opt-in turn modes to the session's request; ``None`` when they are off."""
+        modes = self.pipeline.turn_modes
+        if modes is None:
+            return None
+        if turn.mode == "manual":
+            requested = turn_modes.MANUAL
+        elif turn.requested_type == "semantic_vad":
+            requested = turn_modes.SEMANTIC_VAD
+        else:
+            requested = turn_modes.SERVER_VAD
+        return modes.select(requested)
+
+    def _public_session(self, active: str | None) -> dict[str, Any]:
+        """The ``session.updated`` payload; the opt-in turn modes and MCP tools show as the client set them."""
+        public = self.view.public()
+        if self._mcp is not None and isinstance(public.get("tools"), list):
+            public["tools"] = self._mcp.public_tools(public["tools"])
+        if active is None:
+            return public
+        detection = public.get("audio", {}).get("input", {}).get("turn_detection")
+        if isinstance(detection, dict):
+            detection["x_nvidia_turn_strategy"] = {
+                turn_modes.SEMANTIC_VAD: "smart_turn",
+                turn_modes.MANUAL: "manual",
+            }.get(active, "server_vad")
+        return public
 
     def _resolve_voice(self) -> str | None:
         """v1's voice map (S19); the Pipecat TTS keeps its catalog voice (B8)."""
@@ -402,6 +488,8 @@ class PipecatSession:
     async def close(self) -> None:
         """Release everything the session started, in v1's order (S22)."""
         self._routing_sink.unregister(self.session_id)
+        if self._mcp is not None:
+            self._mcp.shutdown()
         with contextlib.suppress(Exception):
             await self.turns.close()
         await self.pipeline.bridge.aclose()

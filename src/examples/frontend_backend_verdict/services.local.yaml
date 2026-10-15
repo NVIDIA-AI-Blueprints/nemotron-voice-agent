@@ -28,6 +28,16 @@ server:
       max_tokens: 1024
       temperature: 0.0
       extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
+    # Optional: the local LLM of docker/docker-compose.fbv-local-llm.yaml. Listed only while
+    # reachable; the Inference Hub entry above stays the default.
+    nemotron-3.5-lightning-local:
+      name: "Nemotron 3.5 Lightning frontend (local NIM, reasoning off)"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://nvidia-llm:8000/v1"
+      system_prompt: ""
+      max_tokens: 1024
+      temperature: 0.0
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
   thinker-llm:
     nemotron-3-ultra:
       name: "Nemotron 3 Ultra backend (Inference Hub, reasoning on)"
@@ -57,6 +67,16 @@ singlegpu:
       name: "Nemotron 3.5 Lightning frontend (Inference Hub, reasoning off)"
       model_id: "nvidia/nvidia/nemotron-3.5-lightning"
       base_url: "https://inference-api.nvidia.com/v1"
+      system_prompt: ""
+      max_tokens: 1024
+      temperature: 0.0
+      extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
+    # Optional: the local LLM of docker/docker-compose.fbv-local-llm.yaml. Listed only while
+    # reachable; the Inference Hub entry above stays the default.
+    nemotron-3.5-lightning-local:
+      name: "Nemotron 3.5 Lightning frontend (local vLLM, reasoning off)"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://nvidia-llm-vllm:8000/v1"
       system_prompt: ""
       max_tokens: 1024
       temperature: 0.0

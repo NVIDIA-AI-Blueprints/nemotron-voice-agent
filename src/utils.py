@@ -82,8 +82,6 @@ _SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset(
         "prompt_key",
         "prompt_content",
         "tool_choice",
-        "domain_profile",
-        "thinker_prompt",
         "tools",
         "tools_available",
     }
@@ -549,8 +547,6 @@ SESSION_CONFIG_KEYS: frozenset[str] = frozenset(
         "prompt_content",
         "tool_choice",
         "asr_server",
-        "domain_profile",
-        "thinker_prompt",
         "tools",
         "tools_available",
         "asr_model",

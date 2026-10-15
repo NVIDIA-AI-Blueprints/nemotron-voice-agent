@@ -18,7 +18,6 @@ The catalog stores Compose DNS endpoints. The backend rewrites them to `localhos
 | `ws://nvidia-llm-vllm:8000/v1/streaming-session` | `ws://localhost:18000/v1/streaming-session` |
 | `http://nvidia-llm-omni:8000/v1` | `http://localhost:18002/v1` |
 | `http://nvidia-llm-vllm-omni:8002/v1` | `http://localhost:8002/v1` |
-| `http://booking-server:8001` | `http://localhost:8001` |
 | `magpie-multilingual-tts-service:50051` | `localhost:50151` |
 | `magpie-zeroshot-tts-service:50051` | `localhost:50151` |
 | `chatterbox-tts-service:50051` | `localhost:50151` |
@@ -44,14 +43,12 @@ docker compose --profile generic-assistant up -d
 docker compose --profile multilingual-assistant up -d
 docker compose --profile omni-assistant up -d
 docker compose --profile omni-assistant-subagents up -d
-docker compose --profile frontend-backend-agent up -d
 
 # Server (local NIM ASR/TTS/LLM, recommended for scaling)
 docker compose --profile generic-assistant/server up -d
 docker compose --profile multilingual-assistant/server up -d
 docker compose --profile omni-assistant/server up -d
 docker compose --profile omni-assistant-subagents/server up -d
-docker compose --profile frontend-backend-agent/server up -d
 
 # Multi-GPU performance benchmark only
 docker compose --profile generic-assistant/server-perf up -d
@@ -60,7 +57,6 @@ docker compose --profile generic-assistant/server-perf up -d
 docker compose --profile generic-assistant/single-gpu up -d
 docker compose --profile multilingual-assistant/single-gpu up -d
 docker compose --profile omni-assistant/single-gpu up -d
-docker compose --profile frontend-backend-agent/single-gpu up -d
 
 # Frontend/Backend Verdict Agent (Inference Hub LLMs; browser UI and OpenAI Realtime)
 docker compose --profile frontend-backend-verdict-agent up -d             # cloud speech
@@ -68,6 +64,9 @@ docker compose --profile frontend-backend-verdict-agent/server up -d      # NIM 
 docker compose --profile frontend-backend-verdict-agent/single-gpu up -d  # NeMo-Speech.cpp
 # Eval profile (evaluation runs, Realtime only): pass the override in every command
 docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml \
+  --profile frontend-backend-verdict-agent/single-gpu up -d
+# Optional local frontend LLM (default profile, /server or /single-gpu): pass the overlay in every command
+docker compose -f docker-compose.yml -f docker/docker-compose.fbv-local-llm.yaml \
   --profile frontend-backend-verdict-agent/single-gpu up -d
 
 # Resource-heavy single-GPU path (workstation or DGX Spark)

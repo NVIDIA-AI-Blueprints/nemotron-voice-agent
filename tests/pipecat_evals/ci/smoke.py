@@ -14,7 +14,6 @@ from pipecat.runner.types import EvalRunnerArguments
 
 import eval_bot
 from attachment_store import clear_session_attachments, latest_attachment
-from examples.frontend_backend_agent.pipeline import create_transport as create_frontend_backend_transport
 from examples.omni_assistant.pipeline import create_transport as create_omni_transport
 from examples.shared.pipeline_utils import create_transport as create_shared_transport
 
@@ -30,7 +29,6 @@ def _check_transport_factories() -> None:
     args = EvalRunnerArguments(host="127.0.0.1", port=7999)
     _assert_eval_transport("shared", create_shared_transport(args))
     _assert_eval_transport("omni_assistant", create_omni_transport(args))
-    _assert_eval_transport("frontend_backend_agent", create_frontend_backend_transport(args))
 
 
 def _check_eval_bot_uploaded_attachment_body() -> None:

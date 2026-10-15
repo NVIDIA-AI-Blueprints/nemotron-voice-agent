@@ -4,8 +4,8 @@
 # Tools of the browser profile (`default`): OpenAI function schemas, listed by the UI's tools
 # panel (/api/tools) and run in this process by the backend agent (tools.py, tool_handlers.py).
 # OpenAI Realtime sessions (the `eval` profile, Tau) never use these: their client sends its own
-# tools. The names, parameters and limits follow the Frontend/Backend Agent's generic domain
-# (src/examples/frontend_backend_agent/generic/tools.py).
+# tools. The names, parameters and limits follow the generic domain of the former
+# Frontend/Backend Agent example (removed in release 2.3.0).
 #
 # API keys: get_weather needs WEATHERAPI_KEY, get_stock_price FINNHUB_API_KEY and web_search
 # PERPLEXITY_API_KEY. Without its key a tool answers "unavailable" and the agent says so.

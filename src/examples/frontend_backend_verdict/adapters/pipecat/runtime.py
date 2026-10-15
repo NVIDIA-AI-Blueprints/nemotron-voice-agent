@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from examples.frontend_backend_verdict.adapters.pipecat import switches
 from examples.frontend_backend_verdict.adapters.pipecat.settings import PipecatSettings, load_pipecat_settings
 from examples.frontend_backend_verdict.adapters.pipecat.warmup import warm_up
 from examples.frontend_backend_verdict.core.agent.factory import ServerOptions, _agent_factory, build_clients
@@ -191,6 +192,9 @@ def runtime_for(body: Mapping[str, Any], environ: Mapping[str, str] | None = Non
     """
     profile_name(environ)
     _note_default_change(environ)
+    refusal = switches.eval_llm_refusal(body, environ)
+    if refusal:
+        raise ProfileError(refusal)
     name = REALTIME_PROFILE
     endpoints = LLMEndpoints.from_body(body)
     key = (name, endpoints)

@@ -26,7 +26,6 @@ class PipelineImportIsolationTests(unittest.TestCase):
         cases = (
             ("examples.generic.pipeline", True),
             ("examples.multilingual.pipeline", True),
-            ("examples.frontend_backend_agent.pipeline", True),
             ("examples.frontend_backend_verdict.pipeline", True),
             ("examples.omni_assistant.pipeline", False),
             ("examples.omni_assistant_subagents.pipeline", False),
@@ -93,17 +92,6 @@ class PipelineRuntimeIsolationTests(unittest.IsolatedAsyncioTestCase):
                 "examples.multilingual.pipeline",
                 {"tts_id": "ignored", "asr_id": "ignored"},
                 [call("llm", ""), call("tts", ""), call("asr", "")],
-            ),
-            (
-                "examples.frontend_backend_agent.pipeline",
-                {"llm_id": "ignored", "tts_id": "ignored", "asr_id": "ignored", "thinker_llm_id": "ignored"},
-                [
-                    call("llm", ""),
-                    call("tts", ""),
-                    call("asr", ""),
-                    call("thinker-llm", ""),
-                    call("booking-server", ""),
-                ],
             ),
         )
 

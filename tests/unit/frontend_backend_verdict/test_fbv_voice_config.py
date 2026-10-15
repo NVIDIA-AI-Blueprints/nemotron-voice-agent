@@ -176,6 +176,10 @@ ALLOWED_TOP_LEVEL = {
     "realtime",
     "utils",
     "examples",
+    # repository modules in src/ like utils, read by the browser UI adapter (FBA-removal plan 5.2, 5.5):
+    # the shared welcome-message switch and the shared tracing setup
+    "examples_registry",
+    "tracing",
     # distributions declared in [project.optional-dependencies] prototypes-voice(-mic)
     "pipecat",
     "riva",

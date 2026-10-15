@@ -46,6 +46,7 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import Speec
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from examples.frontend_backend_verdict.adapters.pipecat import switches, turn_modes
 from examples.frontend_backend_verdict.adapters.pipecat.serializer import RealtimeSerializer
 from examples.frontend_backend_verdict.adapters.pipecat.services import build_stt, build_tts, build_vad
 from examples.frontend_backend_verdict.adapters.pipecat.speech_output import OutputTagger
@@ -155,6 +156,8 @@ class SessionPipeline:
         self.pipeline = Pipeline(
             [self.transport.input(), *self._middle_processors(speech, settings), self.transport.output()]
         )
+        # Tracing is opt-in for Realtime sessions (switches.py); off, the worker is built as before.
+        tracing: dict[str, Any] = {"enable_tracing": True} if switches.realtime_tracing() else {}
         self.worker = PipelineWorker(
             self.pipeline,
             params=PipelineParams(
@@ -164,12 +167,14 @@ class SessionPipeline:
             enable_rtvi=False,
             idle_timeout_secs=None,
             cancel_on_idle_timeout=False,
+            **tracing,
         )
         self._cancel_on_disconnect()
 
     def _build_turn_processors(self, session: PipecatSession, speech: SpeechStack) -> None:
         """The input cursor, user-turn processor, turn bridge, ASR error tap and output tagger."""
         settings = session.settings
+        self.turn_modes: turn_modes.ModeSwitchStopStrategy | None = None
         self.cursor = InputCursor()
         self.tagger = OutputTagger()
         turn = settings.turn
@@ -185,11 +190,26 @@ class SessionPipeline:
             if turn.wait_for_transcript is not None:
                 stop_kwargs["wait_for_transcript"] = turn.wait_for_transcript
             stops = [SpeechTimeoutUserTurnStopStrategy(**stop_kwargs)]
+            modes = session.allowed_turn_modes()
+            if modes != {turn_modes.SERVER_VAD}:
+                # Opt-in Realtime turn modes (turn_modes.py); off, the strategies are built as before.
+                by_mode: dict[str, list[Any]] = {turn_modes.SERVER_VAD: stops}
+                if turn_modes.MANUAL in modes:
+                    by_mode[turn_modes.MANUAL] = []
+                if turn_modes.SEMANTIC_VAD in modes:
+                    from examples.shared.pipeline_utils import build_smart_turn_stop_strategies  # noqa: PLC0415
+
+                    wait = bool(turn.wait_for_transcript)
+                    by_mode[turn_modes.SEMANTIC_VAD] = list(build_smart_turn_stop_strategies(wait_for_transcript=wait))
+                self.turn_modes = turn_modes.ModeSwitchStopStrategy(by_mode)
+                stops = [self.turn_modes]
         start = [GatedVADStart(session.interruptions_allowed), GatedTranscriptionStart(session.interruptions_allowed)]
         turn_kwargs: dict[str, Any] = {"user_turn_strategies": UserTurnStrategies(start=start, stop=stops)}
         if turn.user_turn_stop_timeout is not None:
             turn_kwargs["user_turn_stop_timeout"] = turn.user_turn_stop_timeout
         self.user_turns = UserTurnProcessor(**turn_kwargs)
+        if self.turn_modes is not None:
+            self.turn_modes.bind_controller(self.user_turns._user_turn_controller)
         self.bridge = FbvTurnBridge(
             config=session.config,
             emit_urgent=session.emit_urgent,
@@ -228,7 +248,7 @@ class SessionPipeline:
         async def on_client_disconnected(_transport: Any, _client: Any) -> None:
             await self.worker.cancel()
 
-    def apply_turn_detection(self, turn: TurnDetectionSettings) -> None:
+    def apply_turn_detection(self, turn: TurnDetectionSettings, *, stop_secs: float | None = None) -> None:
         """End turns on the session's effective silence, as v1's segmenter does (B1).
 
         ``stop_secs`` follows ``silence_duration_ms`` of the session's turn detection (the
@@ -241,7 +261,8 @@ class SessionPipeline:
             return
         from pipecat.audio.vad.vad_analyzer import VADParams  # noqa: PLC0415
 
-        params = VADParams(**{**self._vad_overrides, "stop_secs": turn.silence_duration_ms / 1000.0})
+        stop = turn.silence_duration_ms / 1000.0 if stop_secs is None else stop_secs
+        params = VADParams(**{**self._vad_overrides, "stop_secs": stop})
         if params == self._vad_params:
             return
         self._vad_params = params

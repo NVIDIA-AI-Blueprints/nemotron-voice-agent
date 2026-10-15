@@ -20,7 +20,6 @@ import server
 _GENERIC_MODEL = "nvidia/nemotron-realtime"
 _CLIENT_TOOLS_MODEL = "nvidia/nemotron-realtime-client-tools"
 _OMNI_MODEL = "nvidia/nemotron-realtime-omni"
-_GENERIC_FBA_MODEL = "nvidia/nemotron-realtime-generic-frontend-backend"
 
 
 class RealtimeModelProfileTests(unittest.TestCase):
@@ -49,10 +48,8 @@ class RealtimeModelProfileTests(unittest.TestCase):
             if profile["default"]:
                 defaults.setdefault(profile["pipeline_mode"], []).append(model)
 
-        exact_model_pipelines = {"generic-frontend-backend-agent"}
-        self.assertEqual(set(defaults), set(examples_registry.EXAMPLES) - exact_model_pipelines)
+        self.assertEqual(set(defaults), set(examples_registry.EXAMPLES))
         self.assertTrue(all(len(models) == 1 for models in defaults.values()))
-        self.assertFalse(profiles[_GENERIC_FBA_MODEL]["default"])
 
     def test_generic_full_and_client_tool_profiles_are_distinct_complete_routes(self) -> None:
         full = examples_registry.resolve_realtime_model_profile(_GENERIC_MODEL)
@@ -67,13 +64,9 @@ class RealtimeModelProfileTests(unittest.TestCase):
 
     def test_checked_in_service_selectors_are_explicit_or_use_registry_defaults(self) -> None:
         profiles = examples_registry.realtime_model_profiles()
-        for model, profile in profiles.items():
+        for profile in profiles.values():
             for selector_name, selector_value in profile["selectors"].items():
-                if (
-                    selector_name in {"prompt_key", "thinker_prompt"}
-                    or model == _GENERIC_FBA_MODEL
-                    and selector_name in {"llm_id", "thinker_llm_id"}
-                ):
+                if selector_name == "prompt_key":
                     self.assertNotEqual(selector_value, examples_registry.REALTIME_REGISTRY_DEFAULT_SELECTOR)
                 else:
                     self.assertEqual(selector_value, examples_registry.REALTIME_REGISTRY_DEFAULT_SELECTOR)
@@ -247,9 +240,6 @@ class RealtimeModelProfileTests(unittest.TestCase):
             "omni-assistant-subagents": "cloud",
             "omni-assistant-subagents-server": "server",
             "omni-assistant-subagents-single-gpu": "singlegpu",
-            "frontend-backend-agent": "cloud",
-            "frontend-backend-agent-server": "server",
-            "frontend-backend-agent-single-gpu": "singlegpu",
         }
         for service_name, platform in expected.items():
             with self.subTest(service=service_name):

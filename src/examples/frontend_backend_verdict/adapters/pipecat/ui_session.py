@@ -29,10 +29,13 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from loguru import logger
+from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.workers.runner import WorkerRunner
 
+import examples_registry
+from examples.frontend_backend_verdict.adapters.pipecat import ui_metrics
 from examples.frontend_backend_verdict.adapters.pipecat.pipeline import SpeechStack, real_speech
 from examples.frontend_backend_verdict.adapters.pipecat.runtime import PipecatRuntime, SpeechFactory
 from examples.frontend_backend_verdict.adapters.pipecat.session import PipecatSession
@@ -55,6 +58,8 @@ from examples.frontend_backend_verdict.core.config.voice import VoiceConfig, loa
 from examples.frontend_backend_verdict.core.engine.filler import FillerTap
 from examples.frontend_backend_verdict.core.errors import VoiceConfigError
 
+#: The registry key of this example.
+EXAMPLE_KEY = "frontend-backend-verdict-agent"
 #: The only public prompt key; the agent's other prompt keys stay hidden (registry agent_prompt_keys).
 PUBLIC_PROMPT_KEY = "frontend"
 
@@ -248,6 +253,7 @@ def ui_runtime_for(selection: UiSelection, environ: Mapping[str, str] | None = N
     if runtime is None:
         settings = load_pipecat_settings(pipecat_settings_file(DEFAULT_PROFILE))
         runtime = PipecatRuntime(config, profile=DEFAULT_PROFILE, settings=settings)
+        ui_metrics.install(runtime)
         _UI_RUNTIMES[key] = runtime
     return runtime
 
@@ -314,6 +320,14 @@ class UiSession(PipecatSession):
             session_id=session_id,
         )
 
+    def mcp_allowed(self) -> bool:
+        """Browser sessions run the server's own tools; the Realtime MCP tools do not apply."""
+        return False
+
+    def allowed_turn_modes(self) -> frozenset[str]:
+        """Browser sessions end turns with Smart Turn (or the VAD); the Realtime turn modes do not apply."""
+        return frozenset({"server_vad"})
+
     def _build_pipeline(self, websocket: Any, speech: SpeechStack) -> UiSessionPipeline:  # noqa: ARG002
         return UiSessionPipeline(self, self._transport, speech, idle_timeout_secs=self._idle_timeout_secs)
 
@@ -340,8 +354,15 @@ class UiSession(PipecatSession):
             if greeted:
                 return
             greeted = True
-            if self.config.protocol.greeting_enabled:
+            # ENABLE_WELCOME_MESSAGE=false turns the greeting off, as in the other examples; unset
+            # keeps the registry default (greet).
+            if self.config.protocol.greeting_enabled and examples_registry.welcome_message_enabled(EXAMPLE_KEY):
                 self.turns.speak_greeting()
+
+        @worker.rtvi.event_handler("on_client_message")
+        async def on_client_message(_rtvi: Any, message: Any) -> None:
+            if message.type == "set-voice":
+                await self.apply_set_voice(message.data if isinstance(message.data, dict) else {})
 
         latency = self.pipeline.latency_observer
 
@@ -356,6 +377,26 @@ class UiSession(PipecatSession):
             await worker.queue_frame(
                 RTVIServerMessageFrame(data={"type": "user-bot-latency", "latency": round(value, 3), "first": False})
             )
+
+    async def apply_set_voice(self, payload: Mapping[str, Any]) -> None:
+        """The UI's ``set-voice`` message: the TTS uses ``voice_id`` (and ``language``) from the next sentence on."""
+        from pipecat.services.nvidia.tts import NvidiaTTSSettings  # noqa: PLC0415
+
+        from utils import normalize_lang_code  # noqa: PLC0415
+
+        voice_id = str(payload.get("voice_id") or "")
+        language = str(payload.get("language") or "")
+        if not voice_id:
+            return
+        settings: dict[str, Any] = {"voice": voice_id}
+        if language:
+            settings["language"] = normalize_lang_code(language)
+        await self.pipeline.worker.queue_frame(
+            TTSUpdateSettingsFrame(delta=NvidiaTTSSettings(**settings), service=self.pipeline.tts)
+        )
+        logger.info(
+            f"[{self.session_id}] voice switched to {voice_id}, language={settings.get('language', '(unchanged)')}"
+        )
 
     async def run(self) -> None:
         """Serve until the browser disconnects."""
@@ -375,13 +416,32 @@ class UiSession(PipecatSession):
         logger.info(f"[{self.session_id}] browser UI session started (profile={DEFAULT_PROFILE}, adapter=pipecat)")
         self.configure_agent()
         self._register_rtvi_handlers()
+        metrics_log = self._event_log if isinstance(self._event_log, ui_metrics.UiEventLog) else None
+        if metrics_log is not None:
+            metrics_log.register(self.session_id, ui_metrics.TurnMetrics(self._metrics_sender(loop)))
         self._pump = loop.create_task(self._pump_events(), name=f"fbv-ui-events-{self.session_id}")
         runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
         try:
             await runner.add_workers(self.pipeline.worker)
             await runner.run()
         finally:
+            if metrics_log is not None:
+                metrics_log.unregister(self.session_id)
             await self.close()
+
+    def _metrics_sender(self, loop: asyncio.AbstractEventLoop) -> Any:
+        """Send a ``metric-group`` message to the browser from any thread."""
+        pending: set[asyncio.Task[None]] = set()
+
+        def queue(frame: RTVIServerMessageFrame) -> None:
+            task = loop.create_task(self.pipeline.worker.queue_frame(frame))
+            pending.add(task)
+            task.add_done_callback(pending.discard)
+
+        def send(message: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(queue, RTVIServerMessageFrame(data=message))
+
+        return send
 
 
 # -- entry point ------------------------------------------------------------------------

@@ -1,10 +1,10 @@
 # Frontend/Backend Verdict Agent Example
 
-The Frontend/Backend Verdict Agent is a voice Frontend/Backend Agent on the repository's shared Pipecat speech stack. A fast frontend large language model (LLM) talks to the user and decides whether to answer or delegate. A reasoning backend LLM does the delegated work with tools.
+The Frontend/Backend Verdict Agent is the repository's frontend/backend voice agent, built on the shared Pipecat speech stack. A fast frontend large language model (LLM) talks to the user and decides whether to answer or delegate. A reasoning backend LLM does the delegated work with tools.
 
 The agent serves two kinds of sessions:
 
-- Browser UI sessions over WebRTC or the UI's WebSocket transport, with RTVI, like the `generic-assistant` and `frontend-backend-agent` examples. The server runs five built-in tools.
+- Browser UI sessions over WebRTC or the UI's WebSocket transport, with RTVI, like the `generic-assistant` example. The server runs five built-in tools.
 - OpenAI Realtime sessions on `/v1/realtime` with the model `nvidia/nemotron-realtime-frontend-backend-verdict`. The Realtime client defines the tools and runs them.
 
 This example adds the following behaviors to the cascaded voice loop:
@@ -15,7 +15,7 @@ This example adds the following behaviors to the cascaded voice loop:
 - Caller speech while client tool calls are outstanding resumes the tool continuation with the caller's words.
 - An optional write gate holds every consequential client tool call until the caller confirms a spoken summary of it.
 
-The agent logic lives in `core/`. The `adapters/pipecat/` package runs that logic on the repository's shared Pipecat speech stack. This example is separate from the [Frontend/Backend Agent](../frontend_backend_agent/README.md) example and does not import its Talker/Thinker planner.
+The agent logic lives in `core/`. The `adapters/pipecat/` package runs that logic on the repository's shared Pipecat speech stack. This example replaces the former Frontend/Backend Agent example, which release 2.3.0 removed.
 
 To deploy this example, follow [Deploy the Frontend/Backend Verdict Agent](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md). For evaluation runs, such as tau-bench (Tau), deploy it in [eval mode](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md#deploy-in-eval-mode), which serves plain `ws://` and writes the agent's event and filler logs to `logs/` on the host.
 
@@ -69,7 +69,7 @@ Realtime client
   |  WS /v1/realtime?model=nvidia/nemotron-realtime-frontend-backend-verdict
   v
 Realtime gateway (src/realtime/gateway.py)
-  - authenticates the REALTIME_API_KEY Bearer credential
+  - authenticates the REALTIME_API_KEY Bearer credential or an ek_ client secret
   - resolves ?model= to frontend-backend-verdict-agent
   - hands the socket to the pipeline before it sends any event
   v
@@ -208,7 +208,7 @@ The agent supports no other value. Any other value, including an old `tau3_eval*
 | --- | --- | --- |
 | Turn end | Silero VAD with a server-owned 800 ms silence (`honor_client_values: false`), which keeps spelled-out IDs in one turn | Smart Turn v3. A 200 ms VAD stop hands the turn to Smart Turn, with a 1 s silence fallback (`SMART_TURN_STOP_SECS`). |
 | Pipecat settings | `adapters/pipecat/settings/eval.yaml` | `adapters/pipecat/settings/default.yaml` |
-| Greeting | Off. The history is seeded with the client greeting `Hi! How can I help you today?`. | On. The agent says `Hi! How can I help you today?` when the browser is ready. No greeting is seeded. |
+| Greeting | Off. The history is seeded with the client greeting `Hi! How can I help you today?`. | On, unless `ENABLE_WELCOME_MESSAGE=false`. The agent says `Hi! How can I help you today?` when the browser is ready. No greeting is seeded. |
 | Tools | Client-owned, from `session.update` | The five server-run tools of `tools.yaml` |
 | Instructions | The client's `session.instructions` fill the backend prompt's domain-policy slot | No client instructions. The UI can replace the `frontend` prompt for the session. |
 | Tool-argument normalization | On, for `get_user_details.user_id`, with the retry guard | Off. It applies only to client tools. |
@@ -302,6 +302,11 @@ The example reads the following environment variables.
 | `FBA_VOICE_EVENT_LOG` | Empty | Path of a JSONL event log for Realtime sessions. Empty turns the log off. Browser UI sessions never write it. |
 | `FBA_FILLER_LOG` | Empty | Path of a JSONL filler log for Realtime sessions. Filler timing is also recorded in the application log and, when it is set, the event log. |
 | `WEATHERAPI_KEY`, `FINNHUB_API_KEY`, `PERPLEXITY_API_KEY` | Empty | Keys for the browser UI tools. Refer to [Tools](#tools). |
+| `ENABLE_TRACING` | `false` | Traces browser UI sessions. Refer to [Tracing](#tracing). |
+| `FBV_REALTIME_TRACING` | `false` | With `ENABLE_TRACING=true`, also traces Realtime sessions. Ignored when `FBV_PROFILE=eval`. |
+| `FBV_REALTIME_TURN_MODES` | Unset (`server_vad` only) | Comma-separated turn modes that a Realtime client can select: `server_vad`, `manual`, and `semantic_vad`. `server_vad` is always allowed. Ignored when `FBV_PROFILE=eval`. Refer to [Realtime Turn Modes](#realtime-turn-modes). |
+| `FBV_REALTIME_MCP` | `false` | `true` lets Realtime clients declare Model Context Protocol (MCP) tools. It also needs `REALTIME_MCP_ALLOWED_SERVER_URLS`. Ignored when `FBV_PROFILE=eval`. Refer to [MCP Tools](#mcp-tools). |
+| `ENABLE_WELCOME_MESSAGE` | Unset (greets) | `false` turns off the browser UI greeting. Refer to [Welcome Message](#welcome-message). |
 | `UVICORN_WS_PING_INTERVAL` | Unset (uvicorn uses 20 seconds) | Server WebSocket keepalive ping interval in seconds. `0` turns the ping off. Compose sets `0` for every recipe of this example. |
 | `UVICORN_WS_PING_TIMEOUT` | Unset (uvicorn uses 20 seconds) | Seconds to wait for a pong before the server closes the socket. Compose sets `20` for every recipe of this example. |
 
@@ -313,9 +318,46 @@ Both profiles set `server.ws_ping_interval_s: 0` and `server.ws_ping_timeout_s: 
 
 The frontend LLM comes from the `llm` catalog entry that the session selects: the **LLM** menu of the browser UI, or the Realtime route's selection. A Realtime session takes the backend LLM from the `thinker-llm` entry. A browser UI session has no backend control and uses the backend LLM of `core/config/agent.yaml`. The example uses only `model_id` and `base_url` from the catalog. Other request settings, such as `temperature`, `max_tokens`, and reasoning switches, come from `core/config/agent.yaml`.
 
+With `FBV_PROFILE=eval`, a Realtime session must use the registry default LLMs. When an `ek_` client secret selects another `llm_id` or `thinker_llm_id`, the server sends an `error` event with code `server_error` and closes the socket with code 1011.
+
+### Run the Frontend LLM Locally
+
+By default, both LLMs run on the NVIDIA Inference Hub, and no LLM container starts for this example. The optional `docker/docker-compose.fbv-local-llm.yaml` overlay also starts Nemotron 3.5 Lightning on the host:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.fbv-local-llm.yaml \
+  --profile frontend-backend-verdict-agent/single-gpu up -d
+```
+
+The overlay adds the FBV recipes to existing LLM services. It does not change any other recipe. The following table lists the local LLM for each recipe.
+
+| Recipe profile | LLM service | Catalog entry in `services.local.yaml` |
+| --- | --- | --- |
+| `frontend-backend-verdict-agent/server` | `nvidia-llm` (Nemotron 3.5 Lightning NIM) | `nemotron-3.5-lightning-local` in the `server` section, at `http://nvidia-llm:8000/v1` |
+| `frontend-backend-verdict-agent/single-gpu` | `nvidia-llm-vllm-lightning` (vLLM) | `nemotron-3.5-lightning-local` in the `singlegpu` section, at `http://nvidia-llm-vllm:8000/v1` |
+
+The browser UI's **LLM** menu lists the local entry only while its endpoint is reachable. The Inference Hub entry stays first and remains the default. The local LLM can replace only the frontend LLM. The backend LLM stays the profile's Nemotron 3 Ultra on the Inference Hub. Pass the overlay file in every Compose command for the deployment, including `down`.
+
+On `/single-gpu`, the vLLM service sizes its memory from the free GPU memory when it starts. It needs about 28 GiB after the `VLLM_VRAM_HEADROOM_MIB` headroom, which is 4 GiB by default. Evaluation runs do not use the local LLM. Refer to the eval refusal described in [Change the LLM Endpoints](#change-the-llm-endpoints).
+
 ### Change the Speech Endpoints
 
 The example resolves ASR and TTS with its own catalog reader, without reachability probing. `REALTIME_SERVICE_PLATFORM` selects the catalog for both kinds of sessions, as [Environment Variables](#environment-variables) describes. In the browser UI, the **ASR** and **TTS** menus can select another entry of the example's catalogs. Set `FBA_ASR_SERVER` or `FBA_TTS_SERVER` to point at another Riva-compatible gRPC server. The catalog's `synthesis_mode` is ignored, because the example always synthesizes one sentence per request. The application log shows a warning when the Realtime route's ASR or TTS selection differs from the server that the example uses.
+
+### Tracing
+
+The example uses the repository's OpenTelemetry tracing. Refer to [Enable OpenTelemetry Tracing](../../../docs/how-to/enable-opentelemetry-tracing.md) for the collector setup, for example with `--profile tracing` and Phoenix. The following table lists which sessions are traced.
+
+| Session | Traced when |
+| --- | --- |
+| Browser UI | `ENABLE_TRACING=true` |
+| OpenAI Realtime | `ENABLE_TRACING=true` and `FBV_REALTIME_TRACING=true`, and only when `FBV_PROFILE` is not `eval` |
+
+An eval-mode container ignores every `FBV_REALTIME_*` switch and logs a warning when one is turned on. The `docker/docker-compose.fbv-eval.yaml` override also sets `FBV_REALTIME_TRACING=false`, `FBV_REALTIME_TURN_MODES=server_vad`, and `FBV_REALTIME_MCP=false`. `adapters/pipecat/switches.py` defines these rules.
+
+### Welcome Message
+
+A browser UI session greets the user with `Hi! How can I help you today?` when the browser is ready. Set `ENABLE_WELCOME_MESSAGE=false` to turn the greeting off. When the variable is unset or `true`, the greeting stays on. Realtime sessions never greet, whatever the variable says.
 
 ### Tool Continuation Resume
 
@@ -351,9 +393,29 @@ The following `write_gate` keys in `core/config/voice_agent.yaml` configure the 
 | `max_summary_chars` | `600` | Longest generated summary. A longer summary blocks the call instead of being truncated. |
 | `max_unconfirmed_reissues` | `2` | Held re-issues in one caller turn before a confirmation. After that, the agent asks the caller again. |
 
+## Browser UI Metrics and Voice
+
+The browser UI shows per-turn metrics and lets you change the TTS voice during a session.
+
+### Metrics Panel
+
+After each answered turn, a browser UI session sends one RTVI `metric-group` message. The group is named `Turn N`, and its source is `frontend-backend-verdict`. The group carries the following metrics when the turn records them:
+
+- **Voice to voice**: the time from the end of user speech to the first agent audio (`user_stop_to_first_audio_ms`).
+- **ASR final**: the time from the end of user speech to the final transcript.
+- **Agent start**: the time from the final transcript to the start of the agent.
+- **Agent to first audio**: the time from the start of the agent to the first agent audio.
+- **Frontend LLM** and **Backend LLM**: the LLM latency of each role, with its input and output tokens.
+
+The existing `user-bot-latency` messages still feed the user-to-bot latency view. `adapters/pipecat/ui_metrics.py` builds the groups. Realtime sessions do not send them.
+
+### Voice Picker
+
+The UI's voice picker sends a `set-voice` message. The session changes the TTS voice, and the language when the message carries one, from the next sentence on.
+
 ## Tools
 
-Browser UI sessions use five tools that the server runs. `tools.yaml` holds their OpenAI function schemas, and the UI's read-only tools panel lists them. All five are always enabled. `tool_handlers.py` holds the handlers, copied from the generic domain of the [Frontend/Backend Agent](../frontend_backend_agent/README.md) so that this example does not depend on it.
+Browser UI sessions use five tools that the server runs. `tools.yaml` holds their OpenAI function schemas, and the UI's read-only tools panel lists them. All five are always enabled. `tool_handlers.py` holds the handlers, copied from the generic domain of the former Frontend/Backend Agent example, which release 2.3.0 removed.
 
 | Tool | Key | Behavior without the key |
 | --- | --- | --- |
@@ -378,6 +440,7 @@ Set `FBA_VOICE_EVENT_LOG` to record one JSONL record per internal, voice, and ti
 - `filler_timing`: when filler was ready, whether it was spoken, and its outcome.
 - `wait_input` and `wait_resumed`: a caller turn added to an outstanding tool wait, and the resume of that wait with its trigger.
 - `response_create`: how a client `response.create` was handled, for example the rule `consumed_after_inbox_resume` or `resume_wait`.
+- `mcp_call`: one server-run MCP tool call with its server, tool, outcome, and latency, or its cancellation. Refer to [MCP Tools](#mcp-tools).
 - `write_proposed`, `write_presented`, `write_presentation`, `write_presentation_heard`, `write_confirmation`, `write_confirmed`, `write_invalidated`, `write_held`, `write_gate_error`, and `write_gate_config_problem`: the write gate's proposals, spoken summaries, confirmation verdicts, and problems.
 
 The log can record transcripts and tool payloads. Treat it as sensitive data.
@@ -397,11 +460,68 @@ The `realtime_models` section of [`examples_registry.yaml`](../../../examples_re
 The gateway hands the whole Realtime session to this pipeline before it sends any event. The session implements the OpenAI Realtime protocol. Note the following behavior:
 
 - The session accepts the GA schema only. A `session.update` with a beta field, such as `turn_detection` at the top level or the `pcm16` format string, is rejected as a whole. The error names each field and its GA replacement.
-- A `semantic_vad` request is approximated by silence-based `server_vad`. Eagerness `high` maps to 300 ms of silence, `medium` and `auto` map to 500 ms, and `low` maps to 800 ms. The echoed object carries `x_nvidia_effective` with the effective values. Turns end on silence, not on semantic completeness.
-- `input_audio_buffer.commit` is refused with error code `unsupported_event`. Turns end on the server VAD, so manual turn mode is not available.
+- By default, a `semantic_vad` request is approximated by silence-based `server_vad`. Eagerness `high` maps to 300 ms of silence, `medium` and `auto` map to 500 ms, and `low` maps to 800 ms. The echoed object carries `x_nvidia_effective` with the effective values. Turns end on silence, not on semantic completeness. To end turns with the Smart Turn model instead, refer to [Realtime Turn Modes](#realtime-turn-modes).
+- By default, `input_audio_buffer.commit` is refused with error code `unsupported_event`, because turns end on the server voice activity detection (VAD). To allow manual turns, refer to [Realtime Turn Modes](#realtime-turn-modes).
+- By default, the session accepts function tools only. A `type: "mcp"` tool is refused with error code `invalid_value`. To allow MCP tools, refer to [MCP Tools](#mcp-tools).
 - A `response.create` with per-response `instructions`, `tools`, or `tool_choice` is refused with error code `unsupported_response_override`.
 - Add `?x_nvidia_filler=1` to the WebSocket URL to receive unspoken filler as non-standard `x_nvidia.filler` events. The `eval` profile speaks its filler, so these events apply only to a profile with `filler.mode: log_only`.
 - The first session warms up speech with one short ASR request and one short TTS request. Over the session cap, or when the speech warm-up fails, the server sends an `error` event with code `server_busy` and closes the socket with code 1013. The next session retries the warm-up.
+
+### Realtime Turn Modes
+
+By default, every Realtime turn ends on the server VAD. Set `FBV_REALTIME_TURN_MODES` to a comma-separated list to let clients select other modes through `audio.input.turn_detection` in `session.update`. The following table lists the modes.
+
+| Mode | Client setting | Behavior |
+| --- | --- | --- |
+| `server_vad` | `type: "server_vad"`, the default | Turns end after the configured silence. This mode is always allowed. |
+| `manual` | `turn_detection: null` | Only `input_audio_buffer.commit` ends the user turn. The VAD still detects speech, and the turn-stop watchdog is suspended. |
+| `semantic_vad` | `type: "semantic_vad"` | The Smart Turn model that the browser UI uses ends turns, with a 0.2 s VAD stop instead of the silence approximation. |
+
+For example, set `FBV_REALTIME_TURN_MODES=manual,semantic_vad` to allow both opt-in modes. Unknown names are ignored with a warning. When a client requests a mode that the variable does not allow, the session uses `server_vad`.
+
+In `manual` mode, a commit with no turn in progress returns error code `input_audio_buffer_commit_empty`. With `turn_detection: null`, `create_response` is false, so the client sends `response.create` after the commit, as in OpenAI semantics. When `manual` is not allowed, a commit still returns `unsupported_event`.
+
+When the variable allows more than `server_vad`, the `turn_detection` object in `session.updated` gains the non-standard `x_nvidia_turn_strategy` field, `server_vad` or `smart_turn`, which names the strategy in use. An eval-mode container ignores the variable and keeps `server_vad` only. `adapters/pipecat/turn_modes.py` implements the modes.
+
+### MCP Tools
+
+By default, a Realtime session accepts function tools only. Set `FBV_REALTIME_MCP=true` and `REALTIME_MCP_ALLOWED_SERVER_URLS`, a JSON array of exact server URLs that the shared gateway also uses, to let clients declare remote MCP servers. An eval-mode container ignores `FBV_REALTIME_MCP`. When the allowlist is empty, MCP stays off and the server logs a warning.
+
+A client declares a server in `session.tools`, as the following example shows.
+
+```json
+{
+  "type": "mcp",
+  "server_label": "docs",
+  "server_url": "https://mcp.example.com/mcp",
+  "require_approval": "never"
+}
+```
+
+The entry can also carry `allowed_tools`, `headers`, and `authorization`. The server lists the tools of each declared server and offers them to the agent. It runs every MCP call itself, and the client never sees the calls. The session hides their `function_call` items and repairs `previous_item_id`, `output_index`, and the `response.done` output. `session.updated` echoes the client's `mcp` entries.
+
+The session handles MCP calls in the following ways:
+
+- A response that holds only MCP calls ends with an empty output. The server then continues with the answer in a new response, without a client `response.create`.
+- When a response mixes MCP calls and client function calls, the client sees and answers only its own calls, and then sends `response.create` as usual.
+- A barge-in, that is, a new committed caller turn, or a `response.cancel` stops running MCP calls. The agent gets a `cancelled` result.
+- The event log records each call as an `mcp_call` record.
+
+The following table lists the errors that a `session.update` with MCP tools can return.
+
+| Error code | Cause |
+| --- | --- |
+| `unsupported_capability` | `require_approval` is not `"never"`, or the entry uses `connector_id` or `tunnel_id`. Calls are hidden, so the client has nothing to approve. |
+| `mcp_server_not_allowed` | `server_url` is not in `REALTIME_MCP_ALLOWED_SERVER_URLS`. |
+| `mcp_server_not_defined` | A label-only entry refers to a server that this session has not defined. |
+| `mcp_server_unavailable` | The server cannot be reached or does not list its tools in time. |
+| `invalid_value` | A client function name starts with the reserved `mcp__` prefix. |
+
+The shared limits `REALTIME_MCP_MAX_SERVERS`, `REALTIME_MCP_MAX_TOOLS_PER_SERVER`, `REALTIME_MCP_DISCOVERY_TIMEOUT_SECONDS`, `REALTIME_MCP_CALL_TIMEOUT_SECONDS`, and `REALTIME_MCP_MAX_OUTPUT_BYTES` apply. This example uses a 30-second discovery timeout by default. `adapters/pipecat/mcp_tools.py` implements the MCP tools.
+
+### Client Secrets
+
+An `ek_` client secret from `POST /v1/realtime/client_secrets` logs in on this model's route, as the `REALTIME_API_KEY` Bearer credential does. The session ignores the template's standard session fields, such as `instructions`, `tools`, and `turn_detection`. The client still sends its tools and instructions in `session.update`. In an eval-mode container, a secret whose template selects an LLM other than the registry default is refused. Refer to [Change the LLM Endpoints](#change-the-llm-endpoints).
 
 ### Evaluate With Tau
 
@@ -435,15 +555,16 @@ Keep `UVICORN_WS_PING_INTERVAL=0` for every deployment of this example, includin
 
 This example has the following limitations:
 
-- The repository's `REALTIME_API_KEY` Bearer authentication applies to Realtime sessions.
-- `ek_` client-secret session templates are not applied for this model, because the pipeline owns the session.
+- The repository's `REALTIME_API_KEY` Bearer authentication applies to Realtime sessions. An `ek_` client secret from `POST /v1/realtime/client_secrets` also logs in. The session ignores the template's standard session fields, such as `instructions`, `tools`, and `turn_detection`, and behaves as it does with the Bearer credential. Refer to [Client Secrets](#client-secrets).
 - The repository's `/health` route applies. It does not report the example's speech warm-up or session counts.
 - Speech warm-up runs on the first session of each kind instead of at server start.
 - On a newly created container, Pipecat downloads the NLTK `punkt_tab` data while it sets up the first pipeline. Sessions that start during the download wait for it, and they fail if it takes longer than 120 seconds. Download the data once after you start the container, for example with `docker compose exec <service> .venv/bin/python -c "import nltk; nltk.download('punkt_tab')"`, or keep `/root/nltk_data` on a volume.
-- The browser UI shows the transcripts of both sides and the user-to-bot latency, but not streamed LLM text, because the agent is not a Pipecat LLM service.
-- The browser UI has no control for the backend LLM or for the tool set.
+- The browser UI shows the transcripts of both sides, the user-to-bot latency, and the per-turn metrics group, but not streamed LLM text, because the agent is not a Pipecat LLM service.
+- The browser UI has no control for the backend LLM or for the tool set. The **LLM** menu selects only the frontend LLM.
 - A refused browser UI session, for example on an `eval` container, shows no error in the UI. The app log shows the reason.
-- Manual turn mode is not available for Realtime sessions. `input_audio_buffer.commit` returns the `unsupported_event` error.
+- Manual turn mode and Smart Turn `semantic_vad` are opt-in for Realtime sessions and are never available with `FBV_PROFILE=eval`. Without `FBV_REALTIME_TURN_MODES`, `input_audio_buffer.commit` returns the `unsupported_event` error, and `semantic_vad` is approximated by silence-based turn detection.
+- MCP tools are opt-in for Realtime sessions and are never available with `FBV_PROFILE=eval`. They require `require_approval: "never"`, because the server runs the calls and hides them from the client. OpenAI connectors (`connector_id`) and tunnels (`tunnel_id`) are not available.
+- A Realtime session cannot select its own ASR or TTS service. The speech endpoints follow `REALTIME_SERVICE_PLATFORM` and the `FBA_ASR_SERVER` and `FBA_TTS_SERVER` overrides.
 - A Realtime client's requested voice is ignored. The TTS service uses the catalog voice and logs a warning.
 - No served profile uses the agent's `backend_only` mode (`agent.mode` in `core/config/agent.yaml`). The unit tests cover that mode with a test profile.
 - The `eval` profile is available only on the `/single-gpu` recipe.

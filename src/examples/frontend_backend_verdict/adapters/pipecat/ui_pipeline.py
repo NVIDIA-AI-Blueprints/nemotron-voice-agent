@@ -27,6 +27,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from examples.frontend_backend_verdict.adapters.pipecat import switches
 from examples.frontend_backend_verdict.adapters.pipecat.frames import (
     ItemAudioFrame,
     ResponseEventFrame,
@@ -111,5 +112,6 @@ class UiSessionPipeline(SessionPipeline):
             observers=[self.latency_observer],
             enable_rtvi=True,
             idle_timeout_secs=idle_timeout_secs,
+            **({"enable_tracing": True} if switches.ui_tracing() else {}),
         )
         self._cancel_on_disconnect()
