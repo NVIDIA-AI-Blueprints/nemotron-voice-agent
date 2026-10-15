@@ -82,20 +82,16 @@ For ASR latency and throughput across GPUs and WER for different models, see the
   )
   ```
 
-- **Endpointing (end-of-utterance)**: Riva/NIM ASR decides when the user has stopped speaking from trailing silence, via the endpoint parameters `start_history` / `start_threshold`, `stop_history` / `stop_threshold`. Silence windows are in ms, a multiple of 80, and `-1` keeps the model defaults. For models that do not honor `force_eou`, shorter `stop_history` finalizes faster (lower latency, but can clip trailing words). The cascaded examples construct `NvidiaForceEouSTTService` with `stop_history=400`. To customize this fallback value, pass your chosen value in the example pipeline:
+- **Endpointing (end-of-utterance)**: Riva/NIM ASR decides when the user has stopped speaking from trailing silence, via the endpoint parameters `start_history` / `start_threshold`, `stop_history` / `stop_threshold`. Silence windows are in ms, a multiple of 80, and `-1` keeps the model defaults. Shorter `stop_history` values finalize faster, while longer values provide more trailing context for accurate final transcripts. The cascaded examples construct `NvidiaSTTService` with `stop_history=320`. To customize this value, pass your chosen value in the example pipeline:
 
   ```python
-  stt = NvidiaForceEouSTTService(
+  stt = NvidiaSTTService(
       **asr_kwargs,
-      stop_history=400,  # ms trailing silence before ASR endpointing
+      stop_history=320,  # ms trailing silence before ASR endpointing
   )
   ```
 
-  This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing is the lower-level, ASR-side signal. On each `VADUserStoppedSpeakingFrame`, the local subclass sends an 80 ms PCM silence chunk when the ASR stream is active. The chunk matches the configured sample rate and audio channel count and sets the NVIDIA runtime configuration `force_eou=true` to finalize all submitted audio. If Pipecat reconnects the ASR stream before sending the chunk, the subclass preserves the queued `force_eou` marker for the new stream.
-
-  NVIDIA `force_eou` is honored only by supported cache-aware recurrent neural network transducer (RNNT) models, including the Nemotron ASR Streaming models. Unsupported models ignore this runtime setting and use the configured ASR endpointing instead. The cascaded examples set `stop_history=400`, so these models finalize after 400 ms of trailing silence.
-
-  Stock `NvidiaSTTService` response handling emits `TranscriptionFrame(finalized=True)` when NVIDIA returns `is_final`. Pipecat's stock turn analyzer strategy uses that final transcript together with Smart Turn's decision; ASR does not act on the turn analyzer. Refer to [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html) for the endpoint parameter semantics and defaults.
+  This blueprint's turn-taking is driven mainly by pipeline-level [Smart Turn / Silero VAD](tune-pipeline-performance.md#smart-turn-detection). ASR endpointing independently controls when NVIDIA returns `is_final`. Stock `NvidiaSTTService` response handling then emits `TranscriptionFrame(finalized=True)`, and Pipecat's turn analyzer uses that final transcript together with Smart Turn's decision. Refer to [ASR customization](https://docs.nvidia.com/nim/speech/latest/asr/customization/customization.html) for the endpoint parameter semantics and defaults.
 
 - **Language**: the multilingual example locks each session to a single locale, selectable per connection in the UI (any locale the ASR and TTS both support, default `de-DE`) and fixed for that session. Different sessions can use different languages. The ASR also accepts `language_code: auto` for per-turn detection, but this blueprint does not use it, since a pinned locale is more reliable. For the full set a model supports, see its per-model supported-language table in the [ASR support matrix](https://docs.nvidia.com/nim/speech/latest/reference/support-matrix/asr.html) (Nemotron ASR Streaming covers 40 locales, Parakeet RNNT Multilingual 25+).
 - **Punctuation**: the single-GPU NeMo-Speech.cpp entries reference the `nemo-speech-asr` profile in [`settings.yaml`](../../settings.yaml), so their card in the Services tab has a **Punctuation** toggle that defaults to on. NeMo-Speech.cpp ignores `profanity_filter` and does not apply inverse text normalization, so the profile exposes only punctuation.
