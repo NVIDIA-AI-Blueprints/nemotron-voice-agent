@@ -1,4 +1,4 @@
-# Offline Generic-Assistant Evaluation
+# Offline Processing for Nemotron Voice Agent
 
 Status: experimental implementation. Historical recordings from October 15 use
 the prototype based on commit `dc60ebb` with Pipecat 1.3.0. That base commit does
@@ -10,11 +10,22 @@ integer samples; raw execution timers remain nanoseconds.
 
 ## Problem and Scope
 
+Offline processing introduces a source-offset execution architecture for
+Nemotron Voice Agent. It separates conversation and playback positions from
+network arrival and presentation pacing. Finite-session benchmarking and
+evaluation are the first use cases; the Generic Assistant is the first supported
+integration.
+
+The provider stages are automatic speech recognition (ASR), a large language
+model (LLM), and text-to-speech (TTS). Voice activity detection (VAD) identifies
+speech intervals before the endpoint policy decides that a turn is complete.
+
 The experimental `/api/ws/offline` endpoint accepts a finite 16 kHz mono PCM16
-session, including silence, without input or output presentation pacing. It
-seals the upload, runs one continuous streaming ASR request, detects turns on
-source sample offsets, and schedules generated responses against the source.
-The normal `/api/ws` and WebRTC paths keep their existing behavior.
+session, including silence, without input or output presentation pacing. This
+first integration seals the upload, runs one continuous streaming ASR request,
+detects turns on source sample offsets, and schedules generated responses
+against the source. The normal `/api/ws` and WebRTC paths keep their existing
+behavior.
 
 The goal is to upload an entire user recording as fast as the connection allows
 and produce a bot recording on the same audio timeline. Speech, input silence,
@@ -24,15 +35,28 @@ recording's duration. This supports finite-session accuracy and alignment
 experiments. Real-time presentation sleeps and receive inactivity cannot define
 those positions.
 
-The provider stages are automatic speech recognition (ASR), a large language
-model (LLM), and text-to-speech (TTS). Voice activity detection (VAD) identifies
-speech intervals before the endpoint policy decides that a turn is complete.
+This is a separate finite-session execution engine. The Generic Assistant
+integration reuses that example's configuration, prompt, tools, summary policy,
+Silero, and Smart Turn. It calls ASR/LLM/TTS through offline adapters instead of
+running the live Pipecat frame-processing pipeline. It does not make the existing
+live pipeline operate under a virtual clock, or establish identical live
+accuracy or latency.
 
-This is a separate finite-session execution engine. It reuses the generic
-assistant's configuration, prompt, tools, summary policy, Silero, and Smart Turn,
-but calls ASR/LLM/TTS through offline adapters instead of running the live
-Pipecat frame-processing pipeline. It does not make the existing live pipeline
-operate under a virtual clock, or establish identical live accuracy or latency.
+### Architecture and First Integration
+
+The capability and its initial integration have different responsibilities:
+
+| Layer | Scope in This Change |
+| --- | --- |
+| Offline processing architecture | Immutable source audio, sample-offset replay, provider-availability traces, causal conversation commitment, interruption, aligned recording, and explicit finite-session completion |
+| First supported integration | Generic Assistant configuration, prompt, tools, summary policy, Silero/Smart Turn detector, continuous Riva ASR, HTTP chat-completions LLM, and stitched Magpie TTS |
+| Evaluation clients | Bulk upload, sample selection, comparison WAVs, and latency extraction; these clients exercise the architecture without defining its scheduling policy |
+
+The implementation currently lives in `src/examples/generic/offline/`, and the
+server endpoint constructs the Generic Assistant runtime. Its narrow provider
+protocols and committed-result records are extension boundaries. Other examples,
+provider combinations, and the OpenAI Realtime gateway are not integrated by
+this change.
 
 ### Supported Configuration
 
@@ -78,7 +102,7 @@ flowchart LR
     Commit --> WAV[Aligned recording and WebSocket output]
 ```
 
-| Existing generic/Pipecat behavior | Offline replacement |
+| Wall-Clock Behavior Audited in the First Integration | Offline Processing Rule |
 | --- | --- |
 | Silero speech/silence thresholds already count model windows | Preserve thresholds with fixed 512-sample windows, independent of transport packets |
 | Silero recurrent-state reset uses five wall-clock seconds | Reset at source-sample boundaries |
@@ -113,6 +137,27 @@ the same trace invariants; and alternate recording or transport code consumes
 the same committed result. A new backend still needs adapter contract tests,
 especially for source coverage and word timestamps. No global Pipecat clock is
 patched.
+
+### Extending to Another Integration
+
+To add another example, provide a composition factory that resolves its prompts,
+tools, summary policy, services, and detector settings. Supply adapters that
+implement the `Detector`, `Recognizer`, and `Responder` contracts in `models.py`.
+Keep example-specific configuration and provider lifecycles outside `engine.py`;
+reuse its source-offset replay and the committed-result recording contract.
+
+Register the new runtime at the transport boundary with explicit capability
+validation. Add adapter contract tests for source ownership, availability,
+completion, cancellation, and interrupted text alignment. Run paired live and
+offline cases before making fidelity claims. The current module location does
+not imply that other examples already use this architecture.
+
+A Realtime gateway integration also needs protocol adapters for codec conversion,
+response completion, cancellation, and conversation truncation at scheduled
+playback positions. Gateway post-response idle behavior must follow the source
+timeline. Its ASR request lifecycle must be chosen explicitly and compared with
+the corresponding live gateway; this integration keeps one continuous request.
+Failure watchdogs retain execution-time deadlines.
 
 ## Execution and Timing
 
@@ -293,10 +338,10 @@ residual includes queueing from rapid input supply and must not be interpreted a
 the latency of a paced live ASR stream. The extracted JSON includes definitions
 and the hashes of the input trace files.
 
-## Run
+## Run the First Integration
 
 Configure and start the normal generic server using the existing service catalog
-and credentials. The selected deployment must allow the generic assistant.
+and credentials. The selected deployment must allow the Generic Assistant.
 
 ```bash
 EXAMPLE_SELECTION=generic-assistant PIPELINE_TLS=false uv run python src/server.py
