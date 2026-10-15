@@ -84,6 +84,8 @@ from utils import (
     load_service_entry_by_id,
     load_tools_catalog,
     parse_endpoint,
+    resolve_prompt,
+    resolve_tools_available,
     service_catalog_sources,
     set_active_services,
     set_service_context,
@@ -840,19 +842,25 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
         hands the socket to the selected example bot (``protocol=realtime``).
         """
         from realtime import DEFAULT_PIPELINE_MODE, handle_realtime_websocket
+        from realtime.client_tools import CLIENT_TOOLS_CAPABILITY
 
         async def _ensure_ready(config: dict) -> None:
             await _ensure_services_ready_for_connection(config, _resolve_example(config))
 
         def _resolve_server_tools(config: dict) -> list[str]:
             _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
-            prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
-            if not isinstance(prompt, dict):
+            # Resolve the prompt exactly as the pipeline does: an unknown key falls back to the default.
+            try:
+                prompt_key, _ = resolve_prompt(
+                    module_file, str(config.get("prompt_content", "")), str(config.get("prompt_key", ""))
+                )
+            except KeyError:
                 return []
-            raw_tools = prompt.get("tools_available")
-            if not isinstance(raw_tools, list):
-                return []
-            return [name for name in raw_tools if isinstance(name, str) and name]
+            return [name for name in resolve_tools_available(module_file, prompt_key) if name]
+
+        def _supports_client_tools(config: dict) -> bool:
+            selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
+            return CLIENT_TOOLS_CAPABILITY in set(selected.get("capabilities") or [])
 
         async def _start_bot(ws: WebSocket, config: dict, session_view: dict) -> None:
             selected = examples_registry.find(config.get("pipeline_mode", fallback_example_key))
@@ -888,6 +896,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
             ensure_services_ready=_ensure_ready,
             start_bot=_start_bot,
             resolve_server_tools=_resolve_server_tools,
+            supports_client_tools=_supports_client_tools,
             fallback_example_key=fallback_example_key,
             default_pipeline_mode=DEFAULT_PIPELINE_MODE,
         )

@@ -68,6 +68,10 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
 
 To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.
 
+## OpenAI Realtime Client Tools
+
+On the [OpenAI Realtime–compatible gateway](../../../docs/how-to/use-realtime-gateway.md) (`WS /v1/realtime`), clients can register their own function tools through `session.tools`. The LLM receives them next to the catalog tools from [`prompts.yaml`](prompts.yaml). The client runs each call and returns the result with a `function_call_output` item, then sends `response.create` to continue. For details, refer to [Client Tools](../../../docs/how-to/use-realtime-gateway.md#client-tools).
+
 ## Customization
 
 | Path | Role |

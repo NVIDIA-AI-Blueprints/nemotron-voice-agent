@@ -31,6 +31,7 @@ class ResponseSnapshot:
     audio_done_emitted: bool
     transcript_done_emitted: bool
     output_item_announced: bool = True
+    function_call_items: tuple[dict, ...] = ()
 
 
 @dataclass
@@ -60,6 +61,8 @@ class ConversationState:
     transcript_done_emitted: bool = False
     audio_done_emitted: bool = False
     item_transcripts: dict[str, str] = field(default_factory=dict)
+    # Client tool calls published as function_call output items in this response.
+    function_call_items: list[dict] = field(default_factory=list)
     # False during welcome window; True after first assistant response.done
     # (or immediately when welcome is disabled).
     assistant_has_responded: bool = False
@@ -159,6 +162,7 @@ class ConversationState:
         self.content_part_announced = False
         self.transcript_done_emitted = False
         self.audio_done_emitted = False
+        self.function_call_items = []
         return self.response_id, True
 
     def request_response(self) -> bool:
@@ -201,6 +205,7 @@ class ConversationState:
             audio_done_emitted=self.audio_done_emitted,
             transcript_done_emitted=self.transcript_done_emitted,
             output_item_announced=self.output_item_announced,
+            function_call_items=tuple(dict(item) for item in self.function_call_items),
         )
         self.response_status = status
         self.open_client_text()
@@ -223,3 +228,4 @@ class ConversationState:
         self.content_part_announced = False
         self.transcript_done_emitted = False
         self.audio_done_emitted = False
+        self.function_call_items = []

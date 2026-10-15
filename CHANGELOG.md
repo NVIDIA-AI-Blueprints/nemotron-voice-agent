@@ -10,6 +10,8 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 
 ### Added
 
+- **Client-executed function tools** on the OpenAI Realtime gateway for the Generic Assistant. Clients register tools through `session.tools`, receive each call as a `function_call` output item, and answer with a `function_call_output` item before sending `response.create`. Pending calls survive barge-in and close after `REALTIME_CLIENT_TOOL_TIMEOUT_SECONDS` (default 120) without an output. Pipelines opt in with the `realtime_client_tools` registry capability.
+- The Realtime gateway reports `session.model` from the connect URL's `?model=` value or `session.update`, without using it to select a pipeline.
 - **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the **Streaming Input** toggle on the Lightning service card streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
 - One root `services.yaml` for every example, selected by `SERVICE_RECIPE`, and editable LLM parameters such as reasoning and temperature in the Services tab.
 - Services tab controls for TTS and ASR: **Synthesis Mode** on Magpie TTS entries and **Punctuation** on the single-GPU NeMo-Speech.cpp ASR entries.

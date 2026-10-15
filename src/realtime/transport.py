@@ -17,6 +17,7 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+from realtime.client_tools import RealtimeClientTools, client_tool_timeout_secs
 from realtime.events import BETA_EVENT_ALIASES
 from realtime.observer import RealtimeLifecycleObserver
 from realtime.serializer import RealtimeFrameSerializer
@@ -60,6 +61,18 @@ def create_realtime_transport(
 
     serializer.set_emit(_emit)
 
+    tools = (session_view or {}).get("tools")
+    client_tools = (
+        RealtimeClientTools(
+            tools,
+            scope_id=str((session_view or {}).get("id") or id(websocket)),
+            output_timeout_secs=client_tool_timeout_secs(),
+        )
+        if isinstance(tools, list) and tools
+        else None
+    )
+    serializer.set_client_tools(client_tools)
+
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
@@ -73,6 +86,7 @@ def create_realtime_transport(
         ),
     )
     transport._realtime_serializer = serializer  # type: ignore[attr-defined]
+    transport._realtime_client_tools = client_tools  # type: ignore[attr-defined]
 
     @transport.event_handler("on_client_disconnected")
     async def _shutdown_realtime_on_disconnect(_transport, _client) -> None:  # noqa: ARG001
@@ -92,6 +106,7 @@ def realtime_lifecycle_observer(transport: Any) -> BaseObserver | None:
     observer = RealtimeLifecycleObserver(
         emit=serializer.emit,
         conversation=serializer.conversation,
+        client_tools=realtime_client_tools(transport),
     )
     serializer.set_on_response_cancel(observer.on_response_cancelled)
     serializer.set_response_telemetry_provider(observer.take_response_telemetry)
@@ -99,8 +114,17 @@ def realtime_lifecycle_observer(transport: Any) -> BaseObserver | None:
     return observer
 
 
+def realtime_client_tools(transport: Any) -> RealtimeClientTools | None:
+    """Return the session's client tools when the client registered any."""
+    client_tools = getattr(transport, "_realtime_client_tools", None)
+    return client_tools if isinstance(client_tools, RealtimeClientTools) else None
+
+
 def shutdown_realtime_transport(transport: Any) -> None:
     """Cancel deferred Realtime observer work on session teardown."""
     observer = getattr(transport, "_realtime_observer", None)
     if isinstance(observer, RealtimeLifecycleObserver):
         observer.shutdown()
+    client_tools = realtime_client_tools(transport)
+    if client_tools is not None:
+        client_tools.shutdown()

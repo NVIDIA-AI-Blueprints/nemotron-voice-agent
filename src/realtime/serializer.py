@@ -35,6 +35,7 @@ from realtime.audio import (
     extract_client_pcm_rate,
     validate_session_audio_config,
 )
+from realtime.client_tools import MAX_CLIENT_TOOL_OUTPUT_BYTES, RealtimeClientTools
 from realtime.conversation import ConversationState, new_item_id
 from realtime.events import (
     CLIENT_AUDIO_APPEND,
@@ -56,6 +57,7 @@ from realtime.events import (
 )
 from realtime.lifecycle import announce_response, announce_response_created, finish_response
 from realtime.metrics import RealtimeResponseTelemetry
+from realtime.protocol import RealtimeProtocolError
 from realtime.session import (
     live_session_patch,
     merge_session_patch,
@@ -68,6 +70,9 @@ from realtime.voice import resolve_realtime_tts_voice
 
 CancelHook = Callable[[], str]
 TelemetryHook = Callable[[], RealtimeResponseTelemetry]
+
+# Bounded wait for released client tool outputs to reach the LLM context.
+_CLIENT_TOOL_CONTEXT_TIMEOUT_SECS = 5.0
 
 # Base64 is ~4/3 of raw bytes; reject oversized appends before decode/resample.
 _MAX_APPEND_B64_CHARS = (MAX_PENDING_INPUT_BYTES * 4) // 3 + 64
@@ -101,6 +106,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._emit: EmitFn | None = None
         self._on_response_cancel: CancelHook | None = None
         self._take_response_telemetry: TelemetryHook | None = None
+        self._client_tools: RealtimeClientTools | None = None
         self._bytes_since_commit = 0
 
     @property
@@ -120,6 +126,10 @@ class RealtimeFrameSerializer(FrameSerializer):
     def set_on_response_cancel(self, hook: CancelHook | None) -> None:
         """Register a sync hook that drains observer state on ``response.cancel``."""
         self._on_response_cancel = hook
+
+    def set_client_tools(self, client_tools: RealtimeClientTools | None) -> None:
+        """Register the session's client tools, which receive ``function_call_output`` items."""
+        self._client_tools = client_tools
 
     def set_response_telemetry_provider(self, hook: TelemetryHook | None) -> None:
         """Register an optional passive telemetry snapshot provider."""
@@ -240,7 +250,7 @@ class RealtimeFrameSerializer(FrameSerializer):
             if self._emit is None:
                 logger.warning("Realtime emit not configured; rejecting response.create")
                 return None
-            if not self._conversation.request_response():
+            if self._conversation.response_requested or self._conversation.response_status == "in_progress":
                 await self._emit_event(
                     error_event(
                         "A response is already in progress",
@@ -249,6 +259,8 @@ class RealtimeFrameSerializer(FrameSerializer):
                         param="type",
                     )
                 )
+                return None
+            if not await self._client_tool_outputs_ready(echo_id) or not self._conversation.request_response():
                 return None
             # The assistant item is announced on the first speech, so a reply
             # that produces no speech finishes without an output item.
@@ -533,15 +545,7 @@ class RealtimeFrameSerializer(FrameSerializer):
 
         item_type = item.get("type") or "message"
         if item_type == "function_call_output":
-            await self._emit_event(
-                error_event(
-                    "Client function_call_output is not supported; server catalog tools run internally",
-                    code="unsupported_item",
-                    event_id=echo_id,
-                    param="item.type",
-                )
-            )
-            return None
+            return await self._deserialize_function_call_output(item, echo_id)
 
         role = item.get("role") or "user"
         if item_type != "message" or role != "user":
@@ -600,6 +604,73 @@ class RealtimeFrameSerializer(FrameSerializer):
             run_llm=False,
         )
 
+    async def _deserialize_function_call_output(self, item: dict[str, Any], echo_id: str | None) -> Frame | None:
+        if self._client_tools is None:
+            await self._emit_event(
+                error_event(
+                    "function_call_output requires client tools registered through session.tools",
+                    code="unsupported_item",
+                    event_id=echo_id,
+                    param="item.type",
+                )
+            )
+            return None
+        call_id = item.get("call_id")
+        output = item.get("output")
+        problem = None
+        if not isinstance(call_id, str) or not call_id:
+            problem = ("function_call_output requires call_id", "item.call_id")
+        elif not isinstance(output, str):
+            problem = ("function_call_output requires a string output", "item.output")
+        elif len(output.encode("utf-8")) > MAX_CLIENT_TOOL_OUTPUT_BYTES:
+            problem = (f"function_call_output exceeds {MAX_CLIENT_TOOL_OUTPUT_BYTES} bytes", "item.output")
+        if problem is not None:
+            await self._emit_event(error_event(problem[0], code="invalid_item", event_id=echo_id, param=problem[1]))
+            return None
+        try:
+            await self._client_tools.stage_output(call_id=call_id, output=output)
+        except RealtimeProtocolError as exc:
+            await self._emit_event(exc.with_event_id(echo_id).to_event())
+            return None
+        item_id = item.get("id") if isinstance(item.get("id"), str) and item.get("id") else new_item_id()
+        await self._emit_event(
+            server_event(
+                SERVER_ITEM_CREATED,
+                previous_item_id=None,
+                item={
+                    "id": item_id,
+                    "object": "realtime.item",
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output,
+                },
+            )
+        )
+        return None
+
+    async def _client_tool_outputs_ready(self, echo_id: str | None) -> bool:
+        """Admit ``response.create`` only once every client tool output is in the LLM context."""
+        if self._client_tools is None:
+            return True
+        missing = self._client_tools.calls_missing_output()
+        if missing:
+            await self._emit_event(
+                error_event(
+                    f"function_call_output is still missing for call_id {missing[0]}",
+                    code="tool_output_pending",
+                    event_id=echo_id,
+                    param="type",
+                )
+            )
+            return False
+        try:
+            # Outputs reach the context through the pipeline; this wait is short.
+            await self._client_tools.wait_outputs_applied(timeout=_CLIENT_TOOL_CONTEXT_TIMEOUT_SECS)
+        except RealtimeProtocolError as exc:
+            await self._emit_event(exc.with_event_id(echo_id).to_event())
+            return False
+        return True
+
     async def _serialize_output_audio(self, frame: OutputAudioRawFrame) -> None:
         pcm = frame.audio or b""
         if not pcm:
@@ -649,6 +720,7 @@ class RealtimeFrameSerializer(FrameSerializer):
     async def _emit_cancelled_response(self, *, status_if_active: str = "cancelled") -> None:
         if self._emit is None:
             return
+        response_id = self._conversation.response_id or ""
         # Drain observer LLM text before finish so late TTSStopped cannot revive the turn.
         buffered = self._on_response_cancel() if self._on_response_cancel is not None else ""
         if buffered and not self._conversation.assistant_transcript:
@@ -660,6 +732,8 @@ class RealtimeFrameSerializer(FrameSerializer):
             status=status_if_active,
             telemetry=telemetry,
         )
+        if self._client_tools is not None:
+            await self._client_tools.response_finished(response_id=response_id, status=status_if_active)
 
 
 def _extract_item_text(item: dict[str, Any]) -> str | None:

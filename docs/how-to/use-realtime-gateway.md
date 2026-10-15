@@ -19,14 +19,14 @@ The following table compares the hosted OpenAI Realtime service with this protoc
 | Runtime | Hosted multimodal Realtime models | Cascaded Nemotron ASR → LLM → TTS |
 | URL | OpenAI Realtime WebSocket | `WS /v1/realtime` on this server |
 | Voices | OpenAI voice names (`alloy`, …) | Magpie / catalog voice ids (unknown ids warn and fall back to catalog default) |
-| `session.model` | Selects a Realtime model | Ignored (logged only) |
-| Tools | Client-registered schemas + model-native calling | Client schemas are ignored; server catalog tools run internally |
+| `session.model` | Selects a Realtime model | Echoed only; does not select the pipeline |
+| Tools | Client-registered schemas + model-native calling | Client tools on pipelines that declare `realtime_client_tools`; server catalog tools run internally |
 | Welcome | Client-driven | Optional Nemotron welcome gate (RTVI parity): client text / `response.create` rejected until first assistant `response.done` |
 | Turn detection | Several modes and tunable VAD | Server VAD only; no push-to-talk or VAD tuning |
 | Live `session.update` | Broad session mutation | Voice and PCM updates only; turn mode is immutable |
 | Transport | WebSocket, WebRTC, PCM16, and G.711 | WebSocket PCM16 only |
 
-Invalid session configuration that would break audio (bad PCM format or rate, unsupported turn detection, or text-only output) returns a Realtime `error` and **keeps the socket open** for retry. Fields that do not translate to the cascade (including `session.tools`) are ignored.
+Invalid session configuration that would break audio (bad PCM format or rate, unsupported turn detection, or text-only output) returns a Realtime `error` and **keeps the socket open** for retry. Invalid `session.tools` also returns `invalid_session`. Other fields that do not translate to the cascade are ignored.
 
 The server exposes the following WebSocket endpoints.
 
@@ -87,7 +87,99 @@ Send a `session.update` event to override supported session settings.
 }
 ```
 
-Client tools and `function_call_output` items are not supported. Catalog tools run inside the server and appear through `session.nvidia.server_tools` and the observational `nvidia.tool.started` and `nvidia.tool.completed` events.
+Catalog tools run inside the server and appear through `session.nvidia.server_tools` and the observational `nvidia.tool.started` and `nvidia.tool.completed` events. To run tools in your client, refer to [Client Tools](#client-tools).
+
+### Client Tools
+
+Register client-executed function tools through `session.tools`. The LLM receives them alongside the session's catalog tools. The server does not run client tools. Instead, it sends each call to the client and waits for the result.
+
+The gateway accepts client tools only when the selected pipeline lists `realtime_client_tools` under `capabilities` in `examples_registry.yaml`. Only `generic-assistant` declares it. Other pipelines reject a non-empty `session.tools` with an `invalid_session` error.
+
+The gateway validates `session.tools` against the following rules:
+
+- Each tool uses the Realtime shape `{"type": "function", "name", "description", "parameters"}` or the Chat Completions shape `{"type": "function", "function": {...}}`.
+- Each name matches `^[A-Za-z0-9_-]{1,64}$` and is unique. A name cannot match a tool in `session.nvidia.server_tools`.
+- `parameters` is a JSON Schema object with `"type": "object"`. An omitted `parameters` defaults to an empty object schema.
+- The list holds at most 128 tools and 256 KiB of JSON.
+- `tool_choice` is `auto` or `none`. A forced choice (`required` or a named function) would make every reply call a tool, so it returns `invalid_session` while client tools are set.
+
+Invalid tools return an `invalid_session` error and keep the socket open. `session.created` and `session.updated` echo the normalized tools in the Realtime shape. `session.tools` is not a live field. After handoff, resending identical tools is accepted, but changed tools return `unsupported_live_session_update`. Reconnect to change them. Client tools need an HTTP LLM endpoint; a session that selects the streaming-input LLM fails to start.
+
+The following `session.update` registers one client tool.
+
+```json
+{
+  "type": "session.update",
+  "session": {
+    "type": "realtime",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_order_status",
+        "description": "Look up an order by id.",
+        "parameters": {
+          "type": "object",
+          "properties": { "order_id": { "type": "string" } },
+          "required": ["order_id"]
+        }
+      }
+    ]
+  }
+}
+```
+
+When the LLM calls a client tool, the gateway emits a `function_call` output item through `response.output_item.added`, `conversation.item.created`, `response.function_call_arguments.delta`, `response.function_call_arguments.done`, and `response.output_item.done`. The `response.function_call_arguments.done` event carries the call.
+
+```json
+{
+  "type": "response.function_call_arguments.done",
+  "response_id": "resp_...",
+  "item_id": "item_...",
+  "output_index": 0,
+  "call_id": "call_abc123",
+  "name": "get_order_status",
+  "arguments": "{\"order_id\": \"A-1001\"}"
+}
+```
+
+If the response contains only client tool calls, `response.done` follows when the LLM finishes, with status `completed`, and its `output` lists the `function_call` items. If the model also speaks, `response.done` follows the speech and lists the assistant message before the `function_call` items.
+
+Run the tool, then return its result with a `function_call_output` item. `output` must be a string of at most 1 MiB. The LLM receives it exactly as sent.
+
+```json
+{
+  "type": "conversation.item.create",
+  "item": {
+    "type": "function_call_output",
+    "call_id": "call_abc123",
+    "output": "{\"status\": \"shipped\"}"
+  }
+}
+```
+
+The gateway acknowledges the output with `conversation.item.created` for a `function_call_output` item. As in OpenAI Realtime, the gateway does not continue automatically. Send `response.create` to get the follow-up response. You can send it right after the output: the gateway starts the response once the output is in the LLM context.
+
+```json
+{ "type": "response.create" }
+```
+
+A call stays open until the client answers it. A barge-in or a new user turn does not cancel it. A call closes in the following cases:
+
+- The client sends its `function_call_output`.
+- No output arrives within `REALTIME_CLIENT_TOOL_TIMEOUT_SECONDS` (default `120`). The LLM then receives a timeout result.
+- The response that made the call is cancelled or fails.
+
+The gateway returns the following errors:
+
+| Situation | Error code |
+|-----------|------------|
+| `function_call_output` when the session registered no client tools | `unsupported_item` |
+| Missing or unknown `call_id`, or an `output` that is missing, not a string, or larger than 1 MiB | `invalid_item` |
+| A second output for the same call | `duplicate_tool_output` |
+| An output after the call timed out | `client_tool_timeout` |
+| An output for a call whose response was cancelled or failed | `client_tool_call_cancelled` |
+| `response.create` while a call of a finished response has no output | `tool_output_pending` |
+| `response.create` when an accepted output does not reach the LLM context within 5 seconds | `client_tool_context_timeout` |
 
 ## Field Map
 
@@ -97,18 +189,20 @@ OpenAI top-level fields map onto the cascade when they have a Nemotron equivalen
 |--------------|---------|
 | `instructions` | `prompt_content` (system / prompt text for the cascade) |
 | `voice` / `audio.output.voice` | `tts_voice_id` (soft-validated against TTS catalog; unknown → default) |
-| `tools` | ignored (catalog tools selected through `prompt.id` or `prompt_key` only) |
-| `tool_choice` | `tool_choice` (applies when catalog tools are enabled) |
+| `tools` | client-executed tools offered to the LLM alongside catalog tools (catalog tools are selected through `prompt.id` or `prompt_key`) |
+| `tool_choice` | `tool_choice` (applies when catalog or client tools are enabled; `auto` or `none` with client tools) |
 | `max_output_tokens` | `max_tokens` |
 | `temperature` | LLM `temperature` |
 | `prompt.id` | `prompt_key` |
-| `model` | ignored |
+| `model` | echoed as `session.model`; does not select the pipeline |
 | `audio.*.format` / rate | transport resample |
 | `audio.input.turn_detection` | must be `{ "type": "server_vad" }`; `null` and other modes are rejected |
 | `audio.input.transcription` | selector accepted; requested model ignored because pipeline ASR supplies transcription events |
 | `output_modalities` / `modalities` | must include audio; a requested text modality is a compatibility no-op and does not enable multimodal output |
 
 Defaults when omitted: `pipeline_mode=generic-assistant`, `prompt_key=generic_assistant_without_tools`.
+
+`session.model` reports the connect URL's `?model=` value, or a later non-empty `session.model`. Without either, it reports `nvidia/nemotron-voice-agent`.
 
 ### NVIDIA-Specific Session Fields
 
@@ -136,7 +230,7 @@ Clients can send the following events.
 | `input_audio_buffer.append` | Base64 PCM chunk |
 | `input_audio_buffer.commit` | Accepted as a compatibility no-op in server-VAD mode; automatic commit follows `speech_stopped` |
 | `input_audio_buffer.clear` | Reset client buffer accounting and emit `input_audio_buffer.cleared`; audio already streamed to VAD cannot be withdrawn |
-| `conversation.item.create` | User text items; `function_call_output` is rejected |
+| `conversation.item.create` | User text items, and `function_call_output` items for client tools |
 | `conversation.item.truncate` | Barge-in while a response is in progress. Idle truncate is ignored. Does not emit `conversation.item.truncated`. |
 | `response.create` | Start a model turn. The gateway emits `response.created` immediately; assistant item events follow when the reply first has speakable text or audio. Empty `response: {}` is accepted; non-empty per-response overrides are rejected. |
 | `response.cancel` | Cancel the in-progress response. Without an active response, the gateway returns an `error` with code `response_cancel_not_active`, as OpenAI Realtime does. While a committed voice turn's reply is still being prepared, the cancel is ignored and the reply ends with its own `response.done`. |
@@ -150,10 +244,10 @@ The gateway can emit the following events.
 | Event | Notes |
 |-------|--------|
 | `session.created` / `session.updated` | Session object (OpenAI-shaped + optional `nvidia`) |
-| `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `item_rejected_pre_intro`, `response_create_rejected_pre_intro`, `conversation_already_has_active_response`, `response_cancel_not_active`, `invalid_item`, `invalid_truncate`, and `pipeline_error` |
+| `error` | Realtime-shaped error; common codes include `invalid_session`, `services_not_ready`, `unsupported_live_session_update`, `unsupported_response_override`, `item_rejected_pre_intro`, `response_create_rejected_pre_intro`, `conversation_already_has_active_response`, `response_cancel_not_active`, `invalid_item`, `unsupported_item`, `invalid_truncate`, and `pipeline_error`, plus the [client tool codes](#client-tools) |
 | `input_audio_buffer.*` | Server-VAD speech / commit / clear events |
 | `conversation.item.*` | Item created; cascaded ASR input transcription. `conversation.item.truncated` is not emitted. |
-| `response.*` | Response lifecycle, audio, and audio-transcript events. `response.done` includes standard token `usage` plus response-scoped NVIDIA timing metadata when available. |
+| `response.*` | Response lifecycle, audio, audio-transcript, and client function-call events. `response.done` includes standard token `usage` plus response-scoped NVIDIA timing metadata when available. |
 | `nvidia.tool.started` / `nvidia.tool.completed` | Observation of internally executed catalog tools |
 
 GA clients receive `response.output_audio.*` and `response.output_audio_transcript.*`. Clients that negotiate the beta dialect receive the corresponding `response.audio.*` and `response.audio_transcript.*` names. Audio content parts do not emit `response.output_text.*`.

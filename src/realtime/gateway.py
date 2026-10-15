@@ -28,6 +28,7 @@ SanitizeFn = Callable[..., dict[str, Any]]
 EnsureReadyFn = Callable[[dict[str, Any]], Awaitable[None]]
 StartBotFn = Callable[[WebSocket, dict[str, Any], dict[str, Any]], Awaitable[None]]
 ServerToolsFn = Callable[[dict[str, Any]], list[str]]
+ClientToolsSupportFn = Callable[[dict[str, Any]], bool]
 
 # Pre-handoff: disconnect idle / abusive clients before session.update succeeds.
 _DEFAULT_SESSION_UPDATE_TIMEOUT_SECS = 60
@@ -52,6 +53,15 @@ def _select_realtime_subprotocol(websocket: WebSocket) -> str | None:
     return None
 
 
+def _requested_model(websocket: WebSocket) -> str:
+    """Return the connect URL's ``?model=`` value (echoed, never used for routing)."""
+    query_params = getattr(websocket, "query_params", None)
+    if query_params is None:
+        return ""
+    model = query_params.get("model")
+    return model.strip() if isinstance(model, str) else ""
+
+
 async def _send_json(websocket: WebSocket, payload: dict[str, Any]) -> None:
     await websocket.send_text(json.dumps(payload))
 
@@ -63,6 +73,7 @@ async def handle_realtime_websocket(
     ensure_services_ready: EnsureReadyFn | None = None,
     start_bot: StartBotFn | None = None,
     resolve_server_tools: ServerToolsFn | None = None,
+    supports_client_tools: ClientToolsSupportFn | None = None,
     fallback_example_key: str = "",
     default_pipeline_mode: str = DEFAULT_PIPELINE_MODE,
 ) -> None:
@@ -82,7 +93,7 @@ async def handle_realtime_websocket(
     else:
         await websocket.accept()
 
-    session = RealtimeSession(default_pipeline_mode=default_pipeline_mode)
+    session = RealtimeSession(default_pipeline_mode=default_pipeline_mode, model=_requested_model(websocket))
     with logger.contextualize(stream_id=session.id):
         logger.info(f"Realtime WS connected session_id={session.id}")
 
@@ -168,6 +179,7 @@ async def handle_realtime_websocket(
                     ensure_services_ready=ensure_services_ready,
                     start_bot=start_bot,
                     resolve_server_tools=resolve_server_tools,
+                    supports_client_tools=supports_client_tools,
                     fallback_example_key=fallback_example_key,
                     default_pipeline_mode=default_pipeline_mode,
                 )
@@ -202,6 +214,7 @@ async def _handle_session_update(
     fallback_example_key: str,
     default_pipeline_mode: str,
     resolve_server_tools: ServerToolsFn | None = None,
+    supports_client_tools: ClientToolsSupportFn | None = None,
 ) -> bool:
     """Validate then apply session.update. Return True if the pipeline was started."""
     client_event_id = message.get("event_id")
@@ -235,6 +248,21 @@ async def _handle_session_update(
             sanitized["max_tokens"] = flat["max_tokens"]
         if resolve_server_tools is not None:
             sanitized["server_tools"] = resolve_server_tools(sanitized)
+        client_tools = merged.get("client_tools") or []
+        if client_tools:
+            if supports_client_tools is None or not supports_client_tools(sanitized):
+                raise ValueError(
+                    f"session.tools: pipeline {sanitized.get('pipeline_mode')!r} does not run client tools"
+                )
+            server_tools = set(sanitized.get("server_tools") or [])
+            conflicts = sorted(tool["name"] for tool in client_tools if tool["name"] in server_tools)
+            if conflicts:
+                raise ValueError(f"session.tools: names conflict with server tools: {', '.join(conflicts)}")
+            tool_choice = sanitized.get("tool_choice")
+            if tool_choice == "required" or isinstance(tool_choice, dict):
+                # Every reply, including the one after the output, would have to call a tool.
+                raise ValueError("session.tool_choice must be 'auto' or 'none' when session.tools is set")
+            sanitized["client_tools"] = client_tools
 
         # Soft-resolve voice against the TTS catalog (same list path as RTVI UI).
         # Unknown voices warn and fall back to the catalog default — no reject.

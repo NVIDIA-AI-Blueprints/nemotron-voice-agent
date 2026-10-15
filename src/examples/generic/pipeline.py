@@ -42,11 +42,15 @@ from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
 from examples.shared.pipeline_utils import (
+    add_realtime_client_tools,
     apply_pinned_prompt_summary,
+    bind_realtime_client_tool_context,
     build_context_messages,
     build_pipeline_params,
     build_user_aggregator_params,
     create_transport,
+    realtime_client_tools_enabled,
+    realtime_tool_result_processors,
     register_session_start_handlers,
     with_realtime_observers,
 )
@@ -144,7 +148,15 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"extra_params={extra_params or '(none)'}"
     )
     streaming = is_streaming_llm_url(base_url)
-    llm_service = NvidiaStreamingLLMService if streaming else NvidiaLLMService
+    client_tools_enabled = realtime_client_tools_enabled(transport)
+    if streaming and client_tools_enabled:
+        raise ValueError("Realtime client tools need an HTTP LLM endpoint; the streaming-input LLM is not supported")
+    if client_tools_enabled:
+        from realtime.llm import RealtimeNvidiaLLMService
+
+        llm_service = RealtimeNvidiaLLMService
+    else:
+        llm_service = NvidiaStreamingLLMService if streaming else NvidiaLLMService
     llm = llm_service(
         api_key=nvidia_api_key(),
         base_url=base_url,
@@ -156,13 +168,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     tool_choice = body.get("tool_choice", "auto") or "auto"
     tools_available = resolve_tools_available(__file__, prompt_key)
     tools_schema, registered_tools = build_tools_schema(__file__, tools_available)
-    tools_enabled = tools_schema is not None
-    if tools_enabled:
+    if tools_schema is not None:
         for name in registered_tools:
             llm.register_function(name, TOOL_HANDLERS[name])
             logger.info(f"Registered tool handler: {name}")
     else:
         logger.info(f"Tool calling disabled for prompt_key={prompt_key!r} (no tools_available in prompts.yaml)")
+    tools_schema = add_realtime_client_tools(llm, transport, tools_schema, trusted_tool_names=registered_tools)
+    tools_enabled = tools_schema is not None
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
@@ -218,6 +231,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         context = LLMContext(messages, tools=tools_schema, tool_choice=tool_choice)
     else:
         context = LLMContext(messages)
+    bind_realtime_client_tool_context(transport, context)
     preserve_prompt_messages = len(messages)
 
     user_params = build_user_aggregator_params(welcome_enabled)
@@ -250,6 +264,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             stt,
             user_aggregator,
             llm,
+            *realtime_tool_result_processors(transport),
             tts,
             transport.output(),
             *([activity_check] if activity_check else []),

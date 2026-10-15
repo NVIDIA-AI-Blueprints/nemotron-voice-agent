@@ -80,24 +80,19 @@ class MapSessionUpdateTests(unittest.TestCase):
         self.assertEqual(flat["prompt_key"], "generic_assistant")
         self.assertNotIn("tts_voice_id", flat)
 
-    def test_tools_are_ignored(self) -> None:
+    def test_tools_map_to_client_tools(self) -> None:
+        tool = {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Weather",
+            "parameters": {"type": "object", "properties": {}},
+        }
         omitted = map_session_update_to_flat_config({})
         empty = map_session_update_to_flat_config({"tools": []})
-        populated = map_session_update_to_flat_config(
-            {
-                "tools": [
-                    {
-                        "type": "function",
-                        "name": "get_weather",
-                        "description": "Weather",
-                        "parameters": {"type": "object", "properties": {}},
-                    }
-                ]
-            }
-        )
+        populated = map_session_update_to_flat_config({"tools": [tool]})
         self.assertNotIn("client_tools", omitted)
-        self.assertNotIn("client_tools", empty)
-        self.assertNotIn("client_tools", populated)
+        self.assertEqual(empty["client_tools"], [])
+        self.assertEqual(populated["client_tools"], [tool])
         self.assertEqual(empty["prompt_key"], DEFAULT_PROMPT_KEY)
         self.assertEqual(populated["prompt_key"], DEFAULT_PROMPT_KEY)
 

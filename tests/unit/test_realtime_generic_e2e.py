@@ -37,7 +37,9 @@ from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.utils.text.base_text_aggregator import AggregationType
 
 import examples.generic.pipeline as generic_pipeline
+import realtime.llm as realtime_llm
 import server
+from realtime.llm import RealtimeNvidiaLLMService
 from utils import clear_service_context, set_active_services
 
 EVENT_TIMEOUT_SECS = 20.0
@@ -108,13 +110,19 @@ class SilentClipTTS(FrameProcessor):
 
 
 class ScriptedLLM(NvidiaLLMService):
-    """Replay scripted completions instead of calling an endpoint."""
+    """Replay scripted completions instead of calling an endpoint.
+
+    ``requests`` records the provider messages each request would have sent.
+    """
 
     script: list[Any] = []
     requests: list[list[Any]] = []
 
     async def get_chat_completions(self, context):
-        ScriptedLLM.requests.append(list(context.get_messages()))
+        params = self.get_llm_adapter().get_llm_invocation_params(
+            context, system_instruction=self._settings.system_instruction, convert_developer_to_user=False
+        )
+        ScriptedLLM.requests.append(list(self.build_chat_completion_params(params)["messages"]))
         turn = ScriptedLLM.script.pop(0) if ScriptedLLM.script else text_turn("Fallback reply.")
         if isinstance(turn, Exception):
             raise turn
@@ -124,6 +132,18 @@ class ScriptedLLM(NvidiaLLMService):
                 yield item
 
         return chunks()
+
+
+class ScriptedRealtimeLLM(ScriptedLLM, RealtimeNvidiaLLMService):
+    """Scripted LLM used when the Realtime client registered tools."""
+
+
+ORDER_TOOL = {
+    "type": "function",
+    "name": "get_order_status",
+    "description": "Look up an order by id.",
+    "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+}
 
 
 class GenericRealtimeEndToEndTests(unittest.IsolatedAsyncioTestCase):
@@ -150,6 +170,7 @@ class GenericRealtimeEndToEndTests(unittest.IsolatedAsyncioTestCase):
         patches.enter_context(patch.object(generic_pipeline, "NvidiaForceEouSTTService", PassthroughSTT))
         patches.enter_context(patch.object(generic_pipeline, "NvidiaTTSService", SilentClipTTS))
         patches.enter_context(patch.object(generic_pipeline, "NvidiaLLMService", ScriptedLLM))
+        patches.enter_context(patch.object(realtime_llm, "RealtimeNvidiaLLMService", ScriptedRealtimeLLM))
         patches.enter_context(
             patch.object(server, "_ensure_services_ready_for_connection", AsyncMock(return_value=None))
         )
@@ -296,6 +317,38 @@ class GenericRealtimeEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("What is my BMI?", user_messages[-1]["content"])
         tool_messages = [m for m in ScriptedLLM.requests[1] if isinstance(m, dict) and m.get("role") == "tool"]
         self.assertIn("22.86", tool_messages[0]["content"])
+
+    async def test_client_tool_round_trip(self) -> None:
+        output = '{"status": "shipped", "eta": ""}'
+        ScriptedLLM.script = [
+            tool_turn("get_order_status", {"order_id": "A-1001"}),
+            text_turn("Your order shipped."),
+        ]
+        ws = await self.connect({"tools": [ORDER_TOOL]})
+        await self.send_user_text(ws, "Where is order A-1001?")
+        await self.send(ws, {"type": "response.create"})
+
+        first = await self.events_until(ws, "response.done")
+        self.assertNotIn("error", [event["type"] for event in first])
+        call = first[-1]["response"]["output"][0]
+        self.assertEqual((call["type"], call["name"]), ("function_call", "get_order_status"))
+        self.assertEqual(json.loads(call["arguments"]), {"order_id": "A-1001"})
+
+        # Stock SDK clients send the output and response.create back to back.
+        item = {"type": "function_call_output", "call_id": call["call_id"], "output": output}
+        await self.send(ws, {"type": "conversation.item.create", "item": item})
+        await self.send(ws, {"type": "response.create"})
+        second = await self.events_until(ws, "response.done")
+
+        self.assertNotIn("error", [event["type"] for event in second])
+        self.assertEqual(second[0]["type"], "conversation.item.created")
+        self.assertEqual(second[-1]["response"]["output"][0]["content"][0]["transcript"], "Your order shipped.")
+        request = ScriptedLLM.requests[1]
+        roles = [message["role"] for message in request]
+        self.assertEqual(roles.count("system"), 1)
+        self.assertNotIn("developer", roles)
+        tool_message = next(message for message in request if message["role"] == "tool")
+        self.assertEqual(tool_message["content"], output)
 
 
 if __name__ == "__main__":

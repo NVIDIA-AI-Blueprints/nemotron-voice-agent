@@ -10,7 +10,9 @@ Covers:
 * OpenAI Python SDK multi-turn (OpenAI session fields only)
 * Mapped fields: Magpie ``voice``, ``instructions``, ``temperature``,
   ``max_output_tokens``, Nemotron welcome gate, audio + transcript events
-* Ignores client ``session.tools``; catalog tools follow ``prompt.id`` / ``prompt_key``
+* Echoes client ``session.tools`` (Generic runs them client-side); catalog tools follow
+  ``prompt.id`` / ``prompt_key``
+* Client tool round trip: ``function_call`` item, ``function_call_output``, and ``response.create``
 * Soft voice fallback for unknown ids (e.g. ``alloy``); accepts transcription
   selectors as no-ops and rejects text-only modalities
 
@@ -70,10 +72,10 @@ FEATURE_SESSION: dict[str, Any] = {
         "You are a realtime compatibility-test voice agent.\n"
         "- Keep every spoken reply to one short sentence.\n"
         "- When asked for a secret code word, reply with exactly: NEMO-SMOKE-OK\n"
+        "- Never call set_memory.\n"
     ),
     "voice": NEMOTRON_VOICE,
-    # Client-registered tools are ignored by the gateway; include a sample so we
-    # assert the public session does not activate them.
+    # Client-registered tools; include a sample so we assert the public session echoes them.
     "tools": SAMPLE_TOOLS,
     "tool_choice": "auto",
     "temperature": 0.8,
@@ -494,7 +496,8 @@ async def _run_feature_checks(
         assert voice_ok, session_obj
         assert session_obj.get("temperature") == 0.8, session_obj
         assert session_obj.get("max_output_tokens") == 4096, session_obj
-        assert session_obj.get("tools") == [], session_obj.get("tools")
+        echoed_tools = [tool.get("name") for tool in session_obj.get("tools") or []]
+        assert echoed_tools == [tool["name"] for tool in SAMPLE_TOOLS], session_obj.get("tools")
         summary["session"] = {
             "voice": session_obj.get("voice"),
             "temperature": session_obj.get("temperature"),
@@ -645,7 +648,65 @@ def test_realtime_mapped_fields_and_tools() -> None:
     assert summary.get("post_handoff_instructions_rejected") is True
     assert summary.get("response_override_rejected") is True
     assert summary.get("unknown_voice_soft_fallback") is True
-    assert summary.get("session", {}).get("tools") == []
+    assert [tool.get("name") for tool in summary.get("session", {}).get("tools") or []] == [
+        tool["name"] for tool in SAMPLE_TOOLS
+    ]
+
+
+ORDER_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": "get_order_status",
+    "description": "Look up the shipping status of an order by its id.",
+    "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+}
+
+
+async def _run_client_tool_round_trip(*, turn_timeout_s: float = 120.0) -> dict[str, Any]:
+    """Answer one client tool call the way stock SDK clients do: output, then response.create."""
+    async with await _open_realtime_ws() as ws:
+        created = await _ws_recv_json(ws)
+        assert created.get("type") == "session.created", created
+        session = {
+            "type": "realtime",
+            "output_modalities": ["audio"],
+            "instructions": (
+                "You are a voice assistant for an online store. Always call get_order_status to look up an order "
+                "before answering, then reply in one short sentence."
+            ),
+            "tools": [ORDER_TOOL],
+            "tool_choice": "auto",
+        }
+        await ws.send(json.dumps({"type": "session.update", "session": session}))
+        updated = await _ws_wait_until(
+            ws, predicate=lambda _t, e: e.get("type") == "session.updated", timeout_s=120.0, label="session.update"
+        )
+        assert updated.matched, "timed out waiting for session.updated"
+        # With the welcome message on, the greeting must finish before client text is accepted.
+        await _ws_wait_until(ws, predicate=lambda t, _e: t.saw_done, timeout_s=20.0, label="intro")
+
+        await _send_user_text(ws, "What is the status of order A-1001?")
+        first = await _ws_wait_until(ws, predicate=lambda t, _e: t.saw_done, timeout_s=turn_timeout_s, label="call")
+        assert first.saw_done and first.status == "completed", f"call response status={first.status!r}"
+        assert first.function_calls, "the model did not call the client tool"
+        call = first.function_calls[0]
+        assert call.get("name") == "get_order_status", call
+
+        output = json.dumps({"order_id": "A-1001", "status": "shipped"})
+        item = {"type": "function_call_output", "call_id": call["call_id"], "output": output}
+        await ws.send(json.dumps({"type": "conversation.item.create", "item": item}))
+        await ws.send(json.dumps({"type": "response.create"}))
+        second = await _ws_wait_until(
+            ws, predicate=lambda t, _e: _is_spoken(t), timeout_s=turn_timeout_s, label="reply"
+        )
+        assert second.matched and second.status == "completed", f"reply status={second.status!r}"
+        return {"call": call, "reply": second.transcript}
+
+
+def test_realtime_client_tool_round_trip() -> None:
+    """A client tool call is answered with function_call_output, then response.create."""
+    summary = asyncio.run(_run_client_tool_round_trip())
+    print(f"\nclient tool call: {summary['call']}\nassistant: {summary['reply']}")
+    assert "ship" in summary["reply"].lower(), summary["reply"]
 
 
 def test_realtime_rejects_incompatible_session_fields() -> None:

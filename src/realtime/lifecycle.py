@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from realtime.conversation import ConversationState, ResponseSnapshot
+from realtime.conversation import ConversationState, ResponseSnapshot, new_item_id
 from realtime.events import (
     SERVER_CONTENT_PART_ADDED,
     SERVER_CONTENT_PART_DONE,
+    SERVER_FUNCTION_CALL_ARGUMENTS_DELTA,
+    SERVER_FUNCTION_CALL_ARGUMENTS_DONE,
     SERVER_ITEM_CREATED,
     SERVER_OUTPUT_AUDIO_DONE,
     SERVER_OUTPUT_AUDIO_TRANSCRIPT_DONE,
@@ -89,6 +91,64 @@ async def announce_response(conversation: ConversationState, emit: EmitFn) -> tu
     return response_id, created
 
 
+async def announce_function_call(
+    conversation: ConversationState,
+    emit: EmitFn,
+    *,
+    call_id: str,
+    name: str,
+    arguments: str,
+) -> str:
+    """Publish one client tool call as a completed ``function_call`` output item.
+
+    Returns the item id. The item is also recorded on the active response so
+    ``response.done`` lists it.
+    """
+    response_id, _created = await announce_response_created(conversation, emit)
+    item_id = new_item_id()
+    output_index = len(conversation.function_call_items) + (1 if conversation.output_item_announced else 0)
+    item = {
+        "id": item_id,
+        "object": "realtime.item",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments,
+    }
+    conversation.function_call_items.append(item)
+    await emit_with_aliases(
+        emit,
+        server_event(
+            SERVER_OUTPUT_ITEM_ADDED,
+            response_id=response_id,
+            output_index=output_index,
+            item={**item, "status": "in_progress", "arguments": ""},
+        ),
+    )
+    await emit_with_aliases(emit, server_event(SERVER_ITEM_CREATED, previous_item_id=None, item=item))
+    for event_type, payload in (
+        (SERVER_FUNCTION_CALL_ARGUMENTS_DELTA, {"delta": arguments}),
+        (SERVER_FUNCTION_CALL_ARGUMENTS_DONE, {"name": name, "arguments": arguments}),
+    ):
+        await emit_with_aliases(
+            emit,
+            server_event(
+                event_type,
+                response_id=response_id,
+                item_id=item_id,
+                output_index=output_index,
+                call_id=call_id,
+                **payload,
+            ),
+        )
+    await emit_with_aliases(
+        emit,
+        server_event(SERVER_OUTPUT_ITEM_DONE, response_id=response_id, output_index=output_index, item=item),
+    )
+    return item_id
+
+
 async def finish_response(
     conversation: ConversationState,
     emit: EmitFn,
@@ -120,10 +180,11 @@ async def emit_finish_from_snapshot(
 ) -> None:
     """Emit audio/item/response done events for a completed snapshot."""
     response_id = snap.response_id
+    function_calls = [dict(item) for item in snap.function_call_items]
     if not snap.output_item_announced:
-        # Nothing was spoken (e.g. an empty reply to response.create), so there
-        # is no assistant item to close; the response finishes with no output.
-        await _emit_response_done(emit, {"id": response_id, "status": snap.status, "output": []}, telemetry)
+        # Nothing was spoken (e.g. an empty reply to response.create, or only
+        # client tool calls), so there is no assistant message item to close.
+        await _emit_response_done(emit, {"id": response_id, "status": snap.status, "output": function_calls}, telemetry)
         return
 
     item_id = snap.item_id
@@ -190,7 +251,8 @@ async def emit_finish_from_snapshot(
                 "role": "assistant",
                 "status": item_status,
                 "content": [{"type": "output_audio", "transcript": transcript}],
-            }
+            },
+            *function_calls,
         ],
     }
     await _emit_response_done(emit, response, telemetry)

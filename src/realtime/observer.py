@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from typing import Any
 
@@ -36,6 +37,7 @@ from pipecat.services.llm_service import LLMService
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.utils.errors import ErrorCategory
 
+from realtime.client_tools import RealtimeClientTools
 from realtime.conversation import ConversationState
 from realtime.events import (
     SERVER_AUDIO_COMMITTED,
@@ -52,7 +54,7 @@ from realtime.events import (
     error_event,
     server_event,
 )
-from realtime.lifecycle import announce_response, announce_response_created, finish_response
+from realtime.lifecycle import announce_function_call, announce_response, announce_response_created, finish_response
 from realtime.metrics import RealtimeMetricsAccumulator, RealtimeResponseTelemetry
 
 # Frames this observer maps to Realtime events (ignore the rest for dedupe).
@@ -99,7 +101,8 @@ class RealtimeLifecycleObserver(BaseObserver):
     after queued audio has been serialized. A response that produced no speech
     (for example an empty reply to ``response.create``) finishes when its LLM
     run ends and no tool follow-up is pending. Pipeline barge-in finishes on
-    ``InterruptionFrame``.
+    ``InterruptionFrame``. Calls to client tools are published as
+    ``function_call`` output items instead of ``nvidia.tool.*`` events.
     """
 
     def __init__(
@@ -107,6 +110,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         *,
         emit: EmitFn,
         conversation: ConversationState,
+        client_tools: RealtimeClientTools | None = None,
         max_frames: int = 4096,
         **kwargs: Any,
     ) -> None:
@@ -114,6 +118,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         super().__init__(**kwargs)
         self._emit_fn = emit
         self._conversation = conversation
+        self._client_tools = client_tools
         self._processed_frames: set[int] = set()
         self._frame_history: deque[int] = deque(maxlen=max_frames)
         self._processed_metric_frames: set[int] = set()
@@ -428,6 +433,14 @@ class RealtimeLifecycleObserver(BaseObserver):
 
         if isinstance(frame, FunctionCallsStartedFrame):
             for call in frame.function_calls or []:
+                function_name = getattr(call, "function_name", "") or ""
+                if self._client_tool_name(function_name) is not None:
+                    await self._emit_client_function_call(
+                        tool_call_id=getattr(call, "tool_call_id", "") or "",
+                        function_name=function_name,
+                        arguments=getattr(call, "arguments", None),
+                    )
+                    continue
                 self._track_tool_call(getattr(call, "tool_call_id", "") or "")
                 await self._emit_server_tool_started(
                     tool_call_id=getattr(call, "tool_call_id", "") or "",
@@ -437,6 +450,8 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, FunctionCallInProgressFrame):
+            if self._client_tool_name(frame.function_name or "") is not None:
+                return
             self._track_tool_call(frame.tool_call_id or "")
             await self._emit_server_tool_started(
                 tool_call_id=frame.tool_call_id or "",
@@ -450,6 +465,8 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if isinstance(frame, FunctionCallResultFrame):
+            if self._client_tool_name(frame.function_name or "") is not None:
+                return
             await self._emit_event(
                 server_event(
                     SERVER_NVIDIA_TOOL_COMPLETED,
@@ -469,6 +486,32 @@ class RealtimeLifecycleObserver(BaseObserver):
         if isinstance(frame, TTSStoppedFrame):
             await self._finish_response(status="completed")
             return
+
+    def _client_tool_name(self, function_name: str) -> str | None:
+        """Return the client tool name behind a provider function name, if any."""
+        if self._client_tools is None or not function_name:
+            return None
+        return self._client_tools.public_name(function_name)
+
+    async def _emit_client_function_call(self, *, tool_call_id: str, function_name: str, arguments: Any) -> None:
+        if self._client_tools is None or not tool_call_id or tool_call_id in self._emitted_function_calls:
+            return
+        name = self._client_tool_name(function_name) or function_name
+        self._emitted_function_calls.add(tool_call_id)
+        arguments_json = arguments if isinstance(arguments, str) else json.dumps(arguments or {}, default=str)
+        await announce_function_call(
+            self._conversation,
+            self._emit_fn,
+            call_id=tool_call_id,
+            name=name,
+            arguments=arguments_json or "{}",
+        )
+        self._client_tools.call_emitted(
+            call_id=tool_call_id, name=name, response_id=self._conversation.response_id or ""
+        )
+        if self._active_llm_runs and self._run_generation == 0:
+            # The call opened this response, so the run that made it now owns it.
+            self._run_generation = self._open_generation()
 
     def _track_tool_call(self, tool_call_id: str) -> None:
         if tool_call_id:
@@ -556,12 +599,15 @@ class RealtimeLifecycleObserver(BaseObserver):
             await self._emit_transcript_delta(buffer)
 
         generation = self._conversation.response_generation
+        response_id = self._conversation.response_id or ""
         await finish_response(
             self._conversation,
             self._emit_fn,
             status=status,
             telemetry=self.take_response_telemetry(),
         )
+        if self._client_tools is not None:
+            await self._client_tools.response_finished(response_id=response_id, status=status)
         self._bot_transcript_from_tts = False
         self._llm_text_buffer = ""
         self._llm_text_generation = 0

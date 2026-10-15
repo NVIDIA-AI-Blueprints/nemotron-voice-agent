@@ -6,6 +6,7 @@
 import asyncio
 
 from loguru import logger
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -100,6 +101,49 @@ def with_realtime_observers(*observers, transport=None) -> list:
     if realtime_obs is not None:
         out.append(realtime_obs)
     return out
+
+
+def realtime_client_tools_enabled(transport) -> bool:
+    """Return whether the Realtime client registered tools through ``session.tools``."""
+    return getattr(transport, "_realtime_client_tools", None) is not None
+
+
+def add_realtime_client_tools(
+    llm, transport, tools_schema: ToolsSchema | None, *, trusted_tool_names=()
+) -> ToolsSchema | None:
+    """Offer the Realtime client's ``session.tools`` to ``llm``.
+
+    Client tools run on the Realtime client, so their handler waits for the
+    client's ``function_call_output``. Returns ``tools_schema`` with the client
+    tools added, or unchanged when the session registered none (always for RTVI).
+    """
+    if not realtime_client_tools_enabled(transport):
+        return tools_schema
+    from realtime.transport import realtime_client_tools
+
+    client_tools = realtime_client_tools(transport)
+    combined = client_tools.configure(llm, tools_schema, trusted_tool_names)
+    logger.info(f"Registered Realtime client tools: {sorted(client_tools.names)}")
+    return combined
+
+
+def bind_realtime_client_tool_context(transport, context: LLMContext) -> None:
+    """Give the Realtime client tools the LLM context that receives their outputs."""
+    if not realtime_client_tools_enabled(transport):
+        return
+    from realtime.transport import realtime_client_tools
+
+    realtime_client_tools(transport).bind_context(context)
+
+
+def realtime_tool_result_processors(transport) -> list:
+    """Return the processors that keep mixed server and client tool rounds client-driven."""
+    if not realtime_client_tools_enabled(transport):
+        return []
+    from realtime.client_tools import RealtimeToolResultPolicy
+    from realtime.transport import realtime_client_tools
+
+    return [RealtimeToolResultPolicy(realtime_client_tools(transport))]
 
 
 def register_session_start_handlers(
