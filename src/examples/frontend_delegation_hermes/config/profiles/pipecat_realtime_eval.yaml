@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pipecat adapter, evaluation by τ² (fdh-voice with FDH_PIPECAT_PROFILE set to this file): the
+# domain-agnostic realtime_eval.yaml with client-executed tools (tools.executor: wire) and the
+# client's instructions as the policy. Pair with gateway.eval.yaml and config/adapters/pipecat.eval.yaml
+# (0.8 s VAD silence in audio time). Pipecat owns turn endings, so FDH's spelling hold is off.
+
+extends: realtime_eval.yaml
+
+voice_profile: ../voice/pipecat_realtime_eval.yaml
+
+delegation:
+  spelling_hold: {enabled: false}

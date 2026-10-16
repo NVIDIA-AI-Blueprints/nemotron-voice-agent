@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Default configuration for the generic text Frontend/Backend Agent prototype.
+# ${VAR} and ${VAR:-default} are resolved from the environment, so no credential
+# is ever written into this file.
+#
+# Defaults target the NVIDIA Inference Hub (https://inference-api.nvidia.com/v1),
+# whose keys are `sk-...` and whose model ids carry a doubled `nvidia/nvidia/`
+# prefix -- that is not a typo. Reasoning is OFF for the frontend and ON for the
+# backend; see the extra_body comments below.
+
+agent:
+  name: "Assistant"
+  persona: |
+    You are a helpful assistant.
+  mode: frontend_backend        # frontend_backend (default) | backend_only
+
+prompts:
+  path: "prompts.yaml"          # relative to this file
+  inline: {}                    # optional per-key override, e.g. {frontend: "..."}
+
+frontend:
+  prompt_key: frontend
+  llm:
+    model: "${FRONTEND_LLM_MODEL:-nvidia/nvidia/nemotron-3.5-lightning}"
+    base_url: "${FRONTEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    temperature: 0.0
+    max_tokens: 1024
+    extra_body:
+      # Reasoning OFF: the frontend only routes (delegate or answer) and writes a
+      # self-contained query. Thinking on every user turn buys little and is paid
+      # for in latency on the turn the user is waiting through.
+      chat_template_kwargs:
+        enable_thinking: false
+  delegation:
+    max_repair_attempts: 1
+    on_contract_violation: fallback_text   # fallback_text | error
+    fallback_text: "Sorry, I could not process that. Could you rephrase?"
+  history:
+    max_groups: 20              # logical groups, not raw messages
+
+backend:
+  prompt_key: backend
+  stateful: auto                # derived: true for backend_only, or paired with conversation_history full/backend_turns
+  conversation_history:         # paired mode only; see misc/prototypes/frontend-backend-agent-backend-history-plan.md
+    enabled: ${FBA_BACKEND_HISTORY:-false}   # give the backend the conversation history
+    include: full               # full | backend_turns | transcript
+    guidance_key: auto          # auto -> catalog key "backend_history_guidance_<include>"; "" -> no guidance
+                                # (the context note "backend_history_context_<include>" is always added when enabled)
+    request_key: backend_history_request     # catalog template for the per-turn backend request
+  simulated_delay_s: 0          # testing aid: sleep this long before each delegated backend turn (0 = off)
+  llm:
+    model: "${BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}"
+    base_url: "${BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    temperature: 0.0
+    max_tokens: 4096
+    extra_body:
+      # Reasoning ON: the backend does the actual task work -- choosing tools,
+      # reading their results, deciding when it has an answer -- which is where
+      # thinking pays off. reasoning_content comes back in its own field and never
+      # enters our content, so nothing leaks to the user.
+      chat_template_kwargs:
+        enable_thinking: true
+      reasoning_budget: 1024
+  tools:
+    execution: internal         # internal | external (external = caller executes; tau2 mode)
+    max_tool_iterations: 8
+    max_result_chars: 0         # 0 = no truncation
+    parallel_execution: false   # sequential by default; injected tools may mutate shared state
+    on_incomplete_results: error          # error | synthesize_error_result
+    on_user_message_while_pending: error  # error | discard_pending
+  history:
+    max_groups: 40              # used whenever the backend keeps history (stateful)
+
+domain:
+  policy: ""
+  capabilities: []
+  unsupported_reply: "I can only help with the tasks I am set up for."
+
+accounting:
+  pricing: {}                   # {model: {prompt_per_1k: 0.0, completion_per_1k: 0.0}}
+  record_latency: true
+
+logging:
+  level: INFO
+  event_sink: logging           # logging | jsonl | none
+  event_sink_path: "${FBA_EVENT_LOG:-}"
+  log_filler_text: true
+  log_delegation_query: true

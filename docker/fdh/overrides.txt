@@ -1,0 +1,5 @@
+# Overrides for docker/fdh/requirements.txt (the fdh-voice image lock).
+# protobuf: the repository CVE floor (pyproject.toml override-dependencies) over nvidia-riva-client's ==6.33.5 pin;
+# grpcio-tools 1.81.1 (from nvidia-riva-client) is the release that accepts protobuf 6.
+protobuf>=6.33.6,<7
+grpcio-tools==1.81.1

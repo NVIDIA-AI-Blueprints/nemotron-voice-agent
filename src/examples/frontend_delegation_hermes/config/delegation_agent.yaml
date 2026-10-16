@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice server of the frontend-delegation prototype: the single entry point for the voice side.
+# Defaults are tau3-eval-safe. The gateway and its Hermes workers are configured in gateway.yaml.
+# ${VAR} and ${VAR:-default} are resolved from the environment; relative paths (voice_profile,
+# delegation.prompts.path, backend.gateway_config) resolve against the file that declares them.
+# See misc/prototypes/frontend-delegation-hermes/prototype-plan.md, section 11.
+
+voice_profile: voice/tau3.yaml   # a voice-package profile: server, audio, VAD, ASR, TTS, normalization
+
+frontend:
+  decider: llm                       # llm | scripted (tests, --stub-backend smoke runs)
+  script: ""                         # decider: scripted -> JSON list of decisions (optional)
+  llm:
+    model: "${FRONTEND_LLM_MODEL:-nvidia/nvidia/nemotron-3.5-lightning}"
+    base_url: "${FRONTEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}"
+    api_key: "${NVIDIA_API_KEY}"
+    temperature: 0.0
+    max_tokens: 256
+    timeout_s: 10
+    extra_body:
+      chat_template_kwargs: {enable_thinking: false}   # the frontend routes; thinking only costs latency
+  # named forces exactly one delegate call. "required" makes nemotron-3.5-lightning repeat the call until
+  # max_tokens on the Inference Hub (measured 2026-09-29: 256 tokens, ~3 s vs ~40 tokens with named).
+  tool_choice: named                 # named | required | auto
+  parallel_tool_calls: false
+  timeout_ms: 4000                   # per decision; on timeout delegation.on_contract_error applies
+  hedge_after_ms: 1500               # no reply by then: send an identical second request, first valid wins (0 = off)
+  warmup: true                       # one request at startup: opens the HTTPS connection before the first user turn
+  history: {max_groups: 20}          # user turns kept in the frontend projection
+  backend_activity: {max_items: 6, preview_chars: 120}
+
+delegation:
+  on_contract_error: delegate        # delegate (delegate=true, no filler) | direct_empty (delegate=false, no filler)
+  max_repair_attempts: 1
+  speak_when_delegating: true        # D4: the filler of a delegated turn is spoken (false: silent-ack ablation)
+  guards:
+    backend_question_needs_delegate: true   # IDLE + backend's last heard message asked a question -> delegate
+    # A turn that is exactly one of these (punctuation ignored) is never delegated and gets no filler,
+    # unless the backend just asked a question ("okay" may then be an answer). [] disables the guard.
+    backchannel_words: [mm-hmm, mhm, uh-huh, uh huh, hmm, mm, okay, ok, okay sure, sure, alright, all right,
+                        right, thanks, thank you, got it, cool]
+    # fix-plan-f1-f2-f4-f8.md F2 (off here; profiles/realtime_eval.yaml turns them on). They act only
+    # on a silent decision (R1, R2) or a liveness ping while WORKING (R3), and only when the session's ASR
+    # language has a phrase lexicon (delegation.guards.lexicon.<lang>; English ships in the code defaults).
+    liveness_reply: false          # R1: a silent reply to "are you still there?" / "could you repeat that?" is delegated
+    question_never_silent: false   # R2: a silent reply to a question is delegated
+    ping_as_status: false          # R3: a ping while WORKING is a status request (never steers the running call)
+  prompts: {path: "${FDH_PROMPTS:-prompts.yaml}"}
+  # tau3-failure-fixes-plan.md: every delegation-side fix is on here except M2 (experimental).
+  # The voice-side fixes (M3.1 spelled-run joining, M3.3 "invalid ID" wording, I3/I4 recovery notes)
+  # are not in the default voice profile (voice/tau3.yaml); profiles/realtime_eval.yaml sets its own.
+  # M3.2: wait hold_ms before deciding a turn that ends mid-spelling with strong evidence and an
+  # incomplete value; speech during the wait merges into the next turn. complete_patterns: full-match
+  # patterns of a complete spelled value (never held), e.g. ['^[A-Za-z0-9]{6}$'] for 6-character codes,
+  # or auto: the shapes of the identifier examples in the session's tool schemas.
+  spelling_hold: {enabled: true, hold_ms: 1500, complete_patterns: []}
+  # M2 (experimental, RC2): on request=status while IDLE, speak the unheard last answer again instead
+  # of delegating, if it belongs to the last finished run, no task came since and it is <= ttl_s old.
+  # The status_intent trigger needs prompt_features.replay_intent. F1 (fix-plan-f1-f2-f4-f8.md) adds the
+  # triggers backchannel, ping and repeat, which replay only in place of a silent decision, and
+  # whole_if_heard_below (replay the whole answer when less than that share was heard; 0 = the unheard part).
+  replay_unheard_answer: {enabled: false, ttl_s: 30, triggers: [status_intent], whole_if_heard_below: 0}
+  # G1: a delegated filler repeating one of the last `recent` is dropped (WORKING) or replaced.
+  filler_dedupe: {enabled: true, recent: 3}
+
+backend:
+  link: websocket                    # websocket (gateway) | in_process_fake (tests, --stub-backend)
+  url: "${FDH_BACKEND_URL:-ws://localhost:8790/v1/backend}"
+  open_timeout_s: 45                 # first session.update waits this long for the worker (spawn + AIAgent)
+  gateway_config: "gateway.fake.yaml"   # only for link: in_process_fake
+  simulated_delay: {seconds: 0, where: per_delegation}   # V13: only browser_demo sets 5 (per_delegation | per_tool_call)
+  steer_mode: auto                   # auto (redirect during a model call, else steer) | steer_only
+  status_verbalizer: {mode: llm, timeout_ms: 3000}       # llm | template (template is also the fallback)
+
+session:
+  update_after_start: error          # tools/instructions change after the agent exists: error | ignore
+
+output:
+  hold_max_ms: 4000                  # marks queued audio stale; audio is never released over the user
+  on_stale: {backend_answer: keep, status: drop, filler: drop, apology: keep}
+  # M1: one short line (prompts.yaml status_proactive_lines) after after_s of silence while WORKING,
+  # at most max_per_run per backend run. Calibrate after_s per host (tau3-failure-fixes-plan.md 2).
+  proactive_status: {enabled: true, after_s: "${FDH_PROACTIVE_AFTER_S:-15}", max_per_run: 1}
+  clean_answers: true                # G2: strip markdown, one sentence per list item, before TTS
+
+tools:
+  executor: wire                     # wire (Realtime function_call; tau3) | local (in-process callables; browser)
+  result_timeout_s: 120
+  batch_window_ms: 30                # tool calls arriving within this window share one Realtime response
+
+instructions:
+  apply_to: [backend]                # session.update.instructions (the tau3 policy) -> backend | frontend
+
+# Frontend prompt variants ({% if features.<name> %} in prompts.yaml); all off = the baseline prompt.
+# replay_intent stays off: M2 is experimental.
+prompt_features:
+  replay_intent: false               # M2: tell the frontend its last answer was not heard; "status" in IDLE

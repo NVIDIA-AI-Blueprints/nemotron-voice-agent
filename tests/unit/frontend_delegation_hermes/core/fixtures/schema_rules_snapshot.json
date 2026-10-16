@@ -1,0 +1,161 @@
+{
+  "airline": {
+    "rules": [
+      {
+        "tool": "get_reservation_details",
+        "argument": "reservation_id",
+        "label": "reservation ID",
+        "format_hint": "code",
+        "strip": " .-",
+        "collapse_separators": "",
+        "case": "upper",
+        "restore_prefix": "",
+        "keep_pattern": "^[A-Z0-9]+$",
+        "pattern": "^.+$"
+      },
+      {
+        "tool": "get_user_details",
+        "argument": "user_id",
+        "label": "user ID",
+        "format_hint": "name_name_digits",
+        "strip": " .-",
+        "collapse_separators": "_",
+        "case": "lower",
+        "restore_prefix": "",
+        "keep_pattern": "^[a-z]+_[a-z]+_\\d+$",
+        "pattern": "^[^_]+(?:_[^_]+){1,}_[^_]*\\d[^_]*$"
+      }
+    ],
+    "complete_patterns": [
+      "^[A-Z0-9]{6}$"
+    ],
+    "read_tools": [
+      "calculate",
+      "get_reservation_details",
+      "get_user_details",
+      "list_all_airports",
+      "search_direct_flight",
+      "search_onestop_flight",
+      "get_flight_status"
+    ],
+    "phone_arguments": [],
+    "format_retry_arguments": [],
+    "read_only_tools": []
+  },
+  "retail": {
+    "rules": [
+      {
+        "tool": "get_order_details",
+        "argument": "order_id",
+        "label": "order ID",
+        "format_hint": "#code",
+        "strip": " .-",
+        "collapse_separators": "",
+        "case": "upper",
+        "restore_prefix": "#",
+        "keep_pattern": "^#[A-Z]+\\d+$",
+        "pattern": "^.+$"
+      },
+      {
+        "tool": "get_product_details",
+        "argument": "product_id",
+        "label": "product ID",
+        "format_hint": "digits",
+        "strip": " .-",
+        "collapse_separators": "",
+        "case": "keep",
+        "restore_prefix": "",
+        "keep_pattern": "^\\d+$",
+        "pattern": "^.*\\d.*$"
+      },
+      {
+        "tool": "get_item_details",
+        "argument": "item_id",
+        "label": "item ID",
+        "format_hint": "digits",
+        "strip": " .-",
+        "collapse_separators": "",
+        "case": "keep",
+        "restore_prefix": "",
+        "keep_pattern": "^\\d+$",
+        "pattern": "^.*\\d.*$"
+      },
+      {
+        "tool": "get_user_details",
+        "argument": "user_id",
+        "label": "user ID",
+        "format_hint": "name_name_digits",
+        "strip": " .-",
+        "collapse_separators": "_",
+        "case": "lower",
+        "restore_prefix": "",
+        "keep_pattern": "^[a-z]+_[a-z]+_\\d+$",
+        "pattern": "^[^_]+(?:_[^_]+){1,}_[^_]*\\d[^_]*$"
+      }
+    ],
+    "complete_patterns": [
+      "^#?[A-Z]\\d{7}$",
+      "^\\d{10}$"
+    ],
+    "read_tools": [
+      "calculate",
+      "find_user_id_by_name_zip",
+      "find_user_id_by_email",
+      "get_order_details",
+      "get_product_details",
+      "get_item_details",
+      "get_user_details",
+      "list_all_product_types"
+    ],
+    "phone_arguments": [],
+    "format_retry_arguments": [],
+    "read_only_tools": []
+  },
+  "telecom": {
+    "rules": [],
+    "complete_patterns": [],
+    "read_tools": [
+      "get_customer_by_phone",
+      "get_customer_by_id",
+      "get_customer_by_name",
+      "get_details_by_id",
+      "get_bills_for_customer",
+      "get_data_usage"
+    ],
+    "phone_arguments": [
+      "get_customer_by_phone.phone_number"
+    ],
+    "format_retry_arguments": [
+      "get_customer_by_phone.phone_number"
+    ],
+    "read_only_tools": []
+  },
+  "banking_knowledge": {
+    "rules": [],
+    "complete_patterns": [],
+    "read_tools": [
+      "grep",
+      "get_current_time",
+      "get_user_information_by_id",
+      "get_user_information_by_name",
+      "get_user_information_by_email",
+      "get_referrals_by_user",
+      "get_credit_card_transactions_by_user",
+      "get_credit_card_accounts_by_user",
+      "list_discoverable_agent_tools"
+    ],
+    "phone_arguments": [],
+    "format_retry_arguments": [],
+    "read_only_tools": []
+  },
+  "mock": {
+    "rules": [],
+    "complete_patterns": [],
+    "read_tools": [
+      "get_users"
+    ],
+    "phone_arguments": [],
+    "format_retry_arguments": [],
+    "read_only_tools": []
+  }
+}

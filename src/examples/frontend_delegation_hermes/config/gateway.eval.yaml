@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Gateway of profiles/realtime_eval.yaml: gateway.yaml with every backend prompt variant pinned, so a
+# later edit to the defaults cannot change an evaluation. Detects telecom only and gives it the telecom
+# domain note (analysis/2026-10-11_fdh-telecom-gpt55-deep). Every tau3-geval-failure-fixes-plan.md
+# backend fix is on. Records the backend decision trace.
+
+extends: gateway.yaml
+
+prompt_features:
+  spelling_v2: true
+  spoken_output: true
+  write_consent: true
+  phone_format: true
+  domain_notes: true              # the telecom note only
+  # tau3-geval-failure-fixes-plan.md section 4: on.
+  format_correction: true
+  write_consent_v2: true
+  policy_check: true
+  request_scope: true
+  transfer_check: true
+  capability_check: true
+  # fix-plan-f1-f2-f4-f8.md: on.
+  situational_facts: true
+  identity_from_identifier: true
+
+hermes:
+  # P0.3: the clean controls and the arms record each model request and response for the G2 decision
+  # replay (logging only). FDH_BACKEND_TRACE=false turns it off.
+  backend_trace: ${FDH_BACKEND_TRACE:-true}
+
+domains:
+  telecom: {tools_any: [get_customer_by_phone]}
