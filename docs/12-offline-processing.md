@@ -83,8 +83,8 @@ Offline execution replaces the following pacing and idle dependencies.
 
 Measured compute and service delays remain part of response placement. A turn
 becomes ready after both endpoint computation and its owned final transcripts
-are available. Late recognition can defer or combine turns while newer user
-speech is active.
+are available. Transcript availability is tracked independently of source
+position and upload progress.
 
 LLM output streams into TTS while generation continues. Each audio chunk retains
 its observed readiness relative to the response request. The scheduler places it
@@ -172,10 +172,9 @@ committed spans, and stereo alignment. The exported evidence bundle retains
 WAVs, server metrics, and runtime provenance; refer to the
 [validation artifact reference](offline-processing-reference.md#completed-composite-inspection).
 
-The offline run coalesces some source turns and produces fewer responses than
-the online run. This inspection does not establish behavioral or accuracy
-fidelity. Full-Duplex-Bench (FDB) score-validation work remains in progress;
-official scoring will follow sharing this proposal.
+Behavioral and scoring consistency against real-time streaming is being
+validated. Full-Duplex-Bench (FDB) score validation is in progress; official
+scoring will follow sharing this design proposal.
 
 The comparison uses identical canonical PCM, application revision, model
 services, prompts, voice, generation settings, and detector settings. Each case
@@ -248,9 +247,10 @@ validation layer.
 
 ## Limits and Extensions
 
-Bulk-ASR readiness projection can change turn grouping or response placement
-relative to paced input. Replay can also generate work that later interruptions
-discard, so compute totals do not reproduce live cancellation savings.
+Bulk-ASR availability measurements include backlog from rapid input and must
+retain their recorded timing scope. Replay can generate work that later
+interruptions discard, so compute totals do not reproduce live cancellation
+savings.
 Time-sensitive tool results and independent generation can differ between runs.
 
 The proposed mode targets faster accuracy and task-completion evaluation.

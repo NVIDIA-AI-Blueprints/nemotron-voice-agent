@@ -46,8 +46,8 @@ The design replaces the following timing dependencies.
 
 The scheduler keeps model-service availability separate from endpoint detection.
 For a turn, response readiness is the later of endpoint availability and the
-availability of its owned final transcripts. Recognition that becomes ready
-while newer user speech is active can defer or combine pending turns.
+availability of its owned final transcripts. Source dependency and observed
+availability are recorded separately for each transcript.
 
 LLM text streams into TTS while generation continues. Each returned audio chunk
 retains its observed availability relative to the response request. Its start
@@ -255,11 +255,11 @@ Both modes use continuous ASR with the same STT baseline (`stop_history=320`,
 recognition progress. Offline EOF explicitly completes the finite source; the
 online stream remains open during normal conversation.
 
-The bulk ASR availability projection can still change transcript readiness,
-response timing, or turn grouping compared with paced input. The paired
-evaluation must measure these differences; aligned output alone does not
-establish live fidelity. It must also verify the effective 320 ms configuration
-in both modes rather than infer it from the proposal baseline.
+Paired evaluation measures transcript availability and response timing using
+each mode's recorded boundaries. It also verifies the effective 320 ms
+configuration in both modes rather than inferring it from the proposal baseline.
+Behavioral and scoring consistency against real-time streaming is being
+validated.
 
 Replay can generate audio that an interruption later discards. Its compute
 totals include that work and do not reproduce the savings from live cancellation.
@@ -420,11 +420,9 @@ no force-EOU injection. Recording checks verify source and runtime provenance,
 output extents, offline server/client PCM equality, silence outside committed
 offline spans, and stereo channel alignment.
 
-The offline run produces fewer committed responses and coalesces some source
-turns. Bulk-ASR availability can cause this divergence. Successful recording
-checks do not establish behavioral fidelity or benchmark accuracy.
-Full-Duplex-Bench score validation remains in progress and follows sharing the
-proposal.
+Behavioral and scoring consistency against real-time streaming is being
+validated. Full-Duplex-Bench score validation is in progress and follows sharing
+the design proposal.
 
 The exported evidence bundle keeps these files together, with paths relative
 to its root.
