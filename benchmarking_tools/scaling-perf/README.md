@@ -601,4 +601,4 @@ can include them. RTVI does not currently populate `smart_turn_inference`.
 
 ### Agent Stage Columns
 
-The client still maps the per-stage RTVI metrics that the removed Frontend/Backend Agent example emitted, for example `frontend_tool_selection_ttft` and `backend_llm_ttft`. No shipped example emits them since release 2.3.0, so those columns always read `N/A`.
+The client still maps the per-stage RTVI metrics that the removed Frontend/Backend Agent example emitted, for example `frontend_tool_selection_ttft` and `backend_llm_ttft`. No shipped example emits them, so those columns always read `N/A`.

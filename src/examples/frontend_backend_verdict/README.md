@@ -15,7 +15,7 @@ This example adds the following behaviors to the cascaded voice loop:
 - Caller speech while client tool calls are outstanding resumes the tool continuation with the caller's words.
 - An optional write gate holds every consequential client tool call until the caller confirms a spoken summary of it.
 
-The agent logic lives in `core/`. The `adapters/pipecat/` package runs that logic on the repository's shared Pipecat speech stack. This example replaces the former Frontend/Backend Agent example, which release 2.3.0 removed.
+The agent logic lives in `core/`. The `adapters/pipecat/` package runs that logic on the repository's shared Pipecat speech stack. This example replaces the former Frontend/Backend Agent example.
 
 To deploy this example, follow [Deploy the Frontend/Backend Verdict Agent](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md). For evaluation runs, such as tau-bench (Tau), deploy it in [eval mode](../../../docs/how-to/deploy-frontend-backend-verdict-agent.md#deploy-in-eval-mode), which serves plain `ws://` and writes the agent's event and filler logs to `logs/` on the host.
 
@@ -415,7 +415,7 @@ The UI's voice picker sends a `set-voice` message. The session changes the TTS v
 
 ## Tools
 
-Browser UI sessions use five tools that the server runs. `tools.yaml` holds their OpenAI function schemas, and the UI's read-only tools panel lists them. All five are always enabled. `tool_handlers.py` holds the handlers, copied from the generic domain of the former Frontend/Backend Agent example, which release 2.3.0 removed.
+Browser UI sessions use five tools that the server runs. `tools.yaml` holds their OpenAI function schemas, and the UI's read-only tools panel lists them. All five are always enabled. `tool_handlers.py` holds the handlers, copied from the generic domain of the former Frontend/Backend Agent example.
 
 | Tool | Key | Behavior without the key |
 | --- | --- | --- |
