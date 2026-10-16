@@ -78,6 +78,8 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(tts["tts_language_code"], "fr-FR")
         self.assertEqual(runtime.configuration["tool_choice"], "none")
         self.assertFalse(runtime.configuration["asr_force_eou"])
+        self.assertEqual(tts["tts_sample_rate"], 22050)
+        self.assertEqual(runtime.configuration["output_sample_rate"], 16000)
 
     def test_scalar_settings_are_used_when_not_overridden_in_extra(self):
         runtime, _, _ = self.build({"temperature": "0", "max_tokens": "128"})
