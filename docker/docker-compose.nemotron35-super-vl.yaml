@@ -1,0 +1,158 @@
+# Nemotron 3.5 Super VL. `nemotron-35-super-vl` is the NIM for */server recipes;
+# `nemotron-35-super-vl-vllm` serves the HF checkpoint for */single-gpu recipes
+# and also serves /v1/streaming-session for the Streaming Input toggle.
+services:
+  nemotron-35-super-vl:
+    profiles:
+      - nemotron-35-super-vl
+    image: nvcr.io/nim/nvidia/nemotron-3.5-super-vl-120b-a12b:2.0.13-variant-build.1
+    user: "0:0"
+    environment:
+      - NGC_API_KEY=${NVIDIA_API_KEY:-not-needed}
+      - NIM_HTTP_API_PORT=8000
+      - NIM_PASSTHROUGH_ARGS=--served-model-name nvidia/nemotron-3.5-super-vl-120b-a12b --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3
+    ports:
+      - "18001:8000"
+    volumes:
+      - llm_cache:/opt/nim/.cache
+    shm_size: 16GB
+    ulimits:
+      nofile: 2048
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/v1/health/ready\").read()' || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 1800s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1', '2']
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  nemotron-35-super-vl-vllm:
+    profiles:
+      - nemotron-35-super-vl-single-gpu
+    image: vllm/vllm-openai:v0.31.0
+    pull_policy: if_not_present
+    shm_size: 16GB
+    env_file:
+      - ../.env
+    environment:
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+    ports:
+      - "18001:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ${HOME}/.cache/flashinfer:/root/.cache/flashinfer
+      - llm_cache:/root/.cache/vllm
+      - ../src:/app/src:ro
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        model=nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4
+        args=(
+          --host 0.0.0.0
+          --port 8000
+          --served-model-name nvidia/nemotron-3.5-super-vl-120b-a12b
+          --max-model-len 32768
+          --max-num-seqs 8
+          --trust-remote-code
+          --language-model-only
+          --enable-auto-tool-choice
+          --tool-call-parser qwen3_coder
+          --reasoning-parser nemotron_v3
+          --enable-prefix-caching
+          --mamba-cache-mode align
+          --kv-cache-dtype fp8
+          --async-scheduling
+          --speculative-config '{"method": "mtp", "num_speculative_tokens": 3}'
+        )
+
+        gpu_name="$$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)"
+        compute_cap="$$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1)"
+        device_model=""
+        dmi_product=""
+        [[ -r /proc/device-tree/model ]] && device_model="$$(tr -d '\0' </proc/device-tree/model)"
+        [[ -r /sys/class/dmi/id/product_name ]] && dmi_product="$$(tr -d '\0' </sys/class/dmi/id/product_name)"
+        compute_major="$${compute_cap%%.*}"
+
+        unified=0
+        max_util=0.90
+        if [[ "$${gpu_name}" == *"NVIDIA GB10"* || "$${dmi_product}" == *"DGX_Spark"* ]]; then
+          echo "Super recipe: DGX Spark / NVFP4"
+          unified=1
+          max_util=0.75
+          args+=(--moe-backend marlin)
+        elif [[ "$${device_model}" == *"Jetson"* && "$${device_model}" == *"Thor"* ]] ||
+             [[ "$${dmi_product}" == *"Jetson"* && "$${dmi_product}" == *"Thor"* ]]; then
+          echo "Super recipe: Jetson Thor / NVFP4"
+          unified=1
+          max_util=0.75
+          args+=(--moe-backend marlin)
+          # Weights stay in unified memory while FlashInfer JIT-compiles.
+          # Parallel nvcc jobs are OOM-killed (exit 137); one job fits.
+          export MAX_JOBS=1
+          echo "FlashInfer JIT: MAX_JOBS=1"
+        elif [[ "$${compute_major}" =~ ^[0-9]+$ ]] && (( compute_major >= 10 )); then
+          echo "Super recipe: Blackwell workstation / NVFP4"
+        else
+          echo "Unsupported GPU for Super single-GPU (needs Blackwell NVFP4): $${gpu_name:-unknown} $${compute_cap:-unknown}" >&2
+          exit 1
+        fi
+
+        total="$$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
+        free="$$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
+        if ! [[ "$${total}" =~ ^[0-9]+$$ ]]; then
+          total="$$(awk '/MemTotal/ {printf "%d", $$2/1024}' /proc/meminfo)"
+        fi
+        if ! [[ "$${free}" =~ ^[0-9]+$$ ]]; then
+          free="$$(awk '/MemAvailable/ {printf "%d", $$2/1024}' /proc/meminfo)"
+        fi
+        if (( unified )); then
+          avail_mib=$$(( $$(awk '/MemAvailable/ {print $$2}' /proc/meminfo) / 1024 ))
+          (( avail_mib < free )) && free=$${avail_mib}
+        fi
+        headroom="$${VLLM_VRAM_HEADROOM_MIB:-4096}"
+        safe=$$((free > headroom ? free - headroom : 0))
+        if (( safe < 79872 )); then
+          echo "Not enough free memory for Super (need >= 78GiB after $${headroom}MiB headroom, free=$${free}MiB)." >&2
+          exit 1
+        fi
+        util="$${VLLM_GPU_MEMORY_UTILIZATION:-$$(awk -v s="$${safe}" -v t="$${total}" -v m="$${max_util}" 'BEGIN { u=s/t; if (u>m+0) u=m+0; printf "%.2f", u }')}"
+        echo "Super VRAM plan: $${free}MiB free / $${total}MiB total -> --gpu-memory-utilization $${util}"
+        args+=(--gpu-memory-utilization "$${util}")
+
+        cd /app/src
+        exec python3 -m examples.shared.vllm_streaming_input.server "$${model}" "$${args[@]}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 1800s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

@@ -12,10 +12,24 @@ import {
   type LLMService,
   type ServiceEntry,
   type ServiceSettingsSchema,
+  type ServiceStatus,
   type SimpleService,
 } from "../../api";
 import { ServiceSettingsControls, SettingRow } from "../ServiceSettingsControls";
 import { Toggle } from "../Toggle";
+
+/* ── Custom service row actions, locked while a session uses the selection ── */
+
+function RowActions({ onEdit, onRemove }: Readonly<{ onEdit: () => void; onRemove: () => void }>) {
+  const { isLocked } = useConnectionState();
+  const title = (action: string) => (isLocked ? "Locked during session" : action);
+  return (
+    <div className="svc-row__actions">
+      <button className="svc-icon-btn" onClick={(event) => { event.stopPropagation(); onEdit(); }} disabled={isLocked} title={title("Edit")}>✎</button>
+      <button className="svc-icon-btn svc-icon-btn--remove" onClick={(event) => { event.stopPropagation(); onRemove(); }} disabled={isLocked} title={title("Remove")}>−</button>
+    </div>
+  );
+}
 
 /* ── Custom ASR / TTS service row ── */
 
@@ -92,20 +106,7 @@ function SimpleServiceRow({
         {svc.voiceId && <span className="svc-row__detail">voice: {svc.voiceId}</span>}
         {svc.functionId && <span className="svc-row__detail svc-row__sys">function_id: {svc.functionId}</span>}
       </div>
-      <div className="svc-row__actions">
-        <button
-          className="svc-icon-btn"
-          onClick={(event) => {
-            event.stopPropagation();
-            setForm(buildForm());
-            setEditing(true);
-          }}
-          title="Edit"
-        >
-          ✎
-        </button>
-        <button className="svc-icon-btn svc-icon-btn--remove" onClick={(event) => { event.stopPropagation(); onRemove(svc.id); }} title="Remove">−</button>
-      </div>
+      <RowActions onEdit={() => { setForm(buildForm()); setEditing(true); }} onRemove={() => onRemove(svc.id)} />
     </div>
   );
 }
@@ -223,10 +224,7 @@ function LLMServiceRow({ svc, isActive, onSelect }: Readonly<{ svc: LLMService; 
         {svc.systemPrompt && <span className="svc-row__detail svc-row__sys">sys: {svc.systemPrompt}</span>}
         {svc.extraParams && <span className="svc-row__detail svc-row__sys">extra: {svc.extraParams}</span>}
       </div>
-      <div className="svc-row__actions">
-        <button className="svc-icon-btn" onClick={() => { resetForm(); setEditing(true); }} title="Edit">✎</button>
-        <button className="svc-icon-btn svc-icon-btn--remove" onClick={() => removeLLM(svc.id)} title="Remove">−</button>
-      </div>
+      <RowActions onEdit={() => { resetForm(); setEditing(true); }} onRemove={() => removeLLM(svc.id)} />
     </div>
   );
 }
@@ -236,12 +234,19 @@ function LLMServiceRow({ svc, isActive, onSelect }: Readonly<{ svc: LLMService; 
 type ServiceVariant = {
   id: string;
   source?: LLMService["source"];
+  status?: ServiceStatus;
   details: string[];
   schema?: ServiceSettingsSchema;
   streamingUrl?: string;
 };
 
 const SOURCE_LABELS: Record<string, string> = { "self-hosted": "Self-hosted", "cloud-nim": "NVIDIA Cloud" };
+const STATUS_DISPLAY: Record<ServiceStatus, { label: string; indicator: string }> = {
+  ready: { label: "Ready", indicator: "done" },
+  starting: { label: "Starting…", indicator: "running" },
+  error: { label: "Error", indicator: "failed" },
+  offline: { label: "Not running", indicator: "failed" },
+};
 
 function BuiltInServiceCard({
   slot, name, variants, activeId, expanded, streaming, isLocked, onSelect, onToggle, renderSettings,
@@ -290,6 +295,12 @@ function BuiltInServiceCard({
           ))}
         </div>
         <div className="svc-row__controls">
+          {shown.status && (
+            <>
+              <span className="svc-row__detail">{STATUS_DISPLAY[shown.status].label}</span>
+              <span className={`agent-task-indicator agent-task-indicator-${STATUS_DISPLAY[shown.status].indicator}`} aria-hidden="true" />
+            </>
+          )}
           <div className="svc-source" role="group" aria-label="Endpoint">
             {variants.map((variant) => (
               <button
@@ -434,15 +445,16 @@ export function ServicesPanel() {
   const llmCards = groupByCatalogKey(llms.filter((s) => s.builtIn), (s) => ({
     id: s.id,
     source: s.source,
+    status: s.status,
     details: compact([s.baseUrl, s.modelId]),
     schema: s.settings,
     streamingUrl: canStream ? s.streamingUrl : undefined,
   }));
   const asrCards = groupByCatalogKey(asrServices.filter((s) => s.builtIn), (s) => ({
-    id: s.id, source: s.source, details: compact([s.server, s.model]), schema: s.settings,
+    id: s.id, source: s.source, status: s.status, details: compact([s.server, s.model]), schema: s.settings,
   }));
   const ttsCards = groupByCatalogKey(ttsServices.filter((s) => s.builtIn), (s) => ({
-    id: s.id, source: s.source, details: compact([s.server, s.voiceId && `voice: ${s.voiceId}`]), schema: s.settings,
+    id: s.id, source: s.source, status: s.status, details: compact([s.server, s.voiceId && `voice: ${s.voiceId}`]), schema: s.settings,
   }));
 
   const renderCatalogSection = (slot: string) => {
@@ -450,6 +462,7 @@ export function ServicesPanel() {
     const cards = groupByCatalogKey(entries, (entry) => ({
       id: entry.id,
       source: entry.source,
+      status: entry.status,
       details: compact([String(entry.server ?? entry.base_url ?? ""), String(entry.model ?? entry.model_id ?? "")]),
       schema: serviceSettingsSchema(entry),
     }));

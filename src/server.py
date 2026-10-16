@@ -39,16 +39,19 @@ load_dotenv(override=True)
 import argparse
 import asyncio
 import contextlib
+import http.client
 import json
 import os
+import socket
 import sys
+import urllib.error
 import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 import uvicorn
@@ -69,6 +72,7 @@ import examples_registry
 from attachment_store import consume_capture_request, store_attachment
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, PIPELINE_AUDIO_OUT_SAMPLE_RATE
 from examples.shared.prewarm import build_session_languages, peek_cached_tts_config, prewarm_tts, warmup_tts_synthesis
+from examples.shared.speaker import speaker_diarization_requested
 from examples.shared.subagents import load_subagent_registry
 from utils import (
     LOCAL_SPEECH_PORTS,
@@ -77,7 +81,6 @@ from utils import (
     build_services_api_response,
     default_prompt_key,
     filter_session_config,
-    is_endpoint_reachable,
     is_nvcf,
     load_prompt_catalog,
     load_service_entry,
@@ -95,6 +98,10 @@ _session_configs: dict[str, dict] = {}
 _active_session_configs: dict[str, dict] = {}
 _CONNECT_PREWARM_TIMEOUT_SECS = parse_env_int("CONNECT_PREWARM_TIMEOUT_SECS", 45)
 _CONNECT_HEALTH_TIMEOUT_SECS = 5
+_STATUS_PROBE_TIMEOUT_SECS = 2
+ServiceStatus = Literal["ready", "starting", "error", "offline"]
+_seen_service_targets: set[str] = set()
+_failed_service_targets: set[str] = set()
 _NIM_READY_PATH = "/v1/health/ready"
 _LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 _TURN_LISTEN_PORT = 3478
@@ -194,6 +201,22 @@ def _deployment_response(active: dict, options: list[dict]) -> dict:
     }
 
 
+# Session config keys that need an example capability. The session allowlist is
+# shared across examples, so enforce per example features here.
+_CAPABILITY_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
+    "speaker_labels": ("asr_speaker_diarization",),
+}
+
+
+def _asr_supports_diarization(config: dict) -> bool:
+    entry = (
+        load_service_entry_by_id("asr", str(config["asr_id"]))
+        if config.get("asr_id")
+        else load_service_entry("asr", "")
+    )
+    return entry.get("speaker_diarization_supported") is True
+
+
 def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict:
     """Bind the catalog for the requested pipeline_mode and drop unknown slot keys."""
     if not isinstance(data, dict):
@@ -204,7 +227,23 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
         prompt_key = examples_registry.prompt_default_key(example["key"])
         if prompt_key:
             config["prompt_key"] = prompt_key
-    return filter_session_config(config)
+    capabilities = set(example.get("capabilities") or [])
+    for capability, keys in _CAPABILITY_CONFIG_KEYS.items():
+        if capability not in capabilities:
+            for key in keys:
+                config.pop(key, None)
+    config = filter_session_config(config)
+    prompt = load_prompt_catalog(examples_registry.example_module_file(example)).get(config.get("prompt_key", ""), {})
+    multi_speaker_prompt = isinstance(prompt, dict) and prompt.get("multi_speaker_support") is True
+    diarization_disabled = not speaker_diarization_requested(config)
+    if multi_speaker_prompt and (
+        "speaker_labels" not in capabilities or not _asr_supports_diarization(config) or diarization_disabled
+    ):
+        fallback_key = examples_registry.prompt_default_key(example["key"])
+        if fallback_key:
+            config["prompt_key"] = fallback_key
+        config.pop("prompt_content", None)
+    return config
 
 
 def _example_with_module_file(example_key: str = "") -> tuple[dict, Path]:
@@ -377,23 +416,15 @@ def _service_host_port(server: str) -> tuple[str, int]:
 
 
 def _check_service_port(label: str, server: str) -> None:
-    if not is_endpoint_reachable(server):
-        raise RuntimeError(
-            f"Selected {label} service is not reachable at {server}. "
-            f"Check that the {label} service is running and healthy."
-        )
+    _raise_unless_ready(label, server, _remembered_status(server, _probe_tcp(server, _CONNECT_HEALTH_TIMEOUT_SECS)))
 
 
 def _http_host(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
-def _service_starting_message(label: str, *, ready_json: bool = False) -> str:
-    expected_state = "report ready" if ready_json else "become healthy"
-    return (
-        f"Selected {label} service is still starting. "
-        f"Wait for the service health check to {expected_state}, then try again."
-    )
+def _service_starting_message(label: str) -> str:
+    return f"Selected {label} service is still starting. Wait for it to become ready, then try again."
 
 
 def _local_speech_ready_url(label: str, server: str) -> str:
@@ -409,43 +440,136 @@ def _local_speech_ready_url(label: str, server: str) -> str:
 
 
 def _llm_health_url(base_url: str) -> str:
-    """Return the readiness URL of the self-hosted LLM at ``base_url`` from its catalog ``health_path``, or ``""``."""
-    health_path = next(
+    """Return the readiness URL of the self-hosted LLM at ``base_url`` or its ``streaming_url``, or ``""``."""
+    entry = next(
         (
-            str(entry["health_path"])
+            entry
             for source, catalog in service_catalog_sources()
             if source == SELF_HOSTED_SOURCE
             for entry in catalog.get("llm", {}).values()
-            if entry.get("base_url") == base_url and entry.get("health_path")
+            if base_url in (entry.get("base_url"), entry.get("streaming_url")) and entry.get("health_path")
         ),
-        "",
+        None,
     )
-    if not health_path:
+    if entry is None:
         return ""
-    parsed = urlparse(base_url)
-    return f"{parsed.scheme}://{parsed.netloc}{health_path}"
+    parsed = urlparse(str(entry["base_url"]))
+    return f"{parsed.scheme}://{parsed.netloc}{entry['health_path']}"
+
+
+def _unreachable_status(host: str, exc: BaseException) -> ServiceStatus:
+    """An unresolvable host, or a refused local port, means the container is not running.
+
+    A running container's published port accepts connections through docker-proxy even while
+    the model loads, so only a stopped one refuses on ``localhost``.
+    """
+    if isinstance(exc, socket.gaierror):
+        return "offline"
+    if isinstance(exc, ConnectionRefusedError) and host.strip("[]").lower() in _LOCAL_SERVICE_HOSTS:
+        return "offline"
+    return "starting"
+
+
+def _probe_http(health_url: str, expects_ready_json: bool, timeout: float) -> ServiceStatus:
+    """Probe a health URL; see ``_unreachable_status`` for when a failure means offline."""
+    try:
+        with urllib.request.urlopen(health_url, timeout=timeout) as response:
+            body = response.read()
+    except urllib.error.URLError as exc:
+        return _unreachable_status(urlparse(health_url).hostname or "", exc.reason)
+    except (OSError, http.client.HTTPException):
+        return "starting"
+    if not expects_ready_json:
+        return "ready"
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "starting"
+    if isinstance(payload, dict) and (payload.get("status") == "ready" or payload.get("ready") is True):
+        return "ready"
+    return "starting"
+
+
+def _probe_tcp(server: str, timeout: float) -> ServiceStatus:
+    """Probe a gRPC port for services without an HTTP readiness endpoint."""
+    host, port = _service_host_port(server)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return "ready"
+    except OSError as exc:
+        return _unreachable_status(host, exc)
+
+
+def _remembered_status(target: str, status: ServiceStatus) -> ServiceStatus:
+    """Turn a probe result into the UI status: a service that vanishes after being seen is ``error`` until ready."""
+    if status == "offline":
+        if target not in _seen_service_targets:
+            return "offline"
+        _failed_service_targets.add(target)
+        return "error"
+    _seen_service_targets.add(target)
+    if status == "ready":
+        _failed_service_targets.discard(target)
+        return "ready"
+    return "error" if target in _failed_service_targets else "starting"
+
+
+def _raise_unless_ready(label: str, target: str, status: ServiceStatus) -> None:
+    if status == "starting":
+        raise RuntimeError(_service_starting_message(label))
+    if status != "ready":
+        raise RuntimeError(
+            f"Selected {label} service is not running at {target}. "
+            f"Start it, or pick another {label} in the Services tab."
+        )
 
 
 def _check_http_health(label: str, target: str, health_url: str, expects_ready_json: bool = False) -> None:
-    try:
-        with urllib.request.urlopen(health_url, timeout=_CONNECT_HEALTH_TIMEOUT_SECS) as response:
-            body = response.read()
-    except Exception as exc:
-        logger.warning(f"{label} health check failed for {target} via {health_url}: {exc}")
-        raise RuntimeError(_service_starting_message(label)) from exc
+    status = _remembered_status(health_url, _probe_http(health_url, expects_ready_json, _CONNECT_HEALTH_TIMEOUT_SECS))
+    if status != "ready":
+        logger.warning(f"{label} health check for {target} via {health_url}: {status}")
+    _raise_unless_ready(label, target, status)
 
-    if not expects_ready_json:
-        return
 
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        logger.warning(f"{label} readiness check for {target} via {health_url} returned invalid JSON")
-        raise RuntimeError(_service_starting_message(label, ready_json=True)) from exc
+def _status_probe(slot: str, entry: dict) -> tuple[str, bool] | None:
+    """Return ``(target, expects_ready_json)`` for a self-hosted entry; targets without a scheme use TCP."""
+    if entry.get("source") != SELF_HOSTED_SOURCE:
+        return None
+    if base_url := entry.get("base_url"):
+        health_url = _llm_health_url(str(base_url))
+        return (health_url, False) if health_url else None
+    if server := entry.get("server"):
+        ready_url = _local_speech_ready_url(slot, str(server))
+        return (ready_url, True) if ready_url else (str(server), False)
+    return None
 
-    if payload.get("status") != "ready" and payload.get("ready") is not True:
-        logger.warning(f"{label} readiness check for {target} via {health_url} returned {payload}")
-        raise RuntimeError(_service_starting_message(label, ready_json=True))
+
+def _probe_status(target: str, expects_ready_json: bool) -> ServiceStatus:
+    timeout = _STATUS_PROBE_TIMEOUT_SECS
+    status = _probe_http(target, expects_ready_json, timeout) if "://" in target else _probe_tcp(target, timeout)
+    return _remembered_status(target, status)
+
+
+async def _with_service_status(catalog: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Add ``status`` to self-hosted entries and hide offline ones, unless a slot has nothing else to offer."""
+    probes = {
+        (slot, index): probe
+        for slot, entries in catalog.items()
+        for index, entry in enumerate(entries)
+        if (probe := _status_probe(slot, entry))
+    }
+    targets = list(set(probes.values()))
+    results = await asyncio.gather(*(_run_blocking(_probe_status, *target) for target in targets))
+    statuses = dict(zip(targets, results, strict=True))
+    result = {}
+    for slot, entries in catalog.items():
+        annotated = [
+            {**entry, "status": statuses[probes[slot, index]]} if (slot, index) in probes else entry
+            for index, entry in enumerate(entries)
+        ]
+        visible = [entry for entry in annotated if entry.get("status") != "offline"] or annotated
+        result[slot] = [{**entry, "selected": index == 0} for index, entry in enumerate(visible)]
+    return result
 
 
 async def _run_http_readiness_check(
@@ -895,10 +1019,16 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     # ---- Prompt catalog (read-only, scoped to the active example) ----
 
     @app.get("/api/prompts")
-    async def get_prompts(pipeline_mode: str = Query(default="")):
+    async def get_prompts(
+        pipeline_mode: str = Query(default=""),
+        asr_id: str = Query(default=""),
+    ):
         example_key = pipeline_mode or fallback_example_key
+        example = _bind_example_context_by_key(example_key)
         _, module_file = _example_with_module_file(example_key)
         catalog = load_prompt_catalog(module_file)
+        diarization_supported = _asr_supports_diarization({"asr_id": asr_id})
+        speaker_labels_supported = "speaker_labels" in set(example.get("capabilities") or [])
         registry_default_key = examples_registry.prompt_default_key(example_key)
         default_key = registry_default_key if registry_default_key in catalog else default_prompt_key(catalog)
         hidden_prompt_keys = examples_registry.agent_prompt_keys(example_key)
@@ -912,9 +1042,13 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
                 "selectable": key not in hidden_prompt_keys,
                 "scope": "agent" if key in hidden_prompt_keys else "session",
                 "tools": [t for t in (val.get("tools_available") or []) if isinstance(t, str)],
+                "multiSpeakerSupport": val.get("multi_speaker_support") is True,
             }
             for key, val in catalog.items()
-            if isinstance(val, dict) and "content" in val and val.get("internal") is not True
+            if isinstance(val, dict)
+            and "content" in val
+            and val.get("internal") is not True
+            and (val.get("multi_speaker_support") is not True or (speaker_labels_supported and diarization_supported))
         ]
         agent_prompts = catalog.get("agent_prompts")
         if isinstance(agent_prompts, dict):
@@ -970,7 +1104,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     @app.get("/api/services")
     async def get_services(pipeline_mode: str = Query(default="")):
         _bind_example_context_by_key(pipeline_mode or fallback_example_key)
-        return build_services_api_response()
+        return await _with_service_status(build_services_api_response())
 
     # ---- TTS config (voices & languages from the TTS service) ----
 

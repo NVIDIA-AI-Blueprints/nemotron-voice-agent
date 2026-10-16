@@ -36,9 +36,9 @@ from examples.omni_assistant_subagents.subagents.speaker.action_envelope import 
     normalize_selected_input_source,
     normalize_turn_action,
 )
-from examples.omni_assistant_subagents.subagents.speaker.json_stream import JsonStringFieldStreamer
 from examples.omni_assistant_subagents.subagents.speaker.repeat_guard import RepeatGuard, is_affirmation
 from examples.shared.json_parsing import extract_json_object
+from examples.shared.json_stream import JsonStringFieldStreamer
 from utils import parse_env_float, parse_env_int
 
 _CAPTURE_ESCALATION_COOLDOWN = 3

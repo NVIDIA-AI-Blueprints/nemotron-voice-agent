@@ -1,6 +1,6 @@
 ---
 name: nemotron-voice-agent-deploy
-description: Deploy and configure Nemotron Voice Agent using root Compose recipe profiles. Use when deploying, troubleshooting authentication and startup, or changing `.env`, prompts, default services, or LLM settings of a running deployment.
+description: Deploy and configure Nemotron Voice Agent using root Compose recipe profiles. Use when deploying, troubleshooting authentication and startup, or changing `.env`, prompts, default services, LLM settings, or speaker labels of a running deployment.
 version: "2.3.0"
 license: CC-BY-4.0 AND Apache-2.0
 metadata:
@@ -16,14 +16,14 @@ metadata:
 
 Use this skill to bring up or tear down the Nemotron Voice Agent with a Docker Compose recipe profile. It covers choosing a cloud, `*/server`, or `*/single-gpu` recipe, wiring the right credentials (`NVIDIA_API_KEY` plus an `nvcr.io` login for `*/server`, `HF_TOKEN` for `*/single-gpu`), inspecting host hardware, selecting a recipe, and troubleshooting startup or authentication failures.
 
-It also covers configuration changes to a running deployment (`.env`, prompts, default services, LLM settings, exposed examples and transports) through `references/configure.md`.
+It also covers configuration changes to a running deployment (`.env`, prompts, default services, LLM settings, speaker labels, exposed examples and transports) through `references/configure.md`.
 
 Do not use this skill to change `pipeline.py` or migrate Pipecat versions (use `nemotron-voice-agent-upgrade-pipecat`), or for work unrelated to this blueprint.
 
 ## Rules
 
 - Run commands from the repository root that contains `docker-compose.yml`. Use Docker Compose.
-- Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any recipe. They are not recipes.
+- Specify **exactly one recipe**. Each profile is a complete recipe. `docker compose up` with no profile is a no-op. Never combine two recipes. `tracing` and `turn` compose orthogonally with any recipe. The optional LLM sidecar profiles `nemotron-35-super-vl` and `nemotron-35-super-vl-single-gpu` are added next to a matching recipe (see `references/configure.md`). None of these are recipes.
 - Preserve existing `.env`. Create it only if missing: `test -f .env || cp .env.example .env`.
 - Use `references/configure.md` for `.env`, catalog, setting, or prompt changes. Do not write host-specific vLLM flags into `.env`.
 - Recipe names: `<example>` = cloud NVCF, `<example>/server` = local NIM on a **workstation** (not DGX Spark, not Jetson Thor), `<example>/single-gpu` = local vLLM + NeMo-Speech.cpp. `generic-assistant/server-perf` is a 4-GPU Blackwell workstation load benchmark with a pinned NVFP4 TP2 LLM profile, not a UI deploy. Older hardware requires a compatible TP2 profile. See `benchmarking_tools/scaling-perf/README.md`.

@@ -65,7 +65,7 @@ from examples.omni_assistant_subagents.subagents.transport.webcam_controller imp
 )
 from examples.omni_assistant_subagents.subagents.webcam import WebcamAgent
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.pipeline_utils import build_pipeline_params
+from examples.shared.pipeline_utils import build_pipeline_params, latency_metric_group
 from examples.shared.subagents import SubagentRegistry
 from tracing import IS_TRACING_ENABLED
 from utils import load_ipa_dictionary, normalize_lang_code, parse_env_float
@@ -122,7 +122,6 @@ class OmniTransportAgent(PipelineWorker):
         self._tts_synthesis_mode = tts_synthesis_mode
         self._runner_args = runner_args
         self._session_id = session_id
-        self._latency_turn_count = 1
         self._proactive_directives = proactive_directives or {}
         self._unregister_attachment_listener = None
         self._pending_capture_query = ""
@@ -258,80 +257,27 @@ class OmniTransportAgent(PipelineWorker):
     def _build_latency_observer(self) -> UserBotLatencyObserver:
         """Build the latency observer that emits per-turn metric groups over RTVI."""
         latency_observer = UserBotLatencyObserver()
-        latest_latency_turn_id = ""
-        latest_latency_turn_label = ""
-        latest_latency_ms: float | None = None
+        latency_turn = 1
+        latest_latency: float | None = None
 
         @latency_observer.event_handler("on_latency_measured")
         async def on_latency(observer, latency):
-            nonlocal latest_latency_ms, latest_latency_turn_id, latest_latency_turn_label
-            latest_latency_turn_id = f"turn-{self._latency_turn_count}"
-            latest_latency_turn_label = f"Turn {self._latency_turn_count}"
-            latest_latency_ms = round(latency * 1000, 3)
+            nonlocal latest_latency
+            latest_latency = latency
             logger.info(f"Nemotron Omni subagents User->Bot latency: {latency:.3f}s")
 
         @latency_observer.event_handler("on_latency_breakdown")
         async def on_latency_breakdown(observer, breakdown):
-            nonlocal latest_latency_ms, latest_latency_turn_id, latest_latency_turn_label
-            if latest_latency_ms is None:
+            nonlocal latency_turn, latest_latency
+            if latest_latency is None:
                 return
-            metrics = [
-                {
-                    "key": "total_latency_ms",
-                    "label": "Total Latency",
-                    "value": latest_latency_ms,
-                    "unit": "ms",
-                }
-            ]
-            if breakdown.user_turn_secs is not None:
-                metrics.append(
-                    {
-                        "key": "user_turn_ms",
-                        "label": "User Turn",
-                        "value": round(breakdown.user_turn_secs * 1000, 3),
-                        "unit": "ms",
-                    }
-                )
-            for index, ttfb in enumerate(breakdown.ttfb):
-                processor = ttfb.processor.replace("#", "_").replace(" ", "_")
-                metrics.append(
-                    {
-                        "key": f"ttfb_{index}_{processor}",
-                        "label": f"{ttfb.processor} TTFB",
-                        "value": round(ttfb.duration_secs * 1000, 3),
-                        "unit": "ms",
-                    }
-                )
-            if breakdown.text_aggregation is not None:
-                metrics.append(
-                    {
-                        "key": "text_aggregation_ms",
-                        "label": f"{breakdown.text_aggregation.processor} Text Aggregation",
-                        "value": round(breakdown.text_aggregation.duration_secs * 1000, 3),
-                        "unit": "ms",
-                    }
-                )
-            if not metrics:
-                return
-            await self.queue_frame(
-                RTVIServerMessageFrame(
-                    data={
-                        "type": "metric-group",
-                        "group_id": latest_latency_turn_id,
-                        "group_label": latest_latency_turn_label,
-                        "category": "latency",
-                        "source": "UserBotLatencyObserver",
-                        "metrics": metrics,
-                    }
-                )
-            )
+            group = latency_metric_group(latency_turn, latest_latency, breakdown)
+            await self.queue_frame(RTVIServerMessageFrame(data=group))
+            latency_turn += 1
+            latest_latency = None
             events = breakdown.turn_contribution_lines()
             if events:
                 logger.info(f"Nemotron Omni subagents latency breakdown: {' | '.join(events)}")
-            self._latency_turn_count += 1
-            latest_latency_ms = None
-            latest_latency_turn_id = ""
-            latest_latency_turn_label = ""
 
         return latency_observer
 

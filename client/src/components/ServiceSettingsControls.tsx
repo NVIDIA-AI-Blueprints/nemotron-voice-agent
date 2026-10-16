@@ -38,6 +38,10 @@ function parseNumber(raw: string, integer: boolean): number | undefined {
   return integer ? Math.round(value) : value;
 }
 
+function clamp(value: number, spec: ServiceSettingSpec): number {
+  return Math.min(spec.max ?? value, Math.max(spec.min ?? value, value));
+}
+
 export function ServiceSettingsControls({ schema, values, disabled, onChange, children }: Props) {
   const resolve = (name: string) => values[name] ?? schema[name]?.default;
 
@@ -93,6 +97,10 @@ export function ServiceSettingsControls({ schema, values, disabled, onChange, ch
           disabled={rowDisabled}
           aria-label={spec.label ?? name}
           onChange={(e) => onChange(name, parseNumber(e.target.value, spec.type === "int"))}
+          onBlur={() => {
+            const bounded = numeric === undefined ? undefined : clamp(numeric, spec);
+            if (bounded !== numeric) onChange(name, bounded);
+          }}
         />
       </>
     );

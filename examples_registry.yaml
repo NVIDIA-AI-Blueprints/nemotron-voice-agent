@@ -32,7 +32,7 @@ examples:
       llm: [nemotron-lightning, nemotron-super]
       asr: [nemotron-asr-streaming-english, parakeet-ctc, parakeet-rnnt]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
-    capabilities: [streaming_input]
+    capabilities: [streaming_input, speaker_labels]
     activity_check:
       first_warning_s: 480
       second_warning_s: 30
@@ -44,7 +44,7 @@ examples:
   multilingual-assistant:
     label: Multilingual Assistant
     services:
-      llm: [nemotron-lightning]
+      llm: [nemotron-lightning, nemotron-super]
       asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     capabilities: [session_languages]

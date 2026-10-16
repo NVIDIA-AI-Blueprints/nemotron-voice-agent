@@ -66,7 +66,7 @@ After `up`, a healthy container is not proof of fit. Warm ASR, TTS, and vLLM, an
 
 The Lightning Compose matrix selects the following model and precision automatically:
 
-- DGX Spark: NVFP4 with DSpark speculative decoding.
+- DGX Spark: NVFP4.
 - Blackwell workstation: NVFP4 with DFlash speculative decoding.
 - Jetson Thor: NVFP4 without a draft model.
 - Ada/Hopper workstation: NVFP4 checkpoint served as W4A16 via Marlin.

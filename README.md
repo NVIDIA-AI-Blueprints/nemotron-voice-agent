@@ -66,7 +66,7 @@ See the [CHANGELOG](CHANGELOG.md) for the full release history.
 | | [Magpie TTS Zeroshot](https://build.nvidia.com/nvidia/magpie-tts-zeroshot/modelcard) | |
 | | [Chatterbox TTS Multilingual](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) | |
 | **LLM** | [Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) | Any OpenAI-compatible |
-| | [Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) | |
+| | [Nemotron 3.5 Super VL 120B A12B](https://build.nvidia.com/nvidia/nemotron-3.5-super-vl-120b-a12b/modelcard) | |
 | | [Nemotron 3 Nano Omni 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) | |
 | **Orchestration** | [Pipecat](https://github.com/pipecat-ai/pipecat) | [LiveKit Agents with NVIDIA plugin](https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-nvidia) |
 
@@ -78,7 +78,7 @@ Each example showcases a **pattern** for building a voice pipeline. Start from t
 
 | Example | Description | When to use | Supported Deployment Profiles |
 |---------|-------------|-------------|--------------------|
-| [Generic Assistant](src/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron ASR, Nemotron LLM, and Magpie TTS. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
+| [Generic Assistant](src/examples/generic/README.md) | Baseline **English-only** cascaded pipeline with Nemotron ASR, Nemotron LLM, and Magpie TTS. Optional speaker labels isolate the first speaker or label a multi-speaker conversation. | Best for getting started and prototyping, before tailoring to a specific domain. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 | [Multilingual Assistant](src/examples/multilingual/README.md) | Cascaded pipeline using **Multilingual ASR and TTS**, with a fixed language per session for better reliability. | Use for non-English and multi-language voice agents. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 | [Nemotron Omni Assistant](src/examples/omni_assistant/README.md) | Cascaded pipeline using **Nemotron Omni**, where a single model replaces the ASR + LLM stages and Magpie TTS speaks the reply. | Comparing a cascaded ASR + LLM + TTS pipeline against an Omni-based one. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark, Jetson Thor) |
 | [Nemotron Omni Assistant Subagents](src/examples/omni_assistant_subagents/README.md) | Multi-agent **Nemotron Omni** pipeline where specialized agents add audio/video and live-webcam understanding while the voice loop stays responsive. | Recommended for multimodal inputs, giving a richer experience across image, audio, video, and webcam. | Cloud, Server (workstation), Single GPU (workstation, DGX Spark) |
@@ -99,7 +99,7 @@ These are the minimum requirements, and support varies by example and deployment
 | Cloud | CPU only (no GPU) | Model endpoints from NVIDIA cloud APIs (NVCF). |
 | Server | NVIDIA GPU workstation. GPU count and memory depend on the selected models and scale. | Scaling-oriented NIM deployment. DGX Spark and Jetson Thor are not supported for this profile. Default all-on-one-GPU layout is about 80 GB. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
 | Performance Server | Four-GPU Blackwell workstation | `generic-assistant/server-perf` load benchmark only, not a browser UI session. |
-| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
+| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Optionally, deploy the Nemotron 3.5 Super VL model for better intelligence. Check the LLM sizing guide for its deployment requirements. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
 
 ### Software Requirements
 
