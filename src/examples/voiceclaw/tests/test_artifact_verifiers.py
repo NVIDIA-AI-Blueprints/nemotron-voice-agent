@@ -449,11 +449,9 @@ def test_installer_image_has_an_explicit_nonroot_contract(fault: str | None) -> 
     inspected = _image_inspect(source=source, user="65532:65532")
     config = inspected["Config"]
     config["ExposedPorts"] = {"18790/tcp": {}}
-    config["Env"] = ["VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1"]
     config["Labels"].update(
         {
             "org.opencontainers.image.revision": revision,
-            "com.nvidia.voiceclaw.install-contract": "voiceclaw.nemoclaw.container.v1",
             "com.nvidia.voiceclaw.openshell-revision": _IMAGE_VERIFIER._OPEN_SHELL_REVISION,
         }
     )

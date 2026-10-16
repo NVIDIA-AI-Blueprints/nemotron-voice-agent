@@ -37,7 +37,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             installer_runtime.run_healthcheck()
         else:
             if arguments.config is not None or arguments.ui:
-                parser.error("the installer profile does not accept configuration or UI overrides")
+                parser.error("the NemoClaw container profile does not accept configuration or UI overrides")
             installer_runtime.main()
         return
     if arguments.command == "healthcheck":

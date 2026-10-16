@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Bind protected installer inputs to the upstream Fabric adapter."""
+"""Bind the container environment settings to the upstream Fabric adapter."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from voiceclaw.model_contracts import ModelContractCatalog
 class InstallerSandboxExecutor:
     """Supply the upstream executor protocol without operator credential discovery.
 
-    The SDK helper preserves the installer's static bearer or explicit private
+    The SDK helper preserves the configured static bearer or explicit private
     HTTP mode and verifies the physical sandbox identity before every command.
     Upstream owns bridge decoding, readiness, context, and invocation semantics.
     """
@@ -37,7 +37,7 @@ class InstallerSandboxExecutor:
         *,
         transport_factory: Callable[[], SDKExecutionTransport] = SDKExecutionTransport,
     ) -> None:
-        """Bind one descriptor and track only local client tasks for cleanup."""
+        """Bind one connection and track only local client tasks for cleanup."""
         self._connection = connection
         self._transport_factory = transport_factory
         self._lock = threading.Lock()
@@ -96,7 +96,6 @@ class InstallerSandboxExecutor:
         except TransportFailure as error:
             code = {
                 "access_denied": OpenShellFailureCode.AUTH_DENIED,
-                "credential_invalid": OpenShellFailureCode.AUTH_DENIED,
                 "target_replaced": OpenShellFailureCode.TARGET_MISSING,
                 "outcome_unconfirmed": OpenShellFailureCode.TIMEOUT,
             }.get(error.code, OpenShellFailureCode.UNAVAILABLE)

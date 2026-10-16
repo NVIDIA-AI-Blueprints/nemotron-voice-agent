@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Foreground container-v1 bootstrap with observation-only readiness."""
+"""Foreground Container Service Contract v1 runtime with local health."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import http.client
 import os
 import secrets
 import signal
-import stat
 from contextlib import suppress
 from importlib import resources
 from pathlib import Path
@@ -18,27 +17,16 @@ from typing import Any
 
 import yaml
 
-from voiceclaw.config import load_config
+from voiceclaw.config import parse_config
 from voiceclaw.frontend_runtime import materialize_frontend_runtime
 from voiceclaw.installer_executor import InstallerSandboxExecutor, compose_installer_backend
-from voiceclaw.installer_inputs import (
-    CREDENTIAL_LIMIT,
-    DATA_ROOT,
-    ContainerInputError,
-    ProfileInputs,
-    _acl,
-    load_connection,
-    protected_directory,
-    read_protected,
-    strict_json,
-    validate_bearer,
-    validate_speech_key,
-)
+from voiceclaw.installer_inputs import ContainerInputError, ContainerSettings, strict_json
 from voiceclaw.model_contracts import load_model_contract_catalog
 from voiceclaw.server import create_app
 
-PORT = 18790
 RUNTIME_ROOT = Path("/run/voiceclaw-managed")
+STATE_PATH = Path("/var/lib/voiceclaw/state/state.db")
+SPEECH_KEY_ENV = "VOICECLAW_SPEECH_KEY"
 READINESS_SECONDS = 15
 FRONTEND_PROBE_SECONDS = 2
 FRONTEND_HEADER_LIMIT = 4096
@@ -60,53 +48,13 @@ async def _terminate_process(process: asyncio.subprocess.Process | None) -> None
     await process.wait()
 
 
-def _runtime_directory(path: Path) -> None:
-    if path != RUNTIME_ROOT:
-        with protected_directory(path.parent, root=RUNTIME_ROOT, mutable=True) as parent, suppress(FileExistsError):
-            os.mkdir(path.name, 0o700, dir_fd=parent)
-    with protected_directory(path, root=RUNTIME_ROOT):
-        pass
-
-
-def _state_path(path: Path) -> None:
-    # A populated installer volume hides the image's state directory. Create only
-    # missing application-owned parents; never repair unsafe existing inputs.
-    current = DATA_ROOT
-    for component in path.parent.relative_to(DATA_ROOT).parts:
-        with protected_directory(current, mutable=True) as parent, suppress(FileExistsError):
-            os.mkdir(component, 0o700, dir_fd=parent)
-        current = current / component
-    with protected_directory(path.parent) as parent:
-        try:
-            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
-        except FileNotFoundError:
-            return
-        try:
-            m = os.fstat(fd)
-            if (
-                not stat.S_ISREG(m.st_mode)
-                or (m.st_uid, m.st_gid, stat.S_IMODE(m.st_mode)) != (65532, 65532, 0o600)
-                or _acl(fd)
-            ):
-                raise ContainerInputError
-        finally:
-            os.close(fd)
-
-
 class InstallerApplication:
     """One explicit application; health cannot activate, repair or stop it."""
 
-    def __init__(self, inputs: ProfileInputs, *, environment: dict[str, str]) -> None:
-        """Require a complete protected input set before activation."""
-        self.inputs = inputs
-        self.environment = environment
-        self.connection = load_connection(str(inputs.connection_file))
-        if self.connection.credential_file == inputs.speech_file:
-            raise ContainerInputError
-        if self.connection.credential_file is not None:
-            validate_bearer(read_protected(str(self.connection.credential_file)))
-        validate_speech_key(read_protected(str(inputs.speech_file), maximum=CREDENTIAL_LIMIT))
-        _state_path(inputs.state)
+    def __init__(self, settings: ContainerSettings) -> None:
+        """Bind the validated environment settings before activation."""
+        self.settings = settings
+        self.connection = settings.connection
         self.process: asyncio.subprocess.Process | None = None
         self.delegate: Any | None = None
         self.lifespan: Any | None = None
@@ -115,21 +63,13 @@ class InstallerApplication:
         self.executor: InstallerSandboxExecutor | None = None
 
     async def start(self) -> None:
-        """Start the bundled child once; never poll missing legacy projections."""
-        for path in (RUNTIME_ROOT, RUNTIME_ROOT / "home", RUNTIME_ROOT / "cache", RUNTIME_ROOT / "config"):
-            _runtime_directory(path)
+        """Start the bundled child once and compose the upstream adapter."""
+        for path in (RUNTIME_ROOT / "home", RUNTIME_ROOT / "cache", STATE_PATH.parent):
+            os.makedirs(path, mode=0o700, exist_ok=True)
         raw = yaml.safe_load(resources.files("voiceclaw.resources").joinpath("nemoclaw_container_v1.yaml").read_text())
-        for role in ("llm", "asr", "tts"):
-            raw["frontend_profiles"]["managed_nvidia"]["services"][role]["credential"]["file"] = str(
-                self.inputs.speech_file
-            )
-        raw["state"]["path"] = str(self.inputs.state)
-        effective = RUNTIME_ROOT / "config" / "voiceclaw.yaml"
-        # Scratch is image/application-owned, separate from installer inputs.
-        fd = os.open(effective, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-        with os.fdopen(fd, "w") as output:
-            yaml.safe_dump(raw, output, sort_keys=False)
-        config = load_config(effective, environ={})
+        raw["server"]["port"] = self.settings.port
+        raw["state"]["path"] = str(STATE_PATH)
+        config = parse_config(raw)
         contracts = load_model_contract_catalog(config.model_contracts.path, profile=config.model_contracts.profile)
         plan = materialize_frontend_runtime(
             config.selected_frontend,
@@ -137,8 +77,8 @@ class InstallerApplication:
             internal_endpoint="ws://127.0.0.1:7861/v1/realtime",
             model_contracts=contracts,
         )
-        speech = validate_speech_key(read_protected(str(self.inputs.speech_file)))
         internal_key = secrets.token_urlsafe(32)
+        # The frontend child receives the speech key only, never the gateway token.
         child_environment = {
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "LANG": "C.UTF-8",
@@ -147,7 +87,7 @@ class InstallerApplication:
             "HOME": str(RUNTIME_ROOT / "home"),
             "XDG_CACHE_HOME": str(RUNTIME_ROOT / "cache"),
             **plan.nva_environment,
-            "NVIDIA_API_KEY": speech,
+            "NVIDIA_API_KEY": self.settings.speech_key,
             "REALTIME_API_KEY": internal_key,
             "PIPELINE_TLS": "false",
             "UVICORN_WORKERS": "1",
@@ -171,7 +111,7 @@ class InstallerApplication:
             )
             self.delegate = create_app(
                 config,
-                environ={**self.environment, "REALTIME_UPSTREAM_API_KEY": internal_key},
+                environ={SPEECH_KEY_ENV: self.settings.speech_key, "REALTIME_UPSTREAM_API_KEY": internal_key},
                 ui=True,
                 composition=compose_installer_backend(self.connection, contracts, executor=self.executor),
             )
@@ -233,21 +173,13 @@ class InstallerApplication:
         )
 
     async def readiness(self) -> str | None:
-        """Check installation readiness; native agent qualification is separate."""
+        """Check local readiness; native agent qualification is separate."""
         if not self._local_initialized():
             return "frontend-unavailable"
         try:
             async with asyncio.timeout(READINESS_SECONDS):
-                current = await asyncio.to_thread(load_connection, str(self.inputs.connection_file))
-                if current != self.connection:
-                    return "configuration-invalid"
-                validate_speech_key(await asyncio.to_thread(read_protected, str(self.inputs.speech_file)))
-                if current.credential_file is not None:
-                    validate_bearer(await asyncio.to_thread(read_protected, str(current.credential_file)))
                 if not await self._frontend_available() or not self._local_initialized():
                     return "frontend-unavailable"
-        except ContainerInputError:
-            return "configuration-invalid"
         except Exception:
             return "readiness-unknown"
         return None
@@ -288,8 +220,8 @@ class InstallerApplication:
                     await self.shutdown()
                     await send({"type": "lifespan.shutdown.complete"})
                     return
-        elif scope["type"] == "http" and scope.get("path") in {"/livez", "/readyz"}:
-            reason = None if scope["path"] == "/livez" else await self.readiness()
+        elif scope["type"] == "http" and scope.get("path") == "/health":
+            reason = await self.readiness()
             headers = [(b"cache-control", b"no-store")]
             if reason:
                 headers.append((b"x-voiceclaw-reason", reason.encode("ascii")))
@@ -306,13 +238,14 @@ class InstallerApplication:
             await send({"type": "http.response.body", "body": b""})
 
 
-def run_healthcheck() -> None:
-    """Probe localhost readiness; Docker retains no diagnostic output."""
+def run_healthcheck(environ: dict[str, str] | None = None) -> None:
+    """Probe localhost health; Docker retains no diagnostic output."""
     connection = None
     code = 1
     try:
-        connection = http.client.HTTPConnection("127.0.0.1", PORT, timeout=READINESS_SECONDS)
-        connection.request("GET", "/readyz", headers={"Connection": "close"})
+        port = ContainerSettings.from_environment(os.environ if environ is None else environ).port
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=READINESS_SECONDS)
+        connection.request("GET", "/health", headers={"Connection": "close"})
         response = connection.getresponse()
         if response.status == 200 and response.read(1) == b"":
             code = 0
@@ -330,22 +263,16 @@ def main() -> None:
     try:
         if (os.geteuid(), os.getegid()) != (65532, 65532):
             raise ContainerInputError
-        inputs = ProfileInputs.from_environment(os.environ)
-        environment = {
-            name: os.environ[name]
-            for name in (
-                "VOICECLAW_RUNTIME_PROFILE",
-                "VOICECLAW_INSTALL_CONTRACT",
-                "VOICECLAW_AGENT_CONNECTION_FILE",
-                "VOICECLAW_SPEECH_CREDENTIAL_FILE",
-                "VOICECLAW_STATE_PATH",
-            )
-        }
-        application = InstallerApplication(inputs, environment=environment)
+        application = InstallerApplication(ContainerSettings.from_environment(os.environ))
     except Exception:
         raise SystemExit("container-input-invalid") from None
     import uvicorn
 
     uvicorn.run(
-        application, host="0.0.0.0", port=PORT, access_log=False, log_level="warning", timeout_graceful_shutdown=5
+        application,
+        host="0.0.0.0",
+        port=application.settings.port,
+        access_log=False,
+        log_level="warning",
+        timeout_graceful_shutdown=5,
     )

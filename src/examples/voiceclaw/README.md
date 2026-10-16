@@ -31,7 +31,7 @@ realtime frontend                 OpenShell adapter
 
 By default, the realtime frontend model chooses between a conversational reply
 and agent delegation, building a standalone goal for delegated work. The
-installer profile preserves that model-selected routing: greetings and direct
+NemoClaw container profile preserves that model-selected routing: greetings and direct
 conversation stay in the frontend, while delegated work uses the validated,
 standalone goal produced by the frontend. The frontend presents
 acknowledgements and result speech. The Interaction Manager invokes the
@@ -51,64 +51,72 @@ and an `HF_TOKEN` in the repository `.env`. Refer to the
 [Getting Started guide](../../../docs/01-getting-started.md) for host and GPU
 prerequisites.
 
-## Install with NemoClaw Container v1
+## Deploy as a NemoClaw Container Service
 
-The `nemoclaw-container-v1` image target implements the accepted
-`voiceclaw.nemoclaw.container.v1` installer contract. NemoClaw declares and
-manages an ordinary application container, delivers protected inputs, and binds
-it to an existing OpenShell sandbox. VoiceClaw does not install or manage the
-agent.
+The `nemoclaw-container-v1` image target implements the VoiceClaw side of the
+NemoClaw [Container Service Contract v1](https://github.com/NVIDIA/NemoClaw/blob/bf93570b92c08230cee3816f382b93f97cd519e5/docs/design/container-contract.md).
+NemoClaw deploys it as an ordinary `kind: container` service with literal
+environment values. There is no application-specific installer, generated
+connection descriptor, or credential file. VoiceClaw does not install or manage
+the agent.
 
 This profile preserves the upstream OpenShell/Fabric adapter, request codec,
-and result validation. A narrow installer executor supplies
-the protected descriptor and pinned SDK transport. It does not replace the
-default image supervisor, developer Compose recipe, or cloud configuration.
-The installer starts with a fresh target and permits one non-durable delegated
+and result validation. A narrow executor connects that adapter to the pinned
+OpenShell SDK client. It does not replace the default image supervisor,
+developer Compose recipe, or cloud configuration.
+The profile starts with a fresh target and permits one non-durable delegated
 turn. A successful or ambiguous invocation consumes that target; provision a
 fresh target for another delegated request. Matched native tool calls and
 results can run within the invocation, but VoiceClaw does not claim session
 continuity or reconnect recovery.
 
-The installer sets `interaction.turn_routing_mode: model`. Delegation requires
+The profile sets `interaction.turn_routing_mode: model`. Delegation requires
 the currently advertised `work.delegate` operation; an unavailable or consumed
 backend rejects the request. The runtime sends the validated standalone goal
 selected by the frontend. Argument, source-text, readiness, and availability
 checks still apply.
 
-Use the following nonsecret environment inputs in the application declaration:
+Copy the gateway URL, workspace, and sandbox ID from the operator's deployment.
+This fragment uses trusted local plaintext mode:
 
-```text
-VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1
-VOICECLAW_INSTALL_CONTRACT=voiceclaw.nemoclaw.container.v1
-VOICECLAW_AGENT_CONNECTION_FILE=/var/lib/voiceclaw/config/agent-connection.json
-VOICECLAW_SPEECH_CREDENTIAL_FILE=/var/lib/voiceclaw/credentials/speech
-VOICECLAW_STATE_PATH=/var/lib/voiceclaw/state/state.db
+```yaml
+environment:
+  VOICECLAW_PORT: "18790"
+  VOICECLAW_GATEWAY_URL: "http://172.29.230.2:17681"
+  VOICECLAW_WORKSPACE: "ACTUAL_WORKSPACE"
+  VOICECLAW_SANDBOX_NAME: assistant
+  VOICECLAW_SANDBOX_ID: "ACTUAL_SANDBOX_ID"
+  VOICECLAW_AGENT_NAME: main
+  VOICECLAW_AUTH_MODE: none
+  VOICECLAW_SPEECH_KEY: "REPLACE_AT_DEPLOY_TIME"
 ```
 
-NemoClaw supplies the descriptor and credential files before startup. Do not
-place credentials in YAML, Docker environment values, or command arguments.
-Refer to the [installer contract](NEMOCLAW_CONTAINER_V1.md) for the descriptor,
-image build, ownership, transport, and validation requirements.
+For HTTPS, set `VOICECLAW_AUTH_MODE: oidcBearer` and supply the application's
+service token in `VOICECLAW_GATEWAY_TOKEN`. Literal environment values are
+visible in configuration, NemoClaw plans and state, exports, and Docker
+inspection. Replace placeholders only in private local configuration and never
+commit or share the result. Refer to the [container profile](NEMOCLAW_CONTAINER_V1.md)
+for validation rules, the image build, and qualification requirements.
 
-The installer profile serves the packaged browser console at `GET /` and
-`WS /v1/realtime` on port `18790`. Publish it only on host loopback or the
+The profile serves the packaged browser console at `GET /` and
+`WS /v1/realtime` on `VOICECLAW_PORT`. Publish it only on host loopback or the
 approved private deployment network. After NemoClaw apply returns, check local
-installation readiness on the Linux host:
+health on the Linux host:
 
 ```bash
-curl --fail --max-time 15 http://127.0.0.1:18790/readyz
+curl --fail --max-time 15 http://127.0.0.1:18790/health
 ```
 
-An empty `200` response confirms protected inputs, initialized local components,
-and the bundled frontend listener. It does not prove native Fabric health,
-provider credentials, model responses, or a complete voice turn. Agent checks
-and invocations retain upstream validation; unsupported native health is not
-reported as healthy. The installer needs a fresh agent target for its first
+An empty `200` response confirms initialized local components and the bundled
+frontend listener. It does not prove native Fabric health, provider
+credentials, model responses, or a complete voice turn. Agent checks and
+invocations retain upstream validation; unsupported native health is not
+reported as healthy. The profile needs a fresh agent target for its first
 delegated turn; verified successful turns can then share that native context.
 
-The earlier installer revision passed a manual ARM64 Station installation and
-local readiness check. That result does not qualify this upstream adaptation;
-refer to the [evidence boundaries](NEMOCLAW_CONTAINER_V1.md#validation-and-evidence).
+Earlier manual results used the retired descriptor-based revision and do not
+qualify this revision; refer to the
+[evidence boundaries](NEMOCLAW_CONTAINER_V1.md#validation-and-evidence).
 
 ### Open the Installed Browser Console
 
@@ -123,12 +131,13 @@ WebSocket share port `18790`; no separate browser server is required.
      -L 127.0.0.1:18790:127.0.0.1:18790 operator@your-linux-host
    ```
 
-   Keep the SSH session running while you use the console. The installer must
-   publish the application port on the remote host's loopback address first.
+   Keep the SSH session running while you use the console. The NemoClaw
+   `publication` setting must publish the application port on the remote host's
+   loopback address first.
 
 2. Open `http://localhost:18790/` locally and select **Connect**. The console
    derives its WebSocket endpoint from this address. Leave **Client secret**
-   empty for the private installer profile.
+   empty for the private container profile.
 3. Wait for **Session ready**, then select **Start listening** and grant
    microphone access. Follow the negotiated turn behavior shown below the
    composer, or enter a typed request and press **Enter**.
@@ -227,7 +236,7 @@ Use `kind: openai_realtime` to replace the bundled cascade with an external
 Realtime endpoint.
 
 `interaction.turn_routing_mode` accepts `model` or `agent`. The default `model`
-mode, also used by the installer, lets the frontend select a direct reply or
+mode, also used by the container profile, lets the frontend select a direct reply or
 delegation. Explicit `agent` mode requires `work.delegate` for every finalized
 request and is intended for bounded qualification. Its private structured model
 call is silent; acknowledgements and result speech follow separately after
@@ -314,7 +323,7 @@ uv run --project src/examples/voiceclaw --extra server --extra openshell \
 ```
 
 For the developer stack, use port `7860`. The default verifier context contract
-is `unqualified`, including for the installer profile. Audio input and
+is `unqualified`, including for the container profile. Audio input and
 `--query` are mutually exclusive; the recorded-input check sends no typed fallback.
 The verifier sends paced 20 ms audio chunks and follows the session's
 negotiated automatic or manual turn behavior. It preserves the cascade's
@@ -338,7 +347,7 @@ that you heard the reply.
 
 Start qualification with a fresh target. A successful or ambiguous invocation
 consumes it. Do not replay a recording after an uncertain invocation; use a
-fresh target. Restarting the installer cannot recover prior native history or
+fresh target. Restarting the container cannot recover prior native history or
 pending work.
 
 ### Troubleshoot Route Selection
@@ -366,7 +375,7 @@ result before repeating agent work. Provider error details remain private.
 ## Current Limitations
 
 - The OpenShell profile supports one concurrent VoiceClaw session.
-- The installer OpenShell/Fabric profile supports one non-durable delegated
+- The container OpenShell/Fabric profile supports one non-durable delegated
   turn for each fresh target.
 - Agent results are terminal responses. Backend event streaming, durable
   acceptance, replay, steering, confirmed remote cancellation, and reconnect

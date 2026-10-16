@@ -2,104 +2,111 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # ruff: noqa: D100, D101, D102, D103, D107
 
-import errno
-import json
-import os
-from pathlib import Path
-
 import pytest
 
-from voiceclaw.installer_inputs import (
-    ContainerInputError,
-    ProfileInputs,
-    parse_connection,
-    protected_directory,
-    read_protected,
-    validate_bearer,
-)
+from voiceclaw.installer_inputs import ContainerInputError, ContainerSettings, strict_json, validate_bearer
+
+SANDBOX_ID = "893ed65e-1972-48ba-b5b7-764119c24d07"
 
 
-def connection_value(*, no_auth=False):
+def environment(*, no_auth=False, **overrides):
     value = {
-        "schemaVersion": "nemoclaw.agent-connection.v1",
-        "deploymentUid": "3f3bcfca-27c7-4ed6-9d7e-2cc3918b1252",
-        "service": "voice",
-        "gateway": {"endpoint": "https://openshell.example.com:8443", "tls": {"trust": "system", "caFile": None}},
-        "authentication": {
-            "mode": "oidcBearer",
-            "credentialFile": "/var/lib/voiceclaw/credentials/openshell",
-            "refreshMode": "none",
-        },
-        "target": {
-            "workspace": "explicit-workspace",
-            "sandbox": "assistant",
-            "sandboxId": "893ed65e-1972-48ba-b5b7-764119c24d07",
-            "agent": "assistant",
-        },
-        "bridge": {"interfaceVersion": 1, "command": "fabric-agent"},
-        "timeouts": {"healthSeconds": 12, "invokeSeconds": 120},
+        "VOICECLAW_GATEWAY_URL": "https://openshell.example.com:8443",
+        "VOICECLAW_WORKSPACE": "explicit-workspace",
+        "VOICECLAW_SANDBOX_NAME": "assistant",
+        "VOICECLAW_SANDBOX_ID": SANDBOX_ID,
+        "VOICECLAW_AGENT_NAME": "assistant",
+        "VOICECLAW_AUTH_MODE": "oidcBearer",
+        "VOICECLAW_GATEWAY_TOKEN": "fixture.bearer",
+        "VOICECLAW_SPEECH_KEY": "nvapi-fixture",
     }
-
     if no_auth:
-        value["gateway"] = {"endpoint": "http://172.18.0.2:8080", "tls": {"trust": "none", "caFile": None}}
-        value["authentication"] = {"mode": "none", "credentialFile": None, "refreshMode": "none"}
+        value["VOICECLAW_GATEWAY_URL"] = "http://172.18.0.2:8080"
+        value["VOICECLAW_AUTH_MODE"] = "none"
+        del value["VOICECLAW_GATEWAY_TOKEN"]
+    for name, item in overrides.items():
+        if item is None:
+            value.pop(name, None)
+        else:
+            value[name] = item
     return value
 
 
+def settings(value=None):
+    return ContainerSettings.from_environment(environment() if value is None else value)
+
+
 def connection(value=None):
-    return parse_connection(json.dumps(connection_value() if value is None else value).encode())
+    return settings(value).connection
 
 
-def test_valid_exact_connection_and_profile():
-    c = connection()
-    assert c.workspace == "explicit-workspace"
-    assert c.sandbox_id == connection_value()["target"]["sandboxId"]
-    assert c.health_seconds == 12 and c.invoke_seconds == 120
-    p = ProfileInputs.from_environment(
-        {
-            "VOICECLAW_RUNTIME_PROFILE": "nemoclaw-container-v1",
-            "VOICECLAW_INSTALL_CONTRACT": "voiceclaw.nemoclaw.container.v1",
-            "VOICECLAW_AGENT_CONNECTION_FILE": "/var/lib/voiceclaw/config/agent-connection.json",
-            "VOICECLAW_SPEECH_CREDENTIAL_FILE": "/var/lib/voiceclaw/credentials/speech",
-            "VOICECLAW_STATE_PATH": "/var/lib/voiceclaw/state/state.db",
-        }
+def test_valid_environment_settings():
+    s = settings()
+    c = s.connection
+    assert s.port == 18790 and s.speech_key == "nvapi-fixture"
+    assert (c.workspace, c.sandbox, c.sandbox_id, c.agent) == (
+        "explicit-workspace",
+        "assistant",
+        SANDBOX_ID,
+        "assistant",
     )
-    assert p.state == Path("/var/lib/voiceclaw/state/state.db")
-    with pytest.raises(ContainerInputError):
-        ProfileInputs.from_environment({"VOICECLAW_RUNTIME_PROFILE": "nemoclaw-container-v1"})
+    assert c.authentication_mode == "oidcBearer" and c.bearer == "fixture.bearer"
+    assert c.health_seconds == 12 and c.invoke_seconds == 120
+    assert settings(environment(VOICECLAW_PORT="18791")).port == 18791
+    assert "fixture.bearer" not in repr(s) and "nvapi-fixture" not in repr(s)
 
 
-@pytest.mark.parametrize("no_auth", [False, True])
-def test_explicit_transport_and_credential_selection(no_auth):
-    c = connection(connection_value(no_auth=no_auth))
-    assert c.authentication_mode == ("none" if no_auth else "oidcBearer")
-    assert c.credential_file == (None if no_auth else Path("/var/lib/voiceclaw/credentials/openshell"))
-    assert c.workspace == "explicit-workspace" and c.agent == "assistant"
+def test_no_auth_selects_plaintext_without_any_token():
+    c = connection(environment(no_auth=True))
+    assert c.authentication_mode == "none" and c.bearer is None
+    assert c.endpoint == "http://172.18.0.2:8080"
 
 
 @pytest.mark.parametrize(
-    "no_auth,path,bad",
+    "no_auth,overrides",
     [
-        (True, ("authentication", "mode"), "oidcBearer"),
-        (True, ("authentication", "credentialFile"), "/var/lib/voiceclaw/credentials/openshell"),
-        (True, ("authentication", "refreshMode"), "automatic"),
-        (True, ("gateway", "tls", "trust"), "system"),
-        (True, ("gateway", "tls", "caFile"), "/var/lib/voiceclaw/config/ca.pem"),
-        (True, ("gateway", "endpoint"), "https://172.18.0.2:8080"),
-        (False, ("authentication", "mode"), "none"),
-        (False, ("authentication", "credentialFile"), None),
-        (False, ("gateway", "tls", "trust"), "none"),
-        (False, ("gateway", "endpoint"), "http://172.18.0.2:8080"),
+        (True, {"VOICECLAW_GATEWAY_TOKEN": "fixture.bearer"}),
+        (True, {"VOICECLAW_GATEWAY_URL": "https://172.18.0.2:8080"}),
+        (True, {"VOICECLAW_AUTH_MODE": "oidcBearer"}),
+        (False, {"VOICECLAW_GATEWAY_TOKEN": None}),
+        (False, {"VOICECLAW_GATEWAY_URL": "http://172.18.0.2:8080"}),
+        (False, {"VOICECLAW_AUTH_MODE": "none"}),
+        (False, {"VOICECLAW_AUTH_MODE": None}),
+        (False, {"VOICECLAW_AUTH_MODE": "mTLS"}),
     ],
 )
-def test_rejects_inconsistent_authentication_and_transport(no_auth, path, bad):
-    value = connection_value(no_auth=no_auth)
-    nested = value
-    for key in path[:-1]:
-        nested = nested[key]
-    nested[path[-1]] = bad
+def test_rejects_inconsistent_authentication_and_transport(no_auth, overrides):
     with pytest.raises(ContainerInputError, match="^container-input-invalid$"):
-        connection(value)
+        settings(environment(no_auth=no_auth, **overrides))
+
+
+@pytest.mark.parametrize(
+    "name,bad",
+    [
+        ("VOICECLAW_GATEWAY_URL", None),
+        ("VOICECLAW_WORKSPACE", None),
+        ("VOICECLAW_WORKSPACE", ""),
+        ("VOICECLAW_SANDBOX_NAME", None),
+        ("VOICECLAW_SANDBOX_NAME", "a/b"),
+        ("VOICECLAW_SANDBOX_ID", None),
+        ("VOICECLAW_SANDBOX_ID", "ACTUAL_SANDBOX_ID"),
+        ("VOICECLAW_SANDBOX_ID", "00000000-0000-0000-0000-000000000000"),
+        ("VOICECLAW_AGENT_NAME", None),
+        ("VOICECLAW_AGENT_NAME", "../assistant"),
+        ("VOICECLAW_GATEWAY_TOKEN", "bearer with spaces"),
+        ("VOICECLAW_GATEWAY_TOKEN", ""),
+        ("VOICECLAW_SPEECH_KEY", None),
+        ("VOICECLAW_SPEECH_KEY", ""),
+        ("VOICECLAW_SPEECH_KEY", "key\nvalue"),
+        ("VOICECLAW_PORT", "0"),
+        ("VOICECLAW_PORT", "65536"),
+        ("VOICECLAW_PORT", "018790"),
+        ("VOICECLAW_PORT", "port"),
+    ],
+)
+def test_rejects_missing_or_invalid_settings_without_echoing_values(name, bad):
+    with pytest.raises(ContainerInputError, match="^container-input-invalid$"):
+        settings(environment(**{name: bad}))
 
 
 @pytest.mark.parametrize(
@@ -134,51 +141,13 @@ def test_rejects_inconsistent_authentication_and_transport(no_auth, path, bad):
     ],
 )
 def test_no_auth_rejects_nonprivate_or_ambiguous_endpoints(endpoint):
-    value = connection_value(no_auth=True)
-    value["gateway"]["endpoint"] = endpoint
     with pytest.raises(ContainerInputError):
-        connection(value)
+        connection(environment(no_auth=True, VOICECLAW_GATEWAY_URL=endpoint))
 
 
 @pytest.mark.parametrize("endpoint", ["http://10.23.1.2:8080", "http://172.18.0.2:8080", "http://192.168.50.2:8080/"])
 def test_no_auth_accepts_canonical_rfc1918_literals(endpoint):
-    value = connection_value(no_auth=True)
-    value["gateway"]["endpoint"] = endpoint
-    assert connection(value).endpoint == endpoint
-
-
-@pytest.mark.parametrize(
-    "path,bad",
-    [
-        (("schemaVersion",), "unknown"),
-        (("deploymentUid",), "<deployment UUID>"),
-        (("service",), ""),
-        (("target", "workspace"), ""),
-        (("target", "sandboxId"), "<sandbox UUID>"),
-        (("target", "agent"), "../assistant"),
-        (("target", "sandbox"), "a/b"),
-        (("bridge", "interfaceVersion"), True),
-        (("bridge", "command"), "sh"),
-        (("authentication", "mode"), "mTLS"),
-        (("authentication", "refreshMode"), "automatic"),
-        (("authentication", "credentialFile"), "/var/lib/voiceclaw/credentials/../openshell"),
-        (("authentication", "credentialFile"), "/etc/openshell"),
-        (("gateway", "tls", "trust"), "insecure"),
-        (("gateway", "tls", "trust"), "privateCa"),
-        (("gateway", "tls", "caFile"), "/etc/ssl/ca.pem"),
-        (("timeouts", "healthSeconds"), 13),
-        (("timeouts", "invokeSeconds"), True),
-        (("timeouts", "invokeSeconds"), 121),
-    ],
-)
-def test_rejects_invalid_nested_fields(path, bad):
-    value = connection_value()
-    nested = value
-    for key in path[:-1]:
-        nested = nested[key]
-    nested[path[-1]] = bad
-    with pytest.raises(ContainerInputError, match="^container-input-invalid$"):
-        connection(value)
+    assert connection(environment(no_auth=True, VOICECLAW_GATEWAY_URL=endpoint)).endpoint == endpoint
 
 
 @pytest.mark.parametrize(
@@ -202,137 +171,18 @@ def test_rejects_invalid_nested_fields(path, bad):
     ],
 )
 def test_rejects_unsafe_endpoint(url):
-    value = connection_value()
-    value["gateway"]["endpoint"] = url
     with pytest.raises(ContainerInputError):
-        connection(value)
+        connection(environment(VOICECLAW_GATEWAY_URL=url))
 
 
-@pytest.mark.parametrize("raw", [b"[]", b"{} {}", b"\xff", b'{"x":NaN}', b" " * 65537])
-def test_rejects_invalid_descriptor_bytes(raw):
+@pytest.mark.parametrize("raw", [b"[]", b"{} {}", b"\xff", b'{"x":NaN}', b'{"x":1,"x":1}', b" " * 65537])
+def test_strict_json_rejects_ambiguous_payloads(raw):
     with pytest.raises(ContainerInputError):
-        parse_connection(raw)
+        strict_json(raw, 65536)
 
 
-@pytest.mark.parametrize("field", list(connection_value()))
-def test_rejects_missing_or_unknown_fields(field):
-    value = connection_value()
-    del value[field]
-    with pytest.raises(ContainerInputError):
-        connection(value)
-    value = connection_value()
-    value["unexpected"] = "unknown"
-    with pytest.raises(ContainerInputError):
-        connection(value)
-
-
-def test_rejects_duplicate_keys_and_legacy():
-    raw = json.dumps(connection_value()).replace(
-        '"interfaceVersion": 1', '"interfaceVersion": 1, "interfaceVersion": 1'
-    )
-    with pytest.raises(ContainerInputError):
-        parse_connection(raw.encode())
-    value = connection_value()
-    value["target"]["unexpected"] = "secret-sentinel"
-    with pytest.raises(ContainerInputError) as error:
-        connection(value)
-    assert "secret-sentinel" not in str(error.value)
-    with pytest.raises(ContainerInputError):
-        connection({"integration": "voice", "agentRouteHost": "legacy.localhost"})
-
-
-def no_acl(*_args):
-    raise OSError(errno.ENODATA, "no ACL")
-
-
-@pytest.fixture
-def protected(tmp_path, monkeypatch):
-    monkeypatch.setattr(os, "getxattr", no_acl, raising=False)
-    root = tmp_path / "voiceclaw"
-    root.mkdir(mode=0o700)
-    leaf = root / "credentials" / "openshell"
-    leaf.parent.mkdir(mode=0o700)
-    leaf.write_bytes(b"short-valid-bearer")
-    leaf.chmod(0o600)
-    return root, leaf
-
-
-def read_test(root, leaf):
-    return read_protected(str(leaf), root=root, uid=os.geteuid(), gid=os.getegid(), maximum=65536)
-
-
-def test_protected_read_and_protocol_specific_validation(protected):
-    root, leaf = protected
-    assert read_test(root, leaf) == b"short-valid-bearer"
-    assert validate_bearer(b"ab") == "ab"
-    for value in (b"a\rb", b"a\nb", b"a b", b"\x00", b"", b"\xff"):
+def test_bearer_validation_is_bounded_and_header_safe():
+    assert validate_bearer(b"short-valid-bearer") == "short-valid-bearer"
+    for bad in (b"", b"a b", b"a\r\nx", b"a" * (16 * 1024 + 1)):
         with pytest.raises(ContainerInputError):
-            validate_bearer(value)
-
-
-@pytest.mark.parametrize(
-    "fault",
-    ["leaf_mode", "parent_mode", "symlink", "directory", "oversized", "owner", "acl", "unstable", "acl_unavailable"],
-)
-def test_protected_file_rejections(protected, monkeypatch, fault):
-    root, leaf = protected
-    if fault == "leaf_mode":
-        leaf.chmod(0o644)
-    elif fault == "parent_mode":
-        leaf.parent.chmod(0o755)
-    elif fault == "symlink":
-        leaf.unlink()
-        leaf.symlink_to(root / "other")
-    elif fault == "directory":
-        leaf.unlink()
-        leaf.mkdir()
-    elif fault == "oversized":
-        leaf.write_bytes(b"x" * 65537)
-    elif fault == "owner":
-        with pytest.raises(ContainerInputError):
-            read_protected(str(leaf), root=root, uid=os.geteuid() + 1, gid=os.getegid(), maximum=65536)
-        return
-    elif fault == "acl":
-        monkeypatch.setattr(os, "getxattr", lambda *_args: b"acl")
-    elif fault == "acl_unavailable":
-        monkeypatch.delattr(os, "getxattr")
-    else:
-        original = os.read
-
-        def unstable(fd, size):
-            result = original(fd, size)
-            leaf.write_bytes(b"changed-sentinel")
-            return result
-
-        monkeypatch.setattr(os, "read", unstable)
-    with pytest.raises(ContainerInputError):
-        read_test(root, leaf)
-
-
-def test_bound_short_reads_and_traversal(protected, monkeypatch):
-    root, leaf = protected
-    original = os.read
-    monkeypatch.setattr(os, "read", lambda fd, size: original(fd, min(3, size)))
-    assert read_test(root, leaf) == b"short-valid-bearer"
-    with pytest.raises(ContainerInputError):
-        read_test(root, str(leaf.parent) + "/../credentials/openshell")
-
-
-def test_unrelated_ancestor_content_changes_do_not_replace_protected_binding(protected):
-    root, leaf = protected
-    with protected_directory(root, root=root, uid=os.geteuid(), gid=os.getegid()):
-        unrelated = root.parent / "unrelated-sibling"
-        unrelated.write_text("fixture")
-    assert read_test(root, leaf) == b"short-valid-bearer"
-
-
-@pytest.mark.parametrize("mutable", [False, True])
-def test_ancestor_path_replacement_is_rejected_even_when_contents_may_change(protected, mutable):
-    root, _leaf = protected
-    original = root.parent / "original-mount"
-    with (
-        pytest.raises(ContainerInputError),
-        protected_directory(root, root=root, uid=os.geteuid(), gid=os.getegid(), mutable=mutable),
-    ):
-        root.rename(original)
-        root.mkdir(mode=0o700)
+            validate_bearer(bad)
