@@ -28,7 +28,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.nvidia.stt import NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
@@ -47,7 +47,6 @@ from examples.multilingual.multilingual_processor import (
 )
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -55,6 +54,7 @@ from examples.shared.pipeline_utils import (
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
+    latency_metric_group,
     register_session_start_handlers,
     with_realtime_observers,
 )
@@ -207,7 +207,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if fixed_session_language:
         asr_kwargs["settings"].language = fixed_session_language
-    stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
+    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={fixed_session_language}, punctuation={asr_automatic_punctuation}"
@@ -245,11 +245,12 @@ async def bot(runner_args: RunnerArguments) -> None:
     if raw_temperature in ("", None):
         raw_temperature = default_llm.get("temperature", "")
     llm_temperature = float(raw_temperature) if raw_temperature not in ("", None) else None
+    temperature = base_extra.get("temperature", llm_temperature)
 
     logger.info(
         f"LLM: model={model_id}, base_url={base_url}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
-        f"temperature={llm_temperature if llm_temperature is not None else '(default)'}, "
+        f"temperature={'(default)' if temperature is None else temperature}, "
         f"extra_params={base_extra or '(none)'}"
     )
 
@@ -363,6 +364,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     latency_observer = UserBotLatencyObserver()
+    latency_turn = 1
+    latest_latency: float | None = None
     summary_lock = asyncio.Lock()
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
@@ -391,6 +394,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_measured")
     async def on_latency(observer, latency):
+        nonlocal latest_latency
+        latest_latency = latency
         logger.info(f"User→Bot latency: {latency:.3f}s")
         await task.queue_frame(
             RTVIServerMessageFrame(
@@ -404,6 +409,12 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def on_breakdown(observer, breakdown):
+        nonlocal latency_turn, latest_latency
+        if latest_latency is not None:
+            group = latency_metric_group(latency_turn, latest_latency, breakdown)
+            await task.queue_frame(RTVIServerMessageFrame(data=group))
+            latency_turn += 1
+            latest_latency = None
         events = breakdown.turn_contribution_lines()
         await task.queue_frame(
             RTVIServerMessageFrame(

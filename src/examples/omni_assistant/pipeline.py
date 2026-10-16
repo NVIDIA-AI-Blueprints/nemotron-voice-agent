@@ -50,6 +50,7 @@ from examples.shared.pipeline_utils import (
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
+    latency_metric_group,
     register_session_start_handlers,
     with_realtime_observers,
 )
@@ -195,10 +196,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     latency_observer = UserBotLatencyObserver()
-    latency_turn_count = 1
-    latest_latency_turn_id = ""
-    latest_latency_turn_label = ""
-    latest_latency_ms: float | None = None
+    latency_turn = 1
+    latest_latency: float | None = None
 
     @latency_observer.event_handler("on_first_bot_speech_latency")
     async def on_first_bot_speech(observer, latency):
@@ -215,10 +214,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_measured")
     async def on_latency(observer, latency):
-        nonlocal latest_latency_ms, latest_latency_turn_id, latest_latency_turn_label
-        latest_latency_turn_id = f"turn-{latency_turn_count}"
-        latest_latency_turn_label = f"Turn {latency_turn_count}"
-        latest_latency_ms = round(latency * 1000, 3)
+        nonlocal latest_latency
+        latest_latency = latency
         logger.info(f"User->Bot latency: {latency:.3f}s")
         await task.queue_frame(
             RTVIServerMessageFrame(
@@ -232,59 +229,13 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def on_latency_breakdown(observer, breakdown):
-        nonlocal latency_turn_count, latest_latency_ms, latest_latency_turn_id, latest_latency_turn_label
-        if latest_latency_ms is None:
+        nonlocal latency_turn, latest_latency
+        if latest_latency is None:
             return
-        metrics = [
-            {
-                "key": "total_latency_ms",
-                "label": "Total Latency",
-                "value": latest_latency_ms,
-                "unit": "ms",
-            }
-        ]
-        if breakdown.user_turn_secs is not None:
-            metrics.append(
-                {
-                    "key": "user_turn_ms",
-                    "label": "User Turn",
-                    "value": round(breakdown.user_turn_secs * 1000, 3),
-                    "unit": "ms",
-                }
-            )
-        for index, ttfb in enumerate(breakdown.ttfb):
-            processor = ttfb.processor.replace("#", "_").replace(" ", "_")
-            metrics.append(
-                {
-                    "key": f"ttfb_{index}_{processor}",
-                    "label": f"{ttfb.processor} TTFB",
-                    "value": round(ttfb.duration_secs * 1000, 3),
-                    "unit": "ms",
-                }
-            )
-        if breakdown.text_aggregation is not None:
-            metrics.append(
-                {
-                    "key": "text_aggregation_ms",
-                    "label": f"{breakdown.text_aggregation.processor} Text Aggregation",
-                    "value": round(breakdown.text_aggregation.duration_secs * 1000, 3),
-                    "unit": "ms",
-                }
-            )
-        if not metrics:
-            return
-        await task.queue_frame(
-            RTVIServerMessageFrame(
-                data={
-                    "type": "metric-group",
-                    "group_id": latest_latency_turn_id,
-                    "group_label": latest_latency_turn_label,
-                    "category": "latency",
-                    "source": "UserBotLatencyObserver",
-                    "metrics": metrics,
-                }
-            )
-        )
+        group = latency_metric_group(latency_turn, latest_latency, breakdown)
+        await task.queue_frame(RTVIServerMessageFrame(data=group))
+        latency_turn += 1
+        latest_latency = None
         events = breakdown.turn_contribution_lines()
         await task.queue_frame(
             RTVIServerMessageFrame(
@@ -299,10 +250,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         )
         if events:
             logger.info(f"Latency breakdown: {' | '.join(events)}")
-        latency_turn_count += 1
-        latest_latency_ms = None
-        latest_latency_turn_id = ""
-        latest_latency_turn_label = ""
 
     task = PipelineWorker(
         pipeline,

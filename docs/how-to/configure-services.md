@@ -32,7 +32,7 @@ server:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
       server: "nemotron-asr-streaming-english:50052"
-      model: "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"
+      model: "cache-aware-parakeet-rnnt-en-US-asr-streaming-sortformer"
       nvcf:
         function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
         model: "nemotron-asr-streaming"
@@ -66,7 +66,7 @@ Each example lists the catalog keys it offers per slot under `services` in `exam
 ```yaml
 multilingual-assistant:
   services:
-    llm: [nemotron-lightning]
+    llm: [nemotron-lightning, nemotron-super]
     asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt]
     tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
 ```
@@ -77,7 +77,7 @@ The [Examples table](../../README.md#-examples) links to each example README. Ea
 
 ## Switching services in the UI
 
-The Services tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
+The Services tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Each self-hosted card shows its sidecar's status: **Starting…** while the container loads, **Ready** once its health check passes, and **Error** if the container stops after the app server has seen it, until it is ready again. Entries whose container the app server has not seen running are hidden. Until you click an entry, the first visible one is used, so a scaled-down Lightning does not stay the default. An entry you clicked stays selected while its card is visible, including when it shows **Starting…** or **Error**; click another entry to change it. Statuses refresh every five seconds, so a sidecar started later appears without a page refresh. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
 
 ## Editable settings
 
@@ -134,7 +134,7 @@ To configure a specific local model, check its Docker Compose file under [`docke
 ```yaml
 services:
   nemotron-asr-streaming-english:
-    image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.1
+    image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.4.0
     profiles:
       - generic-assistant/server
       - frontend-backend-agent/server
@@ -193,5 +193,7 @@ server:
 `supported_languages` is optional LLM capability metadata for the multilingual assistant. When present, the UI offers only session locales whose base language appears in the list. Omit it for a custom LLM when its language capabilities are unknown; this preserves unrestricted, backward-compatible behavior. An explicitly empty list permits no session locales.
 
 `health_path` is an optional self-hosted LLM field with the serving engine's readiness path, such as `/v1/health/ready` for NIM or `/health` for vLLM. Before a session starts, the backend checks it on the `base_url` host and port, and reports a stopped or loading LLM instead of connecting. Entries without it skip the check.
+
+ASR entries can set `speaker_diarization_supported: true` to show the **Diarization** control in the UI, and `speaker_diarization_max_speakers` to cap the speaker count. For details, refer to [Enable Speaker Labels](enable-speaker-labels.md).
 
 `streaming_url` is an optional self-hosted LLM field that points at a StreamingInput WebSocket. The Services tab shows a **Streaming Input** toggle for it when the example lists `streaming_input` under `capabilities`. For details, refer to [Configure LLM](configure-llm.md).

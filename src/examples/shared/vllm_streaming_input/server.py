@@ -13,9 +13,9 @@ request with vLLM's own template and appends only the new prompt tokens to the
 turn's engine request. ``input_text_buffer.commit`` then generates the answer
 through vLLM's chat completions stream, so reasoning and tool parsing are
 unchanged, and ends the request. A render that no longer extends what the
-engine holds starts a new request. After an answer that calls a tool, a new
-request prefills the conversation and that answer while the tool runs, so the
-follow-up turn appends only the tool result.
+engine holds starts a new request. Once an answer starts a tool call, a standby
+request prefills the conversation alongside it and then appends that answer, so
+the follow-up turn appends only the tool result.
 
 Usage is that of ``vllm serve``::
 
@@ -44,15 +44,38 @@ from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import RequestOutputKind
 
-from examples.shared.vllm_streaming_input.vllm_patch import apply_installed_patch
-
 logger = init_logger(f"vllm.{__name__}")
 router = APIRouter()
 
 
-def _prefill_params() -> SamplingParams:
-    """Prefill a chunk with one throwaway token, which vLLM drops when the next chunk arrives."""
-    return SamplingParams(max_tokens=1, temperature=0.0, ignore_eos=True, output_kind=RequestOutputKind.DELTA)
+def _prefill_params(request: ChatCompletionRequest) -> SamplingParams:
+    """Prefill a chunk with one throwaway token, which vLLM drops when the next chunk arrives.
+
+    vLLM detokenizes the whole engine request as its first chunk says, so the
+    chunk keeps the special tokens the tool parser asked the render to keep.
+    """
+    return SamplingParams(
+        max_tokens=1,
+        temperature=0.0,
+        ignore_eos=True,
+        output_kind=RequestOutputKind.DELTA,
+        skip_special_tokens=request.skip_special_tokens,
+        spaces_between_special_tokens=request.spaces_between_special_tokens,
+    )
+
+
+def _add_delta(message: dict[str, Any], delta: dict[str, Any]) -> None:
+    """Accumulate a chat completion chunk's content and tool calls into an assistant message."""
+    if delta.get("content"):
+        message["content"] = (message.get("content") or "") + delta["content"]
+    for call in delta.get("tool_calls") or []:
+        calls = message.setdefault("tool_calls", [])
+        while len(calls) <= call["index"]:
+            calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+        entry, function = calls[call["index"]], call.get("function") or {}
+        entry["id"] = call.get("id") or entry["id"]
+        entry["function"]["name"] += function.get("name") or ""
+        entry["function"]["arguments"] += function.get("arguments") or ""
 
 
 @dataclass
@@ -63,7 +86,95 @@ class _Answer:
     params: SamplingParams
     prompt_token_ids: list[int]
     outputs: asyncio.Queue[RequestOutput | None] = field(default_factory=asyncio.Queue)
-    token_ids: list[int] = field(default_factory=list)
+
+
+class _EngineRequest:
+    """One StreamingInput engine request, fed prompt chunks until an answer closes it.
+
+    The answer must be the last chunk: a resumable request whose input stream
+    stays open can keep decoding past EOS, so an answer is never resumed.
+    """
+
+    def __init__(self, engine) -> None:
+        """Bind the request to the shared engine."""
+        self.engine = engine
+        self.fed: list[int] = []
+        self._pending: list[int] = []
+        self._next_answer: _Answer | None = None
+        self._answer: _Answer | None = None
+        self._prefill_params: SamplingParams | None = None
+        self._wake = asyncio.Event()
+        self._chunk_done = asyncio.Event()
+        self._closed = False
+        self._request_id = f"stream-{uuid4()}"
+        self._task: asyncio.Task | None = None
+
+    def extends(self, token_ids: list[int]) -> bool:
+        """Return whether ``token_ids`` continue what this request holds and can still be appended."""
+        return not self._closed and token_ids[: len(self.fed)] == self.fed
+
+    def feed(self, token_ids: list[int], prefill_params: SamplingParams, answer: _Answer | None = None) -> None:
+        """Queue the tokens beyond ``fed``, which ``token_ids`` must extend, and the answer if any."""
+        delta = token_ids[len(self.fed) :]
+        if not delta and answer is None:
+            return
+        self.fed += delta
+        self._pending += delta
+        self._next_answer = answer
+        self._prefill_params = prefill_params
+        if self._task is None:
+            self._task = asyncio.create_task(self._run())
+        self._wake.set()
+
+    async def stop(self) -> None:
+        """Cancel the request and abort it on the engine."""
+        task, self._task = self._task, None
+        self._closed = True
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+            with contextlib.suppress(Exception):
+                await self.engine.abort(self._request_id)
+
+    async def _inputs(self):
+        """Yield one chunk at a time, merging appends that arrive while one runs."""
+        while True:
+            await self._wake.wait()
+            self._wake.clear()
+            token_ids, self._pending = self._pending, []
+            answer, self._next_answer = self._next_answer, None
+            if not token_ids and answer is None:
+                continue
+            self._answer = answer
+            self._chunk_done.clear()
+            yield StreamingInput(
+                prompt=TokensPrompt(prompt_token_ids=token_ids),
+                sampling_params=answer.params if answer else self._prefill_params,
+            )
+            if answer is not None:
+                self._closed = True
+                return
+            await self._chunk_done.wait()
+
+    async def _run(self) -> None:
+        try:
+            async for output in self.engine.generate(self._inputs(), self._prefill_params, self._request_id):
+                answer = self._answer
+                if answer is None:
+                    self._chunk_done.set()
+                    continue
+                answer.outputs.put_nowait(output)
+                if output.outputs[0].finish_reason is not None:
+                    self._end_answer()
+        finally:
+            self._end_answer()
+
+    def _end_answer(self) -> None:
+        answer, self._answer = self._answer, None
+        if answer is not None:
+            answer.outputs.put_nowait(None)
+        self._chunk_done.set()
 
 
 class StreamingSession:
@@ -76,15 +187,9 @@ class StreamingSession:
         self.chat = websocket.app.state.openai_serving_chat
         self.request: dict[str, Any] = {}
         self.text = ""
-        self._fed: list[int] = []
-        self._pending: list[int] = []
-        self._next_answer: _Answer | None = None
-        self._answer: _Answer | None = None
-        self._wake = asyncio.Event()
-        self._chunk_done = asyncio.Event()
-        self._input_closed = False
-        self._request_id = ""
-        self._engine_task: asyncio.Task | None = None
+        self._prefill_params: SamplingParams | None = None
+        self._engine: _EngineRequest | None = None
+        self._standby: _EngineRequest | None = None
         self._response_task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()
 
@@ -105,6 +210,7 @@ class StreamingSession:
         finally:
             await self._cancel_response()
             await self._stop_engine()
+            await self._stop_standby()
 
     async def _handle(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
@@ -146,6 +252,7 @@ class StreamingSession:
         result = await self.chat.render_chat_request(request)
         if isinstance(result, ErrorResponse):
             raise ValueError(result.error.message)
+        self._prefill_params = _prefill_params(request)
         conversation, engine_inputs = result
         return conversation, list(self.chat._extract_prompt_components(engine_inputs[0]).token_ids or [])
 
@@ -173,18 +280,11 @@ class StreamingSession:
 
         A prompt that no longer extends the engine's starts a new request.
         """
-        if self._engine_task is not None and (self._input_closed or token_ids[: len(self._fed)] != self._fed):
+        if self._engine is not None and not self._engine.extends(token_ids):
             await self._stop_engine()
-        delta = token_ids[len(self._fed) :]
-        if not delta and answer is None:
-            return
-        self._fed += delta
-        self._pending += delta
-        self._next_answer = answer
-        if self._engine_task is None:
-            self._input_closed = False
-            self._engine_task = asyncio.create_task(self._run_engine())
-        self._wake.set()
+        if self._engine is None:
+            self._engine = _EngineRequest(self.engine)
+        self._engine.feed(token_ids, self._prefill_params, answer)
 
     def _answer_params(self, request: ChatCompletionRequest, prompt_len: int) -> SamplingParams:
         max_tokens = get_max_tokens(
@@ -197,57 +297,33 @@ class StreamingSession:
         )
         return request.to_sampling_params(max_tokens, self.chat.default_sampling_params)
 
-    async def _inputs(self):
-        """Yield one chunk at a time, merging appends that arrive while one runs."""
-        while True:
-            await self._wake.wait()
-            self._wake.clear()
-            token_ids, self._pending = self._pending, []
-            answer, self._next_answer = self._next_answer, None
-            if not token_ids and answer is None:
-                continue
-            self._answer = answer
-            self._chunk_done.clear()
-            yield StreamingInput(
-                prompt=TokensPrompt(prompt_token_ids=token_ids),
-                sampling_params=answer.params if answer else _prefill_params(),
-            )
-            if answer is not None:
-                self._input_closed = True
-                return
-            await self._chunk_done.wait()
-
-    async def _run_engine(self) -> None:
-        self._request_id = f"stream-{uuid4()}"
-        try:
-            async for output in self.engine.generate(self._inputs(), _prefill_params(), self._request_id):
-                answer = self._answer
-                if answer is None:
-                    self._chunk_done.set()
-                    continue
-                answer.token_ids += output.outputs[0].token_ids
-                answer.outputs.put_nowait(output)
-                if output.outputs[0].finish_reason is not None:
-                    self._end_answer()
-        finally:
-            self._end_answer()
-
-    def _end_answer(self) -> None:
-        answer, self._answer = self._answer, None
-        if answer is not None:
-            answer.outputs.put_nowait(None)
-        self._chunk_done.set()
-
     async def _stop_engine(self) -> None:
-        task, self._engine_task = self._engine_task, None
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-            with contextlib.suppress(Exception):
-                await self.engine.abort(self._request_id)
-        self._fed, self._pending, self._next_answer = [], [], None
-        self._wake.clear()
+        engine, self._engine = self._engine, None
+        if engine is not None:
+            await engine.stop()
+
+    def _start_standby(self, answer: _Answer) -> None:
+        """Prefill the answer's prompt on a second request while the answer still streams."""
+        if self._standby is None:
+            self._standby = _EngineRequest(self.engine)
+            self._standby.feed(answer.prompt_token_ids, self._prefill_params)
+
+    async def _render_with_answer(self, answer: _Answer, message: dict[str, Any]) -> list[int]:
+        """Render the conversation ending with the answer as the client sends it back.
+
+        The template drops tokens the model generates around a tool call, such
+        as a stray ``</think>`` after the spoken text, so the generated tokens
+        do not prefix the follow-up turn's prompt.
+        """
+        messages = [*answer.request.messages, message]
+        request = answer.request.model_copy(update={"messages": messages, "add_generation_prompt": False})
+        _, token_ids = await self._render(request)
+        return token_ids
+
+    async def _stop_standby(self) -> None:
+        standby, self._standby = self._standby, None
+        if standby is not None:
+            await standby.stop()
 
     async def _respond(self, answer: _Answer) -> None:
         """Stream the answer through vLLM's chat completions output path."""
@@ -268,19 +344,36 @@ class StreamingSession:
             chat_template_kwargs=self.chat._effective_chat_template_kwargs(answer.request),
         )
         called_tool = False
+        message: dict[str, Any] = {"role": "assistant", "content": None}
         try:
             async for event in stream:
                 data = event.removeprefix("data: ").strip()
                 if data and data != "[DONE]":
                     chunk = json.loads(data)
-                    called_tool |= any(c.get("finish_reason") == "tool_calls" for c in chunk.get("choices", []))
+                    choices = chunk.get("choices", [])
+                    for choice in choices:
+                        _add_delta(message, choice.get("delta") or {})
+                    if message.get("tool_calls"):
+                        self._start_standby(answer)
+                    called_tool |= any(c.get("finish_reason") == "tool_calls" for c in choices)
                     await self._send("response.delta", response_id=answer.response_id, chunk=chunk)
             if called_tool:
-                await self._feed(answer.prompt_token_ids + answer.token_ids[:-1])
+                self._start_standby(answer)
+                standby, self._standby = self._standby, None
+                token_ids = await self._render_with_answer(answer, message)
+                if not standby.extends(token_ids):
+                    await standby.stop()
+                    standby = _EngineRequest(self.engine)
+                standby.feed(token_ids, self._prefill_params)
+                finished, self._engine = self._engine, standby
+                if finished is not None:
+                    await finished.stop()
             await self._send("response.done", response_id=answer.response_id)
         except Exception as e:
             logger.exception("Streaming response failed")
             await self._send("error", error=str(e), code="processing_error")
+        finally:
+            await self._stop_standby()
 
     async def _cancel_response(self) -> None:
         """Stop an answer still streaming, along with the engine request generating it."""
@@ -314,7 +407,6 @@ def _build_app_with_streaming_session(build_app):
 
 def main() -> None:
     """Run ``vllm serve`` with the streaming session route mounted."""
-    logger.info(apply_installed_patch())
     entry.build_app = _build_app_with_streaming_session(entry.build_app)
     sys.argv = ["vllm", "serve", *sys.argv[1:]]
     vllm_main()

@@ -23,7 +23,7 @@ Every app service sets `SERVICE_RECIPE`. `server` and `single-gpu` pick that sec
 | `omni-assistant-subagents/single-gpu` | `omni-assistant-subagents-single-gpu` | `nvidia-llm-vllm-omni`, `nemo-speech-tts` (TTS only). **Not supported on Jetson Thor.** |
 | `frontend-backend-agent` | `frontend-backend-agent` | `booking-server` |
 | `frontend-backend-agent/server` | `frontend-backend-agent-server` | `booking-server`, `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
-| `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning`, `nemo-speech` (ASR + TTS) |
+| `frontend-backend-agent/single-gpu` | `frontend-backend-agent-single-gpu` | `booking-server`, `nvidia-llm-vllm-lightning-frontend-backend`, `nemo-speech` (ASR + TTS) |
 
 `NVIDIA_API_KEY` is required for cloud-only, `*/server`, and `generic-assistant/server-perf`. `HF_TOKEN` is required for `*/single-gpu`. NVIDIA Cloud entries appear only when `NVIDIA_API_KEY` is set. Host-native `uv run` leaves `SERVICE_RECIPE` unset and picks the section whose sidecars are reachable.
 

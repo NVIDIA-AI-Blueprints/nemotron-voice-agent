@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
+from urllib.parse import urlparse
 
 import examples_registry
 import utils
@@ -76,6 +77,7 @@ _CATALOG = dedent(
           model_id: catalog-model
           base_url: http://nvidia-llm-vllm:8000/v1
           streaming_url: ws://nvidia-llm-vllm:8000/v1/streaming-session
+          health_path: /health
       asr:
         parakeet:
           name: NeMo Speech ASR
@@ -453,6 +455,13 @@ class StreamingInputTests(_CatalogTestCase):
         self.assertEqual(self._base_url(["streaming_input"], llm_streaming="false"), "http://nvidia-llm-vllm:8000/v1")
         self.assertEqual(self._base_url(["streaming_input"]), "http://nvidia-llm-vllm:8000/v1")
 
+    def test_streaming_session_still_checks_the_llm_health_endpoint(self) -> None:
+        import server
+
+        base_url = self._base_url(["streaming_input"], llm_streaming="true")
+
+        self.assertEqual(server._llm_health_url(base_url), "http://nvidia-llm-vllm:8000/health")
+
     def test_host_runtime_rewrites_the_streaming_url(self) -> None:
         with patch.dict(os.environ, {"APP_RUNTIME": ""}):
             base_url = self._base_url(["streaming_input"], llm_streaming="true")
@@ -677,6 +686,22 @@ class RepositoryCatalogTests(unittest.TestCase):
                     catalog[recipe]["llm"]["nemotron-lightning"]["supported_languages"], lightning_languages
                 )
 
+    def test_super_is_an_optional_llm_on_every_self_hosted_recipe(self) -> None:
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker" / "docker-compose.nemotron35-super-vl.yaml")
+        for recipe, service, profile in (
+            ("server", "nemotron-35-super-vl", "nemotron-35-super-vl"),
+            ("single-gpu", "nemotron-35-super-vl-vllm", "nemotron-35-super-vl-single-gpu"),
+        ):
+            with self.subTest(recipe=recipe):
+                entry = catalog[recipe]["llm"]["nemotron-super"]
+                self.assertEqual(urlparse(entry["base_url"]).hostname, service)
+                self.assertEqual(compose["services"][service]["profiles"], [profile])
+        for key in ("generic-assistant", "multilingual-assistant"):
+            with self.subTest(example=key):
+                llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]
+                self.assertEqual(llm_keys[:2], ["nemotron-lightning", "nemotron-super"])
+
     def test_lightning_budget_key_follows_the_serving_engine(self) -> None:
         example = examples_registry.EXAMPLES["frontend-backend-agent"]
         set_service_context(example)
@@ -687,6 +712,13 @@ class RepositoryCatalogTests(unittest.TestCase):
                 self.assertEqual(thinker["extra_body"][budget_key], 1024)
                 talker = json.loads(load_service_entry("llm", "")["extra_params"])
                 self.assertEqual(talker["extra_body"]["chat_template_kwargs"], {"enable_thinking": False})
+
+    def test_lightning_is_the_generic_default_llm(self) -> None:
+        example = examples_registry.EXAMPLES["generic-assistant"]
+        set_service_context(example)
+        for recipe in ("server", "single-gpu"):
+            with self.subTest(recipe=recipe), patch.dict(os.environ, {"SERVICE_RECIPE": recipe, "NVIDIA_API_KEY": ""}):
+                self.assertEqual(load_service_entry("llm", "")["model_id"], "nvidia/nemotron-3.5-lightning-30b-a3b")
 
     def test_multilingual_agent_prompt_keys_are_registry_declared(self) -> None:
         unlocked = examples_registry.Selection(
@@ -718,7 +750,8 @@ class HostRuntimeRewriteTests(unittest.TestCase):
             ("base_url", "http://nvidia-llm-omni:8000/v1"): "http://localhost:18002/v1",
             ("base_url", "http://nvidia-llm-vllm-omni:8002/v1"): "http://localhost:8002/v1",
             ("base_url", "ws://nvidia-llm-vllm:8000/v1/streaming-session"): "ws://localhost:18000/v1/streaming-session",
-            ("base_url", "http://nemotron-3-super:8000/v1"): "http://localhost:18001/v1",
+            ("base_url", "http://nemotron-35-super-vl:8000/v1"): "http://localhost:18001/v1",
+            ("base_url", "http://nemotron-35-super-vl-vllm:8000/v1"): "http://localhost:18001/v1",
             ("server", "magpie-multilingual-tts-service:50051"): "localhost:50151",
             ("server", "parakeet-ctc-asr:50052"): "localhost:50352",
             ("server", "nemo-speech:50051"): "localhost:50051",
@@ -753,6 +786,22 @@ class ComposeRecipeTests(unittest.TestCase):
             environment["FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE"],
             "${FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE:-true}",
         )
+
+    def test_streaming_urls_point_at_services_running_the_streaming_server(self) -> None:
+        services_by_host: dict[str, dict] = {}
+        for path in (utils.PROJECT_ROOT / "docker").glob("docker-compose.*.yaml"):
+            for name, service in (utils.load_yaml_file(path).get("services") or {}).items():
+                aliases = ((service.get("networks") or {}).get("default") or {}).get("aliases") or []
+                for host in (name, *aliases):
+                    services_by_host[host] = service
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        for recipe, categories in catalog.items():
+            for key, entry in categories.get("llm", {}).items():
+                if "streaming_url" not in entry:
+                    continue
+                with self.subTest(recipe=recipe, key=key):
+                    service = services_by_host[urlparse(entry["streaming_url"]).hostname]
+                    self.assertIn("examples.shared.vllm_streaming_input.server", "".join(service["command"]))
 
 
 if __name__ == "__main__":

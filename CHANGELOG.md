@@ -6,28 +6,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.3.0] - TBD
 
-This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-independent Smart Turn handling for audio-only user turns, and adds streaming-input prefill for the Generic Assistant on single-GPU hosts.
+This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-independent Smart Turn handling for audio-only user turns, adds streaming-input prefill and speaker labels to the Generic Assistant, replaces Nemotron 3 Super with Nemotron 3.5 Super VL on server and single-GPU hosts, and upgrades the single-GPU Lightning vLLM image to 0.31.0.
 
 ### Added
 
 - **Streaming-input prefill** for the Generic Assistant. The single-GPU Lightning vLLM sidecar also serves a text StreamingInput WebSocket at `/v1/streaming-session`, and the **Streaming Input** toggle on the Lightning service card streams each ASR update into it, so the prompt is prefilled while the user is still speaking. `NvidiaStreamingLLMService` and `StreamingLLMUserAggregator` are drop-in replacements for `NvidiaLLMService` and `LLMUserAggregator`.
 - One root `services.yaml` for every example, selected by `SERVICE_RECIPE`, and editable LLM parameters such as reasoning and temperature in the Services tab.
 - Services tab controls for TTS and ASR: **Synthesis Mode** on Magpie TTS entries and **Punctuation** on the single-GPU NeMo-Speech.cpp ASR entries.
+- **Nemotron 3.5 Super VL on single-GPU hosts.** The `nemotron-35-super-vl-single-gpu` profile serves it with vLLM on GPU `0`, with MTP speculative decoding, the language model only, and Streaming Input. Scale Lightning to zero with `--scale nvidia-llm-vllm-lightning=0`.
+- Speaker labels for the Generic Assistant. NVIDIA streaming ASR can tag who is talking, and the conversation panel shows those labels while diarization is on.
+- Self-hosted service cards in the Services tab show **Starting…**, **Ready**, or **Error**, and they refresh every five seconds. Entries whose container has not been seen running are hidden, so a scaled-down Lightning no longer stays the default. Connecting to a stopped service reports that it is not running instead of still starting.
+- Token `usage` and per-response NVIDIA timing in the Realtime gateway's `response.done` event. Timing is in `response.metadata.nvidia_metrics`.
+- OpenAI Realtime clients for the Full-Duplex-Bench (`inference_realtime.py`) and `benchmarking_tools/scaling-perf` benchmarks. The Full-Duplex-Bench RTVI client is now `inference_rtvi.py`.
 
 ### Changed
 
-- Upgraded Pipecat to version 1.12.0.
+- Upgraded Pipecat from 1.7.0 to 1.12.0.
+- NVIDIA streaming ASR now finalizes after 320 ms of trailing silence in the Generic, Multilingual, and Frontend/Backend examples.
+- Replaced Nemotron 3 Super with **Nemotron 3.5 Super VL** (`nemotron-super`) on the server recipe. The Multilingual Assistant now lists it after Lightning, as the Generic Assistant does. Lightning stays the default.
+- Upgraded the single-GPU Lightning vLLM image from `vllm/vllm-openai:v0.27.1` to `v0.31.0`.
+- Updated Nemotron ASR Streaming NIM to version 1.4.0.
+- The `*/single-gpu` speech services run NeMo-Speech.cpp 0.2.0 with Magpie TTS Multilingual v2607, up from 0.1.0 with v2602.
+- The single-GPU Frontend/Backend Agent speaks validated Thinker responses directly instead of having the Talker rephrase them. Set `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE`, which is on in the single-GPU Compose profile.
 - Replaced the custom Omni audio-only Smart Turn stop strategy with Pipecat's built-in `TurnAnalyzerUserTurnStopStrategy`, configured with `wait_for_transcript=False`.
+- With streaming prefill, vLLM on a single GPU can't use DSpark due to regressions, so DGX Spark serves Nemotron 3.5 Lightning without the DSpark draft model.
 - UI selections (example, transport, services, prompt) no longer persist in browser localStorage. They survive disconnect and reconnect, and a page refresh resets them to the server defaults. Custom services and prompts stay saved.
 
 ### Fixed
 
-- Host-native runs reach Nemotron 3 Super on its published port `18001`.
+- Host-native runs reach Nemotron 3.5 Super VL on its published port `18001`.
 - The Frontend/Backend Agent Thinker honors the Max Tokens setting.
+- `GET /health` returns the server status when the client UI is built, instead of the UI.
+- Session configs with a non-string service selection ID are rejected with a clear error.
+- The Generic Assistant welcome message follows the selected prompt's persona.
+- The Metrics Board shows per-turn latency summaries, and exports them to Excel, for the Generic and Multilingual Assistants too.
+- WebSocket sessions no longer log "Unknown frame kind" in the browser console on each interruption.
+- Custom services can't be edited or removed during a session, the same as prompts.
+- The idle screen no longer suggests flower-shop questions for every example.
 
 ### Removed
 
-- `LOCAL_SERVICES_ENABLED`, `SERVICES_CLOUD_PATH`, `SERVICES_LOCAL_PATH`, and the `*-reasoning` catalog entries. Use `SERVICE_RECIPE` and the Reasoning setting instead.
+- `SERVICES_CLOUD_PATH`, `SERVICES_LOCAL_PATH`, and the `*-reasoning` catalog entries. Use `SERVICE_RECIPE` and the Reasoning setting instead.
 - The per-example `services.cloud.yaml` and `services.local.yaml` files, and the `slots` field and `defaults.llm`, `defaults.asr`, and `defaults.tts` keys in `examples_registry.yaml`. List each example's services under `services` instead. The first available key is the default.
 - The `nemotron-voice-agent-configure-pipeline` skill. `nemotron-voice-agent-deploy` now covers configuration changes.
 
