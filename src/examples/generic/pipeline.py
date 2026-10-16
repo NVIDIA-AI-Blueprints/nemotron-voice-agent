@@ -3,9 +3,9 @@
 
 """Generic cascaded pipeline: NVIDIA STT -> Nemotron LLM -> NVIDIA TTS with function calling.
 
-Uses pipecat's built-in NVIDIA classes, with a local NvidiaSTTService subclass
-that flushes submitted ASR audio via ``force_eou`` when local VAD reports a stop:
-  - NvidiaForceEouSTTService  (Nemotron Streaming ASR)
+Uses pipecat's built-in NVIDIA classes, including the standard continuous STT
+service with its default ``stop_history=320`` and no injected force-EOU audio:
+  - NvidiaSTTService  (Nemotron Streaming ASR)
   - NvidiaLLMService  (NIM-compatible LLM)
   - NvidiaTTSService  (Magpie TTS)
 
@@ -30,7 +30,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
-from pipecat.services.nvidia.stt import NvidiaSTTSettings
+from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.workers.runner import WorkerRunner
 
@@ -39,12 +39,11 @@ from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.evaluation_trace import (
-    EvaluationNvidiaForceEouSTTService,
+    EvaluationNvidiaSTTService,
     EvaluationNvidiaTTSService,
     create_evaluation_trace,
 )
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
@@ -109,8 +108,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if asr_language_code:
         asr_kwargs["settings"].language = asr_language_code
-    stt_service = EvaluationNvidiaForceEouSTTService if evaluation_trace else NvidiaForceEouSTTService
-    stt = stt_service(**asr_kwargs, stop_history=400, **evaluation_kwargs)
+    stt_service = EvaluationNvidiaSTTService if evaluation_trace else NvidiaSTTService
+    stt = stt_service(**asr_kwargs, **evaluation_kwargs)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"

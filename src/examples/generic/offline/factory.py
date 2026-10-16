@@ -31,7 +31,13 @@ from utils import (
 
 from .detection import create_generic_detector
 from .engine import OfflineSessionEngine
-from .providers import OpenAITextStream, StreamingResponder, create_riva_recognizer, create_riva_synthesis
+from .providers import (
+    STANDARD_STT_STOP_HISTORY,
+    OpenAITextStream,
+    StreamingResponder,
+    create_riva_recognizer,
+    create_riva_synthesis,
+)
 
 
 class GenericOfflineRuntime:
@@ -76,6 +82,7 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "asr_server": config.get("asr_server") or asr.get("server", "grpc.nvcf.nvidia.com:443"),
         "asr_function_id": config.get("asr_function_id") or asr.get("function_id", ""),
         "asr_model": config.get("asr_model") or asr.get("model", ""),
+        "asr_stop_history": STANDARD_STT_STOP_HISTORY,
         "asr_language_code": config.get("asr_language_code") or asr.get("language_code", "en-US"),
         "asr_automatic_punctuation": str(
             config.get("asr_automatic_punctuation", asr.get("automatic_punctuation", "true"))
@@ -188,7 +195,7 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "asr_language_code": settings["asr_language_code"],
         "asr_model": settings["asr_model"],
         "asr_automatic_punctuation": settings["asr_automatic_punctuation"],
-        "asr_stop_history_ms": 400,
+        "asr_stop_history_ms": settings["asr_stop_history"],
         "asr_force_eou": False,
         "pronunciation_dictionary_sha256": hashlib.sha256(
             json.dumps(settings["custom_dictionary"] or {}, sort_keys=True).encode()
