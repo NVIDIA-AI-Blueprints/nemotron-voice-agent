@@ -17,23 +17,26 @@ The agent serves two kinds of sessions:
 The example has one Docker Compose recipe, `frontend-delegation-hermes-agent/single-gpu`. It runs the following containers:
 
 - `frontend-delegation-hermes-agent-single-gpu`: the voice side in the shared app image, `nemotron-voice-agent:latest`, on the app port.
-- `fdh-hermes`: the FDH gateway and its Hermes workers in the Hermes image, `nemotron-voice-agent-fdh:local`, with Python 3.14. The gateway listens on port `8790` of the Compose network and is not published to the host.
+- `fdh-hermes`: the controller of the Hermes backend. By default, it runs the FDH gateway and its Hermes workers in an NVIDIA OpenShell sandbox. The sandbox runs the Hermes image, `nemotron-voice-agent-fdh:local`, with Python 3.14.
+- `hermes-openshell-gateway`: the OpenShell gateway. It creates the sandbox and routes the voice side's backend connection to it.
+- `hermes-openshell-init`: a one-time service. It creates the OpenShell gateway's signing keys and exits.
 - `nemo-speech`: automatic speech recognition (ASR) and text-to-speech (TTS) with NeMo-Speech.cpp on one local GPU.
 - `fdh-hermes-image`: a build-only service. It builds the Hermes image and exits.
 
-The `FDH_PROFILE` setting decides what a deployment serves. Refer to [Choose a Profile](#choose-a-profile).
+The `FDH_PROFILE` setting decides what a deployment serves. Refer to [Choose a Profile](#choose-a-profile). The Hermes backend runs in OpenShell by default, or in a plain container with an overlay. Refer to [Choose the Hermes Runtime](#choose-the-hermes-runtime).
 
-> **Note:** The commands in this guide are checked against the repository's Compose files, `docker/Dockerfile.fdh`, `docker/fdh/gateway.sh`, `.env.example`, and source code. They were not run on GPU hardware for this revision of the guide.
+> **Note:** The commands in this guide are checked against the repository's Compose files, `docker/Dockerfile.fdh`, `docker/fdh/gateway.sh`, `docker/fdh/openshell/`, `.env.example`, and source code. They were not run on GPU hardware for this revision of the guide. The OpenShell runtime has not yet been validated on a live host. If it does not start on your host, use the plain runtime.
 
 ## Instructions for AI Agents
 
 If you are an AI agent that deploys this example for a user, follow these rules:
 
 1. If the user's request does not say which profile to deploy, ask: "Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?" Wait for the answer. Do not choose one silently, even though Compose uses `default` when no overlay is passed.
-2. For `default`, use the plain recipe command. For `eval`, add the `docker/docker-compose.fdh-eval.yaml` overlay to every Compose command. Refer to [Choose a Profile](#choose-a-profile).
+2. For `default`, use the recipe command without overlays. For `eval`, add the `docker/docker-compose.fdh-eval.yaml` overlay to every Compose command. Refer to [Choose a Profile](#choose-a-profile).
 3. For Tau or any other benchmark, always deploy `eval`. A `default` deployment pairs Realtime sessions with the wrong gateway configuration.
-4. After startup and the first session, read the profile and the configuration hash from the app log, and the gateway configuration and source hash from the `fdh-hermes` log. Report them to the user. Refer to [Verify the Deployment](#verify-the-deployment).
-5. Check only that `NVIDIA_API_KEY` and `REALTIME_API_KEY` are present in `.env`. Do not print their values.
+4. Use the default OpenShell runtime. Add the plain runtime overlay, `docker/docker-compose.fdh-hermes-plain.yaml`, only when the user asks for it or the host cannot run OpenShell. Pass the Compose files in this order: `docker-compose.yml`, then the plain overlay, then the eval overlay. Refer to [Choose the Hermes Runtime](#choose-the-hermes-runtime).
+5. After startup and the first session, read the profile and the configuration hash from the app log, and the gateway configuration and source hash from the Hermes logs. Report them to the user. Refer to [Verify the Deployment](#verify-the-deployment).
+6. Check only that `NVIDIA_API_KEY` and `REALTIME_API_KEY` are present in `.env`. Do not print their values.
 
 Do not overwrite other keys in an existing `.env`. For smoke tests, benchmark checks, and logs, load the deploy skill at `.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md`.
 
@@ -41,7 +44,7 @@ Do not overwrite other keys in an existing `.env`. For smoke tests, benchmark ch
 
 The deployment needs the following:
 
-- Docker Compose v2.20 or newer.
+- Docker Engine 28 or newer and Docker Compose 2.24.4 or newer. The plain runtime overlay uses the Compose `!override` and `!reset` tags, which need Compose 2.24.4.
 - An x86_64 Linux host with one NVIDIA GPU for the `nemo-speech` container (GPU 0). The LLMs do not use the local GPU. The Hermes image's lock, `docker/fdh/requirements.txt`, is resolved for x86_64 Linux, so DGX Spark and Jetson Thor are not supported.
 - NVIDIA driver 580.x or newer and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 - Python 3 and either the Hugging Face `hf` CLI or `uvx` for the speech model download script.
@@ -50,13 +53,22 @@ The deployment needs the following:
 - Free host ports `7860` for the app, or another port set with `PIPELINE_APP_PORT`, and `50051` for `nemo-speech`.
 - A clone of this repository. Run every command in this guide from the repository root.
 
+The default OpenShell runtime also needs the following on the host:
+
+- Linux kernel 6.2 or newer with Landlock turned on. The sandbox refuses to run without Landlock. Check the kernel with `uname -r`.
+- A free host port `127.0.0.1:8080` for the OpenShell gateway.
+- No other OpenShell gateway on the host. The port `8080` and the directory `/var/lib/openshell` are shared by the whole host, so only one OpenShell gateway can run per host. This includes a second checkout of this repository.
+- Write access for Docker to `/var/lib/openshell`. Docker creates the directory as `root` on the first start. It holds the gateway's signing keys and database.
+
+The plain runtime does not need these. Refer to [Choose the Hermes Runtime](#choose-the-hermes-runtime).
+
 ## Credentials
 
 The recipe uses the `.env` keys in the following table.
 
 | `.env` key | Required | Purpose |
 | --- | --- | --- |
-| `NVIDIA_API_KEY` | Yes | An NVIDIA Inference Hub key (`sk-...`). Both LLMs send it. It is the only `.env` key that reaches the `fdh-hermes` container, and the gateway refuses to start without it. |
+| `NVIDIA_API_KEY` | Yes | An NVIDIA Inference Hub key (`sk-...`). Both LLMs send it. It is the only `.env` key that reaches the Hermes side, and `fdh-hermes` refuses to start without it. With OpenShell, the key goes to the OpenShell provider, never into the sandbox. |
 | `HF_TOKEN` | Yes | Hugging Face token. The download script reads it to fetch the NeMo-Speech.cpp model weights. |
 | `REALTIME_API_KEY` | Recommended | The Bearer credential that OpenAI Realtime clients send. Leave it unset only for unauthenticated local development. |
 | `HERMES_AGENT_DIR` | No | Path of the Hermes checkout for the image build. The default is `../hermes-agent`. Refer to [Get Hermes](#get-hermes). |
@@ -79,6 +91,50 @@ OpenAI Realtime sessions always use the `eval` delegation profile and Pipecat se
 The `eval` profile refuses browser UI sessions, so they cannot take resources from an evaluation run. The UI shows no error: the session ends, and the app log shows the error.
 
 `docker-compose.yml` sets every FDH variable of the voice service as a literal value, so `.env` cannot change an evaluation run. Setting `FDH_PROFILE` or another `FDH_*` key in `.env` has no effect on the Compose recipe. Only the eval overlay changes these values. `FDH_PROFILE` accepts only `default` and `eval`. Any other value fails each session with an error that names both.
+
+## Choose the Hermes Runtime
+
+The Hermes backend, that is the FDH gateway and its Hermes workers, can run in one of two runtimes. Both run the same image, `nemotron-voice-agent-fdh:local`, with the same `docker/fdh/gateway.sh` start script and the same `docker/fdh/gateway.env` settings. Agent behavior, turn taking, and evaluation behavior are the same in both. The following table compares them.
+
+| Runtime | When to use it | Backend URL of the voice side | Extra Compose file |
+| --- | --- | --- | --- |
+| OpenShell (default) | Normal use and evaluation runs | `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` | None |
+| Plain | A/B checks against OpenShell, debugging, and hosts that cannot run OpenShell | `ws://fdh-hermes:8790/v1/backend` | `docker/docker-compose.fdh-hermes-plain.yaml` |
+
+In the OpenShell runtime, the following rules apply to the sandbox:
+
+- The FDH gateway and its workers run as user ID 1500. The code and packages under `/app` are read-only. Only `/app/logs`, `/app/.cache`, `/tmp`, and `/sandbox` are writable. The rules are in `docker/fdh/openshell/policy.yaml`.
+- The sandbox can call only `inference-api.nvidia.com`, plus any host that you add to `policy.yaml`.
+- The sandbox never sees the real `NVIDIA_API_KEY`. Its `NVIDIA_API_KEY` holds a placeholder. OpenShell adds the real key to requests to `inference-api.nvidia.com` only. The provider profile is `docker/fdh/openshell/nvidia-fdh.yaml`.
+- The OpenShell release is pinned in `docker/fdh/openshell/VERSION`. Every OpenShell image and the OpenShell command-line interface (CLI) use that release.
+
+The OpenShell gateway has the following security limits. Keep them in mind on a shared host:
+
+- It mounts the Docker socket, which gives it the same power as `root` on the host.
+- It runs without TLS and without user authentication. Compose publishes it only on the host loopback address, `127.0.0.1:8080`.
+
+Always pass the Compose files in this order: `docker-compose.yml`, then the plain overlay if you use it, then the eval overlay if you use it. The following commands start each combination:
+
+```bash
+# OpenShell runtime (default)
+docker compose -f docker-compose.yml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+
+# OpenShell runtime, eval profile
+docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+
+# Plain runtime
+docker compose -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+
+# Plain runtime, eval profile
+docker compose -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml \
+  -f docker/docker-compose.fdh-eval.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+```
+
+Pass the same files in every later Compose command for the deployment, such as `ps`, `logs`, `exec`, and `down`. The plain overlay does not start `hermes-openshell-init` or `hermes-openshell-gateway`. In the plain runtime, `fdh-hermes` is the FDH gateway container itself, on port `8790` of the Compose network, and is not published to the host.
 
 ## Configure the Environment
 
@@ -104,7 +160,7 @@ The following optional keys change the deployment. Leave them unset to keep the 
 | `PIPELINE_TLS` | `true` | `true` serves HTTPS and `wss://` with a self-signed certificate. `false` serves plain HTTP and `ws://`. Browsers need HTTPS for the microphone, except on `localhost`. The eval overlay sets `false`. |
 | `NEMO_SPEECH_MODEL_LOC` | `models/nemo-speech` | Host directory that holds the speech model weights. |
 | `ENABLE_WELCOME_MESSAGE` | Unset (greets) | `false` turns off the browser UI greeting. Realtime sessions never greet. |
-| `HERMES_AGENT_DIR` | `../hermes-agent` | Path of the Hermes checkout for the image build. |
+| `HERMES_AGENT_DIR` | `../hermes-agent` | Path of the Hermes checkout for the image build. Both runtimes use it. |
 
 Do not set `UVICORN_WS_PING_INTERVAL` for this recipe. Compose sets it to `0` on the voice service, and Realtime sessions refuse to start when the server pings WebSocket clients.
 
@@ -126,7 +182,7 @@ git -C "$HERMES_AGENT_DIR" status --porcelain
 git -C "$HERMES_AGENT_DIR" rev-parse HEAD
 ```
 
-The `status --porcelain` command must print nothing, and `rev-parse HEAD` must print the pinned commit. Hermes runs only inside the `fdh-hermes` container, so you do not need a Hermes environment on the host.
+The `status --porcelain` command must print nothing, and `rev-parse HEAD` must print the pinned commit. Hermes runs only inside the Hermes image, in the OpenShell sandbox or in the plain `fdh-hermes` container, so you do not need a Hermes environment on the host.
 
 ## Start the Deployment
 
@@ -135,9 +191,13 @@ The following table lists the services of the recipe. The later commands use the
 | Service | Image | Role |
 | --- | --- | --- |
 | `frontend-delegation-hermes-agent-single-gpu` | `nemotron-voice-agent:latest` | The voice side: the frontend, speech, and both session kinds. |
-| `fdh-hermes` | `nemotron-voice-agent-fdh:local` | The FDH gateway and its Hermes workers. |
+| `fdh-hermes` | `nemotron-voice-agent-fdh-openshell-cli:local` | The controller. It creates the OpenShell sandbox `fdh-hermes`, which runs the FDH gateway and its Hermes workers from `nemotron-voice-agent-fdh:local`. It saves the sandbox logs and deletes the sandbox when it stops. |
+| `hermes-openshell-gateway` | `ghcr.io/nvidia/openshell/gateway` (pinned) | The OpenShell gateway. It starts the sandbox through the Docker socket and routes the backend connection to it. |
+| `hermes-openshell-init` | `ghcr.io/nvidia/openshell/gateway` (pinned) | Creates the OpenShell gateway's signing keys in `/var/lib/openshell/tls`, and then exits. It keeps existing keys. |
 | `fdh-hermes-image` | `nemotron-voice-agent-fdh:local` | Builds the Hermes image, and then exits. |
 | `nemo-speech` | NeMo-Speech.cpp | ASR and TTS on GPU 0. |
+
+With the plain runtime overlay, `fdh-hermes` runs `nemotron-voice-agent-fdh:local` directly, and the two OpenShell services do not start.
 
 Complete the following steps:
 
@@ -165,17 +225,26 @@ Complete the following steps:
     docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build
     ```
 
-    For the `eval` profile, follow [Deploy in Eval Mode](#deploy-in-eval-mode) instead.
+    For the `eval` profile, follow [Deploy in Eval Mode](#deploy-in-eval-mode) instead. For the plain runtime, add the plain overlay, as [Choose the Hermes Runtime](#choose-the-hermes-runtime) shows.
 
-The first start builds both images and pulls the `nemo-speech` image, so it can take several minutes. Compose starts the services in order: `fdh-hermes-image` builds the image and exits, `fdh-hermes` starts and turns healthy after its gateway answers `GET /health`, and then the voice service starts.
+The first start builds the images and pulls the `nemo-speech` and OpenShell images, so it can take several minutes. OpenShell publishes no CLI download for its prerelease tags, so `docker/fdh/openshell/Dockerfile.cli` builds the OpenShell CLI from source at the pinned commit. The first build compiles Rust code and takes several more minutes. Later builds reuse the Docker build cache.
 
-The voice service mounts `src/` read-only, but the `fdh-hermes` container runs the source that is built into its image. Keep `--build` on every `up` after a source change, so that both sides run the same code. Rebuild also after a change to `docker/Dockerfile.fdh`, `docker/fdh/`, the Hermes checkout, or `HERMES_AGENT_DIR`.
+Compose starts the services in order:
+
+1. `fdh-hermes-image` builds the Hermes image and exits.
+2. `hermes-openshell-init` creates the signing keys and exits. Then `hermes-openshell-gateway` starts.
+3. `fdh-hermes` checks the kernel version, waits for the OpenShell gateway, sets up the API key provider, and creates the sandbox. It turns healthy after the FDH gateway in the sandbox answers `GET /health` through the OpenShell gateway. The health check allows 180 seconds for startup.
+4. The voice service starts.
+
+In the plain runtime, `fdh-hermes` turns healthy after its gateway answers `GET /health` on port `8790`.
+
+The voice service mounts `src/` read-only, but the Hermes runtime runs the source that is built into the Hermes image. Keep `--build` on every `up` after a source change, so that both sides run the same code. Rebuild also after a change to `docker/Dockerfile.fdh`, `docker/fdh/`, the Hermes checkout, or `HERMES_AGENT_DIR`.
 
 ## Verify the Deployment
 
 Run the following checks in order.
 
-1. Check that the services are running and that the voice service becomes healthy. The `fdh-hermes-image` service shows as exited with code 0:
+1. Check that the services are running and that the voice service becomes healthy. The `fdh-hermes-image` and `hermes-openshell-init` services show as exited with code 0:
 
     ```bash
     docker compose --profile frontend-delegation-hermes-agent/single-gpu ps -a
@@ -189,22 +258,37 @@ Run the following checks in order.
 
     The route returns `{"status":"ok"}`. It confirms that the server process is up. It does not check speech, the LLMs, or the gateway.
 
-3. Check the gateway health route inside the `fdh-hermes` container:
+3. Check the FDH gateway health route. In the OpenShell runtime, the check goes through the OpenShell gateway, the same route that the voice side uses:
 
     ```bash
     docker compose --profile frontend-delegation-hermes-agent/single-gpu exec fdh-hermes \
+      curl -s -H 'Host: default--fdh-hermes.openshell.localhost' http://hermes-openshell-gateway:8080/health; echo
+    ```
+
+    In the plain runtime, check the gateway inside the `fdh-hermes` container instead:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml \
+      --profile frontend-delegation-hermes-agent/single-gpu exec fdh-hermes \
       curl -s http://localhost:8790/health; echo
     ```
 
     The response contains `"ok": true`, the open `"sessions"`, `"max_sessions"` (8), and the number of running Hermes `"workers"`.
 
-4. Check the gateway configuration and the source hash of the Hermes image:
+4. Check the gateway configuration and the source hash of the Hermes image. In the OpenShell runtime, the `fdh-hermes` log shows the controller. It prints the image, the gateway configuration, and the OpenShell CLI version:
 
     ```bash
-    docker compose --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes | grep 'FDH gateway'
+    docker compose --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes
     ```
 
-    The line has the form `FDH gateway: config gateway.yaml, source <hash>`. The eval overlay shows `gateway.eval.yaml`. To confirm that the image runs your checkout, compute the same hash on the host and compare:
+    The line `fdh-hermes (OpenShell runtime): image nemotron-voice-agent-fdh:local, gateway config gateway.yaml` names the configuration. The FDH gateway's own output is in the sandbox workload container, which OpenShell starts from the Hermes image. The following commands find that container and read the gateway line:
+
+    ```bash
+    docker ps --filter ancestor=nemotron-voice-agent-fdh:local --format '{{.Names}}'
+    docker logs <sandbox-workload-container> 2>&1 | grep 'FDH gateway'
+    ```
+
+    In the plain runtime, run `logs fdh-hermes | grep 'FDH gateway'` with the plain overlay instead. The line has the form `FDH gateway: config gateway.yaml, source <hash>`. The eval overlay shows `gateway.eval.yaml`. To confirm that the image runs your checkout, compute the same hash on the host and compare:
 
     ```bash
     find src -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
@@ -330,14 +414,14 @@ To deploy in eval mode, complete the following steps:
     curl -f http://localhost:7860/health
     ```
 
-5. Check the eval settings. The first command prints `eval` and `false`. The second prints a line that names `gateway.eval.yaml`:
+5. Check the eval settings. The first command prints `eval` and `false`. The second prints a controller line that names `gateway.eval.yaml`. In the plain runtime, it prints the `FDH gateway` line:
 
     ```bash
     docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
       --profile frontend-delegation-hermes-agent/single-gpu exec frontend-delegation-hermes-agent-single-gpu \
       printenv FDH_PROFILE PIPELINE_TLS
     docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
-      --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes | grep 'FDH gateway'
+      --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes | grep -E 'gateway config|FDH gateway'
     ```
 
 6. Connect one client to `ws://localhost:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-delegation-hermes`, as [Connect a Realtime Client](#connect-a-realtime-client) shows. Then check that the voice event log grew on the host:
@@ -355,9 +439,9 @@ The Tau evaluation harness is not part of this repository. Use the following ste
 1. Deploy in eval mode, as [Deploy in Eval Mode](#deploy-in-eval-mode) describes. Every Tau run must use the eval overlay, because only the overlay switches the gateway to `gateway.eval.yaml`.
 2. Configure the harness with the WebSocket URL `ws://<host>:7860/v1/realtime`, the model `nvidia/nemotron-realtime-frontend-delegation-hermes`, and your `REALTIME_API_KEY` as the Bearer credential. The former `pine-*` model names and the former ports `8775` and `8776` no longer reach FDH.
 3. Keep the session count within the cap of 4 Realtime sessions.
-4. Record the gateway configuration and the source hash from the `fdh-hermes` log, and the profile and `config hash` from the app log, with the results.
+4. Record the Hermes runtime, the gateway configuration and the source hash from the Hermes logs, and the profile and `config hash` from the app log, with the results.
 
-The `config hash` includes the backend URL, which is now `ws://fdh-hermes:8790/v1/backend`. It therefore differs from runs on the former FDH containers. To compare runs, use the prompt hashes and `session_tools_sha256`. Refer to [Deployed Fingerprint](../../src/examples/frontend_delegation_hermes/README.md#deployed-fingerprint).
+The `config hash` includes the backend URL. The URL is `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` in the OpenShell runtime and `ws://fdh-hermes:8790/v1/backend` in the plain runtime. The hash therefore differs between the two runtimes and from runs on the former FDH containers. To compare runs, use the prompt hashes and `session_tools_sha256`. Refer to [Deployed Fingerprint](../../src/examples/frontend_delegation_hermes/README.md#deployed-fingerprint).
 
 ## Read the Logs
 
@@ -366,12 +450,30 @@ The containers write the logs in the following table. The `logs/` paths are on t
 | Log | Content |
 | --- | --- |
 | `docker compose --profile frontend-delegation-hermes-agent/single-gpu logs frontend-delegation-hermes-agent-single-gpu` | The app log: the ready line, the Pipecat settings, and per-session errors. |
-| `docker compose --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes` | The gateway log: its configuration, the source hash, and gateway errors. |
+| `docker compose --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes` | OpenShell runtime: the controller log, with the image, the gateway configuration, the OpenShell CLI version, and setup errors. Plain runtime: the gateway log, with its configuration, the source hash, and gateway errors. |
 | `logs/fdh_voice_events.pipecat.jsonl` | The voice event log of both session kinds. |
-| `logs/fdh_gateway_events.pipecat.jsonl` | The gateway event log. |
-| `logs/fdh_workers_pipecat/` | One log per Hermes worker. With `gateway.eval.yaml`, also one `<session_id>.trace.jsonl` backend decision trace per session. |
+| `logs/fdh_gateway_events.pipecat.jsonl` | Plain runtime: the gateway event log. |
+| `logs/fdh_workers_pipecat/` | Plain runtime: one log per Hermes worker. With `gateway.eval.yaml`, also one `<session_id>.trace.jsonl` backend decision trace per session. |
+| `logs/openshell/<time>/` | OpenShell runtime: the gateway event log, the worker logs, and the backend decision traces, saved from the sandbox's `/app/logs` when `fdh-hermes` stops. |
 
-The containers write the log files as `root`. The repository ignores the `logs/` directory.
+In the OpenShell runtime, the gateway and worker log files stay inside the sandbox, in `/app/logs`, while it runs. The following commands read the other OpenShell logs:
+
+- The FDH gateway and worker output, and Landlock denials: `docker logs <sandbox-workload-container>`. Find the container name with `docker ps --filter ancestor=nemotron-voice-agent-fdh:local --format '{{.Names}}'`.
+- The policy decisions, that is the allowed and denied outbound calls of the sandbox:
+
+    ```bash
+    docker compose --profile frontend-delegation-hermes-agent/single-gpu exec fdh-hermes \
+      openshell logs fdh-hermes
+    ```
+
+- A copy of `/app/logs` during a run. The copy lands in `logs/openshell/now/` on the host:
+
+    ```bash
+    docker compose --profile frontend-delegation-hermes-agent/single-gpu exec fdh-hermes \
+      openshell sandbox download fdh-hermes /app/logs /out/now
+    ```
+
+Add the overlay files of your deployment to these commands. The containers write the log files as `root`. The repository ignores the `logs/` directory.
 
 ## Stop and Clean Up
 
@@ -388,7 +490,11 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
   --profile frontend-delegation-hermes-agent/single-gpu down
 ```
 
-The gateway closes open sessions one after another, so the stop can take up to 75 seconds. The command keeps `.env`, the built images, the logs in `logs/`, and the speech model weights in `models/nemo-speech`.
+In the OpenShell runtime, `fdh-hermes` saves the sandbox's `/app/logs` to `logs/openshell/<time>/` and then deletes the sandbox. The stop can take up to 60 seconds. If the controller crashed and left a sandbox behind, the next start saves its logs and deletes it before it creates a new one.
+
+In the plain runtime, the gateway closes open sessions one after another, so the stop can take up to 75 seconds. Pass the plain overlay to `down` as well.
+
+The command keeps `.env`, the built images, the logs in `logs/`, the speech model weights in `models/nemo-speech`, and the OpenShell gateway's keys and database in `/var/lib/openshell`.
 
 ## Troubleshooting
 
@@ -399,6 +505,13 @@ The following table lists common failures for this recipe. For general startup i
 | `up` fails while it builds `fdh-hermes-image`, and the error names the `hermes` build context. | The Hermes checkout is missing at `HERMES_AGENT_DIR`. | Complete [Get Hermes](#get-hermes), and set an absolute `HERMES_AGENT_DIR` in `.env`. |
 | The image build fails in the `uv pip check` step. | The Hermes checkout does not match the lock in `docker/fdh/requirements.txt`. | Check out the commit from the lock header in a clean checkout, or regenerate the lock as its header describes. |
 | `fdh-hermes` exits at start, its log says `NVIDIA_API_KEY is not set`, and the voice service never starts. | `.env` has no `NVIDIA_API_KEY`. | Set `NVIDIA_API_KEY` to an NVIDIA Inference Hub key, and then rerun the `up` command. |
+| `fdh-hermes` exits, and its log says `OpenShell needs Linux 6.2+ (Landlock ABI 3)`. | The host kernel is older than 6.2. | Run the plain runtime, or use a host with Linux 6.2 or newer. |
+| The sandbox fails to start, and the workload container log shows a Landlock error. | Landlock is turned off in the host kernel. The policy does not allow the sandbox to run without it. | Turn on Landlock in the kernel boot settings, or run the plain runtime. |
+| `fdh-hermes` exits, and its log says `OpenShell gateway at http://hermes-openshell-gateway:8080 not connected after 120 s`. | The OpenShell gateway did not start. | Read `docker compose --profile frontend-delegation-hermes-agent/single-gpu logs hermes-openshell-gateway hermes-openshell-init`. Check the Docker socket and `/var/lib/openshell`. |
+| `up -d` fails with `port is already allocated` for port `8080`. | Another process, or another OpenShell gateway, uses `127.0.0.1:8080`. | Stop the other process or OpenShell gateway. Only one OpenShell gateway can run per host. |
+| `up` fails with an unknown `!override` or `!reset` tag. | Docker Compose is older than 2.24.4. | Update Docker Compose to 2.24.4 or newer. |
+| `fdh-hermes` never turns healthy in the OpenShell runtime. | The sandbox did not start, or the FDH gateway in it failed. | Read the `fdh-hermes` log and the sandbox workload container log, as [Read the Logs](#read-the-logs) describes. Then rerun the `up` command. |
+| The FDH gateway or a worker fails on a call to a host other than `inference-api.nvidia.com`. | The sandbox policy blocks the host. | Read the denied calls with `openshell logs fdh-hermes`, as [Read the Logs](#read-the-logs) shows. Add the host under `network_policies` in `docker/fdh/openshell/policy.yaml`, or compare with the plain runtime. |
 | A browser UI session ends at once or never starts, and the app log shows `runs with FDH_PROFILE=eval`. | The deployment runs the `eval` profile, which refuses browser UI sessions. | Start the recipe without the eval overlay. |
 | A browser UI session ends at once, and the app log shows `browser session refused`. | Either 4 browser UI sessions are already open, or the warm-up failed. | Close idle browser sessions. For a warm-up failure, read the `startup failed` line in the app log, and then start a new session. |
 | A Realtime client receives an `error` event with code `server_busy`, and the socket closes with code 1013. | The message `server at capacity (server.max_sessions)` means that 4 Realtime sessions are open. The message `server is starting` means that the warm-up failed. | Close idle sessions, or wait and reconnect. For a warm-up failure, read the `startup failed` line in the app log. The next session retries the warm-up. |
@@ -406,14 +519,14 @@ The following table lists common failures for this recipe. For general startup i
 | The app log shows `backend gateway not reachable`, and sessions fail. | The `fdh-hermes` gateway is not running or not healthy. | Run `docker compose --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes`, fix the cause, and rerun the `up` command. |
 | A Realtime client receives an `error` event with code `server_error`, the socket closes with code 1011, and the error asks for `UVICORN_WS_PING_INTERVAL=0`. | The server pings WebSocket clients, which the `eval` settings do not allow. This happens in a host-native run or in a modified Compose file. | Set `UVICORN_WS_PING_INTERVAL=0` for the server process. |
 | The WebSocket handshake fails, and the server closes it with code 1008 and reason `realtime authentication failed`. | `REALTIME_API_KEY` is set, and the Realtime client sent no credential or a different one. | Send `Authorization: Bearer <your-realtime-api-key>` with the value from `.env`. |
-| `session.update` fails with `worker_start_timeout` or `backend_unavailable`. | A Hermes worker did not start. | Read the worker logs in `logs/fdh_workers_pipecat/`. Rerun the `up` command with `--build` if the Hermes checkout changed. |
-| A code change works on the voice side but not in Hermes, or the source hash in the `fdh-hermes` log differs from your checkout. | The Hermes image runs the source that was built into it. | Rerun the `up` command with `--build`. |
-| A benchmark run shows other backend prompt hashes than expected, or the `fdh-hermes` log names `gateway.yaml`. | The deployment runs without the eval overlay. | Redeploy with `-f docker/docker-compose.fdh-eval.yaml`, and pass it in every Compose command. |
+| `session.update` fails with `worker_start_timeout` or `backend_unavailable`. | A Hermes worker did not start. | Read the worker logs: `logs/fdh_workers_pipecat/` in the plain runtime, or a copy of the sandbox's `/app/logs` in the OpenShell runtime. Rerun the `up` command with `--build` if the Hermes checkout changed. |
+| A code change works on the voice side but not in Hermes, or the source hash in the `FDH gateway` line differs from your checkout. | The Hermes image runs the source that was built into it. | Rerun the `up` command with `--build`. |
+| A benchmark run shows other backend prompt hashes than expected, or the Hermes logs name `gateway.yaml`. | The deployment runs without the eval overlay. | Redeploy with `-f docker/docker-compose.fdh-eval.yaml`, and pass it in every Compose command. |
 | The client fails with `ssl argument is incompatible with a ws:// URI`, or a `wss://` handshake fails with an SSL error. | The client and the server disagree on TLS. Eval mode serves plain `ws://`. | Use `ws://` for an eval-mode deployment and `wss://` for the standard deployment. |
 | The browser does not ask for the microphone. | The page is served over plain HTTP from another machine. | Keep `PIPELINE_TLS=true` (the default) and open the `https://` URL. |
 | The download script fails, or `nemo-speech` cannot find its models. | `HF_TOKEN` is missing or invalid, or the weights are in another directory. | Set `HF_TOKEN` in `.env` and rerun the script as your user, or point `NEMO_SPEECH_MODEL_LOC` at the weights. |
 | `up -d` fails with `port is already allocated` or `address already in use`. | Another process uses the app port or port `50051`. | Set `PIPELINE_APP_PORT` to a free port for the app. For `50051`, stop the other recipe that runs a speech sidecar. |
-| `mv` or `rm` in `logs/` fails with permission denied. | The containers write logs as `root`. | Run `sudo chown -R "$USER" logs`. |
+| `mv` or `rm` in `logs/` or `logs/openshell/` fails with permission denied. | The containers write logs as `root`. | Run `sudo chown -R "$USER" logs`. |
 
 ## Related Topics
 

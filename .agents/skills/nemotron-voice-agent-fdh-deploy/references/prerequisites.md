@@ -5,12 +5,23 @@ Complete these steps once per host, from the repository root. Both profiles need
 ## 1. Host
 
 - An x86_64 Linux host with one NVIDIA GPU for `nemo-speech` (GPU 0), NVIDIA driver 580.x or newer, and the NVIDIA Container Toolkit. The Hermes image lock (`docker/fdh/requirements.txt`) is resolved for x86_64 Linux, so DGX Spark and Jetson Thor are not supported. The LLMs run on the NVIDIA Inference Hub, not on the local GPU.
-- Docker Compose v2.20 or newer, Git, Python 3, and either the Hugging Face `hf` CLI or `uvx`.
-- Free host ports `7860` (or `PIPELINE_APP_PORT`) and `50051`. The gateway port 8790 is not published.
+- Docker Engine 28 or newer, Docker Compose 2.24.4 or newer (the plain overlay uses `!override` and `!reset`), Git, Python 3, and either the Hugging Face `hf` CLI or `uvx`.
+- Free host ports `7860` (or `PIPELINE_APP_PORT`) and `50051`. The FDH gateway port 8790 is not published.
+- For the default OpenShell runtime: Linux kernel 6.2 or newer with Landlock turned on, a free host port `127.0.0.1:8080`, and no other OpenShell gateway on the host (port 8080 and `/var/lib/openshell` are host-wide; Docker creates `/var/lib/openshell` as root). Hosts that cannot meet these use the plain overlay, `docker/docker-compose.fdh-hermes-plain.yaml`.
+
+Check the OpenShell host needs:
+
+```bash
+uname -r                                                  # 6.2 or newer
+cat /sys/kernel/security/lsm                              # must list landlock
+docker version --format '{{.Server.Version}}'             # 28 or newer
+docker compose version                                    # 2.24.4 or newer
+ss -ltn 'sport = :8080'                                   # expect no listener
+```
 
 ## 2. Environment File
 
-`.env` must define `NVIDIA_API_KEY`, an Inference Hub key, and `HF_TOKEN` for the speech model download. Realtime clients need `REALTIME_API_KEY`. The frontend model (`nvidia/nvidia/nemotron-3.5-lightning`) and the backend model (`nvidia/nvidia/nemotron-3-ultra`) both run on the Inference Hub. `NVIDIA_API_KEY` is the only `.env` key that reaches `fdh-hermes`, and `docker/fdh/gateway.sh` refuses to start without it.
+`.env` must define `NVIDIA_API_KEY`, an Inference Hub key, and `HF_TOKEN` for the speech model download. Realtime clients need `REALTIME_API_KEY`. The frontend model (`nvidia/nvidia/nemotron-3.5-lightning`) and the backend model (`nvidia/nvidia/nemotron-3-ultra`) both run on the Inference Hub. `NVIDIA_API_KEY` is the only `.env` key that reaches `fdh-hermes`, and `fdh-hermes` refuses to start without it. In the OpenShell runtime the key goes to the OpenShell provider, never into the sandbox.
 
 Keep any existing `.env`. Check presence only, never values:
 
@@ -37,14 +48,15 @@ git -C "$HERMES_AGENT_DIR" status --porcelain                  # expect no outpu
 git -C "$HERMES_AGENT_DIR" rev-parse HEAD; grep -m1 'Hermes commit' docker/fdh/requirements.txt
 ```
 
-The two commit hashes must match. Hermes runs only in the `fdh-hermes` container, so a deployment needs no host Hermes environment.
+The two commit hashes must match. Hermes runs only in the Hermes image (the OpenShell sandbox, or the plain `fdh-hermes` container), so a deployment needs no host Hermes environment.
 
 ## 4. Image Rebuild Triggers
 
-The recipe uses two images:
+The recipe builds three images:
 
 - `nemotron-voice-agent:latest`, the shared app image (`docker/Dockerfile`, `uv sync --frozen --extra fdh`). The voice service mounts `src/` read-only, so voice-side code and prompt changes need only a restart. Rebuild it after a dependency change.
-- `nemotron-voice-agent-fdh:local`, the Hermes image (`docker/Dockerfile.fdh`, Python 3.14.7). It copies `src/` at build time, writes the hash of `src/` to `/app/SOURCE_SHA256`, and does not mount `src/`.
+- `nemotron-voice-agent-fdh:local`, the Hermes image (`docker/Dockerfile.fdh`, Python 3.14.7). It copies `src/` at build time, writes the hash of `src/` to `/app/SOURCE_SHA256`, and does not mount `src/`. It has a `sandbox` user (UID/GID 1500) and `WORKDIR /sandbox` for OpenShell, but no `USER` line, so the plain runtime still runs as root.
+- `nemotron-voice-agent-fdh-openshell-cli:local`, the OpenShell controller image (`docker/fdh/openshell/Dockerfile.cli`). It builds the OpenShell CLI from source at the commit in `docker/fdh/openshell/VERSION`, because prerelease tags publish no CLI download. The first build compiles Rust and takes several minutes.
 
 Rebuild with `up -d --build` after a change to any of the following:
 
@@ -52,7 +64,7 @@ Rebuild with `up -d --build` after a change to any of the following:
 - `docker/fdh/requirements.txt`, `docker/fdh/overrides.txt`, `docker/fdh/gateway.sh`, or `docker/Dockerfile.fdh`;
 - the Hermes checkout or `HERMES_AGENT_DIR`.
 
-The build runs import smoke tests for the gateway and the worker, imports Hermes, and checks the dependency set with `uv pip check`. `docker/fdh/gateway.env` is read at container start, so a change to it needs only `up -d`.
+The build runs import smoke tests for the gateway and the worker, imports Hermes, and checks the dependency set with `uv pip check`. `docker/fdh/gateway.env` is read at container start, so a change to it needs only `up -d`. For changes to the files in `docker/fdh/openshell/`, refer to `config-knobs.md`, section OpenShell Runtime. A change to `docker/fdh/openshell/VERSION` or `Dockerfile.cli` needs `up -d --build`.
 
 ## 5. Optional Host Hermes Environment
 

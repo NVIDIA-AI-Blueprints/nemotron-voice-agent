@@ -7,7 +7,11 @@ Complete `prerequisites.md` first, then set the following variables in every she
 ```bash
 P=frontend-delegation-hermes-agent/single-gpu
 E="-f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml"
+# plain runtime (baseline) instead: the plain overlay goes before the eval overlay
+# E="-f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml -f docker/docker-compose.fdh-eval.yaml"
 ```
+
+The Hermes runtime is OpenShell by default. Use the plain runtime only when the user asks for it, for example for an A/B slice. Record which runtime a run used, and do not mix runtimes inside one comparison.
 
 ## 1. Topology
 
@@ -16,10 +20,14 @@ E="-f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml"
                              /v1/realtime?model=nvidia/nemotron-realtime-frontend-delegation-hermes
                              ├─ frontend decider ──► Inference Hub nvidia/nvidia/nemotron-3.5-lightning (reasoning off)
                              ├─ speech ──► nemo-speech :50051
-                             └─ ws://fdh-hermes:8790/v1/backend
-                                  └─ fdh-hermes (nemotron-voice-agent-fdh:local): FDH gateway + one Hermes worker per session
-                                       └─ AIAgent ──► Inference Hub nvidia/nvidia/nemotron-3-ultra (reasoning on)
+                             └─ ws://default--fdh-hermes.openshell.localhost:8080/v1/backend
+                                  └─ hermes-openshell-gateway (routes by Host header)
+                                       └─ OpenShell sandbox fdh-hermes (nemotron-voice-agent-fdh:local, UID 1500):
+                                          FDH gateway + one Hermes worker per session
+                                            └─ AIAgent ──► Inference Hub nvidia/nvidia/nemotron-3-ultra (reasoning on)
 ```
+
+The `fdh-hermes` service is the controller that creates the sandbox. With the plain overlay, the URL is `ws://fdh-hermes:8790/v1/backend`, and `fdh-hermes` is the FDH gateway container itself.
 
 The shared route checks the Bearer credential (`REALTIME_API_KEY`), resolves the model from the registry, and hands the socket to FDH before it sends any event. FDH serves `session.created` and every later event with its own wire code (`frontend-delegation-hermes-agent` is in `_SESSION_OWNED_PIPELINES` of `src/realtime/gateway.py`).
 
@@ -52,9 +60,14 @@ docker compose $E --profile $P exec frontend-delegation-hermes-agent-single-gpu 
   .venv/bin/python -c "import nltk; print(nltk.download('punkt_tab', quiet=True))"   # True
 curl -f http://localhost:7860/health                                                    # {"status":"ok"}
 docker compose $E --profile $P exec frontend-delegation-hermes-agent-single-gpu printenv FDH_PROFILE PIPELINE_TLS UVICORN_WS_PING_INTERVAL
-docker compose $E --profile $P logs fdh-hermes | grep 'FDH gateway'                    # config gateway.eval.yaml, source <hash>
-docker compose $E --profile $P exec fdh-hermes curl -s http://localhost:8790/health; echo
+docker compose $E --profile $P logs fdh-hermes | grep 'gateway config'                 # controller: gateway config gateway.eval.yaml
+W=$(docker ps --filter ancestor=nemotron-voice-agent-fdh:local --format '{{.Names}}' | head -1)   # sandbox workload
+docker logs "$W" 2>&1 | grep 'FDH gateway'                                              # config gateway.eval.yaml, source <hash>
+docker compose $E --profile $P exec fdh-hermes \
+  curl -s -H 'Host: default--fdh-hermes.openshell.localhost' http://hermes-openshell-gateway:8080/health; echo
 ```
+
+Plain runtime: `logs fdh-hermes | grep 'FDH gateway'` and `exec fdh-hermes curl -s http://localhost:8790/health`.
 
 Expect `eval`, `false`, and `0`. The gateway health shows `"ok": true`, `"max_sessions": 8`, and the pinned `"backend_features"`. Compare the source hash with the checkout, as `SKILL.md` describes.
 
@@ -89,11 +102,12 @@ Report FDH runs on the shared stack separately from runs on the former FDH conta
 
 Record the following with every run:
 
-- the gateway configuration and source hash: `docker compose $E --profile $P logs fdh-hermes | grep 'FDH gateway'`;
+- the Hermes runtime (OpenShell or plain), and for OpenShell the release in `docker/fdh/openshell/VERSION`;
+- the gateway configuration and source hash: the `FDH gateway` line from `docker logs "$W"` (plain: `docker compose $E --profile $P logs fdh-hermes`);
 - the profile and `config hash` from the ready line of the app log;
 - the fingerprint records in `logs/fdh_voice_events.pipecat.jsonl`: `fdh_session_start` (`features`), `frontend_prompt`, and `backend_configured`, which carries the backend fingerprint the gateway reports (`backend_system_sha256`, `backend_catalog_sha256`, `backend_domain`) and `session_tools_sha256`.
 
-`config_hash` includes `backend.url`, which is now `ws://fdh-hermes:8790/v1/backend` (formerly `ws://host.docker.internal:8790/v1/backend`), so it differs from earlier runs. Group and compare runs by the prompt hashes and `session_tools_sha256`. `backend_system_sha256` differs between `gateway.yaml` and `gateway.eval.yaml`, so it shows a run that missed the eval overlay.
+`config_hash` includes `backend.url`, which is now `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` (plain runtime: `ws://fdh-hermes:8790/v1/backend`; formerly `ws://host.docker.internal:8790/v1/backend`), so it differs between runtimes and from earlier runs. Group and compare runs by the prompt hashes and `session_tools_sha256`. `backend_system_sha256` differs between `gateway.yaml` and `gateway.eval.yaml`, so it shows a run that missed the eval overlay.
 
 The pins of the eval behavior are `tests/unit/frontend_delegation_hermes/pipecat/fixtures/eval_pins.json`, checked by `test_fdh_eval_pins.py`. Regenerate them only for an intended change of the evaluated behavior.
 
@@ -102,10 +116,15 @@ The pins of the eval behavior are `tests/unit/frontend_delegation_hermes/pipecat
 | Log | Content |
 | --- | --- |
 | `docker compose $E --profile $P logs frontend-delegation-hermes-agent-single-gpu` | App log: ready line, Pipecat settings, session errors |
-| `docker compose $E --profile $P logs fdh-hermes` | Gateway log: configuration, source hash, gateway errors |
+| `docker compose $E --profile $P logs fdh-hermes` | OpenShell: controller log (image, gateway configuration, OpenShell CLI version, setup errors). Plain: gateway log (configuration, source hash, gateway errors) |
+| `docker logs "$W"` | OpenShell: FDH gateway and worker output, and Landlock denials |
+| `docker compose $E --profile $P exec fdh-hermes openshell logs fdh-hermes` | OpenShell: policy decisions (allowed and denied outbound calls) |
 | `logs/fdh_voice_events.pipecat.jsonl` | Voice events of every session (`FDH_EVENT_LOG`) |
-| `logs/fdh_gateway_events.pipecat.jsonl` | Gateway events (`FDH_GATEWAY_LOG` in `docker/fdh/gateway.env`) |
-| `logs/fdh_workers_pipecat/` | One log per Hermes worker, and with `gateway.eval.yaml` one `<session_id>.trace.jsonl` backend decision trace per session |
+| `logs/fdh_gateway_events.pipecat.jsonl` | Plain: gateway events (`FDH_GATEWAY_LOG` in `docker/fdh/gateway.env`) |
+| `logs/fdh_workers_pipecat/` | Plain: one log per Hermes worker, and with `gateway.eval.yaml` one `<session_id>.trace.jsonl` backend decision trace per session |
+| `logs/openshell/<time>/` | OpenShell: the sandbox's `/app/logs` (gateway events, worker logs, traces), saved when `fdh-hermes` stops |
+
+In the OpenShell runtime, the gateway events, worker logs, and traces stay in the sandbox's `/app/logs` until `fdh-hermes` stops (`down`, or `restart fdh-hermes`). To copy them during a run, use `docker compose $E --profile $P exec fdh-hermes openshell sandbox download fdh-hermes /app/logs /out/now`; the copy lands in `logs/openshell/now/`. Copy or stop before you read a run's traces.
 
 The containers write the logs as `root`. Before you move or delete them, run `sudo chown -R "$USER" logs`.
 

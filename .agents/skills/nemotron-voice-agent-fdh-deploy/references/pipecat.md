@@ -10,7 +10,7 @@ A browser session is the former FDH demo on the shared UI transport (`adapters/p
 
 - delegation profile `profiles/pipecat_demo.yaml`: the greeting "Hi! How can I help you today?" (off with `ENABLE_WELCOME_MESSAGE=false`), the demo tools `get_order` and `cancel_order` run in the server, and `FDH_BACKEND_DELAY_S` seconds (5 in Compose) before each backend run, so you can try status questions and steering while the backend works;
 - Pipecat settings `adapters/pipecat.yaml`: Pipecat's defaults (Silero VAD `stop_secs` 0.2, `audio_idle_timeout` 1.0 s, `user_speech_timeout` 0.6 s, Smart Turn off);
-- gateway configuration `gateway.yaml` in `fdh-hermes`.
+- gateway configuration `gateway.yaml` in the Hermes runtime (the OpenShell sandbox by default).
 
 The pipeline is `create_transport` → VAD → STT → user turn → `FdhTurnBridge` → TTS → `OutputTagger` → `UiOutputGate` → transport output, with `enable_rtvi=True`. The turn manager, delegation, and backend link are the same objects that a Realtime session uses.
 
@@ -19,9 +19,14 @@ The pipeline is `create_transport` → VAD → STT → user turn → `FdhTurnBri
 ```bash
 docker compose --profile $P up -d --build
 curl -fk https://localhost:7860/health                         # {"status":"ok"}
-docker compose --profile $P exec fdh-hermes curl -s http://localhost:8790/health; echo
-docker compose --profile $P logs fdh-hermes | grep 'FDH gateway'   # config gateway.yaml, source <hash>
+docker compose --profile $P exec fdh-hermes \
+  curl -s -H 'Host: default--fdh-hermes.openshell.localhost' http://hermes-openshell-gateway:8080/health; echo
+docker compose --profile $P logs fdh-hermes | grep 'gateway config'   # controller: gateway config gateway.yaml
+docker logs "$(docker ps --filter ancestor=nemotron-voice-agent-fdh:local --format '{{.Names}}' | head -1)" 2>&1 \
+  | grep 'FDH gateway'                                               # config gateway.yaml, source <hash>
 ```
+
+For the plain runtime, add `-f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml` to every Compose command. Then check health with `exec fdh-hermes curl -s http://localhost:8790/health` and read `logs fdh-hermes | grep 'FDH gateway'`.
 
 After the first browser session, the app log shows `frontend-delegation-hermes-agent ready (adapter=pipecat, profile=default)`, `Pipecat adapter settings`, and `browser UI session started (profile=default, adapter=pipecat)`:
 

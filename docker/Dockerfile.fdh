@@ -65,4 +65,21 @@ RUN set -e; \
 
 EXPOSE 8790
 
+# OpenShell runtime (the default; docker/fdh/openshell/): the sandbox runs this image as UID 1500
+# (policy.yaml `process.run_as_user`), with /app read-only except logs/ and .cache/, the paths the
+# gateway and its workers write. iproute2 is what OpenShell's bring-your-own-container example adds.
+# No USER line: the plain runtime (docker/docker-compose.fdh-hermes-plain.yaml) still runs as root,
+# exactly as before. No package, Python or Hermes change.
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+RUN groupadd --gid 1500 sandbox \
+    && useradd --uid 1500 --gid sandbox --home-dir /sandbox --shell /bin/bash sandbox \
+    && install -d -o 1500 -g 1500 /sandbox /app/logs /app/.cache
+
 ENTRYPOINT ["/app/gateway.sh"]
+
+# Last line. OpenShell's Docker driver needs the sandbox user to own the working directory
+# (crates/openshell-driver-docker/README.md, "Identity and Workspace"), and /app must stay root-owned.
+# gateway.sh does `cd /app` and every start command is an absolute path, so the plain runtime is unaffected.
+WORKDIR /sandbox
