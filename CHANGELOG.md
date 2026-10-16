@@ -36,7 +36,6 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 
 ### Fixed
 
-- Host-native runs reach Nemotron 3.5 Super VL on its published port `18001`.
 - The Frontend/Backend Agent Thinker honors the Max Tokens setting.
 - `GET /health` returns the server status when the client UI is built, instead of the UI.
 - Session configs with a non-string service selection ID are rejected with a clear error.
