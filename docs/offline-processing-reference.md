@@ -411,9 +411,34 @@ final-tail extension, malformed uploads, disconnect, and watchdog failure.
 The real sample client also exercises the engine with different packet sizes
 and accelerated input; identical traces must produce identical aligned PCM.
 
-The follow-up real-provider paired runs will additionally verify configuration
-and source hashes, server/client PCM equality, silence outside committed spans,
-exact clipping, stereo channel alignment, source consumption, provider-timer identities, and
-matching final metrics. These checks validate recording and measurement
-integrity. Benchmark scorers separately evaluate semantic accuracy and task
-completion.
+### Completed Composite Inspection
+
+An unscored composite inspection completed on Pipecat 1.12.0 through the normal
+`/v1/realtime` gateway and `/api/ws/offline`. Both paths use the same source PCM
+and local model services, standard continuous STT with `stop_history=320`, and
+no force-EOU injection. Recording checks verify source and runtime provenance,
+output extents, offline server/client PCM equality, silence outside committed
+offline spans, and stereo channel alignment.
+
+The offline run produces fewer committed responses and coalesces some source
+turns. Bulk-ASR availability can cause this divergence. Successful recording
+checks do not establish behavioral fidelity or benchmark accuracy.
+Full-Duplex-Bench score validation remains in progress and follows sharing the
+proposal.
+
+The exported evidence bundle keeps these files together, with paths relative
+to its root.
+
+| Artifact | Contents |
+| --- | --- |
+| `run_report.md` | Measured results, timing scopes, limitations, and links to the recordings |
+| `offline/composite_300s/` and `online/composite_300s/` | Input, aligned bot output, and user-left/bot-right comparison WAVs |
+| `comparison/` | Paired server metrics, transcripts, source hashes, and WAV inventory |
+| `runtime_versions.json` and `source-provenance.json` | Installed dependencies, effective STT settings, and deployed application revision |
+| `model-runtime.json` | Model deployment configuration |
+| `verification.json` | Recording-integrity checks for both completed paths |
+
+Keep model configuration differences in the report when comparing older runs.
+The current deployment uses TTS batch size 8; differences from earlier
+deployments cannot be attributed solely to the Pipecat version. Official
+benchmark scorers separately evaluate semantic accuracy and task completion.
