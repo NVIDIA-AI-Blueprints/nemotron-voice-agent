@@ -137,17 +137,13 @@ def inspect(path):
 print(json.dumps({
     "process": {"uid": os.geteuid(), "gid": os.getegid()},
     "root": inspect(sys.argv[1]),
-    "config": inspect(sys.argv[2]),
-    "credentials": inspect(sys.argv[3]),
-    "state": inspect(sys.argv[4]),
-    "runtime_root": inspect(sys.argv[5]),
+    "state": inspect(sys.argv[2]),
+    "runtime_root": inspect(sys.argv[3]),
 }, separators=(",", ":"), sort_keys=True))
 """
 _EXPECTED_INSTALLER_FILESYSTEM = {
     "process": {"uid": 65_532, "gid": 65_532},
     "root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-    "config": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
-    "credentials": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
     "runtime_root": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
     "state": {"access_acl": False, "kind": "directory", "uid": 65_532, "gid": 65_532, "mode": 0o700},
 }
@@ -421,12 +417,7 @@ def _verify_contract(
         "org.opencontainers.image.source": source,
     }
     if installer:
-        expected_labels.update(
-            {
-                "com.nvidia.voiceclaw.install-contract": "voiceclaw.nemoclaw.container.v1",
-                "com.nvidia.voiceclaw.openshell-revision": _OPEN_SHELL_REVISION,
-            }
-        )
+        expected_labels["com.nvidia.voiceclaw.openshell-revision"] = _OPEN_SHELL_REVISION
         expected_health = {
             "Interval": 10_000_000_000,
             "Timeout": 20_000_000_000,
@@ -435,8 +426,6 @@ def _verify_contract(
         }
         if any(healthcheck.get(name) != value for name, value in expected_health.items()):
             raise ValueError("installer health timing does not match the contract")
-        if "VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1" not in (config.get("Env") or []):
-            raise ValueError("installer image must select its runtime profile")
     for name, expected in expected_labels.items():
         if labels.get(name) != expected:
             raise ValueError(f"image label {name} does not match the verified build input")
@@ -614,8 +603,6 @@ def _installer_filesystem_contract(container: str) -> dict[str, object]:
         "-c",
         _INSTALLER_FILESYSTEM_PROBE,
         "/var/lib/voiceclaw",
-        "/var/lib/voiceclaw/config",
-        "/var/lib/voiceclaw/credentials",
         "/var/lib/voiceclaw/state",
         "/run/voiceclaw-managed",
     )

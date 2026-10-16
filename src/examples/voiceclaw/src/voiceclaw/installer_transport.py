@@ -14,13 +14,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from voiceclaw.installer_inputs import (
-    AgentConnection,
-    ContainerInputError,
-    read_protected,
-    strict_json,
-    validate_bearer,
-)
+from voiceclaw.installer_inputs import AgentConnection, ContainerInputError, strict_json
 
 INPUT_LIMIT = 512 * 1024
 OUTPUT_LIMIT = 4 * 1024 * 1024
@@ -30,7 +24,6 @@ OPEN_SHELL_REVISION = "6648bd0c290efbc41ba131ee9831ee45cd431f94"
 _FAILURES = frozenset(
     {
         "access_denied",
-        "credential_invalid",
         "target_replaced",
         "transport_unavailable",
         "outcome_unconfirmed",
@@ -162,15 +155,10 @@ class SDKExecutionTransport:
             if remaining <= 0:
                 raise TransportFailure("transport_unavailable")
             async with asyncio.timeout(remaining):
-                bearer = None
-                if connection.authentication_mode == "oidcBearer" and connection.credential_file is not None:
-                    try:
-                        bearer = validate_bearer(
-                            await asyncio.to_thread(read_protected, str(connection.credential_file))
-                        )
-                    except ContainerInputError:
-                        raise TransportFailure("credential_invalid") from None
-                elif connection.authentication_mode != "none" or connection.credential_file is not None:
+                bearer = connection.bearer
+                if (connection.authentication_mode == "oidcBearer") != (bearer is not None) or (
+                    connection.authentication_mode not in {"oidcBearer", "none"}
+                ):
                     raise TransportFailure("protocol_error")
                 control = json.dumps(
                     {

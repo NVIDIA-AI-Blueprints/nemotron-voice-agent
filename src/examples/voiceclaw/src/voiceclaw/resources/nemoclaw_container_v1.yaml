@@ -23,7 +23,7 @@ frontend_profiles:
         endpoint: https://integrate.api.nvidia.com/v1
         model: nvidia/nemotron-3.5-lightning-30b-a3b
         credential:
-          file: /var/lib/voiceclaw/credentials/speech
+          env: VOICECLAW_SPEECH_KEY
         temperature: 0.0
         # The hosted route does not expose the provider tokenizer endpoint.
         supports_tokenize: false
@@ -45,7 +45,7 @@ frontend_profiles:
         function_id: bb0837de-8c7b-481f-9ec8-ef5663e9c1fa
         language_code: en-US
         credential:
-          file: /var/lib/voiceclaw/credentials/speech
+          env: VOICECLAW_SPEECH_KEY
       tts:
         id: managed-magpie-tts
         name: Magpie TTS Multilingual
@@ -58,7 +58,7 @@ frontend_profiles:
         synthesis_mode: stitched
         language_code: en-US
         credential:
-          file: /var/lib/voiceclaw/credentials/speech
+          env: VOICECLAW_SPEECH_KEY
     connect_timeout_seconds: 15
     bootstrap_timeout_seconds: 15
     max_event_bytes: 16777216

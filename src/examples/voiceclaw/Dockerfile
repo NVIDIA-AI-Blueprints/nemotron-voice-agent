@@ -145,20 +145,19 @@ RUN uv sync \
       /app/src/examples/voiceclaw/src/voiceclaw/resources/voiceclaw.container.yaml \
       /etc/voiceclaw/voiceclaw.yaml
 
-# Installer entry path; the default upstream runtime remains below.
+# NemoClaw Container Service Contract v1 entry path, configured by environment;
+# the default upstream runtime remains below.
 FROM voiceclaw-base AS nemoclaw-container-v1
 ARG VOICECLAW_SOURCE_REVISION
 RUN test "${#VOICECLAW_SOURCE_REVISION}" -eq 40 \
     && case "${VOICECLAW_SOURCE_REVISION}" in *[!0-9a-f]*) false ;; *) true ;; esac
 COPY --from=openshell-client-builder /client/target/release/voiceclaw-openshell-exec /usr/local/bin/voiceclaw-openshell-exec
 COPY --from=openshell-client-builder /client/legal/ /app/legal/openshell/
-LABEL com.nvidia.voiceclaw.install-contract="voiceclaw.nemoclaw.container.v1" \
-    com.nvidia.voiceclaw.openshell-revision="6648bd0c290efbc41ba131ee9831ee45cd431f94"
-ENV VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1
+LABEL com.nvidia.voiceclaw.openshell-revision="6648bd0c290efbc41ba131ee9831ee45cd431f94"
 RUN groupadd --gid 65532 voiceclaw-managed \
     && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin voiceclaw-managed \
-    && chown 65532:65532 /var/lib/voiceclaw /var/lib/voiceclaw/config /var/lib/voiceclaw/credentials /var/lib/voiceclaw/state \
-    && chmod 0700 /var/lib/voiceclaw /var/lib/voiceclaw/config /var/lib/voiceclaw/credentials /var/lib/voiceclaw/state \
+    && chown 65532:65532 /var/lib/voiceclaw /var/lib/voiceclaw/state \
+    && chmod 0700 /var/lib/voiceclaw /var/lib/voiceclaw/state \
     && install -d -o 65532 -g 65532 -m 0700 /run/voiceclaw-managed \
     && touch /etc/voiceclaw-nemoclaw-container-v1 \
     && chmod 0444 /etc/voiceclaw-nemoclaw-container-v1

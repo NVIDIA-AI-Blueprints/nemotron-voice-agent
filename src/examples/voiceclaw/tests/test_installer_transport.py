@@ -3,12 +3,13 @@
 # ruff: noqa: D100, D101, D102, D103, D107
 
 import asyncio
+import dataclasses
 import sys
 import time
 from pathlib import Path
 
 import pytest
-from test_installer_inputs import connection, connection_value
+from test_installer_inputs import connection, environment
 
 from voiceclaw import installer_transport as transport
 from voiceclaw.installer_transport import SDKExecutionTransport, TransportFailure
@@ -21,13 +22,8 @@ def helper(tmp_path: Path, code: str) -> str:
     return str(path)
 
 
-@pytest.fixture(autouse=True)
-def fixture_credential(monkeypatch):
-    monkeypatch.setattr(transport, "read_protected", lambda _: b"fixture.bearer")
-
-
 def execute(client, *, seconds=1, no_auth=False):
-    c = connection(connection_value(no_auth=no_auth))
+    c = connection(environment(no_auth=no_auth))
     return client.execute(
         c,
         ["/usr/local/bin/fabric-agent", "invoke", "--agent", c.agent, "--input", "-"],
@@ -63,11 +59,7 @@ print(json.dumps({'exitCode':0,'stdout':base64.b64encode(b'fixture output').deco
     assert not client._children
 
 
-def test_no_auth_sends_no_token_and_never_reads_openshell_credentials(tmp_path, monkeypatch):
-    def forbidden_read(_):
-        raise AssertionError("no OpenShell credential may be read")
-
-    monkeypatch.setattr(transport, "read_protected", forbidden_read)
+def test_no_auth_sends_no_token(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENSHELL_TOKEN", "unrelated-operator-sentinel")
     monkeypatch.setenv("SSL_CERT_FILE", "/operator/unsupported.pem")
     client = SDKExecutionTransport(
@@ -162,14 +154,14 @@ def test_shutdown_cancels_only_local_execution_and_rejects_further_calls(tmp_pat
     assert not client._children
 
 
-def test_credential_failure_prevents_child_launch(monkeypatch):
-    def invalid(_):
-        raise transport.ContainerInputError
-
-    monkeypatch.setattr(transport, "read_protected", invalid)
+@pytest.mark.parametrize("no_auth", [False, True])
+def test_mismatched_credential_selection_prevents_child_launch(no_auth):
+    c = connection(environment(no_auth=no_auth))
+    c = dataclasses.replace(c, bearer=None if c.bearer else "fixture.bearer")
     client = SDKExecutionTransport(client="/never-launched")
-    with pytest.raises(TransportFailure, match="credential_invalid"):
-        asyncio.run(execute(client))
+    argv = ["/usr/local/bin/fabric-agent", "invoke", "--agent", c.agent, "--input", "-"]
+    with pytest.raises(TransportFailure, match="protocol_error"):
+        asyncio.run(client.execute(c, argv, b"{}", time.monotonic() + 1))
     assert not client._children
 
 

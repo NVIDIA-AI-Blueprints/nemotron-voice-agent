@@ -1,166 +1,118 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: BSD-2-Clause -->
 
-# NemoClaw Container v1 Installer Contract
+# NemoClaw Container Profile
 
-## Accepted Scope
+## Scope
 
-San Dang accepted VoiceClaw implementation of `voiceclaw.nemoclaw.container.v1`
-on October 5, 2026, in the operator conversation. On October 7, San Dang
-approved adapting the installer to the latest `feat/voiceclaw_example`
-implementation while retaining upstream behavior. These conversation decisions
-establish scope and the accountable maintainer; they are not published upstream
-issue decisions.
+The `nemoclaw-container-v1` image target implements the VoiceClaw settings in
+NemoClaw's [Container Service Contract v1](https://github.com/NVIDIA/NemoClaw/blob/bf93570b92c08230cee3816f382b93f97cd519e5/docs/design/container-contract.md).
+That decision is accepted in NemoClaw, with San Dang as the accountable
+maintainer. [NemoClaw PR #13093](https://github.com/NVIDIA/NemoClaw/pull/13093)
+provides the generic container base. [PR #12619](https://github.com/NVIDIA/NemoClaw/pull/12619)
+is closed, so protected credential-file delivery is deferred.
 
-Placement is `src/examples/voiceclaw` in
-`NVIDIA-AI-Blueprints/nemotron-voice-agent`. The adaptation baseline is
-`fe2402e4ab6377c6eba4ae00a9d2a72f4422f808`. The reason is to preserve the tested
-installer interface without retaining a duplicate agent adapter.
-
-The responsibility split is explicit:
+NemoClaw deploys this image as an ordinary `kind: container` service and passes
+literal environment values. It does not interpret VoiceClaw settings. There is
+no application-specific installer, `agentConnection`, generated connection
+descriptor, or credential file. VoiceClaw does not require
+`/run/nemoclaw/agent-connection.json` or any other descriptor to start.
 
 | Owner | Responsibility |
 | --- | --- |
-| NemoClaw | YAML declaration, protected delivery, resolved bindings, dependency ordering, container create/start/health/remove, and owned data removal |
-| VoiceClaw | Application image, foreground bootstrap, bundled frontend, local readiness, installer executor, request/result integration, and local shutdown |
+| NemoClaw | Container create/start/health/remove, publication, and declared environment |
+| Operator | Gateway and agent creation and verification before deployment, and private handling of literal values |
+| VoiceClaw | Image, settings validation, bundled frontend, local health, executor, request/result integration, and local shutdown |
 | OpenShell | Gateway transport, authentication, authorization, and sandbox isolation |
 | Fabric and its adapter | Agent execution, bridge contracts, result/context evidence, and native health capability |
-| Issuer/operator | Credential issuance, audience, authority, expiry, revocation, and renewal |
+| Issuer/operator | Service-token issuance, audience, authority, expiry, revocation, and renewal |
 
-NemoClaw's separate scope acceptance is recorded in
-[issue #12567](https://github.com/NVIDIA/NemoClaw/issues/12567#issuecomment-5996200381).
-Scope does not include a token issuer, background installer operator, agent
-lifecycle manager, Docker socket, host networking, host IPC, or GPU access for
-the VoiceClaw application. The default image supervisor, developer Compose
+The application has no Docker socket, host networking, host IPC, GPU access, or
+agent lifecycle control. The default image supervisor, developer Compose
 recipe, Python SDK factory, and cloud/external frontend profiles remain separate.
 
-Validation covers descriptor and protected-file rejection, SDK transport,
-upstream protocol integration, observation-only local health, state-directory
-initialization, no replay, and local child shutdown. Linux image/bootstrap and
-explicit voice-turn evidence remain separate gates.
+## Environment
 
-## Installer Inputs
+| Variable | Meaning |
+| --- | --- |
+| `VOICECLAW_PORT` | Listener port for the console, `WS /v1/realtime`, and `GET /health`; default `18790` |
+| `VOICECLAW_GATEWAY_URL` | OpenShell gateway URL reachable from the container |
+| `VOICECLAW_WORKSPACE` | Selected workspace name |
+| `VOICECLAW_SANDBOX_NAME` | Selected sandbox name |
+| `VOICECLAW_SANDBOX_ID` | Expected physical sandbox UUID |
+| `VOICECLAW_AGENT_NAME` | Agent to invoke in that sandbox |
+| `VOICECLAW_AUTH_MODE` | `none` or `oidcBearer` |
+| `VOICECLAW_GATEWAY_TOKEN` | Service token; required for `oidcBearer` and rejected for `none` |
+| `VOICECLAW_SPEECH_KEY` | Hosted speech and LLM credential for the bundled frontend |
 
-The five application environment inputs remain unchanged:
+Every value except the port is required. Startup validates all settings before
+activation and exits with the fixed message `container-input-invalid` without
+echoing a value. There is no default target, host-variable expansion, operator
+credential discovery, or unauthenticated fallback.
 
-```text
-VOICECLAW_RUNTIME_PROFILE=nemoclaw-container-v1
-VOICECLAW_INSTALL_CONTRACT=voiceclaw.nemoclaw.container.v1
-VOICECLAW_AGENT_CONNECTION_FILE=/var/lib/voiceclaw/config/agent-connection.json
-VOICECLAW_SPEECH_CREDENTIAL_FILE=/var/lib/voiceclaw/credentials/speech
-VOICECLAW_STATE_PATH=/var/lib/voiceclaw/state/state.db
-```
+Literal credentials are a temporary plaintext approach, not secret storage.
+They are visible in YAML, NemoClaw plans and state, exports, Docker inspection,
+and the application process environment. Replace placeholders only in private
+local configuration; never commit real values or share resulting plans, state,
+exports, or logs. Removing the container does not revoke an upstream credential.
 
-NemoClaw resolves one connection before starting VoiceClaw. The connection is a
-UTF-8 JSON object of at most 64 KiB. This nonsecret example contains invalid
-placeholders; replace them with the actual deployment bindings:
+VoiceClaw keeps both credentials out of command arguments, browser responses,
+and logs. The gateway token reaches only the trusted SDK client through a
+private stdin pipe. The speech key reaches only the bundled frontend child
+environment and the local credential binding for that frontend.
 
-```json
-{
-  "schemaVersion": "nemoclaw.agent-connection.v1",
-  "deploymentUid": "<deployment UUID>",
-  "service": "voice",
-  "gateway": {
-    "endpoint": "https://<container-reachable gateway>:<port>",
-    "tls": {"trust": "system", "caFile": null}
-  },
-  "authentication": {
-    "mode": "oidcBearer",
-    "credentialFile": "/var/lib/voiceclaw/credentials/openshell",
-    "refreshMode": "none"
-  },
-  "target": {
-    "workspace": "<resolved workspace>",
-    "sandbox": "assistant",
-    "sandboxId": "<resolved sandbox UUID>",
-    "agent": "main"
-  },
-  "bridge": {"interfaceVersion": 1, "command": "fabric-agent"},
-  "timeouts": {"healthSeconds": 12, "invokeSeconds": 120}
-}
-```
+## Connection Modes
 
-The parser rejects unknown versions or fields, duplicate JSON keys, malformed
-identities, unsafe URLs and paths, and the obsolete installer projection.
-There is no automatic fallback or operator credential discovery.
-
-Installer-owned directories use mode `0700`; descriptor and credential files
-use `0600`, all owned by UID:GID `65532:65532`. VoiceClaw validates ownership,
-modes, regular files, access control lists, stable bounded reads, and no-follow
-traversal. Ancestors outside the protected data root retain identity, ownership,
-and mode checks; unrelated sibling activity does not invalidate a safe binding.
-VoiceClaw does not rewrite protected inputs. Each credential read is bounded to
-16 KiB. Speech and OpenShell credential paths must be distinct.
-
-The application owns only its local state. Startup creates missing state parent
-directories beneath the verified data root with mode `0700`, preserving a valid
-existing `0600` state file. Unsafe existing paths fail startup. This supports a
-`NoCopy` volume populated with configuration and credentials but no state
-directory.
-
-## Explicit Connection Modes
-
-The installer profile supports two distinct descriptor pairs:
-
-| Gateway | TLS | Authentication |
+| `VOICECLAW_AUTH_MODE` | Gateway | Credential |
 | --- | --- | --- |
-| HTTPS | `trust: system`, `caFile: null` | `mode: oidcBearer`, protected `credentialFile`, `refreshMode: none` |
-| Development-only private HTTP | `trust: none`, `caFile: null` | `mode: none`, `credentialFile: null`, `refreshMode: none` |
+| `oidcBearer` | HTTPS with system certificate verification | `VOICECLAW_GATEWAY_TOKEN` |
+| `none` | Development-only private HTTP | No gateway token |
 
-HTTPS uses a static bearer with verified system trust. It does not implement
-upstream client-credentials exchange or refresh. The issuer must approve the
-service identity and its finite lifetime, audience, and authority. Do not copy
-administrator credentials, operator login state, or refresh tokens. Gateway
-rejection fails closed. Private CA delivery requires separate review.
+HTTPS uses a static bearer and does not implement client-credentials exchange
+or refresh. Do not supply administrator credentials, operator login state, or
+refresh tokens. A token's authority is determined by the gateway. Gateway
+rejection and TLS errors fail closed.
 
 Development HTTP requires a canonical literal IPv4 address from `10.0.0.0/8`,
 `172.16.0.0/12`, or `192.168.0.0/16`, with an explicit port. DNS names, IPv6,
 loopback, link-local/public addresses, alternate numeric forms, and non-origin
-URLs are rejected. No OpenShell credential is read in this mode. Speech
-credentials remain required. Mixed modes and automatic downgrade are rejected.
+URLs are rejected. Mixed modes are rejected. The address filter cannot prove
+network isolation; HTTP provides no encryption or peer authentication. Use it
+only for an explicitly trusted local deployment.
 
-The address parser cannot prove Docker ownership or isolation. NemoClaw must
-bind the endpoint to the declared gateway and deployment network and prevent
-LAN/public publication. HTTP provides no encryption or peer authentication;
-other reachable processes can use gateway RPCs beyond this executor's commands.
-This is not production or authenticated qualification.
+## Agent Adapter Integration
 
-These modes are installer-specific. The upstream YAML factory retains its
-anonymous loopback and remote OAuth client-credentials rules without relaxation.
-
-## Upstream Adapter Integration
-
-The installer executor implements the upstream `SandboxExecutor` port and uses
-the image-owned `voiceclaw-openshell-exec` Rust SDK client. The OpenShell SDK
+The executor implements the upstream `SandboxExecutor` port and uses the
+image-owned `voiceclaw-openshell-exec` Rust SDK client. The OpenShell SDK
 revision remains `6648bd0c290efbc41ba131ee9831ee45cd431f94`, with a checked-in
-lockfile. The executor supplies the explicit workspace, sandbox name, and
-physical sandbox ID from the protected descriptor.
+lockfile. The client receives the explicit workspace, sandbox name, and
+expected sandbox ID, and verifies that identity before each command. If the
+identity changed or cannot be established, the request stops instead of
+invoking another sandbox by name. The pinned OpenShell API has no atomic ID
+precondition, so this check cannot eliminate the replacement race.
 
 VoiceClaw composes the existing `OpenShellFabricAdapter`. It retains upstream
 request encoding, bridge decoding, result-channel parsing, correlation checks,
-and fresh-target context validation. There is no second legacy backend or
-fabricated successful bridge check. The executor accepts only the adapter's
+and fresh-target context validation. The executor accepts only the adapter's
 fixed `/usr/local/bin/fabric-agent check --agent ... --live` and
-`/usr/local/bin/fabric-agent invoke --agent ... --input -` operations. It runs
-no login shell or lifecycle command.
+`/usr/local/bin/fabric-agent invoke --agent ... --input -` operations, with
+check and invoke deadlines of 12 and 120 seconds. It bounds stdin and streamed
+output and rejects output that echoes the gateway token. It runs no login shell
+or lifecycle command. An unavailable agent returns a bounded failure; no other
+agent is selected.
 
-The installer sets `interaction.turn_routing_mode: model`. The frontend selects
+The profile sets `interaction.turn_routing_mode: model`. The frontend selects
 direct conversation or the advertised `work.delegate` operation. Unavailable or
 consumed backends reject delegated requests before admission. Delegation sends
 the validated standalone goal produced by the frontend; acknowledgements and
-result speech use separate responses. Argument, source-text, readiness, and
-availability checks still apply.
+result speech use separate responses.
 
 Requests use the `nvidia.fabric.openclaw` codec with `{agent, message}` input.
-The image selects this OpenClaw adapter; the descriptor adds no adapter override
-or new fields. Both the Fabric agent and native OpenClaw agent are bound to
-`descriptor.target.agent`. Different Fabric and native agent names are not
-supported by this installer contract.
-Successful results must preserve the Fabric runtime, adapter, and agent
-identities and qualify each appended turn against verified native history.
-The selected response must parse as `voiceclaw.result.v1` display/speech
-channels. Plain text is not a
-successful fallback.
+Both the Fabric agent and native OpenClaw agent are bound to
+`VOICECLAW_AGENT_NAME`. Successful results must preserve the Fabric runtime,
+adapter, and agent identities and qualify each appended turn against verified
+native history. The selected response must parse as `voiceclaw.result.v1`
+display/speech channels. Plain text is not a successful fallback.
 
 First-turn qualification requires exactly one original user prompt, the matching
 session identity for the native agent and runtime, and a final assistant response with empty
@@ -186,46 +138,23 @@ newline. The response body and exact user prompt remain unchanged. The selected
 response still passes the strict result-envelope parser; JSON-equivalent
 rewrites are not accepted as matching history.
 
-The installer profile permits one non-durable delegated turn against a fresh
+The profile permits one non-durable delegated turn against a fresh
 target. A successful or ambiguous invocation, an unusable result, or an
 abandoned in-flight invocation consumes the target and prevents another
 dispatch. VoiceClaw does not adopt existing native history or claim session
 continuity, reconnect recovery, replay, event streaming, steering, or confirmed
 remote cancellation. Provision a fresh target before delegating again.
 
-The executor bounds stdin and streamed output and enforces the descriptor's
-deadlines. Bearer control data enters the trusted SDK child through a private
-stdin pipe, separately from the remote request. Credentials do not enter Docker
-environment configuration, command arguments, browser state, correlation state,
-or logs. The bundled frontend can receive its speech key in a restricted child
-environment when required by its provider library.
-
-A sandbox-ID precheck detects an observed replacement but is not atomic
-authorization fencing. It cannot eliminate the name-to-ID race. The gateway
-identity's authority can exceed the executor's command allowlist.
-
-## Image and Local Readiness
-
-The dedicated `nemoclaw-container-v1` image target owns the following interface:
+## Image and Health
 
 | Item | Value |
 | --- | --- |
 | Entrypoint and command | `/usr/local/bin/voiceclaw-runtime serve` |
-| Runtime identity | `65532:65532` |
-| Listener and API | `0.0.0.0:18790`; `WS /v1/realtime` |
-| Browser UI | Packaged console at `GET /` on the same listener |
-| Disposable data | `/var/lib/voiceclaw` |
+| Runtime identity | `65532:65532`; other identities are rejected |
+| Listener | `0.0.0.0:${VOICECLAW_PORT}`; console at `GET /`, `WS /v1/realtime`, `GET /health` |
+| Disposable state | `/var/lib/voiceclaw/state/state.db` |
 | Writable scratch | `/run/voiceclaw-managed` |
 | Stop allowance | SIGTERM; local children stop within 15 seconds |
-
-The browser console uses the existing `WS /v1/realtime` facade on port `18790`.
-Keep host publication on loopback or the approved private deployment network.
-For a remote Linux host, forward its loopback listener to your local computer
-with SSH, then open `http://localhost:18790/`. Refer to the
-[browser access procedure](README.md#open-the-installed-browser-console).
-Microphone capture requires a secure browser context, such as localhost, and
-your microphone permission. Browser access retains the installer's private
-network boundary and existing agent binding.
 
 Build from the repository root after committing all reviewed inputs:
 
@@ -243,33 +172,25 @@ docker build \
   .
 ```
 
-The build command does not publish an image. Supply an immutable
-`repository@sha256:<64-hex-manifest-digest>` to NemoClaw and prove that it
-resolves in the selected Docker engine under `imagePullPolicy: Never`. A local
-tag or configuration image ID does not establish that manifest reference.
+The build does not publish an image. Supply NemoClaw an immutable
+`repository@sha256:<64-hex-manifest-digest>` that resolves in the selected
+Docker engine. A local tag or configuration image ID is not that reference.
 
-`GET /livez` observes process/listener liveness. Installer-profile `GET /readyz`
-returns empty `200` for valid protected inputs, initialized local components, a
-live frontend child, and a successful bounded child `/health` observation.
-Otherwise it returns empty `503`. The child probe targets
-`http://127.0.0.1:7861/health` and requires `200` with `{"status": "ok"}`.
-It has a 2-second budget within the 15-second readiness deadline, with 4,096
-header bytes and 1,024 body bytes maximum. Docker retains health command output;
-the command keeps that output empty.
+`GET /health` returns empty `200` when local components are initialized, the
+bundled frontend child is running, and its `http://127.0.0.1:7861/health`
+returns `200` with `{"status": "ok"}`. It returns empty `503` while loading or
+after a failure. The child probe has a 2-second budget within a 15-second
+health deadline, with 4,096 header bytes and 1,024 body bytes maximum. Use
+`readiness.path: /health` in NemoClaw, or rely on the image `HEALTHCHECK`.
 
-Local readiness creates no user session, agent invocation, model response,
-credential renewal, repair, or lifecycle change. It does not prove provider
-credentials or native agent health. Unsupported native health remains distinct;
-the upstream adapter still validates the real bridge binding before delegated
-work. A validated running binding can pass the upstream binding check while
-native health remains unsupported. No unsupported status is fabricated or
-relabeled as native healthy.
+Health creates no user session, agent invocation, model response, or lifecycle
+change. It does not prove provider credentials or native agent health.
+Unsupported native health remains distinct; the upstream adapter still
+validates the bridge binding before delegated work.
 
 Docker health uses a 10-second interval, 20-second timeout, 180-second start
-period, and three retries. NemoClaw waits up to 300 seconds for startup.
-Descriptor health and invoke budgets remain 1–12 and 1–120 seconds respectively.
-The image bundles executable dependencies; startup downloads no executable or
-package. The hosted frontend preset does not inherit the sandbox's local vLLM
+period, and three retries. The image bundles executable dependencies; startup
+downloads no executable or package. The hosted frontend preset does not inherit the sandbox's local vLLM
 provider automatically.
 
 The hosted frontend large language model (LLM) sets `supports_tokenize: false`
@@ -283,7 +204,7 @@ qualify a complete voice reply.
 Application removal deletes its owned disposable volume and preserves the
 agent dependency. Deployment-wide destroy follows NemoClaw ownership and can
 delete its sandbox. VoiceClaw shutdown stops only local work and children.
-The installer runtime closes its SDK executor before draining the facade,
+The runtime closes its SDK executor before draining the facade,
 cancelling local helper tasks. It waits up to 2 seconds for helper cleanup,
 then terminates the bundled frontend's local process group and reaps the child.
 Cleanup still runs when facade shutdown fails. Cancelling a local helper does
@@ -292,7 +213,9 @@ Credential revocation remains the issuer/operator's responsibility.
 
 ## Validation and Evidence
 
-Historical manual evidence applies only to the earlier implementation:
+Historical manual evidence used the retired descriptor-based revision. It
+proves only that earlier installation and local readiness, not this revision
+or an agent/model response:
 
 | Item | Observed Evidence |
 | --- | --- |
@@ -300,52 +223,30 @@ Historical manual evidence applies only to the earlier implementation:
 | Reported application manifest | `nc-voiceclaw-test@sha256:b057f38bf971185d1e0cc12e12b6f6476242e2d518831ccc728e8c4c3af06a09` |
 | NemoClaw source | `1285a41115945c1f123d377ff580681b9bdb3976` |
 | Operator environment | ARM64 Linux DGX Station, NVIDIA GB300, sudo Docker |
-| Installer result | NemoClaw apply completed; voice container readiness completed |
-| Local probe | HTTP `200` from `http://127.0.0.1:18790/readyz` on October 7 |
 | Native health | `fabric_health_unsupported`, not native healthy |
 
-These are operator-supplied results, not authenticated hardware or image
-provenance. They prove the earlier manual installation and local readiness, not
-an agent/model response or full voice conversation. The earlier pending
-HTTP-descriptor coordination was completed on the NemoClaw side; it is not a
-remaining parser-only blocker. For each PR candidate, record source-pinned
-image and complete-input startup evidence.
-
-Record focused test and hook results for the actual reviewed commit in the PR.
-Do not transfer historical test counts or image results to this revision.
-Fixture success proves only its assertions. A missing-input image smoke does
+Record focused test results for the reviewed commit. Do not transfer historical
+test counts or image results to this revision. A missing-input image smoke does
 not prove complete-input startup.
 
-Qualification requires these distinct results:
+Report the source revision, image digest, platform, and accepted settings for
+qualification under [NemoClaw #12570](https://github.com/NVIDIA/NemoClaw/issues/12570):
 
-1. Build and verify the adapted image, source/package/license/client provenance,
+1. Build and verify the image, source/package/license/client provenance,
    architecture, and selected-engine manifest resolution.
-2. Apply the existing YAML inputs on Linux and observe unchanged apply,
-   interrupted setup/retry, invalid protected input rejection, and local
-   readiness without native inference.
+2. Deploy the YAML service on Linux and observe health without native
+   inference, invalid-setting rejection, and owned removal.
 3. Submit one explicit committed turn against a fresh target after apply exits.
    Prove intended-agent invocation and display/speech results separately from
-   hosted speech-provider credential acceptance and audio behavior. Check the
-   browser result display and audible result playback independently. A valid
-   `voiceclaw.result.v1` response with `speech: null` requests no result speech;
-   its display result does not establish an audible reply. Use the
-   [recorded voice verifier](README.md#verify-a-recorded-voice-turn) to check
-   correlated input transcription, delegated work, and generated result audio.
-   Require transcript, display, and speech markers plus a captured result WAV
-   for this evidence. The verifier saves generated audio and acknowledges zero
-   playback; audible delivery requires separate observation. For installer
-   qualification, select `--context-continuity unqualified`. Prove intended-agent
-   invocation for the one request selected for delegation and also prove that a
-   greeting stays in the frontend. Local tests do not establish this live result.
-4. Test failed/revoked identity and TLS rejection, ambiguous invocation with no
-   replay, secret-free export/reapply, and owned application removal without
-   deleting the agent or retained inference storage.
+   hosted speech-provider credential acceptance and audio behavior. Use the
+   [recorded voice verifier](README.md#verify-a-recorded-voice-turn) with
+   `--context-continuity unqualified`, and prove that a greeting stays in the
+   frontend. Audible delivery requires separate observation.
+4. Test unavailable or replaced agents, failed authentication and TLS
+   rejection, ambiguous invocation with no replay, and interruption/retry.
 
-San Dang remains the accountable integration maintainer. Issuer/operator and
-provider owners must supply identity and speech qualification evidence.
-Supported native health remains upstream work tracked by
+A healthy container, parser fixture, or successful HTTP probe alone is not
+qualification. Supported native health remains upstream work tracked by
 [Fabric #298](https://github.com/NVIDIA/NeMo-Fabric/issues/298) and
 [NemoClaw #12443](https://github.com/NVIDIA/NemoClaw/issues/12443).
-Joint qualification remains tracked by
-[NemoClaw #12570](https://github.com/NVIDIA/NemoClaw/issues/12570).
 This document does not claim production or full voice qualification.
