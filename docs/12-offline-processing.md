@@ -2,9 +2,9 @@
 
 ## Aim and Background
 
-Enable Nemotron Voice Agent to process recorded conversations faster than real
-time so you can run accuracy and task-completion benchmarks without waiting for
-every recording to play. The input includes speech and silence. The output is
+This proposal enables Nemotron Voice Agent to process recorded conversations
+faster than real time. You can run accuracy and task-completion benchmarks
+without waiting for every recording to play. The input includes speech and silence. The output is
 bot audio positioned on the same timeline, with transcripts and server-side
 measurements that explain each response.
 
@@ -39,6 +39,13 @@ endpoint. It uses a separate execution engine and does not change the normal
 `/api/ws`, `/v1/realtime`, or WebRTC paths. This is not an OpenAI Realtime or RTVI
 protocol extension. Other examples can reuse the scheduling contracts through
 additional integration factories.
+
+The design baseline uses the standard continuous NVIDIA STT service with
+`stop_history=320` (the 320 ms baseline).
+It does not inject force-EOU requests or synthetic control silence. Both modes
+must use this baseline and record the effective STT configuration during
+validation. This setting is separate from Silero's silence threshold; the
+scheduler does not add another 320 ms delay.
 
 ## Design Approach and Architecture
 
@@ -289,7 +296,13 @@ bytes is not the success criterion. Compare recognized input, response intent,
 turn ownership, silence, interruption behavior, and benchmark results. Report
 observed differences instead of assuming timing or accuracy equivalence.
 
-### Results and Recordings
+### Validation Status and Prepared Recordings
+
+Full-Duplex-Bench (FDB) score-validation work is in progress. Paired online and
+offline model runs and benchmark scoring are scheduled after this design
+proposal is shared. The next validation report will compare response content,
+turn placement, interruption behavior, accuracy, and task-completion outcomes.
+This proposal does not report measured benchmark scores or claim equivalence.
 
 The four paired source files are prepared. Each preserves the original sample
 prefix exactly and appends 4,000 ms of explicit zero-valued silence to allow a
@@ -297,18 +310,17 @@ natural final endpoint in both modes. The manifest records original and prepared
 hashes, sample counts, and padding. These prepared inputs are comparison cases,
 not the unmodified official benchmark inputs.
 
-| Source | Prepared Duration, ms | Online Execution | Offline Execution |
-| --- | ---: | --- | --- |
-| FDB v1 smooth turn 117 | 13,099.94 | Pending | Pending |
-| FDB v1 synthetic pause 88 | 9,322.69 | Pending | Pending |
-| FDB v1.5 user interruption 135 | 20,594.69 | Pending | Pending |
-| FDB v1.5 clean baseline 135 | 20,595.00 | Pending | Pending |
+| Source | Prepared Duration, ms |
+| --- | ---: |
+| FDB v1 smooth turn 117 | 13,099.94 |
+| FDB v1 synthetic pause 88 | 9,322.69 |
+| FDB v1.5 user interruption 135 | 20,594.69 |
+| FDB v1.5 clean baseline 135 | 20,595.00 |
 
-Current-revision real-provider paired execution is pending. No output WAV,
-server metric, speedup, or accuracy agreement is claimed for these prepared
-inputs. The completed report will link the native input, online bot, offline
-bot, and comparison WAVs for listening and download, followed by per-case and
-valid-turn metrics in milliseconds.
+The follow-up report will link the native input, online bot, offline bot, and
+comparison WAVs for listening and download. It will include per-case and
+valid-turn server metrics in milliseconds, measured evaluation turnaround, and
+scorer results with their input and configuration provenance.
 
 The results require measured values for the following comparisons.
 
@@ -378,13 +390,16 @@ commits, or `response.create`.
 
 ### Limits of the Comparison
 
-The live Generic Assistant uses `NvidiaForceEouSTTService`, which sends an
-80 ms silence chunk tagged `force_eou` at VAD stop. Offline ASR preserves one
-continuous finite source and does not insert that chunk. Its manifest records
-`asr_force_eou: false`. This request-policy difference and the bulk ASR
-availability projection can change transcripts, response timing, or turn grouping.
-The paired evaluation must expose these differences; it cannot certify live
-fidelity from aligned output alone.
+Both modes use continuous ASR with the same STT baseline (`stop_history=320`,
+320 ms) and no force-EOU injection. Source audio, including silence, determines
+recognition progress. Offline EOF explicitly completes the finite source; the
+online stream remains open during normal conversation.
+
+The bulk ASR availability projection can still change transcript readiness,
+response timing, or turn grouping compared with paced input. The paired
+evaluation must measure these differences; aligned output alone does not
+establish live fidelity. It must also verify the effective 320 ms configuration
+in both modes rather than infer it from the proposal baseline.
 
 Replay can generate audio that an interruption later discards. Its compute
 totals include that work and do not reproduce the savings from live cancellation.
@@ -536,9 +551,9 @@ final-tail extension, malformed uploads, disconnect, and watchdog failure.
 The real sample client also exercises the engine with different packet sizes
 and accelerated input; identical traces must produce identical aligned PCM.
 
-Real-provider paired runs additionally verify configuration and source hashes,
-server/client PCM equality, silence outside committed spans, exact clipping,
-stereo channel alignment, source consumption, provider-timer identities, and
+The follow-up real-provider paired runs will additionally verify configuration
+and source hashes, server/client PCM equality, silence outside committed spans,
+exact clipping, stereo channel alignment, source consumption, provider-timer identities, and
 matching final metrics. These checks validate recording and measurement
 integrity. Benchmark scorers separately evaluate semantic accuracy and task
 completion.
