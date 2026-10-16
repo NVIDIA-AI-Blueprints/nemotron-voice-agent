@@ -70,9 +70,7 @@ def _standalone_realtime_test_app():
         patch.object(server, "_sanitize_realtime_config", side_effect=_sanitize),
         patch.object(server, "_validate_realtime_bootstrap_selectors"),
         patch.object(server, "_resolve_realtime_server_tools", return_value=[]),
-        patch.object(server, "_resolve_realtime_delegate_tools", return_value=[]),
         patch.object(server, "_resolve_realtime_server_tool_schemas", return_value=[]),
-        patch.object(server, "_resolve_realtime_delegate_tool_schemas", return_value=[]),
         patch.object(server, "_resolve_realtime_session_capabilities", side_effect=resolve_capabilities),
         patch.object(server, "resolve_voice_for_language", return_value=_VOICE),
     ):
@@ -506,7 +504,7 @@ dotenv.load_dotenv = lambda *, override: original(
     override=override,
 )
 import server  # noqa: F401
-import examples.frontend_backend_agent.pipeline  # noqa: F401
+import tracing  # noqa: F401  (also loads .env without overriding the deployment)
 print(os.environ["REALTIME_SERVICE_PLATFORM"])
 """
             env = os.environ.copy()
@@ -753,9 +751,7 @@ print(os.environ["REALTIME_SERVICE_PLATFORM"])
                 return_value=RealtimeModelRoute(model=_MODEL, runtime_config=runtime),
             ),
             patch.object(server, "_resolve_realtime_server_tools", return_value=[]),
-            patch.object(server, "_resolve_realtime_delegate_tools", return_value=[]),
             patch.object(server, "_resolve_realtime_server_tool_schemas", return_value=[]),
-            patch.object(server, "_resolve_realtime_delegate_tool_schemas", return_value=[]),
             patch.object(
                 server,
                 "_bind_example_context_by_key",

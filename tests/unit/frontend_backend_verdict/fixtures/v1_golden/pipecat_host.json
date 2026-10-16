@@ -1,0 +1,2023 @@
+{
+ "barge_in_conversation": [
+  {
+   "event_id": "<id0>",
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "noise_reduction": null,
+      "transcription": null,
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<id1>",
+    "instructions": "",
+    "max_output_tokens": "inf",
+    "model": "pine-e2e",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [],
+    "type": "realtime"
+   },
+   "type": "session.created"
+  },
+  {
+   "event_id": "<id2>",
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "noise_reduction": {
+       "type": "near_field"
+      },
+      "transcription": {
+       "language": "en",
+       "model": "gpt-4o-transcribe"
+      },
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<id1>",
+    "instructions": "You are a customer service agent handling a VOICE CALL with a customer.\n\n# Important Voice Call Considerations\n\n1. Respond naturally and conversationally as you would in a real phone call\n\n2. Try to be helpful and always follow the policy.\n\n# User authentication and user information collection\n\n1. When collecting customer information (e.g. names, emails, IDs), ask the customer to spell it out letter by letter (e.g. \"J, O, H, N\") to ensure you have the correct information and accomodate for customer audio being unclear or background noise.\n\n2. If authenticating the user fails based on user provided information, ALWAYS explicitly ask the customer to SPELL THINGS OUT or provide information LETTER BY LETTER (e.g. \"first name J, O, H, N last name S, M, I, T, H\").\n\n# Mock Domain Policy\n\n1. Each task must have a title\n2. Task status can only be \"pending\" or \"completed\"\n3. Only existing users can create tasks \n4. You are not allowed to delete tasks. You should transfer the a human agent.\n5. If the user asks for a compliment, compliment them",
+    "max_output_tokens": "inf",
+    "model": "pine-e2e",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [
+     {
+      "description": "Create a new task for a user.",
+      "name": "create_task",
+      "parameters": {
+       "properties": {
+        "description": {
+         "default": null,
+         "description": "Optional description of the task",
+         "title": "Description",
+         "type": "string"
+        },
+        "title": {
+         "description": "The title of the task",
+         "title": "Title",
+         "type": "string"
+        },
+        "user_id": {
+         "description": "The ID of the user creating the task",
+         "title": "User Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_id",
+        "title"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Get all users in the database.",
+      "name": "get_users",
+      "parameters": {
+       "properties": {},
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Update the status of a task.",
+      "name": "update_task_status",
+      "parameters": {
+       "properties": {
+        "status": {
+         "description": "The new status of the task",
+         "enum": [
+          "pending",
+          "completed"
+         ],
+         "title": "Status",
+         "type": "string"
+        },
+        "task_id": {
+         "description": "The ID of the task to update",
+         "title": "Task Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "task_id",
+        "status"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Transfer the user to a human agent, with a summary of the user's issue.\n\nOnly transfer if\n -  the user explicitly asks for a human agent\n -  given the policy and the available tools, you cannot solve the user's issue.",
+      "name": "transfer_to_human_agents",
+      "parameters": {
+       "properties": {
+        "summary": {
+         "description": "A summary of the user's issue.",
+         "title": "Summary",
+         "type": "string"
+        }
+       },
+       "required": [
+        "summary"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     }
+    ],
+    "type": "realtime"
+   },
+   "type": "session.updated"
+  },
+  {
+   "audio_start_ms": 0,
+   "event_id": "<id3>",
+   "item_id": "<id4>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 600,
+   "event_id": "<id5>",
+   "item_id": "<id4>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "event_id": "<id6>",
+   "item_id": "<id4>",
+   "previous_item_id": null,
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "event_id": "<id7>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id4>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.added"
+  },
+  {
+   "event_id": "<id8>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id4>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 1",
+   "event_id": "<id9>",
+   "item_id": "<id4>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id10>",
+   "item_id": "<id4>",
+   "transcript": "utterance 1",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "event_id": "<id11>",
+   "response": {
+    "id": "<id12>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "event_id": "<id13>",
+   "item": {
+    "arguments": "",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.output_item.added"
+  },
+  {
+   "event_id": "<id16>",
+   "item": {
+    "arguments": "",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "previous_item_id": "<id4>",
+   "type": "conversation.item.added"
+  },
+  {
+   "call_id": "<id14>",
+   "delta": "{}",
+   "event_id": "<id17>",
+   "item_id": "<id15>",
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.function_call_arguments.delta"
+  },
+  {
+   "arguments": "{}",
+   "call_id": "<id14>",
+   "event_id": "<id18>",
+   "item_id": "<id15>",
+   "name": "get_users",
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.function_call_arguments.done"
+  },
+  {
+   "event_id": "<id19>",
+   "item": {
+    "arguments": "{}",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.output_item.done"
+  },
+  {
+   "event_id": "<id20>",
+   "item": {
+    "arguments": "{}",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id21>",
+   "response": {
+    "id": "<id12>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "arguments": "{}",
+      "call_id": "<id14>",
+      "id": "<id15>",
+      "name": "get_users",
+      "object": "realtime.item",
+      "status": "completed",
+      "type": "function_call"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "event_id": "<id22>",
+   "item": {
+    "call_id": "<id14>",
+    "id": "<id23>",
+    "object": "realtime.item",
+    "output": "{}",
+    "status": "completed",
+    "type": "function_call_output"
+   },
+   "previous_item_id": "<id15>",
+   "type": "conversation.item.added"
+  },
+  {
+   "event_id": "<id24>",
+   "item": {
+    "call_id": "<id14>",
+    "id": "<id23>",
+    "object": "realtime.item",
+    "output": "{}",
+    "status": "completed",
+    "type": "function_call_output"
+   },
+   "previous_item_id": "<id15>",
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id25>",
+   "response": {
+    "id": "<id26>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "event_id": "<id27>",
+   "item": {
+    "content": [],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_item.added"
+  },
+  {
+   "event_id": "<id29>",
+   "item": {
+    "content": [],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "previous_item_id": "<id23>",
+   "type": "conversation.item.added"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id30>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "part": {
+    "transcript": "",
+    "type": "audio"
+   },
+   "response_id": "<id26>",
+   "type": "response.content_part.added"
+  },
+  {
+   "content_index": 0,
+   "delta": "Thanks.",
+   "event_id": "<id31>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id32>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": " I have looked that up for you.",
+   "event_id": "<id33>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id34>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id35>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id36>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id37>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "transcript": "Thanks. I have looked that up for you.",
+   "type": "response.output_audio_transcript.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id38>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "part": {
+    "transcript": "Thanks. I have looked that up for you.",
+    "type": "audio"
+   },
+   "response_id": "<id26>",
+   "type": "response.content_part.done"
+  },
+  {
+   "event_id": "<id39>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Thanks. I have looked that up for you.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_item.done"
+  },
+  {
+   "event_id": "<id40>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Thanks. I have looked that up for you.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id41>",
+   "response": {
+    "id": "<id26>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "content": [
+       {
+        "transcript": "Thanks. I have looked that up for you.",
+        "type": "output_audio"
+       }
+      ],
+      "id": "<id28>",
+      "object": "realtime.item",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "audio_start_ms": 1600,
+   "event_id": "<id42>",
+   "item_id": "<id43>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 2200,
+   "event_id": "<id44>",
+   "item_id": "<id43>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "event_id": "<id45>",
+   "item_id": "<id43>",
+   "previous_item_id": "<id28>",
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "event_id": "<id46>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id43>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<id28>",
+   "type": "conversation.item.added"
+  },
+  {
+   "event_id": "<id47>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id43>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<id28>",
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 2",
+   "event_id": "<id48>",
+   "item_id": "<id43>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id49>",
+   "item_id": "<id43>",
+   "transcript": "utterance 2",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "event_id": "<id50>",
+   "response": {
+    "id": "<id51>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "event_id": "<id52>",
+   "item": {
+    "content": [],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_item.added"
+  },
+  {
+   "event_id": "<id54>",
+   "item": {
+    "content": [],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "previous_item_id": "<id43>",
+   "type": "conversation.item.added"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id55>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "part": {
+    "transcript": "",
+    "type": "audio"
+   },
+   "response_id": "<id51>",
+   "type": "response.content_part.added"
+  },
+  {
+   "content_index": 0,
+   "delta": "Understood.",
+   "event_id": "<id56>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id57>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": " Is there anything else I can help you with today?",
+   "event_id": "<id58>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id59>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id60>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id61>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id62>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id63>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "transcript": "Understood. Is there anything else I can help you with today?",
+   "type": "response.output_audio_transcript.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id64>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "part": {
+    "transcript": "Understood. Is there anything else I can help you with today?",
+    "type": "audio"
+   },
+   "response_id": "<id51>",
+   "type": "response.content_part.done"
+  },
+  {
+   "event_id": "<id65>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Understood. Is there anything else I can help you with today?",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_item.done"
+  },
+  {
+   "event_id": "<id66>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Understood. Is there anything else I can help you with today?",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id67>",
+   "response": {
+    "id": "<id51>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "content": [
+       {
+        "transcript": "Understood. Is there anything else I can help you with today?",
+        "type": "output_audio"
+       }
+      ],
+      "id": "<id53>",
+      "object": "realtime.item",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "audio_end_ms": 150,
+   "content_index": 0,
+   "event_id": "<id68>",
+   "item_id": "<id28>",
+   "type": "conversation.item.truncated"
+  }
+ ],
+ "conversation": [
+  {
+   "event_id": "<id0>",
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "noise_reduction": null,
+      "transcription": null,
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<id1>",
+    "instructions": "",
+    "max_output_tokens": "inf",
+    "model": "pine-e2e",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [],
+    "type": "realtime"
+   },
+   "type": "session.created"
+  },
+  {
+   "event_id": "<id2>",
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "noise_reduction": {
+       "type": "near_field"
+      },
+      "transcription": {
+       "language": "en",
+       "model": "gpt-4o-transcribe"
+      },
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<id1>",
+    "instructions": "You are a customer service agent handling a VOICE CALL with a customer.\n\n# Important Voice Call Considerations\n\n1. Respond naturally and conversationally as you would in a real phone call\n\n2. Try to be helpful and always follow the policy.\n\n# User authentication and user information collection\n\n1. When collecting customer information (e.g. names, emails, IDs), ask the customer to spell it out letter by letter (e.g. \"J, O, H, N\") to ensure you have the correct information and accomodate for customer audio being unclear or background noise.\n\n2. If authenticating the user fails based on user provided information, ALWAYS explicitly ask the customer to SPELL THINGS OUT or provide information LETTER BY LETTER (e.g. \"first name J, O, H, N last name S, M, I, T, H\").\n\n# Mock Domain Policy\n\n1. Each task must have a title\n2. Task status can only be \"pending\" or \"completed\"\n3. Only existing users can create tasks \n4. You are not allowed to delete tasks. You should transfer the a human agent.\n5. If the user asks for a compliment, compliment them",
+    "max_output_tokens": "inf",
+    "model": "pine-e2e",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [
+     {
+      "description": "Create a new task for a user.",
+      "name": "create_task",
+      "parameters": {
+       "properties": {
+        "description": {
+         "default": null,
+         "description": "Optional description of the task",
+         "title": "Description",
+         "type": "string"
+        },
+        "title": {
+         "description": "The title of the task",
+         "title": "Title",
+         "type": "string"
+        },
+        "user_id": {
+         "description": "The ID of the user creating the task",
+         "title": "User Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_id",
+        "title"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Get all users in the database.",
+      "name": "get_users",
+      "parameters": {
+       "properties": {},
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Update the status of a task.",
+      "name": "update_task_status",
+      "parameters": {
+       "properties": {
+        "status": {
+         "description": "The new status of the task",
+         "enum": [
+          "pending",
+          "completed"
+         ],
+         "title": "Status",
+         "type": "string"
+        },
+        "task_id": {
+         "description": "The ID of the task to update",
+         "title": "Task Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "task_id",
+        "status"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Transfer the user to a human agent, with a summary of the user's issue.\n\nOnly transfer if\n -  the user explicitly asks for a human agent\n -  given the policy and the available tools, you cannot solve the user's issue.",
+      "name": "transfer_to_human_agents",
+      "parameters": {
+       "properties": {
+        "summary": {
+         "description": "A summary of the user's issue.",
+         "title": "Summary",
+         "type": "string"
+        }
+       },
+       "required": [
+        "summary"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     }
+    ],
+    "type": "realtime"
+   },
+   "type": "session.updated"
+  },
+  {
+   "audio_start_ms": 0,
+   "event_id": "<id3>",
+   "item_id": "<id4>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 600,
+   "event_id": "<id5>",
+   "item_id": "<id4>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "event_id": "<id6>",
+   "item_id": "<id4>",
+   "previous_item_id": null,
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "event_id": "<id7>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id4>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.added"
+  },
+  {
+   "event_id": "<id8>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id4>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 1",
+   "event_id": "<id9>",
+   "item_id": "<id4>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id10>",
+   "item_id": "<id4>",
+   "transcript": "utterance 1",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "event_id": "<id11>",
+   "response": {
+    "id": "<id12>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "event_id": "<id13>",
+   "item": {
+    "arguments": "",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.output_item.added"
+  },
+  {
+   "event_id": "<id16>",
+   "item": {
+    "arguments": "",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "previous_item_id": "<id4>",
+   "type": "conversation.item.added"
+  },
+  {
+   "call_id": "<id14>",
+   "delta": "{}",
+   "event_id": "<id17>",
+   "item_id": "<id15>",
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.function_call_arguments.delta"
+  },
+  {
+   "arguments": "{}",
+   "call_id": "<id14>",
+   "event_id": "<id18>",
+   "item_id": "<id15>",
+   "name": "get_users",
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.function_call_arguments.done"
+  },
+  {
+   "event_id": "<id19>",
+   "item": {
+    "arguments": "{}",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<id12>",
+   "type": "response.output_item.done"
+  },
+  {
+   "event_id": "<id20>",
+   "item": {
+    "arguments": "{}",
+    "call_id": "<id14>",
+    "id": "<id15>",
+    "name": "get_users",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id21>",
+   "response": {
+    "id": "<id12>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "arguments": "{}",
+      "call_id": "<id14>",
+      "id": "<id15>",
+      "name": "get_users",
+      "object": "realtime.item",
+      "status": "completed",
+      "type": "function_call"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "event_id": "<id22>",
+   "item": {
+    "call_id": "<id14>",
+    "id": "<id23>",
+    "object": "realtime.item",
+    "output": "{}",
+    "status": "completed",
+    "type": "function_call_output"
+   },
+   "previous_item_id": "<id15>",
+   "type": "conversation.item.added"
+  },
+  {
+   "event_id": "<id24>",
+   "item": {
+    "call_id": "<id14>",
+    "id": "<id23>",
+    "object": "realtime.item",
+    "output": "{}",
+    "status": "completed",
+    "type": "function_call_output"
+   },
+   "previous_item_id": "<id15>",
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id25>",
+   "response": {
+    "id": "<id26>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "event_id": "<id27>",
+   "item": {
+    "content": [],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_item.added"
+  },
+  {
+   "event_id": "<id29>",
+   "item": {
+    "content": [],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "previous_item_id": "<id23>",
+   "type": "conversation.item.added"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id30>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "part": {
+    "transcript": "",
+    "type": "audio"
+   },
+   "response_id": "<id26>",
+   "type": "response.content_part.added"
+  },
+  {
+   "content_index": 0,
+   "delta": "Thanks.",
+   "event_id": "<id31>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id32>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": " I have looked that up for you.",
+   "event_id": "<id33>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id34>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id35>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id36>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_audio.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id37>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "response_id": "<id26>",
+   "transcript": "Thanks. I have looked that up for you.",
+   "type": "response.output_audio_transcript.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id38>",
+   "item_id": "<id28>",
+   "output_index": 0,
+   "part": {
+    "transcript": "Thanks. I have looked that up for you.",
+    "type": "audio"
+   },
+   "response_id": "<id26>",
+   "type": "response.content_part.done"
+  },
+  {
+   "event_id": "<id39>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Thanks. I have looked that up for you.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id26>",
+   "type": "response.output_item.done"
+  },
+  {
+   "event_id": "<id40>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Thanks. I have looked that up for you.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id28>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id41>",
+   "response": {
+    "id": "<id26>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "content": [
+       {
+        "transcript": "Thanks. I have looked that up for you.",
+        "type": "output_audio"
+       }
+      ],
+      "id": "<id28>",
+      "object": "realtime.item",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "audio_start_ms": 4400,
+   "event_id": "<id42>",
+   "item_id": "<id43>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 5000,
+   "event_id": "<id44>",
+   "item_id": "<id43>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "event_id": "<id45>",
+   "item_id": "<id43>",
+   "previous_item_id": "<id28>",
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "event_id": "<id46>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id43>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<id28>",
+   "type": "conversation.item.added"
+  },
+  {
+   "event_id": "<id47>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id43>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<id28>",
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 2",
+   "event_id": "<id48>",
+   "item_id": "<id43>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id49>",
+   "item_id": "<id43>",
+   "transcript": "utterance 2",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "event_id": "<id50>",
+   "response": {
+    "id": "<id51>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "event_id": "<id52>",
+   "item": {
+    "content": [],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_item.added"
+  },
+  {
+   "event_id": "<id54>",
+   "item": {
+    "content": [],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "previous_item_id": "<id43>",
+   "type": "conversation.item.added"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id55>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "part": {
+    "transcript": "",
+    "type": "audio"
+   },
+   "response_id": "<id51>",
+   "type": "response.content_part.added"
+  },
+  {
+   "content_index": 0,
+   "delta": "Understood.",
+   "event_id": "<id56>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id57>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": " Is there anything else I can help you with today?",
+   "event_id": "<id58>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id59>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id60>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "<audio>",
+   "event_id": "<id61>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id62>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_audio.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id63>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "response_id": "<id51>",
+   "transcript": "Understood. Is there anything else I can help you with today?",
+   "type": "response.output_audio_transcript.done"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id64>",
+   "item_id": "<id53>",
+   "output_index": 0,
+   "part": {
+    "transcript": "Understood. Is there anything else I can help you with today?",
+    "type": "audio"
+   },
+   "response_id": "<id51>",
+   "type": "response.content_part.done"
+  },
+  {
+   "event_id": "<id65>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Understood. Is there anything else I can help you with today?",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<id51>",
+   "type": "response.output_item.done"
+  },
+  {
+   "event_id": "<id66>",
+   "item": {
+    "content": [
+     {
+      "transcript": "Understood. Is there anything else I can help you with today?",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<id53>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id67>",
+   "response": {
+    "id": "<id51>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "content": [
+       {
+        "transcript": "Understood. Is there anything else I can help you with today?",
+        "type": "output_audio"
+       }
+      ],
+      "id": "<id53>",
+      "object": "realtime.item",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "audio_start_ms": 8800,
+   "event_id": "<id68>",
+   "item_id": "<id69>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 9400,
+   "event_id": "<id70>",
+   "item_id": "<id69>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "event_id": "<id71>",
+   "item_id": "<id69>",
+   "previous_item_id": "<id53>",
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "event_id": "<id72>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id69>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<id53>",
+   "type": "conversation.item.added"
+  },
+  {
+   "event_id": "<id73>",
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<id69>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<id53>",
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 3",
+   "event_id": "<id74>",
+   "item_id": "<id69>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "event_id": "<id75>",
+   "item_id": "<id69>",
+   "transcript": "utterance 3",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "event_id": "<id76>",
+   "response": {
+    "id": "<id77>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "event_id": "<id78>",
+   "item": {
+    "arguments": "",
+    "call_id": "<id79>",
+    "id": "<id80>",
+    "name": "transfer_to_human_agents",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<id77>",
+   "type": "response.output_item.added"
+  },
+  {
+   "event_id": "<id81>",
+   "item": {
+    "arguments": "",
+    "call_id": "<id79>",
+    "id": "<id80>",
+    "name": "transfer_to_human_agents",
+    "object": "realtime.item",
+    "status": "in_progress",
+    "type": "function_call"
+   },
+   "previous_item_id": "<id69>",
+   "type": "conversation.item.added"
+  },
+  {
+   "call_id": "<id79>",
+   "delta": "{\"summary\": \"scripted gate run\"}",
+   "event_id": "<id82>",
+   "item_id": "<id80>",
+   "output_index": 0,
+   "response_id": "<id77>",
+   "type": "response.function_call_arguments.delta"
+  },
+  {
+   "arguments": "{\"summary\": \"scripted gate run\"}",
+   "call_id": "<id79>",
+   "event_id": "<id83>",
+   "item_id": "<id80>",
+   "name": "transfer_to_human_agents",
+   "output_index": 0,
+   "response_id": "<id77>",
+   "type": "response.function_call_arguments.done"
+  },
+  {
+   "event_id": "<id84>",
+   "item": {
+    "arguments": "{\"summary\": \"scripted gate run\"}",
+    "call_id": "<id79>",
+    "id": "<id80>",
+    "name": "transfer_to_human_agents",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "output_index": 0,
+   "response_id": "<id77>",
+   "type": "response.output_item.done"
+  },
+  {
+   "event_id": "<id85>",
+   "item": {
+    "arguments": "{\"summary\": \"scripted gate run\"}",
+    "call_id": "<id79>",
+    "id": "<id80>",
+    "name": "transfer_to_human_agents",
+    "object": "realtime.item",
+    "status": "completed",
+    "type": "function_call"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "event_id": "<id86>",
+   "response": {
+    "id": "<id77>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "arguments": "{\"summary\": \"scripted gate run\"}",
+      "call_id": "<id79>",
+      "id": "<id80>",
+      "name": "transfer_to_human_agents",
+      "object": "realtime.item",
+      "status": "completed",
+      "type": "function_call"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  }
+ ]
+}

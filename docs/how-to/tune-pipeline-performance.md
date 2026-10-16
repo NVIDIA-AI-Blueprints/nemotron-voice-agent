@@ -13,14 +13,7 @@ This section covers pipeline configurations for optimizing the performance and u
 By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https://docs.pipecat.ai/api-reference/server/utilities/turn-detection/smart-turn-overview) detection to decide when the user has finished speaking, so the agent replies promptly without cutting the user off. [Silero VAD](https://docs.pipecat.ai/server/utilities/audio/silero-vad-analyzer) (`stop_secs=0.2`) detects the pause, and the Smart Turn model then judges whether the turn is actually complete. If the model still has not finalized after the Smart Turn silence fallback (default **1.0 s**, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
 
 Smart Turn controls when a user turn ends. It does not decide whether a sound
-starts a barge-in. The Generic Frontend/Backend Agent uses Pipecat's bot-aware
-minimum-word start strategy: while the bot is speaking, at least 2 transcribed
-words must arrive before the pipeline interrupts bot audio. When the bot is not
-speaking, 1 transcribed word can start a normal turn. This threshold prevents a
-single stray automatic speech recognition token from cutting off a response.
-The server records accepted interruptions through the
-`user-interruption-trigger` event and `user_interruption_trigger` log, including
-a bounded transcript and word count.
+starts a barge-in.
 
 ### How It Works
 
@@ -64,16 +57,16 @@ The [Omni examples](../../src/examples/omni_assistant/README.md) run ASR inside 
 
 Every turn appends to the LLM's context. Left unbounded, that context keeps growing, which raises latency (more tokens to process means a higher time-to-first-token), increases cost, and eventually overflows the model's context window. For real-time voice, a small, bounded context is what keeps replies fast. Pipecat manages history through its [context aggregators](https://docs.pipecat.ai/guides/learn/context-management) and built-in [context summarization](https://docs.pipecat.ai/pipecat/fundamentals/context-summarization). The examples wire a **turn-count** window (`CHAT_HISTORY_RECENT_TURNS`) on top for a predictable per-turn budget.
 
-We use context summarization logic for our examples to always **pin the initial prompt / system messages** loaded at session start. Nemotron's chat template carries the assistant instructions and tool definitions in the *user* section, so those must stay verbatim. Evicting them (as a token-based window might) would degrade tool-calling and persona. Only the older **conversational** turns are trimmed, and the handling differs by example:
+We use context summarization logic for our examples to always **pin the initial prompt / system messages** loaded at session start. Nemotron's chat template carries the assistant instructions and tool definitions in the *user* section, so those must stay verbatim. Evicting them (as a token-based window might) would degrade tool-calling and persona. Only the older **conversational** turns are trimmed:
 
 - **Generic** and **Multilingual** assistants **summarize** older history: once the conversation grows past the recent window, the older turns are condensed into a single pinned summary message (an additional LLM call after the turn), and the most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-- **Frontend/Backend Agent** uses a plain **sliding window**: older non-prompt messages are dropped, keeping only the most recent `CHAT_HISTORY_RECENT_TURNS` messages.
+- The **Frontend/Backend Verdict Agent** does not read `CHAT_HISTORY_RECENT_TURNS`. Its backend history settings live in the example's profiles. Refer to the [Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md#realtime-session-behavior).
 
 ### Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHAT_HISTORY_RECENT_TURNS` | `10` (Generic / Multilingual), `20` (Frontend/Backend Agent) | Most recent non-prompt turns kept before older history is summarized (Generic/Multilingual) or dropped (Frontend/Backend Agent) |
+| `CHAT_HISTORY_RECENT_TURNS` | `10` | Most recent non-prompt turns kept before older history is summarized (Generic and Multilingual) |
 
 ```bash
 # Override the per-example default (applies to whichever example is running)
@@ -86,7 +79,7 @@ When the message count exceeds `CHAT_HISTORY_RECENT_TURNS`:
 
 1. Initial prompt messages loaded at session start are always preserved.
 2. The most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
-3. Older non-prompt turns are **summarized into one pinned summary message** (Generic / Multilingual) or **removed** (Frontend/Backend Agent).
+3. Older non-prompt turns are **summarized into one pinned summary message**.
 
 ### Recommendations
 
@@ -130,6 +123,18 @@ When `UVICORN_WORKERS > 1`, **session-config-based WebRTC and WebSocket flows ar
 - keep a **single worker** if you depend on per-process session config
 - use **sticky routing** so a session stays on the same worker
 - move session state into **shared storage**
+
+## WebSocket Keepalive
+
+`UVICORN_WS_PING_INTERVAL` and `UVICORN_WS_PING_TIMEOUT` set the server WebSocket keepalive in seconds for `src/server.py` and `src/realtime_server.py`. When they are unset, uvicorn uses 20 seconds for both. An interval of `0` turns the server ping off.
+
+```bash
+# .env or container env
+UVICORN_WS_PING_INTERVAL=<seconds>
+UVICORN_WS_PING_TIMEOUT=<seconds>
+```
+
+The values apply to every WebSocket session in the server process. The [Frontend/Backend Verdict Agent](../../src/examples/frontend_backend_verdict/README.md) requires the keepalive to match its `eval` profile, which every OpenAI Realtime session uses. That profile sets the interval to `0` and the timeout to `20`, so a server that runs this example must turn the keepalive off for every session.
 
 ## Transport Selection
 

@@ -1,0 +1,434 @@
+{
+ "api_reachable": {
+  "services": {
+   "asr": [
+    {
+     "builtIn": true,
+     "function_id": "",
+     "model": "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer",
+     "name": "Nemotron ASR Streaming English",
+     "selected": true,
+     "server": "localhost:50152",
+     "source": "self-hosted"
+    },
+    {
+     "builtIn": true,
+     "function_id": "",
+     "model": "nemotron-speech-streaming-en-0.6b",
+     "name": "Nemotron Speech Streaming",
+     "selected": false,
+     "server": "localhost:50051",
+     "source": "self-hosted"
+    },
+    {
+     "builtIn": true,
+     "function_id": "4155ae85-73e1-4936-b47f-87b9de165651",
+     "model": "nemotron-asr-streaming",
+     "name": "Nemotron ASR Streaming English",
+     "selected": false,
+     "server": "grpc.nvcf.nvidia.com:443",
+     "source": "cloud-nim"
+    }
+   ],
+   "llm": [
+    {
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":false}}}",
+     "max_tokens": 1024,
+     "model_id": "nvidia/nvidia/nemotron-3.5-lightning",
+     "name": "Nemotron 3.5 Lightning frontend (Inference Hub, reasoning off)",
+     "selected": true,
+     "source": "self-hosted",
+     "system_prompt": "",
+     "temperature": 0.0
+    },
+    {
+     "base_url": "http://localhost:18000/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":false}}}",
+     "max_tokens": 1024,
+     "model_id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+     "name": "Nemotron 3.5 Lightning frontend (local NIM, reasoning off)",
+     "selected": false,
+     "source": "self-hosted",
+     "system_prompt": "",
+     "temperature": 0.0
+    },
+    {
+     "base_url": "http://localhost:18000/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":false}}}",
+     "max_tokens": 1024,
+     "model_id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+     "name": "Nemotron 3.5 Lightning frontend (local vLLM, reasoning off)",
+     "selected": false,
+     "source": "self-hosted",
+     "system_prompt": "",
+     "temperature": 0.0
+    },
+    {
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":false}}}",
+     "max_tokens": 1024,
+     "model_id": "nvidia/nvidia/nemotron-3.5-lightning",
+     "name": "Nemotron 3.5 Lightning frontend (Inference Hub, reasoning off)",
+     "selected": false,
+     "source": "cloud-nim",
+     "system_prompt": "",
+     "temperature": 0.0
+    }
+   ],
+   "thinker-llm": [
+    {
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":true},\"reasoning_budget\":1024}}",
+     "max_tokens": 4096,
+     "model_id": "nvidia/nvidia/nemotron-3-ultra",
+     "name": "Nemotron 3 Ultra backend (Inference Hub, reasoning on)",
+     "selected": true,
+     "source": "self-hosted",
+     "temperature": 0.0
+    },
+    {
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":true},\"reasoning_budget\":1024}}",
+     "max_tokens": 4096,
+     "model_id": "nvidia/nvidia/nemotron-3-ultra",
+     "name": "Nemotron 3 Ultra backend (Inference Hub, reasoning on)",
+     "selected": false,
+     "source": "cloud-nim",
+     "temperature": 0.0
+    }
+   ],
+   "tts": [
+    {
+     "builtIn": true,
+     "function_id": "",
+     "model": "magpie-tts-multilingual",
+     "name": "Magpie TTS",
+     "selected": true,
+     "server": "localhost:50151",
+     "source": "self-hosted",
+     "synthesis_mode": "stitched",
+     "voice_id": "Magpie-Multilingual.EN-US.Aria"
+    },
+    {
+     "builtIn": true,
+     "function_id": "",
+     "model": "magpie-tts-multilingual",
+     "name": "Magpie TTS (NeMo-Speech.cpp)",
+     "selected": false,
+     "server": "localhost:50051",
+     "source": "self-hosted",
+     "synthesis_mode": "stitched",
+     "voice_id": "John"
+    },
+    {
+     "builtIn": true,
+     "function_id": "500bfea0-ba3d-4158-8276-1d04daedfdcd",
+     "model": "magpie-tts-multilingual",
+     "name": "Magpie TTS Multilingual",
+     "selected": false,
+     "server": "grpc.nvcf.nvidia.com:443",
+     "source": "cloud-nim",
+     "synthesis_mode": "stitched",
+     "voice_id": "Magpie-Multilingual.EN-US.Aria"
+    }
+   ]
+  },
+  "tools": [
+   {
+    "description": "Check the current weather: live current conditions for a city or location. Never a forecast, history, climate or weather news.",
+    "name": "get_weather",
+    "parameters": {
+     "properties": {
+      "city": {
+       "description": "The city or location",
+       "maxLength": 200,
+       "type": "string"
+      },
+      "units": {
+       "description": "Temperature units (default celsius)",
+       "enum": [
+        "celsius",
+        "fahrenheit"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "city"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Check a current stock price: a live public-company quote. Never news, predictions, crypto, commodities or price history.",
+    "name": "get_stock_price",
+    "parameters": {
+     "properties": {
+      "company_name": {
+       "description": "The company name or stock ticker",
+       "maxLength": 200,
+       "type": "string"
+      }
+     },
+     "required": [
+      "company_name"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Search the live web for current, recent, forecast, changing, externally verifiable or uncertain information.",
+    "name": "web_search",
+    "parameters": {
+     "properties": {
+      "query": {
+       "description": "What to look up",
+       "maxLength": 1000,
+       "type": "string"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Calculate an adult's body mass index (BMI) from weight in kilograms and height in metres. Never infer the weight or height.",
+    "name": "calculate_bmi",
+    "parameters": {
+     "properties": {
+      "height_m": {
+       "description": "Height in metres",
+       "maximum": 4,
+       "minimum": 0.3,
+       "type": "number"
+      },
+      "weight_kg": {
+       "description": "Weight in kilograms",
+       "maximum": 1000,
+       "minimum": 1,
+       "type": "number"
+      }
+     },
+     "required": [
+      "weight_kg",
+      "height_m"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Generate one random whole number between min and max, inclusive. Use only when the user explicitly asks for a random number.",
+    "name": "generate_random_number",
+    "parameters": {
+     "properties": {
+      "max": {
+       "description": "Largest allowed value (default 100)",
+       "maximum": 1000000000,
+       "minimum": -1000000000,
+       "type": "integer"
+      },
+      "min": {
+       "description": "Smallest allowed value (default 1)",
+       "maximum": 1000000000,
+       "minimum": -1000000000,
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  ]
+ },
+ "api_unreachable": {
+  "services": {
+   "asr": [
+    {
+     "builtIn": true,
+     "function_id": "4155ae85-73e1-4936-b47f-87b9de165651",
+     "model": "nemotron-asr-streaming",
+     "name": "Nemotron ASR Streaming English",
+     "selected": true,
+     "server": "grpc.nvcf.nvidia.com:443",
+     "source": "cloud-nim"
+    }
+   ],
+   "llm": [
+    {
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":false}}}",
+     "max_tokens": 1024,
+     "model_id": "nvidia/nvidia/nemotron-3.5-lightning",
+     "name": "Nemotron 3.5 Lightning frontend (Inference Hub, reasoning off)",
+     "selected": true,
+     "source": "cloud-nim",
+     "system_prompt": "",
+     "temperature": 0.0
+    }
+   ],
+   "thinker-llm": [
+    {
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "builtIn": true,
+     "extra_params": "{\"extra_body\":{\"chat_template_kwargs\":{\"enable_thinking\":true},\"reasoning_budget\":1024}}",
+     "max_tokens": 4096,
+     "model_id": "nvidia/nvidia/nemotron-3-ultra",
+     "name": "Nemotron 3 Ultra backend (Inference Hub, reasoning on)",
+     "selected": true,
+     "source": "cloud-nim",
+     "temperature": 0.0
+    }
+   ],
+   "tts": [
+    {
+     "builtIn": true,
+     "function_id": "500bfea0-ba3d-4158-8276-1d04daedfdcd",
+     "model": "magpie-tts-multilingual",
+     "name": "Magpie TTS Multilingual",
+     "selected": true,
+     "server": "grpc.nvcf.nvidia.com:443",
+     "source": "cloud-nim",
+     "synthesis_mode": "stitched",
+     "voice_id": "Magpie-Multilingual.EN-US.Aria"
+    }
+   ]
+  },
+  "tools": [
+   {
+    "description": "Check the current weather: live current conditions for a city or location. Never a forecast, history, climate or weather news.",
+    "name": "get_weather",
+    "parameters": {
+     "properties": {
+      "city": {
+       "description": "The city or location",
+       "maxLength": 200,
+       "type": "string"
+      },
+      "units": {
+       "description": "Temperature units (default celsius)",
+       "enum": [
+        "celsius",
+        "fahrenheit"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "city"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Check a current stock price: a live public-company quote. Never news, predictions, crypto, commodities or price history.",
+    "name": "get_stock_price",
+    "parameters": {
+     "properties": {
+      "company_name": {
+       "description": "The company name or stock ticker",
+       "maxLength": 200,
+       "type": "string"
+      }
+     },
+     "required": [
+      "company_name"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Search the live web for current, recent, forecast, changing, externally verifiable or uncertain information.",
+    "name": "web_search",
+    "parameters": {
+     "properties": {
+      "query": {
+       "description": "What to look up",
+       "maxLength": 1000,
+       "type": "string"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Calculate an adult's body mass index (BMI) from weight in kilograms and height in metres. Never infer the weight or height.",
+    "name": "calculate_bmi",
+    "parameters": {
+     "properties": {
+      "height_m": {
+       "description": "Height in metres",
+       "maximum": 4,
+       "minimum": 0.3,
+       "type": "number"
+      },
+      "weight_kg": {
+       "description": "Weight in kilograms",
+       "maximum": 1000,
+       "minimum": 1,
+       "type": "number"
+      }
+     },
+     "required": [
+      "weight_kg",
+      "height_m"
+     ],
+     "type": "object"
+    }
+   },
+   {
+    "description": "Generate one random whole number between min and max, inclusive. Use only when the user explicitly asks for a random number.",
+    "name": "generate_random_number",
+    "parameters": {
+     "properties": {
+      "max": {
+       "description": "Largest allowed value (default 100)",
+       "maximum": 1000000000,
+       "minimum": -1000000000,
+       "type": "integer"
+      },
+      "min": {
+       "description": "Smallest allowed value (default 1)",
+       "maximum": 1000000000,
+       "minimum": -1000000000,
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  ]
+ },
+ "worker": {
+  "enable_rtvi": true,
+  "idle_timeout_secs": null,
+  "keys": [
+   "enable_rtvi",
+   "idle_timeout_secs",
+   "observers",
+   "params"
+  ],
+  "observers": [
+   "UserBotLatencyObserver",
+   "TurnTrackingObserver",
+   "RTVIObserver"
+  ],
+  "params": {
+   "audio_in_sample_rate": 16000,
+   "audio_out_sample_rate": 22050,
+   "enable_metrics": true,
+   "enable_usage_metrics": false
+  }
+ }
+}

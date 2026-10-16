@@ -1,0 +1,589 @@
+{
+ "backend_only": {
+  "agent": {
+   "accounting": {
+    "pricing": {},
+    "record_latency": true
+   },
+   "backend": {
+    "conversation_history": {
+     "enabled": false,
+     "guidance_key": "auto",
+     "include": "full",
+     "request_key": "backend_history_request"
+    },
+    "history": {
+     "max_groups": 40
+    },
+    "llm": {
+     "api_key": "<redacted>",
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "extra_body": {
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "reasoning_budget": 1024
+     },
+     "max_tokens": 4096,
+     "model": "nvidia/nvidia/nemotron-3-ultra",
+     "temperature": 0.0,
+     "timeout_seconds": 120.0
+    },
+    "prompt_key": "backend",
+    "simulated_delay_s": 0.0,
+    "stateful": true,
+    "tools": {
+     "execution": "external",
+     "max_result_chars": 0,
+     "max_tool_iterations": 8,
+     "on_incomplete_results": "synthesize_error_result",
+     "on_user_message_while_pending": "discard_pending",
+     "parallel_execution": false
+    }
+   },
+   "domain": {
+    "capabilities": [],
+    "policy": "",
+    "unsupported_reply": "I can only help with the tasks I am set up for."
+   },
+   "frontend": {
+    "delegation": {
+     "fallback_text": "Sorry, I could not process that. Could you rephrase?",
+     "max_repair_attempts": 1,
+     "on_contract_violation": "fallback_text"
+    },
+    "history": {
+     "max_groups": 20
+    },
+    "llm": {
+     "api_key": "<redacted>",
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "extra_body": {},
+     "max_tokens": 2048,
+     "model": "unused",
+     "temperature": 0.0,
+     "timeout_seconds": 120.0
+    },
+    "prompt_key": "frontend"
+   },
+   "logging": {
+    "event_sink": "none",
+    "event_sink_path": "",
+    "level": "INFO",
+    "log_delegation_query": true,
+    "log_filler_text": true
+   },
+   "mode": "backend_only",
+   "name": "Assistant",
+   "persona": "You are a helpful assistant.",
+   "prompts": {
+    "inline": {},
+    "path": "<path>"
+   },
+   "source_dir": "<path>"
+  },
+  "agent_config_path": "<path>",
+  "asr": {
+   "endpoint": {
+    "api_key": "<redacted>",
+    "function_id": "",
+    "kind": "asr",
+    "language_code": "en-US",
+    "model": "nemotron-speech-streaming-en-0.6b",
+    "server": "nemo-speech:50051",
+    "source": "catalog <repo>/src/examples/frontend_backend_verdict/services.local.yaml [singlegpu] nemotron-asr-streaming-english",
+    "use_ssl": false,
+    "voice_id": ""
+   },
+   "interim_results": true,
+   "max_concurrent_streams": 0,
+   "normalize_text": true,
+   "sample_rate": 22050,
+   "sentence_split": true,
+   "voice_map": {}
+  },
+  "audio": {
+   "default_input_format": {
+    "rate": 24000,
+    "type": "audio/pcm"
+   },
+   "default_output_format": {
+    "rate": 24000,
+    "type": "audio/pcm"
+   },
+   "engine_rate": 16000,
+   "output_chunk_ms": 100,
+   "pace_lead_ms": 300,
+   "pace_output": false
+  },
+  "barge_in": {
+   "enabled": true,
+   "frontend_verdict": {
+    "note_key": "frontend_task_in_progress",
+    "same_query_guard": true,
+    "timeout_ms": 4000
+   },
+   "history": "truncate_heard",
+   "interruption_marker": " [interrupted by the user]",
+   "while_thinking": "cancel_and_merge"
+  },
+  "filler": {
+   "log_path": "",
+   "mode": "log_only",
+   "speak_after_ms": 300
+  },
+  "instructions": {
+   "apply_to": [
+    "backend"
+   ],
+   "cascade_addendum_key": "cascade_voice_addendum",
+   "fallback_file": "",
+   "fallback_text": "",
+   "frontend_capabilities": "from_tools",
+   "placement": "policy_slot",
+   "strip_patterns": []
+  },
+  "logging": {
+   "event_log": "",
+   "level": "INFO",
+   "log_wire": false,
+   "redact_content": false
+  },
+  "normalization": {
+   "tool_arguments": {
+    "enabled": true,
+    "escalate_invalid_message_key": "",
+    "invalid_message_key": "tool_argument_invalid",
+    "max_local_rounds": 3,
+    "result_hints": {
+     "auto_tools": false,
+     "count_local_invalid": true,
+     "enabled": false,
+     "escalate_message_key": "",
+     "failure_pattern": "",
+     "max_hints": 3,
+     "message_key": "lookup_not_found_hint",
+     "tools": []
+    },
+    "retry_guard": {
+     "enabled": true,
+     "message_key": "tool_call_already_failed",
+     "permanent_failure_pattern": "^Error: .*\\bnot found\\b",
+     "scope": "rules"
+    },
+    "rules": [
+     {
+      "argument": "user_id",
+      "case": "lower",
+      "collapse_separators": "_",
+      "format_hint": "firstname_lastname_1234",
+      "keep_pattern": "",
+      "label": "user ID",
+      "on_invalid": "answer_locally",
+      "pattern": "^[a-z]+_[a-z]+_\\d{4}$",
+      "restore_prefix": "",
+      "source": "config",
+      "spoken_form": true,
+      "strip": " .-",
+      "tool": "get_user_details"
+     }
+    ],
+    "schema_rules": false
+   },
+   "transcript": {
+    "case": "lower",
+    "compound_numbers": true,
+    "enabled": true,
+    "extra_filler_words": [],
+    "extra_stop_words": [],
+    "frontend_note_key": "identifier_note_voice",
+    "max_part_tokens": 6,
+    "number_words": true,
+    "ruleset": "en",
+    "separator_words": {
+     "underscore": "_"
+    },
+    "spelled_runs": {
+     "case": "keep",
+     "enabled": false,
+     "min_tokens": 3
+    }
+   }
+  },
+  "protocol": {
+   "auto_response": true,
+   "emit_input_transcription": true,
+   "emit_usage": true,
+   "greeting_enabled": false,
+   "greeting_text": "",
+   "resume_on": "response_create",
+   "seed_history_with_client_greeting": "Hi! How can I help you today?"
+  },
+  "resolved_in_paths": {
+   "agent.config": "<path>",
+   "agent.overrides.prompts.path": "<path>",
+   "asr.catalog.example_dir": "<path>",
+   "instructions.fallback_file": "",
+   "tts.catalog.example_dir": "<path>"
+  },
+  "server": {
+   "bearer_token": "<redacted>",
+   "host": "0.0.0.0",
+   "max_sessions": 8,
+   "path": "/v1/realtime",
+   "port": 8765,
+   "require_bearer": false,
+   "session_update_timeout_s": 30.0,
+   "warmup": true,
+   "ws_ping_interval_s": 0.0,
+   "ws_ping_timeout_s": 20.0
+  },
+  "source_files": [
+   "<path>",
+   "<path>"
+  ],
+  "tools": {
+   "config_tool_specs": [],
+   "config_tools": "",
+   "result_timeout_s": 120.0,
+   "source": "client"
+  },
+  "tts": {
+   "endpoint": {
+    "api_key": "<redacted>",
+    "function_id": "",
+    "kind": "tts",
+    "language_code": "en-US",
+    "model": "magpie-tts-multilingual",
+    "server": "nemo-speech:50051",
+    "source": "catalog <repo>/src/examples/frontend_backend_verdict/services.local.yaml [singlegpu] magpie-multilingual-tts",
+    "use_ssl": false,
+    "voice_id": "John"
+   },
+   "interim_results": true,
+   "max_concurrent_streams": 0,
+   "normalize_text": true,
+   "sample_rate": 22050,
+   "sentence_split": true,
+   "voice_map": {
+    "alloy": ""
+   }
+  },
+  "turn_detection": {
+   "honor_client_values": true,
+   "min_speech_ms": 120,
+   "min_transcript_chars": 1,
+   "prefix_padding_ms": 300,
+   "silence_duration_ms": 500,
+   "threshold": 0.5,
+   "vad": "silero"
+  },
+  "warnings": [],
+  "write_gate": {
+   "default": "non_read",
+   "enabled": false,
+   "exempt": [],
+   "include": [],
+   "max_summary_chars": 600,
+   "max_unconfirmed_reissues": 2,
+   "tools": {}
+  }
+ },
+ "tau3_eval_frontend_verdict_speak_history": {
+  "agent": {
+   "accounting": {
+    "pricing": {},
+    "record_latency": true
+   },
+   "backend": {
+    "conversation_history": {
+     "enabled": true,
+     "guidance_key": "auto",
+     "include": "full",
+     "request_key": "backend_history_request"
+    },
+    "history": {
+     "max_groups": 40
+    },
+    "llm": {
+     "api_key": "<redacted>",
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "extra_body": {
+      "chat_template_kwargs": {
+       "enable_thinking": true
+      },
+      "reasoning_budget": 1024
+     },
+     "max_tokens": 4096,
+     "model": "nvidia/nvidia/nemotron-3-ultra",
+     "temperature": 0.0,
+     "timeout_seconds": 120.0
+    },
+    "prompt_key": "backend",
+    "simulated_delay_s": 0.0,
+    "stateful": true,
+    "tools": {
+     "execution": "external",
+     "max_result_chars": 0,
+     "max_tool_iterations": 8,
+     "on_incomplete_results": "synthesize_error_result",
+     "on_user_message_while_pending": "discard_pending",
+     "parallel_execution": false
+    }
+   },
+   "domain": {
+    "capabilities": [],
+    "policy": "",
+    "unsupported_reply": "I can only help with the tasks I am set up for."
+   },
+   "frontend": {
+    "delegation": {
+     "fallback_text": "Sorry, I could not process that. Could you rephrase?",
+     "max_repair_attempts": 1,
+     "on_contract_violation": "fallback_text"
+    },
+    "history": {
+     "max_groups": 20
+    },
+    "llm": {
+     "api_key": "<redacted>",
+     "base_url": "https://inference-api.nvidia.com/v1",
+     "extra_body": {
+      "chat_template_kwargs": {
+       "enable_thinking": false
+      }
+     },
+     "max_tokens": 1024,
+     "model": "nvidia/nvidia/nemotron-3.5-lightning",
+     "temperature": 0.0,
+     "timeout_seconds": 120.0
+    },
+    "prompt_key": "frontend"
+   },
+   "logging": {
+    "event_sink": "none",
+    "event_sink_path": "",
+    "level": "INFO",
+    "log_delegation_query": true,
+    "log_filler_text": true
+   },
+   "mode": "frontend_backend",
+   "name": "Assistant",
+   "persona": "You are a helpful assistant.",
+   "prompts": {
+    "inline": {},
+    "path": "<path>"
+   },
+   "source_dir": "<path>"
+  },
+  "agent_config_path": "<path>",
+  "asr": {
+   "endpoint": {
+    "api_key": "<redacted>",
+    "function_id": "",
+    "kind": "asr",
+    "language_code": "en-US",
+    "model": "nemotron-speech-streaming-en-0.6b",
+    "server": "nemo-speech:50051",
+    "source": "catalog <repo>/src/examples/frontend_backend_verdict/services.local.yaml [singlegpu] nemotron-asr-streaming-english",
+    "use_ssl": false,
+    "voice_id": ""
+   },
+   "interim_results": true,
+   "max_concurrent_streams": 0,
+   "normalize_text": true,
+   "sample_rate": 22050,
+   "sentence_split": true,
+   "voice_map": {}
+  },
+  "audio": {
+   "default_input_format": {
+    "rate": 24000,
+    "type": "audio/pcm"
+   },
+   "default_output_format": {
+    "rate": 24000,
+    "type": "audio/pcm"
+   },
+   "engine_rate": 16000,
+   "output_chunk_ms": 100,
+   "pace_lead_ms": 300,
+   "pace_output": false
+  },
+  "barge_in": {
+   "enabled": true,
+   "frontend_verdict": {
+    "note_key": "frontend_task_in_progress",
+    "same_query_guard": true,
+    "timeout_ms": 4000
+   },
+   "history": "truncate_heard",
+   "interruption_marker": " [interrupted by the user]",
+   "while_thinking": "frontend_verdict"
+  },
+  "filler": {
+   "log_path": "",
+   "mode": "speak",
+   "speak_after_ms": 300
+  },
+  "instructions": {
+   "apply_to": [
+    "backend"
+   ],
+   "cascade_addendum_key": "cascade_voice_addendum",
+   "fallback_file": "",
+   "fallback_text": "",
+   "frontend_capabilities": "from_tools",
+   "placement": "policy_slot",
+   "strip_patterns": []
+  },
+  "logging": {
+   "event_log": "",
+   "level": "INFO",
+   "log_wire": false,
+   "redact_content": false
+  },
+  "normalization": {
+   "tool_arguments": {
+    "enabled": true,
+    "escalate_invalid_message_key": "",
+    "invalid_message_key": "tool_argument_invalid",
+    "max_local_rounds": 3,
+    "result_hints": {
+     "auto_tools": false,
+     "count_local_invalid": true,
+     "enabled": false,
+     "escalate_message_key": "",
+     "failure_pattern": "",
+     "max_hints": 3,
+     "message_key": "lookup_not_found_hint",
+     "tools": []
+    },
+    "retry_guard": {
+     "enabled": true,
+     "message_key": "tool_call_already_failed",
+     "permanent_failure_pattern": "^Error: .*\\bnot found\\b",
+     "scope": "rules"
+    },
+    "rules": [
+     {
+      "argument": "user_id",
+      "case": "lower",
+      "collapse_separators": "_",
+      "format_hint": "firstname_lastname_1234",
+      "keep_pattern": "",
+      "label": "user ID",
+      "on_invalid": "answer_locally",
+      "pattern": "^[a-z]+_[a-z]+_\\d{4}$",
+      "restore_prefix": "",
+      "source": "config",
+      "spoken_form": true,
+      "strip": " .-",
+      "tool": "get_user_details"
+     }
+    ],
+    "schema_rules": false
+   },
+   "transcript": {
+    "case": "lower",
+    "compound_numbers": true,
+    "enabled": true,
+    "extra_filler_words": [],
+    "extra_stop_words": [],
+    "frontend_note_key": "identifier_note_voice",
+    "max_part_tokens": 6,
+    "number_words": true,
+    "ruleset": "en",
+    "separator_words": {
+     "underscore": "_"
+    },
+    "spelled_runs": {
+     "case": "keep",
+     "enabled": false,
+     "min_tokens": 3
+    }
+   }
+  },
+  "protocol": {
+   "auto_response": true,
+   "emit_input_transcription": true,
+   "emit_usage": true,
+   "greeting_enabled": false,
+   "greeting_text": "",
+   "resume_on": "response_create",
+   "seed_history_with_client_greeting": "Hi! How can I help you today?"
+  },
+  "resolved_in_paths": {
+   "agent.config": "<path>",
+   "agent.overrides.prompts.path": "<path>",
+   "asr.catalog.example_dir": "<path>",
+   "instructions.fallback_file": "",
+   "tts.catalog.example_dir": "<path>"
+  },
+  "server": {
+   "bearer_token": "<redacted>",
+   "host": "0.0.0.0",
+   "max_sessions": 8,
+   "path": "/v1/realtime",
+   "port": 8765,
+   "require_bearer": false,
+   "session_update_timeout_s": 30.0,
+   "warmup": true,
+   "ws_ping_interval_s": 0.0,
+   "ws_ping_timeout_s": 20.0
+  },
+  "source_files": [
+   "<path>",
+   "<path>",
+   "<path>",
+   "<path>",
+   "<path>"
+  ],
+  "tools": {
+   "config_tool_specs": [],
+   "config_tools": "",
+   "result_timeout_s": 120.0,
+   "source": "client"
+  },
+  "tts": {
+   "endpoint": {
+    "api_key": "<redacted>",
+    "function_id": "",
+    "kind": "tts",
+    "language_code": "en-US",
+    "model": "magpie-tts-multilingual",
+    "server": "nemo-speech:50051",
+    "source": "catalog <repo>/src/examples/frontend_backend_verdict/services.local.yaml [singlegpu] magpie-multilingual-tts",
+    "use_ssl": false,
+    "voice_id": "John"
+   },
+   "interim_results": true,
+   "max_concurrent_streams": 0,
+   "normalize_text": true,
+   "sample_rate": 22050,
+   "sentence_split": true,
+   "voice_map": {
+    "alloy": ""
+   }
+  },
+  "turn_detection": {
+   "honor_client_values": false,
+   "min_speech_ms": 120,
+   "min_transcript_chars": 1,
+   "prefix_padding_ms": 300,
+   "silence_duration_ms": 800,
+   "threshold": 0.5,
+   "vad": "silero"
+  },
+  "warnings": [],
+  "write_gate": {
+   "default": "non_read",
+   "enabled": false,
+   "exempt": [],
+   "include": [],
+   "max_summary_chars": 600,
+   "max_unconfirmed_reissues": 2,
+   "tools": {}
+  }
+ }
+}

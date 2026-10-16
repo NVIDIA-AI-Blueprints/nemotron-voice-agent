@@ -458,14 +458,9 @@ llm:
 
     def test_cloud_nemotron_asr_uses_current_english_model_name(self) -> None:
         generic_catalog = utils.load_yaml_file(Path("src/examples/generic/services.cloud.yaml"))
-        frontend_backend_catalog = utils.load_yaml_file(Path("src/examples/frontend_backend_agent/services.cloud.yaml"))
         multilingual_catalog = utils.load_yaml_file(Path("src/examples/multilingual/services.cloud.yaml"))
 
         self.assertEqual(generic_catalog["asr"]["nemotron-asr-streaming-english"]["model"], "nemotron-asr-streaming")
-        self.assertEqual(
-            frontend_backend_catalog["asr"]["nemotron-asr-streaming-english"]["model"],
-            "nemotron-asr-streaming",
-        )
         self.assertNotIn("nemotron-asr-streaming-multilingual", multilingual_catalog["asr"])
 
     def test_multilingual_llms_declare_supported_languages(self) -> None:
@@ -495,7 +490,6 @@ llm:
         expected = {
             "generic": {"server": 4096, "singlegpu": 2048},
             "multilingual": {"server": 4096, "singlegpu": 2048},
-            "frontend_backend_agent": {"server": 4096, "singlegpu": 2048},
         }
         for example_dir, profile_caps in expected.items():
             catalog = utils.load_yaml_file(Path(f"src/examples/{example_dir}/services.local.yaml"))

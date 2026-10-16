@@ -13,9 +13,10 @@ from pathlib import Path
 import uvicorn
 from loguru import logger
 
+from dependency_check import require_matching_pipecat
 from realtime.protocol import MAX_REALTIME_EVENT_BYTES
 from server import create_realtime_app
-from utils import parse_env_bool, parse_env_int
+from utils import parse_env_bool, parse_env_int, uvicorn_ws_ping_kwargs
 
 
 def _parse_min_int(value: str, minimum: int = 1) -> int:
@@ -65,6 +66,7 @@ def app_factory():
 
 def main() -> None:
     """Start the standalone Realtime API with optional multi-worker scaling."""
+    require_matching_pipecat()
     parser = argparse.ArgumentParser(description="Nemotron Voice Agent Realtime API Server")
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=7860)
@@ -99,6 +101,7 @@ def main() -> None:
             workers=workers,
             factory=True,
             ws_max_size=MAX_REALTIME_EVENT_BYTES,
+            **uvicorn_ws_ping_kwargs(),
             **ssl_kwargs,
         )
     else:
@@ -107,6 +110,7 @@ def main() -> None:
             host=args.host,
             port=args.port,
             ws_max_size=MAX_REALTIME_EVENT_BYTES,
+            **uvicorn_ws_ping_kwargs(),
             **ssl_kwargs,
         )
 

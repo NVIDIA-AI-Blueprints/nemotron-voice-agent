@@ -71,3 +71,9 @@ docs/how-to/evaluate-thinker-talker-airline.md
 eval/
 tests/test_voice_agent_eval.py
 .ipynb_checkpoints/
+scripts/frontend_backend_verdict_sync.py
+
+misc/
+
+# Eval-mode agent logs (docker/docker-compose.fbv-eval.yaml mounts ./logs)
+/logs/

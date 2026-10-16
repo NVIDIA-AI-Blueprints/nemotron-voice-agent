@@ -1,0 +1,958 @@
+{
+ "events": [
+  {
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "noise_reduction": null,
+      "transcription": null,
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "rate": 24000,
+       "type": "audio/pcm"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<SESS1>",
+    "instructions": "",
+    "max_output_tokens": "inf",
+    "model": "pine-test",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [],
+    "type": "realtime"
+   },
+   "type": "session.created"
+  },
+  {
+   "session": {
+    "audio": {
+     "input": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "noise_reduction": {
+       "type": "near_field"
+      },
+      "transcription": {
+       "language": "en",
+       "model": "gpt-4o-transcribe"
+      },
+      "turn_detection": {
+       "create_response": true,
+       "idle_timeout_ms": null,
+       "interrupt_response": true,
+       "prefix_padding_ms": 300,
+       "silence_duration_ms": 500,
+       "threshold": 0.5,
+       "type": "server_vad"
+      }
+     },
+     "output": {
+      "format": {
+       "type": "audio/pcmu"
+      },
+      "speed": 1.0,
+      "voice": "alloy"
+     }
+    },
+    "id": "<SESS1>",
+    "instructions": "You are a customer service agent handling a VOICE CALL with a customer.\n\n# Important Voice Call Considerations\n\n1. Respond naturally and conversationally as you would in a real phone call\n\n2. Try to be helpful and always follow the policy.\n\n# User authentication and user information collection\n\n1. When collecting customer information (e.g. names, emails, IDs), ask the customer to spell it out letter by letter (e.g. \"J, O, H, N\") to ensure you have the correct information and accomodate for customer audio being unclear or background noise.\n\n2. If authenticating the user fails based on user provided information, ALWAYS explicitly ask the customer to SPELL THINGS OUT or provide information LETTER BY LETTER (e.g. \"first name J, O, H, N last name S, M, I, T, H\").\n\n# Mock Domain Policy\n\n1. Each task must have a title\n2. Task status can only be \"pending\" or \"completed\"\n3. Only existing users can create tasks \n4. You are not allowed to delete tasks. You should transfer the a human agent.\n5. If the user asks for a compliment, compliment them",
+    "max_output_tokens": "inf",
+    "model": "pine-test",
+    "object": "realtime.session",
+    "output_modalities": [
+     "audio"
+    ],
+    "tool_choice": "auto",
+    "tools": [
+     {
+      "description": "Create a new task for a user.",
+      "name": "create_task",
+      "parameters": {
+       "properties": {
+        "description": {
+         "default": null,
+         "description": "Optional description of the task",
+         "title": "Description",
+         "type": "string"
+        },
+        "title": {
+         "description": "The title of the task",
+         "title": "Title",
+         "type": "string"
+        },
+        "user_id": {
+         "description": "The ID of the user creating the task",
+         "title": "User Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_id",
+        "title"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Get all users in the database.",
+      "name": "get_users",
+      "parameters": {
+       "properties": {},
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Update the status of a task.",
+      "name": "update_task_status",
+      "parameters": {
+       "properties": {
+        "status": {
+         "description": "The new status of the task",
+         "enum": [
+          "pending",
+          "completed"
+         ],
+         "title": "Status",
+         "type": "string"
+        },
+        "task_id": {
+         "description": "The ID of the task to update",
+         "title": "Task Id",
+         "type": "string"
+        }
+       },
+       "required": [
+        "task_id",
+        "status"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     },
+     {
+      "description": "Transfer the user to a human agent, with a summary of the user's issue.\n\nOnly transfer if\n -  the user explicitly asks for a human agent\n -  given the policy and the available tools, you cannot solve the user's issue.",
+      "name": "transfer_to_human_agents",
+      "parameters": {
+       "properties": {
+        "summary": {
+         "description": "A summary of the user's issue.",
+         "title": "Summary",
+         "type": "string"
+        }
+       },
+       "required": [
+        "summary"
+       ],
+       "title": "parameters",
+       "type": "object"
+      },
+      "type": "function"
+     }
+    ],
+    "type": "realtime"
+   },
+   "type": "session.updated"
+  },
+  {
+   "audio_start_ms": 0,
+   "item_id": "<ITEM1>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "audio_end_ms": 600,
+   "item_id": "<ITEM1>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "item_id": "<ITEM1>",
+   "previous_item_id": null,
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM1>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.added"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM1>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 1",
+   "item_id": "<ITEM1>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM1>",
+   "transcript": "utterance 1",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "response": {
+    "id": "<RESP1>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "item": {
+    "content": [],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_item.added"
+  },
+  {
+   "item": {
+    "content": [],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "previous_item_id": "<ITEM1>",
+   "type": "conversation.item.added"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "part": {
+    "transcript": "",
+    "type": "audio"
+   },
+   "response_id": "<RESP1>",
+   "type": "response.content_part.added"
+  },
+  {
+   "content_index": 0,
+   "delta": "Let me check that for you right now.",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "5bWmn5ycnqay5TcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2ircVBKyEdHB0hK0HGrKKdnJ2hqr5LLSMeHB0gKTzPr6SenJ2f",
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_audio.done"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "transcript": "Let me check that for you right now.",
+   "type": "response.output_audio_transcript.done"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM2>",
+   "output_index": 0,
+   "part": {
+    "transcript": "Let me check that for you right now.",
+    "type": "audio"
+   },
+   "response_id": "<RESP1>",
+   "type": "response.content_part.done"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": "Let me check that for you right now.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<RESP1>",
+   "type": "response.output_item.done"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": "Let me check that for you right now.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<ITEM2>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "audio_start_ms": 1500,
+   "item_id": "<ITEM3>",
+   "type": "input_audio_buffer.speech_started"
+  },
+  {
+   "response": {
+    "id": "<RESP1>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "content": [
+       {
+        "transcript": "Let me check that for you right now.",
+        "type": "output_audio"
+       }
+      ],
+      "id": "<ITEM2>",
+      "object": "realtime.item",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "cancelled",
+    "status_details": {
+     "reason": "turn_detected",
+     "type": "cancelled"
+    },
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 0
+     },
+     "input_tokens": 0,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "total_tokens": 0
+    }
+   },
+   "type": "response.done"
+  },
+  {
+   "audio_end_ms": 2100,
+   "item_id": "<ITEM3>",
+   "type": "input_audio_buffer.speech_stopped"
+  },
+  {
+   "item_id": "<ITEM3>",
+   "previous_item_id": "<ITEM2>",
+   "type": "input_audio_buffer.committed"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM3>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<ITEM2>",
+   "type": "conversation.item.added"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": null,
+      "type": "input_audio"
+     }
+    ],
+    "id": "<ITEM3>",
+    "object": "realtime.item",
+    "role": "user",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": "<ITEM2>",
+   "type": "conversation.item.done"
+  },
+  {
+   "content_index": 0,
+   "delta": "utterance 2",
+   "item_id": "<ITEM3>",
+   "type": "conversation.item.input_audio_transcription.delta"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM3>",
+   "transcript": "utterance 2",
+   "type": "conversation.item.input_audio_transcription.completed",
+   "usage": {
+    "seconds": 0,
+    "type": "duration"
+   }
+  },
+  {
+   "response": {
+    "id": "<RESP2>",
+    "object": "realtime.response",
+    "output": [],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "in_progress",
+    "status_details": null,
+    "usage": null
+   },
+   "type": "response.created"
+  },
+  {
+   "item": {
+    "content": [],
+    "id": "<ITEM4>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_item.added"
+  },
+  {
+   "item": {
+    "content": [],
+    "id": "<ITEM4>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "in_progress",
+    "type": "message"
+   },
+   "previous_item_id": "<ITEM3>",
+   "type": "conversation.item.added"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "part": {
+    "transcript": "",
+    "type": "audio"
+   },
+   "response_id": "<RESP2>",
+   "type": "response.content_part.added"
+  },
+  {
+   "content_index": 0,
+   "delta": "It is all set.",
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_audio_transcript.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "5bWmn5ycnqay5TcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0/zQmHxwcHiYyZLenn52cnqWw2DkoHx0cHiQvT7upoJ2cnqOuyj4qIR0cHSIsRcGroZ2cnaGrwUUsIh0cHSEqPsquo56cnaCpu08vJB4cHR8oOdiwpZ6cnZ+nt2QyJh4cHB8mNP+0p5+cnJ6msuQ3Jx8cHB4lMFi5qJ+dnJ6kr887KSAdHB4jLkq+qqGdnJ2irMVBKyEdHB0hK0HFrKKdnJ2hqr5KLiMeHB0gKTvPr6SenJ2fqLlYMCUeHBwfJzfksqaenJyfp7T/NCYfHBweJjJkt6efnZyepbDYOSgfHRweJC9Pu6mgnZyeo67KPiohHRwdIixFwauhnZydoavBRSwiHRwdISo+yq6jnpydoKm7Ty8kHhwdHyg52LClnpydn6e3ZDImHhwcHyY0/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjQ=",
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "delta": "/7Snn5ycnqay5DcnHxwcHiUwWLmon52cnqSvzzspIB0cHiMuSr6qoZ2cnaKsxUErIR0cHSErQcWsop2cnaGqvkouIx4cHSApO8+vpJ6cnZ+ouVgwJR4cHB8nN+Sypp6cnJ+ntP80Jh8cHB4mMmS3p5+dnJ6lsNg5KB8dHB4kL0+7qaCdnJ6jrso+KiEdHB0iLEXBq6GdnJ2hq8FFLCIdHB0hKj7KrqOenJ2gqbtPLyQeHB0fKDnYsKWenJ2fp7dkMiYeHBwfJjT/tKefnJyeprLkNycfHBweJTBYuaifnZyepK/POykgHRweIy5KvqqhnZydoqzFQSshHRwdIStBxayinZydoaq+Si4jHhwdICk7z6+knpydn6i5WDAlHhwcHyc35LKmnpycn6e0fDUmHxwcHiYyZbenn52cnqSx0zY=",
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_audio.delta"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_audio.done"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "transcript": "It is all set.",
+   "type": "response.output_audio_transcript.done"
+  },
+  {
+   "content_index": 0,
+   "item_id": "<ITEM4>",
+   "output_index": 0,
+   "part": {
+    "transcript": "It is all set.",
+    "type": "audio"
+   },
+   "response_id": "<RESP2>",
+   "type": "response.content_part.done"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": "It is all set.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<ITEM4>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "output_index": 0,
+   "response_id": "<RESP2>",
+   "type": "response.output_item.done"
+  },
+  {
+   "item": {
+    "content": [
+     {
+      "transcript": "It is all set.",
+      "type": "output_audio"
+     }
+    ],
+    "id": "<ITEM4>",
+    "object": "realtime.item",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   },
+   "previous_item_id": null,
+   "type": "conversation.item.done"
+  },
+  {
+   "response": {
+    "id": "<RESP2>",
+    "object": "realtime.response",
+    "output": [
+     {
+      "content": [
+       {
+        "transcript": "It is all set.",
+        "type": "output_audio"
+       }
+      ],
+      "id": "<ITEM4>",
+      "object": "realtime.item",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+     }
+    ],
+    "output_modalities": [
+     "audio"
+    ],
+    "status": "completed",
+    "status_details": null,
+    "usage": {
+     "input_token_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0,
+      "text_tokens": 20
+     },
+     "input_tokens": 20,
+     "output_token_details": {
+      "audio_tokens": 0,
+      "text_tokens": 20
+     },
+     "output_tokens": 20,
+     "total_tokens": 40
+    }
+   },
+   "type": "response.done"
+  }
+ ],
+ "filler": [
+  {
+   "asr_final": {
+    "since_turn_end_ms": 0
+   },
+   "backend_done": null,
+   "filler_audio_start": {
+    "since_filler_ms": 0
+   },
+   "filler_ready": {
+    "frontend_latency_ms": 0,
+    "since_session_start_ms": 0,
+    "since_turn_end_ms": 0,
+    "since_turn_start_ms": 0
+   },
+   "first_answer_audio": null,
+   "kind": "filler",
+   "mode": "speak",
+   "outcome": "cancelled",
+   "session_id": "<SESS1>",
+   "speak_after_ms": 0,
+   "spoken": true,
+   "text": "Let me check that for you right now.",
+   "turn_end": {
+    "audio_ms": 600
+   },
+   "turn_id": 1,
+   "turn_start": {
+    "audio_ms": 0
+   },
+   "would_have_spoken": true
+  },
+  {
+   "asr_final": {
+    "since_turn_end_ms": 0
+   },
+   "backend_done": {
+    "since_filler_ms": 0,
+    "since_turn_end_ms": 0
+   },
+   "filler_audio_start": null,
+   "filler_ready": {
+    "frontend_latency_ms": 0,
+    "since_session_start_ms": 0,
+    "since_turn_end_ms": 0,
+    "since_turn_start_ms": 0
+   },
+   "first_answer_audio": {
+    "since_filler_ms": 0,
+    "since_turn_end_ms": 0
+   },
+   "kind": "filler",
+   "mode": "speak",
+   "outcome": "answer",
+   "session_id": "<SESS1>",
+   "speak_after_ms": 0,
+   "spoken": false,
+   "text": "",
+   "turn_end": {
+    "audio_ms": 2100
+   },
+   "turn_id": 2,
+   "turn_start": {
+    "audio_ms": 1500
+   },
+   "would_have_spoken": false
+  }
+ ],
+ "records": [
+  {
+   "audio_ms": 0,
+   "backend_history": "off",
+   "backend_history_guidance": "",
+   "kind": "session_start",
+   "model": "pine-test",
+   "normalization": {
+    "retry_guard": false,
+    "tool_arguments": [],
+    "transcript": false
+   },
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 0,
+   "input_format": {
+    "type": "audio/pcmu"
+   },
+   "instructions_chars": 1048,
+   "kind": "session_updated",
+   "output_format": {
+    "type": "audio/pcmu"
+   },
+   "session_id": "<SESS1>",
+   "tools": [
+    "create_task",
+    "get_users",
+    "update_task_status",
+    "transfer_to_human_agents"
+   ],
+   "turn_detection": {
+    "mode": "server_vad",
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 500,
+    "threshold": 0.5,
+    "type": "server_vad"
+   }
+  },
+  {
+   "audio_ms": 220,
+   "audio_start_ms": 0,
+   "item_id": "<ITEM1>",
+   "kind": "speech_started",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_end_ms": 600,
+   "audio_ms": 1160,
+   "item_id": "<ITEM1>",
+   "kind": "speech_stopped",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 1160,
+   "item_id": "<ITEM1>",
+   "kind": "asr_final",
+   "session_id": "<SESS1>",
+   "transcript": "utterance 1"
+  },
+  {
+   "audio_ms": 1160,
+   "kind": "agent_turn_start",
+   "session_id": "<SESS1>",
+   "text": "utterance 1",
+   "turn_id": 1
+  },
+  {
+   "kind": "delegation",
+   "query": "Check the thing.",
+   "session_id": "<SESS1>"
+  },
+  {
+   "kind": "filler",
+   "session_id": "<SESS1>",
+   "text": "Let me check that for you right now."
+  },
+  {
+   "earlier_turns": 0,
+   "enabled": false,
+   "guidance": "",
+   "history_groups": 0,
+   "history_messages": 0,
+   "include": "off",
+   "kind": "backend_context",
+   "request_chars": 16,
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 1680,
+   "audio_start_ms": 1500,
+   "item_id": "<ITEM2>",
+   "kind": "speech_started",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 1680,
+   "kind": "thinking_cancelled",
+   "merge": true,
+   "reason": "turn_detected",
+   "session_id": "<SESS1>",
+   "turn_id": 1
+  },
+  {
+   "audio_end_ms": 2100,
+   "audio_ms": 2720,
+   "item_id": "<ITEM2>",
+   "kind": "speech_stopped",
+   "session_id": "<SESS1>"
+  },
+  {
+   "audio_ms": 2720,
+   "item_id": "<ITEM2>",
+   "kind": "asr_final",
+   "session_id": "<SESS1>",
+   "transcript": "utterance 2"
+  },
+  {
+   "audio_ms": 2720,
+   "kind": "agent_turn_start",
+   "session_id": "<SESS1>",
+   "text": "utterance 1 utterance 2",
+   "turn_id": 2
+  },
+  {
+   "kind": "delegation",
+   "query": "Never mind, check the other thing.",
+   "session_id": "<SESS1>"
+  },
+  {
+   "earlier_turns": 0,
+   "enabled": false,
+   "guidance": "",
+   "history_groups": 0,
+   "history_messages": 0,
+   "include": "off",
+   "kind": "backend_context",
+   "request_chars": 34,
+   "session_id": "<SESS1>"
+  },
+  {
+   "kind": "backend_final",
+   "session_id": "<SESS1>",
+   "text": "It is all set."
+  },
+  {
+   "calls": 2,
+   "cost": 0.0,
+   "kind": "step_usage",
+   "session_calls": 2,
+   "session_id": "<SESS1>",
+   "step": "2 calls · 40 tok · 0.00 s · cost $0.0000",
+   "total_tokens": 40
+  },
+  {
+   "audio_ms": 2740,
+   "backend": {
+    "cached_tokens": 0,
+    "calls": 1,
+    "completion_tokens": 10,
+    "prompt_tokens": 10,
+    "total_tokens": 20
+   },
+   "frontend": {
+    "cached_tokens": 0,
+    "calls": 1,
+    "completion_tokens": 10,
+    "prompt_tokens": 10,
+    "total_tokens": 20
+   },
+   "input_tokens": 20,
+   "kind": "agent_turn_done",
+   "outcome": "text",
+   "output_tokens": 20,
+   "session_id": "<SESS1>",
+   "step": "respond",
+   "turn_id": 2
+  },
+  {
+   "audio_ms": 2800,
+   "kind": "filler_skipped",
+   "reason": "skipped_backend_fast",
+   "session_id": "<SESS1>",
+   "turn_id": 2
+  },
+  {
+   "audio_ms": 2800,
+   "kind": "turn_latency",
+   "session_id": "<SESS1>",
+   "turn_id": 2
+  },
+  {
+   "audio_ms": 2800,
+   "heard_ms": 360,
+   "kind": "response_done",
+   "response_id": "<RESP1>",
+   "sent_ms": 500,
+   "session_id": "<SESS1>",
+   "status": "completed"
+  },
+  {
+   "audio_ms": 3300,
+   "kind": "session_end",
+   "session_id": "<SESS1>"
+  }
+ ]
+}

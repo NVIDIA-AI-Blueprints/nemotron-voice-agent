@@ -33,7 +33,7 @@ Run:
 
 from dotenv import load_dotenv
 
-from utils import parse_env_bool, parse_env_int
+from utils import parse_env_bool, parse_env_int, uvicorn_ws_ping_kwargs
 
 # Deployment-provided environment variables are authoritative. ``.env`` is a
 # local-development defaults file and must never replace Helm/NVCF settings
@@ -53,7 +53,6 @@ import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated
@@ -75,6 +74,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 import config_store
 import examples_registry
 from attachment_store import consume_capture_request, store_attachment
+from dependency_check import require_matching_pipecat
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_IN_SAMPLE_RATE, PIPELINE_AUDIO_OUT_SAMPLE_RATE
 from examples.shared.prewarm import (
     build_session_languages,
@@ -144,8 +144,6 @@ _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 _MAX_REALTIME_CLIENT_SECRET_REQUEST_BYTES = 256 * 1024
 _REALTIME_TRUNCATION_PIPELINES = frozenset(
     {
-        "frontend-backend-agent",
-        "generic-frontend-backend-agent",
         "generic-assistant",
         "multilingual-assistant",
     }
@@ -200,6 +198,7 @@ def _run_single_worker(args: argparse.Namespace, app: FastAPI, ssl_kwargs: dict)
         host=args.host,
         port=args.port,
         ws_max_size=MAX_REALTIME_EVENT_BYTES,
+        **uvicorn_ws_ping_kwargs(),
         **ssl_kwargs,
     )
 
@@ -213,6 +212,7 @@ def _run_multi_worker(args: argparse.Namespace, workers: int, ssl_kwargs: dict) 
         workers=workers,
         factory=True,
         ws_max_size=MAX_REALTIME_EVENT_BYTES,
+        **uvicorn_ws_ping_kwargs(),
         **ssl_kwargs,
     )
 
@@ -257,49 +257,18 @@ def _sanitize_session_config(data: dict, fallback_example_key: str = "") -> dict
     example = _bind_example_context_by_key(str(data.get("pipeline_mode", "")) or fallback_example_key)
     config = dict(data)
     config["pipeline_mode"] = example["key"]
-    # Registry-owned: a client cannot pair a prompt catalog with another domain backend.
-    config["domain_profile"] = example.get("domain_profile", "")
-    config["thinker_prompt"] = example.get("thinker_prompt", "")
-    allowed_tools = list(dict.fromkeys(example.get("tools") or ()))
-    config["tools"] = allowed_tools
-    if example.get("domain_profile"):
-        requested_tools = config.pop("tools_available", None)
-        if requested_tools is not None:
-            if isinstance(requested_tools, str):
-                requested = [] if requested_tools.strip().lower() == "none" else requested_tools.split(",")
-            elif isinstance(requested_tools, list | tuple):
-                requested = requested_tools
-            else:
-                requested = []
-            requested_names = {str(name).strip() for name in requested}
-            # The browser may narrow a domain's registry-owned allowlist, but it
-            # can never add a tool that the selected example did not declare.
-            config["tools"] = [name for name in allowed_tools if name in requested_names]
+    config["tools"] = list(dict.fromkeys(example.get("tools") or ()))
 
     _bind_registry_prompt(example, config)
     return filter_session_config(config)
 
 
 def _bind_registry_prompt(example: dict, config: dict) -> None:
-    """Prevent a domain profile from selecting another domain's catalog prompt."""
+    """Default an empty prompt selection to the example's registry prompt key."""
     if config.get("prompt_content"):
         return
     default_key = examples_registry.prompt_default_key(example["key"])
     requested_key = str(config.get("prompt_key") or default_key or "").strip()
-    if not example.get("domain_profile"):
-        if requested_key:
-            config["prompt_key"] = requested_key
-        return
-
-    module_file = examples_registry.example_module_file(example)
-    catalog = load_prompt_catalog(module_file)
-    hidden_keys = frozenset(example.get("agent_prompt_keys") or ())
-    if requested_key not in catalog or requested_key in hidden_keys:
-        logger.warning(
-            f"Prompt {requested_key!r} is not selectable for domain {example['domain_profile']!r}; "
-            f"using registry default {default_key!r}"
-        )
-        requested_key = default_key or ""
     if requested_key:
         config["prompt_key"] = requested_key
 
@@ -308,56 +277,6 @@ def _example_with_module_file(example_key: str = "") -> tuple[dict, Path]:
     """Return ``(registry_entry, module_file)`` for a registry example key."""
     selected = examples_registry.find(example_key)
     return selected, examples_registry.example_module_file(selected)
-
-
-def _domain_tools_payload(example: dict) -> list[dict]:
-    """Render registry-allowlisted domain ToolSpecs for the browser catalog."""
-    profile = str(example.get("domain_profile") or "").strip()
-    if not profile:
-        return []
-
-    from examples.frontend_backend_agent.src.domain import resolve_domain_spec
-
-    spec = resolve_domain_spec(profile)
-    kind_to_json = {str: "string", int: "integer", float: "number", bool: "boolean"}
-    payload: list[dict] = []
-    for name in dict.fromkeys(example.get("tools") or ()):
-        tool = spec.tool_registry.get(name)
-        if tool is None:
-            continue
-        properties: dict[str, dict] = {}
-        required: list[str] = []
-        for param_name, param in tool.params.items():
-            property_schema: dict = {"type": kind_to_json.get(param.kind, "string")}
-            if param.label:
-                property_schema["description"] = param.label
-            if param.kind is str:
-                property_schema["minLength"] = 1
-                property_schema["maxLength"] = param.max_len
-            if param.choices:
-                property_schema["enum"] = sorted(param.choices)
-            if param.bounds:
-                lower, upper = param.bounds
-                property_schema["minimum"] = int(lower) if param.kind is int else lower
-                property_schema["maximum"] = int(upper) if param.kind is int else upper
-            if not param.required and param.default is not None:
-                property_schema["default"] = param.default
-            if param.required:
-                required.append(param_name)
-            properties[param_name] = property_schema
-        payload.append(
-            {
-                "name": name,
-                "description": tool.contract,
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                    "additionalProperties": False,
-                },
-            }
-        )
-    return payload
 
 
 def _activate_example_catalog(module_file: Path, example: dict) -> None:
@@ -1066,12 +985,6 @@ def _as_realtime_tool_schema(tool: dict) -> dict | None:
 
 
 def _resolve_realtime_server_tools(config: dict, fallback_example_key: str) -> list[str]:
-    selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
-    if selected["key"] in _REALTIME_DELEGATE_TOOL_MODULES:
-        # The Talker holds only call_backend/cancel_backend. A Frontend/Backend
-        # prompt's ``tools_available`` is the hidden planner's internal allowlist,
-        # never an advertised server tool, and has no OpenAI schema to publish.
-        return []
     _, module_file = _example_with_module_file(str(config.get("pipeline_mode", "")) or fallback_example_key)
     prompt = load_prompt_catalog(module_file).get(str(config.get("prompt_key", "")), {})
     if not isinstance(prompt, dict):
@@ -1092,38 +1005,6 @@ def _resolve_realtime_server_tool_schemas(config: dict, fallback_example_key: st
         if schema is not None:
             schemas.append(schema)
     return schemas
-
-
-#: Frontend/Backend pipelines expose exactly two Talker-visible delegate tools.
-#: The value is the module owning that domain's call/cancel contracts.
-_REALTIME_DELEGATE_TOOL_MODULES: dict[str, str] = {
-    "frontend-backend-agent": "examples.frontend_backend_agent.airline.tools",
-    "generic-frontend-backend-agent": "examples.frontend_backend_agent.generic.tools",
-}
-
-
-def _resolve_realtime_delegate_tool_schemas(config: dict, fallback_example_key: str) -> list[dict]:
-    selected = examples_registry.find(str(config.get("pipeline_mode", "")) or fallback_example_key)
-    module_path = _REALTIME_DELEGATE_TOOL_MODULES.get(selected["key"])
-    if module_path is None:
-        return []
-    module = import_module(module_path)
-    CALL_BACKEND_TOOL = module.CALL_BACKEND_TOOL
-    CANCEL_BACKEND_TOOL = module.CANCEL_BACKEND_TOOL
-
-    return [
-        schema
-        for tool in (CALL_BACKEND_TOOL, CANCEL_BACKEND_TOOL)
-        if (schema := _as_realtime_tool_schema(tool)) is not None
-    ]
-
-
-def _resolve_realtime_delegate_tools(config: dict, fallback_example_key: str) -> list[str]:
-    return [
-        schema["name"]
-        for schema in _resolve_realtime_delegate_tool_schemas(config, fallback_example_key)
-        if isinstance(schema.get("name"), str)
-    ]
 
 
 _REALTIME_LANGUAGE_SELECTOR = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
@@ -1666,12 +1547,7 @@ def create_app(host: str = "localhost", prompt_file: str = "", *, realtime_only:
                 sanitize_session_config=lambda data, **kwargs: _sanitize_realtime_config(data, **kwargs),
                 initial_session=parsed.session,
                 resolve_server_tools=lambda config: _resolve_realtime_server_tools(config, fallback_example_key),
-                resolve_delegate_tools=lambda config: _resolve_realtime_delegate_tools(config, fallback_example_key),
                 resolve_server_tool_schemas=lambda config: _resolve_realtime_server_tool_schemas(
-                    config,
-                    fallback_example_key,
-                ),
-                resolve_delegate_tool_schemas=lambda config: _resolve_realtime_delegate_tool_schemas(
                     config,
                     fallback_example_key,
                 ),
@@ -1822,12 +1698,7 @@ def create_app(host: str = "localhost", prompt_file: str = "", *, realtime_only:
             ensure_services_ready=_ensure_ready,
             start_bot=_start_bot,
             resolve_server_tools=lambda config: _resolve_realtime_server_tools(config, fallback_example_key),
-            resolve_delegate_tools=lambda config: _resolve_realtime_delegate_tools(config, fallback_example_key),
             resolve_server_tool_schemas=lambda config: _resolve_realtime_server_tool_schemas(
-                config,
-                fallback_example_key,
-            ),
-            resolve_delegate_tool_schemas=lambda config: _resolve_realtime_delegate_tool_schemas(
                 config,
                 fallback_example_key,
             ),
@@ -1891,9 +1762,7 @@ def create_app(host: str = "localhost", prompt_file: str = "", *, realtime_only:
 
     @app.get("/api/tools")
     async def get_tools(pipeline_mode: str = Query(default="")):
-        example, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
-        if example.get("domain_profile"):
-            return _domain_tools_payload(example)
+        _, module_file = _example_with_module_file(pipeline_mode or fallback_example_key)
         catalog = load_tools_catalog(module_file)
         tools: list[dict] = []
         for name, entry in catalog.items():
@@ -2050,6 +1919,7 @@ def create_realtime_app(host: str = "localhost", prompt_file: str = "") -> FastA
 
 def main():
     """Parse CLI args and start the uvicorn server."""
+    require_matching_pipecat()
     parser = argparse.ArgumentParser(description="Pipeline NVIDIA Server")
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=7860)
