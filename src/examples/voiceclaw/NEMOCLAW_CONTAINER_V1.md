@@ -18,6 +18,8 @@ no application-specific installer, `agentConnection`, generated connection
 descriptor, or credential file. VoiceClaw does not require
 `/run/nemoclaw/agent-connection.json` or any other descriptor to start.
 
+The following table assigns each responsibility to one owner:
+
 | Owner | Responsibility |
 | --- | --- |
 | NemoClaw | Container create/start/health/remove, publication, and declared environment |
@@ -27,11 +29,14 @@ descriptor, or credential file. VoiceClaw does not require
 | Fabric and its adapter | Agent execution, bridge contracts, result/context evidence, and native health capability |
 | Issuer/operator | Service-token issuance, audience, authority, expiry, revocation, and renewal |
 
-The application has no Docker socket, host networking, host IPC, GPU access, or
-agent lifecycle control. The default image supervisor, developer Compose
-recipe, Python SDK factory, and cloud/external frontend profiles remain separate.
+The application has no Docker socket, host networking, host interprocess
+communication (IPC), GPU access, or agent lifecycle control. The default image
+supervisor, developer Compose recipe, Python SDK factory, and cloud/external
+frontend profiles remain separate.
 
 ## Environment
+
+VoiceClaw reads the following settings from its process environment:
 
 | Variable | Meaning |
 | --- | --- |
@@ -62,6 +67,8 @@ private stdin pipe. The speech key reaches only the bundled frontend child
 environment and the local credential binding for that frontend.
 
 ## Connection Modes
+
+Select exactly one of the following authentication modes:
 
 | `VOICECLAW_AUTH_MODE` | Gateway | Credential |
 | --- | --- | --- |
@@ -147,6 +154,8 @@ remote cancellation. Provision a fresh target before delegating again.
 
 ## Image and Health
 
+The `nemoclaw-container-v1` image target provides the following interface:
+
 | Item | Value |
 | --- | --- |
 | Entrypoint and command | `/usr/local/bin/voiceclaw-runtime serve` |
@@ -190,8 +199,8 @@ validates the bridge binding before delegated work.
 
 Docker health uses a 10-second interval, 20-second timeout, 180-second start
 period, and three retries. The image bundles executable dependencies; startup
-downloads no executable or package. The hosted frontend preset does not inherit the sandbox's local vLLM
-provider automatically.
+downloads no executable or package. The hosted frontend preset does not
+automatically inherit the sandbox's local vLLM provider.
 
 The hosted frontend large language model (LLM) sets `supports_tokenize: false`
 because its endpoint does not provide the `/tokenize` API. This disables native
