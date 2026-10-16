@@ -52,10 +52,9 @@ from pipecat.frames.frames import (
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
+from pipecat.services.nvidia.stt import NvidiaSTTService
 from pipecat.services.nvidia.tts import NvidiaTTSService
 from pipecat.transports.base_output import BaseOutputTransport
-
-from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 
 _LIFECYCLE_FRAMES = (
     ClientConnectedFrame,
@@ -78,7 +77,7 @@ TIMING_SCOPES = {
         "Observer callbacks may wait in Pipecat's proxy queue"
     ),
     "input_end_sample": "Received PCM cursor at observation; not a backdated raw speech boundary",
-    "asr_request_supplied": "Parent gRPC request iterator yielded audio; not socket delivery",
+    "asr_request_supplied": "Parent Riva audio iterator consumed supplied PCM; not socket delivery",
     "asr_provider_result": "Existing nonempty-results callback entered on the event loop; not raw gRPC first byte",
     "llm_frames": (
         "Use pipeline_timestamp_ns differences for LLM start/first nonempty text/end: this is the original "
@@ -210,13 +209,20 @@ class EvaluationTrace(BaseObserver):
             text=text,
         )
 
-    def asr_request(self, request) -> None:
-        """Read request metadata inside the exception-isolated observation call."""
+    def configure_asr(self, *, stop_history: int) -> None:
+        """Retain endpointing values from the initialized standard service."""
+        with self._lock:
+            self._configuration.update(
+                asr_service="NvidiaSTTService", asr_stop_history_ms=stop_history, asr_force_eou=False
+            )
+
+    def asr_audio(self, audio: bytes) -> None:
+        """Count original PCM when the standard Riva request iterator consumes it."""
         self.record(
             "asr_request_supplied",
-            audio_bytes=len(request.audio_content),
-            force_eou=dict(request.runtime_config).get("force_eou") == "true",
-            is_configuration=request.HasField("streaming_config"),
+            audio_bytes=len(audio),
+            force_eou=False,
+            is_configuration=False,
         )
 
     def asr_response(self, response) -> None:
@@ -359,19 +365,42 @@ def create_evaluation_trace(body: dict) -> EvaluationTrace | None:
         return None
 
 
-class EvaluationNvidiaForceEouSTTService(NvidiaForceEouSTTService):
+class _ObservedASRClient:
+    """Delegate Riva requests while observing consumption of their original PCM."""
+
+    def __init__(self, client, trace: EvaluationTrace):
+        """Wrap one initialized client without replacing Pipecat's stream iterator."""
+        self._client = client
+        self._trace = trace
+
+    def __getattr__(self, name):
+        """Preserve the initialized client's remaining attributes unchanged."""
+        return getattr(self._client, name)
+
+    def streaming_response_generator(self, audio_chunks, streaming_config):
+        """Let Riva create every request from byte-identical source chunks."""
+
+        def audio():
+            for chunk in audio_chunks:
+                _observe(self._trace, "asr_audio", chunk)
+                yield chunk
+
+        return self._client.streaming_response_generator(audio_chunks=audio(), streaming_config=streaming_config)
+
+
+class EvaluationNvidiaSTTService(NvidiaSTTService):
     """Observe the normal continuous ASR service without changing its requests."""
 
     def __init__(self, *args, evaluation_trace: EvaluationTrace, **kwargs):
         """Retain the session observer and initialize the unmodified ASR service."""
         self._evaluation_trace = evaluation_trace
         super().__init__(*args, **kwargs)
+        _observe(self._evaluation_trace, "configure_asr", stop_history=self._stop_history)
 
-    def _iter_streaming_requests(self, audio_chunks, streaming_config):
-        """Observe parent request yields, including explicitly tagged force EOU."""
-        for request in super()._iter_streaming_requests(audio_chunks, streaming_config):
-            _observe(self._evaluation_trace, "asr_request", request)
-            yield request
+    def _initialize_client(self):
+        """Wrap the real client once while retaining the parent's iterator identity."""
+        super()._initialize_client()
+        self._asr_service = _ObservedASRClient(self._asr_service, self._evaluation_trace)
 
     def _response_handler(self, iterator):
         """Observe the existing ASR worker lifetime, including reconnect attempts."""

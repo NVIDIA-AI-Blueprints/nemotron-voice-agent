@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import riva.client
 from pipecat.frames.frames import (
     InputAudioRawFrame,
     InterruptionFrame,
@@ -27,17 +28,17 @@ from pipecat.frames.frames import (
 from pipecat.metrics.metrics import TTFBMetricsData
 from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.nvidia.stt import NvidiaSTTService
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.transports.base_output import BaseOutputTransport
 from riva.client.proto import riva_asr_pb2 as rasr
 
 from examples.shared.evaluation_trace import (
-    EvaluationNvidiaForceEouSTTService,
+    EvaluationNvidiaSTTService,
     EvaluationNvidiaTTSService,
     EvaluationTrace,
     create_evaluation_trace,
 )
-from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 
 
 class EvaluationTraceTests(unittest.IsolatedAsyncioTestCase):
@@ -262,24 +263,75 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.trace.close()
         return json.loads(self.trace.path.read_text())["events"]
 
-    async def test_asr_requests_and_force_eou_remain_byte_identical(self):
-        """Do not alter the parent request stream while measuring consumption."""
-        service = EvaluationNvidiaForceEouSTTService(evaluation_trace=self.trace, use_ssl=False)
+    def asr_client(self, service, *, response=()):
+        """Initialize the real Riva serializer with a non-networking capture stub."""
+        requests_seen = []
+
+        def streaming(requests, **kwargs):
+            requests_seen.extend(requests)
+            return iter(response)
+
+        client = object.__new__(riva.client.ASRService)
+        client.auth = SimpleNamespace(get_auth_metadata=lambda: [])
+        client.stub = SimpleNamespace(StreamingRecognize=streaming)
+
+        def initialize(instance):
+            instance._asr_service = client
+
+        with patch.object(NvidiaSTTService, "_initialize_client", initialize):
+            service._initialize_client()
+        return requests_seen
+
+    async def test_asr_requests_remain_byte_identical_to_standard_stt_without_force_eou(self):
+        """Keep the default 320 endpoint and serialize only original source PCM."""
+        service = EvaluationNvidiaSTTService(evaluation_trace=self.trace, use_ssl=False)
         service._sample_rate = 16000
-        silence = service._force_eou_silence()
-        service._force_eou_silences.append(silence)
-        config = rasr.StreamingRecognitionConfig()
-        requests = list(service._iter_streaming_requests([b"speech", silence], config))
-        self.assertEqual(requests[1].audio_content, b"speech")
-        self.assertEqual(requests[2].audio_content, silence)
-        self.assertEqual(dict(requests[1].runtime_config), {})
-        self.assertEqual(dict(requests[2].runtime_config), {"force_eou": "true"})
+        config = service._create_recognition_config()
+        self.assertEqual(config.config.endpointing_config.stop_history, 320)
+        chunks = [b"speech", b"\0" * 1024]
+        requests = self.asr_client(service)
+        list(service._asr_service.streaming_response_generator(iter(chunks), config))
+        expected = list(riva.client.asr.streaming_request_generator(iter(chunks), config))
+        self.assertEqual(
+            [request.SerializeToString() for request in requests],
+            [request.SerializeToString() for request in expected],
+        )
+        self.assertEqual([request.audio_content for request in requests[1:]], chunks)
+        self.assertTrue(all(not request.runtime_config for request in requests))
         supplied = [event for event in self.events() if event["event"] == "asr_request_supplied"]
-        self.assertEqual([event["force_eou"] for event in supplied], [False, False, True])
+        self.assertEqual([event["audio_bytes"] for event in supplied], [6, 1024])
+        self.assertTrue(all(not event["force_eou"] for event in supplied))
+        configuration = json.loads(self.trace.path.read_text())["configuration"]
+        self.assertEqual(configuration["asr_stop_history_ms"], 320)
+        self.assertFalse(configuration["asr_force_eou"])
+
+    async def test_standard_stream_drop_retains_original_iterator_for_reconnect(self):
+        """The observation adapter must not break Pipecat's iterator identity guard."""
+        service = EvaluationNvidiaSTTService(evaluation_trace=self.trace, use_ssl=False)
+        service._sample_rate = 16000
+        service._config = service._create_recognition_config()
+        self.asr_client(service)
+
+        class Iterator:
+            closed = False
+
+            def __iter__(self):
+                return iter([b"original"])
+
+        iterator = Iterator()
+        service._audio_iterator = iterator
+        reconnect = AsyncMock()
+        with (
+            patch.object(service, "get_event_loop", return_value=asyncio.get_running_loop()),
+            patch.object(service, "_request_reconnect", reconnect),
+        ):
+            await asyncio.to_thread(service._response_handler, iterator)
+            await asyncio.sleep(0)
+        reconnect.assert_awaited_once_with()
 
     async def test_asr_response_callback_and_worker_delegate_without_reinterpretation(self):
         """Observe original result objects and preserve the parent's worker return."""
-        service = EvaluationNvidiaForceEouSTTService(evaluation_trace=self.trace, use_ssl=False)
+        service = EvaluationNvidiaSTTService(evaluation_trace=self.trace, use_ssl=False)
         response = rasr.StreamingRecognizeResponse(
             results=[
                 rasr.StreamingRecognitionResult(
@@ -288,11 +340,11 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         parent = AsyncMock()
-        with patch.object(NvidiaForceEouSTTService, "_handle_response", parent):
+        with patch.object(NvidiaSTTService, "_handle_response", parent):
             await service._handle_response(response)
         parent.assert_awaited_once_with(response)
         iterator = SimpleNamespace(closed=False)
-        with patch.object(NvidiaForceEouSTTService, "_response_handler", return_value="parent-result") as worker:
+        with patch.object(NvidiaSTTService, "_response_handler", return_value="parent-result") as worker:
             self.assertEqual(service._response_handler(iterator), "parent-result")
         worker.assert_called_once_with(iterator)
         events = self.events()
@@ -356,16 +408,17 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_asr_trace_callback_failures_do_not_change_requests_or_provider_errors(self):
         """Contain only trace failures; preserve errors raised by the parent provider."""
         trace = MagicMock(spec=EvaluationTrace)
-        trace.asr_request.side_effect = RuntimeError("observation failed")
+        trace.asr_audio.side_effect = RuntimeError("observation failed")
         trace.asr_response.side_effect = RuntimeError("observation failed")
         trace.record.side_effect = RuntimeError("observation failed")
-        service = EvaluationNvidiaForceEouSTTService(evaluation_trace=trace, use_ssl=False)
-        requests = list(service._iter_streaming_requests([b"audio"], rasr.StreamingRecognitionConfig()))
+        service = EvaluationNvidiaSTTService(evaluation_trace=trace, use_ssl=False)
+        requests = self.asr_client(service)
+        list(service._asr_service.streaming_response_generator([b"audio"], rasr.StreamingRecognitionConfig()))
         self.assertEqual(requests[1].audio_content, b"audio")
         response = SimpleNamespace(results=None)
         provider_error = RuntimeError("provider failed")
         with (
-            patch.object(NvidiaForceEouSTTService, "_handle_response", AsyncMock(side_effect=provider_error)),
+            patch.object(NvidiaSTTService, "_handle_response", AsyncMock(side_effect=provider_error)),
             self.assertRaises(RuntimeError) as failure,
         ):
             await service._handle_response(response)
