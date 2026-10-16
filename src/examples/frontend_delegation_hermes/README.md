@@ -21,13 +21,14 @@ The following diagram shows the containers of the recipe:
  Realtime client ────┴─► frontend-delegation-hermes-agent-single-gpu (shared app image, Python 3.12, :7860)
                           ├─ frontend decider ──► Inference Hub nemotron-3.5-lightning
                           ├─ speech ──► nemo-speech :50051 (ASR + TTS)
-                          └─ ws://fdh-hermes:8790/v1/backend (FDH_BACKEND_URL)
-                               └─ fdh-hermes (nemotron-voice-agent-fdh:local, Python 3.14)
-                                    └─ FDH gateway :8790 + one Hermes worker process per session
-                                         └─ Inference Hub nemotron-3-ultra
+                          └─ ws://default--fdh-hermes.openshell.localhost:8080/v1/backend (FDH_BACKEND_URL)
+                               └─ hermes-openshell-gateway (OpenShell gateway, 127.0.0.1:8080 on the host)
+                                    └─ OpenShell sandbox fdh-hermes (nemotron-voice-agent-fdh:local, Python 3.14, UID 1500)
+                                         └─ FDH gateway :8790 + one Hermes worker process per session
+                                              └─ Inference Hub nemotron-3-ultra (the only allowed outbound host)
 ```
 
-The voice side runs in the shared app container. Hermes needs Python 3.14 and its own packages, so the FDH gateway and the Hermes workers run in their own image, built from [`docker/Dockerfile.fdh`](../../../docker/Dockerfile.fdh) with the Hermes checkout in `HERMES_AGENT_DIR`. [`docker/fdh/gateway.sh`](../../../docker/fdh/gateway.sh) starts the gateway with the settings in [`docker/fdh/gateway.env`](../../../docker/fdh/gateway.env). The gateway listens on the Compose network and is not published to the host. The image does not mount `src/`, so rebuild it after a source change. It records a hash of its `src/` in `/app/SOURCE_SHA256`, and the gateway prints that hash at start.
+The voice side runs in the shared app container. Hermes needs Python 3.14 and its own packages, so the FDH gateway and the Hermes workers run in their own image, built from [`docker/Dockerfile.fdh`](../../../docker/Dockerfile.fdh) with the Hermes checkout in `HERMES_AGENT_DIR`. [`docker/fdh/gateway.sh`](../../../docker/fdh/gateway.sh) starts the gateway with the settings in [`docker/fdh/gateway.env`](../../../docker/fdh/gateway.env). By default, the gateway and its workers run in an NVIDIA OpenShell sandbox. The `fdh-hermes` service is a controller that creates the sandbox with the files in [`docker/fdh/openshell/`](../../../docker/fdh/openshell/). The sandbox can call only `inference-api.nvidia.com`, and it sees a placeholder in place of the real `NVIDIA_API_KEY`. The plain runtime overlay, [`docker/docker-compose.fdh-hermes-plain.yaml`](../../../docker/docker-compose.fdh-hermes-plain.yaml), runs the gateway in a plain `fdh-hermes` container at `ws://fdh-hermes:8790/v1/backend` instead. Use it for A/B checks, debugging, and hosts that cannot run OpenShell. Both runtimes run the same image and settings, and neither publishes the FDH gateway port to the host. The image does not mount `src/`, so rebuild it after a source change. It records a hash of its `src/` in `/app/SOURCE_SHA256`, and the gateway prints that hash at start.
 
 Only the worker processes import Hermes, because `src/utils.py` would shadow Hermes's own `utils` module. The workers get a `PYTHONPATH` that holds only an `examples` symlink.
 
@@ -39,13 +40,13 @@ Only the worker processes import Hermes, because `src/utils.py` would shadow Her
 | --- | --- | --- |
 | Delegation profile | `profiles/pipecat_demo.yaml` | `profiles/pipecat_realtime_eval.yaml` |
 | Pipecat settings | `adapters/pipecat.yaml` | `adapters/pipecat.eval.yaml` |
-| Gateway configuration (`fdh-hermes`) | `gateway.yaml` | `gateway.eval.yaml` |
+| Gateway configuration (Hermes runtime) | `gateway.yaml` | `gateway.eval.yaml` |
 
 The rules match the Frontend/Backend Agent example:
 
 - OpenAI Realtime sessions always run the `eval` delegation profile and Pipecat settings, whatever `FDH_PROFILE` says.
 - A deployment with `FDH_PROFILE=eval` refuses browser UI sessions.
-- The gateway configuration belongs to the deployment, because one `fdh-hermes` container serves every session. Only the eval overlay sets `gateway.eval.yaml`, so benchmark runs must use it.
+- The gateway configuration belongs to the deployment, because one Hermes runtime serves every session. Only the eval overlay sets `gateway.eval.yaml`, so benchmark runs must use it.
 
 [`adapters/pipecat/profiles.py`](adapters/pipecat/profiles.py) holds the mapping. `docker-compose.yml` sets every FDH variable of the voice service as a literal, so `.env` cannot change an evaluation run.
 
@@ -172,13 +173,16 @@ The voice server and the gateway log a deployed fingerprint: `fdh_session_start.
 
 ## Run It
 
-The following commands start the recipe, with the browser UI (`default`) or for evaluation runs (`eval`). Complete the prerequisites of the [deploy guide](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md) first: `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`, the speech model weights, and the Hermes checkout in `HERMES_AGENT_DIR`.
+The following commands start the recipe, with the browser UI (`default`) or for evaluation runs (`eval`). Complete the prerequisites of the [deploy guide](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md) first: `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`, the speech model weights, and the Hermes checkout in `HERMES_AGENT_DIR`. The default OpenShell runtime also needs Linux 6.2 or newer with Landlock, Docker Engine 28 or newer, Docker Compose 2.24.4 or newer, and a free host port `127.0.0.1:8080`.
 
 ```bash
 # default: the browser UI at https://<host>:7860, and Realtime sessions with the eval settings
 docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build
 # eval: OpenAI Realtime only, ws://<host>:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-delegation-hermes
 docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+# plain runtime (baseline): add the plain overlay before the eval overlay, if any
+docker compose -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml \
   --profile frontend-delegation-hermes-agent/single-gpu up -d --build
 ```
 
@@ -188,7 +192,7 @@ For a Realtime smoke test, run the repository's test client and open `http://loc
 uv run python realtime_test_client/proxy.py --model nvidia/nemotron-realtime-frontend-delegation-hermes
 ```
 
-The logs are `docker compose logs fdh-hermes` (the gateway configuration and the source hash), `logs/fdh_voice_events.pipecat.jsonl`, `logs/fdh_gateway_events.pipecat.jsonl`, and `logs/fdh_workers_pipecat/`.
+The voice event log is `logs/fdh_voice_events.pipecat.jsonl`. In the OpenShell runtime, `docker compose logs fdh-hermes` shows the controller and the gateway configuration, and the sandbox's gateway events, worker logs, and traces are saved to `logs/openshell/<time>/` when `fdh-hermes` stops. In the plain runtime, `docker compose logs fdh-hermes` shows the gateway configuration and the source hash, and the gateway writes `logs/fdh_gateway_events.pipecat.jsonl` and `logs/fdh_workers_pipecat/`. The deploy guide's [Read the Logs](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md#read-the-logs) section lists every log.
 
 ## Tests
 
@@ -203,7 +207,8 @@ The suites cover the following areas:
 - `core/` tests the shared code. `test_fdh_workflow_table.py` checks all 12 rows of `workflow.csv`. `test_fdh_gateway_processes.py` runs real worker processes with the fake agent. `test_fdh_golden_prompts.py` and `test_fdh_fix_plan.py` pin the baseline prompts and the `124acf7` control. `test_fdh_tau3_fixes.py`, `test_fdh_identity_fixes.py`, and `test_fdh_geval_fixes.py` cover the switches. `test_fdh_schema_rules.py` checks the derived rules against `fixtures/schema_rules_snapshot.json`. The core tests drive the turn manager through `core/_fdh_test_head/`, a test-only Realtime head with an input-audio clock, an energy VAD, and stub speech. It is not shipped.
 - `voice/` tests the voice layer: configuration, normalization, the Realtime wire events, and playback.
 - `pipecat/` tests the Pipecat adapter with an energy VAD, a stub ASR, and a tone TTS. `test_fdh_eval_pins.py` pins the eval behavior against `fixtures/eval_pins.json`: the prompt and tool hashes and the backend fingerprint per τ² domain (airline, retail, and telecom), the hashed delegation, voice, and gateway settings, the Pipecat settings and processors, and the server events of a scripted session per domain. `test_fdh_registry.py` checks the registry files, and `test_fdh_ui_session.py` checks the browser UI sessions.
-- `test_fdh_compose.py` checks that the voice service sets every FDH variable as a literal, that `docker/fdh/gateway.env` holds plain `KEY=value` lines, and that the eval overlay sets only `environment` keys on `fdh-hermes`.
+- `test_fdh_compose.py` checks that the voice service sets every FDH variable as a literal, that `docker/fdh/gateway.env` holds plain `KEY=value` lines, that the eval overlay sets only `environment` keys on `fdh-hermes`, that OpenShell is the default runtime, that the plain overlay overrides single fields only, and that the controller passes every `gateway.env` key into the sandbox.
+- `test_fdh_openshell_pins.py` checks that every OpenShell image and the CLI build use the one release in `docker/fdh/openshell/VERSION`, and that the OpenShell gateway's bind port matches the published port.
 - `test_fdh_import_isolation.py` checks that the core imports no adapter, that no adapter imports another, and that the gateway never loads Pipecat.
 - `test_fdh_dependencies.py` checks that the image lock pins the repository's Pipecat version and lists the same packages as the `fdh` extra.
 

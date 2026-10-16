@@ -1,6 +1,6 @@
 # Configuration Knobs
 
-Profiles and gateway configurations are in `src/examples/frontend_delegation_hermes/config/`. Unknown keys fail at load time. The voice service mounts `src/` read-only, so a voice-side configuration change needs a restart: `docker compose [$E] --profile $P restart frontend-delegation-hermes-agent-single-gpu`. The `fdh-hermes` container runs the source built into its image, so a change to a gateway configuration, a backend prompt, or other gateway code needs `up -d --build`.
+Profiles and gateway configurations are in `src/examples/frontend_delegation_hermes/config/`. Unknown keys fail at load time. The voice service mounts `src/` read-only, so a voice-side configuration change needs a restart: `docker compose [$E] --profile $P restart frontend-delegation-hermes-agent-single-gpu`. The Hermes runtime (the OpenShell sandbox, or the plain `fdh-hermes` container) runs the source built into the Hermes image, so a change to a gateway configuration, a backend prompt, or other gateway code needs `up -d --build`.
 
 ## Profiles
 
@@ -10,7 +10,7 @@ Profiles and gateway configurations are in `src/examples/frontend_delegation_her
 | --- | --- | --- |
 | Delegation profile | `profiles/pipecat_demo.yaml` | `profiles/pipecat_realtime_eval.yaml` |
 | Pipecat settings | `adapters/pipecat.yaml` | `adapters/pipecat.eval.yaml` |
-| Gateway configuration (`fdh-hermes`, `FDH_GATEWAY_CONFIG`) | `gateway.yaml` | `gateway.eval.yaml` (eval overlay) |
+| Gateway configuration (Hermes runtime, `FDH_GATEWAY_CONFIG`) | `gateway.yaml` | `gateway.eval.yaml` (eval overlay) |
 
 Realtime sessions always use the `eval` delegation profile and Pipecat settings. The code passes each profile's Pipecat settings file explicitly, so `FDH_PIPECAT_SETTINGS` has no effect on the Compose recipe.
 
@@ -29,7 +29,7 @@ Realtime sessions always use the `eval` delegation profile and Pipecat settings.
 | `FDH_EVENT_LOG` | `logs/fdh_voice_events.pipecat.jsonl` | The voice event log |
 | `FDH_PROMPTS` | `prompts.yaml` | The frontend prompt catalog in `config/` |
 | `FRONTEND_LLM_MODEL`, `FRONTEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3.5-lightning`, `https://inference-api.nvidia.com/v1` | The frontend model of Realtime sessions and the default of browser sessions |
-| `FDH_BACKEND_URL` | `ws://fdh-hermes:8790/v1/backend` | The gateway |
+| `FDH_BACKEND_URL` | `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` (`ws://fdh-hermes:8790/v1/backend` with the plain overlay) | The gateway, through the OpenShell gateway's network alias by default |
 | `FBA_ASR_SERVER`, `FBA_TTS_SERVER` | Empty | Replace the catalog speech server |
 | `FBA_VOICE_EVENT_LOG`, `FBA_FILLER_LOG` | Empty | Voice-layer logs, off |
 | `FBA_VOICE_PROMPTS` | `prompts.voice.yaml` | The voice-layer prompt catalog |
@@ -38,7 +38,7 @@ Realtime sessions always use the `eval` delegation profile and Pipecat settings.
 
 The voice service also reads the shared `.env` (`NVIDIA_API_KEY`, `REALTIME_API_KEY`, `PIPELINE_TLS`, `ENABLE_WELCOME_MESSAGE`, and so on) and publishes `${PIPELINE_APP_PORT:-7860}`.
 
-The `fdh-hermes` service reads `docker/fdh/gateway.env` and receives only `NVIDIA_API_KEY` from `.env`. `gateway.env` holds plain `KEY=value` lines:
+The `fdh-hermes` service reads `docker/fdh/gateway.env` and receives only `NVIDIA_API_KEY` from `.env`. In the OpenShell runtime, the controller passes every `gateway.env` key into the sandbox with the value from its own environment, so an eval overlay value wins. It gives `NVIDIA_API_KEY` to the OpenShell provider only; the sandbox sees a placeholder. `gateway.env` holds plain `KEY=value` lines:
 
 | Variable | Value |
 | --- | --- |
@@ -48,7 +48,23 @@ The `fdh-hermes` service reads `docker/fdh/gateway.env` and receives only `NVIDI
 | `FDH_GATEWAY_LOG` | `logs/fdh_gateway_events.pipecat.jsonl` |
 | `FDH_WORKER_LOG_DIR` | `logs/fdh_workers_pipecat` |
 
-`gateway.env` deliberately does not set `FDH_BACKEND_TRACE`, `FDH_WARM_WORKERS`, or `FDH_AGENT_KIND`, because their defaults differ by gateway configuration. Compose also sets `FDH_GATEWAY_HOST=0.0.0.0`. `docker/fdh/gateway.sh` starts the gateway on port 8790 and prints the configuration and the image's source hash. `tests/unit/frontend_delegation_hermes/test_fdh_compose.py` checks these rules.
+`gateway.env` deliberately does not set `FDH_BACKEND_TRACE`, `FDH_WARM_WORKERS`, or `FDH_AGENT_KIND`, because their defaults differ by gateway configuration. The plain overlay also sets `FDH_GATEWAY_HOST=0.0.0.0`. In the sandbox the gateway binds the default, `127.0.0.1`, and OpenShell reaches it there. `docker/fdh/gateway.sh` starts the gateway on port 8790 and prints the configuration and the image's source hash. `tests/unit/frontend_delegation_hermes/test_fdh_compose.py` checks these rules.
+
+## OpenShell Runtime
+
+Every OpenShell file is in `docker/fdh/openshell/`. The following table lists them:
+
+| File | Purpose |
+| --- | --- |
+| `VERSION` | The one pinned OpenShell release (`v0.1.5-pre.4`), its commit, and the image digests. `test_fdh_openshell_pins.py` checks that the 5 pins in Compose, `gateway.toml`, and the CLI build arguments match it |
+| `gateway.toml` | The OpenShell gateway settings: bind `0.0.0.0:8080`, no TLS, no user authentication, pinned sandbox and supervisor images, `image_pull_policy = "if_not_present"` |
+| `policy.yaml` | The sandbox policy: UID/GID 1500, read-only `/app` except `/app/logs` and `/app/.cache`, Landlock required, and `network_policies` for extra outbound hosts (none today) |
+| `nvidia-fdh.yaml` | The provider profile: the real `NVIDIA_API_KEY`, only for `inference-api.nvidia.com:443`, only for Hermes' Python interpreter |
+| `Dockerfile.cli` | The controller image: the OpenShell CLI built from source at the pinned commit, plus `curl`, `jq`, and `bash` |
+| `controller.env` | Controller-only settings: `OPENSHELL_GATEWAY_ENDPOINT`, `FDH_IMAGE` |
+| `controller.sh` | The `fdh-hermes` controller: kernel check, provider setup, sandbox create, log save and delete on stop |
+
+`policy.yaml`, `nvidia-fdh.yaml`, and `controller.sh` are mounted into the controller, so a change to them needs `docker compose [$E] --profile $P restart fdh-hermes`, which saves the logs, deletes the sandbox, and creates a new one. A change to `controller.env` needs `up -d`. A change to `gateway.toml` needs `docker compose [$E] --profile $P restart hermes-openshell-gateway`. A change to `VERSION` must update all 5 pins together.
 
 ## Image
 

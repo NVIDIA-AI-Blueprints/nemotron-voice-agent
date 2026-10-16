@@ -268,7 +268,9 @@ services:
 
   # Frontend Delegation Hermes agent (src/examples/frontend_delegation_hermes), single-gpu only:
   # the voice side in the shared app container, and the Hermes runtime (the FDH gateway and its Hermes
-  # workers, Python 3.14) in the `fdh-hermes` container. The voice side reaches Hermes only through
+  # workers, Python 3.14) behind the `fdh-hermes` service: by default an OpenShell sandbox (see the
+  # OpenShell block below), or a plain container with docker/docker-compose.fdh-hermes-plain.yaml
+  # (the baseline for A/B checks and debugging). The voice side reaches Hermes only through
   # FDH_BACKEND_URL and depends only on `fdh-hermes` being healthy. FDH_PROFILE has two values:
   # `default` (browser UI) and `eval` (OpenAI Realtime only; set with FDH_GATEWAY_CONFIG by
   # docker/docker-compose.fdh-eval.yaml). OpenAI Realtime sessions always use the `eval` settings.
@@ -294,7 +296,9 @@ services:
       FDH_PROMPTS: prompts.yaml
       FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
       FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
-      FDH_BACKEND_URL: ws://fdh-hermes:8790/v1/backend
+      # The Hermes runtime's address (OpenShell: the gateway's routed host name; port 8080 is the
+      # OpenShell gateway's). The plain overlay sets ws://fdh-hermes:8790/v1/backend.
+      FDH_BACKEND_URL: ws://default--fdh-hermes.openshell.localhost:8080/v1/backend
       # The voice side's other catalog and log variables, at the values FDH ran with before.
       FBA_ASR_SERVER: ""
       FBA_TTS_SERVER: ""
@@ -323,33 +327,105 @@ services:
     entrypoint: ["true"]
     restart: "no"
 
-  # The Hermes runtime: the FDH gateway (docker/fdh/gateway.sh) on the Compose network, not published
-  # to the host. Its settings come only from docker/fdh/gateway.env and the eval overlay; .env supplies
-  # only NVIDIA_API_KEY (the backend LLM key; gateway.sh refuses to start without it).
+  # ---- FDH Hermes runtime: OpenShell (the default). Every OpenShell service is in this block, and its
+  # files are in docker/fdh/openshell/ (one pinned release: docker/fdh/openshell/VERSION). The FDH gateway
+  # and its Hermes workers run in the OpenShell sandbox "fdh-hermes" (FDH image, UID 1500, egress only to
+  # the backend LLM host, a placeholder instead of the API key). The plain runtime (the baseline for A/B
+  # checks and debugging) is the overlay docker/docker-compose.fdh-hermes-plain.yaml.
+  # Host needs: Linux 6.2+ with Landlock, Docker Engine 28+, Compose 2.24.4+, host port 127.0.0.1:8080
+  # free, and no other OpenShell gateway on the host (/var/lib/openshell is host-wide).
+
+  # One-time: generates the OpenShell gateway's JWT keys (kept if present), then exits.
+  hermes-openshell-init:
+    image: ghcr.io/nvidia/openshell/gateway:0.1.5-pre.4@sha256:c7cf028241fbeeb9ee273efb2724776eb86107d00d06ed5ca437e6378078e389
+    profiles:
+      - frontend-delegation-hermes-agent/single-gpu
+    user: "0"
+    command: ["generate-certs", "--output-dir", "/var/lib/openshell/tls"]
+    environment:
+      HOME: /var/lib/openshell
+    volumes:
+      - &openshell-data
+        type: bind
+        source: /var/lib/openshell
+        target: /var/lib/openshell
+        bind:
+          create_host_path: true
+    restart: "no"
+
+  # The OpenShell gateway: creates the sandbox through the host's Docker socket and routes
+  # Host "default--fdh-hermes.openshell.localhost" to the sandbox's port 8790. The alias lets the voice
+  # service reach it with FDH_BACKEND_URL, unchanged code. It runs no Hermes logic.
+  hermes-openshell-gateway:
+    image: ghcr.io/nvidia/openshell/gateway:0.1.5-pre.4@sha256:c7cf028241fbeeb9ee273efb2724776eb86107d00d06ed5ca437e6378078e389
+    profiles:
+      - frontend-delegation-hermes-agent/single-gpu
+    # Clear the image's CMD (--bind-address ...), so gateway.toml owns every setting.
+    command: []
+    user: "0"
+    depends_on:
+      hermes-openshell-init:
+        condition: service_completed_successfully
+    ports:
+      # The sandbox supervisors run on the host network and dial 127.0.0.1:8080: same port as the bind.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path on the host and in the container: Docker mounts the supervisor binary from it.
+      - *openshell-data
+      - ./docker/fdh/openshell/gateway.toml:/etc/openshell/gateway.toml:ro
+    environment:
+      OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
+      OPENSHELL_DB_URL: "sqlite:/var/lib/openshell/gateway.db?mode=rwc"
+      HOME: /var/lib/openshell
+      XDG_DATA_HOME: /var/lib/openshell
+    networks:
+      default:
+        aliases:
+          - default--fdh-hermes.openshell.localhost
+    restart: unless-stopped
+
+  # The Hermes runtime contract service (healthy = the FDH gateway answers /health). Here: the controller
+  # (docker/fdh/openshell/controller.sh, OpenShell CLI) that creates the sandbox, reports its health, and
+  # on stop saves the sandbox's logs to logs/openshell/<time>/ and deletes it. Gateway settings come only
+  # from docker/fdh/gateway.env and the eval overlay; .env supplies only NVIDIA_API_KEY, which goes to the
+  # OpenShell provider, never into the sandbox.
   fdh-hermes:
-    image: nemotron-voice-agent-fdh:local
-    pull_policy: never
+    image: nemotron-voice-agent-fdh-openshell-cli:local
+    build:
+      context: .
+      dockerfile: docker/fdh/openshell/Dockerfile.cli
+      args:
+        OPENSHELL_VERSION: v0.1.5-pre.4
+        OPENSHELL_COMMIT: a4c848adbddd0b4732fd70ddcf8a563a5b1e9317
     profiles:
       - frontend-delegation-hermes-agent/single-gpu
     depends_on:
+      hermes-openshell-gateway:
+        condition: service_started
       fdh-hermes-image:
         condition: service_completed_successfully
     init: true
     env_file:
       - docker/fdh/gateway.env
+      - docker/fdh/openshell/controller.env
     environment:
-      FDH_GATEWAY_HOST: 0.0.0.0
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
     volumes:
-      - ./logs:/app/logs
+      - ./docker/fdh/openshell:/cfg:ro
+      - ./docker/fdh/gateway.env:/cfg-env/gateway.env:ro
+      - ./logs/openshell:/out
+    # /cfg is read-only; do not rely on the exec bit.
+    command: ["bash", "/cfg/controller.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-fs", "-m", "5", "http://localhost:8790/health"]
+      test: ["CMD", "curl", "-fs", "-m", "5", "-H", "Host: default--fdh-hermes.openshell.localhost",
+             "http://hermes-openshell-gateway:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 60s
-    # The gateway closes open sessions one after another (about 15 s each); 4 sessions fit in 75 s.
-    stop_grace_period: 75s
+      start_period: 180s
+    # Time to save the sandbox's logs and delete it.
+    stop_grace_period: 60s
     restart: "no"
     logging:
       driver: "json-file"
