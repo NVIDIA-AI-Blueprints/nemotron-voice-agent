@@ -165,10 +165,17 @@ commands, refer to the
 
 ## Validation and Results
 
-Full-Duplex-Bench (FDB) score-validation work is in progress. Paired model runs
-and scoring will follow sharing this proposal. The follow-up report will include
-input, default-online, offline, and comparison WAVs; server metrics; evaluation
-turnaround; and scorer results. No score equivalence is claimed at this stage.
+An unscored composite recording has completed through both execution paths on
+Pipecat 1.12.0 with standard continuous STT, `stop_history=320`, and no force-EOU
+injection. Recording checks verify identical source PCM, output extents,
+committed spans, and stereo alignment. The exported evidence bundle retains
+WAVs, server metrics, and runtime provenance; refer to the
+[validation artifact reference](offline-processing-reference.md#completed-composite-inspection).
+
+The offline run coalesces some source turns and produces fewer responses than
+the online run. This inspection does not establish behavioral or accuracy
+fidelity. Full-Duplex-Bench (FDB) score-validation work remains in progress;
+official scoring will follow sharing this proposal.
 
 The comparison uses identical canonical PCM, application revision, model
 services, prompts, voice, generation settings, and detector settings. Each case
@@ -235,7 +242,9 @@ transcript ownership, future-context suppression, overlapping generation,
 interruption, history commitment, silence, final tails, malformed upload,
 disconnect, and watchdog failures. Client and trace tests cover delayed replies,
 cancellation ownership, source/session pairing, and partial observations.
-Paired model runs and benchmark scoring provide the next validation layer.
+The completed composite inspection validates recording and measurement
+integrity. Paired benchmark cases and official scoring provide the next
+validation layer.
 
 ## Limits and Extensions
 
