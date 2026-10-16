@@ -25,6 +25,8 @@ This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-in
 - NVIDIA streaming ASR now finalizes after 320 ms of trailing silence in the Generic, Multilingual, and Frontend/Backend examples.
 - Replaced Nemotron 3 Super with **Nemotron 3.5 Super VL** (`nemotron-super`) on the server recipe. The Multilingual Assistant now lists it after Lightning, as the Generic Assistant does. Lightning stays the default.
 - Upgraded the single-GPU Lightning vLLM image from `vllm/vllm-openai:v0.27.1` to `v0.31.0`.
+- Updated Nemotron 3.5 Lightning NIM to version 2.1.4.
+- Updated Magpie TTS Multilingual NIM to version 1.10.1.
 - Updated Nemotron ASR Streaming NIM to version 1.4.0.
 - The `*/single-gpu` speech services run NeMo-Speech.cpp 0.2.0 with Magpie TTS Multilingual v2607, up from 0.1.0 with v2602.
 - The single-GPU Frontend/Backend Agent speaks validated Thinker responses directly instead of having the Talker rephrase them. Set `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE`, which is on in the single-GPU Compose profile.
