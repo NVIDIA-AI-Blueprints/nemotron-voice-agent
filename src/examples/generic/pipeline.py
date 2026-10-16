@@ -38,6 +38,11 @@ import examples_registry
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
+from examples.shared.evaluation_trace import (
+    EvaluationNvidiaForceEouSTTService,
+    EvaluationNvidiaTTSService,
+    create_evaluation_trace,
+)
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_force_eou_stt import NvidiaForceEouSTTService
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
@@ -72,6 +77,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
+    evaluation_trace = create_evaluation_trace(body)
+    evaluation_kwargs = {"evaluation_trace": evaluation_trace} if evaluation_trace else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
     prompt_key, base_system_content = resolve_prompt(
         __file__,
@@ -102,7 +109,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if asr_language_code:
         asr_kwargs["settings"].language = asr_language_code
-    stt = NvidiaForceEouSTTService(**asr_kwargs, stop_history=400)
+    stt_service = EvaluationNvidiaForceEouSTTService if evaluation_trace else NvidiaForceEouSTTService
+    stt = stt_service(**asr_kwargs, stop_history=400, **evaluation_kwargs)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
@@ -201,7 +209,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
-    tts = NvidiaTTSService(**tts_kwargs)
+    tts_service = EvaluationNvidiaTTSService if evaluation_trace else NvidiaTTSService
+    tts = tts_service(**tts_kwargs, **evaluation_kwargs)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
@@ -322,7 +331,11 @@ async def bot(runner_args: RunnerArguments) -> None:
             enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        observers=with_realtime_observers(latency_observer, transport=transport),
+        observers=with_realtime_observers(
+            latency_observer,
+            *([evaluation_trace] if evaluation_trace else []),
+            transport=transport,
+        ),
         enable_tracing=IS_TRACING_ENABLED,
         processor_unusable_policy=ProcessorUnusablePolicy.END,
         setup_timeout_secs=120.0,
@@ -386,4 +399,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(task)
-    await runner.run()
+    try:
+        await runner.run()
+    finally:
+        if evaluation_trace:
+            await asyncio.to_thread(evaluation_trace.close)

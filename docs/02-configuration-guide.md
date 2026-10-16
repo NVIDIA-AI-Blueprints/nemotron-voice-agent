@@ -23,7 +23,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
-| [Offline Processing for Nemotron Voice Agent](12-offline-processing.md) | Configure the first integration's finite-session WebSocket upload, aligned recordings, and latency extraction |
+| [Offline Processing for Nemotron Voice Agent](12-offline-processing.md) | Configure finite-session upload, aligned recording, and metrics for offline accuracy and task-completion evaluation |
 
 ## Welcome Message
 

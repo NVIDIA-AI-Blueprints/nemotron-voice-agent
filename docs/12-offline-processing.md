@@ -1,585 +1,544 @@
 # Offline Processing for Nemotron Voice Agent
 
-Status: experimental implementation. Historical recordings from October 15 use
-the prototype based on commit `dc60ebb` with Pipecat 1.3.0. That base commit does
-not contain the offline feature. This pull request ports the
-implementation to the current `develop` branch, which pins Pipecat 1.12.0. The
-saved recordings do not validate this new revision or its changed defaults.
-All human-readable latency values below are milliseconds. Wire positions remain
-integer samples; raw execution timers remain nanoseconds.
+## Aim and Background
 
-## Problem and Scope
+Enable Nemotron Voice Agent to process recorded conversations faster than real
+time so you can run accuracy and task-completion benchmarks without waiting for
+every recording to play. The input includes speech and silence. The output is
+bot audio positioned on the same timeline, with transcripts and server-side
+measurements that explain each response.
 
-Offline processing introduces a source-offset execution architecture for
-Nemotron Voice Agent. It separates conversation and playback positions from
-network arrival and presentation pacing. Finite-session benchmarking and
-evaluation are the first use cases; the Generic Assistant is the first supported
-integration.
+A real-time voice agent receives and plays audio at its recorded rate. A long
+pause therefore takes time even when the models have no work to do. Bulk input
+removes that wait, but network arrival time no longer identifies the speaker's
+position in the conversation. Pacing output faster alone also loses the original
+timing of silence, turn completion, and interruption.
 
-The provider stages are automatic speech recognition (ASR), a large language
-model (LLM), and text-to-speech (TTS). Voice activity detection (VAD) identifies
-speech intervals before the endpoint policy decides that a turn is complete.
+This design separates the **recording timeline** from **execution time**. Audio
+sample offsets determine where conversation events occur. Measured model-service
+delays still affect when bot audio becomes available. The server renders gaps
+as silence instead of sleeping through them.
 
-The experimental `/api/ws/offline` endpoint accepts a finite 16 kHz mono PCM16
-session, including silence, without input or output presentation pacing. This
-first integration seals the upload, runs one continuous streaming ASR request,
-detects turns on source sample offsets, and schedules generated responses
-against the source. The normal `/api/ws` and WebRTC paths keep their existing
-behavior.
+The target outcome is a faster evaluation workflow with inspectable evidence:
 
-The goal is to upload an entire user recording as fast as the connection allows
-and produce a bot recording on the same audio timeline. Speech, input silence,
-turn detection, provider readiness, interruption, and the final response tail
-must retain explicit positions even when execution finishes much sooner than the
-recording's duration. This supports finite-session accuracy and alignment
-experiments. Real-time presentation sleeps and receive inactivity cannot define
-those positions.
+* Upload a complete recording without real-time pacing.
+* Preserve source speech, silence, and turn boundaries.
+* Generate responses using the configured ASR, LLM, TTS, prompt, and tools.
+* Interrupt bot playback when the user is confirmed to have started speaking.
+* Save aligned user and bot WAVs, transcripts, events, and server metrics.
+* Compare the same files through offline and normal online processing before
+  relying on offline task or accuracy scores.
 
-This is a separate finite-session execution engine. The Generic Assistant
-integration reuses that example's configuration, prompt, tools, summary policy,
-Silero, and Smart Turn. It calls ASR/LLM/TTS through offline adapters instead of
-running the live Pipecat frame-processing pipeline. It does not make the existing
-live pipeline operate under a virtual clock, or establish identical live
-accuracy or latency.
+Automatic speech recognition (ASR), a large language model (LLM), text-to-speech
+(TTS), and voice activity detection (VAD) form the first supported integration.
+The capability is an execution architecture for Nemotron Voice Agent; the
+Generic Assistant is the first example that composes its providers and policy.
 
-### Architecture and First Integration
+The implementation adds `/api/ws/offline`, a custom finite-session WebSocket
+endpoint. It uses a separate execution engine and does not change the normal
+`/api/ws`, `/v1/realtime`, or WebRTC paths. This is not an OpenAI Realtime or RTVI
+protocol extension. Other examples can reuse the scheduling contracts through
+additional integration factories.
 
-The capability and its initial integration have different responsibilities:
+## Design Approach and Architecture
 
-| Layer | Scope in This Change |
-| --- | --- |
-| Offline processing architecture | Immutable source audio, sample-offset replay, provider-availability traces, causal conversation commitment, interruption, aligned recording, and explicit finite-session completion |
-| First supported integration | Generic Assistant configuration, prompt, tools, summary policy, Silero/Smart Turn detector, continuous Riva ASR, HTTP chat-completions LLM, and stitched Magpie TTS |
-| Evaluation clients | Bulk upload, sample selection, comparison WAVs, and latency extraction; these clients exercise the architecture without defining its scheduling policy |
+### Source Offsets Define Conversation Time
 
-The implementation currently lives in `src/examples/generic/offline/`, and the
-server endpoint constructs the Generic Assistant runtime. Its narrow provider
-protocols and committed-result records are extension boundaries. Other examples,
-provider combinations, and the OpenAI Realtime gateway are not integrated by
-this change.
+At 16 kHz, each sample has an unambiguous position in the recording. A 512-sample
+analysis window represents 32 ms, whether it arrives immediately or after a
+network pause. Transport packet sizes do not change the analysis window.
 
-### Supported Configuration
+The server first validates and seals the complete source, including silence.
+Detection and continuous ASR analyze that immutable source. The scheduler then
+replays speech, endpoint, transcript-readiness, and generated-audio events in
+sample order. It advances directly between events without waiting for source
+silence to elapse.
 
-The current adapter supports the generic cascaded assistant with a continuous
-Riva ASR stream, an HTTP chat-completions LLM endpoint, and stitched Magpie TTS.
-It preserves catalog/session selections for the ASR model, language, and
-punctuation, LLM temperature, token limit, tool choice, and TTS voice/language.
-The per-session configuration fingerprint records the resolved choices.
+Analyzing the source ahead does not permit using future conversation state.
+Only transcripts whose source dependency and availability have been reached can
+enter a response. Generation uses a private history snapshot. Replay decides
+which generated audio and context updates survive a later interruption.
 
-Source detection honors the shared turn-policy settings. Smart Turn mode uses
-a 200 ms Silero stop threshold and the shared 1,000 ms fallback by default.
-`SMART_TURN_STOP_SECS` overrides the fallback. Set
-`USE_SILERO_VAD_TURN_DETECTION=true` for Silero-only detection;
-`SILERO_VAD_STOP_SECS` then controls its stop threshold, which defaults to 500 ms.
-The `*_SECS` environment variables accept values in seconds.
-
-Streaming-input LLM URLs using `ws://` or `wss://`, per-sentence synthesis,
-zero-shot TTS models, and zero-shot audio prompts are rejected explicitly.
-This endpoint does not expose the OpenAI Realtime gateway protocol. The existing
-`/v1/realtime`, `/api/ws`, and WebRTC paths retain their own behavior.
-
-## Architecture and Wall-Clock Audit
-
-Changing the output sleep alone is insufficient. Advancing a shared clock to the
-last uploaded sample also breaks causality: a bulk upload can reach EOF while a
-response to the first turn is still computing. This endpoint seals an immutable
-source and replays a chronological event queue. Detection and recognition may
-analyze ahead; only events reached on the presentation timeline may affect the
-conversation. Generation produces a provisional trace, and replay decides which
-audio and context changes actually survive an interruption.
+The following diagram shows the boundaries between source analysis, scheduling,
+provider execution, and recording.
 
 ```mermaid
 flowchart LR
-    WS[WebSocket upload and explicit EOF] --> Source[Immutable PCM source]
-    Source --> VAD[Silero and Smart Turn source analysis]
-    Source --> ASR[One continuous ASR stream]
-    VAD --> Replay[Sample-offset event replay]
+    Upload[Finite WebSocket upload and explicit EOF] --> Source[Immutable source PCM]
+    Source --> Detector[Source-indexed VAD and turn detection]
+    Source --> ASR[Continuous ASR and availability trace]
+    Detector --> Replay[Chronological sample-offset scheduler]
     ASR --> Replay
-    Replay --> Providers[LLM and overlapping TTS]
-    Providers --> Trace[Provisional availability trace]
+    Replay --> Generation[LLM and overlapping TTS]
+    Generation --> Trace[Provisional text and audio trace]
     Trace --> Replay
-    Replay --> Commit[Committed positioned audio and context]
-    Commit --> WAV[Aligned recording and WebSocket output]
+    Replay --> Commit[Committed audio and conversation state]
+    Commit --> Recording[Aligned WAVs and event manifest]
+    Commit --> Output[Positioned WebSocket output]
 ```
 
-| Wall-Clock Behavior Audited in the First Integration | Offline Processing Rule |
-| --- | --- |
-| Silero speech/silence thresholds already count model windows | Preserve thresholds with fixed 512-sample windows, independent of transport packets |
-| Silero recurrent-state reset uses five wall-clock seconds | Reset at source-sample boundaries |
-| VAD `audio_idle_timeout` forces a stop when frames stop arriving | Source silence or explicit EOF; upload watchdog only fails a stalled session |
-| Speech-timeout policy and Smart Turn's STT timeout can stop a turn after elapsed time | Audio endpoint plus final-ASR availability; no interim-transcript inactivity guess |
-| Smart Turn buffer retention and speech start use monotonic time | Source offsets for buffer selection and speech boundaries |
-| Streaming STT keepalive can insert audio after wall-clock inactivity | Finite source iterator, unchanged source silence, explicit request EOF |
-| WebSocket output pacing and output-queue idle behavior | Positioned spans; zero-filled gaps during rendering |
-| Bot-speaking notifications and TTS idle stop-frame timer | Scheduled playback start/end plus synthesis EOF |
-| Assistant context follows asynchronous output notifications | Commit only completed playback or the aligned played prefix |
-| Audio-buffer recorder aligns frames using arrival timestamps | Canonical ingress WAV and committed bot spans at absolute sample offsets |
-| Wall-clock user/bot latency observer | Source events and measured provider availability stored separately |
-| Pipeline/session inactivity timers | Explicit finite-session completion and failure-only watchdogs |
+### Keep Two Explicit Time Domains
 
-The module boundaries keep scheduling policy independent of transport, model
-execution, and files:
+The two time domains have distinct responsibilities.
 
-| Boundary | Responsibility and contract |
-| --- | --- |
-| `models.py` | Immutable source/trace/span records and the narrow `Detector`, `Recognizer`, and `Responder` protocols |
-| `detection.py` | Source-only speech/endpoint decisions, source-indexed model state and buffers, measured endpoint computation |
-| `providers.py` | One finite continuous ASR call, streaming LLM/TTS capture, observed execution measurements and optional word alignment |
-| `engine.py` | Chronological replay, turn readiness, private response snapshots, interruption, and conversation/audio commitment |
-| `recorder.py` | Validate and render committed nonoverlapping spans into zero-filled PCM and save the audit files |
-| `protocol.py`, `websocket.py` | Validate bounded uploads and explicit EOF, own cancellation/watchdogs, publish output and metrics |
-| `factory.py` | Compose generic services and session-owned resources from the existing catalogs/configuration |
-
-These boundaries apply SOLID principles concretely: each module has one reason
-to change; new backends implement small provider protocols; the scheduler depends
-on those protocols rather than Riva/OpenAI/WebSocket classes; adapters must obey
-the same trace invariants; and alternate recording or transport code consumes
-the same committed result. A new backend still needs adapter contract tests,
-especially for source coverage and word timestamps. No global Pipecat clock is
-patched.
-
-### Extending to Another Integration
-
-To add another example, provide a composition factory that resolves its prompts,
-tools, summary policy, services, and detector settings. Supply adapters that
-implement the `Detector`, `Recognizer`, and `Responder` contracts in `models.py`.
-Keep example-specific configuration and provider lifecycles outside `engine.py`;
-reuse its source-offset replay and the committed-result recording contract.
-
-Register the new runtime at the transport boundary with explicit capability
-validation. Add adapter contract tests for source ownership, availability,
-completion, cancellation, and interrupted text alignment. Run paired live and
-offline cases before making fidelity claims. The current module location does
-not imply that other examples already use this architecture.
-
-A Realtime gateway integration also needs protocol adapters for codec conversion,
-response completion, cancellation, and conversation truncation at scheduled
-playback positions. Gateway post-response idle behavior must follow the source
-timeline. Its ASR request lifecycle must be chosen explicitly and compared with
-the corresponding live gateway; this integration keeps one continuous request.
-Failure watchdogs retain execution-time deadlines.
-
-## Execution and Timing
-
-There are two time domains. Upload progress is transport bookkeeping and does not
-advance either conversation or playback.
-
-| Domain | Representation | Used for |
+| Domain | Representation | Responsibility |
 | --- | --- | --- |
-| Source/presentation time | Absolute integer samples at 16 kHz; offset 0 is the first input sample | Speech and endpoint positions, causal replay, response placement, clipping, silence, recording extent |
-| Observed execution time | Monotonic elapsed nanoseconds, reported as milliseconds | Provider/endpoint compute observations, upload/runtime/publication measurements, failure watchdogs |
+| Recording timeline | Absolute integer samples; zero is the first source sample | Speech, turn endpoints, response placement, interruption, silence, and recording extent |
+| Observed execution time | Monotonic durations, displayed in milliseconds | Provider delays, upload, processing, publication, and failure watchdogs |
 
-Measured execution durations are deliberately retained and projected onto the
-sample timeline. Removing those durations would put bot replies too early. A
-failure watchdog can abort a stalled request but cannot end a user's turn or
-manufacture audio.
+Upload progress does not advance conversation time. Provider execution remains
+measured because a response cannot be placed before its input and generated
+audio are available. Watchdogs retain execution-time deadlines, but they only
+fail stalled work. They cannot end a user turn or insert source silence.
 
-Silero runs in fixed 512-sample windows; its reset schedule and Smart Turn's
-buffer selection use source offsets. No missing-packet timeout manufactures a
-speech stop. Source EOF explicitly closes a pending user turn.
+The design replaces the following timing dependencies.
 
-ASR and detection are source-only preprocessing. Future transcripts cannot enter
-conversation history until their source turn and recognition availability are
-reached. Late recognition during newer speech defers/coalesces pending input.
-Responses run against private history snapshots. Tool/summary context updates
-are provisional until their scheduled availability; cancelled future events
-are dropped.
+| Existing Behavior | Offline Rule |
+| --- | --- |
+| Silero speech and silence thresholds | Preserve fixed-window audio counting |
+| Periodic Silero state reset | Reset after the corresponding source samples |
+| Receive-idle and user-speech timeouts | Use source silence, detector decisions, and explicit source EOF |
+| Smart Turn retained audio buffers | Select buffers using source offsets |
+| ASR inactivity keepalive | Send only source PCM and explicitly drain the finite request |
+| Output pacing and queue-empty silence | Schedule PCM spans and zero-fill uncovered positions |
+| Bot-speaking and TTS idle notifications | Use scheduled playback start/end and synthesis completion |
+| Conversation commitment after output | Commit completed speech or the aligned prefix actually played |
+| Recorder arrival timestamps | Record ingress PCM and positioned committed bot spans |
+| Session inactivity | Require explicit input completion and explicit processing completion |
 
-LLM text is sent to a persistent Magpie synthesis stream while generation is
-still in progress. Each PCM chunk retains measured availability relative to the
-response request. Its playback begins at the later of availability and preceding
-playback end. Gaps are silence. User speech interrupts at the VAD confirmation
-offset; a chunk is clipped exactly and unplayed response samples are discarded.
-Synthesis EOF and playback end are distinct.
+### Provider Availability and Playback
 
-Define `S(ns) = ceil(ns * 16000 / 1_000_000_000)`. This rounds forward so an
-observation can never make audio available before its measured readiness.
+The scheduler keeps model-service availability separate from endpoint detection.
+For a turn, response readiness is the later of endpoint availability and the
+availability of its owned final transcripts. Recognition that becomes ready
+while newer user speech is active can defer or combine pending turns.
 
-For user turn `t`, readiness is:
+LLM text streams into TTS while generation continues. Each returned audio chunk
+retains its observed availability relative to the response request. Its start
+is the later of that availability and the preceding chunk's playback end. This
+preserves overlap between LLM and TTS instead of adding their full durations.
 
-```text
-turn_ready[t] = max(endpoint_sample[t] + S(endpoint_compute_ns[t]),
-                    latest_available_sample_of_ASR_segments_owned_by_t)
-```
-
-A response is requested only after every seen pending turn is ready, no user
-speech is active, and no response remains active. Recognition that arrives while
-newer speech is active can therefore defer/coalesce several detected turns into
-one request. Source decisions at the same sample are processed before a request;
-confirmed speech start also wins ties against output/context completion.
-
-For response request sample `r`, measured chunk availability `c_i_ns`, and chunk
-length `n_i`:
+Convert a measured duration to samples by rounding forward:
 
 ```text
-start_i = max(r + S(c_i_ns), end_(i-1))
-end_i   = start_i + n_i
+S(duration_ns) = ceil(duration_ns * 16000 / 1_000_000_000)
+turn_ready = max(endpoint_sample + S(endpoint_compute_ns),
+                 latest_owned_transcript_available_sample)
+chunk_start = max(response_request_sample + S(chunk_ready_ns),
+                  previous_chunk_end)
+chunk_end = chunk_start + chunk_sample_count
 ```
 
-The response remains active through the later of playback end and provider
-completion. Interruption at sample `s` retains only PCM before `s`, including a
-partial final chunk. Recording and wire output use these same committed spans.
+Confirmed user speech takes priority over bot playback at the same sample.
+Interruption clips a chunk exactly at that position and discards later audio.
+It is not backdated to the raw speech onset. Valid TTS word alignment retains
+only the played assistant text prefix; without valid alignment, interrupted
+assistant text is omitted from later history.
 
-The runtime first completes source detection and continuous ASR concurrently,
-then captures each requested response and replays its measured availability.
-It does not sleep through source silence. Whole-session wall execution and
-source-timeline turn gaps consequently measure different things.
-
-The original generic prompt, service catalogs, tool schemas, text filter, and
-pinned history-summary policy are reused. Automatic introduction is disabled
-for this finite-session mode. Summary work happens before the next LLM request,
-inside response capture, and its observed execution is included in that trace.
-
-Provider word timestamps are requested when the installed Riva protocol supports
-them. Valid ordered timings retain only the played word prefix after interruption.
-This assumes cumulative offsets across the response's synthesis submissions;
-confirm that contract with the selected live TTS backend. The adapter preserves
-word metadata on the final metadata-only chunk. Bounds and first-seen order are
-validated; invalid offsets are never
-sorted into a seemingly valid alignment.
-When timestamps are absent or invalid, interrupted assistant text is omitted
-from history and the manifest explicitly reports that policy; unplayed full text
-is never inserted as if it had been spoken.
-
-### Measurement Limits
-
-The implementation measures **server-observed provider elapsed time**, including
-RPC transport and queueing. It does not claim pure GPU execution time. Playback
-uses the overlapping LLM/TTS trace rather than summing independent durations.
-
-Continuous ASR associates finals with word offsets and `audio_processed`. Its
-current availability policy is recorded as
-`source_dependency_plus_observed_bulk_residual`. For each final:
+Continuous ASR records each final's source dependency and observed arrival.
+The current adapter projects its availability using the following policy:
 
 ```text
-dependency_sample = max(reported_audio_processed_sample, latest_word_end_sample)
-residual_ns       = max(0, final_arrival_ns - dependency_chunk_supplied_ns)
-available_sample  = max(previous_available_sample,
-                        dependency_sample + S(residual_ns))
+dependency = max(reported_audio_processed_sample, latest_word_end_sample)
+residual_ns = max(0, final_arrival_ns - dependency_chunk_supplied_ns)
+available_sample = max(previous_available_sample,
+                       dependency + S(residual_ns))
 ```
 
-The supply observation is when the ASR request iterator yields the dependency's
-512-sample chunk, not when the backend receives or finishes it. This residual
-includes rapid-input backlog, RPC/transport, and backend queueing/processing.
-Reported coverage may also include silence after a word. Adding that residual to
-its source dependency is an explicit projection policy, not a measurement of
-how a paced live stream would behave. The live runs confirmed that the adapter
-works with the selected backend; paired live runs are still required to validate
-latency/accuracy fidelity. Pure GPU inference time is unavailable here.
+The residual includes transport, queueing, and backlog caused by rapid input.
+It is an explicit offline projection, not a measurement of paced online ASR
+latency. The manifest names the policy
+`source_dependency_plus_observed_bulk_residual` so evaluation can distinguish it
+from other availability models.
 
-The source detector deterministically includes its current endpoint window.
-Live Pipecat frame-queue ordering and its initial wall-clock Silero reset may
-differ slightly. Compare paired cases before claiming identical task outcomes.
-Current `develop` also uses `NvidiaForceEouSTTService` in the live generic path.
-It sends an 80 ms silence chunk tagged with `force_eou` at VAD stop. Offline
-recognition preserves the finite source and does not insert keepalive silence
-or force-EOU requests; the manifest records `asr_force_eou: false`. A shared
-source-indexed ASR endpoint policy is additional fidelity work, not a property
-of the current continuous adapter.
-The trace runtime can compute audio that is subsequently discarded by a simulated
-interruption; its compute totals include that work. It does not reproduce the
-compute savings of real-time cancellation. External read-only tools can return
-different dates, random values, or online data across independent evaluations.
+### Recording and Conversation Invariants
 
-Execution watchdogs remain real-time failure checks for upload, RPC, processing,
-and publication. They never advance conversation time or fabricate silence.
+The scheduler and recorder enforce the following rules.
 
-### Causality and Recording Invariants
+* Input becomes immutable after sample-count, packet-count, and SHA-256 checks.
+  Source silence remains ordinary PCM; a disconnect cancels the session.
+* Future source speech or transcripts cannot enter a response history early.
+* One continuous ASR request consumes the whole recording and drains at EOF.
+* Transcript ownership extends from turn start to endpoint, retaining quiet
+  trailing words after detected speech end. Missing or ambiguous ownership fails.
+* Generation does not mutate shared history. Playback and context updates remain
+  provisional until replay commits them.
+* Bot spans are ordered and nonoverlapping. Every uncovered sample is zero.
+* Output spans at least the input duration and extends for a final bot reply.
 
-The runtime enforces the following invariants:
+A recording with 300,000 ms of source audio therefore produces at least
+300,000 ms of bot output, including silence. Evaluation adapters can additionally
+crop a source-horizon view when a benchmark requires a fixed interval.
 
-* Input is immutable after a length, packet-count, and hash-validated EOF. Silence
-  is ordinary source PCM; disconnect is cancellation rather than implicit EOF.
-* Source-only models can inspect ahead, but future source speech/transcripts
-  cannot enter a response's history before replay reaches their dependency and
-  readiness positions.
-* ASR remains one continuous request for the entire recording. Recognition
-  ownership uses the turn-start-to-endpoint half-open interval, with an explicit
-  source-EOF point rule. This retains quiet trailing words after VAD speech end;
-  missing or ambiguous ownership fails instead of silently dropping text.
-* Provider outputs and tool/summary context changes are provisional. Replay
-  commits only events reached before interruption; generation never mutates
-  shared history directly.
-* Interruption occurs at VAD-confirmed speech start. It is not backdated to the
-  raw speech onset. Unplayed audio and future context events are discarded.
-* Committed bot spans are ordered and nonoverlapping. Unfilled positions are
-  exactly zero; there is no wall-clock idle-silence generator.
-* Output covers `max(input_sample_count, last_committed_bot_sample)`. Explicit
-  EOF can finish a pending user turn, and the final reply can extend past input.
+## Implementation Overview
 
-### Recorded Latency Metrics
+Small contracts separate scheduling policy from transport, providers, and files.
+The first integration currently lives in `src/examples/generic/offline/`.
 
-New sessions record observed ASR first response, first nonempty transcript, first
-final transcript, input supply/EOF and per-final source dependency/residual
-timing. Each LLM request round records dispatch, first response/text and stream
-completion. TTS records first text queued/consumed, first audio, last audio and
-stream EOF; its input-to-first-audio timer excludes earlier sentence aggregation.
-These timers include transport and provider queueing, rather than isolating GPU
-execution.
+| Module | Responsibility |
+| --- | --- |
+| `models.py` | Immutable source, recognition, response, and committed-span records; `Detector`, `Recognizer`, and `Responder` protocols |
+| `detection.py` | Source-indexed Silero and Smart Turn decisions, model resets, buffers, and endpoint computation observations |
+| `providers.py` | Continuous Riva ASR, streaming HTTP LLM, overlapping stitched Magpie TTS, provider timers, and optional word alignment |
+| `engine.py` | Causal replay, turn readiness, private history snapshots, interruption, and audio/context commitment |
+| `recorder.py` | Span validation, zero-filled rendering, WAVs, and audit records |
+| `protocol.py` and `websocket.py` | Bounded upload, offset validation, explicit EOF, cancellation, publication, and failure watchdogs |
+| `factory.py` | Generic Assistant prompt, tools, service selections, summary policy, and session-owned resources |
+| `src/examples/shared/evaluation_trace.py` | Optional passive timing observations for the normal live pipeline, separate from offline scheduling |
 
-`metrics.server` records upload, runtime construction/execution, recording,
-publication and source-sealed-to-first-output-send timings. Its batch E2E scope
-ends at precompletion, before the final metrics-manifest rewrite and completion
-frame send. These are execution measurements. Rendered turn gaps use sample
-positions and can include endpoint silence, ASR projection and deferred playback.
-Offline wire publication follows whole-session processing, so wire TTFB and
-source-timeline first response describe different events.
+These boundaries apply the SOLID principles directly. Each module owns one
+responsibility. Provider protocols are narrow and keep the scheduler independent
+of Riva, OpenAI, and WebSocket classes. New implementations must preserve the
+same source, availability, completion, and commitment invariants. An additional
+transport or recorder consumes the same committed result. No global Pipecat
+clock is patched.
 
-Extract per-session, per-response, ASR-final and LLM-round tables from saved runs:
+To integrate another example, supply a composition factory and adapters that
+satisfy those contracts. Keep example-specific configuration and provider
+lifecycles outside `engine.py`. An OpenAI Realtime gateway integration additionally
+needs codec conversion, response completion, cancellation, and conversation
+truncation tied to scheduled playback.
 
-```bash
-uv run python benchmarking_tools/offline-eval/extract_metrics.py \
-  --input-dir saved_run --output-dir extracted_metrics --run-label trial_01
-```
+### Configuration and Lifecycle
 
-Missing observations in older recordings remain null. New probe values require
-new recordings; never attach a repeat run's timings to earlier audio. Bulk ASR
-residual includes queueing from rapid input supply and must not be interpreted as
-the latency of a paced live ASR stream. The extracted JSON includes definitions
-and the hashes of the input trace files.
+The first integration supports continuous Riva ASR, an HTTP chat-completions LLM,
+and stitched Magpie TTS. It resolves the Generic Assistant's prompt, tools,
+summary policy, model selections, language, punctuation, voice, temperature, and
+token settings. A configuration fingerprint records the resolved choices.
+Automatic introduction is disabled for finite-session processing.
 
-## Run the First Integration
+Offline synthesis requests the same native 22,050 Hz TTS output as the live
+pipeline, using `PIPELINE_AUDIO_OUT_SAMPLE_RATE`. A continuous SoXR VHQ stream
+converts it to canonical 16 kHz PCM and flushes its tail at synthesis EOF. The
+manifest records `tts_sample_rate`, `output_sample_rate`, and `tts_resampling`.
+The paired live gateway requests 16 kHz client PCM from its existing output
+conversion path. Matching the native synthesis rate avoids changing the TTS
+request merely to simplify comparison. Offline first-audio timing ends at the
+first canonical PCM, so it includes the continuous resampler's initial buffering.
+Live service TTFB ends before output resampling. These are distinct scopes.
 
-Configure and start the normal generic server using the existing service catalog
-and credentials. The selected deployment must allow the Generic Assistant.
+Source detection uses the shared turn settings. Smart Turn uses a 200 ms Silero
+stop threshold and a 1,000 ms fallback by default. `SMART_TURN_STOP_SECS` overrides
+the fallback. `USE_SILERO_VAD_TURN_DETECTION=true` selects Silero-only detection;
+`SILERO_VAD_STOP_SECS` then defaults to 500 ms. These environment values accept
+seconds even though reported measurements use milliseconds.
+
+Streaming-input LLM URLs, per-sentence synthesis, zero-shot TTS models, and
+zero-shot audio prompts are rejected explicitly. They need dedicated adapters
+rather than silent changes in behavior.
+
+### WebSocket and Recording Contract
+
+The custom protocol is `nva.offline.v1`. The client starts with
+`offline.session.start`, declaring 16 kHz mono PCM16, the input sample count,
+and optional session configuration. The server acknowledges bounds before audio.
+
+Binary packets contain a network-order `!4sQQI` header: magic, sequence,
+absolute start sample, and sample count. `NVAI` identifies input and `NVAO`
+identifies output. PCM is little-endian signed 16-bit mono. Input is contiguous
+and ordered. Output can omit silence but must be ordered and nonoverlapping.
+
+`offline.input.complete` supplies the sample count, packet count, and SHA-256.
+The server validates and seals the source, processes it, publishes committed
+audio and events, and sends `offline.session.complete`. Disconnect is not EOF.
+Input after EOF is rejected. Failures send `offline.session.error`.
+
+`OFFLINE_AUDIO_DUMP_PATH` selects the server-owned recording directory; its
+default is `audio_dumps/offline`. A UUID session directory contains these files.
+
+| File | Contents |
+| --- | --- |
+| `source.wav` | Canonical ingress PCM, including silence |
+| `full_output.wav` | Positioned bot PCM with zero-filled gaps and any final tail |
+| `events.jsonl` | Source, recognition availability, interruption, playback, and context events |
+| `manifest.json` | Extents, configuration fingerprint, messages, compute traces, and metrics |
+| `failure.json` | Explicit failure status when processing does not succeed |
+
+The sample client also writes source-horizon `output.wav` and a stereo
+`comparison.wav`, with user input on the left and bot output on the right.
+
+## Paired Online and Offline Evaluation
+
+### Method
+
+Use the same canonical files on the same application revision and model services.
+The online baseline must use the normal live pipeline with input paced at its
+recorded rate. Pacing upload to `/api/ws/offline` does not exercise the live
+pipeline and is not an online baseline.
+
+The paired evaluation follows these steps.
+
+1. Select individual recordings with natural turns, a pause, an interruption, and
+   a clean baseline. Preserve source silence and record each canonical file's hash.
+2. Prepare a shared source with explicit trailing silence when a natural final
+   endpoint is required. Both modes receive those exact samples.
+3. Resolve identical model, prompt, voice, generation, and detector settings.
+   Disable automatic introduction for both modes and start a fresh conversation
+   for each case. Record any unavoidable processing-policy differences.
+4. Run each recording through the live pipeline at one times audio speed and
+   through `/api/ws/offline` without pacing.
+5. Save each mode's bot WAV, aligned user/bot comparison WAV, transcripts,
+   source events, server metrics, revision, dependencies, and configuration.
+6. Verify PCM extent, offsets, silence, interruption cuts, source hashes, and
+   metric definitions before comparing response content and task outcomes.
+7. Run the benchmark's scorer separately when reporting accuracy or task
+   completion. Keep the benchmark's required source horizon and scoring rules.
+
+Independent generations can differ even with temperature zero. Matching WAV
+bytes is not the success criterion. Compare recognized input, response intent,
+turn ownership, silence, interruption behavior, and benchmark results. Report
+observed differences instead of assuming timing or accuracy equivalence.
+
+### Results and Recordings
+
+The four paired source files are prepared. Each preserves the original sample
+prefix exactly and appends 4,000 ms of explicit zero-valued silence to allow a
+natural final endpoint in both modes. The manifest records original and prepared
+hashes, sample counts, and padding. These prepared inputs are comparison cases,
+not the unmodified official benchmark inputs.
+
+| Source | Prepared Duration, ms | Online Execution | Offline Execution |
+| --- | ---: | --- | --- |
+| FDB v1 smooth turn 117 | 13,099.94 | Pending | Pending |
+| FDB v1 synthetic pause 88 | 9,322.69 | Pending | Pending |
+| FDB v1.5 user interruption 135 | 20,594.69 | Pending | Pending |
+| FDB v1.5 clean baseline 135 | 20,595.00 | Pending | Pending |
+
+Current-revision real-provider paired execution is pending. No output WAV,
+server metric, speedup, or accuracy agreement is claimed for these prepared
+inputs. The completed report will link the native input, online bot, offline
+bot, and comparison WAVs for listening and download, followed by per-case and
+valid-turn metrics in milliseconds.
+
+The results require measured values for the following comparisons.
+
+| Comparison | Evidence |
+| --- | --- |
+| Evaluation turnaround | Source duration, upload duration, processing completion, and total elapsed time for each mode |
+| Recognized input and response content | Final ASR text, generated assistant text, and the committed played prefix |
+| Turn placement | VAD speech end, endpoint, first committed bot sample, and rendered turn gap |
+| Interruption | Confirmed user start, final bot sample, and any discarded response tail |
+| Server processing | ASR first nonempty transcript, LLM first text and stream completion, TTS first audio and completion |
+| File integrity | Source SHA-256, PCM format, channel alignment, output extent, and server/client equality |
+
+### Server Tracing and Metric Definitions
+
+Set `NVA_EVAL_TRACE_DIR` on the server to retain passive live-pipeline traces.
+Without that setting, the normal provider classes and frame flow are unchanged.
+The observer never creates audio, changes pacing, or makes provider requests.
+It counts PCM, buffers bounded events, and writes a session JSON file after the
+worker stops. Trace-file failures do not fail the voice session.
+
+The live trace records ASR request yields and existing response callbacks,
+LLM frames, TTS text submission and generated PCM, stitched-worker completion,
+VAD and semantic turn events, and output frames after their transport write.
+Context IDs and request indices preserve observed ownership; absent events
+remain null. Every trace includes `timing_scopes` for the boundaries it observes.
+Observer callbacks can run after frame pushes. The report therefore calculates
+LLM frame intervals from their original pipeline timestamps. Provider hooks use
+a separate clock origin, so the report does not subtract a TTS-hook timestamp
+from an LLM-frame timestamp without clock calibration.
+
+All human-readable durations are milliseconds. Raw manifests retain sample
+positions and nanosecond timers. Stages overlap and their durations must not be
+summed into an end-to-end total. The following scopes distinguish measurements
+that have similar names but different start or end events.
+
+| Metric | Offline Scope | Normal Live Scope |
+| --- | --- | --- |
+| Server E2E | Sealed source to precompletion for the entire file, after processing, recording, and publication | Pipecat inferred user speech end to `BotStartedSpeakingFrame`, per reported turn |
+| ASR first text | Request start to first nonempty transcript; continuous-stream firsts cover the recording | Existing nonempty-results callback or final-text frame; Pipecat ASR TTFB starts at inferred user speech end and ends at transcript finalization |
+| LLM first text | RPC dispatch to first nonempty text | Service start frame to first nonempty text frame; Pipecat TTFT can instead end at a choices-bearing role-only delta |
+| LLM completion | RPC dispatch to stream completion | Start to end at the service frame boundary, including local request work |
+| TTS first audio | First text consumed by the gRPC request iterator to first canonical 16 kHz PCM, including resampler buffering | Filtered text entering `run_tts` to native PCM entering the TTS context queue, before output resampling and paced output |
+| TTS completion | First consumed text to synthesis EOF, including later text waits | Stitched-worker completion, including later text waits; cancelled or returned workers do not by themselves establish successful RPC EOF |
+| Output observation | Committed PCM at scheduled sample offsets | Output frame after transport write; client receipt and playback are separate observations |
+| Rendered turn gap | Last owned turn's detected speech end to first committed bot PCM | Reported separately from server latency; client playback uses packet receipt and queued PCM |
+
+Offline batch E2E and live turn E2E cover different scopes. Likewise, ASR,
+LLM, and TTS observations must retain their boundary labels instead of being
+presented as interchangeable timers. Provider measurements include transport and
+backend queueing; none isolates GPU execution.
+
+Offline turn-gap breakdown separates endpoint wait, post-endpoint readiness and
+scheduling wait, and response-request-to-first-PCM delay. Only responses with
+committed PCM count in valid-turn summaries. Cancelled responses still contribute
+to processing totals. EOF-flushed responses are identified separately from
+natural endpoints.
+
+The online comparison client retains the server's reported metrics in
+milliseconds and writes its own receipt/playback measurements with separate
+names. It models zero-prebuffer playback by placing each packet no earlier than
+receipt or the preceding queued packet's end. Its WAV is a client playback
+recording, not a server sample clock. It applies no network-delay correction or
+manual time shift. A semantic turn waiting for a response or an active response
+prevents idle completion. Collection waits until that work settles or the
+absolute post-input deadline fails the run. It does not send extra audio, manual
+commits, or `response.create`.
+
+### Limits of the Comparison
+
+The live Generic Assistant uses `NvidiaForceEouSTTService`, which sends an
+80 ms silence chunk tagged `force_eou` at VAD stop. Offline ASR preserves one
+continuous finite source and does not insert that chunk. Its manifest records
+`asr_force_eou: false`. This request-policy difference and the bulk ASR
+availability projection can change transcripts, response timing, or turn grouping.
+The paired evaluation must expose these differences; it cannot certify live
+fidelity from aligned output alone.
+
+Replay can generate audio that an interruption later discards. Its compute
+totals include that work and do not reproduce the savings from live cancellation.
+Read-only tools can also return different time-sensitive values across runs.
+
+This workflow targets benchmark turnaround for accuracy and task completion.
+Offline throughput is not real-time concurrency capacity. A benchmark that scores
+real-world response delay, such as latency-sensitive Full-Duplex-Bench criteria,
+still needs its live evaluation. WAV integrity checks do not constitute an
+official accuracy, Full-Duplex-Bench, or task-completion score.
+
+## Running and Reproducing
+
+Configure the normal Generic Assistant and start the application with its
+catalogs and credentials.
 
 ```bash
 EXAMPLE_SELECTION=generic-assistant PIPELINE_TLS=false uv run python src/server.py
 ```
 
-The sample client lives in `benchmarking_tools/offline-eval/client.py` and uses
-the root benchmark dependencies:
+The following client sends an existing canonical recording without pacing.
 
 ```bash
 uv sync --group benchmark
 uv run python benchmarking_tools/offline-eval/client.py \
   --url ws://127.0.0.1:7860/api/ws/offline \
-  --input query_1.wav query_2.wav query_3.wav \
-  --gap-seconds 8 --duration-seconds 300 --output-dir offline_run_01
+  --input session.wav --gap-seconds 0 --upload-speed 0 \
+  --output-dir offline_run
 ```
 
-Input recordings are preserved and separated by the requested silence. The
-client pads to the requested session length and refuses to shorten recordings.
-For an already assembled recording use `--input session.wav --gap-seconds 0`.
-`--upload-speed 0` sends in bulk; `--upload-speed 1` paces the upload for comparison.
-Upload pacing does not determine server presentation timestamps.
+Multiple `--input` files can be separated by `--gap-seconds` and padded with
+`--duration-seconds`. The client refuses to shorten source recordings.
+`--upload-speed 1` tests paced input to this same offline endpoint; it does not
+change the server's execution engine.
 
-For a small selection of individual Full-Duplex-Bench (FDB) inputs, use the batch
-runner:
+The batch runner starts an independent session for each sample.
 
 ```bash
 uv run python benchmarking_tools/offline-eval/run_fdb_samples.py \
   --manifest cases.json --url ws://127.0.0.1:7860/api/ws/offline \
   --config config.json --output-dir fdb_offline_run
+uv run python benchmarking_tools/offline-eval/extract_metrics.py \
+  --input-dir fdb_offline_run --output-dir extracted_metrics --run-label offline
 ```
 
-The manifest is `{"cases":[{"id":"case-1","input":"canonical.wav","provenance":{}}]}`.
-Relative inputs resolve beside the manifest. Supply already normalized 16 kHz
-mono PCM16 and record any conversion in provenance. Each case keeps a separate
-conversation. Upload has no pacing and defaults to the server's maximum
-65,536-sample packets, capped to the negotiated limit. The runner additionally
-writes `input.wav` and a stereo `comparison.wav` with user input left and bot
-output right. Channels retain exact samples; the user side is padded for the
-bot's final tail. A connection/provider failure produces failure status without
-fabricated output audio.
+The manifest format is
+`{"cases":[{"id":"case-1","input":"canonical.wav","provenance":{}}]}`.
+Relative inputs resolve beside it. Supply 16 kHz mono PCM16 and record any
+conversion in provenance. The optional configuration uses the existing Generic
+Assistant session keys. A session created through `/api/session-config` can
+instead be passed as `?session_id=...`; those process-local IDs are not supported
+across workers. Direct handshake configuration avoids that lookup.
 
-Optional `--config config.json` supplies the existing generic prompt/service
-selection keys. Alternatively create a normal `/api/session-config` session and
-add `?session_id=...` to the offline endpoint. Process-local session IDs remain
-unsupported in multi-worker deployments; direct handshake configuration works.
+### Reproduce the Paired Comparison
 
-## Recording
+Start the same current application with optional passive server tracing enabled.
+The live gateway and offline endpoint use that application and its configured
+model services. Configure the server catalogs so the flat configuration selects
+the same models, prompt, voice, and generation settings in both modes.
 
-Set `OFFLINE_AUDIO_DUMP_PATH` to a server-owned output directory. Its default is
-`audio_dumps/offline`. Each sealed session gets a generated UUID directory:
+```bash
+NVA_EVAL_TRACE_DIR=audio_dumps/evaluation \
+  EXAMPLE_SELECTION=generic-assistant PIPELINE_TLS=false \
+  uv run python src/server.py
+```
 
-* `source.wav`: canonical ingress recording, before any service/turn filtering.
-* `full_output.wav`: committed bot PCM at explicit offsets, with zero-filled gaps.
-* `events.jsonl`: source, availability, interruption, playback, and context events.
-* `manifest.json`: source/output extents, compute trace, messages, and configuration fingerprint.
-* `failure.json`: failure status when execution does not finish successfully.
+Prepare shared input files, run offline inference, and then replay the same
+prepared files through the normal OpenAI Realtime gateway at their recorded rate.
+The preparation command makes no model requests. Use new or empty output
+directories for each invocation.
 
-The output extent is `max(source_end, final_committed_response_end)`. A 300-second
-source has at least 300 seconds of output; a final response may extend it. The
-client additionally writes a source-horizon `output.wav` view for the existing
-NVA FDB adapter. Benchmark-specific cropping belongs in that adapter, not the
-server. Do not concatenate independent FDB cases for official scoring.
+```bash
+uv run python benchmarking_tools/offline-eval/compare_live.py \
+  --manifest cases.json --prepare-only --trailing-silence-ms 4000 \
+  --output-dir paired/prepared
+uv run python benchmarking_tools/offline-eval/run_fdb_samples.py \
+  --manifest paired/prepared/cases.json \
+  --url ws://127.0.0.1:7860/api/ws/offline --config config.json \
+  --output-dir paired/offline
+uv run python benchmarking_tools/offline-eval/compare_live.py \
+  --manifest paired/prepared/cases.json \
+  --live-url ws://127.0.0.1:7860/v1/realtime --config config.json \
+  --offline-results-dir paired/offline --output-dir paired/online
+```
 
-## Wire Contract
+The live client verifies paired source PCM equality before replay. It requests
+16 kHz PCM for both client directions. It writes input/bot comparison WAVs,
+`offline_left_online_right.wav`, transcripts, send/receive traces, accepted
+session settings, and server-reported latency tables. The optional
+`REALTIME_API_KEY` environment variable supplies a live gateway bearer token;
+credentials are not saved in session configuration.
 
-The version is `nva.offline.v1`. The client first sends `offline.session.start`
-with rate, channels, encoding, input sample count, and optional generic `config`.
-The server acknowledges capabilities and bounds before receiving PCM.
+After the live session closes, use the passive server trace files to build the
+paired report. If the client runs on another host, first copy the completed
+trace files to the path passed as `--server-traces-dir`.
 
-Binary packets begin with a network-order `!4sQQI` header: magic, sequence,
-absolute start sample, sample count. `NVAI` means input and `NVAO` means committed
-output. PCM is little-endian signed 16-bit mono. Input packets must be contiguous
-and ordered. Output may omit silence but must be nonoverlapping and ordered.
-Sample offset zero and partial final packets are valid.
+```bash
+uv run python benchmarking_tools/offline-eval/report_comparison.py \
+  --offline-results-dir paired/offline --online-results-dir paired/online \
+  --server-traces-dir audio_dumps/evaluation --output-dir paired/report
+```
 
-`offline.input.complete` contains input sample count, packet count, and SHA-256.
-It seals the source; disconnect is cancellation, not EOF. The server streams
-committed output/events and ends with `offline.session.complete`, including
-rendered sample count, output packet count, status, and configuration fingerprint.
-Input after EOF is rejected throughout processing and publication. Failures use
-`offline.session.error`; no success recording is inferred from receive inactivity.
+The reporter makes no provider requests. It requires successful runs with the
+same case IDs, compares the actual input PCM bytes and format, and matches each
+accepted live session ID to exactly one server trace. Missing runs, unequal
+sources, and ambiguous trace matches fail explicitly. Its outputs include these
+files, with all time values in milliseconds.
 
-## Validation
+| Report File | Contents |
+| --- | --- |
+| `comparison.json` | Complete report, metric definitions, source hashes, file inventory, and warnings |
+| `cases_ms.csv` | Per-case completion times, offline batch processing, response counts, scoped server summaries, and input-pacing lateness |
+| `offline_valid_responses_ms.csv` | Offline committed-response timings and turn-gap breakdown |
+| `online_valid_responses_ms.csv` | Live committed responses, server-reported metrics, and client receipt/playback observations |
+| `asr_workers_ms.csv` | Live ASR worker lifetime and callback timings from worker start or first supplied audio |
+| `llm_requests_ms.csv` | Live service-frame first-text and completion timings, with explicit ownership information |
+| `tts_contexts_ms.csv` | Live text submission, first generated PCM, worker lifetime, and cancellation/outcome scope |
+| `server_messages_ms.csv` | Server latency observations in their original event scope |
+| `wav_inventory_ms.csv` | Native WAV paths, durations, formats, and file/PCM hashes |
+| `transcripts.json` | Offline committed conversation and live transcription events |
 
-Run unit and in-process WebSocket tests without model or judge endpoints:
+Only responses with committed PCM populate valid-response tables. Empty source
+regions do not become turns. Request indices, synthesis context IDs, and wire
+response IDs remain separate unless the trace proves their association. Equal
+ordinal counts are insufficient. Missing observations remain null or blank.
+
+The per-case online/offline client completion ratio includes setup, publication,
+and the online idle drain. The report shows these components separately. This
+ratio describes evaluation turnaround, not inference acceleration or equivalent
+response latency. It does not infer task accuracy or acoustic scores.
+
+For official live benchmark procedures, refer to the
+[Full-Duplex-Bench client](../benchmarking_tools/Full-Duplex-Bench-Eval/README.md)
+and [scaling benchmark](../benchmarking_tools/scaling-perf/README.md).
+
+## Verification and Tests
+
+The offline tests use deterministic provider traces to verify the architecture
+without model or judge endpoints.
 
 ```bash
 uv run pytest tests/unit/test_offline*.py
 ```
 
-Tests cover source-window thresholds, reset offsets, partial EOF, one continuous
-ASR stream, stream draining, late/multiple recognition segments, future-context
-suppression, summary/tool ordering, overlapping text/audio production, exact
-interruption clipping, silence, final extension, malformed uploads, disconnect,
-watchdog failure, and recording extent. Recorded traces make packetization and
-arrival-pause comparisons deterministic.
+Coverage includes packetization-independent detection, source resets, partial
+EOF, continuous ASR draining, quiet trailing words, future-context suppression,
+summary/tool ordering, overlapping generation, interruption clipping, silence,
+final-tail extension, malformed uploads, disconnect, and watchdog failure.
+The real sample client also exercises the engine with different packet sizes
+and accelerated input; identical traces must produce identical aligned PCM.
 
-`tests/unit/test_offline_client_integration.py` runs the actual sample client and timeline
-engine together with deterministic provider traces. A 300-second session is
-uploaded using 511-, 512-, and 32768-sample packets and at 200 times audio speed.
-It verifies identical events and identical 301-second server/client WAVs, a
-confirmed-speech interruption, synthesis availability gaps, and final extension.
-These are alignment checks, not speech accuracy or provider speed measurements.
-
-### Current Revision Validation
-
-The Pipecat 1.12.0 port passed the full unit suite: **684 tests passed, three
-skipped, and 166 parameterized subtests passed**. The offline tests exercise
-deterministic provider traces without making model-service requests.
-
-The bundled Silero and Smart Turn v3.2 source detector also processed all four
-archived sample inputs. The two silence-fallback endpoints occurred 1,184 ms
-after VAD speech end under the current shared 1,000 ms setting, compared with
-3,168 ms in the archived prototype. This is a source-detector observation, not
-a new ASR/LLM/TTS response latency. Model and policy changes can also alter other
-detector events.
-
-A separate smoke check constructed the current generic runtime, ran its bundled
-detector on empty source input, and closed its provider resources successfully.
-It verified the continuous-ASR, `asr_force_eou: false`, stitched-TTS configuration.
-Neither check sent ASR, LLM, or TTS inference requests. No response WAVs were
-regenerated on the port; the following latency tables describe the historical
-prototype recordings only.
-
-### Historical Real-Provider Sample Validation
-
-The Pipecat 1.3.0 prototype's original run and a separately labeled instrumented
-repeat used four FDB inputs: v1 smooth-turn 117, v1 synthetic-pause 88,
-v1.5 user-interruption 135, and
-v1.5 clean-baseline 135. A separate 300,000 ms composite concatenated those inputs
-with source silence and padding as an alignment stress test. It is not an
-official FDB case, and its empty padding is not used in the valid-turn averages.
-
-The deployed services were Nemotron ASR NIM 1.3.1, an OpenAI-compatible
-`nvidia/nemotron-3.5-lightning-30b-a3b` LLM endpoint, and Magpie TTS 1.10.0 using
-`Magpie-Multilingual.EN-US.Aria`. The trial selected
-`generic_assistant_without_tools`, temperature 0, and `max_tokens` 256; no
-automatic introduction was generated. The remote application was a separate
-CPU container and reused the existing model deployments.
-
-At the historical recording revision, the suite passed locally and in the remote
-runtime: **141 tests plus 61 parameterized subtests**. Ruff and whitespace checks
-passed. Current revision validation is reported separately above. Saved-run
-verification checked source hashes,
-server/client PCM equality, event equality,
-zero PCM outside committed spans, exact interruption clipping, stereo comparison
-channels, full continuous-ASR source consumption, provider-timer identities, and
-matching server/client final metrics. Original and repeat input/configuration
-hashes matched and source detector decisions were identical. Generated audio and
-provider measurements belong to their own run and are kept separately.
-
-The selected live TTS backend also returned ordered cumulative word timestamps
-across two synthesis text submissions, including metadata on its final
-metadata-only response. That verifies this backend's current contract; the
-fallback policy still applies to others.
-
-### Historical Measured Valid-Turn Latencies
-
-These are the Pipecat 1.3.0 instrumented repeat's five responses with committed
-PCM, excluding the composite and the smooth case's response cancelled before any playback.
-Every value is milliseconds, rounded to two decimals. The synthetic-pause reply
-coalesced three detector turns and used EOF, not a natural endpoint.
-
-| Valid response | Endpoint wait | Post-endpoint readiness/scheduling wait | Response request to first PCM | Rendered turn gap |
-| --- | ---: | ---: | ---: | ---: |
-| Smooth 117, response 2 | 192.00 | 635.69 | 123.81 | 951.50 |
-| Pause 88, response 1 (EOF) | 0.00 | 349.50 | 88.63 | 438.13 |
-| Interruption 135, response 1 | 3,168.00 | 0.31 | 106.75 | 3,275.06 |
-| Interruption 135, response 2 | 192.00 | 1,202.19 | 92.56 | 1,486.75 |
-| Clean 135, response 1 | 3,168.00 | 0.25 | 108.13 | 3,276.38 |
-
-The gap is first committed bot PCM minus the last owned turn's VAD speech end.
-Endpoint wait is source time; readiness/scheduling wait includes projected ASR
-availability, measured endpoint computation, and any deferral. It is not a pure
-ASR timer. Sample-projected first PCM rounds forward to a 0.0625 ms sample grid.
-
-| Same valid response | LLM TTFT | LLM full RPC stream | TTS first audio | TTS full stream | Full response generation |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Smooth 117, response 2 | 24.58 | 139.23 | 39.64 | 530.03 | 614.32 |
-| Pause 88, response 1 | 28.17 | 131.63 | 38.38 | 474.99 | 525.32 |
-| Interruption 135, response 1 | 27.62 | 107.59 | 42.74 | 466.45 | 530.56 |
-| Interruption 135, response 2 | 28.22 | 99.74 | 39.23 | 385.41 | 438.89 |
-| Clean 135, response 1 | 27.06 | 104.27 | 44.45 | 477.27 | 541.04 |
-
-LLM TTFT/full stream start at RPC dispatch. TTS first audio/full stream start
-when the synthesis adapter consumes its first text, excluding earlier LLM text
-aggregation; full stream also includes waiting for later text and EOF. Full
-response generation starts at response capture and ends when LLM/TTS capture
-finishes, including audio later discarded after an interruption. These stages
-overlap and must not be summed.
-
-Continuous ASR has recording-level first-response timers, rather than a new
-request and TTFB for every turn:
-
-| Individual recording | ASR first response | ASR first nonempty text | ASR first final text | ASR complete stream | Server batch E2E |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Smooth 117 | 28.67 | 118.94 | 193.60 | 623.51 | 2,233.03 |
-| Pause 88 | 25.20 | 82.30 | 139.30 | 382.76 | 1,130.37 |
-| Interruption 135 | 25.73 | 43.79 | 162.18 | 1,123.26 | 2,189.55 |
-| Clean 135 | 24.48 | 127.85 | 160.17 | 1,117.86 | 1,757.04 |
-
-An ASR first response may contain no transcript. Server batch E2E is sealed input
-to precompletion after recording/publication, not a per-turn reply timer. For
-the separate 300,000 ms stress test, server batch E2E was 24,690.98 ms and ASR
-stream completion was 19,988.43 ms. Those are offline processing observations.
-
-The historical prototype used Smart Turn's then-default 3,000 ms silence
-fallback. Current `develop` uses the shared 1,000 ms fallback by default; the prototype
-numbers do not predict its turn gaps. The observed 3,168 ms endpoint wait
-dominates two historical individual turn gaps. The other long waits include the
-bulk ASR availability projection. Neither fast
-provider TTFB nor a complete aligned WAV establishes live timing fidelity. The
-interruption sample's cutoff was 480.00 ms after its supplied annotation, at VAD
-confirmation; replay added zero additional samples after confirmation. The
-smooth sample's annotation-to-first-PCM gap was 857.50 ms. These annotation
-comparisons are inspection metrics, not official scores.
-
-The downloadable evidence bundle contains input, full bot output, source-horizon
-output, user-left/bot-right comparison WAVs, server/client manifests and events,
-configuration/runtime provenance, verification reports, and CSV/JSON timing
-tables. Raw ASR-final and LLM-round rows preserve per-call observations. Missing
-timers from the original run remain null; repeat measurements are never applied
-to its earlier WAVs.
-
-### Remaining Fidelity Work
-
-No official FDB judge/scorer, paired real-time run, or official FDB/τ score was
-run. Verification of file/sample integrity does not certify semantic response
-quality or detector correctness. Accuracy agreement and ASR availability
-projection must be checked on paired live/offline cases before claiming
-equivalent evaluation outcomes. Offline throughput is not real-time concurrency
-capacity or real-world response latency.
-
-FDB smooth-turn scoring derives reply latency from output word timestamps and
-the annotated source turn boundary. Its pause-handling decisions also depend on
-whether output exists inside the evaluated interval. Consequently, deleting
-compute delay or allowing the extended tail into an originally bounded case can
-change scores. Keep each official case's source horizon and alignment in the FDB
-adapter. The full server recording remains available for inspection. Use the
-existing real-time scaling-perf runner for concurrency and service-latency claims;
-use this client for finite-session accuracy experiments and offline throughput.
+Real-provider paired runs additionally verify configuration and source hashes,
+server/client PCM equality, silence outside committed spans, exact clipping,
+stereo channel alignment, source consumption, provider-timer identities, and
+matching final metrics. These checks validate recording and measurement
+integrity. Benchmark scorers separately evaluate semantic accuracy and task
+completion.

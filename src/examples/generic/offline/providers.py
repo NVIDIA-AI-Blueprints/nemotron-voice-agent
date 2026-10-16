@@ -503,6 +503,27 @@ def create_riva_recognizer(settings: dict) -> ContinuousASR:
     return ContinuousASR(stream, cancel=cancel)
 
 
+def _canonical_synthesis_audio(responses, source_rate: int):
+    """Convert native synthesis PCM without chunk-boundary drift or idle resets."""
+    if source_rate == RATE:
+        yield from responses
+        return
+
+    import numpy as np
+    import soxr
+
+    stream = soxr.ResampleStream(source_rate, RATE, 1, dtype="int16", quality="VHQ")
+    for response in responses:
+        if len(response.audio) % 2:
+            raise ValueError("TTS emitted unaligned native PCM16")
+        audio = stream.resample_chunk(np.frombuffer(response.audio, dtype=np.int16)).tobytes()
+        # Word times remain milliseconds from the same response origin.
+        yield SimpleNamespace(audio=audio, meta=getattr(response, "meta", None))
+    tail = stream.resample_chunk(np.empty(0, dtype=np.int16), last=True).tobytes()
+    if tail:
+        yield SimpleNamespace(audio=tail, meta=None)
+
+
 def create_riva_synthesis(settings: dict):
     """Create an explicitly drained Magpie SynthesizeOnline call per response."""
     import riva.client
@@ -533,7 +554,7 @@ def create_riva_synthesis(settings: dict):
                     yield riva_tts_pb2.SynthesizeSpeechRequest(
                         text=part,
                         language_code=settings.get("tts_language_code") or "en-US",
-                        sample_rate_hz=RATE,
+                        sample_rate_hz=settings.get("tts_sample_rate", RATE),
                         encoding=riva.client.AudioEncoding.LINEAR_PCM,
                         voice_name=settings.get("tts_voice_id") or "Magpie-Multilingual.EN-US.Aria",
                         custom_dictionary=", ".join(f"{key}  {value}" for key, value in dictionary.items()),
@@ -546,7 +567,7 @@ def create_riva_synthesis(settings: dict):
             if request_epoch != epoch[0]:
                 call.cancel()
         try:
-            yield from call
+            yield from _canonical_synthesis_audio(call, settings.get("tts_sample_rate", RATE))
         finally:
             call.cancel()
             auth.channel.close()

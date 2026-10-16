@@ -14,6 +14,7 @@ from examples.generic.offline.providers import (
     ContinuousASR,
     OpenAITextStream,
     StreamingResponder,
+    _canonical_synthesis_audio,
     create_riva_recognizer,
     create_riva_synthesis,
 )
@@ -53,6 +54,38 @@ class ManualClock:
 
 
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_tts_conversion_preserves_duration_tail_and_packetization(self):
+        import numpy as np
+
+        native = (np.sin(np.arange(22050) * 2 * np.pi * 440 / 22050) * 10000).astype(np.int16).tobytes()
+        marker = SimpleNamespace(words=[SimpleNamespace(word="hello", start_time=0, end_time=1000)])
+
+        def convert(chunk_bytes):
+            responses = [
+                SimpleNamespace(audio=native[offset : offset + chunk_bytes], meta=None)
+                for offset in range(0, len(native), chunk_bytes)
+            ]
+            responses.append(SimpleNamespace(audio=b"", meta=marker))
+            return list(_canonical_synthesis_audio(responses, 22050))
+
+        small, whole = convert(514), convert(len(native))
+        small_pcm = b"".join(response.audio for response in small)
+        self.assertEqual(len(small_pcm), RATE * 2)
+        # SoXR dithers int16 output; packetization must preserve positions and
+        # duration, while sample values can differ within quantization noise.
+        np.testing.assert_allclose(
+            np.frombuffer(small_pcm, dtype=np.int16).astype(np.int32),
+            np.frombuffer(b"".join(response.audio for response in whole), dtype=np.int16).astype(np.int32),
+            atol=2,
+            rtol=0,
+        )
+        self.assertEqual(sum(response.meta is marker for response in small), 1)
+        self.assertTrue(small[-1].audio, "EOF must release samples retained in the resampling filter")
+
+    async def test_native_tts_conversion_rejects_partial_pcm_samples(self):
+        with self.assertRaisesRegex(ValueError, "unaligned native"):
+            list(_canonical_synthesis_audio([SimpleNamespace(audio=b"x", meta=None)], 22050))
+
     async def test_asr_observed_events_separate_protocol_interim_final_and_source_dependency(self):
         base = 1_000_000_000
         clock = ManualClock(base)
