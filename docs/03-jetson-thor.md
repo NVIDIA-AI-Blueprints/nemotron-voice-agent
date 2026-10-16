@@ -75,10 +75,9 @@ the supported configuration on Thor.
 
     # Nemotron Omni: local Omni vLLM + NeMo-Speech.cpp TTS only (Omni does its own ASR)
     docker compose --profile omni-assistant/single-gpu up -d
-
-    # Frontend/Backend Agent: NeMo-Speech.cpp + Lightning vLLM + booking-server
-    docker compose --profile frontend-backend-agent/single-gpu up -d
     ```
+
+    The Frontend/Backend Verdict Agent has a `frontend-backend-verdict-agent/single-gpu` recipe. It runs only speech locally and uses NVIDIA Inference Hub LLMs, unless you add the `docker/docker-compose.fbv-local-llm.yaml` overlay to run the frontend LLM on the Lightning vLLM service. This guide does not validate that recipe on Jetson Thor. For its steps, refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md).
 
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 
@@ -88,7 +87,7 @@ the supported configuration on Thor.
 
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
 
-7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, `omni-assistant`, or `frontend-backend-agent`).
+7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, or `omni-assistant`).
 
     ```bash
     # View logs for the whole profile

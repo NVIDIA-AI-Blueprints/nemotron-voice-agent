@@ -48,8 +48,8 @@ uv run ruff check src/ | head -40
 
 If an example needs more than renames (reworked turn-taking, transport handshake), give one agent the new
 source/docs + the example's `pipeline.py` and custom processors. Likely candidates: `omni_assistant`
-(smart-turn + user-mute + multimodal), `omni_assistant_subagents` (subagents bus/runner), `frontend_backend_agent`
-(planner + TTS filter + tools). Add a translation layer if a frame/RTVI payload shape changed rather than
+(smart-turn + user-mute + multimodal), `omni_assistant_subagents` (subagents bus/runner), `frontend_backend_verdict`
+(turn bridge + Realtime serializer + browser UI session in `adapters/pipecat/`). Add a translation layer if a frame/RTVI payload shape changed rather than
 dropping fields.
 
 ## Step 3 — Cross-cutting sweep
@@ -95,7 +95,7 @@ Fix client type/lint errors using the renamed RTVI APIs from the notes. Confirm 
 ## Step 5 — Tests
 
 Unit tests live under `tests/unit/` (`test_service_catalog.py`, `test_prompt_catalog.py`,
-`test_frontend_backend_agent.py`, booking-state helpers). Update plumbing only; preserve intent.
+`tests/unit/frontend_backend_verdict/`). Update plumbing only; preserve intent.
 
 - Scan: `grep -rn "pipecat\|<old_import_root>\|<OldClass>\|<OldFrame>" tests/unit/`.
 - Change only import paths, mock targets, constructor/`Settings` kwargs, frame names, fixture shapes. Never

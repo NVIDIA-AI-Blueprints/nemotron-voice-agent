@@ -70,7 +70,7 @@ signatures, trust the actual installed/new source; use the MCP for intent and mi
   the installed package and new source. Pipecat reorganizes its module tree between versions.
 - **Generic**: works for any transition; discover changes, hardcode nothing.
 - **Examples are the unit of work**: 5 examples (`generic`, `multilingual`, `omni_assistant`,
-  `omni_assistant_subagents`, `frontend_backend_agent`), each with its own `pipeline.py`. One agent per example + one
+  `omni_assistant_subagents`, `frontend_backend_verdict`), each with its own `pipeline.py` (`frontend_backend_verdict` re-exports `adapters/pipecat/pipeline.py`). One agent per example + one
   cross-cutting agent for `src/examples/shared/` and `src/server.py`.
 - **Custom service subclasses require parent-API review**: explicitly inspect
   `src/examples/shared/nvidia_word_tts.py` (`NvidiaWordTTSService`) and

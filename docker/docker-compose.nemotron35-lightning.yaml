@@ -41,7 +41,7 @@ x-vllm-lightning: &vllm-lightning
       max-file: "5"
 
 services:
-  nvidia-llm-vllm-lightning: &vllm-lightning-service
+  nvidia-llm-vllm-lightning:
     <<: *vllm-lightning
     profiles:
       - generic-assistant/single-gpu
@@ -160,20 +160,6 @@ services:
       default:
         aliases:
           - nvidia-llm-vllm
-
-  nvidia-llm-vllm-lightning-frontend-backend:
-    <<: *vllm-lightning-service
-    profiles:
-      - frontend-backend-agent/single-gpu
-    environment:
-      FLASHINFER_DISABLE_VERSION_CHECK: "1"
-      VLLM_USE_V2_MODEL_RUNNER: "0"
-    ports:
-      - "18001:8000"
-    networks:
-      default:
-        aliases:
-          - nvidia-llm-vllm-frontend-backend
 
 volumes:
   llm_cache:

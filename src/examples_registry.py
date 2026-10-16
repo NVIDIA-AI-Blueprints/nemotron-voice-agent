@@ -32,8 +32,6 @@ class ExampleEntry(TypedDict):
     slots: list[str]
     capabilities: list[str]
     agent_prompt_keys: list[str]
-    domain_profile: str
-    thinker_prompt: str
     tools: list[str]
     activity_check: ActivityCheckConfig | None
     defaults: dict[str, list[str] | str]
@@ -81,7 +79,6 @@ class RealtimeModelSelectors(TypedDict, total=False):
     """Trusted catalog selectors bound by one public Realtime model id."""
 
     prompt_key: str
-    thinker_prompt: str
     llm_id: str
     thinker_llm_id: str
     asr_id: str
@@ -222,7 +219,6 @@ def _rewrite_entry_for_host_runtime(entry: dict) -> dict:
                 .replace("nemo-speech:50051", "localhost:50051")
                 .replace("nemo-speech-multilingual:50051", "localhost:50051")
                 .replace("nemo-speech-tts:50051", "localhost:50051")
-                .replace("booking-server:8001", "localhost:8001")
                 .replace("host.docker.internal", "localhost")
             )
     return out
@@ -303,7 +299,6 @@ _REALTIME_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _REALTIME_PROFILE_FIELDS = frozenset({"label", "pipeline_mode", "default", "selectors", "platform_overrides"})
 _REALTIME_SELECTOR_SLOTS: dict[str, tuple[str, str | None]] = {
     "prompt_key": ("prompt", None),
-    "thinker_prompt": ("thinker-prompt", None),
     "llm_id": ("llm", "llm"),
     "thinker_llm_id": ("thinker-llm", "thinker-llm"),
     "asr_id": ("asr", "asr"),
@@ -315,7 +310,7 @@ _REALTIME_REQUIRED_SLOT_SELECTORS = {
     "asr": "asr_id",
     "tts": "tts_id",
 }
-_REALTIME_SERVICE_SELECTOR_NAMES = frozenset(_REALTIME_SELECTOR_SLOTS) - {"prompt_key", "thinker_prompt"}
+_REALTIME_SERVICE_SELECTOR_NAMES = frozenset(_REALTIME_SELECTOR_SLOTS) - {"prompt_key"}
 
 
 def realtime_service_platform(value: str | None = None) -> str:
@@ -549,7 +544,7 @@ def _load_realtime_model_profiles(
 
         for selector_name, selector_value in selectors.items():
             slot, category = _REALTIME_SELECTOR_SLOTS[selector_name]
-            if slot not in {"prompt", "thinker-prompt"} and slot not in slots:
+            if slot != "prompt" and slot not in slots:
                 raise RuntimeError(
                     f"Realtime model {raw_model!r} selector {selector_name!r} is incompatible "
                     f"with pipeline {pipeline_mode!r}"
@@ -558,19 +553,6 @@ def _load_realtime_model_profiles(
                 if selector_value == REALTIME_REGISTRY_DEFAULT_SELECTOR:
                     raise RuntimeError(f"Realtime model {raw_model!r} prompt_key must name an explicit public prompt")
                 _validate_realtime_prompt_selector(example, selector_value)
-                continue
-            if selector_name == "thinker_prompt":
-                expected_thinker_prompt = str(example.get("thinker_prompt") or "")
-                prompt = _load_yaml_mapping(_example_dir(example) / "prompts.yaml").get(selector_value)
-                if (
-                    selector_value != expected_thinker_prompt
-                    or not isinstance(prompt, dict)
-                    or not isinstance(prompt.get("content"), str)
-                ):
-                    raise RuntimeError(
-                        f"Realtime model {raw_model!r} thinker_prompt {selector_value!r} "
-                        f"is not the trusted Thinker prompt for {example['key']!r}"
-                    )
                 continue
             if category is None:
                 raise RuntimeError(f"Realtime model {raw_model!r} selector {selector_name!r} has no catalog")
@@ -586,7 +568,7 @@ def _load_realtime_model_profiles(
         for platform in REALTIME_SERVICE_PLATFORMS:
             overrides = platform_overrides.get(platform, {})
             for selector_name, base_selector in selectors.items():
-                if selector_name in {"prompt_key", "thinker_prompt"}:
+                if selector_name == "prompt_key":
                     continue
                 slot, category = _REALTIME_SELECTOR_SLOTS[selector_name]
                 if category is None:
@@ -766,8 +748,6 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
         slots = entry.get("slots", [])
         capabilities = entry.get("capabilities", [])
         agent_prompt_keys = entry.get("agent_prompt_keys", [])
-        domain_profile = str(entry.get("domain_profile") or "").strip().lower()
-        thinker_prompt = str(entry.get("thinker_prompt") or "").strip()
         tools = entry.get("tools", [])
         activity_check = entry.get("activity_check")
         defaults = entry.get("defaults", {})
@@ -811,10 +791,8 @@ def _load_examples(data: dict) -> dict[str, ExampleEntry]:
             "slots": list(slots),
             "capabilities": list(capabilities),
             "agent_prompt_keys": list(agent_prompt_keys),
-            "domain_profile": domain_profile,
             "activity_check": normalized_activity_check,
             "defaults": normalized_defaults,
-            "thinker_prompt": thinker_prompt,
             "tools": list(tools),
             "welcome_message": welcome_message,
             "bot": bot_spec,
@@ -1029,7 +1007,7 @@ def materialize_realtime_profile_selectors(
     for selector_name, base_selector in selectors.items():
         if not isinstance(base_selector, str):
             raise RuntimeError(f"Realtime model {model!r} selector {selector_name!r} is not valid")
-        if selector_name in {"prompt_key", "thinker_prompt"}:
+        if selector_name == "prompt_key":
             materialized[selector_name] = base_selector  # type: ignore[literal-required]
             continue
         selected = raw_overrides.get(selector_name, base_selector)
@@ -1086,7 +1064,6 @@ def metadata(example: EnrichedExample) -> dict:
         "label": example["label"],
         "slots": example["slots"],
         "capabilities": example["capabilities"],
-        "domainProfile": example["domain_profile"],
         "default_session_language": str(example["defaults"].get("default_session_language") or ""),
         "defaults": defaults,
     }

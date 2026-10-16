@@ -101,70 +101,16 @@ during simultaneous user speech.
 - `Tool.inputSchema` is now `Tool.input_schema`.
 - `CallToolResult.isError` is now `CallToolResult.is_error`.
 
-### Frontend/Backend latency reporting
-
-`turn_contribution_lines()` replaces `chronological_events()` on the stage
-latency breakdown used by `src/examples/frontend_backend_agent/pipeline.py`.
-
-### Realtime Talker composition moved out of the RTVI import path
-
-`ReliableRealtimeNvidiaLLMService` (the Realtime-protocol-aware Talker
-service) moved from `reliable_talker.py` into a new module,
-`src/examples/frontend_backend_agent/src/reliable_realtime_talker.py`, and
-`pipeline.py` imports it lazily, only inside the `is_realtime` branch. The
-class composes `examples.shared.nvidia_llm.NvidiaLLMService`, which pulls in
-the Realtime protocol stack. Importing it unconditionally meant an ordinary
-RTVI (non-Realtime) session initialized Realtime machinery it never used.
-
-### Ordinary Frontend/Backend service lookup
-
-The non-Realtime path in `pipeline.py` selected default LLM, TTS, ASR, and
-Thinker-LLM catalog entries through a `pipeline_mode`-scoped registry key
-(`_registry_default_service_key(pipeline_mode, ...)`). That indirection is
-gone; the non-Realtime path now calls `load_service_entry(category, "")`
-directly, matching the Realtime path's plain default lookup, and adds a
-`domain_service_loader` closure so an empty booking-server key falls back to
-the catalog's registered default while the Realtime path is unaffected.
-
-### Text-encoded tool calls: multiple calls in one stream
-
-`harvest_text_tool_calls` (`src/examples/shared/text_tool_calls.py`) handles
-a Nemotron completion that encodes more than one `<tool_call>` block in a
-single text stream. Previously it emitted one synthesized chunk carrying every
-harvested `ChoiceDeltaToolCall`, which downstream Pipecat 1.11 aggregation
-only consumed the first tool call from. It now emits one chunk per tool call
-(`role="assistant"` on the first, `role=None` on the rest, matching how a
-native streamed multi-call response is shaped), followed by a single terminal
-chunk carrying `finish_reason="tool_calls"` with an empty delta.
-
-Synthesized tool-call chunks also now reach the stage-metrics observer
-(`_collect_stream` in `reliable_talker.py`), so a text-encoded call is timed
-and correlated the same way a natively streamed one is; previously only
-native tool-call chunks were observed.
-
-### `GENERIC_TALKER_STREAM_TIMEOUT_SECONDS` default: 40.0 to 15.0
-
-Not a Pipecat API change, but adjusted during this migration and worth
-recording alongside it. The Talker stream bound
-(`_TALKER_STREAM_TIMEOUT_SECONDS` in `reliable_talker.py`) retries once, so
-two attempts at the old 40 s default could alone consume 80 s, leaving no
-headroom against a 90 s caller response deadline once the up-to-40 s backend
-deadline (`GENERIC_BACKEND_TIMEOUT_SECONDS`) is added. At 15 s per attempt,
-two attempts plus the backend deadline total at most 70 s. See
-`src/examples/frontend_backend_agent/README.md#configure-the-shared-pipeline`
-for the full budget breakdown.
-
 ## Verification
 
 This migration was validated against:
 
 - `uvx ruff@0.15.6 check .` and `uvx ruff@0.15.6 format --check .`
 - The full unit suite (`uv run pytest tests/ -v`)
-- A container build and health check with
-  `EXAMPLE_SELECTION=generic-frontend-backend-agent`
+- A container build and health check
 - A single-task Tau airline run from the `voice-agent-evaluation` repository,
-  which exercises the client-tool round trip, delegate-tool ownership, and the
-  timeout budget above against a live Realtime session
+  which exercises the client-tool round trip and delegate-tool ownership
+  against a live Realtime session
 
 Record actual pass/fail evidence for each in the pull request's Documentation
 Writer Review receipt and commit history rather than treating this page as

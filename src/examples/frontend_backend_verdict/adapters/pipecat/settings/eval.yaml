@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pipecat adapter settings for Tau evaluation (from FDH config/adapters/pipecat.eval.yaml, a0ef50c).
+# Tau pauses its input between ticks, sometimes for seconds, so the end of a turn is measured
+# in input audio only, like the profiles' 800 ms server-owned silence:
+#   - vad.stop_secs 0.8: Silero counts the silence in audio chunks.
+#   - vad.audio_idle_timeout 0: disables the VADProcessor's wall-clock forced speech stop, which
+#     cut users off mid-utterance whenever a Tau tick stalled for more than about 1.6 s.
+#   - turn.user_speech_timeout 0: no wall-clock wait after the VAD stop.
+#   - turn.stt_ttfs_p99 3.0: after the VAD stop, wait up to 3.0 - stop_secs seconds for the
+#     force-EOU final transcript (it ends the wait as soon as it arrives). Pipecat's NVIDIA
+#     default (1.0) leaves 0.2 s, and a later final would start a second user turn.
+#   - turn.wait_for_transcript false: a turn with no transcript (noise) ends after that wait
+#     with an empty transcript, as in v1, instead of after user_turn_stop_timeout (5 s).
+#   - audio.out_sample_rate null: the output transport runs at the profile's TTS rate, so the
+#     agent's audio is resampled once (to the client format), as in v1. FDH's 24000 made
+#     Pipecat resample 22050 -> 24000 first.
+#   - audio.out_10ms_chunks 2: the transport pads each sentence's last chunk with silence up to
+#     a full chunk; 20 ms chunks (Tau's frame size) keep that under 20 ms per sentence, where
+#     FDH's 100 ms chunks added up to 100 ms of silence after every sentence. v1 added none.
+# Plan: misc/frontend-backend-verdict/shared-stack-plan.md §7.2.
+
+vad:
+  confidence: null
+  start_secs: null
+  stop_secs: 0.8
+  min_volume: null
+  audio_idle_timeout: 0.0
+
+turn:
+  user_speech_timeout: 0.0
+  user_turn_stop_timeout: null
+  stt_ttfs_p99: 3.0
+  wait_for_transcript: false
+
+audio:
+  in_sample_rate: 16000
+  out_sample_rate: null
+  out_10ms_chunks: 2
+  write_timeout_s: 120.0
+
+tts:
+  synthesis_mode: per_sentence

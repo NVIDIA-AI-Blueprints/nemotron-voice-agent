@@ -32,7 +32,7 @@ import websockets
 from websockets.asyncio.server import serve as ws_serve
 
 HERE = pathlib.Path(__file__).resolve().parent
-DEFAULT_MODEL = "nvidia/nemotron-realtime-generic-frontend-backend"
+DEFAULT_MODEL = "nvidia/nemotron-realtime"
 
 
 def _read_env(path: pathlib.Path, name: str) -> str:

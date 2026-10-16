@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.frames.frames import FunctionCallResultProperties
 from pipecat.services.llm_service import FunctionCallParams
 
-from examples.frontend_backend_agent.airline.tools import TOOLS_SCHEMA as DELEGATE_TOOLS_SCHEMA
 from examples.generic.tools import build_tools_schema
 from examples.shared.tool_runtime import (
     schema_validating_tool_handler,
@@ -25,6 +25,29 @@ from examples.shared.tool_runtime import (
     tool_parameter_schema,
 )
 from realtime.tool_schema import compile_tool_arguments_validator, tool_argument_validation_failure
+
+#: A delegate-style tool with a required argument and no extra properties (inline, so the
+#: test does not depend on any example's tool module).
+DELEGATE_TOOLS_SCHEMA = ToolsSchema(
+    standard_tools=[],
+    custom_tools={
+        AdapterType.OPENAI: [
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_backend",
+                    "description": "Send one detailed query to the backend.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}, "filler_text": {"type": "string"}},
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ]
+    },
+)
 
 _GENERIC_MODULE = Path(__file__).resolve().parents[2] / "src" / "examples" / "generic" / "tools.py"
 _OUTER_VALIDATION_WALL_CLOCK_SECS = 1.0

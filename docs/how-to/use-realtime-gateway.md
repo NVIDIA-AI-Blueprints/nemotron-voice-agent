@@ -54,6 +54,8 @@ Configure these deployment settings in `.env` when needed:
 | `REALTIME_ALLOW_PROXY_BEARER` | Allows a trusted proxy's authenticated outer Bearer credential to coexist with a browser `ek_` client secret. The default is `false`. |
 | `REALTIME_SERVICE_PLATFORM` | Selects the exact `cloud`, `server`, or `singlegpu` catalog section. Host-native runs default to `cloud`; Compose pins the value for each recipe. |
 | `REALTIME_MCP_ALLOWED_SERVER_URLS` | JSON array of exact, trusted Streamable HTTP MCP URLs that the gateway can contact. |
+| `UVICORN_WS_PING_INTERVAL` | Server WebSocket keepalive ping interval in seconds. Unset keeps the uvicorn default of 20 seconds. `0` turns the ping off. |
+| `UVICORN_WS_PING_TIMEOUT` | Seconds to wait for a keepalive pong before the server closes the socket. Unset keeps the uvicorn default of 20 seconds. |
 
 For local development, `.env` supplies defaults for variables that are not
 already present in the process environment. Existing process variables remain
@@ -93,8 +95,7 @@ The repository defines these profiles:
 | `nvidia/nemotron-realtime-multilingual` | Multilingual cascaded pipeline |
 | `nvidia/nemotron-realtime-omni` | Direct Omni pipeline with optional client-owned functions |
 | `nvidia/nemotron-realtime-omni-subagents` | Omni multi-agent pipeline without client-defined functions |
-| `nvidia/nemotron-realtime-frontend-backend` | Airline Frontend/Backend Agent with trusted delegation functions |
-| `nvidia/nemotron-realtime-generic-frontend-backend` | Generic Frontend/Backend Agent with server and client tools planned by its hidden Thinker |
+| `nvidia/nemotron-realtime-frontend-backend-verdict` | Frontend/Backend Verdict Agent, with a frontend LLM and a reasoning backend LLM, that owns the whole Realtime session and runs client-owned function tools. Refer to the [Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md) and [Deploy the Frontend/Backend Verdict Agent](deploy-frontend-backend-verdict-agent.md). |
 
 Select a model in the WebSocket URL:
 
@@ -122,10 +123,8 @@ within `REALTIME_SERVICE_PLATFORM`. It does not probe endpoints or switch to a
 different platform. Use `platform_overrides` when a profile needs a different
 catalog key on one platform.
 
-Use standard `session.instructions` to customize agent behavior. The Generic
-Frontend/Backend profile can update its instructions, tools, and tool choice
-while connected. A live session update cannot change the selected model profile
-or its service route.
+Use standard `session.instructions` to customize agent behavior. A live session
+update cannot change the selected model profile or its service route.
 
 ## Authenticate and Connect
 
@@ -256,8 +255,8 @@ Start it from the repository root while the server is running:
 python realtime_test_client/proxy.py
 ```
 
-Then open `http://localhost:8765`. The page connects to the Generic
-Frontend/Backend profile by default and provides **Connect**, **Start mic**,
+Then open `http://localhost:8765`. The page connects to the
+`nvidia/nemotron-realtime` profile by default and provides **Connect**, **Start mic**,
 **Send text**, and **Clear** controls, a conversation view, the negotiated
 session configuration, and a raw event log. It sends 24 kHz mono PCM16 audio
 and plays streamed `response.output_audio.delta` events.
@@ -266,9 +265,9 @@ The client is a proxy rather than a page the server hosts, for two reasons:
 
 - Browsers cannot set an `Authorization` header on a WebSocket.
 - The browser fallback offers an `ek_` client secret as a WebSocket
-  subprotocol. That secret encodes the whole bound session, and the Generic
-  Frontend/Backend session exceeds the client-secret size cap. The gateway
-  rejects it with "The bound Realtime session is too large for a WebSocket
+  subprotocol. That secret encodes the whole bound session, and a session
+  with a large prompt or tool set can exceed the client-secret size cap. The
+  gateway rejects it with "The bound Realtime session is too large for a WebSocket
   client secret." Refer to `_CLIENT_SECRET_MAX_CHARS` in
   `src/realtime/auth.py`.
 
@@ -284,7 +283,7 @@ Configure the proxy with these options:
 | --- | --- | --- |
 | `--port` | `8765` | Local port that serves the page and the browser WebSocket |
 | `--upstream` | `wss://localhost:7860` | Realtime gateway to relay to |
-| `--model` | `nvidia/nemotron-realtime-generic-frontend-backend` | Realtime model id to request |
+| `--model` | `nvidia/nemotron-realtime` | Realtime model id to request |
 | `--env-file` | repository `.env` | File to read `REALTIME_API_KEY` from |
 
 This is a local development tool. It holds the master key in the proxy process
@@ -444,7 +443,7 @@ barrier that orders the response. The publication setting is captured when an
 input item starts, so a live null/non-null update applies to the next item and
 does not change an in-flight item's event contract.
 
-Generic, Multilingual, and Frontend/Backend cascaded ASR profiles can select
+Generic and Multilingual cascaded ASR profiles can select
 manual mode in the initial session update:
 
 ```json
@@ -510,13 +509,14 @@ requires the client to do anything. A standard OpenAI Realtime client needs no
 special handling to avoid answering a call it never sees, and no configuration
 naming the trusted tools to filter them out.
 
-For the Generic Frontend/Backend profile the trusted names are `call_backend`
-and `cancel_backend`. That set is pinned by `DelegateToolNameContractTests`,
-and the fact that neither the call nor its result ever reaches the wire is
-pinned by `DelegateCallWireContractTests`, both in
-`tests/unit/test_generic_fba_trusted_tool_routing.py`, and by
+No shipped Realtime model profile declares delegate tools. The gateway keeps
+the generic delegate machinery for profiles that do. The fact that neither a
+delegate call nor its result ever reaches the wire is pinned by
+`DelegateCallWireContractTests` in
+`tests/unit/test_realtime_delegate_tool_routing.py`, which declares
+`call_backend` and `cancel_backend` inline on `generic-assistant`, and by
 `ObserverServerToolLifecycleTests` in
-`tests/unit/test_realtime_observer_lifecycle.py`. Treat a change to any of
+`tests/unit/test_realtime_observer_lifecycle.py`. Treat a change to either of
 them as a breaking wire-contract change.
 
 ### Run a Client-Owned Function
@@ -524,10 +524,7 @@ them as a breaking wire-contract change.
 A client-owned call still uses the ordinary two-response shape: the response
 that carries the call (call it Response A here), and a later response with a
 different response ID that carries the answer (Response B). Declare a
-client-owned function in an initial or live session update. The Generic
-Frontend/Backend profile accepts instruction, tool, and tool-choice changes
-while connected. It prepares the matching Thinker policy and Talker capability
-prompt before it commits the session update:
+client-owned function in an initial or live session update:
 
 ```json
 {
@@ -580,72 +577,6 @@ The client-tool deadline defaults to 120 seconds. A timeout produces a
 structured failure and keeps the connection available for a recovery response.
 Tool-call state does not survive disconnection.
 
-### Run the Generic Frontend/Backend Profile
-
-Use `nvidia/nemotron-realtime-generic-frontend-backend` when the client owns
-domain functions but the server must retain bounded planning and grounded
-speech. This profile applies the following ownership boundary:
-
-- The Lightning Talker sees only `call_backend` and `cancel_backend`. This
-  remains true for its canonical context, live session updates, and each
-  response-scoped context.
-- `cancel_backend` withdraws only this assistant's own in-flight delegated
-  request, for example when the user says stop, never mind, or ignore that
-  while a `call_backend` call is still running. It never performs a
-  cancellation the user asks for as a task, such as cancelling an order,
-  booking, or reservation; the Talker sends requests like that to
-  `call_backend` like any other domain request.
-- The Talker receives a bounded capability digest with descriptions, but no
-  client function identifiers or argument schemas. It is deterministic by
-  default; model mode uses that same Lightning instance.
-- The Super Thinker receives `session.instructions` verbatim as a distinct
-  system message. Its trusted planner rules and complete server/client tool
-  contract remain in a separate server-owned system message.
-- Python validates the complete plan before the first side effect. Server tools
-  run in process; client tools suspend the plan and use standard
-  `function_call_output` events.
-- Independent client calls from one planning round share one response. The
-  backend waits up to `GENERIC_CLIENT_TOOL_TIMEOUT_SECONDS`, which defaults to
-  25 seconds, before it returns one grounded failure.
-- The backend retains one parked plan per session. Barge-in, cancellation, a
-  newer generation, a late result, or a repeated failed call cannot revive
-  stale work.
-
-The Talker supplies a short, query-grounded `filler_text` in its original
-`call_backend` arguments. `call_backend` itself never reaches the client, so
-that response closes with an empty output array; only after it closes can the
-pipeline emit the precomputed filler text as its own ordinary response,
-without another model inference or a new user turn. The grounded final answer
-follows as a later, ordinary response. A rejected or missing filler remains
-silent; the runtime never substitutes a static phrase. From the client's point
-of view this is nothing more than an assistant that sometimes speaks twice for
-one user turn -- a brief acknowledgement, then the real answer -- with no
-tool-call machinery visible in between.
-
-The profile regenerates its capability digest whenever
-`session.instructions`, `session.tools`, or `session.tool_choice` changes.
-`REALTIME_CAPABILITY_MODE=static`, the default, renders it immediately from the
-effective tool catalog and makes no additional model call. Set the mode to
-`model` to ask the same Nemotron Lightning instance for schema-constrained
-summaries with reasoning disabled, temperature zero, a 350-token output ceiling,
-and a 30-second deadline. Model mode caches validated output in a bounded
-process cache and, when configured, Redis for 24 hours. The cache key covers the
-effective instructions, server and client tools, tool choice, profile, and
-summary schema version.
-
-Python uses exact names to validate completeness, but omits those identifiers
-from the rendered Talker digest. It rejects omissions, renamed or invented
-tools, policy text, and internal model details. A cache, timeout, provider,
-schema, or validation failure
-degrades to the deterministic digest; it never prevents session startup or a
-live policy update. The Thinker instruction, Talker digest, and tool validators
-still commit together.
-
-Do not interpret this source implementation as a qualified deployment. The
-32,768-token model context and reduced sequence limits in the dedicated Viking
-evaluation values must pass model-startup, live Realtime, and benchmark gates
-before promotion.
-
 ### Run Long-Running Delegation
 
 Do not keep one Realtime tool call open for an unbounded backend job. Have a
@@ -659,10 +590,17 @@ gateway treats all of them as ordinary functions. The backend can use HTTP, a
 queue, Agent Communication Protocol (ACP), agent-to-agent (A2A), or another
 transport without changing the Realtime contract.
 
-Use the `nvidia/nemotron-realtime-frontend-backend` profile when the deployed
-pipeline owns the included airline backend agent. Use
-`nvidia/nemotron-realtime-client-tools` when the client application owns that
-delegation boundary.
+Use `nvidia/nemotron-realtime-client-tools` when the client application owns
+that delegation boundary. Use `nvidia/nemotron-realtime-frontend-backend-verdict`
+when you want the deployed pipeline to split the conversation between a fast
+frontend LLM and a reasoning backend LLM that calls your client-owned function
+tools. By default, that profile refuses `type: "mcp"` tools and
+`input_audio_buffer.commit`, and it approximates `semantic_vad` with silence.
+The deployment can opt in to manual commits and Smart Turn `semantic_vad` with
+`FBV_REALTIME_TURN_MODES`, and to MCP tools with `FBV_REALTIME_MCP=true`. Its
+MCP calls run on the server without client approval and stay hidden from the
+client, so they need `require_approval: "never"`. Refer to the
+[Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md#use-the-openai-realtime-api).
 
 ### Run an MCP Tool
 

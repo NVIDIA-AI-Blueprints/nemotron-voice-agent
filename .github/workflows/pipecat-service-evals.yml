@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Service-backed Pipecat evals. These use NVIDIA-hosted ASR/LLM/TTS services,
-# an NVIDIA-hosted judge, a local Omni NIM server, and the local booking server.
+# an NVIDIA-hosted judge, and a local Omni NIM server.
 
 name: Pipecat Service Evals
 
@@ -122,55 +122,6 @@ jobs:
           echo "Local Omni NIM did not become ready within 40 minutes."
           exit 1
 
-      - name: Start booking backend
-        run: |
-          if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
-            echo "A booking backend is already serving on localhost:8001; refusing to reuse a stale service."
-            exit 1
-          fi
-
-          if python - <<'PY'
-          import socket
-          import sys
-
-          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-              sock.settimeout(1)
-              sys.exit(0 if sock.connect_ex(("127.0.0.1", 8001)) == 0 else 1)
-          PY
-          then
-            echo "Port 8001 is already in use before this workflow started the booking backend."
-            exit 1
-          fi
-
-          mkdir -p "$RUNNER_TEMP/booking-db"
-          rm -f "$RUNNER_TEMP/booking-server.pid" "$RUNNER_TEMP/booking-server.starttime"
-          BOOKING_DB_PATH="$RUNNER_TEMP/booking-db/bookings.db" \
-            BOOKING_HOST=127.0.0.1 \
-            BOOKING_PORT=8001 \
-            nohup uv run --group eval python -m examples.frontend_backend_agent.airline.database.server \
-            > "$RUNNER_TEMP/booking-server.log" 2>&1 &
-          pid="$!"
-          echo "$pid" > "$RUNNER_TEMP/booking-server.pid"
-          awk '{print $22}' "/proc/$pid/stat" > "$RUNNER_TEMP/booking-server.starttime"
-
-          for attempt in {1..60}; do
-            current_starttime="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
-            expected_starttime="$(cat "$RUNNER_TEMP/booking-server.starttime")"
-            if [ "$current_starttime" != "$expected_starttime" ]; then
-              cat "$RUNNER_TEMP/booking-server.log" || true
-              exit 1
-            fi
-
-            if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 60 ]; then
-              cat "$RUNNER_TEMP/booking-server.log" || true
-              exit 1
-            fi
-            sleep 2
-          done
-
       - name: Run Pipecat service evals
         env:
           SERVICE_EVAL_MANIFEST: ${{ github.event.inputs.manifest || 'tests/pipecat_evals/service/cloud_tts_manifest.yaml' }}
@@ -204,44 +155,8 @@ jobs:
           name: pipecat-service-eval-logs
           path: |
             eval-runs/
-            ${{ runner.temp }}/booking-server.log
             ${{ runner.temp }}/omni-nim.log
 
       - name: Stop local Omni NIM
         if: always() && (github.event_name != 'workflow_dispatch' || inputs.scenario == '' || startsWith(inputs.scenario, 'omni_'))
         run: docker compose --profile omni-assistant-subagents/server rm -f -s nvidia-llm-omni || true
-
-      - name: Stop booking backend
-        if: always()
-        run: |
-          pid_file="$RUNNER_TEMP/booking-server.pid"
-          starttime_file="$RUNNER_TEMP/booking-server.starttime"
-
-          if [ ! -f "$pid_file" ] || [ ! -f "$starttime_file" ]; then
-            rm -f "$pid_file" "$starttime_file"
-            exit 0
-          fi
-
-          pid="$(cat "$pid_file")"
-          expected_starttime="$(cat "$starttime_file")"
-          rm -f "$pid_file" "$starttime_file"
-
-          is_owned_process() {
-            [ -n "$pid" ] || return 1
-            current_starttime="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
-            [ "$current_starttime" = "$expected_starttime" ]
-          }
-
-          is_owned_process || exit 0
-
-          kill "$pid" || true
-          for attempt in {1..10}; do
-            if ! is_owned_process; then
-              exit 0
-            fi
-            sleep 1
-          done
-
-          if is_owned_process; then
-            kill -9 "$pid" || true
-          fi

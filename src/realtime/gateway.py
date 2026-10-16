@@ -58,12 +58,16 @@ _MCP_ENDPOINT_FIELDS = frozenset({"server_url", "connector_id", "tunnel_id"})
 _SMART_TURN_PIPELINES = frozenset({"omni-assistant", "omni-assistant-subagents"})
 _CONFIGURABLE_CASCADE_PIPELINES = frozenset(
     {
-        "frontend-backend-agent",
-        "generic-frontend-backend-agent",
         "generic-assistant",
         "multilingual-assistant",
     }
 )
+# Pipelines that own the whole Realtime session: the gateway authenticates the socket,
+# resolves ``?model=`` to the pipeline, and hands the socket over before it sends any
+# event. The pipeline then serves ``session.created``, every ``session.update`` and the
+# rest of the protocol itself (the frontend/backend verdict example runs the voice
+# prototype's own Realtime session this way).
+_SESSION_OWNED_PIPELINES = frozenset({"frontend-backend-verdict-agent"})
 
 
 class _ReplayWebSocket:
@@ -310,6 +314,9 @@ def _controller_from_runtime(
     pipeline_mode = str(runtime_config.get("pipeline_mode") or _DEFAULT_PIPELINE_MODE)
     if pipeline_mode in _SMART_TURN_PIPELINES:
         turn_detection_type = "semantic_vad"
+    elif pipeline_mode in _SESSION_OWNED_PIPELINES:
+        # Advertised only on the gateway's own controller, which this session never publishes.
+        turn_detection_type = "server_vad"
     elif pipeline_mode in _CONFIGURABLE_CASCADE_PIPELINES:
         turn_detection_type = (
             "server_vad" if parse_env_bool("USE_SILERO_VAD_TURN_DETECTION", default=False) else "semantic_vad"
@@ -317,8 +324,6 @@ def _controller_from_runtime(
     else:
         raise ValueError(f"Realtime turn detection is not defined for pipeline_mode {pipeline_mode!r}")
     manual_input_available = bool(transcription_model) and pipeline_mode in {
-        "frontend-backend-agent",
-        "generic-frontend-backend-agent",
         "generic-assistant",
         "multilingual-assistant",
     }
@@ -735,6 +740,17 @@ async def _run_realtime_websocket(
 
     with logger.contextualize(stream_id=controller.id):
         logger.info(f"Realtime WS connected session_id={controller.id}")
+        pipeline_mode = controller.runtime_config.get("pipeline_mode")
+        if pipeline_mode in _SESSION_OWNED_PIPELINES:
+            if start_bot is None:
+                logger.info("Realtime session configured without a pipeline start callback")
+                return
+            logger.info(f"Realtime handoff session_id={controller.id} pipeline_mode={pipeline_mode} (session-owned)")
+            try:
+                await start_bot(websocket, controller.runtime_config, controller)
+            except WebSocketDisconnect:
+                logger.info(f"Realtime WS disconnected session_id={controller.id}")
+            return
         for event in controller.created_events():
             await _send_json(websocket, event)
 

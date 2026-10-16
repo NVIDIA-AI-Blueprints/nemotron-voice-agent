@@ -29,12 +29,10 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RTVI_COMPACTION_HANDLERS = (
     ("src/examples/generic/pipeline.py", "apply_pinned_prompt_summary"),
     ("src/examples/multilingual/pipeline.py", "apply_pinned_prompt_summary"),
-    ("src/examples/frontend_backend_agent/pipeline.py", "_apply_chat_history_sliding_window"),
 )
 _REALTIME_PIPELINES = (
     "src/examples/generic/pipeline.py",
     "src/examples/multilingual/pipeline.py",
-    "src/examples/frontend_backend_agent/pipeline.py",
     "src/examples/omni_assistant/pipeline.py",
     "src/examples/omni_assistant_subagents/pipeline.py",
 )
