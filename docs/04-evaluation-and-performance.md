@@ -9,6 +9,8 @@ real-time pacing and places responses on the source timeline. The Generic
 Assistant is the first integration. Compare matched files through the normal
 live pipeline and offline processing before relying on equivalent benchmark
 outcomes; offline turnaround does not measure real-world response latency.
+For commands, recording files, and exact metric scopes, refer to the
+[implementation and evaluation reference](offline-processing-reference.md).
 
 ---
 
