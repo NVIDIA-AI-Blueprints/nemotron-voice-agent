@@ -78,6 +78,8 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(tts["tts_language_code"], "fr-FR")
         self.assertEqual(runtime.configuration["tool_choice"], "none")
         self.assertFalse(runtime.configuration["asr_force_eou"])
+        self.assertEqual(asr["asr_stop_history"], 320)
+        self.assertEqual(runtime.configuration["asr_stop_history_ms"], asr["asr_stop_history"])
         self.assertEqual(tts["tts_sample_rate"], 22050)
         self.assertEqual(runtime.configuration["output_sample_rate"], 16000)
 

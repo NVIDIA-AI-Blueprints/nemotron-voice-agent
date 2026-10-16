@@ -437,6 +437,13 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         config = requests_seen[0].streaming_config.config
         self.assertEqual(config.model, "selected-model")
         self.assertFalse(config.enable_automatic_punctuation)
+        from pipecat.services.nvidia.stt import NvidiaSTTService
+
+        native = NvidiaSTTService(use_ssl=False)
+        native._sample_rate = RATE
+        native_config = native._create_recognition_config().config
+        self.assertEqual(config.endpointing_config, native_config.endpointing_config)
+        self.assertEqual(config.endpointing_config.stop_history, 320)
         self.assertEqual(b"".join(request.audio_content for request in requests_seen[1:]), bytes(1026))
         self.assertTrue(all(not request.runtime_config for request in requests_seen))
 

@@ -11,6 +11,7 @@ the bulk request; it includes transport and provider queueing, not pure GPU time
 import asyncio
 import bisect
 import copy
+import inspect
 import json
 import queue
 import threading
@@ -18,6 +19,8 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from types import SimpleNamespace
 from typing import Any
+
+from pipecat.services.nvidia.stt import NvidiaSTTService
 
 from .models import (
     RATE,
@@ -29,6 +32,10 @@ from .models import (
     SpokenWord,
     ns_to_samples,
 )
+
+# Read the pinned live service's constructor default so the request and manifest
+# share its endpointing baseline rather than maintaining a separate override.
+STANDARD_STT_STOP_HISTORY = inspect.signature(NvidiaSTTService).parameters["stop_history"].default
 
 
 class ContinuousASR:
@@ -479,7 +486,9 @@ def create_riva_recognizer(settings: dict) -> ContinuousASR:
         ),
         interim_results=True,
     )
-    riva.client.add_endpoint_parameters_to_config(config, -1, -1.0, 400, -1, -1.0, -1.0)
+    riva.client.add_endpoint_parameters_to_config(
+        config, -1, -1.0, settings.get("asr_stop_history", STANDARD_STT_STOP_HISTORY), -1, -1.0, -1.0
+    )
 
     def stream(audio):
         def requests():

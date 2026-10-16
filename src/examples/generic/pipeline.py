@@ -3,7 +3,8 @@
 
 """Generic cascaded pipeline: NVIDIA STT -> Nemotron LLM -> NVIDIA TTS with function calling.
 
-Uses pipecat's built-in NVIDIA classes:
+Uses pipecat's built-in NVIDIA classes, including the standard continuous STT
+service with its default ``stop_history=320`` and no injected force-EOU audio:
   - NvidiaSTTService  (Nemotron Streaming ASR)
   - NvidiaLLMService  (NIM-compatible LLM)
   - NvidiaTTSService  (Magpie TTS)
@@ -43,7 +44,7 @@ from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.evaluation_trace import (
-    EvaluationNvidiaForceEouSTTService,
+    EvaluationNvidiaSTTService,
     EvaluationNvidiaTTSService,
     create_evaluation_trace,
 )
@@ -160,8 +161,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             f"Speaker diarization enabled: max_speakers={max_speakers or '(default)'}, "
             f"multi_speaker_support={multi_speaker_support}"
         )
-    stt_service = EvaluationNvidiaForceEouSTTService if evaluation_trace else NvidiaForceEouSTTService
-    stt = stt_service(**asr_kwargs, stop_history=400, **evaluation_kwargs)
+    stt_service = EvaluationNvidiaSTTService if evaluation_trace else NvidiaSTTService
+    stt = stt_service(**asr_kwargs, **evaluation_kwargs)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
