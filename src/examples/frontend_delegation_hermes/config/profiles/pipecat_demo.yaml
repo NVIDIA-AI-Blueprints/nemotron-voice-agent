@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Pipecat adapter, demo (the default fdh-voice service on 8776): browser page, greeting, demo tools
+# Pipecat adapter, demo (the `default` profile: browser UI sessions): greeting, demo tools
 # run in the voice server, and FDH_BACKEND_DELAY_S seconds (default 5) before each backend run so
 # status questions and steering can be tried while the backend is WORKING. Pair with gateway.yaml
 # and config/adapters/pipecat.yaml. Pipecat owns turn endings, so FDH's spelling hold is off.

@@ -2,90 +2,79 @@
   "skill_name": "nemotron-voice-agent-fdh-deploy",
   "cases": [
     {
-      "id": "nemotron-voice-agent-fdh-deploy-ask-adapter",
+      "id": "nemotron-voice-agent-fdh-deploy-ask-profile",
       "prompt": "Deploy FDH.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Asks which adapter to start, Pipecat or τ³, states that Pipecat is the default, and starts nothing before the user answers.",
+      "expected_output": "Asks which profile to deploy, default (for the browser UI) or eval (for evaluation runs such as Tau), and starts nothing before the user answers.",
       "assertions": [
         "Loaded nemotron-voice-agent-fdh-deploy/SKILL.md.",
-        "Asked which adapter to deploy and named Pipecat as the default.",
-        "Did not run docker compose before the user chose an adapter.",
-        "Did not open references/tau.md or references/pipecat.md before the choice."
+        "Asked which profile to deploy, default or eval.",
+        "Did not run docker compose up before the user chose a profile.",
+        "Did not open references/pipecat.md or references/tau.md before the choice."
       ]
     },
     {
-      "id": "nemotron-voice-agent-fdh-deploy-pipecat-ask-mode",
-      "prompt": "Deploy the Pipecat head of the frontend delegation Hermes example.",
-      "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Asks whether the user wants the demo or the eval mode, then follows references/pipecat.md for the chosen mode on the fdh-voice service, port 8776.",
-      "assertions": [
-        "Asked demo or eval before starting anything.",
-        "Did not ask which adapter, because the request names Pipecat.",
-        "Targets the fdh-voice service on host port 8776."
-      ]
-    },
-    {
-      "id": "nemotron-voice-agent-fdh-deploy-pipecat-demo",
+      "id": "nemotron-voice-agent-fdh-deploy-browser-ui",
       "prompt": "Start the FDH demo so I can talk to it in the browser.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Goes straight to the Pipecat demo: starts nemo-speech, then `docker compose --env-file .env -f docker/docker-compose.frontend-delegation-hermes.yaml up -d --build fdh-voice`, checks https://localhost:8776/health, and gives the https://<host-ip>:8776/ URL.",
+      "expected_output": "Goes straight to the default profile: runs the preflight, then `docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build`, checks https://localhost:7860/health and the fdh-hermes gateway health, and gives the https://<host>:7860 URL.",
       "assertions": [
-        "Did not ask which adapter or which mode.",
-        "Started the fdh-voice service with the default demo settings (pipecat_demo.yaml, gateway.yaml, adapters/pipecat.yaml).",
-        "Used TLS (https) on port 8776 and told the user to accept the self-signed certificate."
+        "Did not ask which profile.",
+        "Used the frontend-delegation-hermes-agent/single-gpu Compose profile without the eval overlay.",
+        "Used TLS (https) on port 7860 and told the user to accept the self-signed certificate.",
+        "Did not use the removed fdh-voice service, port 8776, or docker/docker-compose.frontend-delegation-hermes.yaml."
       ]
     },
     {
-      "id": "nemotron-voice-agent-fdh-deploy-pipecat-eval",
-      "prompt": "Bring up the Pipecat adapter in eval mode so tau2 can evaluate it.",
+      "id": "nemotron-voice-agent-fdh-deploy-eval",
+      "prompt": "Bring up FDH in eval mode so tau2 can evaluate it.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Starts fdh-voice with FDH_PIPECAT_PROFILE=pipecat_realtime_eval.yaml, FDH_PIPECAT_GATEWAY_CONFIG=gateway.eval.yaml, FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml, and FDH_PIPECAT_TLS=false, checks that /health shows vad stop_secs 0.8 and audio_idle_timeout 0.0 and turn user_speech_timeout 0.0, and points τ² at ws://localhost:8776/v1/realtime with a pine-fdh-pipecat-* model tag.",
+      "expected_output": "Starts `docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml --profile frontend-delegation-hermes-agent/single-gpu up -d --build`, checks FDH_PROFILE=eval, PIPELINE_TLS=false, and the `FDH gateway: config gateway.eval.yaml` log line, and points the client at ws://localhost:7860/v1/realtime with the model nvidia/nemotron-realtime-frontend-delegation-hermes and the REALTIME_API_KEY Bearer credential.",
       "assertions": [
-        "Set all four FDH_PIPECAT_* eval variables.",
-        "Used the eval settings file adapters/pipecat.eval.yaml (0.8 s audio-time turn end, no wall-clock idle stop).",
-        "Verified \"stop_secs\": 0.8, \"audio_idle_timeout\": 0.0 and \"user_speech_timeout\": 0.0 in /health.",
-        "Used port 8776 and a pine-fdh-pipecat-* model tag, not the τ³ port 8775."
+        "Passed the docker/docker-compose.fdh-eval.yaml overlay after docker-compose.yml.",
+        "Verified that the fdh-hermes log names gateway.eval.yaml.",
+        "Used port 7860 and the model nvidia/nemotron-realtime-frontend-delegation-hermes, not a pine-* model name or port 8775 or 8776.",
+        "Did not print the value of REALTIME_API_KEY or NVIDIA_API_KEY."
       ]
     },
     {
-      "id": "nemotron-voice-agent-fdh-deploy-tau",
-      "prompt": "Deploy the τ³ adapter of FDH for benchmarking.",
+      "id": "nemotron-voice-agent-fdh-deploy-benchmark-needs-overlay",
+      "prompt": "FDH is already running for the browser UI. Can I just point tau2 at it for a benchmark run?",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Asks nothing more, checks that fdh-voice is stopped, and starts `docker compose --env-file .env -f docker/docker-compose.frontend-delegation-hermes.yaml --profile tau up -d --build fdh-tau` with realtime_eval.yaml and gateway.eval.yaml on port 8775, then checks both /health endpoints.",
+      "expected_output": "Explains that Realtime sessions on a default deployment use gateway.yaml, so a benchmark run must redeploy with the eval overlay, which switches fdh-hermes to gateway.eval.yaml.",
       "assertions": [
-        "Did not ask any further question.",
-        "Passed --profile tau and named the fdh-tau service.",
-        "Checked with docker ps that fdh-voice is not running before a reportable run.",
-        "Checked the gateway with docker exec fdh-tau curl -s 127.0.0.1:8790/health."
+        "Said that benchmark runs must use docker/docker-compose.fdh-eval.yaml.",
+        "Named gateway.eval.yaml as the gateway configuration that the overlay sets.",
+        "Did not suggest writing FDH_PROFILE or other FDH_* keys to .env."
       ]
     },
     {
-      "id": "nemotron-voice-agent-fdh-deploy-tau-second-container",
-      "prompt": "Start a second τ³ container beside the main one.",
+      "id": "nemotron-voice-agent-fdh-deploy-stale-hermes-source",
+      "prompt": "I changed the FDH backend prompt but the Hermes backend still behaves the old way.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Starts a second fdh-tau container with FDH_CONTAINER_NAME=fdh-tau-2, FDH_VOICE_HOST_PORT=8777, its own event and gateway logs, and a separate Compose project name with -p, leaving the main fdh-tau on 8775 untouched.",
+      "expected_output": "Explains that fdh-hermes runs the source built into its image, compares the `FDH gateway: ... source <hash>` log line with the checkout's hash, and rebuilds with `up -d --build`.",
       "assertions": [
-        "Used a separate Compose project name (-p) so the main container is not replaced.",
-        "Set FDH_CONTAINER_NAME and FDH_VOICE_HOST_PORT for the second container (port 8777).",
-        "Gave the second container its own FDH_EVENT_LOG and FDH_GATEWAY_LOG."
+        "Opened references/troubleshooting.md or references/prerequisites.md.",
+        "Compared the source hash in the fdh-hermes log with the checkout.",
+        "Rebuilt with --build instead of only restarting the container."
       ]
     },
     {
-      "id": "nemotron-voice-agent-fdh-deploy-gateway-unhealthy",
-      "prompt": "The fdh-tau container exits right after start with 'gateway not healthy'. What is wrong?",
+      "id": "nemotron-voice-agent-fdh-deploy-missing-key",
+      "prompt": "The fdh-hermes container exits right after start and the voice service never comes up. What is wrong?",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Reads `docker logs fdh-tau` for the in-container gateway error, checks that FDH_GATEWAY_CONFIG names an existing file in src/examples/frontend_delegation_hermes/config/, and recreates the container after the fix.",
+      "expected_output": "Reads `docker compose --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes`, recognizes `NVIDIA_API_KEY is not set` or a gateway configuration error, checks that NVIDIA_API_KEY is present in .env without printing it, and reruns `up -d`.",
       "assertions": [
         "Opened references/troubleshooting.md.",
-        "Inspected docker logs fdh-tau for the gateway's startup error.",
-        "Checked the FDH_GATEWAY_CONFIG value against the config directory."
+        "Inspected the fdh-hermes container log.",
+        "Checked the presence of NVIDIA_API_KEY without printing its value."
       ]
     },
     {
       "id": "nemotron-voice-agent-fdh-deploy-negative-registered-example",
       "prompt": "Deploy the generic assistant on my workstation GPU.",
       "expected_skill": "nemotron-voice-agent-deploy",
-      "expected_output": "The FDH deploy skill does not activate, because the generic assistant is a registered example deployed with the root Compose recipes.",
+      "expected_output": "The FDH deploy skill does not activate, because the request is for the generic assistant.",
       "assertions": [
         "Did not load or apply nemotron-voice-agent-fdh-deploy.",
         "Routed the request to nemotron-voice-agent-deploy."

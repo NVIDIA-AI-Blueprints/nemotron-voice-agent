@@ -1,47 +1,71 @@
 # Frontend Delegation Hermes Example
 
-Frontend Delegation Hermes (FDH) is an OpenAI Realtime (GA) voice agent with two agents that are decoupled in time:
+Frontend Delegation Hermes (FDH) is a voice agent with two agents that are decoupled in time:
 
 - **The frontend** (`nvidia/nvidia/nemotron-3.5-lightning`, reasoning off) runs on every user turn and makes exactly one call: `delegate(delegate, filler_text, request)`. The server speaks `filler_text` immediately. `request=status` asks a working backend for progress without disturbing it.
-- **The backend** is a Hermes `AIAgent` (`nvidia/nvidia/nemotron-3-ultra`, reasoning on), one per Realtime session, in its own Python 3.14 worker process behind a gateway. Depending on its state, it starts a session, continues it (`run_conversation`), steers the running task (`steer` or `redirect`), or reports progress (`get_activity_summary`). The controller follows [`fixtures/workflow.csv`](fixtures/workflow.csv).
+- **The backend** is a Hermes `AIAgent` (`nvidia/nvidia/nemotron-3-ultra`, reasoning on), one per session, in its own Python 3.14 worker process behind a gateway. Depending on its state, it starts a session, continues it (`run_conversation`), steers the running task (`steer` or `redirect`), or reports progress (`get_activity_summary`). The controller follows [`fixtures/workflow.csv`](fixtures/workflow.csv).
 
-The example is self-contained. It is not registered in `examples_registry.yaml` and has no root Compose recipe. It runs from its own image and Compose file: [`docker/Dockerfile.fdh`](../../../docker/Dockerfile.fdh) and [`docker/docker-compose.frontend-delegation-hermes.yaml`](../../../docker/docker-compose.frontend-delegation-hermes.yaml).
+The example is registered in [`examples_registry.yaml`](../../../examples_registry.yaml) as `frontend-delegation-hermes-agent`, with the slots `llm`, `asr`, and `tts`. It serves two kinds of sessions on the repository's shared server:
 
-To build, deploy, or evaluate the example, load the [`nemotron-voice-agent-fdh-deploy`](../../../.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md) skill. Its references hold the complete τ³ procedure, the gates, and the configuration knobs.
+- Browser UI sessions over WebRTC or the UI's WebSocket transport, with the Real-Time Voice Inference (RTVI) protocol.
+- OpenAI Realtime (GA) sessions on the shared `/v1/realtime` route with the model `nvidia/nemotron-realtime-frontend-delegation-hermes`.
 
-For the step-by-step user guide, refer to [Deploy the Frontend Delegation Hermes Agent](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md).
+It has one Docker Compose recipe, `frontend-delegation-hermes-agent/single-gpu`, and an eval overlay, [`docker/docker-compose.fdh-eval.yaml`](../../../docker/docker-compose.fdh-eval.yaml). For the step-by-step guide, refer to [Deploy the Frontend Delegation Hermes Agent](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md). AI agents load the [`nemotron-voice-agent-fdh-deploy`](../../../.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md) skill to build, deploy, or evaluate the example.
 
 ## Architecture
 
-The following diagram shows one container. Both adapters use the same layout:
+The following diagram shows the containers of the recipe:
 
 ```text
- client ─ws─► voice server :7860 (Pipecat adapter or τ³ adapter)
-               ├─ frontend decider ──► Inference Hub nemotron-3.5-lightning
-               ├─ speech ──► nemo-speech :50051 (ASR + TTS)
-               └─ ws://host.docker.internal:8790/v1/backend
-                    └─ backend gateway 127.0.0.1:8790 (inside the container)
-                         └─ one Hermes worker process per session ──► Inference Hub nemotron-3-ultra
+ browser UI (RTVI) ──┐
+ Realtime client ────┴─► frontend-delegation-hermes-agent-single-gpu (shared app image, Python 3.12, :7860)
+                          ├─ frontend decider ──► Inference Hub nemotron-3.5-lightning
+                          ├─ speech ──► nemo-speech :50051 (ASR + TTS)
+                          └─ ws://fdh-hermes:8790/v1/backend (FDH_BACKEND_URL)
+                               └─ fdh-hermes (nemotron-voice-agent-fdh:local, Python 3.14)
+                                    └─ FDH gateway :8790 + one Hermes worker process per session
+                                         └─ Inference Hub nemotron-3-ultra
 ```
 
-`docker/fdh/entrypoint.sh` starts the gateway, waits for its `/health`, and then starts the adapter named by `FDH_ADAPTER`. The gateway is reachable only on the container's loopback. Only the worker processes import Hermes, because `src/utils.py` would shadow Hermes's own `utils` module. The workers get a `PYTHONPATH` that holds only an `examples` symlink.
+The voice side runs in the shared app container. Hermes needs Python 3.14 and its own packages, so the FDH gateway and the Hermes workers run in their own image, built from [`docker/Dockerfile.fdh`](../../../docker/Dockerfile.fdh) with the Hermes checkout in `HERMES_AGENT_DIR`. [`docker/fdh/gateway.sh`](../../../docker/fdh/gateway.sh) starts the gateway with the settings in [`docker/fdh/gateway.env`](../../../docker/fdh/gateway.env). The gateway listens on the Compose network and is not published to the host. The image does not mount `src/`, so rebuild it after a source change. It records a hash of its `src/` in `/app/SOURCE_SHA256`, and the gateway prints that hash at start.
 
-## Adapters
+Only the worker processes import Hermes, because `src/utils.py` would shadow Hermes's own `utils` module. The workers get a `PYTHONPATH` that holds only an `examples` symlink.
 
-The example has two server adapters over one shared core. The following table compares them:
+## Sessions and Profiles
 
-| Adapter | Entry Point | Service and Port | Use When |
-| --- | --- | --- | --- |
-| Pipecat (default) | `server.py` | `fdh-voice`, 8776 | You want the browser demo, or a τ² evaluation with Pipecat-native turn taking |
-| τ³ | `tau_server.py` | `fdh-tau` (Compose profile `tau`), 8775 | You run τ³ benchmarks and need the behavior the τ³ scores were measured with |
+`FDH_PROFILE` selects the deployment profile. Unset means `default`, and any other value than `default` or `eval` is an error. The following table lists what each profile runs. The paths are relative to `config/`.
 
-The **Pipecat adapter** serves WebSocket and OpenAI Realtime only, without WebRTC or RTVI. Pipecat owns turn taking: Silero VAD with `VADParams` from the settings file, the default user-turn start strategies, and `SpeechTimeoutUserTurnStopStrategy`, with Smart Turn disabled. Pipecat also owns interruptions and audio pacing. Speech uses `NvidiaForceEouSTTService` and `NvidiaTTSService` in `per_sentence` mode on the catalog endpoints. The FDH spelling hold is off in both Pipecat profiles.
+| | `default` (browser UI) | `eval` (OpenAI Realtime, benchmarks) |
+| --- | --- | --- |
+| Delegation profile | `profiles/pipecat_demo.yaml` | `profiles/pipecat_realtime_eval.yaml` |
+| Pipecat settings | `adapters/pipecat.yaml` | `adapters/pipecat.eval.yaml` |
+| Gateway configuration (`fdh-hermes`) | `gateway.yaml` | `gateway.eval.yaml` |
 
-The **τ³ adapter** keeps the prototype server unchanged: an audio clock driven by the client's audio, Silero VAD with 800 ms silence, tracking of sent versus heard audio, and each transcript delta sent just before its audio. It never imports Pipecat adapter code.
+The rules match the Frontend/Backend Verdict example:
 
-### Pipecat Adapter Realtime Subset
+- OpenAI Realtime sessions always run the `eval` delegation profile and Pipecat settings, whatever `FDH_PROFILE` says.
+- A deployment with `FDH_PROFILE=eval` refuses browser UI sessions.
+- The gateway configuration belongs to the deployment, because one `fdh-hermes` container serves every session. Only the eval overlay sets `gateway.eval.yaml`, so benchmark runs must use it.
 
-The Pipecat adapter supports the following OpenAI Realtime behavior:
+[`adapters/pipecat/profiles.py`](adapters/pipecat/profiles.py) holds the mapping. `docker-compose.yml` sets every FDH variable of the voice service as a literal, so `.env` cannot change an evaluation run.
+
+### Browser UI Sessions
+
+A browser UI session runs the `default` profile on the repository's UI transport, with RTVI in place of the Realtime wire protocol. It is the former FDH demo: the greeting "Hi! How can I help you today?", the demo tools `get_order` and `cancel_order` run in the server, a 5-second delay before each backend run (`FDH_BACKEND_DELAY_S`), and Pipecat's default turn settings.
+
+The UI's **LLM** menu selects the frontend model, and the **ASR**, **TTS**, and voice menus select the speech endpoints from this example's catalogs. The Hermes backend model stays the gateway's. The UI's prompt editor is not applied, because the frontend prompt is `config/prompts.yaml` (`frontend_system`). Browser sessions share one cap of `server.max_sessions` sessions (4 in Compose), separate from the Realtime cap.
+
+[`adapters/pipecat/ui_session.py`](adapters/pipecat/ui_session.py) and [`adapters/pipecat/ui_pipeline.py`](adapters/pipecat/ui_pipeline.py) implement these sessions. They reuse the Realtime session's turn manager, turn bridge, output tagger, delegation, and backend link.
+
+### OpenAI Realtime Sessions
+
+The shared `/v1/realtime` route authenticates the socket with `REALTIME_API_KEY`, resolves the model, and hands the socket over before it sends any event. `frontend-delegation-hermes-agent` is a session-owned pipeline in `src/realtime/gateway.py`, so FDH serves `session.created` and every later event with its own wire code. [`adapters/pipecat/bot.py`](adapters/pipecat/bot.py) builds the Realtime pipeline, and [`adapters/pipecat/runtime.py`](adapters/pipecat/runtime.py) admits the session.
+
+Realtime sessions have their own cap of `server.max_sessions` sessions (4 in Compose). A refused session receives an `error` event with code `server_busy`, and the socket closes with code 1013. The first session waits for a one-time warm-up, one frontend LLM request and a gateway check, before it is admitted. A failed warm-up refuses that session with `server is starting`, and the next session retries it. The server must not ping WebSocket clients: Compose sets `UVICORN_WS_PING_INTERVAL=0`, and Realtime sessions refuse to start otherwise.
+
+Pipecat owns turn taking: Silero VAD with `VADParams` from the settings file, the default user-turn start strategies, and `SpeechTimeoutUserTurnStopStrategy`, with Smart Turn disabled. Pipecat also owns interruptions and audio pacing. Speech uses `NvidiaForceEouSTTService` and `NvidiaTTSService` in `per_sentence` mode on the catalog endpoints. The FDH spelling hold is off in both profiles.
+
+The Realtime sessions support the following OpenAI Realtime behavior:
 
 - `session.update` with tools, instructions, input and output audio formats, and server VAD;
 - `input_audio_buffer.append` and `input_audio_buffer.clear`;
@@ -57,40 +81,43 @@ The following limits apply:
 
 ## Layout
 
-The following table lists the example's folders and entry points:
+The following table lists the example's files and folders:
 
 | Path | Role |
 | --- | --- |
-| `server.py` | Default entry point: the Pipecat adapter |
-| `tau_server.py` | τ³ entry point: the τ³ adapter |
-| `core/` | Shared, adapter-neutral code. `engine/` (turn manager, transcript, output scheduler, backend link, spelling hold, spoken-text cleanup), `frontend/` (the `delegate` contract, decider with repair, hedging, and guards, status verbalizer), `backend/` (protocol, controller state machine, context queue), `sidecar/` (gateway, session runtime, worker pool, Hermes homes, in-process stub), `worker/` (worker loop, tool futures, the only Hermes import), `tools/` (relay, result hints, format retry, field provenance, identity ledger), `normalization/`, `wire/` (Realtime events and session protocol), `audio/`, `text/` (demo tools), `config.py`, `voice_config.py`, `prompt_features.py`, `runtime.py`, `head_api.py` |
-| `adapters/pipecat/` | The Pipecat adapter: app, serializer, per-connection pipeline, turn bridge, speech output and tagger, timing estimate, services, and settings |
-| `adapters/tau/` | The τ³ adapter: app, server, session, input and output paths, audio clock, segmenter, and Riva, Silero, and stub speech |
-| `cli/` | Tools: `voice_chat` and `audio_io` (Realtime client), `client_tools`, `backend_probe` (gateway without audio), `report_adapter` (event log to `fba_voice_metrics.py` records), `normalization_replay`, `tau2_replay`, and `tau2_gates/` (Gate A and Gate B) |
+| `pipeline.py` | The registry entry point. It re-exports `bot` from `adapters/pipecat/bot.py`. |
+| `prompts.yaml` | The registry's prompt catalog: one public, informational `frontend` prompt for the UI's prompt panel. The agent does not read it. |
+| `tools.yaml` | The demo tools that the UI's tools panel lists. |
+| `services.local.yaml` | The on-premises catalog. The `singlegpu` section holds the frontend LLM and the `nemo-speech` ASR and TTS entries. The `server` section exists for the registry's catalog checks. |
+| `services.cloud.yaml` | NVIDIA cloud function (NVCF) ASR and TTS entries, and the Inference Hub frontend LLM, for browser UI selections. |
+| `adapters/pipecat/` | The Pipecat adapter. `bot.py` routes a session, `runtime.py` holds the warm-up and admission, `profiles.py` maps `FDH_PROFILE`, `ui_session.py` and `ui_pipeline.py` serve the browser UI, and `session.py`, `pipeline.py`, `serializer.py`, `turn_bridge.py`, `speech_output.py`, `timing.py`, `services.py`, and `settings.py` serve the Realtime sessions. |
+| `core/` | Shared, adapter-neutral code. `engine/` (turn manager, transcript, output scheduler, backend link, spelling hold, spoken-text cleanup), `frontend/` (the `delegate` contract, decider with repair, hedging, and guards, status verbalizer), `backend/` (protocol, controller state machine, context queue), `sidecar/` (gateway, session runtime, worker pool, Hermes homes, in-process stub), `worker/` (worker loop, tool futures, the only Hermes import), `tools/` (relay, result hints, format retry, field provenance, identity ledger), `normalization/`, `wire/` (Realtime events and session protocol), `audio/`, `text/` (demo tools), `catalog.py`, `config.py`, `voice_config.py`, `prompt_features.py`, `runtime.py`, `server_common.py`, and `head_api.py` |
 | `config/` | `delegation_agent.yaml`, `voice_agent.yaml`, `gateway*.yaml`, `prompts.yaml` (frontend), `prompts.backend.yaml` (backend), `prompts.voice.yaml`, `voice/*.yaml` (voice profiles), `profiles/*.yaml`, `adapters/pipecat*.yaml` (Pipecat settings), and `text/` |
 | `fixtures/` | `workflow.csv` (the controller specification) and `delegation_cases.jsonl` (frontend decision cases) |
-| `web/index.html` | The browser page served at `/` |
 
-## Profiles
+`config/voice_agent.yaml` reads the speech endpoints from the `singlegpu` section of this example's own `services.local.yaml`. `FBA_ASR_SERVER` and `FBA_TTS_SERVER` replace the catalog server.
 
-Pass a profile with `--config`, or with `FDH_PROFILE` or `FDH_PIPECAT_PROFILE` in Compose. Unless noted otherwise, every profile has 800 ms end-of-turn silence (the client's value is ignored), transcript normalization on, and no WebSocket keepalive ping. The following table lists the profiles:
+## Configuration Profiles
+
+Unless noted otherwise, every profile has 800 ms end-of-turn silence (the client's value is ignored), transcript normalization on, and no WebSocket keepalive ping. The following table lists the delegation profiles in `config/profiles/`:
 
 | Profile | Use |
 | --- | --- |
-| `profiles/pipecat_demo.yaml` | Pipecat demo: `browser_demo.yaml` with Pipecat turn taking, browser page, greeting, demo tools run in the server, and `FDH_BACKEND_DELAY_S` (default 5 s) before each backend run. Pair it with `gateway.yaml` and `adapters/pipecat.yaml` |
-| `profiles/pipecat_realtime_eval.yaml` | Pipecat eval: `realtime_eval.yaml` with Pipecat turn taking, client-executed tools (`tools.executor: wire`), the client's instructions as the policy, and no greeting. Pair it with `gateway.eval.yaml` and `adapters/pipecat.eval.yaml` |
-| `profiles/realtime_eval.yaml` | τ³ default: the single domain-agnostic evaluation profile. Tool-argument rules, result-hint targets, and spelling-hold patterns come from the session's tool schemas. Pair it with `gateway.eval.yaml` |
-| `profiles/browser_demo.yaml` | The browser profile for the τ³ adapter, with demo tools in the server |
-| `profiles/stub.yaml`, `profiles/stub_gate.yaml` | No GPU, LLM, or Hermes (with `--stub-speech`). `stub_gate` makes the fake backend call a tool, so τ³ Gate A passes |
+| `pipecat_demo.yaml` | The `default` profile: `browser_demo.yaml` with Pipecat turn taking. |
+| `pipecat_realtime_eval.yaml` | The `eval` profile: `realtime_eval.yaml` with Pipecat turn taking, client-executed tools (`tools.executor: wire`), the client's instructions as the policy, and no greeting. |
+| `browser_demo.yaml` | The base of `pipecat_demo.yaml`: greeting, demo tools run in the server, and `FDH_BACKEND_DELAY_S` (default 5 s) before each backend run. |
+| `realtime_eval.yaml` | The base of `pipecat_realtime_eval.yaml`: the single domain-agnostic evaluation profile. Tool-argument rules, result-hint targets, and spelling-hold patterns come from the session's tool schemas. |
 
-The Pipecat adapter's turn settings live in their own files, outside the shared delegation config and its `config_hash`. The following table lists them:
+The test-only stub profiles live in `tests/unit/frontend_delegation_hermes/core/_fdh_variants.py`.
+
+The Pipecat turn settings live in their own files, outside the shared delegation config and its `config_hash`. The following table lists them:
 
 | Settings File | Use |
 | --- | --- |
-| `config/adapters/pipecat.yaml` | Demo and deployment: every VAD and turn key is `null`, so Pipecat's defaults apply |
-| `config/adapters/pipecat.eval.yaml` | Eval only: Silero `stop_secs: 0.8`, `audio_idle_timeout: 0` and `user_speech_timeout: 0`, so a turn ends after 0.8 s of silence counted in input audio, as on the τ³ adapter |
+| `config/adapters/pipecat.yaml` | The `default` profile: every VAD and turn key is `null`, so Pipecat's defaults apply. |
+| `config/adapters/pipecat.eval.yaml` | The `eval` profile: Silero `stop_secs: 0.8`, `audio_idle_timeout: 0`, and `user_speech_timeout: 0`, so a turn ends after 0.8 s of silence counted in input audio. |
 
-Select a settings file with `FDH_PIPECAT_SETTINGS` or `--pipecat-settings`. The skill's `config-knobs.md` reference and its `tau.md` reference list every knob and every profile pair.
+The skill's `config-knobs.md` reference lists every knob.
 
 ## Failure-Fix Switches
 
@@ -145,41 +172,23 @@ The voice server and the gateway log a deployed fingerprint: `fdh_session_start.
 
 ## Run It
 
-Use the Compose services through the [deploy skill](../../../.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md). The following commands start each adapter after `nemo-speech` is up and `HERMES_AGENT_DIR` is set in `.env`:
+The following commands start the recipe, with the browser UI (`default`) or for evaluation runs (`eval`). Complete the prerequisites of the [deploy guide](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md) first: `NVIDIA_API_KEY` and `HF_TOKEN` in `.env`, the speech model weights, and the Hermes checkout in `HERMES_AGENT_DIR`.
 
 ```bash
-F=docker/docker-compose.frontend-delegation-hermes.yaml
-docker compose --profile frontend-backend-verdict-agent/single-gpu up -d nemo-speech
-docker compose --env-file .env -f $F up -d --build fdh-voice                     # Pipecat demo, https://<host>:8776/
-docker compose --env-file .env -f $F --profile tau up -d --build fdh-tau         # τ³, ws://<host>:8775/v1/realtime
-docker compose -f $F --profile tau down                                          # stop both
+# default: the browser UI at https://<host>:7860, and Realtime sessions with the eval settings
+docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+# eval: OpenAI Realtime only, ws://<host>:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-delegation-hermes
+docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
 ```
 
-You can also launch the voice servers directly on the host for development. They need a running gateway (refer to the host gateway appendix of the skill's `tau.md` reference) and the speech endpoint on the host. The following commands show the direct launch:
+For a Realtime smoke test, run the repository's test client and open `http://localhost:8765`. Add `--upstream ws://localhost:7860` in eval mode:
 
 ```bash
-export FBA_ASR_SERVER=localhost:50051 FBA_TTS_SERVER=localhost:50051
-# Pipecat adapter, demo
-PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.server \
-  --config src/examples/frontend_delegation_hermes/config/profiles/pipecat_demo.yaml \
-  --backend-url ws://127.0.0.1:8790/v1/backend --tls
-# Pipecat adapter, eval
-FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.server \
-  --config src/examples/frontend_delegation_hermes/config/profiles/pipecat_realtime_eval.yaml \
-  --backend-url ws://127.0.0.1:8790/v1/backend
-# τ³ adapter
-PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.tau_server \
-  --config src/examples/frontend_delegation_hermes/config/profiles/realtime_eval.yaml \
-  --backend-url ws://127.0.0.1:8790/v1/backend
+uv run python realtime_test_client/proxy.py --model nvidia/nemotron-realtime-frontend-delegation-hermes
 ```
 
-Both adapters accept `--host`, `--port`, `--max-sessions`, `--backend-url`, `--tls`, `--tls-cert`, `--tls-key`, and `--stub-backend` (an in-process fake backend and the rule-based frontend). The τ³ adapter also accepts `--stub-speech` (energy VAD, stub ASR, and tone TTS, no GPU). The no-GPU smoke run is:
-
-```bash
-PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.tau_server \
-  --config src/examples/frontend_delegation_hermes/config/profiles/stub_gate.yaml \
-  --stub-speech --stub-backend --port 8779
-```
+The logs are `docker compose logs fdh-hermes` (the gateway configuration and the source hash), `logs/fdh_voice_events.pipecat.jsonl`, `logs/fdh_gateway_events.pipecat.jsonl`, and `logs/fdh_workers_pipecat/`.
 
 ## Tests
 
@@ -191,12 +200,13 @@ uv run pytest tests/unit/frontend_delegation_hermes -q
 
 The suites cover the following areas:
 
-- `core/` tests the shared code. `test_fdh_workflow_table.py` checks all 12 rows of `workflow.csv`. `test_fdh_gateway_processes.py` runs real worker processes with the fake agent. `test_fdh_golden_prompts.py` and `test_fdh_fix_plan.py` pin the baseline prompts and the `124acf7` control. `test_fdh_tau3_fixes.py`, `test_fdh_identity_fixes.py`, and `test_fdh_geval_fixes.py` cover the switches. `test_fdh_schema_rules.py` checks the derived rules against `fixtures/schema_rules_snapshot.json`.
-- `tau/` tests the τ³ adapter, including the τ² contract and an end-to-end WebSocket run.
-- `pipecat/` tests the Pipecat adapter with an energy VAD, a stub ASR, and a tone TTS.
-- `test_fdh_import_isolation.py` checks that the core imports no adapter, that each adapter imports no other adapter, and that the τ³ adapter imports no Pipecat pipeline code.
+- `core/` tests the shared code. `test_fdh_workflow_table.py` checks all 12 rows of `workflow.csv`. `test_fdh_gateway_processes.py` runs real worker processes with the fake agent. `test_fdh_golden_prompts.py` and `test_fdh_fix_plan.py` pin the baseline prompts and the `124acf7` control. `test_fdh_tau3_fixes.py`, `test_fdh_identity_fixes.py`, and `test_fdh_geval_fixes.py` cover the switches. `test_fdh_schema_rules.py` checks the derived rules against `fixtures/schema_rules_snapshot.json`. The core tests drive the turn manager through `core/_fdh_test_head/`, a test-only Realtime head with an input-audio clock, an energy VAD, and stub speech. It is not shipped.
+- `voice/` tests the voice layer: configuration, normalization, the Realtime wire events, and playback.
+- `pipecat/` tests the Pipecat adapter with an energy VAD, a stub ASR, and a tone TTS. `test_fdh_eval_pins.py` pins the eval behavior against `fixtures/eval_pins.json`: the prompt and tool hashes and the backend fingerprint per τ² domain (airline, retail, and telecom), the hashed delegation, voice, and gateway settings, the Pipecat settings and processors, and the server events of a scripted session per domain. `test_fdh_registry.py` checks the registry files, and `test_fdh_ui_session.py` checks the browser UI sessions.
+- `test_fdh_compose.py` checks that the voice service sets every FDH variable as a literal, that `docker/fdh/gateway.env` holds plain `KEY=value` lines, and that the eval overlay sets only `environment` keys on `fdh-hermes`.
+- `test_fdh_import_isolation.py` checks that the core imports no adapter, that no adapter imports another, and that the gateway never loads Pipecat.
 - `test_fdh_dependencies.py` checks that the image lock pins the repository's Pipecat version and lists the same packages as the `fdh` extra.
 
-`test_fdh_hermes_multisession.py` runs real Hermes workers against a fake OpenAI server. It is skipped when the Hermes interpreter (`FDH_HERMES_PYTHON`, default `~/.cache/fdh/hermes-venv-314/bin/python`) is missing. `test_fdh_hermes_adapter.py` needs the Hermes interpreter, and the skill's `tau.md` reference has the in-image command that runs every suite with real Hermes.
+`test_fdh_hermes_multisession.py` runs real Hermes workers against a fake OpenAI server. It is skipped when the Hermes interpreter (`FDH_HERMES_PYTHON`, default `~/.cache/fdh/hermes-venv-314/bin/python`) is missing. `test_fdh_hermes_adapter.py` also needs the Hermes interpreter. The skill's `prerequisites.md` reference describes the optional host Hermes environment.
 
-After an intended baseline change, regenerate the golden files with `PYTHONPATH=src uv run python tests/unit/frontend_delegation_hermes/core/_fdh_golden.py --write`.
+After an intended baseline change, regenerate the golden files with `PYTHONPATH=src uv run python tests/unit/frontend_delegation_hermes/core/_fdh_golden.py --write`. Regenerate the eval pins only for an intended change of the evaluated behavior, with `PYTHONPATH=src uv run python tests/unit/frontend_delegation_hermes/pipecat/_fdh_eval_pins.py --write`.

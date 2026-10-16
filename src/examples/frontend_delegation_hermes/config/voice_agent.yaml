@@ -71,7 +71,7 @@ barge_in:
 asr:
   source: catalog                   # catalog | inline
   catalog:
-    example_dir: "../../frontend_backend_verdict"   # [in-path]
+    example_dir: ".."               # [in-path] the example root (services.local.yaml, services.cloud.yaml)
     services: local                 # local -> services.local.yaml | cloud -> services.cloud.yaml
     platform: singlegpu             # local only: top-level section (server | singlegpu); empty for cloud
     key: nemotron-asr-streaming-english
@@ -83,7 +83,7 @@ asr:
 tts:
   source: catalog
   catalog:
-    example_dir: "../../frontend_backend_verdict"   # [in-path]
+    example_dir: ".."               # [in-path] the example root (services.local.yaml, services.cloud.yaml)
     services: local
     platform: singlegpu
     key: magpie-multilingual-tts

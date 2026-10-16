@@ -3,10 +3,9 @@
 
 """Resolve ASR/TTS endpoints from an example's service catalog or inline YAML.
 
-The catalogs are the same files the official voice example reads
-(``src/examples/frontend_backend_verdict/services.{local,cloud}.yaml``), so one
-entry behaves identically in both stacks. Authentication mirrors Pipecat 1.7's
-``NvidiaSTTService`` / ``NvidiaTTSService``: SSL exactly when the server is an
+The catalogs are the example's own ``services.{local,cloud}.yaml`` (the files the
+repository's registry and browser UI read too), so one entry behaves identically in both.
+Authentication mirrors Pipecat 1.7's ``NvidiaSTTService`` / ``NvidiaTTSService``: SSL exactly when the server is an
 NVCF host, ``function-id`` plus ``Bearer`` metadata for NVCF, nothing required
 for a local nemo-speech server.
 """

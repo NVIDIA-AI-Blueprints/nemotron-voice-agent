@@ -11,7 +11,15 @@ import base64
 import json
 import unittest
 
-from _pipecat_fakes import Client, failing_tts_app, pcmu_silence, pcmu_speech, stub_app, tau2_session_update
+from _pipecat_fakes import (
+    Client,
+    failing_tts_app,
+    pcmu_silence,
+    pcmu_speech,
+    stub_app,
+    stub_runtime,
+    tau2_session_update,
+)
 from fastapi.testclient import TestClient
 
 
@@ -23,12 +31,9 @@ def _output(call_id: str, output: str) -> dict:
 
 
 class PipecatContractTests(unittest.TestCase):
-    def test_handshake_health_and_page(self) -> None:
-        with TestClient(stub_app()) as client:
-            health = client.get("/health").json()
-            self.assertEqual((health["status"], health["adapter"]), ("ok", "pipecat"))
-            self.assertFalse(health["pipecat"]["smart_turn"])
-            self.assertEqual(client.get("/").status_code, 200)
+    def test_handshake_and_health(self) -> None:
+        app = stub_app()
+        with TestClient(app) as client:
             with client.websocket_connect("/v1/realtime?model=pine-pipecat") as ws:
                 session = Client(ws)
                 created = session.wait_for("session.created")
@@ -38,16 +43,17 @@ class PipecatContractTests(unittest.TestCase):
                 updated = session.wait_for("session.updated")
                 self.assertEqual(updated["session"]["audio"]["output"]["format"]["type"], "audio/pcmu")
                 self.assertEqual(session.of_type("error"), [])
+            health = app.state.runtime.health()
+            self.assertEqual((health["status"], health["adapter"], health["profile"]), ("ok", "pipecat", "eval"))
+            self.assertFalse(health["pipecat"]["smart_turn"])
 
     def test_eval_settings_end_turns_on_audio_time_only(self) -> None:
-        with TestClient(stub_app(settings="adapters/pipecat.eval.yaml")) as client:
-            health = client.get("/health").json()
+        health = stub_runtime(settings="adapters/pipecat.eval.yaml").health()
         self.assertEqual(health["pipecat"]["vad"], {"stop_secs": 0.8, "audio_idle_timeout": 0.0})
         self.assertEqual(health["pipecat"]["turn"], {"user_speech_timeout": 0.0})
 
     def test_demo_settings_keep_pipecat_defaults(self) -> None:
-        with TestClient(stub_app(settings="adapters/pipecat.yaml")) as client:
-            health = client.get("/health").json()
+        health = stub_runtime(settings="adapters/pipecat.yaml").health()
         self.assertEqual((health["pipecat"]["vad"], health["pipecat"]["turn"]), ({}, {}))
 
     def test_turn_tool_round_trip_and_transcript_before_audio(self) -> None:

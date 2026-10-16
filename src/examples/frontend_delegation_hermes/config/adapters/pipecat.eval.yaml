@@ -8,7 +8,7 @@
 #   - vad.audio_idle_timeout 0: disables the VADProcessor's wall-clock forced speech stop, which
 #     cut users off mid-utterance whenever a τ² tick stalled for more than about 1.6 s.
 #   - turn.user_speech_timeout 0: no wall-clock wait after the VAD stop.
-# Select with FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml.
+# The `eval` profile (adapters/pipecat/profiles.py): every OpenAI Realtime session uses it.
 
 vad:
   confidence: null

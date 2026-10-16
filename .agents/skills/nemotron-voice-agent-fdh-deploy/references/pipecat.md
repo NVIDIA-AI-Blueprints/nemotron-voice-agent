@@ -1,40 +1,44 @@
-# Pipecat Adapter
+# Browser UI (`default` Profile)
 
-The Pipecat adapter (`src/examples/frontend_delegation_hermes/server.py`) is the default. It serves OpenAI Realtime (GA) over WebSocket at `/v1/realtime`, `/health`, and a browser page at `/`. It has no WebRTC and no RTVI. Pipecat owns the turn taking:
+A `default` deployment serves browser UI sessions over WebRTC or the UI's WebSocket transport, with RTVI, from the shared app (`src/server.py`). It also serves OpenAI Realtime sessions, which always use the `eval` settings but pair them with `gateway.yaml`. Do not use a `default` deployment for benchmark runs: use `tau.md`.
 
-- Silero VAD with `VADParams` from the settings file;
-- Pipecat's default user-turn start strategies;
-- `SpeechTimeoutUserTurnStopStrategy` as the stop strategy, with Smart Turn disabled;
-- Pipecat interruptions and audio pacing;
-- `NvidiaForceEouSTTService` and `NvidiaTTSService` (`per_sentence`) on the catalog speech endpoints.
+Complete `prerequisites.md` first, then set `P=frontend-delegation-hermes-agent/single-gpu`.
 
-The FDH spelling hold is off in both Pipecat profiles. The service is `fdh-voice` on host port 8776. It has `restart: "no"`, so it never comes back by itself during a τ³ campaign.
+## What a Browser Session Runs
 
-Complete `prerequisites.md` first, then set `F=docker/docker-compose.frontend-delegation-hermes.yaml`.
+A browser session is the former FDH demo on the shared UI transport (`adapters/pipecat/ui_session.py`, `ui_pipeline.py`):
 
-## Demo
+- delegation profile `profiles/pipecat_demo.yaml`: the greeting "Hi! How can I help you today?" (off with `ENABLE_WELCOME_MESSAGE=false`), the demo tools `get_order` and `cancel_order` run in the server, and `FDH_BACKEND_DELAY_S` seconds (5 in Compose) before each backend run, so you can try status questions and steering while the backend works;
+- Pipecat settings `adapters/pipecat.yaml`: Pipecat's defaults (Silero VAD `stop_secs` 0.2, `audio_idle_timeout` 1.0 s, `user_speech_timeout` 0.6 s, Smart Turn off);
+- gateway configuration `gateway.yaml` in `fdh-hermes`.
 
-The demo pairs `pipecat_demo.yaml` with `gateway.yaml` and `config/adapters/pipecat.yaml` (Pipecat defaults). It greets you, runs the demo tools in the server, and waits `FDH_BACKEND_DELAY_S` seconds (default 5) before each backend run, so you can try status questions and steering while the backend works. TLS is on by default.
+The pipeline is `create_transport` → VAD → STT → user turn → `FdhTurnBridge` → TTS → `OutputTagger` → `UiOutputGate` → transport output, with `enable_rtvi=True`. The turn manager, delegation, and backend link are the same objects that a Realtime session uses.
 
-### Start the Demo
+## Start and Check
 
 ```bash
-docker compose --env-file .env -f $F up -d --build fdh-voice
-sleep 30; curl -sk https://localhost:8776/health; echo
-docker logs fdh-voice 2>&1 | grep -E 'backend gateway|warm-up|Pipecat adapter settings|config hash'
+docker compose --profile $P up -d --build
+curl -fk https://localhost:7860/health                         # {"status":"ok"}
+docker compose --profile $P exec fdh-hermes curl -s http://localhost:8790/health; echo
+docker compose --profile $P logs fdh-hermes | grep 'FDH gateway'   # config gateway.yaml, source <hash>
 ```
 
-Expected `/health`:
+After the first browser session, the app log shows `frontend-delegation-hermes-agent ready (adapter=pipecat, profile=default)`, `Pipecat adapter settings`, and `browser UI session started (profile=default, adapter=pipecat)`:
 
-- `"status": "ok"`, `"prototype": "frontend-delegation-hermes"`, and `"adapter": "pipecat"`;
-- `"pipecat"` with `"settings_file"` naming `adapters/pipecat.yaml`, `"vad": {}`, `"tts_synthesis_mode": "per_sentence"`, and `"smart_turn": false`;
-- `"backend": {"link": "websocket", ...}` and the profile's `"features"`.
+```bash
+docker compose --profile $P logs frontend-delegation-hermes-agent-single-gpu | grep -E 'ready \(adapter|Pipecat adapter settings|browser UI session'
+```
 
-The gateway health is the same as for the τ³ adapter. Check it with `docker exec fdh-voice curl -s 127.0.0.1:8790/health`.
+## Use the Browser UI
 
-### Use the Browser Page
+Open `https://<host>:7860`. Use the host's IP address, not a corporate host name that HSTS forces through a proxy. Accept the self-signed certificate and allow the microphone. From a laptop, you can instead tunnel with `ssh -N -L 7860:localhost:7860 <user>@<host>` and open `https://localhost:7860`.
 
-Open `https://$HOST_IP:8776/`. Use the IP address, not a `*.nvidia.com` hostname, which HSTS forces through a proxy. Accept the self-signed certificate and allow the microphone. From a laptop, you can instead tunnel with `ssh -N -L 8776:localhost:8776 <user>@<host>` and open `https://localhost:8776/`.
+The recipe pins `EXAMPLE_SELECTION=frontend-delegation-hermes-agent`. The UI controls work as follows:
+
+- **LLM** selects the frontend model and base URL. The backend (Hermes) model stays the gateway's.
+- **ASR**, **TTS**, and the voice select the speech endpoints from this example's catalogs. A voice change applies from the next sentence on.
+- **Prompt** shows the informational `frontend` prompt of the example's `prompts.yaml`. Edits are not applied. The real frontend prompt is `config/prompts.yaml` (`frontend_system`).
+- **Tools** lists `get_order` and `cancel_order` (`tools.yaml`).
 
 The demo tools know order `5512` (shipped) and `5513` (processing). `cancel_order` works on `5513`, and any other number is "not found." The following table lists what to say and what to expect:
 
@@ -47,87 +51,8 @@ The demo tools know order `5512` (shipped) and `5513` (processing). `cancel_orde
 | After an answer: "Please cancel order 5513" | A filler. A new run continues the same Hermes session |
 | Talk over an answer | The answer stops, and the backend learns what you heard (a delivery note) |
 
-Change the delay with `FDH_PIPECAT_BACKEND_DELAY_S=<seconds>` on the `up` command. A value of `0` disables it. The eval profile never delays.
+## Limits
 
-A check without a browser: `curl -sk https://localhost:8776/` returns the page.
-
-## Eval
-
-The eval mode lets a τ² client evaluate the Pipecat adapter over OpenAI Realtime. It pairs `pipecat_realtime_eval.yaml` (client-executed tools with `tools.executor: wire`, the client's `session.update` instructions as the policy, no greeting) with `gateway.eval.yaml` and `config/adapters/pipecat.eval.yaml`. TLS is off.
-
-The eval settings measure the end of a user turn in input audio only, like the τ³ adapter's 800 ms. τ² pauses its input between ticks, and about 3% of ticks stall for more than 2 s while its user simulator runs, so any wall-clock timer in turn ending cuts users off or adds latency. The demo keeps Pipecat's defaults. The eval settings change three keys:
-
-| Key | Demo (Pipecat default) | Eval | Why |
-| --- | --- | --- | --- |
-| `vad.stop_secs` | 0.2 | 0.8 | Silero counts the silence in audio chunks, the τ³ adapter's 800 ms |
-| `vad.audio_idle_timeout` | 1.0 (wall clock) | 0 (off) | `VADProcessor` forces speech-stopped after 1 s without input audio, which ends the turn mid-utterance when a τ² tick stalls |
-| `turn.user_speech_timeout` | 0.6 (wall clock) | 0 | `SpeechTimeoutUserTurnStopStrategy` waits this long after the VAD stop |
-
-`user_turn_stop_timeout` keeps its default (5 s, wall clock). It fires only while the user is not speaking, as a safety net. Do not raise `stop_secs` to make up for tick stalls: the stalls no longer end turns, and a longer wait only adds latency, which τ²'s user simulator answers with pings and talk-over.
-
-### Start the Eval Mode
-
-```bash
-FDH_PIPECAT_PROFILE=pipecat_realtime_eval.yaml FDH_PIPECAT_GATEWAY_CONFIG=gateway.eval.yaml \
-FDH_PIPECAT_SETTINGS=adapters/pipecat.eval.yaml FDH_PIPECAT_TLS=false \
-  docker compose --env-file .env -f $F up -d --build fdh-voice
-sleep 30; curl -s http://localhost:8776/health; echo
-```
-
-`/health` must show `"settings_file"` naming `adapters/pipecat.eval.yaml` and `"vad": {"stop_secs": 0.8, "audio_idle_timeout": 0.0}` and `"turn": {"user_speech_timeout": 0.0}`. Export the four variables instead of prefixing them when later commands in the same shell must keep the eval mode. Running `up -d fdh-voice` without them recreates the demo.
-
-### Point τ² at the Pipecat Adapter
-
-Run the τ² client in the τ² checkout, after its own setup (`uv sync --extra voice --extra dev` and the Inference Hub variables). A τ² client connects to `ws://localhost:8776/v1/realtime` (`PINE_REALTIME_BASE_URL`). Model tags must start with `pine-`. Use a `pine-fdh-pipecat-*` tag so the run is never confused with a τ³ run.
-
-Report Pipecat scores separately from the τ³ adapter. The two adapters time turns differently.
-
-### Logs and Report
-
-The Pipecat service writes its own logs, so it never appends to the τ³ logs:
-
-- voice events: `logs/fdh_voice_events.pipecat.jsonl` (`FDH_PIPECAT_EVENT_LOG`);
-- gateway events: `logs/fdh_gateway_events.pipecat.jsonl` (`FDH_PIPECAT_GATEWAY_LOG`);
-- Hermes workers: `logs/fdh_workers_pipecat/` (`FDH_PIPECAT_WORKER_LOG_DIR`).
-
-The following command converts the voice event log for `fba_voice_metrics.py`:
-
-```bash
-PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.cli.report_adapter \
-  logs/fdh_voice_events.pipecat.jsonl --out logs/fdh_voice_events.pipecat.legacy.jsonl
-```
-
-## Smoke Test
-
-The command-line client `cli/voice_chat.py` has no TLS option, so run its text or audio smoke test against a plain `ws://` server: the eval mode, or the demo started with `FDH_PIPECAT_TLS=false`.
-
-The following commands synthesize three user turns with the local TTS and play them in τ²'s wire format (μ-law, 8 kHz):
-
-```bash
-mkdir -p /tmp/fdh-wav && uv run python - <<'PY'
-import wave, riva.client
-tts = riva.client.SpeechSynthesisService(riva.client.Auth(uri="localhost:50051", use_ssl=False))
-for i, text in enumerate(["Can you give me the status of order five five one two?", "Okay, thanks.",
-                          "What about order five five one three?"], 1):
-    audio = tts.synthesize(text, voice_name="", language_code="en-US", sample_rate_hz=22050).audio
-    with wave.open(f"/tmp/fdh-wav/u{i}.wav", "wb") as w:
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(22050); w.writeframes(audio)
-PY
-PYTHONPATH=src uv run python -m examples.frontend_delegation_hermes.cli.voice_chat \
-  --url ws://localhost:8776/v1/realtime --model pine-fdh-pipecat-audio --io wav --format pcmu \
-  --in /tmp/fdh-wav/u1.wav --in /tmp/fdh-wav/u2.wav --in /tmp/fdh-wav/u3.wav --out /tmp/fdh-wav/agent.wav \
-  --ui plain --tools examples.frontend_delegation_hermes.core.text.demo_tools:TOOLS
-```
-
-Pass `--tools` only in eval mode, where the client executes the tools. In the demo, the server runs them, so omit `--tools`. Expect a filler, the order status, nothing for "Okay, thanks," and a filler for order 5513. With the eval settings, each answer starts at least 0.8 s after the end of speech. `docker logs fdh-voice` must show no `forcing speech stop` warning in eval mode.
-
-## Known Limits
-
-The Pipecat adapter supports a subset of OpenAI Realtime. The following limits apply:
-
-- **Heard audio is an estimate.** Pipecat's WebSocket output writes audio at twice real time. The adapter advances its playout estimate at real time from the first written chunk, capped at the written amount. A client that pauses playback, such as τ²'s tick loop, hears less than estimated.
-- **Demo turn ending uses wall-clock timers.** The demo keeps Pipecat's `audio_idle_timeout` (1 s) and `user_speech_timeout` (0.6 s), which suit a live microphone. Use the eval settings for any client that pauses its input.
-- **Speech onset is late.** `audio_start_ms` is the cursor at Pipecat's VAD confirmation minus `start_secs`. Stub measurements put it about 200 ms after the actual onset.
-- **Server VAD only.** A client that asks for `turn_detection: null` (manual turns) is accepted with a logged warning: text items work, Pipecat's VAD still ends audio turns, and `input_audio_buffer.commit` is rejected.
-- **Catalog voice only.** The TTS voice is the catalog voice. The client's requested voice is ignored with a warning.
-- **No spelling hold.** Pipecat decides when a turn ends, so FDH never holds a turn open.
+- Browser sessions share one cap of 4 sessions (`FDH_MAX_SESSIONS` in Compose). A refused session ends, and the app log shows `browser session refused`. The cap is separate from the Realtime cap.
+- An eval deployment (`FDH_PROFILE=eval`) refuses every browser session. The app log shows `runs with FDH_PROFILE=eval`.
+- Each new frontend LLM and speech selection builds its own runtime, which warms up once on its first session.

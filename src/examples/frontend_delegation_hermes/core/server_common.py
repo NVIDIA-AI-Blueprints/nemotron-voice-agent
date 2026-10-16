@@ -1,46 +1,23 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Server pieces shared by every head: auth, capacity, ``/health``, TLS, the browser page.
+"""Session pieces the adapter shares: session admission, the ``/health`` body, the filler query flag.
 
-Each head owns its FastAPI app and transport; these helpers keep the parts every
-OpenAI Realtime client sees (bearer check, ``server_busy``, ``?model=`` tag,
-``/health`` body, the ``realtime`` subprotocol) identical across adapters.
+The repository's shared server (``src/server.py``) owns the HTTP app, TLS, the ``/v1/realtime``
+route, its bearer check and the ``realtime`` subprotocol; these helpers keep what FDH's own
+server did per session (``server_busy`` at ``server.max_sessions``, the health summary) unchanged.
 """
 
 from __future__ import annotations
 
 import contextlib
-import hmac
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
-
-from examples.frontend_delegation_hermes.core.voice_config import VoiceConfig
-
-# Browser microphone client served at "/" (it connects back to server.path on the same origin).
-WEB_PAGE = Path(__file__).resolve().parents[1] / "web" / "index.html"
 
 # ``?x_nvidia_filler=1`` on the WebSocket URL: send unspoken filler as ``x_nvidia.filler``
 # events. Off unless asked for, so a tau2 session sees the standard event stream only.
 SHOW_FILLER_PARAM = "x_nvidia_filler"
-
-
-def bearer_ok(headers: Mapping[str, str], config: VoiceConfig) -> bool:
-    """Whether the ``Authorization`` header satisfies ``server.require_bearer``."""
-    if not config.server.require_bearer:
-        return True
-    header = headers.get("authorization", "")
-    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
-    expected = config.server.bearer_token
-    return bool(expected) and hmac.compare_digest(token.encode(), expected.encode())
-
-
-def realtime_subprotocol(headers: Mapping[str, str]) -> str | None:
-    """``realtime`` when the client offered it (the OpenAI SDKs do), else no subprotocol."""
-    offered = [value.strip() for value in headers.get("sec-websocket-protocol", "").split(",")]
-    return "realtime" if "realtime" in offered else None
 
 
 def show_silent_filler(query: Mapping[str, str]) -> bool:
@@ -94,15 +71,3 @@ def health_body(
         with contextlib.suppress(Exception):  # a failing extra must not break /health
             body.update(extra())
     return body, 200 if ready else 503
-
-
-def tls_files(cert: str = "", key: str = "") -> dict[str, str]:
-    """Uvicorn's certificate and key: the given pair, or the stock app's self-signed one in ``.certs/``."""
-    if bool(cert) != bool(key):
-        raise SystemExit("--tls-cert and --tls-key must be given together")
-    if cert:
-        return {"ssl_certfile": cert, "ssl_keyfile": key}
-    from utils import ensure_self_signed_cert  # noqa: PLC0415 - src/utils.py, as used by src/server.py
-
-    certfile, keyfile = ensure_self_signed_cert(Path.cwd() / ".certs")
-    return {"ssl_certfile": certfile, "ssl_keyfile": keyfile}

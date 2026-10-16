@@ -384,7 +384,7 @@ class ResultHintConfigTests(unittest.TestCase):
     def _load(self, text: str):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "voice.yaml"
-            path.write_text(f"extends: {CONFIG / 'voice' / 'tau3.yaml'}\n{text}")
+            path.write_text(f"extends: {variant('voice/tau3.yaml')}\n{text}")
             return load_voice_config(path)
 
     def test_defaults_are_off(self) -> None:

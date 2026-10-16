@@ -3,21 +3,30 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""A τ²-shaped client for the Pipecat adapter: real FastAPI WebSocket, stub speech, fake backend."""
+"""A τ²-shaped client for the Pipecat adapter: real FastAPI WebSocket, stub speech, fake backend.
+
+:func:`realtime_app` hands each socket to ``serve_realtime`` as the shared ``/v1/realtime`` route does
+for a session-owned pipeline (accept with the ``realtime`` subprotocol, then the bot owns the session).
+"""
 
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import queue
 import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from examples.frontend_delegation_hermes.adapters.pipecat.app import build_pipecat_app
+from fastapi import FastAPI, WebSocket
+
+from examples.frontend_delegation_hermes.adapters.pipecat.bot import serve_realtime
 from examples.frontend_delegation_hermes.adapters.pipecat.pipeline import SpeechStack
+from examples.frontend_delegation_hermes.adapters.pipecat.runtime import FdhRuntime
 from examples.frontend_delegation_hermes.adapters.pipecat.services import EnergyVADAnalyzer, StubSTT, ToneTTS
 from examples.frontend_delegation_hermes.adapters.pipecat.settings import load_pipecat_settings
 from examples.frontend_delegation_hermes.core.audio.formats import AudioFormat
@@ -26,7 +35,7 @@ from examples.frontend_delegation_hermes.core.config import load_delegation_conf
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PACKAGE = REPO_ROOT / "src" / "examples" / "frontend_delegation_hermes"
-FIXTURES = REPO_ROOT / "tests" / "unit" / "frontend_delegation_hermes" / "tau" / "fixtures" / "tau2_session_update"
+FIXTURES = REPO_ROOT / "tests" / "unit" / "frontend_delegation_hermes" / "voice" / "fixtures" / "tau2_session_update"
 PCMU = AudioFormat("audio/pcmu", 8000)
 
 
@@ -55,10 +64,39 @@ def stub_speech(_: Any = None) -> SpeechStack:
     return SpeechStack(vad=EnergyVADAnalyzer(), stt=StubSTT(), tts=ToneTTS(sample_rate=16000, ms_per_char=3.0))
 
 
-def stub_app(profile: str = "pipecat_realtime_eval.yaml", settings: str = "adapters/pipecat.yaml", **server: Any):
-    return build_pipecat_app(
-        stub_config(profile, **server), load_pipecat_settings(settings), speech_factory=stub_speech
+def _subprotocol(websocket: WebSocket) -> str | None:
+    """``realtime`` when the client offered it (the shared route's rule)."""
+    offered = [value.strip() for value in websocket.headers.get("sec-websocket-protocol", "").split(",")]
+    return "realtime" if "realtime" in offered else None
+
+
+def realtime_app(runtime: FdhRuntime) -> FastAPI:
+    """``/v1/realtime`` handing the socket to ``serve_realtime``, as the shared route does."""
+    app = FastAPI()
+    app.state.runtime = runtime
+
+    @app.websocket("/v1/realtime")
+    async def realtime(websocket: WebSocket) -> None:
+        await websocket.accept(subprotocol=_subprotocol(websocket))
+        try:
+            await serve_realtime(SimpleNamespace(websocket=websocket, body={"protocol": "realtime"}), runtime=runtime)
+        finally:
+            with contextlib.suppress(Exception):
+                await websocket.close()
+
+    return app
+
+
+def stub_runtime(
+    profile: str = "pipecat_realtime_eval.yaml", settings: str = "adapters/pipecat.yaml", **server: Any
+) -> FdhRuntime:
+    return FdhRuntime(
+        stub_config(profile, **server), load_pipecat_settings(settings), profile="eval", speech_factory=stub_speech
     )
+
+
+def stub_app(profile: str = "pipecat_realtime_eval.yaml", settings: str = "adapters/pipecat.yaml", **server: Any):
+    return realtime_app(stub_runtime(profile, settings, **server))
 
 
 class FailingTTS(ToneTTS):
@@ -73,7 +111,9 @@ def failing_tts_app() -> Any:
     def speech(_: Any = None) -> SpeechStack:
         return SpeechStack(vad=EnergyVADAnalyzer(), stt=StubSTT(), tts=FailingTTS(sample_rate=16000))
 
-    return build_pipecat_app(stub_config(), load_pipecat_settings("adapters/pipecat.yaml"), speech_factory=speech)
+    return realtime_app(
+        FdhRuntime(stub_config(), load_pipecat_settings("adapters/pipecat.yaml"), profile="eval", speech_factory=speech)
+    )
 
 
 def pcmu_speech(ms: int) -> bytes:

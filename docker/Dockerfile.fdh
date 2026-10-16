@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# One image for both adapters of the Frontend Delegation Hermes example (src/examples/frontend_delegation_hermes):
-# the voice server (Pipecat adapter server.py, or τ³ adapter tau_server.py), the backend gateway and
-# the Hermes workers, in one Python 3.14 venv. Hermes always runs inside the container. Build it
-# through docker/docker-compose.frontend-delegation-hermes.yaml, which passes the Hermes checkout as
-# the named build context "hermes"; docker/fdh/entrypoint.sh starts the adapter named by FDH_ADAPTER.
+# The Hermes image of the Frontend Delegation Hermes example (src/examples/frontend_delegation_hermes):
+# the FDH gateway and its Hermes workers, in one Python 3.14 venv (Hermes needs Python 3.14; the
+# repository's app image is Python 3.12). The voice side runs in the shared app image. Compose builds
+# it through the `fdh-hermes-image` service, which passes the Hermes checkout (HERMES_AGENT_DIR) as the
+# named build context "hermes"; docker/fdh/gateway.sh starts the gateway on port 8790.
+#
+# The locked package set (docker/fdh/requirements.txt) is unchanged from the image that also ran the
+# voice side, so Hermes runs with exactly the same packages.
 
 # Base image - OSRB approved Ubuntu base (Bug 4960044)
 FROM nvcr.io/nvidia/base/ubuntu:noble-20260610
@@ -44,11 +47,13 @@ COPY --from=hermes . /opt/hermes
 RUN uv pip install --python /app/.venv/bin/python --no-deps -e /opt/hermes
 
 COPY src/ src/
-COPY --chmod=755 docker/fdh/entrypoint.sh /app/entrypoint.sh
+COPY --chmod=755 docker/fdh/gateway.sh /app/gateway.sh
+# Which source this image runs: compare with the same command on the checkout (the deploy guide).
+RUN cd /app && find src -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum \
+    | sha256sum | cut -d' ' -f1 > /app/SOURCE_SHA256 && cat /app/SOURCE_SHA256
 
 # Build-time smoke, one RUN each so one failure cannot hide another.
-RUN cd /app && PYTHONPATH=/app/src python -c "import examples.frontend_delegation_hermes.server, examples.frontend_delegation_hermes.adapters.pipecat.pipeline"
-RUN cd /app && PYTHONPATH=/app/src python -c "import examples.frontend_delegation_hermes.tau_server, examples.frontend_delegation_hermes.core.sidecar.gateway_server"
+RUN cd /app && PYTHONPATH=/app/src python -c "import examples.frontend_delegation_hermes.core.sidecar.gateway_server, examples.frontend_delegation_hermes.core.worker.worker_main"
 RUN cd /tmp && HERMES_HOME=/tmp/hsmoke python -I -c "import run_agent" && rm -rf /tmp/hsmoke
 RUN set -e; \
     known='The package `nvidia-riva-client` requires `protobuf==6.33.5`, but `6.33.6` is installed'; \
@@ -58,6 +63,6 @@ RUN set -e; \
     bad=$(printf '%s\n' "$out" | grep '^The package' | grep -vxF "$known" || true); \
     [ -z "$bad" ]
 
-EXPOSE 7860
+EXPOSE 8790
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/gateway.sh"]

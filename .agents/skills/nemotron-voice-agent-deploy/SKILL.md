@@ -36,8 +36,9 @@ Do not use this skill to edit `.env`, prompts, or service catalogs of an already
 | Server (`<example>/server`, including `server-perf`) | `NVIDIA_API_KEY` (NGC + NIM) | **Yes**, before `up` |
 | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` (Hugging Face download speed / rate limits) | **No**. Do not use `NVIDIA_API_KEY`. |
 | Exception: `frontend-backend-verdict-agent` (all three recipes) | `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key (both LLMs) on every recipe, plus the family's own rule: cloud sends the same key to NVCF speech (unverified that one key works for both), `/server` also uses it for `docker login nvcr.io` and the NIM sidecars (unverified for an Inference Hub key), `/single-gpu` also needs `HF_TOKEN`. `REALTIME_API_KEY` for Realtime client auth. Optional browser-tool keys: `WEATHERAPI_KEY`, `FINNHUB_API_KEY`, `PERPLEXITY_API_KEY`. Not `NVIDIA_SPEECH_API_KEY`. | Only for `/server` |
+| Exception: `frontend-delegation-hermes-agent/single-gpu` | `HF_TOKEN` and `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key (both LLMs; the only `.env` key the `fdh-hermes` container receives). `REALTIME_API_KEY` for Realtime client auth. A clean Hermes checkout in `HERMES_AGENT_DIR` (default `../hermes-agent`) for the image build. | No |
 
-`HF_TOKEN` is not a substitute for `NVIDIA_API_KEY`. The reverse is also false. `frontend-backend-verdict-agent/single-gpu` is the only single-GPU recipe that uses `NVIDIA_API_KEY`. Every other `*/single-gpu` recipe keeps the rule above. `TURN_USERNAME` and `TURN_PASSWORD` are required only with `--profile turn`.
+`HF_TOKEN` is not a substitute for `NVIDIA_API_KEY`. The reverse is also false. `frontend-backend-verdict-agent/single-gpu` and `frontend-delegation-hermes-agent/single-gpu` are the only single-GPU recipes that use `NVIDIA_API_KEY`. Every other `*/single-gpu` recipe keeps the rule above. `TURN_USERNAME` and `TURN_PASSWORD` are required only with `--profile turn`.
 
 Server NGC login:
 
@@ -66,6 +67,8 @@ Choose **one** recipe from `references/recipes.md`. Hardware only tells you what
 - `single-gpu`: one GPU (workstation, DGX Spark, Jetson Thor). Needs `HF_TOKEN` + `references/single-gpu.md`. Exception: `omni-assistant-subagents/single-gpu` is **not supported on Jetson Thor**. Use cloud.
 
 For any `frontend-backend-verdict-agent` recipe, determine the profile before `up`. If the current request does not say it, ask "Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?" and wait. Do not choose silently, even though `default` is used when unset, and do not treat an existing `FBV_PROFILE` in `.env` as the answer: show it and ask the user to confirm or change it. `default`: the plain recipe command for the Compose profile the user wants (cloud, `/server`, or `/single-gpu`); do not write `FBV_PROFILE` to `.env`. `eval`: `/single-gpu` only, with `-f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml` in every Compose command. Old values (`tau3_eval*`) are not supported. After the first session, report the profile, prompt catalog path, and SHA-256 from the app log. Refer to `docs/how-to/deploy-frontend-backend-verdict-agent.md`.
+
+For `frontend-delegation-hermes-agent/single-gpu`, load `nemotron-voice-agent-fdh-deploy` and follow its decision tree. It asks for the profile (`default` or `eval`) the same way and uses the `docker/docker-compose.fdh-eval.yaml` overlay for `eval`.
 
 If more than one family is viable, present the options and let the user pick. Auto-select only when a single option is viable (for example no usable GPU → cloud).
 

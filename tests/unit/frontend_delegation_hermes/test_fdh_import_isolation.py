@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""C5: the shared core never imports an adapter, no adapter imports another, τ³ never loads Pipecat's pipeline.
+"""C5: the shared core never imports an adapter, no adapter imports another, the gateway never loads Pipecat.
 
 Adapters (the server heads) are discovered by globbing ``adapters/*``, so adding one needs no edit here. The
 static check walks every import of every module; the runtime check imports each entry
@@ -27,7 +27,10 @@ ADAPTERS = sorted(path.name for path in (PACKAGE / "adapters").iterdir() if (pat
 
 # Modules from outside the example that the example may import (Section 3 of the plan).
 SHARED_ALLOWED = {"utils", "examples.shared.nemotron_speech_text_filter"}
-ADAPTER_ALLOWED = {"pipecat": {"examples.shared.nvidia_force_eou_stt"}}
+ADAPTER_ALLOWED = {
+    # The shared Pipecat STT, and for browser UI sessions the repository's UI transport and registry.
+    "pipecat": {"examples.shared.nvidia_force_eou_stt", "examples.shared.pipeline_utils", "examples_registry"},
+}
 PIPECAT_RUNTIME = ("pipecat.pipeline", "pipecat.processors", "pipecat.transports", "pipecat.services")
 # Hermes is imported only by the worker, in its own interpreter (never by a voice adapter).
 HERMES_TOP_LEVEL = {"run_agent", "tools", "toolsets", "model_tools", "hermes_cli"}
@@ -55,7 +58,7 @@ def _files(sub: str) -> list[Path]:
 
 class StaticLayeringTests(unittest.TestCase):
     def test_adapters_are_discovered(self) -> None:
-        self.assertIn("tau", ADAPTERS)
+        self.assertIn("pipecat", ADAPTERS)
 
     def test_core_imports_no_adapter_and_only_allowed_repo_modules(self) -> None:
         for path in _files("core"):
@@ -75,12 +78,6 @@ class StaticLayeringTests(unittest.TestCase):
                         self.assertFalse(name.startswith(tuple(others)), f"adapters/{adapter} imports another adapter")
                         if _repo_module(name) and not name.startswith(PREFIX):
                             self.assertIn(name, SHARED_ALLOWED | ADAPTER_ALLOWED.get(adapter, set()))
-
-    def test_tau_adapter_never_uses_pipecat_runtime(self) -> None:
-        for path in [*_files("adapters/tau"), PACKAGE / "tau_server.py"]:
-            for name in _imports(path):
-                with self.subTest(file=path.name, module=name):
-                    self.assertFalse(name.startswith(PIPECAT_RUNTIME))
 
     def test_hermes_is_imported_only_by_the_worker(self) -> None:
         for path in PACKAGE.rglob("*.py"):
@@ -105,11 +102,11 @@ def _loaded_after(module: str) -> list[str]:
 
 
 class RuntimeIsolationTests(unittest.TestCase):
-    def test_tau_server_loads_no_other_adapter_and_no_pipecat_runtime(self) -> None:
-        loaded = _loaded_after(f"{PREFIX}.tau_server")
-        others = tuple(f"{PREFIX}.adapters.{adapter}" for adapter in ADAPTERS if adapter != "tau")
-        self.assertEqual([m for m in loaded if others and m.startswith(others)], [])
-        self.assertEqual([m for m in loaded if m.startswith(PIPECAT_RUNTIME)], [])
+    def test_gateway_loads_no_adapter_and_no_pipecat(self) -> None:
+        # The gateway runs in the Hermes image (Python 3.14), which has no Pipecat.
+        loaded = _loaded_after(f"{PREFIX}.core.sidecar.gateway_server")
+        self.assertEqual([m for m in loaded if m.startswith(f"{PREFIX}.adapters")], [])
+        self.assertEqual([m for m in loaded if m.startswith("pipecat")], [])
 
     def test_each_adapter_loads_no_other_adapter(self) -> None:
         for adapter in ADAPTERS:

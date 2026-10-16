@@ -14,6 +14,8 @@ name: nemotron-voice-agent
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
 #   frontend-backend-verdict-agent       Cascaded Frontend/Backend agent with the frontend barge-in
 #                                        verdict (browser UI and OpenAI Realtime; Inference Hub LLMs)
+#   frontend-delegation-hermes-agent     Cascaded frontend that delegates to a Hermes backend agent in
+#                                        its own container (browser UI and OpenAI Realtime; single-gpu)
 #
 # Hardware targets:
 #   server                    NIM ASR + LLM + TTS. Recommended for scaling
@@ -40,6 +42,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-verdict-agent/server up
 #   docker compose --profile frontend-backend-verdict-agent/single-gpu up
+#   docker compose --profile frontend-delegation-hermes-agent/single-gpu up --build
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
@@ -262,3 +265,94 @@ services:
       FBV_PROFILE: ${FBV_PROFILE:-default}
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
+
+  # Frontend Delegation Hermes agent (src/examples/frontend_delegation_hermes), single-gpu only:
+  # the voice side in the shared app container, and the Hermes runtime (the FDH gateway and its Hermes
+  # workers, Python 3.14) in the `fdh-hermes` container. The voice side reaches Hermes only through
+  # FDH_BACKEND_URL and depends only on `fdh-hermes` being healthy. FDH_PROFILE has two values:
+  # `default` (browser UI) and `eval` (OpenAI Realtime only; set with FDH_GATEWAY_CONFIG by
+  # docker/docker-compose.fdh-eval.yaml). OpenAI Realtime sessions always use the `eval` settings.
+  # Every FDH setting below is a literal: Compose fills ${...} from .env, so a stale .env value
+  # could otherwise change an evaluation run. Only the overlays change them.
+  frontend-delegation-hermes-agent-single-gpu:
+    <<: *app-base
+    profiles:
+      - frontend-delegation-hermes-agent/single-gpu
+    volumes:
+      - ./src:/app/src:ro
+      - ./examples_registry.yaml:/app/examples_registry.yaml:ro
+      - ./logs:/app/logs
+    environment:
+      <<: *app-env
+      EXAMPLE_SELECTION: frontend-delegation-hermes-agent
+      REALTIME_SERVICE_PLATFORM: singlegpu
+      FDH_PROFILE: default
+      FDH_MAX_SESSIONS: "4"
+      FDH_BACKEND_DELAY_S: "5"
+      FDH_PROACTIVE_AFTER_S: "15"
+      FDH_EVENT_LOG: logs/fdh_voice_events.pipecat.jsonl
+      FDH_PROMPTS: prompts.yaml
+      FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
+      FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
+      FDH_BACKEND_URL: ws://fdh-hermes:8790/v1/backend
+      # The voice side's other catalog and log variables, at the values FDH ran with before.
+      FBA_ASR_SERVER: ""
+      FBA_TTS_SERVER: ""
+      FBA_VOICE_EVENT_LOG: ""
+      FBA_FILLER_LOG: ""
+      FBA_VOICE_PROMPTS: prompts.voice.yaml
+      FBA_BACKEND_HISTORY: "false"
+      # τ² sends no pings and pauses for seconds: the server must not ping (Realtime sessions check it).
+      UVICORN_WS_PING_INTERVAL: "0"
+      UVICORN_WS_PING_TIMEOUT: "20"
+    depends_on:
+      fdh-hermes:
+        condition: service_healthy
+
+  # Builds the Hermes image (docker/Dockerfile.fdh), then exits. HERMES_AGENT_DIR: a clean checkout
+  # of https://github.com/nousresearch/hermes-agent at the commit in docker/fdh/requirements.txt.
+  fdh-hermes-image:
+    image: nemotron-voice-agent-fdh:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fdh
+      additional_contexts:
+        hermes: ${HERMES_AGENT_DIR:-../hermes-agent}
+    profiles:
+      - frontend-delegation-hermes-agent/single-gpu
+    entrypoint: ["true"]
+    restart: "no"
+
+  # The Hermes runtime: the FDH gateway (docker/fdh/gateway.sh) on the Compose network, not published
+  # to the host. Its settings come only from docker/fdh/gateway.env and the eval overlay; .env supplies
+  # only NVIDIA_API_KEY (the backend LLM key; gateway.sh refuses to start without it).
+  fdh-hermes:
+    image: nemotron-voice-agent-fdh:local
+    pull_policy: never
+    profiles:
+      - frontend-delegation-hermes-agent/single-gpu
+    depends_on:
+      fdh-hermes-image:
+        condition: service_completed_successfully
+    init: true
+    env_file:
+      - docker/fdh/gateway.env
+    environment:
+      FDH_GATEWAY_HOST: 0.0.0.0
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-m", "5", "http://localhost:8790/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    # The gateway closes open sessions one after another (about 15 s each); 4 sessions fit in 75 s.
+    stop_grace_period: 75s
+    restart: "no"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"

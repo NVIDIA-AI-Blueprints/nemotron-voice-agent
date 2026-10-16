@@ -42,8 +42,6 @@ class ShippedProfileTests(unittest.TestCase):
                 "pipecat_demo.yaml",
                 "pipecat_realtime_eval.yaml",
                 "realtime_eval.yaml",
-                "stub.yaml",
-                "stub_gate.yaml",
             ],
         )
         for path in SHIPPED:

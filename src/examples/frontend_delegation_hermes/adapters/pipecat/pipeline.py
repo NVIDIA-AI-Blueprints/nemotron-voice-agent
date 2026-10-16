@@ -17,6 +17,10 @@
 
 RTVI is off, there is no idle timeout and no automatic output silence: τ² sends no pings,
 pauses for seconds, and counts every agent audio byte as speech.
+
+That is the OpenAI Realtime pipeline (always the ``eval`` profile). Browser UI sessions run the
+same processors from the VAD to the output tagger on the repository's UI transport, with RTVI
+(``ui_pipeline.py``, ``ui_session.py``).
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ if TYPE_CHECKING:
     from pipecat.audio.vad.vad_analyzer import VADAnalyzer
 
     from examples.frontend_delegation_hermes.adapters.pipecat.session import PipecatSession
+    from examples.frontend_delegation_hermes.adapters.pipecat.settings import PipecatHeadSettings
 
 
 class SpeechStack:
@@ -71,6 +76,43 @@ class SessionPipeline:
     def __init__(self, session: PipecatSession, websocket: WebSocket, speech: SpeechStack) -> None:
         """Assemble the pipeline (it starts in :meth:`PipecatSession.run`)."""
         settings = session.settings
+        self._build_turn_processors(session)
+        audio = settings.audio
+        self.transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                audio_in_enabled=True,
+                audio_in_sample_rate=audio.in_sample_rate,
+                audio_out_enabled=True,
+                audio_out_sample_rate=audio.out_sample_rate,
+                audio_out_10ms_chunks=audio.out_10ms_chunks,
+                audio_out_auto_silence=False,
+                audio_out_end_silence_secs=0,
+                audio_out_write_timeout_secs=audio.write_timeout_s,
+                serializer=RealtimeSerializer(session),
+                session_timeout=None,
+            ),
+        )
+        self.tts = speech.tts
+        self.pipeline = Pipeline(
+            [self.transport.input(), *self._middle_processors(speech, settings), self.transport.output()]
+        )
+        self.worker = PipelineWorker(
+            self.pipeline,
+            params=PipelineParams(
+                audio_in_sample_rate=audio.in_sample_rate,
+                audio_out_sample_rate=audio.out_sample_rate,
+            ),
+            enable_rtvi=False,
+            idle_timeout_secs=None,
+            cancel_on_idle_timeout=False,
+        )
+
+        self._cancel_on_disconnect()
+
+    def _build_turn_processors(self, session: PipecatSession) -> None:
+        """The input cursor, output tagger, user-turn processor and turn bridge (shared with the browser UI)."""
+        settings = session.settings
         self.cursor = InputCursor()
         self.tagger = OutputTagger()
         turn = settings.turn
@@ -93,49 +135,24 @@ class SessionPipeline:
             clock=session.clock,
             session_id=session.session_id,
         )
-        audio = settings.audio
-        self.transport = FastAPIWebsocketTransport(
-            websocket=websocket,
-            params=FastAPIWebsocketParams(
-                audio_in_enabled=True,
-                audio_in_sample_rate=audio.in_sample_rate,
-                audio_out_enabled=True,
-                audio_out_sample_rate=audio.out_sample_rate,
-                audio_out_10ms_chunks=audio.out_10ms_chunks,
-                audio_out_auto_silence=False,
-                audio_out_end_silence_secs=0,
-                audio_out_write_timeout_secs=audio.write_timeout_s,
-                serializer=RealtimeSerializer(session),
-                session_timeout=None,
-            ),
-        )
-        self.tts = speech.tts
-        self.pipeline = Pipeline(
-            [
-                self.transport.input(),
-                VADProcessor(vad_analyzer=speech.vad, **settings.vad.processor_kwargs()),
-                self.cursor,
-                speech.stt,
-                self.user_turns,
-                self.bridge,
-                speech.tts,
-                self.tagger,
-                self.transport.output(),
-            ]
-        )
-        self.worker = PipelineWorker(
-            self.pipeline,
-            params=PipelineParams(
-                audio_in_sample_rate=audio.in_sample_rate,
-                audio_out_sample_rate=audio.out_sample_rate,
-            ),
-            enable_rtvi=False,
-            idle_timeout_secs=None,
-            cancel_on_idle_timeout=False,
-        )
+
+    def _middle_processors(self, speech: SpeechStack, settings: PipecatHeadSettings) -> list[FrameProcessor]:
+        """VAD, input cursor, STT, user turns, the turn bridge, TTS and the output tagger, in order."""
+        return [
+            VADProcessor(vad_analyzer=speech.vad, **settings.vad.processor_kwargs()),
+            self.cursor,
+            speech.stt,
+            self.user_turns,
+            self.bridge,
+            speech.tts,
+            self.tagger,
+        ]
+
+    def _cancel_on_disconnect(self) -> None:
+        """End the session when the client goes away."""
 
         @self.transport.event_handler("on_client_disconnected")
-        async def on_client_disconnected(_transport: Any, _websocket: Any) -> None:
+        async def on_client_disconnected(_transport: Any, _client: Any) -> None:
             await self.worker.cancel()
 
     async def push_to_tts(self, frame: Frame) -> None:

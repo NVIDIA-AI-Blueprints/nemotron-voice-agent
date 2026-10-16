@@ -4,7 +4,7 @@
 # Pipecat head, demo mode. Turn taking and VAD are Pipecat-native: Silero VAD with Pipecat's
 # VADParams defaults, Pipecat's default user-turn start strategies, and the speech-timeout stop
 # strategy (Smart Turn disabled). `null` keeps Pipecat's own default. These keys never enter the
-# shared delegation config or its config_hash. Selected with FDH_PIPECAT_SETTINGS.
+# shared delegation config or its config_hash. The `default` profile (adapters/pipecat/profiles.py).
 
 vad:
   confidence: null

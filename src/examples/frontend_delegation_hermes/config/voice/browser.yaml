@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Browser microphone page (served at /): greeting, the text prototype's demo tools executed in the
-# voice server (a browser cannot run tools), real-time output pacing, TLS on port 8776.
+# Browser sessions: greeting, the text prototype's demo tools executed in the voice server (a
+# browser cannot run tools), real-time output pacing. server.port is unused on the shared server.
 
 extends: base.yaml
 

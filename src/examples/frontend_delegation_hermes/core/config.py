@@ -38,7 +38,7 @@ _FREE_FORM = ("frontend.llm.extra_body", "delegation.guards.lexicon")
 REPLAY_TRIGGERS = ("status_intent", "backchannel", "ping", "repeat")
 
 DEFAULTS: dict[str, Any] = {
-    "voice_profile": "voice/tau3.yaml",
+    "voice_profile": "voice/realtime_eval.yaml",
     "frontend": {
         "decider": "llm",
         "script": "",

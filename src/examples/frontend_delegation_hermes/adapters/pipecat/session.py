@@ -51,7 +51,7 @@ from examples.frontend_delegation_hermes.core.wire.session_view import (
 if TYPE_CHECKING:
     from fastapi import WebSocket
 
-    from examples.frontend_delegation_hermes.adapters.pipecat.pipeline import SpeechStack
+    from examples.frontend_delegation_hermes.adapters.pipecat.pipeline import SessionPipeline, SpeechStack
 
 # Events of the turn manager that must not wait behind agent audio.
 _URGENT_TURN_EVENTS = frozenset({"error", "conversation.item.truncated", "conversation.item.deleted"})
@@ -81,10 +81,7 @@ class PipecatSession:
 
         ``speech`` replaces Silero and the NVIDIA services (tests use the no-GPU stubs).
         """
-        from examples.frontend_delegation_hermes.adapters.pipecat.pipeline import (  # noqa: PLC0415
-            SessionPipeline,
-            real_speech,
-        )
+        from examples.frontend_delegation_hermes.adapters.pipecat.pipeline import real_speech  # noqa: PLC0415
 
         self.config = config
         self.settings = settings
@@ -108,7 +105,7 @@ class PipecatSession:
         self._queue: asyncio.Queue[Frame | None] = asyncio.Queue()
         self._pending_audio: bytes | None = None
         self._warned_manual = False
-        self.pipeline = SessionPipeline(self, websocket, speech or real_speech(self))
+        self.pipeline = self._build_pipeline(websocket, speech or real_speech(self))
         self.protocol = RealtimeProtocol(
             config=config,
             emit=self.emit_urgent,
@@ -149,6 +146,12 @@ class PipecatSession:
         self.protocol.bind(self.turns)
         self.pipeline.bridge.bind(self.turns)
         self.playout = PlayoutEstimator(self.turns.on_audio_advance)
+
+    def _build_pipeline(self, websocket: WebSocket, speech: SpeechStack) -> SessionPipeline:
+        """The OpenAI Realtime pipeline on ``websocket`` (a browser UI session builds its own)."""
+        from examples.frontend_delegation_hermes.adapters.pipecat.pipeline import SessionPipeline  # noqa: PLC0415
+
+        return SessionPipeline(self, websocket, speech)
 
     # -- events -------------------------------------------------------------------------
 

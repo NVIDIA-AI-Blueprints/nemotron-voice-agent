@@ -8,7 +8,7 @@ Before you begin, ensure you have the following:
 
 - Docker Compose v2.20 or newer. Check the version with `docker compose version`.
 - **Cloud (`<example>`), Server (`*/server`), and Performance Server (`generic-assistant/server-perf`):** an NVIDIA API key (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server and Performance Server also need NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
-- **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family, except that `frontend-backend-verdict-agent/single-gpu` also needs `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key for its LLMs. Every `frontend-backend-verdict-agent` recipe uses an Inference Hub key in `NVIDIA_API_KEY`.
+- **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family, except that `frontend-backend-verdict-agent/single-gpu` and `frontend-delegation-hermes-agent/single-gpu` also need `NVIDIA_API_KEY` set to an NVIDIA Inference Hub key for their LLMs. Every `frontend-backend-verdict-agent` recipe uses an Inference Hub key in `NVIDIA_API_KEY`.
 
 For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
@@ -25,6 +25,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
 | [`frontend-backend-verdict-agent`](../src/examples/frontend_backend_verdict/README.md) | Frontend LLM with a reasoning backend LLM, a frontend barge-in verdict, and the shared Pipecat speech stack, served in the browser UI and on the OpenAI Realtime WebSocket | `frontend-backend-verdict-agent`, `frontend-backend-verdict-agent/server`, `frontend-backend-verdict-agent/single-gpu`. Evaluation runs use `/single-gpu` with the eval override. |
+| [`frontend-delegation-hermes-agent`](../src/examples/frontend_delegation_hermes/README.md) | Frontend LLM that delegates work to a Hermes agent backend in its own container, served in the browser UI and on the OpenAI Realtime WebSocket | `frontend-delegation-hermes-agent/single-gpu` (x86_64 workstation). Evaluation runs add the eval overlay. |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
 
@@ -49,8 +50,9 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     | Single-GPU (`<example>/single-gpu`) | `HF_TOKEN` | No |
     | Frontend/Backend Verdict Agent (`frontend-backend-verdict-agent/single-gpu`) | `HF_TOKEN` and `NVIDIA_API_KEY` (Inference Hub key) | No |
     | Frontend/Backend Verdict Agent (`frontend-backend-verdict-agent`, `frontend-backend-verdict-agent/server`) | `NVIDIA_API_KEY` (Inference Hub key) | Only for `/server`, before `up` |
+    | Frontend Delegation Hermes Agent (`frontend-delegation-hermes-agent/single-gpu`) | `HF_TOKEN` and `NVIDIA_API_KEY` (Inference Hub key) | No |
 
-    `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. `HF_TOKEN` is required for Single-GPU. Do not mix these, except for `frontend-backend-verdict-agent/single-gpu`, which needs both because its LLMs run on the NVIDIA Inference Hub. The Frontend/Backend Verdict Agent's cloud and server recipes send the same Inference Hub key to NVCF speech or NGC. Whether one key works for both has not been verified. Refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md#credentials).
+    `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. `HF_TOKEN` is required for Single-GPU. Do not mix these, except for `frontend-backend-verdict-agent/single-gpu` and `frontend-delegation-hermes-agent/single-gpu`, which need both because their LLMs run on the NVIDIA Inference Hub. The Frontend/Backend Verdict Agent's cloud and server recipes send the same Inference Hub key to NVCF speech or NGC. Whether one key works for both has not been verified. Refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md#credentials).
 
     ```bash
     test -f .env || cp .env.example .env
@@ -105,9 +107,12 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant/single-gpu up -d             # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/single-gpu up -d   # Omni Assistant Subagents (workstation / DGX Spark)
     docker compose --profile frontend-backend-verdict-agent/single-gpu up -d  # Frontend/Backend Verdict Agent
+    docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build  # Frontend Delegation Hermes Agent
     ```
 
     The `frontend-backend-verdict-agent/single-gpu` recipe runs only speech locally. Its LLMs use the NVIDIA Inference Hub, so it also requires `NVIDIA_API_KEY` set to an Inference Hub key. The Frontend/Backend Verdict Agent has two profiles: `default` for the browser UI, which these commands use, and `eval` for evaluation runs such as Tau, which uses the `/single-gpu` recipe with the `docker/docker-compose.fbv-eval.yaml` override. To also run the frontend LLM on the host, add the `docker/docker-compose.fbv-local-llm.yaml` overlay. Refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md).
+
+    The `frontend-delegation-hermes-agent/single-gpu` recipe also runs only speech locally and needs `NVIDIA_API_KEY` set to an Inference Hub key. It builds a second image for its Hermes backend from a Hermes checkout, so complete [Get Hermes](how-to/deploy-frontend-delegation-hermes-agent.md#get-hermes) first. Evaluation runs add the `docker/docker-compose.fdh-eval.yaml` overlay. Refer to [Deploy the Frontend Delegation Hermes Agent](how-to/deploy-frontend-delegation-hermes-agent.md).
 
     To verify all services are healthy, run `docker compose ps`.
 
@@ -182,6 +187,7 @@ For development and debugging, you can run the server directly:
     | `omni-assistant` | Lock to Nemotron Omni Assistant |
     | `omni-assistant-subagents` | Lock to Nemotron Omni Assistant Subagents |
     | `frontend-backend-verdict-agent` | Lock to Frontend Backend Verdict Agent. Host-native runs must set `UVICORN_WS_PING_INTERVAL=0`. |
+    | `frontend-delegation-hermes-agent` | Lock to Frontend Delegation Hermes Agent. It needs a reachable FDH gateway at `FDH_BACKEND_URL` and `UVICORN_WS_PING_INTERVAL=0`, so use its Compose recipe. |
 
     > **Note:** Docker Compose deployments pin `EXAMPLE_SELECTION=<example>` to a single example. You can set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
 

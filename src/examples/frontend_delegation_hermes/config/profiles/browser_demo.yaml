@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Browser microphone page (https on 8776): demo tools run in the voice server, and every
+# Browser sessions: demo tools run in the voice server, and every
 # delegation that starts a backend run waits FDH_BACKEND_DELAY_S seconds (default 5) first,
 # so "what's the update?" and steering can be tried while the backend is WORKING.
 

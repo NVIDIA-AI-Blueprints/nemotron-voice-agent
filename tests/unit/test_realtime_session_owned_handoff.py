@@ -35,34 +35,37 @@ async def _ready(_config: dict[str, Any]) -> None:
 
 
 class SessionOwnedHandoffTests(unittest.IsolatedAsyncioTestCase):
-    async def test_verdict_pipeline_is_session_owned(self) -> None:
+    async def test_verdict_and_delegation_hermes_pipelines_are_session_owned(self) -> None:
         self.assertIn("frontend-backend-verdict-agent", _SESSION_OWNED_PIPELINES)
+        self.assertIn("frontend-delegation-hermes-agent", _SESSION_OWNED_PIPELINES)
 
     async def test_session_owned_pipeline_gets_the_socket_before_any_event(self) -> None:
-        update = json.dumps({"type": "session.update", "session": {"type": "realtime"}})
-        ws = FakeWebSocket([update])
-        handed_off: list[tuple[dict[str, Any], int, list[str]]] = []
+        for pipeline_mode in ("frontend-backend-verdict-agent", "frontend-delegation-hermes-agent"):
+            with self.subTest(pipeline_mode=pipeline_mode):
+                update = json.dumps({"type": "session.update", "session": {"type": "realtime"}})
+                ws = FakeWebSocket([update])
+                handed_off: list[tuple[dict[str, Any], int, list[str]]] = []
 
-        async def start_bot(websocket, config, controller) -> None:  # noqa: ARG001
-            # Nothing was sent and nothing was read: the pipeline owns the whole protocol.
-            handed_off.append((config, len(websocket.sent), list(websocket._messages)))
+                async def start_bot(websocket, config, controller, handed_off=handed_off) -> None:  # noqa: ARG001
+                    # Nothing was sent and nothing was read: the pipeline owns the whole protocol.
+                    handed_off.append((config, len(websocket.sent), list(websocket._messages)))
 
-        await handle_realtime_websocket(
-            ws,
-            sanitize_session_config=_sanitizer("frontend-backend-verdict-agent"),
-            ensure_services_ready=_ready,
-            start_bot=start_bot,
-            default_example_key="frontend-backend-verdict-agent",
-            default_pipeline_mode="frontend-backend-verdict-agent",
-        )
+                await handle_realtime_websocket(
+                    ws,
+                    sanitize_session_config=_sanitizer(pipeline_mode),
+                    ensure_services_ready=_ready,
+                    start_bot=start_bot,
+                    default_example_key=pipeline_mode,
+                    default_pipeline_mode=pipeline_mode,
+                )
 
-        self.assertTrue(ws.accepted)
-        self.assertEqual(len(handed_off), 1)
-        config, sent_before_handoff, unread = handed_off[0]
-        self.assertEqual(config["pipeline_mode"], "frontend-backend-verdict-agent")
-        self.assertEqual(sent_before_handoff, 0)
-        self.assertEqual(unread, [update])
-        self.assertEqual(ws.sent, [])
+                self.assertTrue(ws.accepted)
+                self.assertEqual(len(handed_off), 1)
+                config, sent_before_handoff, unread = handed_off[0]
+                self.assertEqual(config["pipeline_mode"], pipeline_mode)
+                self.assertEqual(sent_before_handoff, 0)
+                self.assertEqual(unread, [update])
+                self.assertEqual(ws.sent, [])
 
     async def test_other_pipelines_keep_the_gateway_handshake(self) -> None:
         ws = FakeWebSocket([json.dumps({"type": "session.update", "session": {"type": "realtime"}})])

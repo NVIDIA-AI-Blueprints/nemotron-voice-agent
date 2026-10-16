@@ -5,7 +5,7 @@
 
 """Test-only configuration variants over the shipped FDH configs.
 
-The example ships only the demo, eval, and tau3 default configs. Tests that need a feature switched on
+The example ships only the demo and eval configs. Tests that need a feature switched on
 or off (a "control" with every fix off, or one fix over that control) build it here: each variant is
 the settings it changes over a base, which is a shipped config or another variant. :func:`variant`
 writes it to a temporary file whose ``extends:`` (and ``voice_profile:``) name the base by absolute path,
@@ -47,6 +47,63 @@ delegation:
 #: name -> (base, voice_profile or None, settings). A base or voice profile is a shipped config path
 #: relative to ``config/`` or another variant's name.
 VARIANTS: dict[str, tuple[str, str | None, str]] = {
+    # The τ³ voice profile and the stub profiles, once shipped (removed with the τ³ adapter, shared-stack-plan.md
+    # step 1): tau3-bench voice settings (client tools, no greeting, the tau2 greeting seeded, one tool-argument
+    # rule selected by tool name), and the no-GPU, no-LLM stub runs (rule-based frontend, in-process fake gateway).
+    "voice/tau3.yaml": (
+        "voice/base.yaml",
+        None,
+        """\
+protocol:
+  greeting: {enabled: false, text: ""}
+  seed_history_with_client_greeting: "Hi! How can I help you today?"
+
+tools:
+  source: client
+
+normalization:
+  tool_arguments:
+    enabled: true
+    rules:
+      - tool: get_user_details
+        argument: user_id
+        label: user ID
+        format_hint: firstname_lastname_1234
+        spoken_form: true
+        strip: " .-"
+        collapse_separators: "_"
+        case: lower
+        pattern: '^[a-z]+_[a-z]+_\\d{4}$'
+        on_invalid: answer_locally
+    retry_guard:
+      enabled: true
+      scope: rules
+      permanent_failure_pattern: '^Error: .*\\bnot found\\b'
+""",
+    ),
+    "profiles/stub.yaml": (
+        "delegation_agent.yaml",
+        "voice/tau3.yaml",
+        """\
+delegation:
+  speak_when_delegating: true
+  spelling_hold:
+    complete_patterns: ['^[A-Za-z0-9]{6}$']
+tools:
+  executor: wire
+frontend:
+  decider: scripted
+backend:
+  link: in_process_fake
+  simulated_delay: {seconds: 0, where: per_delegation}
+  status_verbalizer: {mode: template}
+""",
+    ),
+    "profiles/stub_gate.yaml": (
+        "profiles/stub.yaml",
+        None,
+        f"backend:\n  gateway_config: {CONFIG / 'gateway.stub_gate.yaml'}\n",
+    ),
     # Gateway: backend prompt features.
     "gateway.eval_control.yaml": ("gateway.eval.yaml", None, _OFF_9),
     "gateway.eval_124acf7.yaml": (

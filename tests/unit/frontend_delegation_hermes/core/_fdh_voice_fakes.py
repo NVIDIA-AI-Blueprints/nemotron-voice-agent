@@ -16,10 +16,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from examples.frontend_delegation_hermes.adapters.tau.session import RealtimeSession
-from examples.frontend_delegation_hermes.adapters.tau.speech.ports import IdentityNormalizer, SpeechServices
-from examples.frontend_delegation_hermes.adapters.tau.speech.stubs import StubRecognizer, ToneSynthesizer
-from examples.frontend_delegation_hermes.adapters.tau.speech.vad_energy import EnergyVad
 from examples.frontend_delegation_hermes.core.backend.protocol import (
     GATEWAY_TO_VOICE,
     VOICE_TO_GATEWAY,
@@ -36,18 +32,22 @@ from examples.frontend_delegation_hermes.core.head_api import TurnContext
 from examples.frontend_delegation_hermes.core.runtime import DelegationRuntime
 
 ROOT = Path(__file__).resolve().parents[4]
-_VOICE_TESTS = ROOT / "tests" / "unit" / "frontend_delegation_hermes" / "tau"
+_VOICE_TESTS = ROOT / "tests" / "unit" / "frontend_delegation_hermes" / "voice"
 if str(_VOICE_TESTS) not in sys.path:
     sys.path.insert(0, str(_VOICE_TESTS))
 
 from _voice_fakes import MemoryTransport, pcmu_silence, pcmu_speech  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _fdh_test_head.ports import IdentityNormalizer, SpeechServices  # noqa: E402
+from _fdh_test_head.session import RealtimeSession  # noqa: E402
+from _fdh_test_head.stubs import StubRecognizer, ToneSynthesizer  # noqa: E402
+from _fdh_test_head.vad_energy import EnergyVad  # noqa: E402
 from _fdh_variants import variant  # noqa: E402
 
 PACKAGE = ROOT / "src" / "examples" / "frontend_delegation_hermes"
 PROFILES = PACKAGE / "config" / "profiles"
-FIXTURES = ROOT / "tests" / "unit" / "frontend_delegation_hermes" / "tau" / "fixtures" / "tau2_session_update"
+FIXTURES = ROOT / "tests" / "unit" / "frontend_delegation_hermes" / "voice" / "fixtures" / "tau2_session_update"
 
 
 def tau3_config(**backend: Any) -> DelegationConfig:
@@ -153,7 +153,7 @@ def delegate_reply(delegate: bool, filler: str = "", request: str | None = None)
 
 
 class DelegationHarness:
-    """A ``RealtimeSession`` with the delegation turn manager, stub speech and a :class:`FakeLink`."""
+    """The test head's ``RealtimeSession`` with the delegation turn manager, stub speech and a :class:`FakeLink`."""
 
     def __init__(
         self,

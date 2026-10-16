@@ -69,6 +69,12 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml \
 docker compose -f docker-compose.yml -f docker/docker-compose.fbv-local-llm.yaml \
   --profile frontend-backend-verdict-agent/single-gpu up -d
 
+# Frontend Delegation Hermes Agent (Inference Hub LLMs; Hermes in its own container; rebuild after source changes)
+docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+# Eval profile (evaluation runs, Realtime only): pass the overlay in every command
+docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+
 # Resource-heavy single-GPU path (workstation or DGX Spark)
 docker compose --profile omni-assistant-subagents/single-gpu up -d
 ```

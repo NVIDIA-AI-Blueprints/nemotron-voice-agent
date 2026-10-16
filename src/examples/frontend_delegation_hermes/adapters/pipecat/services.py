@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Speech services of the Pipecat adapter, from the same resolved catalog endpoints as the τ³ adapter.
+"""Speech services of the Pipecat adapter, on the ASR and TTS endpoints resolved from the service catalog.
 
 ASR is the repository's ``NvidiaForceEouSTTService`` (a VAD stop forces the end of the
 utterance, as in every repository pipeline); TTS is Pipecat's ``NvidiaTTSService`` with the

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wall-clock time for every head (the τ³ head's audio clock lives in ``adapters/tau/audio_clock.py``).
+"""Wall-clock time for every head (the Pipecat adapter's input-audio clock lives in ``adapters/pipecat/timing.py``).
 
 Wall time is only *recorded* (latency logs) and used for the non-turn timeouts.
 """
