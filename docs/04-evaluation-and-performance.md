@@ -2,6 +2,16 @@
 
 This guide provides reference benchmarks for the Nemotron Voice Agent covering **accuracy**, **full-duplex behavior**, and **latency/throughput**.
 
+For faster accuracy and task-completion evaluation, refer to
+[Offline Processing for Nemotron Voice Agent](12-offline-processing.md). Its
+experimental `/api/ws/offline` endpoint accepts complete recordings without
+real-time pacing and places responses on the source timeline. The Generic
+Assistant is the first integration. Compare matched files through the normal
+live pipeline and offline processing before relying on equivalent benchmark
+outcomes; offline turnaround does not measure real-world response latency.
+For commands, recording files, and exact metric scopes, refer to the
+[implementation and evaluation reference](offline-processing-reference.md).
+
 ---
 
 ## Latency and Scalability
