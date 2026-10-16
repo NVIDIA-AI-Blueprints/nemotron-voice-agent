@@ -7,7 +7,7 @@ report DEFERRED with the recipe list left to validate.
 ## Step 1 — Pick surface
 
 Validate at least one cloud-only recipe end-to-end, plus every example whose `pipeline.py` changed. Order by
-cost: `generic-assistant` (fast) → `omni-assistant`, `omni-assistant-subagents` → `frontend-backend-verdict-agent`,
+cost: `generic-assistant` (fast) → `omni-assistant`, `omni-assistant-subagents` → `frontend-backend-agent`,
 `multilingual-assistant`.
 
 ## Step 2 — Host-native smoke (fastest)
@@ -39,7 +39,7 @@ Per example (browser `client/` or benchmarking harness):
 - **Connect**: start a WebRTC session; confirm the transport handshake (most version-sensitive: SmallWebRTC /
   serializer / runner).
 - **Exercise**: VAD/turn fires → ASR transcript → LLM response → TTS playback → RTVI messages render. Also
-  `omni_assistant_subagents` (subagent bus routing); `frontend_backend_verdict` (browser UI and OpenAI Realtime sessions, frontend and backend LLMs, tools).
+  `omni_assistant_subagents` (subagent bus routing); `frontend_backend_agent` (browser UI and OpenAI Realtime sessions, frontend and backend LLMs, tools).
 - **Observe**: server/Compose logs + browser console for frame exceptions, RTVI mismatches, transport drops,
   observer errors.
 - **Fix & re-run** (max 3/example): diagnose (query `pipecat-docs` MCP if unclear) → fix code/`.env` →

@@ -11,7 +11,7 @@ Pipecat settings           ``adapters/pipecat.yaml``           ``adapters/pipeca
 Gateway config             ``gateway.yaml``                    ``gateway.eval.yaml``
 =========================  ==================================  ======================================
 
-The same rule as the Frontend/Backend Verdict example: OpenAI Realtime sessions always run the
+The same rule as the Frontend/Backend Agent example: OpenAI Realtime sessions always run the
 ``eval`` row, whatever ``FDH_PROFILE`` says, and a deployment with ``FDH_PROFILE=eval`` refuses
 browser sessions. ``FDH_PROFILE`` unset means ``default``; any other value is an error.
 

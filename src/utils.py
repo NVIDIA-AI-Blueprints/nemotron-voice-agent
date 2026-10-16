@@ -873,7 +873,7 @@ def uvicorn_ws_ping_kwargs() -> dict[str, float | None]:
 
     Both are optional and in seconds. When unset, nothing is returned and uvicorn keeps
     its defaults (20 s / 20 s). An interval of ``0`` disables the server ping, which is
-    how the frontend/backend verdict example's prototype profiles run.
+    how the frontend/backend agent example's prototype profiles run.
     """
     kwargs: dict[str, float | None] = {}
     if (os.getenv("UVICORN_WS_PING_INTERVAL") or "").strip():

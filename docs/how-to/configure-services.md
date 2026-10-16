@@ -60,7 +60,7 @@ services:
     image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.3.1
     profiles:
       - generic-assistant/server
-      - frontend-backend-verdict-agent/server
+      - frontend-backend-agent/server
     ports:
       - "50152:50052"   # host:container (gRPC)
     environment:

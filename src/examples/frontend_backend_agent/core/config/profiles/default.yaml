@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The `default` profile: the agent settings for browser UI sessions (WebRTC or the UI's
+# WebSocket), used when FBA_PROFILE is unset. It keeps the `eval` agent (frontend barge-in verdict,
+# spoken filler, backend conversation history, transcript normalization) and changes only what a
+# live browser user needs, plus what server-run tools require. OpenAI Realtime sessions never use
+# it: they always run with profiles/eval.yaml, so serving the browser does not change them.
+#
+# Tune this file and core/config/prompts/generic.yaml freely; eval.yaml and prompts/tau.yaml
+# change only with a Tau A/B run.
+
+extends: eval.yaml
+
+server:
+  # Kept at 0 (as in eval.yaml): the uvicorn keepalive is process-wide, and the Realtime sessions
+  # of the same container need it off.
+  ws_ping_interval_s: 0
+
+agent:
+  overrides:
+    prompts: {path: "../prompts/generic.yaml"}   # [in-path] -> core/config/prompts/generic.yaml
+    # The policy a browser session uses ({domain_policy} in the backend prompt); a Realtime client
+    # sends its own instead. Edit it, or the frontend prompt in the UI, to adapt the assistant.
+    domain:
+      policy: |
+        You are a general voice assistant. Use the tools to check the current weather, look up
+        current stock prices, search the live web for current or uncertain information, calculate
+        a body mass index, and pick random numbers. Answer simple general-knowledge questions
+        directly. Never invent live data such as weather, prices or news: use a tool, and if the
+        tool is unavailable, say so.
+
+turn_detection:
+  # The VAD stop that hands the turn to Smart Turn (adapters/pipecat/settings/default.yaml), as the
+  # repository's shared turn helper uses; Smart Turn ends the turn, with a 1 s silence fallback.
+  silence_duration_ms: 200
+  honor_client_values: false
+
+protocol:
+  # The agent greets first, like the other examples. No caller greeting is seeded into the history.
+  greeting: {enabled: true, text: "Hi! How can I help you today?"}
+  seed_history_with_client_greeting: ""
+
+# The tools of tools.yaml, run in this process (a browser cannot run tools the way a Realtime
+# client does).
+tools:
+  source: config
+  config_tools: "examples.frontend_backend_agent.tools:TOOLS"
+
+normalization:
+  # The tool-argument hook screens tool calls handed to a client; with server-run tools it is off.
+  # Transcript normalization (inherited from eval.yaml) stays on.
+  tool_arguments:
+    enabled: false
+    rules: []
+    retry_guard: {enabled: false, permanent_failure_pattern: ""}
+
+write_gate:
+  enabled: false
+
+# Browser sessions do not write the evaluation logs (FBA_VOICE_EVENT_LOG, FBA_FILLER_LOG).
+logging:
+  event_log: ""
+filler:
+  log_path: ""

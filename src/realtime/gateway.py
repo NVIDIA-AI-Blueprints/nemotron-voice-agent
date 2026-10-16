@@ -65,9 +65,9 @@ _CONFIGURABLE_CASCADE_PIPELINES = frozenset(
 # Pipelines that own the whole Realtime session: the gateway authenticates the socket,
 # resolves ``?model=`` to the pipeline, and hands the socket over before it sends any
 # event. The pipeline then serves ``session.created``, every ``session.update`` and the
-# rest of the protocol itself (the frontend/backend verdict and frontend delegation Hermes
+# rest of the protocol itself (the frontend/backend agent and frontend delegation Hermes
 # examples run their own Realtime session this way).
-_SESSION_OWNED_PIPELINES = frozenset({"frontend-backend-verdict-agent", "frontend-delegation-hermes-agent"})
+_SESSION_OWNED_PIPELINES = frozenset({"frontend-backend-agent", "frontend-delegation-hermes-agent"})
 
 
 class _ReplayWebSocket:

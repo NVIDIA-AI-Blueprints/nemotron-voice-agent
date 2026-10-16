@@ -1,0 +1,27 @@
+# Eval mode for the Frontend/Backend Agent: the `eval` profile. Apply on top of the
+# frontend-backend-agent/single-gpu recipe for evaluation runs (single-gpu only).
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml \
+#     --profile frontend-backend-agent/single-gpu up -d
+#
+# Relative paths resolve from the repository root (the directory of the first -f file).
+
+services:
+  frontend-backend-agent-single-gpu:
+    environment:
+      # OpenAI Realtime sessions only: browser UI sessions are refused, so they cannot take
+      # resources from an evaluation run. Realtime sessions use the `eval` agent settings in every
+      # profile.
+      FBA_PROFILE: eval
+      # Plain HTTP and ws://, so the evaluation client connects without TLS.
+      PIPELINE_TLS: "false"
+      # Per-turn event log and filler timing log, written to the mounted directory.
+      FBA_VOICE_EVENT_LOG: /app/logs/fba_voice_events.jsonl
+      FBA_FILLER_LOG: /app/logs/fba_filler.jsonl
+      # Opt-in Realtime extras stay off for evaluation runs, whatever .env says (the code also
+      # ignores them with FBA_PROFILE=eval).
+      FBA_REALTIME_TRACING: "false"
+      FBA_REALTIME_TURN_MODES: server_vad
+      FBA_REALTIME_MCP: "false"
+    volumes:
+      - ./logs:/app/logs

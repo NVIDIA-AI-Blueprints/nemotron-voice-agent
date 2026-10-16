@@ -77,7 +77,7 @@ the supported configuration on Thor.
     docker compose --profile omni-assistant/single-gpu up -d
     ```
 
-    The Frontend/Backend Verdict Agent has a `frontend-backend-verdict-agent/single-gpu` recipe. It runs only speech locally and uses NVIDIA Inference Hub LLMs, unless you add the `docker/docker-compose.fbv-local-llm.yaml` overlay to run the frontend LLM on the Lightning vLLM service. This guide does not validate that recipe on Jetson Thor. For its steps, refer to [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md).
+    The Frontend/Backend Agent has a `frontend-backend-agent/single-gpu` recipe. It runs only speech locally and uses NVIDIA Inference Hub LLMs, unless you add the `docker/docker-compose.fba-local-llm.yaml` overlay to run the frontend LLM on the Lightning vLLM service. This guide does not validate that recipe on Jetson Thor. For its steps, refer to [Deploy the Frontend/Backend Agent](how-to/deploy-frontend-backend-agent.md).
 
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
 

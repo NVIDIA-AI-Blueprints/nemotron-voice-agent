@@ -23,12 +23,12 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | Configure and use the OpenAI Realtime-compatible WebSocket endpoint |
-| [Deploy the Frontend/Backend Verdict Agent](how-to/deploy-frontend-backend-verdict-agent.md) | Deploy the Frontend/Backend Verdict Agent, choose its `default` or `eval` profile, add the optional local frontend LLM, and verify it |
+| [Deploy the Frontend/Backend Agent](how-to/deploy-frontend-backend-agent.md) | Deploy the Frontend/Backend Agent, choose its `default` or `eval` profile, add the optional local frontend LLM, and verify it |
 | [Deploy the Frontend Delegation Hermes Agent](how-to/deploy-frontend-delegation-hermes-agent.md) | Get Hermes, choose the `default` or `eval` profile, deploy the `frontend-delegation-hermes-agent/single-gpu` recipe with its `fdh-hermes` gateway container, and verify and evaluate it |
 
 ## Welcome Message
 
-When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, and Omni Assistant Subagents examples, and to browser UI sessions of the Frontend/Backend Verdict Agent. The OpenAI Realtime WebSocket waits for a client-initiated turn instead of sending this greeting.
+When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, and Omni Assistant Subagents examples, and to browser UI sessions of the Frontend/Backend Agent. The OpenAI Realtime WebSocket waits for a client-initiated turn instead of sending this greeting.
 
 - **Per example (backend-only):** set `welcome_message: false` on an example in [`examples_registry.yaml`](../examples_registry.yaml). The default is `true` when the key is omitted.
 - **Global override:** set `ENABLE_WELCOME_MESSAGE` in `.env`. When set, `ENABLE_WELCOME_MESSAGE` overrides every example's registry value. For example, the `generic-assistant/server-perf` profile uses it to disable the greeting.

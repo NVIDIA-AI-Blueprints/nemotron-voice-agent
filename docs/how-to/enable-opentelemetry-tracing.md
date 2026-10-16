@@ -37,9 +37,9 @@ OpenTelemetry tracing provides observability for the cascaded voice pipelines, a
 | `ENABLE_TRACING` | `false` | Enable OpenTelemetry tracing for both pipelines |
 | `OTEL_CONSOLE_EXPORT` | `false` | Also print traces to stdout (useful for local debugging) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP collector endpoint |
-| `FBV_REALTIME_TRACING` | `false` | Frontend/Backend Verdict Agent only. With `ENABLE_TRACING=true`, also traces OpenAI Realtime sessions. Ignored when `FBV_PROFILE=eval`. |
+| `FBA_REALTIME_TRACING` | `false` | Frontend/Backend Agent only. With `ENABLE_TRACING=true`, also traces OpenAI Realtime sessions. Ignored when `FBA_PROFILE=eval`. |
 
-The Frontend/Backend Verdict Agent traces its browser UI sessions when `ENABLE_TRACING=true`. Its Realtime sessions also need `FBV_REALTIME_TRACING=true`, and an eval-mode container never traces them. Refer to [Deploy the Frontend/Backend Verdict Agent](deploy-frontend-backend-verdict-agent.md#enable-tracing).
+The Frontend/Backend Agent traces its browser UI sessions when `ENABLE_TRACING=true`. Its Realtime sessions also need `FBA_REALTIME_TRACING=true`, and an eval-mode container never traces them. Refer to [Deploy the Frontend/Backend Agent](deploy-frontend-backend-agent.md#enable-tracing).
 
 **Endpoint format:**
 - **gRPC** (port 4317): `host:port` (for example, `phoenix:4317` or `localhost:4317`)

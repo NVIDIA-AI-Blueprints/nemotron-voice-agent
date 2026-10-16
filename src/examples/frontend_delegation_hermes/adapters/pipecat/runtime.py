@@ -9,7 +9,7 @@ event log, routing sink and filler log, and the session admission (``server.max_
 with ``server_busy`` and close code 1013, as before).
 
 The shared server has no per-example startup hook, so the runtime gets ready on its first session
-(:meth:`FdhRuntime.ensure_ready`, the Frontend/Backend Verdict example's rule): the session waits for
+(:meth:`FdhRuntime.ensure_ready`, the Frontend/Backend Agent example's rule): the session waits for
 the frontend warm-up and the gateway check before it is admitted, so its first turn runs on a warm
 connection, as it did after FDH's own server started. A failed start is reported to that session
 (``server is starting``) and retried by the next one.

@@ -58,16 +58,16 @@ docker compose --profile generic-assistant/single-gpu up -d
 docker compose --profile multilingual-assistant/single-gpu up -d
 docker compose --profile omni-assistant/single-gpu up -d
 
-# Frontend/Backend Verdict Agent (Inference Hub LLMs; browser UI and OpenAI Realtime)
-docker compose --profile frontend-backend-verdict-agent up -d             # cloud speech
-docker compose --profile frontend-backend-verdict-agent/server up -d      # NIM speech
-docker compose --profile frontend-backend-verdict-agent/single-gpu up -d  # NeMo-Speech.cpp
+# Frontend/Backend Agent (Inference Hub LLMs; browser UI and OpenAI Realtime)
+docker compose --profile frontend-backend-agent up -d             # cloud speech
+docker compose --profile frontend-backend-agent/server up -d      # NIM speech
+docker compose --profile frontend-backend-agent/single-gpu up -d  # NeMo-Speech.cpp
 # Eval profile (evaluation runs, Realtime only): pass the override in every command
-docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml \
-  --profile frontend-backend-verdict-agent/single-gpu up -d
+docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml \
+  --profile frontend-backend-agent/single-gpu up -d
 # Optional local frontend LLM (default profile, /server or /single-gpu): pass the overlay in every command
-docker compose -f docker-compose.yml -f docker/docker-compose.fbv-local-llm.yaml \
-  --profile frontend-backend-verdict-agent/single-gpu up -d
+docker compose -f docker-compose.yml -f docker/docker-compose.fba-local-llm.yaml \
+  --profile frontend-backend-agent/single-gpu up -d
 
 # Frontend Delegation Hermes Agent (Inference Hub LLMs; Hermes in its own container; rebuild after source changes)
 docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build

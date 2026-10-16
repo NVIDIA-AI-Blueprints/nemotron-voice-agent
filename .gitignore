@@ -76,5 +76,5 @@ scripts/frontend_backend_verdict_sync.py
 docs/plans/
 misc/
 
-# Agent logs (docker/docker-compose.fbv-eval.yaml and the FDH Compose file mount ./logs)
+# Agent logs (docker/docker-compose.fba-eval.yaml and the FDH Compose file mount ./logs)
 /logs/

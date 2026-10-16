@@ -41,7 +41,7 @@ Only the worker processes import Hermes, because `src/utils.py` would shadow Her
 | Pipecat settings | `adapters/pipecat.yaml` | `adapters/pipecat.eval.yaml` |
 | Gateway configuration (`fdh-hermes`) | `gateway.yaml` | `gateway.eval.yaml` |
 
-The rules match the Frontend/Backend Verdict example:
+The rules match the Frontend/Backend Agent example:
 
 - OpenAI Realtime sessions always run the `eval` delegation profile and Pipecat settings, whatever `FDH_PROFILE` says.
 - A deployment with `FDH_PROFILE=eval` refuses browser UI sessions.

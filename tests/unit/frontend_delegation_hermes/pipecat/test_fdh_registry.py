@@ -31,7 +31,7 @@ from realtime.gateway import _SESSION_OWNED_PIPELINES
 
 FDH = "frontend-delegation-hermes-agent"
 MODEL = "nvidia/nemotron-realtime-frontend-delegation-hermes"
-FBV_DIR = REPO_ROOT / "src" / "examples" / "frontend_backend_verdict"
+FBA_DIR = REPO_ROOT / "src" / "examples" / "frontend_backend_agent"
 
 
 class RegistryTests(unittest.TestCase):
@@ -57,16 +57,16 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("frontend", catalog)
 
     def test_speech_entries_are_the_ones_fdh_used_before(self) -> None:
-        # FDH read FBV's single-GPU and cloud catalogs before it had its own: speech must not change.
-        fbv_local = yaml.safe_load((FBV_DIR / "services.local.yaml").read_text(encoding="utf-8"))
+        # FDH read FBA's single-GPU and cloud catalogs before it had its own: speech must not change.
+        fba_local = yaml.safe_load((FBA_DIR / "services.local.yaml").read_text(encoding="utf-8"))
         fdh_local = yaml.safe_load((PACKAGE / "services.local.yaml").read_text(encoding="utf-8"))
-        fbv_cloud = yaml.safe_load((FBV_DIR / "services.cloud.yaml").read_text(encoding="utf-8"))
+        fba_cloud = yaml.safe_load((FBA_DIR / "services.cloud.yaml").read_text(encoding="utf-8"))
         fdh_cloud = yaml.safe_load((PACKAGE / "services.cloud.yaml").read_text(encoding="utf-8"))
         for kind in ("asr", "tts"):
             with self.subTest(kind=kind):
                 for section in ("singlegpu", "server"):
-                    self.assertEqual(fdh_local[section][kind], fbv_local[section][kind])
-                self.assertEqual(fdh_cloud[kind], fbv_cloud[kind])
+                    self.assertEqual(fdh_local[section][kind], fba_local[section][kind])
+                self.assertEqual(fdh_cloud[kind], fba_cloud[kind])
 
 
 class ProfileTests(unittest.TestCase):

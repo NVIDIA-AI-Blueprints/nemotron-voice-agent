@@ -35,12 +35,12 @@ async def _ready(_config: dict[str, Any]) -> None:
 
 
 class SessionOwnedHandoffTests(unittest.IsolatedAsyncioTestCase):
-    async def test_verdict_and_delegation_hermes_pipelines_are_session_owned(self) -> None:
-        self.assertIn("frontend-backend-verdict-agent", _SESSION_OWNED_PIPELINES)
+    async def test_frontend_backend_and_delegation_hermes_pipelines_are_session_owned(self) -> None:
+        self.assertIn("frontend-backend-agent", _SESSION_OWNED_PIPELINES)
         self.assertIn("frontend-delegation-hermes-agent", _SESSION_OWNED_PIPELINES)
 
     async def test_session_owned_pipeline_gets_the_socket_before_any_event(self) -> None:
-        for pipeline_mode in ("frontend-backend-verdict-agent", "frontend-delegation-hermes-agent"):
+        for pipeline_mode in ("frontend-backend-agent", "frontend-delegation-hermes-agent"):
             with self.subTest(pipeline_mode=pipeline_mode):
                 update = json.dumps({"type": "session.update", "session": {"type": "realtime"}})
                 ws = FakeWebSocket([update])

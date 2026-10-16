@@ -59,41 +59,41 @@
       ]
     },
     {
-      "id": "nemotron-voice-agent-deploy-fbv-ask-profile",
-      "prompt": "Deploy the Frontend/Backend Verdict agent.",
+      "id": "nemotron-voice-agent-deploy-fba-ask-profile",
+      "prompt": "Deploy the Frontend/Backend Agent.",
       "expected_skill": "nemotron-voice-agent-deploy",
-      "expected_output": "Asks \"Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?\" and waits for the answer before starting anything. It does not choose `default` silently even though it is used when FBV_PROFILE is unset, and it does not run `docker compose ... up` until the user answers.",
+      "expected_output": "Asks \"Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?\" and waits for the answer before starting anything. It does not choose `default` silently even though it is used when FBA_PROFILE is unset, and it does not run `docker compose ... up` until the user answers.",
       "assertions": [
         "Asked which profile to deploy (`default` for the browser UI or `eval` for evaluation runs) and waited for the answer.",
         "Did not choose `default` or `eval` silently.",
-        "Did not run any `docker compose --profile frontend-backend-verdict-agent... up` command before the user answered.",
-        "Did not treat an existing `FBV_PROFILE` in `.env` as the user's choice; if one was present, showed it and asked the user to confirm or change it.",
+        "Did not run any `docker compose --profile frontend-backend-agent... up` command before the user answered.",
+        "Did not treat an existing `FBA_PROFILE` in `.env` as the user's choice; if one was present, showed it and asked the user to confirm or change it.",
         "Did not offer or suggest any `tau3_eval*` profile name."
       ]
     },
     {
-      "id": "nemotron-voice-agent-deploy-fbv-browser-ui",
-      "prompt": "Deploy the Frontend/Backend Verdict agent on my single-GPU workstation so I can talk to it in the browser UI.",
+      "id": "nemotron-voice-agent-deploy-fba-browser-ui",
+      "prompt": "Deploy the Frontend/Backend Agent on my single-GPU workstation so I can talk to it in the browser UI.",
       "expected_skill": "nemotron-voice-agent-deploy",
-      "expected_output": "Uses the `default` profile without asking about the profile, selects `frontend-backend-verdict-agent/single-gpu`, requires HF_TOKEN and NVIDIA_API_KEY as an NVIDIA Inference Hub key, downloads the speech weights, and starts it with `docker compose --profile frontend-backend-verdict-agent/single-gpu up -d` without the eval override. After the first browser session it reports `profile=default`, the `generic.yaml` catalog path, and its SHA-256 from the app log.",
+      "expected_output": "Uses the `default` profile without asking about the profile, selects `frontend-backend-agent/single-gpu`, requires HF_TOKEN and NVIDIA_API_KEY as an NVIDIA Inference Hub key, downloads the speech weights, and starts it with `docker compose --profile frontend-backend-agent/single-gpu up -d` without the eval override. After the first browser session it reports `profile=default`, the `generic.yaml` catalog path, and its SHA-256 from the app log.",
       "assertions": [
         "Did not ask which profile to use; the request names the browser UI, so it used `default`.",
-        "Selected `frontend-backend-verdict-agent/single-gpu` and did not pass `docker/docker-compose.fbv-eval.yaml`.",
+        "Selected `frontend-backend-agent/single-gpu` and did not pass `docker/docker-compose.fba-eval.yaml`.",
         "Required HF_TOKEN and NVIDIA_API_KEY (Inference Hub key) and did not ask for NVIDIA_SPEECH_API_KEY or an nvcr.io login.",
-        "Did not write a `tau3_eval*` value or `FBV_PIPECAT_SETTINGS` to `.env`, and did not overwrite other `.env` keys.",
+        "Did not write a `tau3_eval*` value or `FBA_PIPECAT_SETTINGS` to `.env`, and did not overwrite other `.env` keys.",
         "Kept TLS on and pointed the user to `https://<host>:7860`."
       ]
     },
     {
-      "id": "nemotron-voice-agent-deploy-fbv-tau-eval",
-      "prompt": "Deploy the Frontend/Backend Verdict agent so I can run a Tau evaluation.",
+      "id": "nemotron-voice-agent-deploy-fba-tau-eval",
+      "prompt": "Deploy the Frontend/Backend Agent so I can run a Tau evaluation.",
       "expected_skill": "nemotron-voice-agent-deploy",
-      "expected_output": "Uses the `eval` profile without asking about the profile, selects `frontend-backend-verdict-agent/single-gpu`, and starts it with `docker compose -f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml --profile frontend-backend-verdict-agent/single-gpu up -d`, after `mkdir -p logs`. It does not set FBV_PROFILE in `.env` or edit `core/config/prompts/tau.yaml`, and after the first Realtime session it reports `profile=eval`, the `tau.yaml` catalog path, and its SHA-256 from the app log.",
+      "expected_output": "Uses the `eval` profile without asking about the profile, selects `frontend-backend-agent/single-gpu`, and starts it with `docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml --profile frontend-backend-agent/single-gpu up -d`, after `mkdir -p logs`. It does not set FBA_PROFILE in `.env` or edit `core/config/prompts/tau.yaml`, and after the first Realtime session it reports `profile=eval`, the `tau.yaml` catalog path, and its SHA-256 from the app log.",
       "assertions": [
         "Did not ask which profile to use; the request names a Tau evaluation, so it used `eval`.",
-        "Used the `frontend-backend-verdict-agent/single-gpu` recipe with `-f docker-compose.yml -f docker/docker-compose.fbv-eval.yaml`, and did not use the cloud or `/server` recipe for `eval`.",
+        "Used the `frontend-backend-agent/single-gpu` recipe with `-f docker-compose.yml -f docker/docker-compose.fba-eval.yaml`, and did not use the cloud or `/server` recipe for `eval`.",
         "Did not set a `tau3_eval*` profile, did not edit `core/config/prompts/tau.yaml`, and did not overwrite other `.env` keys.",
-        "Pointed the evaluation client at plain `ws://<host>:7860/v1/realtime` with the model `nvidia/nemotron-realtime-frontend-backend-verdict`.",
+        "Pointed the evaluation client at plain `ws://<host>:7860/v1/realtime` with the model `nvidia/nemotron-realtime-frontend-backend`.",
         "Reported the profile (`eval`), prompt catalog path, and SHA-256 read from the app log after the first session."
       ]
     },

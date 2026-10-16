@@ -418,7 +418,7 @@ The following table lists common failures for this recipe. For general startup i
 ## Related Topics
 
 - [Frontend Delegation Hermes README](../../src/examples/frontend_delegation_hermes/README.md)
-- [Deploy the Frontend/Backend Verdict Agent](deploy-frontend-backend-verdict-agent.md)
+- [Deploy the Frontend/Backend Agent](deploy-frontend-backend-agent.md)
 - [Use the OpenAI Realtime-Compatible Gateway](use-realtime-gateway.md)
 - [WebSocket Keepalive](tune-pipeline-performance.md#websocket-keepalive)
 - [Troubleshooting](../06-troubleshooting.md)

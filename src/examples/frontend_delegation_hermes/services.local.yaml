@@ -4,14 +4,14 @@
 # On-prem service catalog for the Frontend Delegation Hermes example.
 #
 # The example ships the single-GPU recipe only. The `server` section (the ASR and TTS NIM
-# sidecars of the server recipe, as in the Frontend/Backend Verdict example) exists because the
+# sidecars of the server recipe, as in the Frontend/Backend Agent example) exists because the
 # repository's registry checks every Realtime model against each platform's catalog; FDH's own
 # speech settings read the `singlegpu` section.
 #
 # ASR and TTS: the example's own catalog loader (core/catalog.py) reads the `singlegpu` section
 # (config/voice_agent.yaml) and hands the endpoints to the shared Pipecat services (the
 # NeMo-Speech.cpp sidecar, nemo-speech:50051). These entries are copies of the Frontend/Backend
-# Verdict example's, which FDH read before it had its own catalog, so speech is unchanged.
+# Agent example's, which FDH read before it had its own catalog, so speech is unchanged.
 # FBA_ASR_SERVER / FBA_TTS_SERVER replace the server. `synthesis_mode` is required by the
 # repository catalog rules; this example does not read it: its TTS runs `per_sentence`
 # (config/adapters/pipecat*.yaml).
