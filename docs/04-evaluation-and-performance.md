@@ -2,13 +2,13 @@
 
 This guide provides reference benchmarks for the Nemotron Voice Agent covering **accuracy**, **full-duplex behavior**, and **latency/throughput**.
 
-For finite-session accuracy experiments without real-time audio pacing, refer to
-[Offline Processing for Nemotron Voice Agent](12-offline-processing.md). The
-source-offset execution architecture is first integrated with the Generic
-Assistant. Its experimental `/api/ws/offline` endpoint records replies at explicit
-source offsets and includes measured provider delay. Its historical sample
-recordings use an earlier runtime; validate paired live cases before using the
-current revision for benchmark claims.
+For faster accuracy and task-completion evaluation, refer to
+[Offline Processing for Nemotron Voice Agent](12-offline-processing.md). Its
+experimental `/api/ws/offline` endpoint accepts complete recordings without
+real-time pacing and places responses on the source timeline. The Generic
+Assistant is the first integration. Compare matched files through the normal
+live pipeline and offline processing before relying on equivalent benchmark
+outcomes; offline turnaround does not measure real-world response latency.
 
 ---
 

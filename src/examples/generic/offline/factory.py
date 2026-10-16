@@ -10,7 +10,11 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
-from examples.shared.pipeline_utils import apply_pinned_prompt_summary, build_context_messages
+from examples.shared.pipeline_utils import (
+    PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+    apply_pinned_prompt_summary,
+    build_context_messages,
+)
 from utils import (
     is_nvcf,
     is_streaming_llm_url,
@@ -83,6 +87,7 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "tts_language_code": normalize_lang_code(
             config.get("tts_language_code") or tts.get("language_code") or "en-US"
         ),
+        "tts_sample_rate": PIPELINE_AUDIO_OUT_SAMPLE_RATE,
         "custom_dictionary": load_ipa_dictionary(),
     }
     synthesis_mode = config.get("tts_synthesis_mode") or tts.get("synthesis_mode") or "stitched"
@@ -194,6 +199,9 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "tts_voice_id": settings["tts_voice_id"],
         "tts_language_code": settings["tts_language_code"],
         "tts_synthesis_mode": synthesis_mode,
+        "tts_sample_rate": settings["tts_sample_rate"],
+        "output_sample_rate": 16000,
+        "tts_resampling": "soxr_vhq_continuous_with_eof_flush",
         "asr_function_id": settings["asr_function_id"],
         "tts_function_id": settings["tts_function_id"],
         "tool_names": sorted(handlers),
