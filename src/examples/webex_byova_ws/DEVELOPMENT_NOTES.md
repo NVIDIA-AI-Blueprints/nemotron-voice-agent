@@ -1,4 +1,7 @@
-# Cisco Webex BYOVA WebSocket Integration Feedback
+# Cisco Webex BYOVA WebSocket Integration Notes
+
+Development record of documented-versus-observed Webex behavior found while
+building this example, and the questions still open with Cisco.
 
 Date: September 9, 2026
 

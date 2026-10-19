@@ -167,6 +167,20 @@ The implemented configuration also defines bounded-operation settings:
 `BYOVA_COMPLETION_TIMEOUT_SECONDS` (`10`), and
 `BYOVA_MAX_MESSAGE_BYTES` (`1048576`).
 
+## Configure Diagnostics
+
+Three settings exist for interoperability testing and are off or at their
+documented value by default:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `BYOVA_TRACE_WIRE` | `false` | Logs every inbound and outbound envelope with its sequence number and wire timestamp, audio elided. |
+| `BYOVA_CAPTURE_DIR` | unset | Writes each prompt-audio chunk as sent, plus a manifest, for byte-level verification. Set `BYOVA_CAPTURE_DIR_HOST` to the host path when using Compose. |
+| `BYOVA_PROMPT_AUDIO_PROFILE` | `raw-mulaw` | Selects the prompt-audio media profile. `wav-pcm16` sends WAV-contained PCM16 instead. |
+
+Wire tracing and capture write one record per chunk, so leave both off for
+production traffic.
+
 ## Use Local Test Mode
 
 Plaintext and disabled authentication require separate, explicit opt-ins:
@@ -191,7 +205,7 @@ The adapter maps conversation events as follows:
 | Cisco `SESSION_START` | Opens one internal RTVI connection and sends `client-ready`. |
 | Pipecat `user-started-speaking` | Sends Cisco `START_OF_INPUT` immediately for barge-in. |
 | Pipecat `user-turn-finalized` | Sends Cisco `END_OF_INPUT` at the canonical finalized-turn edge. |
-| Pipecat output audio | Uses the frame's declared sample rate and converts mono PCM16 to Base64 WAV-contained PCM16 8 kHz Cisco `CHUNK` output. |
+| Pipecat output audio | Uses the frame's declared sample rate and converts mono PCM16 to Base64 raw G.711 mu-law 8 kHz Cisco `CHUNK` output. |
 | Adapter output-complete edge | Sends exactly one Cisco `FINAL` after unpaced generated audio is serialized. |
 | Cisco `SESSION_END` or socket closure | Closes the internal connection and releases conversation state. |
 
@@ -209,13 +223,14 @@ than simulated playback completion.
 Caller audio must be raw Base64 G.711 mu-law, 8 kHz, mono data with
 `encoding=MULAW_FORMAT` and `sample_rate_hertz=8000`.
 
-Prompt audio travels the other way as Base64 PCM16 8 kHz mono in a WAV
-container. This deliberately departs from Cisco's documented media profile,
-which requires raw mu-law with no container: live calls confirmed that raw
-mu-law prompt audio is accepted on the wire and never rendered to the caller,
-while WAV-contained audio always is. Cisco's own sample connector sends its
-WAV prompt assets verbatim, so the adapter follows the working behavior.
-`CISCO_FEEDBACK.md` tracks the contradiction.
+Prompt audio travels the other way in the same documented profile: raw Base64
+G.711 mu-law, 8 kHz, mono with no container. Rendering is coupled to the
+`input_handling_config.dtmf_config` that accompanies `INPUT_VOICE_DTMF`, which
+the documentation does not state. Raw mu-law renders only when `dtmf_config`
+is present, and WAV-contained PCM16 renders only when it is absent. The
+adapter always sends `dtmf_config`, so it always sends raw mu-law.
+`BYOVA_PROMPT_AUDIO_PROFILE` can select `wav-pcm16` for comparison testing.
+`DEVELOPMENT_NOTES.md` records the full matrix.
 
 Generated audio is forwarded as it arrives rather than gathered into fixed
 chunks, which follows the documented instruction to send each chunk as soon as
