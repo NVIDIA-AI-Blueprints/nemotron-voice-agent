@@ -39,7 +39,7 @@ export ENABLE_CISCO_JWS_VALIDATION="${ENABLE_CISCO_JWS_VALIDATION:-true}"
 export FIRST_AUDIO_TIMEOUT_SECS="${FIRST_AUDIO_TIMEOUT_SECS:-120}"
 export ADAPTER_IDLE_SESSION_TIMEOUT_SECS="${ADAPTER_IDLE_SESSION_TIMEOUT_SECS:-600}"
 
-echo "Starting cisco-webex-byova-adapter with:"
+echo "Starting cisco-webex-byova-grpc-adapter with:"
 echo "  NEMOTRON_VOICE_AGENT_WS=${NEMOTRON_VOICE_AGENT_WS}"
 echo "  NEMOTRON_BYOVA_ADAPTER_GRPC_HOST=${NEMOTRON_BYOVA_ADAPTER_GRPC_HOST}"
 echo "  NEMOTRON_BYOVA_ADAPTER_GRPC_PORT=${NEMOTRON_BYOVA_ADAPTER_GRPC_PORT}"
@@ -57,5 +57,5 @@ echo "  ADAPTER_IDLE_SESSION_TIMEOUT_SECS=${ADAPTER_IDLE_SESSION_TIMEOUT_SECS}"
     echo "ERROR: failed to change directory to ${ADAPTER_ROOT}"
     exit 1
   }
-  uv run cisco-webex-byova-adapter
+  uv run cisco-webex-byova-grpc-adapter
 )

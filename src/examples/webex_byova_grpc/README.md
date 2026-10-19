@@ -89,26 +89,26 @@ Every resource this integration needs lives under this example directory:
 Start the backend from the repo root:
 
 ```bash
-docker compose --profile webex-byova-assistant/server up -d
+docker compose --profile webex-byova-grpc-assistant/server up -d
 ```
 
 This example uses the normal server ASR, LLM, and TTS services and pins the
 server to `websocket` transport for the adapter path.
 
 The Compose profile locks the backend to this example with
-`EXAMPLE_SELECTION=webex-byova-assistant`, so the adapter connects directly to
+`EXAMPLE_SELECTION=webex-byova-grpc-assistant`, so the adapter connects directly to
 `/api/ws` without any request-level example selection. To run multiple backend
 workers:
 
 ```bash
 UVICORN_WORKERS=4 \
-  docker compose --profile webex-byova-assistant/server up -d
+  docker compose --profile webex-byova-grpc-assistant/server up -d
 ```
 
 ## Where to look next
 
 - Adapter package and local adapter commands:
-  [`src/examples/webex_byova/client/README.md`](./client/README.md)
+  [`src/examples/webex_byova_grpc/client/README.md`](./client/README.md)
 - End-to-end backend + adapter + Cisco sandbox flow:
   [`run.md`](./run.md)
 - Tool and keypad-state tests:

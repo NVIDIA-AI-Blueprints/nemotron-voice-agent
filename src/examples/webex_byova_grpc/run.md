@@ -1,7 +1,7 @@
 # Connect Webex Contact Center to Nemotron Voice Agent
 
 This POC connects a Cisco Webex Contact Center IVR flow to the
-`webex-byova-assistant` server example. A `VirtualAgentV2` activity invokes the
+`webex-byova-grpc-assistant` server example. A `VirtualAgentV2` activity invokes the
 adapter, which bridges Cisco's BYOVA gRPC interface to the Nemotron Voice Agent
 HTTP and WebSocket APIs and returns generated speech to the caller.
 
@@ -11,7 +11,7 @@ HTTP and WebSocket APIs and returns generated speech to the caller.
 
 In this setup:
 
-- the backend example is `webex-byova-assistant`
+- the backend example is `webex-byova-grpc-assistant`
 - the client is the vendored adapter in [`client/`](./client/)
 - Cisco Webex Contact Center connects to the adapter over gRPC+TLS
 - the adapter connects directly to this server over `/api/ws`
@@ -32,21 +32,21 @@ Caller (PSTN)
 From the repo root:
 
 ```bash
-docker compose --profile webex-byova-assistant/server up -d
+docker compose --profile webex-byova-grpc-assistant/server up -d
 ```
 
 This recipe uses the normal workstation hardware/service stack and pins the
 server to `websocket` transport for the adapter path.
 
 It also locks the backend deployment with
-`EXAMPLE_SELECTION=webex-byova-assistant`, so the adapter connects directly to
+`EXAMPLE_SELECTION=webex-byova-grpc-assistant`, so the adapter connects directly to
 `/api/ws` without request-level example routing. Multiple Uvicorn workers are
 supported because the adapter does not use `/api/session-config` or a
 `session_id`:
 
 ```bash
 UVICORN_WORKERS=4 \
-  docker compose --profile webex-byova-assistant/server up -d
+  docker compose --profile webex-byova-grpc-assistant/server up -d
 ```
 
 `SILERO_VAD_STOP_SECS` controls how much trailing silence is required after
@@ -56,7 +56,7 @@ values better tolerate natural pauses:
 
 ```bash
 SILERO_VAD_STOP_SECS=0.5 \
-  docker compose --profile webex-byova-assistant/server up -d
+  docker compose --profile webex-byova-grpc-assistant/server up -d
 ```
 
 Confirm the backend is healthy before starting the adapter.
@@ -88,7 +88,7 @@ provisioned for that hostname. The user running the adapter must have permission
 to read both files.
 
 ```bash
-cd src/examples/webex_byova/client
+cd src/examples/webex_byova_grpc/client
 uv sync
 export NEMOTRON_BYOVA_ADAPTER_TLS_CERT=/etc/letsencrypt/live/<public-host>/fullchain.pem
 export NEMOTRON_BYOVA_ADAPTER_TLS_KEY=/etc/letsencrypt/live/<public-host>/privkey.pem
@@ -171,7 +171,7 @@ organization, including the required token and nonce rotation.
 Before placing a phone call, validate the adapter locally:
 
 ```bash
-cd src/examples/webex_byova/client
+cd src/examples/webex_byova_grpc/client
 uv run python scripts/test_byova_client.py \
   --grpc-target <host>:50061 \
   --tls \

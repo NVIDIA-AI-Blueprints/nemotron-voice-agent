@@ -17,7 +17,7 @@ import grpc
 import jwt
 from jwt import InvalidTokenError
 
-from cisco_webex_byova_adapter.config import AdapterConfig
+from webex_byova_grpc_adapter.config import AdapterConfig
 
 logger = logging.getLogger(__name__)
 

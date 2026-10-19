@@ -43,7 +43,7 @@ services:
       - omni-assistant/server
       - omni-assistant-subagents/server
       - frontend-backend-agent/server
-      - webex-byova-assistant/server
+      - webex-byova-grpc-assistant/server
       - webex-byova-ws-assistant/server
     environment:
       <<: *magpie-multilingual-tts-service-env

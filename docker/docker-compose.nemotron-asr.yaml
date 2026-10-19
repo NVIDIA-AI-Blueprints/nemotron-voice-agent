@@ -39,7 +39,7 @@ services:
     profiles:
       - generic-assistant/server
       - frontend-backend-agent/server
-      - webex-byova-assistant/server
+      - webex-byova-grpc-assistant/server
       - webex-byova-ws-assistant/server
     environment:
       <<: *nemotron-asr-env

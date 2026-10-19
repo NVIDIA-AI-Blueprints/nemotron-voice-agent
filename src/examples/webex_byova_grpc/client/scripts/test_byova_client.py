@@ -15,7 +15,7 @@ from pathlib import Path
 import grpc
 from google.protobuf.timestamp_pb2 import Timestamp
 
-from cisco_webex_byova_adapter.generated import (
+from webex_byova_grpc_adapter.generated import (
     byova_common_pb2,
     voicevirtualagent_pb2,
     voicevirtualagent_pb2_grpc,

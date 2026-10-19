@@ -16,16 +16,16 @@ from collections.abc import AsyncIterator
 import grpc
 from google.protobuf.struct_pb2 import Struct
 
-from cisco_webex_byova_adapter.audio import normalize_caller_audio, to_byova_audio
-from cisco_webex_byova_adapter.config import AdapterConfig
-from cisco_webex_byova_adapter.generated import (
+from webex_byova_grpc_adapter.audio import normalize_caller_audio, to_byova_audio
+from webex_byova_grpc_adapter.config import AdapterConfig
+from webex_byova_grpc_adapter.generated import (
     byova_common_pb2,
     health_pb2,
     health_pb2_grpc,
     voicevirtualagent_pb2,
     voicevirtualagent_pb2_grpc,
 )
-from cisco_webex_byova_adapter.nemotron_bridge import NemotronSession
+from webex_byova_grpc_adapter.nemotron_bridge import NemotronSession
 
 logger = logging.getLogger(__name__)
 

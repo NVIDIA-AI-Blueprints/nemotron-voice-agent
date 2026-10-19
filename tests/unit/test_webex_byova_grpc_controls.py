@@ -14,18 +14,18 @@ from pipecat.frames.frames import InputTransportMessageFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 
-from examples.webex_byova.input_state import (
+from examples.webex_byova_grpc.input_state import (
     VERIFICATION_CONFIRMATION,
     AuthenticationPhase,
     WebexInputMessageProcessor,
     WebexInputState,
 )
-from examples.webex_byova.tool_handlers import (
+from examples.webex_byova_grpc.tool_handlers import (
     handle_end_call,
     handle_request_keypad_input,
     handle_transfer_to_human,
 )
-from examples.webex_byova.tools import build_tools_schema
+from examples.webex_byova_grpc.tools import build_tools_schema
 
 REPO_ROOT = Path(__file__).parents[2]
 
@@ -113,20 +113,20 @@ def test_terminal_tools_emit_typed_controls(handler, arguments, expected_action)
 def test_webex_catalog_exposes_only_call_control_tools() -> None:
     """Keep the customer-care tool surface focused and deterministic."""
     schema, names = build_tools_schema(
-        REPO_ROOT / "src/examples/webex_byova/pipeline.py",
+        REPO_ROOT / "src/examples/webex_byova_grpc/pipeline.py",
         ["transfer_to_human", "end_call", "request_keypad_input"],
     )
     assert schema is not None
     assert names == ["transfer_to_human", "end_call", "request_keypad_input"]
 
-    with (REPO_ROOT / "src/examples/webex_byova/prompts.yaml").open(encoding="utf-8") as stream:
+    with (REPO_ROOT / "src/examples/webex_byova_grpc/prompts.yaml").open(encoding="utf-8") as stream:
         prompt = yaml.safe_load(stream)["customer_care"]
     assert prompt["tools_available"] == names
 
 
 def test_customer_care_session_starts_with_phone_dtmf() -> None:
     """Force the phone tool rather than arming DTMF outside the LLM."""
-    source = (REPO_ROOT / "src/examples/webex_byova/pipeline.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "src/examples/webex_byova_grpc/pipeline.py").read_text(encoding="utf-8")
 
     assert 'input_state.begin_collection("phone_number")' not in source
     assert "input_state.force_expected_tool()" in source
@@ -136,11 +136,11 @@ def test_customer_care_session_starts_with_phone_dtmf() -> None:
 def test_authentication_state_forces_each_keypad_tool_in_order() -> None:
     """Require phone and then DOB before returning to automatic tool choice."""
     all_tools, _ = build_tools_schema(
-        REPO_ROOT / "src/examples/webex_byova/pipeline.py",
+        REPO_ROOT / "src/examples/webex_byova_grpc/pipeline.py",
         ["transfer_to_human", "end_call", "request_keypad_input"],
     )
     keypad_tools, _ = build_tools_schema(
-        REPO_ROOT / "src/examples/webex_byova/pipeline.py",
+        REPO_ROOT / "src/examples/webex_byova_grpc/pipeline.py",
         ["request_keypad_input"],
     )
     context = LLMContext([], tools=all_tools, tool_choice="auto")

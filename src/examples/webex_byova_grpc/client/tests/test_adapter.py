@@ -14,11 +14,11 @@ from unittest.mock import AsyncMock, patch
 from jwt import InvalidTokenError
 from pipecat.frames.protobufs import frames_pb2
 
-from cisco_webex_byova_adapter.auth import CiscoJwsValidator, _CachedJwkSet
-from cisco_webex_byova_adapter.config import AdapterConfig
-from cisco_webex_byova_adapter.generated import byova_common_pb2, voicevirtualagent_pb2
-from cisco_webex_byova_adapter.nemotron_bridge import NemotronSession
-from cisco_webex_byova_adapter.service import (
+from webex_byova_grpc_adapter.auth import CiscoJwsValidator, _CachedJwkSet
+from webex_byova_grpc_adapter.config import AdapterConfig
+from webex_byova_grpc_adapter.generated import byova_common_pb2, voicevirtualagent_pb2
+from webex_byova_grpc_adapter.nemotron_bridge import NemotronSession
+from webex_byova_grpc_adapter.service import (
     VoiceVirtualAgentServicer,
     _chunk_response_with_audio,
     _dtmf_symbols,
@@ -39,7 +39,7 @@ class CiscoJwsValidatorTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "cisco_webex_byova_adapter.auth.jwt.get_unverified_header",
+                "webex_byova_grpc_adapter.auth.jwt.get_unverified_header",
                 return_value={"kid": "key-1", "alg": "HS256"},
             ),
             self.assertRaisesRegex(InvalidTokenError, "RS256"),
@@ -77,7 +77,7 @@ class CiscoJwsValidatorTests(unittest.IsolatedAsyncioTestCase):
         validator = CiscoJwsValidator(config)
         with (
             patch(
-                "cisco_webex_byova_adapter.auth.jwt.get_unverified_header",
+                "webex_byova_grpc_adapter.auth.jwt.get_unverified_header",
                 return_value={"kid": "key-1", "alg": "RS256"},
             ),
             patch.object(
@@ -85,9 +85,9 @@ class CiscoJwsValidatorTests(unittest.IsolatedAsyncioTestCase):
                 "_get_key_for_kid",
                 AsyncMock(return_value={"kid": "key-1", "kty": "RSA", "alg": "RS256"}),
             ),
-            patch("cisco_webex_byova_adapter.auth.jwt.algorithms.RSAAlgorithm.from_jwk", return_value=object()),
+            patch("webex_byova_grpc_adapter.auth.jwt.algorithms.RSAAlgorithm.from_jwk", return_value=object()),
             patch(
-                "cisco_webex_byova_adapter.auth.jwt.decode",
+                "webex_byova_grpc_adapter.auth.jwt.decode",
                 return_value={"com.cisco.datasource.url": "other.example:50061"},
             ),
             self.assertRaisesRegex(InvalidTokenError, "com.cisco.datasource.url"),
@@ -154,7 +154,7 @@ class NemotronSessionConnectionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch("cisco_webex_byova_adapter.nemotron_bridge.websockets.connect", connect),
+            patch("webex_byova_grpc_adapter.nemotron_bridge.websockets.connect", connect),
             patch.object(NemotronSession, "_reader_loop", reader_loop),
         ):
             await session.start()

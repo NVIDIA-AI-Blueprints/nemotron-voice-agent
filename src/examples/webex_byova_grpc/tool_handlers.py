@@ -12,7 +12,7 @@ from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.services.llm_service import FunctionCallParams, FunctionCallResultProperties
 
-from examples.webex_byova.input_state import WebexInputState, keypad_prompt, keypad_reprompt
+from examples.webex_byova_grpc.input_state import WebexInputState, keypad_prompt, keypad_reprompt
 
 _MAX_REASON_LENGTH = 240
 _ROUTES = {"customer_service", "billing", "technical_support"}

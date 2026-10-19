@@ -13,8 +13,8 @@ name: nemotron-voice-agent
 #   omni-assistant               Cascaded Omni LLM + TTS Pipeline (Omni Assistant)
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
 #   frontend-backend-agent       Cascaded Frontend/Backend Agent Pipeline (Airline Assistant)
-#   webex-byova-assistant        Cascaded backend for Cisco Webex BYOVA adapter
-#   webex-byova-ws-assistant     Generic baseline for Cisco Webex BYOVA WebSocket
+#   webex-byova-grpc-assistant   Cascaded backend for the Cisco Webex BYOVA gRPC adapter
+#   webex-byova-ws-assistant     Cascaded backend for the Cisco Webex BYOVA WebSocket adapter
 #
 # Hardware targets:
 #   server                    NIM ASR + LLM + TTS. Recommended for scaling
@@ -42,7 +42,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-agent/server up
 #   docker compose --profile frontend-backend-agent/single-gpu up
-#   docker compose --profile webex-byova-assistant/server up
+#   docker compose --profile webex-byova-grpc-assistant/server up
 #   docker compose --profile webex-byova-ws-assistant/server up
 #   docker compose --profile webex-byova-ws-assistant/single-gpu up
 #
@@ -235,13 +235,13 @@ services:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
 
-  webex-byova-assistant-server:
+  webex-byova-grpc-assistant-server:
     <<: *app-base
     profiles:
-      - webex-byova-assistant/server
+      - webex-byova-grpc-assistant/server
     environment:
       <<: *app-env
-      EXAMPLE_SELECTION: webex-byova-assistant
+      EXAMPLE_SELECTION: webex-byova-grpc-assistant
       TRANSPORT_SELECTION: websocket
       UVICORN_WORKERS: "${UVICORN_WORKERS:-1}"
       USE_SILERO_VAD_TURN_DETECTION: "true"

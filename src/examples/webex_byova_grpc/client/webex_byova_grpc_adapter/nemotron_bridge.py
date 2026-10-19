@@ -19,8 +19,8 @@ from typing import Any
 import websockets
 from pipecat.frames.protobufs import frames_pb2
 
-from cisco_webex_byova_adapter.audio import TARGET_SAMPLE_RATE
-from cisco_webex_byova_adapter.config import AdapterConfig
+from webex_byova_grpc_adapter.audio import TARGET_SAMPLE_RATE
+from webex_byova_grpc_adapter.config import AdapterConfig
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class NemotronSession:
             "id": f"client-ready-{self.conversation_id}",
             "data": {
                 "version": "1.2.0",
-                "about": {"library": "cisco-webex-byova-adapter"},
+                "about": {"library": "cisco-webex-byova-grpc-adapter"},
             },
         }
         frame = frames_pb2.Frame(message=frames_pb2.MessageFrame(data=json.dumps(payload)))

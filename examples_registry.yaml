@@ -80,8 +80,8 @@ examples:
       tts: [magpie-multilingual-tts]
     bot: examples.frontend_backend_agent.pipeline:bot
 
-  webex-byova-assistant:
-    label: Cisco Webex BYOVA Assistant
+  webex-byova-grpc-assistant:
+    label: Cisco Webex BYOVA gRPC Assistant
     slots: [llm, asr, tts]
     activity_check:
       first_warning_s: 480
@@ -92,7 +92,7 @@ examples:
       llm: [nemotron-lightning]
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
-    bot: examples.webex_byova.pipeline:bot
+    bot: examples.webex_byova_grpc.pipeline:bot
 
   webex-byova-ws-assistant:
     label: Cisco Webex BYOVA WebSocket Assistant

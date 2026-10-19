@@ -1,5 +1,5 @@
 [project]
-name = "cisco-webex-byova-adapter"
+name = "cisco-webex-byova-grpc-adapter"
 version = "0.1.0"
 description = "Thin BYoVA-to-Nemotron adapter for Cisco Webex Contact Center"
 readme = "README.md"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cisco-webex-byova-adapter = "cisco_webex_byova_adapter.main:main"
+cisco-webex-byova-grpc-adapter = "webex_byova_grpc_adapter.main:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -47,4 +47,4 @@ convention = "google"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cisco_webex_byova_adapter*"]
+include = ["webex_byova_grpc_adapter*"]

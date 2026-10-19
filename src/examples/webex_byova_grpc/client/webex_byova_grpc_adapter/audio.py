@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import audioop
 
-from cisco_webex_byova_adapter.generated import voicevirtualagent_pb2
+from webex_byova_grpc_adapter.generated import voicevirtualagent_pb2
 
 # Nemotron accepts caller input at 16 kHz. Output frames declare their own rate.
 TARGET_SAMPLE_RATE = 16000

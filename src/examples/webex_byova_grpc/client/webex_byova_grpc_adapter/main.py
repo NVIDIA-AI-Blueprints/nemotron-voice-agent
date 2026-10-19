@@ -11,11 +11,11 @@ import logging
 
 import grpc
 
-from cisco_webex_byova_adapter.auth import CiscoAuthInterceptor
-from cisco_webex_byova_adapter.config import AdapterConfig
-from cisco_webex_byova_adapter.generated import health_pb2_grpc, voicevirtualagent_pb2_grpc
-from cisco_webex_byova_adapter.http_health import start_health_http_server
-from cisco_webex_byova_adapter.service import HealthServicer, VoiceVirtualAgentServicer
+from webex_byova_grpc_adapter.auth import CiscoAuthInterceptor
+from webex_byova_grpc_adapter.config import AdapterConfig
+from webex_byova_grpc_adapter.generated import health_pb2_grpc, voicevirtualagent_pb2_grpc
+from webex_byova_grpc_adapter.http_health import start_health_http_server
+from webex_byova_grpc_adapter.service import HealthServicer, VoiceVirtualAgentServicer
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ async def serve() -> None:
     health_server = await start_health_http_server(config)
     try:
         await server.start()
-        print(f"cisco-webex-byova-adapter listening on {grpc_scheme}://{config.grpc_bind_address}")
+        print(f"cisco-webex-byova-grpc-adapter listening on {grpc_scheme}://{config.grpc_bind_address}")
         print(f"health endpoint listening on {health_scheme}://{config.health_bind_address}/voiceva/v1/ping")
         await server.wait_for_termination()
     finally:

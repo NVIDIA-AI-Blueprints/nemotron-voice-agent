@@ -36,9 +36,9 @@ from examples.shared.pipeline_utils import (
     register_session_start_handlers,
     with_realtime_observers,
 )
-from examples.webex_byova.input_state import WebexInputMessageProcessor, WebexInputState
-from examples.webex_byova.tools import TOOL_HANDLERS, build_tools_schema
-from examples.webex_byova.transport import create_webex_transport
+from examples.webex_byova_grpc.input_state import WebexInputMessageProcessor, WebexInputState
+from examples.webex_byova_grpc.tools import TOOL_HANDLERS, build_tools_schema
+from examples.webex_byova_grpc.transport import create_webex_transport
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
@@ -230,7 +230,7 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     input_message_processor = WebexInputMessageProcessor(input_state, queue_activity_llm_run, speak)
     activity_check = create_activity_check_processor(
-        examples_registry.activity_check_config(body.get("pipeline_mode", "webex-byova-assistant")),
+        examples_registry.activity_check_config(body.get("pipeline_mode", "webex-byova-grpc-assistant")),
         context=context,
         queue_llm_run=queue_activity_llm_run,
         instruction_role="user",

@@ -19,9 +19,9 @@ Caller (PSTN) -> Webex Calling -> Webex Contact Center flow
 
 ## What is here
 
-- `cisco_webex_byova_adapter/` - runtime adapter code
+- `webex_byova_grpc_adapter/` - runtime adapter code
 - `proto/` - source protobuf definitions
-- `cisco_webex_byova_adapter/generated/` - checked-in generated protobuf Python files
+- `webex_byova_grpc_adapter/generated/` - checked-in generated protobuf Python files
 - `scripts/run_external_adapter.sh` - main launcher
 - `scripts/test_byova_client.py` - local smoke client
 
@@ -47,11 +47,11 @@ Default backend targets:
 
 - `NEMOTRON_VOICE_AGENT_WS=wss://127.0.0.1:7860`
 
-The backend itself is the `webex-byova-assistant` example in this repository.
+The backend itself is the `webex-byova-grpc-assistant` example in this repository.
 The adapter opens `/api/ws` directly without `/api/session-config` or a
 `session_id`, allowing connections to be distributed across multiple Uvicorn
 workers. The backend Compose profile selects the example at startup with
-`EXAMPLE_SELECTION=webex-byova-assistant`.
+`EXAMPLE_SELECTION=webex-byova-grpc-assistant`.
 For the full backend + adapter + Cisco sandbox flow, use:
 
 - [`../run.md`](../run.md)
