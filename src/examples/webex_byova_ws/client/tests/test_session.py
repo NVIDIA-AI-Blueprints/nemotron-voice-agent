@@ -90,7 +90,8 @@ async def test_rtvi_input_boundary_mapping() -> None:
 
 
 @pytest.mark.asyncio
-async def test_audio_is_chunked_with_barge_in_then_exactly_one_final() -> None:
+async def test_audio_is_chunked_then_closed_by_exactly_one_empty_final() -> None:
+    """Match the reference simulator: raw chunks, then one empty-audio FINAL."""
     value, websocket = conversation()
     value.reply.begin("assistant-output")
     value.reply.note_audio()
@@ -102,9 +103,29 @@ async def test_audio_is_chunked_with_barge_in_then_exactly_one_final() -> None:
     assert response_types == ["CHUNK", "FINAL"]
     prompt = websocket.sent[0]["payload"]["prompts"][0]
     assert prompt["is_barge_in_enabled"] is True
+    assert not base64.b64decode(prompt["audio_content_b64"]).startswith(b"RIFF")
     assert websocket.sent[1]["payload"]["prompts"] == [
         {"audio_content_b64": "", "is_barge_in_enabled": True}
     ]
+
+
+@pytest.mark.asyncio
+async def test_every_keypad_response_carries_the_dtmf_collection_rules() -> None:
+    """Webex only delivers DTMF when INPUT_VOICE_DTMF carries a dtmf_config."""
+    value, websocket = conversation()
+    value.reply.begin("assistant-output")
+    value.reply.note_audio()
+    for chunk in value.bot_audio.feed(b"\x00\x00" * 100, 22_050, 1):
+        await value._send_audio(chunk)
+    await value._finish_reply()
+
+    for message in websocket.sent:
+        payload = message["payload"]
+        assert payload["input_mode"] == "INPUT_VOICE_DTMF"
+        assert payload["input_handling_config"]["dtmf_config"] == {
+            "inter_digit_timeout_msec": 3_000,
+            "termchar": "DTMF_DIGIT_POUND",
+        }
 
 
 @pytest.mark.asyncio
@@ -152,70 +173,26 @@ async def test_same_socket_accepts_multiple_audio_requests() -> None:
 
 
 @pytest.mark.asyncio
-async def test_continuation_socket_resumes_bridge_and_resets_sequences() -> None:
-    value, first_websocket = conversation()
-    value.bridge = SimpleNamespace(send_audio=AsyncMock())
-    value.last_inbound_seq = 9
-    value.sequence.next()
-    replacement = FakeWebSocket()
-    audio = {
-        "caller_audio_b64": base64.b64encode(b"\xff" * 160).decode(),
-        "encoding": "MULAW_FORMAT",
-        "sample_rate_hertz": 8000,
-    }
-    await value.attach(replacement, cisco_request(1, "audio_input", audio))
-    assert value.websocket is replacement
-    assert first_websocket.closed
-    assert value.last_inbound_seq == 1
-    assert value.sequence.next() == 1
-    value.bridge.send_audio.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_continuation_waits_until_active_reply_is_final() -> None:
-    value, _ = conversation()
-    value.reply.begin("assistant-output")
-    value.reply_complete.clear()
-    replacement = FakeWebSocket()
+async def test_one_socket_carries_turns_with_a_single_outbound_sequence() -> None:
+    """Keep one connection and one monotonic response counter per conversation."""
+    value, websocket = conversation()
     value.bridge = SimpleNamespace(send_audio=AsyncMock())
     audio = {
         "caller_audio_b64": base64.b64encode(b"\xff" * 160).decode(),
         "encoding": "MULAW_FORMAT",
         "sample_rate_hertz": 8000,
     }
-    attach_task = asyncio.create_task(
-        value.attach(replacement, cisco_request(1, "audio_input", audio))
-    )
-    await asyncio.sleep(0)
-    assert not attach_task.done()
-    await value._send_audio_final()
-    await attach_task
-    assert value.websocket is replacement
 
+    for seq in (1, 2, 3):
+        await value._handle(cisco_request(seq, "audio_input", audio))
+        value.reply.begin("assistant-output")
+        value.reply.note_audio()
+        await value._finish_reply()
 
-@pytest.mark.asyncio
-async def test_continuation_timeout_closes_logical_conversation() -> None:
-    value, _ = conversation()
-    value.config.first_audio_timeout_seconds = 0.001
-    value.config.completion_timeout_seconds = 0.001
-    value.reply.begin("assistant-output")
-    value.reply_complete.clear()
-    replacement = FakeWebSocket()
-    with pytest.raises(TimeoutError):
-        await value.attach(
-            replacement,
-            cisco_request(
-                1,
-                "audio_input",
-                {
-                    "caller_audio_b64": None,
-                    "encoding": "MULAW_FORMAT",
-                    "sample_rate_hertz": 8000,
-                },
-            ),
-        )
-    assert value.closed
-    assert value.closed_event.is_set()
+    assert value.websocket is websocket
+    assert not websocket.closed
+    assert value.last_inbound_seq == 3
+    assert [message["seq"] for message in websocket.sent] == [1, 2, 3]
 
 
 @pytest.mark.asyncio

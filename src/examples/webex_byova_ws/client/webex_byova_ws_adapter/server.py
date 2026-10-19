@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import ssl
 from typing import Any
@@ -11,13 +10,10 @@ from aiohttp import WSMsgType, web
 
 from webex_byova_ws_adapter.auth import CiscoJwsValidator
 from webex_byova_ws_adapter.config import AdapterConfig
-from webex_byova_ws_adapter.protocol import ProtocolError, parse_request, parse_text
 from webex_byova_ws_adapter.session import Conversation
 
 CONFIG = web.AppKey("config", AdapterConfig)
 VALIDATOR = web.AppKey("validator", CiscoJwsValidator)
-CONVERSATIONS = web.AppKey("conversations", dict[str, Conversation])
-CONVERSATION_LOCK = web.AppKey("conversation_lock", asyncio.Lock)
 
 
 async def _authenticate(request: web.Request) -> None:
@@ -31,7 +27,7 @@ async def _authenticate(request: web.Request) -> None:
 
 
 async def voice_agent(request: web.Request) -> web.WebSocketResponse:
-    """Route Cisco physical sockets to a stable logical conversation."""
+    """Serve one Cisco conversation for the whole life of one WebSocket."""
     await _authenticate(request)
     config = request.app[CONFIG]
     websocket = web.WebSocketResponse(
@@ -41,50 +37,11 @@ async def voice_agent(request: web.Request) -> web.WebSocketResponse:
         receive_timeout=None,
     )
     await websocket.prepare(request)
-    first_message = await websocket.receive(timeout=config.send_timeout_seconds)
-    if first_message.type != WSMsgType.TEXT:
-        await websocket.close(code=1003, message=b"JSON text required")
-        return websocket
+    conversation = Conversation(config, websocket)
     try:
-        envelope = parse_text(first_message.data)
-        parsed = parse_request(envelope)
-    except ProtocolError:
-        await websocket.close(code=1007, message=b"invalid first request")
-        return websocket
-
-    event_type = parsed.input_value.get("event_type") if parsed.input_kind == "event_input" else None
-    async with request.app[CONVERSATION_LOCK]:
-        conversation = request.app[CONVERSATIONS].get(parsed.conversation_id)
-        if conversation is not None and conversation.closed:
-            request.app[CONVERSATIONS].pop(parsed.conversation_id, None)
-            conversation = None
-        if conversation is None:
-            if event_type != "SESSION_START":
-                await websocket.close(code=1008, message=b"SESSION_START required")
-                return websocket
-            conversation = Conversation(config, websocket)
-            request.app[CONVERSATIONS][parsed.conversation_id] = conversation
-            continuation = False
-        elif event_type == "SESSION_START":
-            await websocket.close(code=1008, message=b"conversation already active")
-            return websocket
-        else:
-            continuation = True
-    try:
-        if continuation:
-            await conversation.attach(websocket, envelope)
-            await conversation.run(websocket=websocket)
-        else:
-            await conversation.run(envelope, websocket)
-    except TimeoutError:
-        await websocket.close(code=1013, message=b"active reply did not complete")
-    except (ProtocolError, ValueError):
-        pass
+        await conversation.run()
     finally:
-        await conversation.closed_event.wait()
-        async with request.app[CONVERSATION_LOCK]:
-            if request.app[CONVERSATIONS].get(parsed.conversation_id) is conversation:
-                request.app[CONVERSATIONS].pop(parsed.conversation_id, None)
+        await conversation.close()
     return websocket
 
 
@@ -143,8 +100,6 @@ def create_app(config: AdapterConfig | None = None) -> web.Application:
     app = web.Application(client_max_size=resolved.max_message_bytes)
     app[CONFIG] = resolved
     app[VALIDATOR] = CiscoJwsValidator(resolved)
-    app[CONVERSATIONS] = {}
-    app[CONVERSATION_LOCK] = asyncio.Lock()
     app.router.add_get("/v1/va", voice_agent)
     app.router.add_get("/v1/listVirtualAgents", list_virtual_agents)
     app.router.add_get("/health", health)

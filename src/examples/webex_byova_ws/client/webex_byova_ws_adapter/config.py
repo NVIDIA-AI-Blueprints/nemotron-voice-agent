@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from webex_byova_ws_adapter.audio import PROMPT_AUDIO_SUFFIX, RAW_MULAW
+from webex_byova_ws_adapter.protocol import DTMF_DIGITS
+
 SCHEMA_UUID = "a38a10b7-43e4-4676-a076-a7d6dce9387d"
 
 
@@ -56,10 +59,17 @@ class AdapterConfig:
     completion_timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv("BYOVA_COMPLETION_TIMEOUT_SECONDS", "10"))
     )
-    continuation_grace_seconds: float = field(
-        default_factory=lambda: float(os.getenv("BYOVA_CONTINUATION_GRACE_SECONDS", "5"))
-    )
     max_message_bytes: int = field(default_factory=lambda: int(os.getenv("BYOVA_MAX_MESSAGE_BYTES", "1048576")))
+    trace_wire: bool = field(default_factory=lambda: _bool("BYOVA_TRACE_WIRE", False))
+    # Diagnostic capture of outbound prompt audio; empty disables it.
+    capture_dir: str = field(default_factory=lambda: os.getenv("BYOVA_CAPTURE_DIR", ""))
+    prompt_audio_profile: str = field(default_factory=lambda: os.getenv("BYOVA_PROMPT_AUDIO_PROFILE", RAW_MULAW))
+    # INPUT_VOICE_DTMF only delivers DTMF when a dtmf_config accompanies it, so
+    # every response that opens the keypad also carries these collection rules.
+    dtmf_inter_digit_timeout_ms: int = field(
+        default_factory=lambda: int(os.getenv("BYOVA_DTMF_INTER_DIGIT_TIMEOUT_MS", "3000"))
+    )
+    dtmf_termchar: str = field(default_factory=lambda: os.getenv("BYOVA_DTMF_TERMCHAR", "DTMF_DIGIT_POUND"))
 
     def validate(self) -> None:
         """Reject incomplete or unsafe production configuration."""
@@ -71,11 +81,16 @@ class AdapterConfig:
             self.send_timeout_seconds <= 0
             or self.first_audio_timeout_seconds <= 0
             or self.completion_timeout_seconds <= 0
-            or self.continuation_grace_seconds <= 0
             or self.jwks_ttl_seconds <= 0
             or self.auth_clock_skew_seconds < 0
         ):
             raise ValueError("timeouts, JWK cache lifetime, and clock skew must use valid bounds")
+        if self.prompt_audio_profile not in PROMPT_AUDIO_SUFFIX:
+            raise ValueError(f"BYOVA_PROMPT_AUDIO_PROFILE must be one of {sorted(PROMPT_AUDIO_SUFFIX)}")
+        if self.dtmf_inter_digit_timeout_ms <= 0:
+            raise ValueError("BYOVA_DTMF_INTER_DIGIT_TIMEOUT_MS must be positive")
+        if self.dtmf_termchar not in DTMF_DIGITS:
+            raise ValueError("BYOVA_DTMF_TERMCHAR must be a Cisco DTMF digit name")
         if bool(self.tls_cert) != bool(self.tls_key):
             raise ValueError("BYOVA_TLS_CERT and BYOVA_TLS_KEY must be configured together")
         if not self.tls_cert and not self.allow_plaintext_local:

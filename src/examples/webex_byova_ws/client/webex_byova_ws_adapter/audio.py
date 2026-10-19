@@ -1,17 +1,27 @@
-"""Raw telephony audio conversion and bounded output chunking."""
+"""Telephony audio conversion and bounded output chunking."""
 
 from __future__ import annotations
 
 import audioop
 import base64
 import binascii
+import io
+import wave
 from dataclasses import dataclass, field
 
 PIPELINE_RATE = 16_000
 WEBEX_RATE = 8_000
-MIN_CHUNK = 320
-TARGET_CHUNK = 8_000
+SAMPLE_WIDTH = 2
+MIN_CHUNK = 640
 MAX_CHUNK = 32 * 1024
+
+# Cisco's documented media profile is raw mu-law with no container, which the
+# connector renders once a dtmf_config accompanies INPUT_VOICE_DTMF. Without
+# that config it discards raw audio, which is why the WAV form is kept
+# selectable.
+WAV_PCM16 = "wav-pcm16"
+RAW_MULAW = "raw-mulaw"
+PROMPT_AUDIO_SUFFIX = {WAV_PCM16: "wav", RAW_MULAW: "ulaw"}
 
 
 @dataclass(slots=True)
@@ -37,7 +47,12 @@ class CallerAudioConverter:
 
 @dataclass(slots=True)
 class WebexAudioChunker:
-    """Convert mono PCM16 at its declared rate to bounded raw mu-law chunks."""
+    """Resample mono PCM16 to 8 kHz and release it as generated.
+
+    Generated audio is forwarded on arrival rather than gathered into fixed
+    chunks, so the only audio ever held back is a remainder too short for
+    Cisco's minimum prompt size, which the reply's flush releases.
+    """
 
     _resample_state: object | None = None
     _source_rate: int | None = None
@@ -62,23 +77,46 @@ class WebexAudioChunker:
             WEBEX_RATE,
             self._resample_state,
         )
-        self._buffer.extend(audioop.lin2ulaw(downsampled, 2))
+        self._buffer.extend(downsampled)
         chunks: list[bytes] = []
-        while len(self._buffer) >= TARGET_CHUNK:
-            chunks.append(bytes(self._buffer[:TARGET_CHUNK]))
-            del self._buffer[:TARGET_CHUNK]
+        while len(self._buffer) >= MIN_CHUNK:
+            size = min(len(self._buffer), MAX_CHUNK)
+            chunks.append(bytes(self._buffer[:size]))
+            del self._buffer[:size]
         return chunks
 
     def flush(self) -> list[bytes]:
-        """Flush a short tail padded with mu-law silence."""
+        """Flush a short tail padded with silence."""
         if not self._buffer:
             return []
-        self._buffer.extend(b"\xff" * (MIN_CHUNK - len(self._buffer)))
+        self._buffer.extend(bytes(max(0, MIN_CHUNK - len(self._buffer))))
         chunk = bytes(self._buffer)
         self._buffer.clear()
         return [chunk]
 
 
-def encode_audio(raw: bytes) -> str:
-    """Encode raw mu-law bytes for the AsyncAPI prompt field."""
-    return base64.b64encode(raw).decode("ascii")
+def wav_container(pcm: bytes) -> bytes:
+    """Wrap PCM16 8 kHz audio in a WAV container.
+
+    Webex renders prompt audio only when it carries a WAV header, matching the
+    canned prompts its own connector plays.
+    """
+    container = io.BytesIO()
+    with wave.open(container, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(SAMPLE_WIDTH)
+        wav.setframerate(WEBEX_RATE)
+        wav.writeframes(pcm)
+    return container.getvalue()
+
+
+def prompt_audio(pcm: bytes, profile: str) -> bytes:
+    """Render PCM16 8 kHz audio into the wire form of the chosen profile."""
+    if profile == RAW_MULAW:
+        return audioop.lin2ulaw(pcm, SAMPLE_WIDTH)
+    return wav_container(pcm)
+
+
+def encode_audio(payload: bytes) -> str:
+    """Encode rendered prompt audio for the AsyncAPI prompt field."""
+    return base64.b64encode(payload).decode("ascii")

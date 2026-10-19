@@ -318,8 +318,13 @@ services:
       CISCO_ORG_UUID: "${CISCO_ORG_UUID:-}"
       NEMOTRON_VOICE_AGENT_WS: "${NEMOTRON_VOICE_AGENT_WS:-wss://webex-byova-ws-pipeline:7860/api/ws}"
       NEMOTRON_INSECURE_TLS: "${NEMOTRON_INSECURE_TLS:-true}"
-      BYOVA_CONTINUATION_GRACE_SECONDS: "${BYOVA_CONTINUATION_GRACE_SECONDS:-5}"
+      BYOVA_TRACE_WIRE: "${BYOVA_TRACE_WIRE:-false}"
+      BYOVA_CAPTURE_DIR: "${BYOVA_CAPTURE_DIR:-}"
+      BYOVA_PROMPT_AUDIO_PROFILE: "${BYOVA_PROMPT_AUDIO_PROFILE:-raw-mulaw}"
     volumes:
+      - type: bind
+        source: ${BYOVA_CAPTURE_DIR_HOST:-/dev/null}
+        target: /var/tmp/byova-capture
       - type: bind
         source: ${BYOVA_TLS_CERT_HOST:-/dev/null}
         target: /run/secrets/byova-tls.crt
