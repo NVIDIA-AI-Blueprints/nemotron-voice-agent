@@ -98,8 +98,8 @@ class WebexAudioChunker:
 def wav_container(pcm: bytes) -> bytes:
     """Wrap PCM16 8 kHz audio in a WAV container.
 
-    Webex renders prompt audio only when it carries a WAV header, matching the
-    canned prompts its own connector plays.
+    Webex renders this form only when no dtmf_config accompanies the prompt,
+    which is the combination Cisco's own sample connector sends.
     """
     container = io.BytesIO()
     with wave.open(container, "wb") as wav:

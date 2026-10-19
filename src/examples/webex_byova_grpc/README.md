@@ -112,6 +112,6 @@ UVICORN_WORKERS=4 \
 - End-to-end backend + adapter + Cisco sandbox flow:
   [`run.md`](./run.md)
 - Tool and keypad-state tests:
-  [`tests/unit/test_webex_byova_controls.py`](../../../tests/unit/test_webex_byova_controls.py)
+  [`tests/unit/test_webex_byova_grpc_controls.py`](../../../tests/unit/test_webex_byova_grpc_controls.py)
 - Adapter protocol tests:
   [`client/tests/test_adapter.py`](./client/tests/test_adapter.py)

@@ -1,82 +1,22 @@
 # Cisco Webex BYOVA WebSocket Integration Notes
 
-Development record of documented-versus-observed Webex behavior found while
-building this example, and the questions still open with Cisco.
+A running record of building the adapter in [`client/`](./client/) against a
+live Webex Contact Center tenant during September 2026. It exists because
+several behaviors the adapter depends on were not derivable from the published
+documentation, and because for those the route to the answer is more useful
+than the answer by itself.
 
-Date: September 9, 2026
+Entries are chronological. Where a later finding overturned an earlier one, the
+earlier conclusion is kept and marked superseded rather than deleted: the wrong
+turn is part of what makes the final rule credible, and anyone hitting the same
+symptom will recognize the detour.
 
-## Resolution (September 16, 2026)
+Reference:
+[BYOVA over WebSocket](https://developer.webex.com/mcp/docs/bring-your-own-virtual-agent-over-websocket)
 
-Cisco identified the multi-socket behavior as an internal bug and deployed a
-fix. Our live tenant now keeps one `/v1/va` socket for the whole conversation,
-matching the documented lifecycle, so the adapter implements the published
-single-socket contract and the compatibility layer described below is removed.
+## The Documented Contract
 
-The Service App question in *Service App Documentation Clarification* remains
-open, as does the prompt audio encoding question raised below.
-
-## Prompt Audio Encoding (September 17, 2026)
-
-After the socket lifecycle fix, calls connected and every turn traversed the
-pipeline correctly, but no assistant audio was ever rendered to the caller.
-Webex accepted our audio prompts without error and reported nothing unusual.
-
-We isolated the cause with a series of throwaway probe connectors that replaced
-the adapter and replied with fixed payloads. Holding everything else constant
-and varying one factor at a time showed:
-
-1. Only WAV-contained audio is rendered. Holding the source audio, chunk
-   durations, `is_barge_in_enabled`, `input_mode`, reply timing and the
-   `CHUNK`-then-empty-`FINAL` shape identical, and varying only the encoding:
-
-   | Prompt encoding | Rendered to caller |
-   | --- | --- |
-   | Raw G.711 mu-law 8 kHz, no container | No |
-   | Raw PCM16 8 kHz, no container | No |
-   | PCM16 8 kHz in a WAV container | Yes |
-
-2. The container, not the codec, is the deciding factor. Both raw encodings
-   are accepted on the socket without any error and silently discarded.
-3. Rendering is unaffected by `response_type`. Single `FINAL` replies and
-   streamed `CHUNK` sequences both play when the audio is WAV-contained.
-4. Rendering is unaffected by `is_barge_in_enabled`. Prompts play with the flag
-   set to either value.
-5. Rendering is unaffected by reply position. Replies play immediately after
-   `SESSION_START`, unsolicited mid-call, and in answer to caller turns.
-6. A reply sent while the caller is still speaking is correctly discarded as a
-   barge-in, which is expected behavior.
-
-Encoding our prompt audio as PCM16 8 kHz mono inside a WAV container produced
-working multi-turn conversations with the documented single-socket lifecycle.
-
-This contradicts the published documentation, which prohibits containers. The
-*Audio format and chunking* media profile lists `Container: None; do not
-include WAV, RIFF, or other container headers`, applies that profile to both
-`caller_audio_b64` and `prompts[].audio_content_b64`, and the FAQ answers "Can
-the partner send WAV audio?" with "No. Send raw codec bytes without WAV, RIFF,
-or another container header."
-
-The sample connector does the opposite of its own documentation.
-`AudioFileUtil.audioContentFromResources` base64-encodes each prompt asset
-verbatim with `readAllBytes()`, and those assets are WAV files. Cisco's
-`call-start.wav` is RIFF WAVE, Microsoft PCM, 16 bit, mono, 8 kHz. The sample
-therefore sends WAV-contained PCM16, which matches the live connector's actual
-behavior rather than the documented profile.
-
-Partners following the documentation send audio that is accepted on the wire
-and silently discarded, with no `unsupported_media` error to diagnose from.
-
-## Summary (as reported before the fix)
-
-The documented Webex BYOVA WebSocket lifecycle differs from the behavior
-observed in our live Webex Contact Center tenant. A strict implementation of
-the published single-socket contract completes the welcome message but cannot
-receive the caller's subsequent audio. Supporting socket continuation by
-`conversation_id` allows the conversation to proceed.
-
-## Documented WebSocket Flow
-
-The Webex documentation states:
+The documentation describes the lifecycle the adapter now implements:
 
 1. Webex opens one secure `/v1/va` WebSocket for one `conversation_id`.
 2. `SESSION_START` is the first application message on that connection.
@@ -86,107 +26,172 @@ The Webex documentation states:
 5. `FINAL` ends only that reply; it does not end the conversation or close the
    WebSocket.
 6. The same connection continues with the next caller turn.
-7. Webex does not reconnect, resume, or replay an existing session following a
-   connection failure.
+7. Webex does not reconnect, resume, or replay a session after a connection
+   failure.
 
-Reference:
-[BYOVA over WebSocket](https://developer.webex.com/mcp/docs/bring-your-own-virtual-agent-over-websocket)
+Each side owns one monotonic sequence counter for the connection, and a `PONG`
+echoes the sequence number of the `PING` it answers.
 
-## Observed Live Behavior
+## Welcome-Only Calls (September 9)
 
-In live calls, we observe:
+A strict implementation of the contract above completed the welcome message
+and then went deaf. Caller audio never arrived.
 
-1. Webex opens the first `/v1/va` socket and sends `SESSION_START`.
-2. The partner opens the internal Nemotron session.
-3. Nemotron generates the welcome response successfully.
-4. The partner sends schema-valid G.711 mu-law audio chunks followed by one
-   `FINAL`.
-5. Webex closes the original socket after the welcome `FINAL`.
-6. Webex opens additional `/v1/va` sockets for the same call.
-7. Caller audio is not sent on the original conversation socket.
-8. The strict documented implementation rejects the continuation sockets
-   because their first message is not a new `SESSION_START`; caller audio
-   consequently never reaches Nemotron.
+What we saw on every live call: Webex opened the first socket and sent
+`SESSION_START`; the welcome reply went out as mu-law chunks closed by one
+`FINAL`; Webex then **closed that socket** and opened further `/v1/va` sockets
+for the same call. Because a strict implementation requires `SESSION_START` as
+the first message, it rejected those continuation sockets, so the caller's
+speech never reached the pipeline. Two live conversations showed the welcome
+completing in roughly 0.5–0.9 seconds and then stalling, one of them followed
+by four additional connections.
 
-This welcome-only behavior was observed for these live Cisco conversations:
+We worked around it by decoupling the logical conversation from any physical
+socket: one pipeline session per `conversation_id`, continuation sockets
+resolved by that ID and attached to the existing conversation, sequence
+counters reset per physical socket, and promotion of a new socket deferred
+until any in-flight reply and its `FINAL` had finished. That produced working
+multi-turn calls.
 
-- `fd85c442-17da-4997-b58a-be5e4e812285`
-  - Welcome first-speech latency: approximately 0.94 seconds.
-  - Output media: raw G.711 mu-law, 8 kHz mono, normally 8,000 bytes per chunk.
-  - Result: welcome completed, followed by four new `/v1/va` connections and
-    no caller audio on the original socket.
-- `2c9f1a2a-6ca2-49b4-860a-147dba2b306a`
-  - Welcome first-speech latency: approximately 0.52 seconds.
-  - Result: welcome completed and Nemotron became ready for caller input, but
-    no subsequent caller speech reached the Nemotron pipeline.
+**Resolved September 16.** Cisco identified the multi-socket behavior as an
+internal bug and deployed a fix. The tenant now keeps one `/v1/va` socket for
+the whole conversation. The workaround was removed, and the adapter implements
+the published single-socket contract with no continuation handling at all.
 
-Both IDs came from live Webex calls and identify the affected logical
-conversations, not synthetic local tests.
+## Prompt Audio Accepted and Silently Discarded (September 17)
 
-## Behavior That Works
+With the lifecycle fixed, every call connected and every turn traversed the
+pipeline correctly, but no assistant audio was ever rendered to the caller.
+Webex accepted the prompts without error and reported nothing unusual, so there
+was nothing to debug from: every log on the partner side shows a healthy call.
 
-Our earlier compatibility implementation allowed calls to continue by:
+We isolated it with throwaway probe connectors that replaced the adapter and
+replied with fixed payloads, holding everything constant and varying one factor
+at a time. That ruled out most of the envelope: rendering is unaffected by
+`response_type` (single `FINAL` replies and streamed `CHUNK` sequences behave
+alike), by `is_barge_in_enabled`, and by reply position (immediately after
+`SESSION_START`, unsolicited mid-call, and in answer to a caller turn all
+behave alike). A reply sent while the caller is still speaking is discarded as
+a barge-in, which is correct.
 
-1. Owning the logical conversation independently from any physical WebSocket.
-2. Keeping one Nemotron RTVI connection alive for the logical conversation.
-3. Resolving each continuation socket by `conversation_id`.
-4. Attaching the continuation socket to the existing conversation.
-5. Treating inbound and outbound sequence counters as connection-scoped and
-   resetting them for each physical socket.
-6. Waiting for an active assistant reply, including all audio and its `FINAL`,
-   to finish before promoting a continuation socket.
-7. Preserving caller barge-in and the existing Nemotron context across socket
-   changes.
+What did change the outcome was the prompt media itself:
 
-This compatibility behavior enabled successful multi-turn live calls. It was
-removed when we implemented the documented canonical single-socket lifecycle,
-which made the welcome-only failure reproducible.
+| Prompt encoding | Rendered to caller |
+| --- | --- |
+| Raw G.711 mu-law 8 kHz, no container | No |
+| Raw PCM16 8 kHz, no container | No |
+| PCM16 8 kHz in a WAV container | Yes |
 
-After restoring the compatibility layer, live conversation
-`fcd803ec-009f-4dfd-8ff2-5867773cd3a8` completed successfully. The adapter
-attached seven Cisco continuation sockets to the same Nemotron session,
-processed multiple caller transcripts and assistant replies, and closed with
-20 output audio chunks totaling 130,104 raw mu-law bytes.
+**Superseded conclusion.** We read this as "the container, not the codec, is
+the deciding factor" and shipped WAV-contained PCM16, which gave us working
+multi-turn conversations. That conclusion was wrong, but it was not
+unreasonable: it also explained why Cisco's own sample connector works.
+`AudioFileUtil.audioContentFromResources` base64-encodes each prompt asset
+verbatim with `readAllBytes()`, and those assets are WAV files —
+`call-start.wav` is RIFF WAVE, Microsoft PCM, 16 bit, mono, 8 kHz. So the
+sample sends WAV-contained PCM16 while the *Audio format and chunking* media
+profile says `Container: None; do not include WAV, RIFF, or other container
+headers` and the FAQ answers "Can the partner send WAV audio?" with "No."
 
-## Service App Documentation Versus Guidance
+## Prompt Media Is Coupled to `dtmf_config` (September 18)
 
-The WebSocket documentation says to use the same authorized Service App while
-registering the WebSocket data source and explicitly says not to create a
-second Service App for the WebSocket transport.
+Cisco suggested sending `input_handling_config` alongside `INPUT_VOICE_DTMF`.
+With a `dtmf_config` present, raw mu-law rendered — the documented profile had
+been correct all along. Running all four combinations on the live tenant gave
+the actual rule:
 
-During integration, the Webex team advised us that two data sources could not
-be kept in the same Service App and recommended creating a separate Service
-App for WebSocket. We therefore currently use:
+| Prompt audio | `dtmf_config` | Result |
+| --- | --- | --- |
+| Raw mu-law 8 kHz | absent | Accepted on the socket, nothing rendered |
+| Raw mu-law 8 kHz | present | Rendered |
+| WAV-contained PCM16 8 kHz | absent | Rendered |
+| WAV-contained PCM16 8 kHz | present | Rendered as noise |
 
-- One Service App and data source for gRPC BYOVA.
-- A different Service App and data source for WebSocket BYOVA.
+So the earlier table was measured entirely in the `dtmf_config`-absent row, and
+the container looked decisive only because that row has exactly one working
+cell. The adapter always sends `dtmf_config`, so it always sends raw mu-law.
+`BYOVA_PROMPT_AUDIO_PROFILE=wav-pcm16` still selects the other profile for
+comparison testing.
 
-This works operationally, but it conflicts with the published instruction that
-a second Service App should not be created for WebSocket.
+None of this coupling is documented, and the failure mode is a silent discard.
 
-## Clarifications Requested
+## Clipped Prompt Starts (September 18)
 
-Please confirm:
+Once raw mu-law rendered, callers heard the *start of prompts cut off* —
+including the welcome message, with no interruption and no keypress, and most
+noticeably on the reply following a barge-in. Switching the same adapter to
+WAV-contained PCM16 without `dtmf_config` removed the clipping, which is why
+this surfaced only after the media fix.
 
-1. Is `/v1/va` intended to remain one physical WebSocket for the complete
-   conversation, including all turns after the welcome `FINAL`?
-2. If continuation sockets are expected, how must they identify and resume the
-   existing conversation, and are sequence counters scoped to each physical
-   socket?
-3. Should a continuation socket begin with another `SESSION_START`, or may its
-   first message contain caller audio?
-4. Does an audio-bearing welcome `FINAL` require any additional field or
-   acknowledgement to keep the original socket open?
-5. Can gRPC and WebSocket data sources coexist in one Service App, or is one
-   Service App per transport the supported production configuration?
-6. If separate Service Apps are required, please update the WebSocket
-   documentation accordingly.
-7. Which is authoritative for `prompts[].audio_content_b64`: the documented
-   raw mu-law profile with no container, or the WAV-contained PCM16 that the
-   sample connector sends and the live connector renders? Please align the
-   documentation and the sample, and state the supported sample rates.
-8. Can Webex return `unsupported_media` when prompt audio cannot be decoded,
-   rather than discarding it silently?
+Everything we could measure said the audio left intact. Decoding the exact
+bytes written to the socket, each reply began at the first word at full level,
+framed as roughly 100 ms `CHUNK` prompts closed by exactly one `FINAL`, with
+contiguous sequence numbers and no gaps. Asked to confirm the `FINAL` framing,
+we matched our wire log against Cisco's to within 4 ms: a 49-chunk welcome
+turn, 39,129 mu-law bytes, was 4.89 seconds of audio fully transmitted in
+238 ms, with the `FINAL` emitted 2 ms after the last chunk write. The tight
+`CHUNK`-to-`FINAL` interval is faster-than-realtime delivery as the guide
+recommends, not a truncated prompt. Inbound caller frames arriving inside that
+window go to ASR only and never touch reply framing; the only thing that ends a
+turn early is our own VAD, which always emits `START_OF_INPUT` first.
 
-No credentials, bearer tokens, caller audio, DTMF values, or transcripts are
-included in this report.
+Because the only two intelligible combinations in the matrix above differ in
+both variables, we could not isolate the cause from outside.
+
+**Pacing experiment.** Cisco asked us to insert 80–100 ms between chunks. We
+added 90 ms (chunks carry about 100 ms each, so just under realtime) and
+measured inter-chunk gaps of 90–93 ms, median 91, none above 150 ms. The
+caller then heard broken, choppy audio — worse than streaming as fast as
+generated, which at least played continuously apart from the clipped starts.
+Read against Cisco's own log line for one call (first chunk received at
+`11:34:01.655`, playback started at `11:34:01.704`), it suggested roughly 49 ms
+of per-chunk playback setup that is hidden when chunks queue up and becomes
+audible when they arrive at the rate they are consumed. The pacing was removed.
+
+**Resolved September 30.** Cisco deployed a fix. We retested the normal
+configuration — raw mu-law with `dtmf_config`, `INPUT_VOICE_DTMF`,
+`is_barge_in_enabled: true`, chunks streamed as generated — across three calls,
+29 assistant turns and about 255 seconds of prompt audio. The caller
+interrupted 11 times, several times with a large unplayed backlog (up to
+4.1 seconds, others at 3.2, 2.4 and 2.2 seconds). Every following reply played
+from its first word, the welcome message played complete, and prompts stopped
+promptly on barge-in. Those were precisely the conditions that previously
+produced clipped starts.
+
+## Latency (September 30)
+
+Measured inside the pipeline over 30 turns, end of caller turn to first byte of
+bot audio is a median of 0.88 s and a p90 of 1.09 s. Most of that is turn
+detection (500 ms VAD hangover, about 0.53 s) and ASR finalization (about
+0.45 s); LLM first token is about 0.12 s and TTS starts in under 0.1 s. What
+the caller perceives adds roughly 300–500 ms on top, which we attribute to
+network hops plus the per-chunk playback setup above.
+
+## Still Open
+
+**Service App registration.** The documentation says to reuse the same
+authorized Service App when registering the WebSocket data source and
+explicitly advises against creating a second one for the WebSocket transport.
+During integration we were advised that two data sources cannot be kept in one
+Service App and that a separate Service App should be created for WebSocket. We
+run one Service App and data source per transport, which works, but it
+contradicts the published instruction. Which is the supported production
+configuration is unconfirmed.
+
+**Diagnosability of rejected prompt audio.** Both media problems above
+presented as silence with a healthy call on every log we own. An error or
+warning frame when a prompt cannot be decoded or rendered — rather than a
+silent discard — would have removed most of the work recorded here.
+
+## If You Are Building One of These
+
+- Send raw G.711 mu-law 8 kHz with no container, and send `dtmf_config` with
+  `INPUT_VOICE_DTMF`. The two are coupled; neither works alone.
+- Silence with clean logs on both sides means the media contract, not the
+  protocol. Vary one factor at a time with a probe connector rather than
+  instrumenting the real adapter.
+- Stream chunks as soon as they are generated. Pacing them near realtime made
+  playback worse, not better.
+- Treat the sample connector's behavior as evidence about the live service, but
+  not as proof of a rule — it happened to sit in the one working cell of a
+  matrix neither it nor the documentation describes.

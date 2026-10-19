@@ -6,11 +6,15 @@ adapter translates Cisco JSON events and telephony audio to the internal
 Pipecat RTVI WebSocket protocol.
 
 This example does not modify or replace the existing
-[gRPC Webex BYOVA example](../webex_byova/README.md). The pipeline, prompts,
-tools, and service catalogs intentionally match the
+[gRPC Webex BYOVA example](../webex_byova_grpc/README.md). The pipeline,
+prompts, tools, and service catalogs intentionally match the
 [Generic Assistant](../generic/README.md). The sole pipeline transport
 deviation disables browser playback pacing because Webex buffers and paces
 partner audio itself.
+
+[`DEVELOPMENT_NOTES.md`](./DEVELOPMENT_NOTES.md) records where live Webex
+behavior diverged from the published documentation while this adapter was
+built, and how each divergence was resolved.
 
 ## Connection Boundaries
 
@@ -230,12 +234,14 @@ the documentation does not state. Raw mu-law renders only when `dtmf_config`
 is present, and WAV-contained PCM16 renders only when it is absent. The
 adapter always sends `dtmf_config`, so it always sends raw mu-law.
 `BYOVA_PROMPT_AUDIO_PROFILE` can select `wav-pcm16` for comparison testing.
-`DEVELOPMENT_NOTES.md` records the full matrix.
+[`DEVELOPMENT_NOTES.md`](./DEVELOPMENT_NOTES.md) records the full matrix and
+how it was measured.
 
 Generated audio is forwarded as it arrives rather than gathered into fixed
 chunks, which follows the documented instruction to send each chunk as soon as
-it is generated and let Webex pace playback. Chunks range from 640 bytes
-through 32 KB before containerization.
+it is generated and let Webex pace playback. Pacing chunks near realtime
+instead made caller-side playback choppy. Chunks range from 640 bytes through
+32 KB.
 
 ## Generic Baseline Fit
 
