@@ -37,6 +37,7 @@ If you are an AI agent that deploys this example for a user, follow these rules:
 4. Use the default OpenShell runtime. Add the plain runtime overlay, `docker/docker-compose.fdh-hermes-plain.yaml`, only when the user asks for it or the host cannot run OpenShell. Pass the Compose files in this order: `docker-compose.yml`, then the plain overlay, then the eval overlay. Refer to [Choose the Hermes Runtime](#choose-the-hermes-runtime).
 5. After startup and the first session, read the profile and the configuration hash from the app log, and the gateway configuration and source hash from the Hermes logs. Report them to the user. Refer to [Verify the Deployment](#verify-the-deployment).
 6. Check only that `NVIDIA_API_KEY` and `REALTIME_API_KEY` are present in `.env`. Do not print their values.
+7. If, and only if, the user says that the run is a VoiceBench evaluation, ask: "Keep the frontend silent for VoiceBench? The filler is then logged only, and the backend's answer is the first response. Default: no." Wait for the answer. If the answer is yes, add `docker/docker-compose.fdh-voicebench.yaml` after the eval overlay. Pass the Compose files in this order: `docker-compose.yml`, the plain overlay if used, the eval overlay, and then the VoiceBench overlay. Do not ask this question for Tau, the browser UI, or any other run, and never add the VoiceBench overlay for them. VoiceBench runs use the `eval` profile. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation).
 
 Do not overwrite other keys in an existing `.env`. For smoke tests, benchmark checks, and logs, load the deploy skill at `.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md`.
 
@@ -168,6 +169,7 @@ The following optional keys change the deployment. Leave them unset to keep the 
 | `NEMO_SPEECH_MODEL_LOC` | `models/nemo-speech` | Host directory that holds the speech model weights. |
 | `ENABLE_WELCOME_MESSAGE` | Unset (greets) | `false` turns off the browser UI greeting. Realtime sessions never greet. |
 | `HERMES_AGENT_DIR` | `../hermes-agent` | Path of the Hermes checkout for the image build. Both runtimes use it. |
+| `FDH_SILENT_FRONTEND` | `false` | `true` keeps the frontend silent on delegated turns for VoiceBench. Compose sets `false` as a literal value, and only the VoiceBench overlay sets `true`. Setting it in `.env` has no effect. Never set it to an empty value. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation). |
 
 Do not set `UVICORN_WS_PING_INTERVAL` for this recipe. Compose sets it to `0` on the voice service, and Realtime sessions refuse to start when the server pings WebSocket clients.
 
@@ -450,6 +452,47 @@ The Tau evaluation harness is not part of this repository. Use the following ste
 
 The `config hash` includes the backend URL. The URL is `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` in the OpenShell runtime and `ws://fdh-hermes:8790/v1/backend` in the plain runtime. The hash therefore differs between the two runtimes and from runs on the former FDH containers. To compare runs, use the prompt hashes and `session_tools_sha256`. Refer to [Deployed Fingerprint](../../src/examples/frontend_delegation_hermes/README.md#deployed-fingerprint).
 
+## Run a VoiceBench Evaluation
+
+VoiceBench in `voice-agent-evaluation` connects through OpenAI Realtime with the server VAD and never sends `response.create`. It ends each case on the first `response.done` and scores only the audio transcript of that response. This agent speaks each filler and each proactive status line as its own response, so on a delegated turn VoiceBench would score the filler instead of the backend's answer.
+
+The VoiceBench overlay, `docker/docker-compose.fdh-voicebench.yaml`, sets `FDH_SILENT_FRONTEND=true`, which turns on the `delegation.silent_frontend` switch. With the switch on, the agent behaves as follows:
+
+- The filler of a delegated turn is never spoken. The voice event log records it as a `filler_silenced` event with the reason `silent_frontend`.
+- The proactive status line is never spoken. The voice event log records a `proactive_status_silenced` event once per backend run.
+- Direct answers, that is turns that the frontend does not delegate, are still spoken.
+
+Use the VoiceBench overlay for VoiceBench runs only. Tau runs need the spoken filler and status lines.
+
+To run a VoiceBench evaluation, complete the following steps:
+
+1. Complete steps 1 to 4 of [Deploy in Eval Mode](#deploy-in-eval-mode), and start the recipe with the eval overlay and then the VoiceBench overlay. In the plain runtime, pass the plain overlay before the eval overlay:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+      -f docker/docker-compose.fdh-voicebench.yaml \
+      --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+    ```
+
+    Pass the same `-f` files in every Compose command for this deployment, including `exec`, `logs`, and `down`.
+
+2. Check the switch in the voice container. The command prints `true`:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+      -f docker/docker-compose.fdh-voicebench.yaml \
+      --profile frontend-delegation-hermes-agent/single-gpu exec frontend-delegation-hermes-agent-single-gpu \
+      printenv FDH_SILENT_FRONTEND
+    ```
+
+3. Connect one session. In `logs/fdh_voice_events.pipecat.jsonl`, the settings of the `fdh_session_start` record carry `silent_frontend: true`, and each delegated turn has a `filler_silenced` record.
+
+4. Run the harness with the profile `nemotron-fdh-local` and the run configuration `configs/runs/voicebench-fdh-realtime-smoke.yaml` in `voice-agent-evaluation`.
+
+5. Record the `config hash` from the app log with the results. The switch is part of the effective settings only when it is on, so the `config hash` of a VoiceBench run differs from that of a normal eval run. With the switch off, the hash is the same as before the switch existed.
+
+To switch back to a Tau or other evaluation deployment, rerun the `up -d --build` command from [Deploy in Eval Mode](#deploy-in-eval-mode) without the VoiceBench overlay. Compose then recreates the voice container with `FDH_SILENT_FRONTEND=false`.
+
 ## Read the Logs
 
 The containers write the logs in the following table. The `logs/` paths are on the host, in the repository's `logs/` directory.
@@ -498,6 +541,8 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
 ```
 
 In the OpenShell runtime, `fdh-hermes` saves the sandbox's `/app/logs` to `logs/openshell/<time>/` and then deletes the sandbox. The stop can take up to 60 seconds. If the controller crashed and left a sandbox behind, the next start saves its logs and deletes it before it creates a new one.
+
+If you started the deployment with the VoiceBench overlay, pass it after the eval overlay as well.
 
 In the plain runtime, the gateway closes open sessions one after another, so the stop can take up to 75 seconds. Pass the plain overlay to `down` as well.
 

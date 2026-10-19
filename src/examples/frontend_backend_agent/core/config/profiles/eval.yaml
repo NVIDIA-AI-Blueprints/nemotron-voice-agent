@@ -41,8 +41,10 @@ protocol:
   resume_on: response_create
 
 # The frontend's filler is spoken, so the tau2 user hears it and can answer it.
+# FBA_FILLER_MODE=log_only (docker/docker-compose.fba-voicebench.yaml only) logs it instead, so a
+# single-turn benchmark such as VoiceBench scores the answer alone. Never set it to an empty value.
 filler:
-  mode: speak
+  mode: "${FBA_FILLER_MODE:-speak}"
 
 tools:
   source: client

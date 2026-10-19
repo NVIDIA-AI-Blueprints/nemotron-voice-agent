@@ -71,6 +71,7 @@ INTERPOLATED_ENV = (
     "FBA_ASR_SERVER",
     "FBA_TTS_SERVER",
     "FBA_FILLER_LOG",
+    "FBA_FILLER_MODE",
     "FBA_VOICE_EVENT_LOG",
     "FBA_PROFILE",
     # Not interpolated, but read by the adapter: the deployment platform (speech remap, D2) and the

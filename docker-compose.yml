@@ -239,6 +239,7 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       LOCAL_SERVICES_ENABLED: "false"
       FBA_PROFILE: ${FBA_PROFILE:-default}
+      FBA_FILLER_MODE: speak
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
 
@@ -251,6 +252,7 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       REALTIME_SERVICE_PLATFORM: server
       FBA_PROFILE: ${FBA_PROFILE:-default}
+      FBA_FILLER_MODE: speak
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
 
@@ -263,6 +265,7 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       REALTIME_SERVICE_PLATFORM: singlegpu
       FBA_PROFILE: ${FBA_PROFILE:-default}
+      FBA_FILLER_MODE: speak
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
 
@@ -294,6 +297,7 @@ services:
       FDH_PROACTIVE_AFTER_S: "15"
       FDH_EVENT_LOG: logs/fdh_voice_events.pipecat.jsonl
       FDH_PROMPTS: prompts.yaml
+      FDH_SILENT_FRONTEND: "false"
       FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
       FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
       # The Hermes runtime's address (OpenShell: the gateway's routed host name; port 8080 is the

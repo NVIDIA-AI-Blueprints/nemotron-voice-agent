@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from _fba_core_fakes import (
     FakeChatClient,
@@ -22,9 +24,12 @@ from _fba_core_fakes import (
     tool_response,
     voice_config,
 )
+from _fba_golden import pinned_environment
 from _fba_parity import WINDOW_MS
 from _fba_pipecat_fakes import PipecatHarness, PipecatTestCase
 
+from examples.frontend_backend_agent.core.config.profiles import REALTIME_PROFILE, profile_path
+from examples.frontend_backend_agent.core.config.voice import load_voice_config
 from examples.frontend_backend_agent.core.engine.filler import FillerLog
 from examples.frontend_backend_agent.core.engine.runner import AgentClients
 
@@ -179,4 +184,50 @@ class SpeakTests(PipecatTestCase):
         self.assertEqual(len(harness.of_type("response.output_item.added")), 1)
         self.assertFalse(harness.filler_log.records[0]["spoken"])
         self.assertFalse(harness.filler_log.records[0]["would_have_spoken"])
+        await harness.close()
+
+
+def _eval_profile(env: dict[str, str]):
+    with pinned_environment(), mock.patch.dict(os.environ, env):
+        return load_voice_config(profile_path(REALTIME_PROFILE))
+
+
+class FillerModeEnvTests(PipecatTestCase):
+    """``FBA_FILLER_MODE`` (VoiceBench overlay): the eval profile speaks the filler unless it says ``log_only``."""
+
+    def test_eval_profile_speaks_unless_the_environment_says_log_only(self) -> None:
+        self.assertEqual(_eval_profile({}).filler.mode, "speak")
+        self.assertEqual(_eval_profile({"FBA_FILLER_MODE": "log_only"}).filler.mode, "log_only")
+        with self.assertRaises(Exception) as caught:
+            _eval_profile({"FBA_FILLER_MODE": "quiet"})
+        self.assertIn("filler.mode", str(caught.exception))
+
+    async def test_log_only_with_a_slow_backend_answers_alone_in_one_response(self) -> None:
+        gate = asyncio.Event()
+        frontend = FakeChatClient([delegate_response("Check the thing.", filler="Let me check.")])
+        backend = FakeChatClient([text_response("It is all set.")])
+        backend.gates[0] = gate
+        harness = PipecatHarness(
+            config=_eval_profile({"FBA_FILLER_MODE": "log_only"}),
+            clients=AgentClients(backend=backend, frontend=frontend),
+            filler_log=FillerLog(),
+        )
+        await harness.start(tau2_session_update())
+        await harness.speak()
+        await harness.idle(1500)  # the eval profile ends the turn after 0.8 s of silence
+        for _ in range(200):
+            if backend.calls:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(len(backend.calls), 1)
+        await asyncio.sleep(0.6)  # past speak_after_ms (300): speak mode would be speaking the filler now
+        self.assertEqual(harness.of_type("response.output_audio.delta"), [])
+        gate.set()
+        await harness.wait_for("response.done")
+        transcript = "".join(e["delta"] for e in harness.of_type("response.output_audio_transcript.delta"))
+        self.assertEqual(transcript, "It is all set.")
+        self.assertEqual(len(harness.of_type("response.done")), 1)
+        record = harness.filler_log.records[0]
+        self.assertFalse(record["spoken"])
+        self.assertTrue(record["would_have_spoken"])
         await harness.close()

@@ -276,7 +276,7 @@ Every OpenAI Realtime session resolves to the following effective values. `core/
 | Barge-in during backend work | `frontend_verdict`. The frontend decides whether the new speech continues the running task. The verdict deadline is 4,000 ms, after which `cancel_and_merge` applies. A query equal to the running one counts as a continuation (`same_query_guard: true`). |
 | Barge-in history | `truncate_heard`. The history keeps only the heard part of the reply and appends ` [interrupted by the user]`. |
 | Backend history | On, with `include: full` and the default guidance. |
-| Filler | Spoken (`speak`) when the backend is still busy after 300 ms. |
+| Filler | Spoken (`speak`) when the backend is still busy after 300 ms. `FBA_FILLER_MODE` sets the mode. Compose sets `speak`, and only the VoiceBench overlay, `docker/docker-compose.fba-voicebench.yaml`, sets `log_only`, which records the filler in the filler log without speaking it. Refer to [Run a VoiceBench Evaluation](../../../docs/how-to/deploy-frontend-backend-agent.md#run-a-voicebench-evaluation). |
 | Identifier normalization | The transcript hook writes spoken identifiers in lowercase written form for the agent. The wire keeps the raw ASR transcript. The tool-argument rule canonicalizes `get_user_details.user_id` to the pattern `^[a-z]+_[a-z]+_\d{4}$` and answers a malformed ID locally. The retry guard answers a repeat of a call that failed with `Error: ... not found` locally. |
 | Speech while tools are out | Goes to the outstanding tool wait. Refer to [Tool Continuation Resume](#tool-continuation-resume). |
 | Write gate | Off. Refer to [Write Gate](#write-gate). |
@@ -301,6 +301,7 @@ The example reads the following environment variables.
 | `FBA_TTS_SERVER` | Empty | Replaces the TTS catalog server, for example `localhost:50051` for a host-native run. |
 | `FBA_VOICE_EVENT_LOG` | Empty | Path of a JSONL event log for Realtime sessions. Empty turns the log off. Browser UI sessions never write it. |
 | `FBA_FILLER_LOG` | Empty | Path of a JSONL filler log for Realtime sessions. Filler timing is also recorded in the application log and, when it is set, the event log. |
+| `FBA_FILLER_MODE` | `speak` | Filler mode of the profile: `speak` or `log_only`. Compose sets `speak`, and only the VoiceBench overlay sets `log_only`. Never set it to an empty value. |
 | `WEATHERAPI_KEY`, `FINNHUB_API_KEY`, `PERPLEXITY_API_KEY` | Empty | Keys for the browser UI tools. Refer to [Tools](#tools). |
 | `ENABLE_TRACING` | `false` | Traces browser UI sessions. Refer to [Tracing](#tracing). |
 | `FBA_REALTIME_TRACING` | `false` | With `ENABLE_TRACING=true`, also traces Realtime sessions. Ignored when `FBA_PROFILE=eval`. |
@@ -464,7 +465,7 @@ The gateway hands the whole Realtime session to this pipeline before it sends an
 - By default, `input_audio_buffer.commit` is refused with error code `unsupported_event`, because turns end on the server voice activity detection (VAD). To allow manual turns, refer to [Realtime Turn Modes](#realtime-turn-modes).
 - By default, the session accepts function tools only. A `type: "mcp"` tool is refused with error code `invalid_value`. To allow MCP tools, refer to [MCP Tools](#mcp-tools).
 - A `response.create` with per-response `instructions`, `tools`, or `tool_choice` is refused with error code `unsupported_response_override`.
-- Add `?x_nvidia_filler=1` to the WebSocket URL to receive unspoken filler as non-standard `x_nvidia.filler` events. The `eval` profile speaks its filler, so these events apply only to a profile with `filler.mode: log_only`.
+- Add `?x_nvidia_filler=1` to the WebSocket URL to receive unspoken filler as non-standard `x_nvidia.filler` events. The `eval` profile speaks its filler, so these events apply only with `filler.mode: log_only`, for example with the VoiceBench overlay.
 - The first session warms up speech with one short ASR request and one short TTS request. Over the session cap, or when the speech warm-up fails, the server sends an `error` event with code `server_busy` and closes the socket with code 1013. The next session retries the warm-up.
 
 ### Realtime Turn Modes

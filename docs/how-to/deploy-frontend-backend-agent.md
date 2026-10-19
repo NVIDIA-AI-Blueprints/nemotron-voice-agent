@@ -28,6 +28,7 @@ If you are an AI agent that deploys this example for a user, follow these rules:
 3. For `default`, use the plain recipe command for the Compose profile that the user wants: cloud (`frontend-backend-agent`), `frontend-backend-agent/server`, or `frontend-backend-agent/single-gpu`. For `eval`, use `frontend-backend-agent/single-gpu` with the `docker/docker-compose.fba-eval.yaml` override. Refer to [Choose a Profile](#choose-a-profile).
 4. After startup and the first session, read the profile, the prompt catalog path, and its SHA-256 from the app log, and report them to the user. Refer to [Verify the Deployment](#verify-the-deployment).
 5. For Tau or any other evaluation run, deploy `eval`. Do not add the local LLM overlay, and do not set `FBA_REALTIME_*` switches, such as `FBA_REALTIME_TRACING`, `FBA_REALTIME_TURN_MODES`, or `FBA_REALTIME_MCP`, for an evaluation. With `FBA_PROFILE=eval`, the agent ignores every `FBA_REALTIME_*` switch.
+6. If, and only if, the user says that the run is a VoiceBench evaluation, ask: "Keep the frontend silent for VoiceBench? The filler is then logged only, and the backend's answer is the first response. Default: no." Wait for the answer. If the answer is yes, add `docker/docker-compose.fba-voicebench.yaml` after the eval override file. Do not ask this question for Tau, the browser UI, or any other run, and never add the VoiceBench overlay for them. VoiceBench runs use the `eval` profile. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation).
 
 Do not overwrite other keys in an existing `.env`.
 
@@ -124,6 +125,7 @@ The following optional keys change the deployment. Leave them unset to keep the 
 | `PIPELINE_TLS` | `true` | `true` serves HTTPS and `wss://` with a self-signed certificate. `false` serves plain HTTP and `ws://`. Browsers need HTTPS for the microphone, except on `localhost`. |
 | `FBA_VOICE_EVENT_LOG` | Empty | Path of a JSONL event log inside the container for Realtime sessions, for example `/tmp/fba-events.jsonl`. Eval mode sets it. Browser UI sessions never write it. |
 | `FBA_FILLER_LOG` | Empty | Path of a JSONL filler timing log inside the container for Realtime sessions. Eval mode sets it. |
+| `FBA_FILLER_MODE` | `speak` | How the frontend filler is delivered: `speak` or `log_only`. Compose sets `speak`, and only the VoiceBench overlay sets `log_only`. Do not set it in `.env`, and never set it to an empty value. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation). |
 | `FBA_ASR_SERVER`, `FBA_TTS_SERVER` | Empty | Replace the ASR or TTS server of the selected catalog entry. |
 | `NEMO_SPEECH_MODEL_LOC` | `models/nemo-speech` | Host directory that holds the speech model weights for `/single-gpu`. |
 | `ENABLE_WELCOME_MESSAGE` | Unset (greets) | `false` turns off the browser UI greeting. Realtime sessions never greet. |
@@ -400,6 +402,43 @@ The Tau evaluation harness, `voice-agent-evaluation`, is not part of this reposi
 4. Run with a concurrency of 1. The `eval.yaml` profile asks for this until `server.max_sessions` is measured.
 5. Record the profile and the prompt catalog SHA-256 from the app log with the results. The ready line shows `profile=eval`. Earlier runs recorded the profile name `tau3_eval_frontend_verdict_speak_history`, which had the same settings, prompts, and catalog SHA-256. The `session_start` record of the event log also carries the catalog name and SHA-256.
 
+## Run a VoiceBench Evaluation
+
+VoiceBench in `voice-agent-evaluation` connects through OpenAI Realtime with the server VAD and never sends `response.create`. It ends each case on the first `response.done` and scores only the audio transcript of that response. This agent puts the filler and the answer in the same response, so a spoken filler becomes part of the scored transcript. The VoiceBench overlay, `docker/docker-compose.fba-voicebench.yaml`, sets `FBA_FILLER_MODE=log_only`. In that mode, the agent never speaks the filler and records it only in the filler log, as a filler timing record with `spoken` set to `false`. Direct answers are still spoken, and the answer is the only text of the turn's response.
+
+Use the VoiceBench overlay for VoiceBench runs only. Tau runs need the spoken filler, so that the simulated user hears it and can answer it.
+
+To run a VoiceBench evaluation, complete the following steps:
+
+1. Complete steps 1 and 2 of [Deploy in Eval Mode](#deploy-in-eval-mode).
+
+2. Start the recipe with the eval override file and then the VoiceBench overlay:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml \
+      -f docker/docker-compose.fba-voicebench.yaml \
+      --profile frontend-backend-agent/single-gpu up -d --build
+    ```
+
+    Pass the same three `-f` files in every Compose command for this deployment, including `exec` and `down`.
+
+3. Complete steps 4 and 5 of [Deploy in Eval Mode](#deploy-in-eval-mode) with the same three `-f` files.
+
+4. Check the filler mode in the container. The command prints `log_only`:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml \
+      -f docker/docker-compose.fba-voicebench.yaml \
+      --profile frontend-backend-agent/single-gpu exec frontend-backend-agent-single-gpu \
+      printenv FBA_FILLER_MODE
+    ```
+
+5. Connect one session. The agent's ready line in the app log, `frontend/backend agent ready`, then shows `profile=eval` and `filler=log_only`.
+
+6. Point the harness at the model `nvidia/nemotron-realtime-frontend-backend` on `ws://localhost:7860/v1/realtime` with your `REALTIME_API_KEY`. The evaluation repository does not have a VoiceBench run configuration for this agent yet.
+
+To switch back to a Tau or other evaluation deployment, rerun the `up -d` command from [Deploy in Eval Mode](#deploy-in-eval-mode) without the VoiceBench overlay. Compose then recreates the container with `FBA_FILLER_MODE=speak`.
+
 ## Stop and Clean Up
 
 Stop the recipe with the same Compose profile that started it:
@@ -415,7 +454,7 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml \
   --profile frontend-backend-agent/single-gpu down
 ```
 
-If you started the deployment with the local LLM overlay, pass `-f docker-compose.yml -f docker/docker-compose.fba-local-llm.yaml` to `down` as well. The command removes the containers. It keeps `.env`, the built image, the eval-mode logs in `logs/`, the NIM model caches, and the speech model weights in `models/nemo-speech`. Remove the weights only when you no longer need any single-GPU recipe that uses them.
+If you started the deployment with the VoiceBench overlay, add `-f docker/docker-compose.fba-voicebench.yaml` after the eval override file. If you started the deployment with the local LLM overlay, pass `-f docker-compose.yml -f docker/docker-compose.fba-local-llm.yaml` to `down` as well. The command removes the containers. It keeps `.env`, the built image, the eval-mode logs in `logs/`, the NIM model caches, and the speech model weights in `models/nemo-speech`. Remove the weights only when you no longer need any single-GPU recipe that uses them.
 
 ## Troubleshooting
 

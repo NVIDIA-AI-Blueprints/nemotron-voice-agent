@@ -35,6 +35,9 @@ delegation:
   on_contract_error: delegate        # delegate (delegate=true, no filler) | direct_empty (delegate=false, no filler)
   max_repair_attempts: 1
   speak_when_delegating: true        # D4: the filler of a delegated turn is spoken (false: silent-ack ablation)
+  # VoiceBench (docker/docker-compose.fdh-voicebench.yaml): the filler of a delegated turn and the M1
+  # proactive status line are logged, never spoken; direct answers are. Never set FDH_SILENT_FRONTEND empty.
+  silent_frontend: "${FDH_SILENT_FRONTEND:-false}"
   guards:
     backend_question_needs_delegate: true   # IDLE + backend's last heard message asked a question -> delegate
     # A turn that is exactly one of these (punctuation ignored) is never delegated and gets no filler,

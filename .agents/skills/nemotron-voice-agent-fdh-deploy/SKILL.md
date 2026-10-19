@@ -24,6 +24,7 @@ Do not use this skill for the other registered examples (use `nemotron-voice-age
 - For eval mode, pass `$E` in **every** Compose command (`up`, `ps`, `logs`, `exec`, `down`). A command without it recreates the containers with the `default` profile and `gateway.yaml`.
 - Every benchmark run uses the eval overlay. Only the overlay switches the Hermes gateway to `gateway.eval.yaml`. Realtime sessions on a `default` deployment pair the eval frontend with the wrong gateway.
 - The Hermes backend runs in an NVIDIA OpenShell sandbox by default. Use the plain runtime overlay, `docker/docker-compose.fdh-hermes-plain.yaml`, only when the user asks for it (A/B checks, debugging) or the host cannot run OpenShell. Always pass files in this order: `docker-compose.yml`, then the plain overlay, then the eval overlay. For the plain runtime, set `E="-f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml"` (plain `default`) or `E="-f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml -f docker/docker-compose.fdh-eval.yaml"` (plain `eval`), and pass `$E` in every command.
+- If, and only if, the user says the run is a VoiceBench evaluation, ask: "Keep the frontend silent for VoiceBench? The filler is then logged only, and the backend's answer is the first response. Default: no." Wait for the answer. If yes, append `-f docker/docker-compose.fdh-voicebench.yaml` to `$E` after the eval overlay. Do not ask for Tau, the browser UI, or any other run, and never add the overlay for them. VoiceBench runs use `eval`. Refer to `references/tau.md`.
 - OpenShell has not yet been validated on a live host (the go/no-go spike and the eval gates are pending). If it fails on a host, report the failure and offer the plain runtime. Do not edit `docker/fdh/openshell/` files to work around it without the user's approval.
 - `docker-compose.yml` sets every FDH variable of the voice service as a literal. `FDH_*` keys in `.env` have no effect. Do not write them to `.env`.
 - The Hermes checkout in `HERMES_AGENT_DIR` must be clean and at the commit in the header of `docker/fdh/requirements.txt`.
@@ -61,7 +62,7 @@ Request names a profile?
              → references/tau.md
 ```
 
-"Start the FDH demo" or "talk to FDH in the browser" means `default`. "Benchmark", "τ²", or "Tau" means `eval`.
+"Start the FDH demo" or "talk to FDH in the browser" means `default`. "Benchmark", "τ²", "Tau", or "VoiceBench" means `eval`.
 
 ## Deploy
 

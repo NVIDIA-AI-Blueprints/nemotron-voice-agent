@@ -98,6 +98,22 @@ The `Pipecat adapter settings` line must show a `settings_file` that ends in `ad
 
 Report FDH runs on the shared stack separately from runs on the former FDH containers until an A/B slice shows the same rewards.
 
+### VoiceBench
+
+VoiceBench (in `voice-agent-evaluation`) never sends `response.create`, ends each case on the first `response.done`, and scores only that response's audio transcript. FDH speaks each filler and proactive status line as its own response. Ask the user whether to keep the frontend silent only when they say the run is VoiceBench (refer to the rule in `SKILL.md`). If yes, add the VoiceBench overlay last:
+
+```bash
+E="-f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml -f docker/docker-compose.fdh-voicebench.yaml"
+# plain runtime: -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml -f docker/docker-compose.fdh-eval.yaml -f docker/docker-compose.fdh-voicebench.yaml
+docker compose $E --profile $P up -d --build
+docker compose $E --profile $P exec frontend-delegation-hermes-agent-single-gpu printenv FDH_SILENT_FRONTEND   # true
+```
+
+- After one session, `logs/fdh_voice_events.pipecat.jsonl` has `silent_frontend: true` in the `fdh_session_start` settings and a `filler_silenced` record (reason `silent_frontend`) per delegated turn. `proactive_status_silenced` is logged once per backend run instead of the M1 status line. Direct answers are spoken.
+- Harness: profile `nemotron-fdh-local`, run configuration `configs/runs/voicebench-fdh-realtime-smoke.yaml` in `voice-agent-evaluation`. Do not change the evaluator.
+- The `config hash` of a silent run differs from a normal eval run. With the switch off, the hash is unchanged.
+- To switch back, rerun `up -d --build` without the VoiceBench overlay. Never use the overlay for Tau.
+
 ## 6. Fingerprint and Hashes
 
 Record the following with every run:

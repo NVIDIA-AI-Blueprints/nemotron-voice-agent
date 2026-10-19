@@ -63,6 +63,8 @@ DEFAULTS: dict[str, Any] = {
         "on_contract_error": "delegate",
         "max_repair_attempts": 1,
         "speak_when_delegating": True,
+        # VoiceBench: delegated fillers and proactive status lines are logged, never spoken (off by default).
+        "silent_frontend": False,
         "guards": {
             "backend_question_needs_delegate": True,
             "backchannel_words": [
@@ -234,6 +236,7 @@ class DelegationSettings:
     replay: ReplaySettings = field(default_factory=ReplaySettings)
     filler_dedupe: FillerDedupeSettings = field(default_factory=FillerDedupeSettings)
     liveness: LivenessSettings = field(default_factory=LivenessSettings)
+    silent_frontend: bool = False
 
     @property
     def classifies_turns(self) -> bool:
@@ -410,6 +413,7 @@ def build_delegation_config(merged: dict[str, Any], files: tuple[Path, ...] = ()
         on_contract_error=dl["on_contract_error"],
         max_repair_attempts=_int(dl["max_repair_attempts"], "delegation.max_repair_attempts"),
         speak_when_delegating=_bool(dl["speak_when_delegating"], "delegation.speak_when_delegating"),
+        silent_frontend=_bool(dl["silent_frontend"], "delegation.silent_frontend"),
         backend_question_needs_delegate=_bool(
             dl["guards"]["backend_question_needs_delegate"], "delegation.guards.backend_question_needs_delegate"
         ),
@@ -490,6 +494,9 @@ def build_delegation_config(merged: dict[str, Any], files: tuple[Path, ...] = ()
         )
     effective = copy.deepcopy(merged)
     effective["frontend"]["llm"]["api_key"] = "***" if frontend.llm.api_key else ""
+    if not delegation.silent_frontend:
+        # Off: absent, so the config hash of every run without the switch stays unchanged.
+        effective["delegation"].pop("silent_frontend", None)
     return DelegationConfig(
         voice=voice,
         frontend=frontend,

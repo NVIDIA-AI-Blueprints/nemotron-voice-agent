@@ -863,17 +863,24 @@ class DelegationTurnManager:
             if filler and self._config.delegation.filler_dedupe.enabled and decision.repair != LIVENESS_REPLY:
                 never_empty = decision.repair in (QUESTION_NEVER_SILENT, PING_AS_STATUS)
                 filler = self._dedupe_filler(turn, filler, backend_state=context.state, never_empty=never_empty)
-            if filler and self._config.delegation.speak_when_delegating:
+            if filler and self._speaks_delegated_filler:
                 self._queue_frontend(turn, decision, filler, kind="filler")
             elif filler:
-                self._log("filler_silenced", turn_id=turn.turn_id, text=filler)
+                reason = "silent_frontend" if self._config.delegation.silent_frontend else "speak_when_delegating"
+                self._log("filler_silenced", turn_id=turn.turn_id, text=filler, reason=reason)
         elif filler:
             self._queue_frontend(turn, decision, filler, kind="direct")
-        spoken_now = filler and (not decision.delegate or self._config.delegation.speak_when_delegating)
+        spoken_now = filler and (not decision.delegate or self._speaks_delegated_filler)
         if turn.requested and not spoken_now:
             # A client response.create always gets a response (Realtime semantics): an empty one here.
             self._push(CallsItem(batch_id=f"empty_response_{turn.turn_id}", calls=[]))
         self._wake.set()
+
+    @property
+    def _speaks_delegated_filler(self) -> bool:
+        """D4 ``speak_when_delegating``, unless the VoiceBench ``silent_frontend`` switch is on."""
+        delegation = self._config.delegation
+        return delegation.speak_when_delegating and not delegation.silent_frontend
 
     def _guard_filler(self, turn: _Turn, decision: Decision) -> str:
         """The filler of an F2 decision (R1: a liveness line, R2: an alternative); else the model's."""
@@ -1215,6 +1222,10 @@ class DelegationTurnManager:
             text=text,
             silence_wall_s=round(silence, 2),
         )
+        if self._config.delegation.silent_frontend:
+            # Counted against max_per_run above, so this is logged at most that often per run.
+            self._log("proactive_status_silenced", run_id=backend.run_id, epoch=backend.epoch, text=text)
+            return
         entry = self.transcript.add_spoken("status_speech", "frontend", text)
         self._push(SpeechItem(kind="status", text=text, entry=entry, meta={"epoch": backend.epoch, "proactive": True}))
 

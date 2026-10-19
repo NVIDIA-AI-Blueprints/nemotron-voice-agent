@@ -10,7 +10,7 @@ The example is registered in [`examples_registry.yaml`](../../../examples_regist
 - Browser UI sessions over WebRTC or the UI's WebSocket transport, with the Real-Time Voice Inference (RTVI) protocol.
 - OpenAI Realtime (GA) sessions on the shared `/v1/realtime` route with the model `nvidia/nemotron-realtime-frontend-delegation-hermes`.
 
-It has one Docker Compose recipe, `frontend-delegation-hermes-agent/single-gpu`, and an eval overlay, [`docker/docker-compose.fdh-eval.yaml`](../../../docker/docker-compose.fdh-eval.yaml). For the step-by-step guide, refer to [Deploy the Frontend Delegation Hermes Agent](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md). AI agents load the [`nemotron-voice-agent-fdh-deploy`](../../../.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md) skill to build, deploy, or evaluate the example.
+It has one Docker Compose recipe, `frontend-delegation-hermes-agent/single-gpu`, an eval overlay, [`docker/docker-compose.fdh-eval.yaml`](../../../docker/docker-compose.fdh-eval.yaml), and a VoiceBench overlay for VoiceBench runs only, [`docker/docker-compose.fdh-voicebench.yaml`](../../../docker/docker-compose.fdh-voicebench.yaml), which goes after the eval overlay. For the step-by-step guide, refer to [Deploy the Frontend Delegation Hermes Agent](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md). AI agents load the [`nemotron-voice-agent-fdh-deploy`](../../../.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md) skill to build, deploy, or evaluate the example.
 
 ## Architecture
 
@@ -165,6 +165,16 @@ These switches are on in `realtime_eval.yaml`, `voice/realtime_eval.yaml`, `gate
 | `normalization.tool_arguments.result_hints.ledger` | `voice/realtime_eval.yaml` | F8: after a failed identification lookup, the note lists the lookups tried, what the user spelled, the user's corrections, and the other identification lookups the tools offer |
 | `prompt_features.identity_from_identifier` | `gateway.yaml` | F8 name line: a name inside a spoken identifier, after it is confirmed |
 
+## VoiceBench Switch
+
+VoiceBench scores only the first response of each case, and this agent speaks each filler and proactive status line as its own response. The following switch is off by default in both profiles and in the Python code:
+
+| Switch | Where | Effect |
+| --- | --- | --- |
+| `delegation.silent_frontend` | `delegation_agent.yaml` (`FDH_SILENT_FRONTEND`, default `false`) | When on, the filler of a delegated turn is logged as a `filler_silenced` event with the reason `silent_frontend` and never spoken. The M1 proactive status line is not spoken either, and a `proactive_status_silenced` event is logged once per backend run. Direct answers are still spoken. Only `docker/docker-compose.fdh-voicebench.yaml` turns it on. With the switch off, the key is dropped from the effective settings, so the `config_hash` does not change. With it on, `fdh_session_start` carries `silent_frontend: true` and the `config_hash` differs |
+
+For the deployment steps, refer to [Run a VoiceBench Evaluation](../../../docs/how-to/deploy-frontend-delegation-hermes-agent.md#run-a-voicebench-evaluation).
+
 ## Deployed Fingerprint
 
 The voice server and the gateway log a deployed fingerprint: `fdh_session_start.features`, `frontend_prompt`, and `backend_configured`, which includes `backend_domain` and `session_tools_sha256`. `session_tools_sha256` is the first 16 hex characters of the SHA-256 of the session's sorted `session.update` tool schemas. With an `auto` switch on, the voice server also logs a `session_rules` event with the same hash and the derived rules.
@@ -180,6 +190,10 @@ The following commands start the recipe, with the browser UI (`default`) or for 
 docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build
 # eval: OpenAI Realtime only, ws://<host>:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-delegation-hermes
 docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+# VoiceBench only: the eval overlay, then the VoiceBench overlay (silent frontend)
+docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+  -f docker/docker-compose.fdh-voicebench.yaml \
   --profile frontend-delegation-hermes-agent/single-gpu up -d --build
 # plain runtime (baseline): add the plain overlay before the eval overlay, if any
 docker compose -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml \

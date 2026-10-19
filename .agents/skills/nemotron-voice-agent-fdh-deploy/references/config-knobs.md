@@ -106,6 +106,7 @@ The following table lists the shared knobs:
 | Frontend model | env `FRONTEND_LLM_MODEL`, `FRONTEND_LLM_BASE_URL`; `frontend.llm.*` | `nvidia/nvidia/nemotron-3.5-lightning`, thinking off |
 | Frontend tool choice, hedging, and timeout | `frontend.tool_choice`, `frontend.hedge_after_ms`, `frontend.timeout_ms` | `named`, 1500, 4000 |
 | Filler spoken when delegating | `delegation.speak_when_delegating` | `true` |
+| Silent frontend for VoiceBench (filler of delegated turns and M1 status line logged, never spoken; direct answers spoken) | `delegation.silent_frontend`, env `FDH_SILENT_FRONTEND` | `false`; only `docker/docker-compose.fdh-voicebench.yaml` sets `true`. Never set it empty. With it on, the `config hash` differs |
 | Guards | `delegation.guards.backend_question_needs_delegate`, `backchannel_words` | On, 17 words |
 | Steering | `backend.steer_mode` | `auto` (redirect during a model call, else steer) |
 | Status speech | `backend.status_verbalizer.{mode,timeout_ms}` | `llm` (template fallback), 3000 |
