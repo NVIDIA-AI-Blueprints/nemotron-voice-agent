@@ -68,7 +68,7 @@ The `*/single-gpu` vLLM services select the model checkpoint and precision from 
 | Omni on Ampere | BF16 | Free VRAM minus headroom, capped at `0.90`. Requires at least 66 GiB usable. | Omni + TTS -> `0` |
 | Super VL on a Blackwell workstation (96 GB class) | Mixed NVFP4/FP8 with MTP, language model only | Free VRAM minus headroom, capped at `0.90`. Requires at least 78 GiB usable. | Super + ASR + TTS -> `0`, Lightning scaled to zero |
 | Super VL on DGX Spark or Jetson Thor | Mixed NVFP4/FP8 with MTP, language model only | Free unified memory minus headroom, capped at `0.75`. Requires at least 78 GiB usable. On Thor, FlashInfer compiles one kernel at a time (`MAX_JOBS=1`) so the compiler does not run out of unified memory after the weights load. | Super + ASR + TTS -> `0`, Lightning scaled to zero |
-| Super VL on single-GPU service on Hopper, Ada, or Ampere | This service requires Blackwell NVFP4. It exits with `Unsupported GPU for Super single-GPU (needs Blackwell NVFP4)` and restarts. | Depends on the supported NIM profile. | Use the Super VL server NIM (`nemotron-35-super-vl`) with a matching profile: 1× H200, 2× H100 80 GB, or 2× A100 80 GB. Ada GPUs have no listed Super VL NIM profile. |
+| Super VL on single-GPU service on Hopper, Ada, or Ampere | This service requires Blackwell NVFP4. It exits with `Unsupported GPU for Super single-GPU (needs Blackwell NVFP4)` and restarts. | Depends on the supported NIM profile. | Use the Super VL server NIM (`nemotron-35-super-vl`) with a matching profile: 1× H200, 2× H100 80 GB, or 2× A100 80 GB. L40 / L40S (Ada) GPUs have no listed Super VL NIM profile and are not supported for Super VL server deployment. |
 
 These values are startup checks used by the planner, not guarantees that every workload will fit. Model weights, KV cache, speech services, context length, and concurrency must all fit within the selected budget.
 
@@ -79,7 +79,7 @@ Server recipes use model-specific NIM profiles and scaling controls instead of t
 | Lightning NIM on one GPU | 80 GB | `NIM_KVCACHE_PERCENT=0.6` (default) | LLM + ASR + TTS -> `0` |
 | Lightning NIM split across two GPUs | 40 GB/GPU | `NIM_KVCACHE_PERCENT=0.9` | LLM (`nvidia-llm`) -> `0`, ASR + TTS -> `1` |
 | Omni NIM | See the NIM for VLMs support matrix, plus TTS memory when sharing a GPU | Automatic NIM model profile | Omni + TTS -> `0` |
-| Nemotron 3.5 Super VL NIM | See the NIM support matrix for the selected profile | Automatic NIM model profile | Super (`nemotron-35-super-vl`) -> `1`, `2` |
+| Nemotron 3.5 Super VL NIM | See the NIM support matrix for the selected profile (1× H200, 2× H100 80 GB, or 2× A100 80 GB; not supported on L40 / L40S) | Automatic NIM model profile | Super (`nemotron-35-super-vl`) -> `1`, `2` |
 
 Update each service's `device_ids` under `deploy.resources.reservations.devices` when splitting services across GPUs.
 
@@ -186,6 +186,8 @@ nemotron-nim:
 ```
 
 For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. NIM reads the budget from `reasoning_budget` and vLLM from `thinking_token_budget`, so `nemotron-nim` and `nemotron-vllm` differ only in that `path`. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
+
+> **Known limitation (Reasoning OFF with tool calling).** With reasoning **OFF** (`enable_thinking: false`), smaller models such as **Nemotron 3.5 Lightning 30B A3B** can occasionally emit tool-selection planning text (function names, argument math, or prompt rules) as normal assistant `content` before or instead of the structured tool call, which TTS then speaks aloud. Once this planning text enters the conversation history, subsequent turns in the same session can continue repeating that pattern. Start a new session to clear the conversation context, or enable **Reasoning** / switch to **Nemotron 3.5 Super VL** for tool-heavy sessions.
 
 ### Reasoning Parser & Tool Calling (Self-Hosted)
 
