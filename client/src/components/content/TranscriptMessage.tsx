@@ -6,6 +6,7 @@ export interface TranscriptMessageProps {
   text: string;
   timestamp: string;
   streaming?: boolean;
+  displayName?: string;
 }
 
 const formatTime = (timestamp: string) => {
@@ -15,14 +16,21 @@ const formatTime = (timestamp: string) => {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
 
-export function TranscriptMessage({ role, text, timestamp, streaming }: Readonly<TranscriptMessageProps>) {
+export function TranscriptMessage({
+  role,
+  text,
+  timestamp,
+  streaming,
+  displayName,
+}: Readonly<TranscriptMessageProps>) {
   const roleClass = role === "user" ? "message-user" : "message-bot";
+  const label = role === "user" ? (displayName ?? "You") : "Bot";
 
   return (
     <li className={`transcript-message ${roleClass} ${streaming ? "message-streaming" : ""}`}>
       <span className="message-timestamp">{formatTime(timestamp)}</span>
       <div className="message-content">
-        <span className="message-role">{role === "user" ? "You" : "Bot"}:</span>{" "}
+        <span className="message-role">{label}:</span>{" "}
         <span>{text}</span>
       </div>
     </li>

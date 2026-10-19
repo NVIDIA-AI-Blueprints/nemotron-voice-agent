@@ -10,12 +10,14 @@ from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import Frame, InterruptionFrame
 from pipecat.pipeline.worker import PipelineParams
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.runner.types import RunnerArguments
+from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
@@ -54,9 +56,14 @@ def build_smart_turn_analyzer() -> LocalSmartTurnAnalyzerV3:
     return LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=stop_secs))
 
 
-def build_smart_turn_stop_strategies() -> list[TurnAnalyzerUserTurnStopStrategy]:
-    """Return the default Smart Turn stop strategy used by cascaded pipelines."""
-    return [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=build_smart_turn_analyzer())]
+def build_smart_turn_stop_strategies(*, wait_for_transcript: bool = True) -> list[TurnAnalyzerUserTurnStopStrategy]:
+    """Return the shared Smart Turn stop strategy."""
+    return [
+        TurnAnalyzerUserTurnStopStrategy(
+            turn_analyzer=build_smart_turn_analyzer(),
+            wait_for_transcript=wait_for_transcript,
+        )
+    ]
 
 
 def build_user_mute_strategies(welcome_enabled: bool) -> list[MuteUntilFirstBotCompleteUserMuteStrategy]:
@@ -95,6 +102,44 @@ def with_realtime_observers(*observers, transport=None) -> list:
     if realtime_obs is not None:
         out.append(realtime_obs)
     return out
+
+
+class WebClientFrameSerializer(ProtobufFrameSerializer):
+    """Protobuf serializer for ``@pipecat-ai/websocket-transport``, which decodes only audio and message frames.
+
+    The client stops playback on RTVI interruption messages, so the raw
+    ``InterruptionFrame`` would only fail to deserialize there.
+    """
+
+    async def serialize(self, frame: Frame) -> str | bytes | None:
+        """Skip interruption frames; serialize the rest as usual."""
+        if isinstance(frame, InterruptionFrame):
+            return None
+        return await super().serialize(frame)
+
+
+def _ms_metric(key: str, label: str, secs: float) -> dict:
+    return {"key": key, "label": label, "value": round(secs * 1000, 3), "unit": "ms"}
+
+
+def latency_metric_group(turn: int, latency_secs: float, breakdown) -> dict:
+    """Build the ``metric-group`` server message the Metrics Board summarizes for one user→bot turn."""
+    metrics = [_ms_metric("total_latency_ms", "Total Latency", latency_secs)]
+    if breakdown.user_turn_secs is not None:
+        metrics.append(_ms_metric("user_turn_ms", "User Turn", breakdown.user_turn_secs))
+    for index, ttfb in enumerate(breakdown.ttfb):
+        processor = ttfb.processor.replace("#", "_").replace(" ", "_")
+        metrics.append(_ms_metric(f"ttfb_{index}_{processor}", f"{ttfb.processor} TTFB", ttfb.duration_secs))
+    if text := breakdown.text_aggregation:
+        metrics.append(_ms_metric("text_aggregation_ms", f"{text.processor} Text Aggregation", text.duration_secs))
+    return {
+        "type": "metric-group",
+        "group_id": f"turn-{turn}",
+        "group_label": f"Turn {turn}",
+        "category": "latency",
+        "source": "UserBotLatencyObserver",
+        "metrics": metrics,
+    }
 
 
 def register_session_start_handlers(
@@ -317,7 +362,7 @@ def create_transport(runner_args: RunnerArguments):
         )
 
     if isinstance(runner_args, EvalRunnerArguments):
-        from pipecat.evals.serializer import RTVIEvalSerializer
+        from pipecat.evals.serializer import EvalSerializer
         from pipecat.evals.transport import EvalTransport, EvalTransportParams
 
         return EvalTransport(
@@ -328,7 +373,7 @@ def create_transport(runner_args: RunnerArguments):
                 audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
                 audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
                 add_wav_header=False,
-                serializer=RTVIEvalSerializer(),
+                serializer=EvalSerializer(),
             ),
             host=runner_args.host,
             port=runner_args.port,
@@ -351,7 +396,6 @@ def create_transport(runner_args: RunnerArguments):
         )
 
     from pipecat.serializers.base_serializer import FrameSerializer
-    from pipecat.serializers.protobuf import ProtobufFrameSerializer
     from pipecat.transports.websocket.fastapi import (
         FastAPIWebsocketParams,
         FastAPIWebsocketTransport,
@@ -366,6 +410,6 @@ def create_transport(runner_args: RunnerArguments):
             audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
             audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
             add_wav_header=False,
-            serializer=ProtobufFrameSerializer(params=FrameSerializer.InputParams(ignore_rtvi_messages=False)),
+            serializer=WebClientFrameSerializer(params=FrameSerializer.InputParams(ignore_rtvi_messages=False)),
         ),
     )

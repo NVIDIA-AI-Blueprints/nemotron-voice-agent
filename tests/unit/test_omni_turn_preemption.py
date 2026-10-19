@@ -10,11 +10,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from pipecat.frames.frames import (
+    InputAudioRawFrame,
     LLMTextFrame,
     LLMThoughtEndFrame,
     LLMThoughtStartFrame,
     LLMThoughtTextFrame,
     TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
@@ -99,6 +102,23 @@ class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
         # PCM16 mono payload comfortably above the min_user_audio_secs gate (0.3s).
         nbytes = int(self.service._sample_rate * self.service._channels * 2 * seconds)
         self.service._audio_buffer = [b"\x00" * nbytes]
+
+    async def test_base_service_speaking_state_does_not_consume_audio_turn(self) -> None:
+        """The base LLM service updates its own flag before Omni sees each frame."""
+        self.service.push_frame = AsyncMock()
+        self.service._settings.emit_transcriptions = True
+        audio = b"\x00" * int(self.service._sample_rate * self.service._channels * 2)
+
+        await self.service.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+        await self.service.process_frame(
+            InputAudioRawFrame(audio=audio, sample_rate=16000, num_channels=1),
+            FrameDirection.DOWNSTREAM,
+        )
+        await self.service.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+        await self._wait_for(lambda: len(self.turns) == 1)
+        self.assertFalse(self.service._audio_user_speaking)
+        self.assertTrue(self.turns[0].kwargs["expect_transcript"])
 
     async def test_audio_turn_preempts_in_flight_turn(self) -> None:
         self._fill_audio()
@@ -493,6 +513,24 @@ class OmniRequestBuildingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sent["max_tokens"], 2048)
         self.assertNotIn("max_completion_tokens", sent)
+
+    def _capture_requests(self) -> dict:
+        sent: dict = {}
+
+        async def fake_create(**kwargs):
+            sent.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
+
+        self.service._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+        return sent
+
+    async def test_run_inference_forwards_a_response_schema(self) -> None:
+        sent = self._capture_requests()
+        schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+
+        await self.service.run_inference(LLMContext([{"role": "user", "content": "hi"}]), response_schema=schema)
+
+        self.assertEqual(sent["response_format"]["json_schema"]["schema"], schema)
 
     async def test_no_token_limit_is_sent_unless_one_is_configured(self) -> None:
         params = self.service.build_chat_completion_params({"messages": []})

@@ -18,9 +18,9 @@ from pipecat.frames.frames import (
     LLMMessagesAppendFrame,
     LLMRunFrame,
     OutputAudioRawFrame,
-    StartFrame,
     TTSUpdateSettingsFrame,
 )
+from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.serializers.base_serializer import FrameSerializer
 
 from realtime.audio import (
@@ -55,6 +55,7 @@ from realtime.events import (
     server_event,
 )
 from realtime.lifecycle import announce_response, finish_response
+from realtime.metrics import RealtimeResponseTelemetry
 from realtime.session import (
     live_session_patch,
     merge_session_patch,
@@ -66,6 +67,7 @@ from realtime.session import (
 from realtime.voice import resolve_realtime_tts_voice
 
 CancelHook = Callable[[], str]
+TelemetryHook = Callable[[], RealtimeResponseTelemetry]
 
 # Base64 is ~4/3 of raw bytes; reject oversized appends before decode/resample.
 _MAX_APPEND_B64_CHARS = (MAX_PENDING_INPUT_BYTES * 4) // 3 + 64
@@ -98,6 +100,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         self._client_out_rate = extract_client_output_pcm_rate(self._session_view)
         self._emit: EmitFn | None = None
         self._on_response_cancel: CancelHook | None = None
+        self._take_response_telemetry: TelemetryHook | None = None
         self._bytes_since_commit = 0
 
     @property
@@ -117,6 +120,10 @@ class RealtimeFrameSerializer(FrameSerializer):
     def set_on_response_cancel(self, hook: CancelHook | None) -> None:
         """Register a sync hook that drains observer state on ``response.cancel``."""
         self._on_response_cancel = hook
+
+    def set_response_telemetry_provider(self, hook: TelemetryHook | None) -> None:
+        """Register an optional passive telemetry snapshot provider."""
+        self._take_response_telemetry = hook
 
     def update_session_view(self, session_view: dict[str, Any]) -> None:
         """Refresh rates / voice from the latest Realtime session object."""
@@ -139,13 +146,13 @@ class RealtimeFrameSerializer(FrameSerializer):
             return
         await emit_with_aliases(self._emit, event)
 
-    async def setup(self, frame: StartFrame) -> None:
-        """Capture pipeline sample rate from StartFrame when provided."""
-        await super().setup(frame)
-        if getattr(frame, "audio_in_sample_rate", None):
-            self._pipeline_rate = int(frame.audio_in_sample_rate)
-        elif getattr(frame, "audio_out_sample_rate", None):
-            self._pipeline_rate = int(frame.audio_out_sample_rate)
+    async def setup(self, setup: FrameProcessorSetup) -> None:
+        """Capture the pipeline sample rate from Pipecat's setup context."""
+        await super().setup(setup)
+        if setup.audio_in_sample_rate:
+            self._pipeline_rate = int(setup.audio_in_sample_rate)
+        elif setup.audio_out_sample_rate:
+            self._pipeline_rate = int(setup.audio_out_sample_rate)
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         """Serialize outbound audio frames to Realtime JSON text."""
@@ -623,10 +630,12 @@ class RealtimeFrameSerializer(FrameSerializer):
         buffered = self._on_response_cancel() if self._on_response_cancel is not None else ""
         if buffered and not self._conversation.assistant_transcript:
             self._conversation.append_assistant_transcript(buffered)
+        telemetry = self._take_response_telemetry() if self._take_response_telemetry is not None else None
         await finish_response(
             self._conversation,
             self._emit,
             status=status_if_active,
+            telemetry=telemetry,
         )
 
 

@@ -9,6 +9,7 @@
 #   source_token   selected_input_source value the Speaker emits to delegate here.
 #                  Omit for ambient subagents that are not Speaker-routed (webcam, thinker).
 #   reasoning      Model thinking mode: on | off | on_demand.
+#   reasoning_budget  Thinking-token cap for the subagent's reasoning turns. Omit to leave it unbounded.
 #   capability     What the subagent can do (one prose sentence/paragraph).
 #   routing_rules  Shown to the Speaker as "use_when": for routable subagents, when to route
 #                  here; for ambient ones, how to read their live state (they run on their own).
@@ -23,6 +24,7 @@ subagents:
     label: Media Analyzer
     source_token: uploaded_attachment
     reasoning: on
+    reasoning_budget: 2048
     findings_label: analysis
     capability: >-
       reads the contents of an uploaded attachment (image, audio, or video) and returns a
@@ -59,6 +61,7 @@ subagents:
   omni_thinker:
     label: Thinker
     reasoning: on_demand
+    reasoning_budget: 1024
     capability: >-
       deliberate reasoning escalation. The assistant hands off to this automatically — not
       by routing — when a turn is hard or it senses the conversation is going badly (its

@@ -388,27 +388,21 @@ class FrontendBackendPipelineConfigTests(unittest.TestCase):
             {"BOOKING_BACKEND_URL": "http://custom.example:8001", "APP_RUNTIME": ""},
             clear=True,
         ):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = frontend_backend_pipeline._booking_backend_url()
 
         self.assertEqual(url, "http://custom.example:8001")
 
-    def test_booking_backend_url_rewrites_docker_hostname_for_host_native(self) -> None:
+    def test_booking_backend_url_uses_localhost_for_host_native(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = frontend_backend_pipeline._booking_backend_url()
 
         self.assertEqual(url, "http://localhost:8001")
 
-    def test_booking_backend_url_preserves_container_docker_hostname(self) -> None:
+    def test_booking_backend_url_uses_docker_hostname_in_container(self) -> None:
         with patch.dict("os.environ", {"APP_RUNTIME": "container"}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking-server:8001"})
+            url = frontend_backend_pipeline._booking_backend_url()
 
         self.assertEqual(url, "http://booking-server:8001")
-
-    def test_booking_backend_url_preserves_custom_catalog_url(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            url = frontend_backend_pipeline._booking_backend_url({"server": "http://booking.internal:8001"})
-
-        self.assertEqual(url, "http://booking.internal:8001")
 
 
 class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
@@ -496,6 +490,15 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
             {"today": today.isoformat(), "tomorrow": tomorrow.isoformat()},
         )
         self.assertIsNone(llm.max_tokens)
+
+    def test_prompts_request_only_information_needed_for_flight_search(self) -> None:
+        talker_prompt = frontend_backend_pipeline._load_required_catalog_prompt("talker")
+        thinker_prompt = frontend_backend_pipeline._load_required_catalog_prompt("thinker")
+
+        self.assertIn("never enumerate absent fields", talker_prompt)
+        self.assertIn("Flight search requires only origin, destination, and travel date.", thinker_prompt)
+        self.assertIn("New York maps to JFK and Boston maps to BOS", thinker_prompt)
+        self.assertIn('"params_needed": ["date"]', thinker_prompt)
 
     async def test_thinker_started_is_internal_only_while_response_hint_is_speakable(self) -> None:
         thinker = _make_thinker()
@@ -1145,7 +1148,7 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await call_backend("abort"), "aborted")
         await assert_first_planner_error()
 
-    async def test_cancel_backend_cancels_active_call_and_suppresses_stale_result(self) -> None:
+    async def test_cancel_backend_cancels_active_call_and_settles_result(self) -> None:
         thinker = _make_thinker(tool_delay_seconds=1.0)
         llm = _FrameCapturingLLM()
         call_results = []
@@ -1198,6 +1201,42 @@ class FrontendBackendAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(thinker.state.active_task)
         aborted = [event for event in thinker.state.lifecycle_events if event.marker == "ThinkerAborted"]
         self.assertEqual(len(aborted), 1)
+
+    async def test_call_backend_propagates_pipecat_timeout_cancellation(self) -> None:
+        thinker = _make_thinker(tool_delay_seconds=10.0)
+        llm = _FrameCapturingLLM()
+        results = []
+
+        async def result_callback(result, *, properties=None) -> None:
+            results.append((result, properties))
+
+        params = FunctionCallParams(
+            function_name="call_backend",
+            tool_call_id="call_test",
+            arguments={
+                "query": "Search flights from New York to Seattle tomorrow",
+                "origin_airport": "JFK",
+                "dest_airport": "SEA",
+                "date": "2026-05-26",
+            },
+            llm=llm,
+            pipeline_worker=None,
+            context=None,
+            result_callback=result_callback,
+        )
+
+        running_call = asyncio.create_task(
+            build_handlers(thinker, filler_threshold_seconds=10.0)["call_backend"](params)
+        )
+        await asyncio.sleep(0)
+        self.assertIsNotNone(thinker.state.active_task)
+
+        running_call.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await running_call
+
+        self.assertEqual(results, [])
+        self.assertIsNone(thinker.state.active_task)
 
     async def test_cancel_backend_reports_nothing_pending_without_starting_thinker(self) -> None:
         thinker = _make_thinker()

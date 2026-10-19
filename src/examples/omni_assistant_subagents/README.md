@@ -8,7 +8,7 @@ The pattern splits responsibility across a transport agent, speaker agent, media
 
 ## Default Models
 
-The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+The `services` lists in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../services.yaml):
 
 | Profile | Audio-input LLM | TTS |
 | --- | --- | --- |
@@ -77,9 +77,8 @@ To run host-native without Docker, set `selection: omni-assistant-subagents` in 
 | `subagents/webcam/agent.py` | `WebcamAgent` rolling scene summaries for live webcam context |
 | `subagents/thinker/agent.py` | `ThinkerWorker` reruns difficult or low-confidence turns with reasoning enabled |
 | `media_dispatch_processor.py` | frame-processor that defers analyzer dispatch until the speaker ack closes |
-| `subagents.yaml` | source of truth for worker capabilities, routing rules, reasoning modes, and UI labels |
+| `subagents.yaml` | source of truth for worker capabilities, routing rules, reasoning modes and budgets, and UI labels |
 | `prompts.yaml` | example-local prompt catalog (top-level prompt plus `agent_prompts:` per agent) |
-| `services.cloud.yaml`, `services.local.yaml` | example-local service catalogs for cloud and on-prem deployments |
 
 The example declares `capabilities: [attachments, webcam]` in `examples_registry.yaml`, which gates these UI surfaces and backend endpoints:
 

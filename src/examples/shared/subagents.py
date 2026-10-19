@@ -41,7 +41,8 @@ class SubagentSpec:
     ``source_token`` is the ``selected_input_source`` value the Speaker emits to
     delegate to this subagent; ambient subagents (e.g. webcam eye-vision) that
     are not Speaker-routed leave it ``None``. ``reasoning`` selects the model's
-    thinking mode: ``on``, ``off``, or ``on_demand``.
+    thinking mode: ``on``, ``off``, or ``on_demand``. ``reasoning_budget`` caps
+    the thinking tokens when reasoning is on; ``None`` leaves it unbounded.
     """
 
     key: str
@@ -50,6 +51,7 @@ class SubagentSpec:
     routing_rules: str = ""
     source_token: str | None = None
     reasoning: str = _DEFAULT_REASONING
+    reasoning_budget: int | None = None
     findings_label: str = ""
 
     @property
@@ -108,6 +110,11 @@ def normalize_reasoning(value: object) -> str:
     return mode if mode in REASONING_MODES else _DEFAULT_REASONING
 
 
+def _positive_int(value: object) -> int | None:
+    """A YAML integer greater than zero, else ``None``."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
 def load_subagent_registry(yaml_path: str | Path) -> SubagentRegistry:
     """Build a registry from an example's ``subagents.yaml`` (empty if absent/blank).
 
@@ -136,6 +143,7 @@ def load_subagent_registry(yaml_path: str | Path) -> SubagentRegistry:
                 routing_rules=str(item.get("routing_rules") or "").strip(),
                 source_token=(str(token).strip() or None) if token else None,
                 reasoning=normalize_reasoning(item.get("reasoning")),
+                reasoning_budget=_positive_int(item.get("reasoning_budget")),
                 findings_label=str(item.get("findings_label") or "").strip(),
             )
         )

@@ -20,6 +20,7 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMTextFrame,
+    MetricsFrame,
     TranscriptionFrame,
     TTSStoppedFrame,
     TTSTextFrame,
@@ -28,6 +29,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.transports.base_output import BaseOutputTransport
 
 from realtime.conversation import ConversationState
@@ -47,6 +49,7 @@ from realtime.events import (
     server_event,
 )
 from realtime.lifecycle import announce_response, finish_response
+from realtime.metrics import RealtimeMetricsAccumulator, RealtimeResponseTelemetry
 
 # Frames this observer maps to Realtime events (ignore the rest for dedupe).
 _OBSERVED_FRAME_TYPES = (
@@ -89,14 +92,27 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._conversation = conversation
         self._processed_frames: set[int] = set()
         self._frame_history: deque[int] = deque(maxlen=max_frames)
+        self._processed_metric_frames: set[int] = set()
+        self._metric_frame_history: deque[int] = deque(maxlen=max_frames)
         self._bot_transcript_from_tts = False
         self._emitted_function_calls: set[str] = set()
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
+        self._metrics = RealtimeMetricsAccumulator()
 
     def _clear_frame_dedupe(self) -> None:
         self._processed_frames.clear()
         self._frame_history.clear()
+
+    def _remember_metric_frame(self, frame_id: int) -> bool:
+        """Deduplicate metric frames without changing lifecycle dedupe state."""
+        if frame_id in self._processed_metric_frames:
+            return False
+        self._processed_metric_frames.add(frame_id)
+        self._metric_frame_history.append(frame_id)
+        if len(self._processed_metric_frames) > len(self._metric_frame_history):
+            self._processed_metric_frames = set(self._metric_frame_history)
+        return True
 
     def _remember_frame(self, frame_id: int) -> bool:
         """Return True if this frame id is new and should be handled."""
@@ -158,6 +174,15 @@ class RealtimeLifecycleObserver(BaseObserver):
         )
         self._conversation.clear_user_item()
 
+    def take_response_telemetry(self) -> RealtimeResponseTelemetry:
+        """Snapshot passively collected metrics for the next ``response.done``."""
+        try:
+            return self._metrics.finish()
+        except Exception:
+            logger.exception("Realtime metrics snapshot failed; emitting response without telemetry")
+            self._metrics.clear()
+            return RealtimeResponseTelemetry()
+
     def on_response_cancelled(self) -> str:
         """Invalidate buffered LLM text for a cancelled turn; return drained text."""
         text = self._llm_text_buffer
@@ -171,6 +196,9 @@ class RealtimeLifecycleObserver(BaseObserver):
         """Clear buffers on transport / session teardown."""
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
+        self._metrics.clear()
+        self._processed_metric_frames.clear()
+        self._metric_frame_history.clear()
         self._clear_frame_dedupe()
 
     async def on_push_frame(self, data: FramePushed) -> None:
@@ -211,6 +239,13 @@ class RealtimeLifecycleObserver(BaseObserver):
             return
 
         if data.direction != FrameDirection.DOWNSTREAM:
+            return
+        if isinstance(frame, (MetricsFrame, RTVIServerMessageFrame)):
+            if self._remember_metric_frame(frame.id):
+                try:
+                    self._metrics.consume(frame)
+                except Exception:
+                    logger.exception("Realtime metrics collection failed; ignoring metric frame")
             return
         if not isinstance(frame, _OBSERVED_FRAME_TYPES):
             return
@@ -391,6 +426,7 @@ class RealtimeLifecycleObserver(BaseObserver):
             self._conversation,
             self._emit_fn,
             status=status,
+            telemetry=self.take_response_telemetry(),
         )
         self._bot_transcript_from_tts = False
         self._llm_text_buffer = ""

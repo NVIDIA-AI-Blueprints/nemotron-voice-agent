@@ -51,7 +51,7 @@ class ThinkingController:
         self._generation = 0
         self._active_task_id = ""
 
-    def queue(self, transcript: str, *, effort: str, reason: str = "") -> None:
+    def queue(self, transcript: str, *, reason: str = "") -> None:
         """Queue a thinking pass to run after the Speaker's turn completes.
 
         ``reason`` is empty when the model spoke its own stall; a non-empty reason
@@ -61,11 +61,8 @@ class ThinkingController:
         cleaned = transcript.strip()
         if not cleaned:
             return
-        self._pending = {"transcript": cleaned, "effort": effort, "reason": reason}
-        logger.info(
-            f"Queued deliberate thinking: effort={effort}, reason={reason or 'needs_thinking'}, "
-            f"transcript_chars={len(cleaned)}"
-        )
+        self._pending = {"transcript": cleaned, "reason": reason}
+        logger.info(f"Queued deliberate thinking: reason={reason or 'needs_thinking'}, transcript_chars={len(cleaned)}")
 
     def clear_pending(self) -> None:
         """Drop any queued thinking (e.g. when the stall was interrupted)."""
@@ -98,8 +95,7 @@ class ThinkingController:
             return
         self._active_task_id = task_id
         logger.info(
-            f"Deliberate thinking dispatched: task_id={task_id}, effort={pending['effort']}, "
-            f"reason={pending.get('reason') or 'needs_thinking'}"
+            f"Deliberate thinking dispatched: task_id={task_id}, reason={pending.get('reason') or 'needs_thinking'}"
         )
         await self._emit_update(task_id=task_id, status="running", detail="Thinking it through...")
 

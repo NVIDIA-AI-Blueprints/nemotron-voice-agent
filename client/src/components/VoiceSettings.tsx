@@ -93,32 +93,23 @@ export function VoiceSettings() {
     setSelectedSessionLanguage,
   ]);
 
-  const defaultVoice = useMemo(() => {
+  const selectedVoice = useMemo(() => {
     if (!ttsConfig?.voices?.length) return null;
     const catalogLang = (selectedTTS?.languageCode || ttsConfig.defaultLanguage || "en-US")
       .replace("_", "-")
       .toUpperCase();
-    const byId = (voiceId: string) => {
+    for (const voiceId of [selectedVoiceId, selectedTTS?.voiceId, ttsConfig.defaultVoiceId]) {
       const matches = ttsConfig.voices.filter((voice) => voice.id === voiceId);
-      if (matches.length === 0) return null;
-      return matches.find((voice) => voice.language.replace("_", "-").toUpperCase() === catalogLang) || matches[0];
-    };
-    const selectedServiceVoice = selectedTTS?.voiceId || "";
-    if (selectedServiceVoice) {
-      const match = byId(selectedServiceVoice);
-      if (match) return match;
-    }
-    if (ttsConfig.defaultVoiceId) {
-      const match = byId(ttsConfig.defaultVoiceId);
+      const match = matches.find((voice) => voice.language.replace("_", "-").toUpperCase() === catalogLang) || matches[0];
       if (match) return match;
     }
     const enVoice = ttsConfig.voices.find((voice) => voice.language.toUpperCase() === "EN-US");
     return enVoice || ttsConfig.voices[0];
-  }, [ttsConfig, selectedTTS?.voiceId, selectedTTS?.languageCode]);
+  }, [ttsConfig, selectedVoiceId, selectedTTS?.voiceId, selectedTTS?.languageCode]);
 
   const hasActiveOverride = voiceOverride.serviceId === (selectedTTS?.id ?? "");
-  const activeLang = (hasActiveOverride ? voiceOverride.language : "") || (defaultVoice?.language.replace("_", "-") ?? "");
-  const activeVoice = (hasActiveOverride ? voiceOverride.voiceId : "") || defaultVoice?.id || "";
+  const activeLang = (hasActiveOverride ? voiceOverride.language : "") || (selectedVoice?.language.replace("_", "-") ?? "");
+  const activeVoice = (hasActiveOverride ? voiceOverride.voiceId : "") || selectedVoice?.id || "";
 
   const languages = ttsConfig?.languages ?? [];
 

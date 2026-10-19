@@ -314,7 +314,7 @@ class EnvelopeStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, envelope["response"])
         self.assertIn(repeated, BRIDGE_FILLERS)
         self.assertNotIn(envelope["response"], repeated)
-        service._thinking_handler.assert_awaited_once_with("White", "high", "repetition")
+        service._thinking_handler.assert_awaited_once_with("White", "repetition")
 
     async def test_invalid_action_withholds_streamed_text(self) -> None:
         service = self._service()
@@ -646,11 +646,7 @@ class DispatchRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(corrected.response, "Let me think that through carefully.")
         service.run_inference.assert_awaited_once()
         self.assertEqual(service.push_frame.await_count, 0)
-        service._thinking_handler.assert_awaited_once_with(
-            "Count one to five",
-            "medium",
-            "",
-        )
+        service._thinking_handler.assert_awaited_once_with("Count one to five", "")
         service._media_analysis_prompt_handler.assert_not_awaited()
         service._highres_capture_handler.assert_not_awaited()
 
@@ -758,7 +754,7 @@ class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
         settings = omni_service.call_args.kwargs["settings"]
         self.assertEqual(settings.max_tokens, 16384)
 
-    async def test_effort_controls_reasoning_budget_not_total_tokens(self) -> None:
+    async def test_think_uses_total_generation_ceiling_without_per_call_budget(self) -> None:
         worker = object.__new__(ThinkerWorker)
         worker._base_url = "http://localhost:8002/v1"
         worker._model_id = "test-model"
@@ -776,7 +772,6 @@ class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
             "",
             "Count one to five",
             "",
-            1024,
             requester="omni_transport",
             task_id="task-1",
         )
@@ -786,7 +781,7 @@ class ThinkerBudgetTests(unittest.IsolatedAsyncioTestCase):
         worker._omni.run_multimodal_inference.assert_awaited_once()
         kwargs = worker._omni.run_multimodal_inference.await_args.kwargs
         self.assertEqual(kwargs["max_tokens"], 16384)
-        self.assertEqual(kwargs["reasoning_budget"], 1024)
+        self.assertNotIn("reasoning_budget", kwargs)
         self.assertIn("on_reasoning_delta", kwargs)
 
 

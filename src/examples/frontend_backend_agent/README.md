@@ -14,7 +14,7 @@ The diagram shows the full runtime path. User audio enters through the WebRTC/We
 
 ## Default Models
 
-The defaults in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following models for each profile:
+The `services` lists in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../services.yaml):
 
 | Profile | ASR | Talker LLM | Thinker LLM | TTS |
 | --- | --- | --- | --- | --- |
@@ -94,8 +94,9 @@ Reusable Frontend/Backend Agent helpers live under `src/`, airline flight-bookin
 | `CHAT_HISTORY_RECENT_TURNS` | `20` | Number of recent non-prompt messages retained in the frontend LLM context window |
 | `THINKER_FILLER_THRESHOLD_SECONDS` | `0.3` | Delay before optional `call_backend.filler_text` is spoken while backend work is still running |
 | `THINKER_TOOL_TIMEOUT_SECONDS` | `30.0` (`90` for single-GPU Compose) | Timeout for `call_backend` / `cancel_backend` tool handlers |
+| `FRONTEND_BACKEND_DIRECT_TOOL_RESPONSE` | Disabled (`true` for single-GPU Compose) | Speak validated Thinker `response_text` directly instead of asking the Talker to generate another response |
 
-The single-GPU profile uses a dedicated Model Runner V1 service, separate from the V2 service used by the generic and multilingual profiles. The Thinker sets `thinking_token_budget=1024` and `max_tokens=4096`, while the single-GPU Compose profile gives backend tool calls 90 seconds to complete. The numeric thinking budget requires Model Runner V1 in vLLM 0.27.1.
+The single-GPU profile uses a dedicated Model Runner V1 service, separate from the V2 service used by the generic and multilingual profiles. The Thinker sets `thinking_token_budget=1024` and `max_tokens=4096`, while the single-GPU Compose profile gives backend tool calls 90 seconds to complete. It also sends validated Thinker responses directly to TTS, avoiding a second Talker generation that can ignore or rephrase the backend result. The numeric thinking budget requires Model Runner V1 in vLLM 0.27.1.
 
 For model, prompt, and catalog configuration, see [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure Prompts](../../../docs/how-to/configure-prompts.md), and [Configure Services](../../../docs/how-to/configure-services.md). For deployment and general failure modes, see the [Troubleshooting guide](../../../docs/06-troubleshooting.md).
 

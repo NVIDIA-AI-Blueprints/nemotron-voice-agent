@@ -13,11 +13,14 @@ deployment profiles when changing shared behavior.
 - Use `pyproject.toml` and `uv.lock` for Python versions and dependencies.
 - Use `client/package.json` and `client/package-lock.json` for client
   dependencies and scripts.
-- Use `examples_registry.yaml` for registered examples, transports, and
-  per-example defaults.
-- Use each `src/examples/<example>/pipeline.py`, `prompts.yaml`,
-  `services.cloud.yaml`, and `services.local.yaml` for example behavior and
-  configuration. Shared runtime behavior lives in `src/examples/shared/`,
+- Use `examples_registry.yaml` for registered examples, transports, the
+  services each example offers per slot, and per-example service overrides
+  (`settings` and `categories`).
+- Use `services.yaml` for built-in LLM, ASR, and TTS entries (`server` and
+  `single-gpu` sections, `nvcf` for NVIDIA Cloud) and `settings.yaml` for
+  editable service settings.
+- Use each `src/examples/<example>/pipeline.py` and `prompts.yaml` for example
+  behavior and configuration. Shared runtime behavior lives in `src/examples/shared/`,
   `src/server.py`, and the other root modules in `src/`.
 - Use `docker-compose.yml` and the files in `docker/` for Compose profiles,
   service names, container images, ports, and hardware-specific deployment
@@ -34,9 +37,8 @@ deployment profiles when changing shared behavior.
 - Select exactly one recipe profile for a Docker Compose deployment. Cloud
   profiles use `<example>`; local profiles use `<example>/<hardware>`.
   Observability profiles such as `tracing` and `turn` are overlays.
-- Load `.agents/skills/nemotron-voice-agent-deploy/SKILL.md` for deployment or startup troubleshooting.
-- Load `.agents/skills/nemotron-voice-agent-configure-pipeline/SKILL.md` for changes to `.env`,
-  `examples_registry.yaml`, prompts, service catalogs, transports, tracing, or
+- Load `.agents/skills/nemotron-voice-agent-deploy/SKILL.md` for deployment, startup troubleshooting, or
+  changes to `.env`, `examples_registry.yaml`, prompts, service catalogs, settings, transports, tracing, or
   audio settings.
 - Load `.agents/skills/nemotron-voice-agent-upgrade-pipecat/SKILL.md` before changing Pipecat server or
   client dependency versions or migrating Pipecat APIs.

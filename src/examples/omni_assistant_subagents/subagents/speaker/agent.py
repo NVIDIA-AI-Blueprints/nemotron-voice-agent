@@ -11,9 +11,10 @@ from typing import Any
 from loguru import logger
 from openai.types.chat import ChatCompletionChunk
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
+from pipecat.bus.messages import BusCancelMessage
 from pipecat.frames.frames import ErrorFrame, LLMServiceMetadataFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import LLMService
 
@@ -35,9 +36,9 @@ from examples.omni_assistant_subagents.subagents.speaker.action_envelope import 
     normalize_selected_input_source,
     normalize_turn_action,
 )
-from examples.omni_assistant_subagents.subagents.speaker.json_stream import JsonStringFieldStreamer
 from examples.omni_assistant_subagents.subagents.speaker.repeat_guard import RepeatGuard, is_affirmation
 from examples.shared.json_parsing import extract_json_object
+from examples.shared.json_stream import JsonStringFieldStreamer
 from utils import parse_env_float, parse_env_int
 
 _CAPTURE_ESCALATION_COOLDOWN = 3
@@ -64,7 +65,7 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
         media_analysis_prompt_handler: Callable[[str, str, str, str], Awaitable[None]] | None = None,
         uploaded_attachment_available: Callable[[], bool] | None = None,
         attachment_pending: Callable[[], bool] | None = None,
-        thinking_handler: Callable[[str, str, str], Awaitable[None]] | None = None,
+        thinking_handler: Callable[[str, str], Awaitable[None]] | None = None,
         highres_capture_handler: Callable[[str], Awaitable[None]] | None = None,
         visual_status_provider: Callable[[], str] | None = None,
         **kwargs,
@@ -304,9 +305,6 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
             logger.warning(f"Speaker Omni response did not parse as JSON: {raw_content[:500]!r}")
         transcript = str(raw_payload.get("transcript", "")).strip()
         if transcript and not self.current_turn_has_user_audio():
-            # Nothing was spoken this turn, so a reported transcript is the model
-            # echoing context back at us. Keeping it would enter the conversation
-            # as something the user said and steer every later turn.
             logger.info(f"Speaker Omni dropped a transcript claimed without user audio: chars={len(transcript)}")
             transcript = ""
         response = clean_spoken_response_artifacts(str(raw_payload.get("response", "")))
@@ -494,10 +492,9 @@ class SubagentsSpeakerOmniService(NvidiaOmniLLMService):
             )
             return
         reason = "repetition" if repeated else ""
-        effort = "high" if repeated else "medium"
         try:
-            logger.info(f"Speaker Omni escalating to Thinker: reason={reason or 'needs_thinking'}, effort={effort}")
-            await self._thinking_handler(transcript, effort, reason)
+            logger.info(f"Speaker Omni escalating to Thinker: reason={reason or 'needs_thinking'}")
+            await self._thinking_handler(transcript, reason)
         except Exception as exc:
             logger.warning(f"Speaker Omni thinking handler failed: {exc}")
             await self.push_error_frame(
@@ -527,7 +524,7 @@ class SpeakerOmniAgent(PipelineWorker):
         media_analysis_prompt_handler: Callable[[str, str, str, str], Awaitable[None]] | None = None,
         uploaded_attachment_available: Callable[[], bool] | None = None,
         attachment_pending: Callable[[], bool] | None = None,
-        thinking_handler: Callable[[str, str, str], Awaitable[None]] | None = None,
+        thinking_handler: Callable[[str, str], Awaitable[None]] | None = None,
         highres_capture_handler: Callable[[str], Awaitable[None]] | None = None,
         visual_status_provider: Callable[[], str] | None = None,
     ) -> None:
@@ -540,10 +537,6 @@ class SpeakerOmniAgent(PipelineWorker):
             api_key=api_key,
             base_url=base_url,
             context=context,
-            # The Speaker registers no tools, so it can use the forced JSON
-            # response format its action envelope needs. It parses and emits the
-            # user transcript itself, so the service's own tag-based transcript
-            # extraction stays off.
             extra={"response_format": {"type": "json_object"}, **dict(extra_params or {})},
             settings=NvidiaOmniSettings(
                 model=model_id,
@@ -567,4 +560,19 @@ class SpeakerOmniAgent(PipelineWorker):
             active=True,
             bridged=(),
             enable_rtvi=False,
+            processor_unusable_policy=ProcessorUnusablePolicy.END,
+            setup_timeout_secs=120.0,
         )
+        self._runner_cancel_requested = False
+
+        @self.event_handler("on_pipeline_error")
+        async def on_pipeline_error(_worker, frame) -> None:
+            processor = frame.processor
+            if processor and not processor.is_usable and not self._runner_cancel_requested:
+                self._runner_cancel_requested = True
+                await self.send_bus_message(
+                    BusCancelMessage(
+                        source=self.name,
+                        reason=f"{processor} can no longer do its job",
+                    )
+                )

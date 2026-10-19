@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from realtime.voice import resolve_realtime_tts_voice, tts_routing_changed
 
@@ -126,6 +127,34 @@ class GetTtsConfigCacheTests(unittest.TestCase):
             result = prewarm_mod.get_tts_config("tts.example:443", "v", "fid", "model")
         prewarm_mock.assert_called_once_with("tts.example:443", "v", "fid", "model")
         self.assertEqual(result, fetched)
+
+
+class TtsSynthesisWarmupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from examples.shared import prewarm as prewarm_mod
+
+        prewarm_mod._TTS_SYNTHESIS_READY_KEYS.clear()
+
+    def tearDown(self) -> None:
+        from examples.shared import prewarm as prewarm_mod
+
+        prewarm_mod._TTS_SYNTHESIS_READY_KEYS.clear()
+
+    def test_successful_route_is_warmed_only_once(self) -> None:
+        from examples.shared import prewarm as prewarm_mod
+
+        service = SimpleNamespace(
+            _initialize_client=Mock(),
+            _settings=SimpleNamespace(voice="voice", language="en-US", quality=20),
+            _service=SimpleNamespace(synthesize_online=Mock(return_value=iter([object()]))),
+        )
+        with patch.object(prewarm_mod, "_create_tts_service", return_value=service) as create_service:
+            first = prewarm_mod.warmup_tts_synthesis("tts.example:443", "voice", "fid", "model")
+            second = prewarm_mod.warmup_tts_synthesis("tts.example:443", "voice", "fid", "model")
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        create_service.assert_called_once_with("tts.example:443", "voice", "fid", "model")
 
 
 if __name__ == "__main__":

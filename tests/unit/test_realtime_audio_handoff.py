@@ -67,6 +67,21 @@ class AudioHelperTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
+    async def test_setup_uses_frame_processor_setup_input_rate(self) -> None:
+        ser = RealtimeFrameSerializer()
+        setup = MagicMock()
+        setup.audio_in_sample_rate = 48000
+        setup.audio_out_sample_rate = 24000
+
+        with patch(
+            "pipecat.serializers.base_serializer.FrameSerializer.setup",
+            new=AsyncMock(),
+        ) as base_setup:
+            await ser.setup(setup)
+
+        base_setup.assert_awaited_once_with(setup)
+        self.assertEqual(ser._pipeline_rate, 48000)
+
     async def test_append_produces_input_audio_frame(self) -> None:
         emitted: list[dict[str, Any]] = []
 

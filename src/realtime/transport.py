@@ -94,6 +94,7 @@ def realtime_lifecycle_observer(transport: Any) -> BaseObserver | None:
         conversation=serializer.conversation,
     )
     serializer.set_on_response_cancel(observer.on_response_cancelled)
+    serializer.set_response_telemetry_provider(observer.take_response_telemetry)
     transport._realtime_observer = observer  # type: ignore[attr-defined]
     return observer
 

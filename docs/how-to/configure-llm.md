@@ -4,29 +4,29 @@ The cascaded pipeline calls a text **LLM** for response generation. The **Omni**
 
 Nemotron models are **transparent**: weights and training data are open on [Hugging Face](https://huggingface.co/nvidia) and the technical reports for reproducing them are public, so you can evaluate a model before putting it in production. The **Nemotron 3** family pairs a hybrid **Mamba-Transformer MoE** architecture for efficient, high-throughput, multimodal agentic AI, and deploys with open frameworks (vLLM, SGLang, Ollama, llama.cpp) on any NVIDIA GPU (edge, cloud, or data center) or as NVIDIA NIM microservices.
 
-The reasoning family is tiered by capability. **Nemotron 3.5 Lightning** is the fast, efficient default for cascaded examples, while **Nemotron 3 Nano Omni** adds multimodal audio input. **Nemotron 3 Super** offers the highest efficiency with leading accuracy for reasoning and tool calling in multi-agent apps. **Ultra** gives the highest reasoning accuracy for the most complex agentic tasks. Learn more at [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron).
+The reasoning family is tiered by capability. **Nemotron 3.5 Lightning** is the fast, efficient default for cascaded examples, while **Nemotron 3 Nano Omni** adds multimodal audio input. **Nemotron 3.5 Super VL** offers the highest efficiency with leading accuracy for reasoning and tool calling in multi-agent apps. **Ultra** gives the highest reasoning accuracy for the most complex agentic tasks. Learn more at [NVIDIA Nemotron](https://developer.nvidia.com/topics/ai/nemotron).
 
-Models are declared per example in `services.cloud.yaml` (remote / NVCF) and `services.local.yaml` (Compose-managed sidecars). This page is the **model reference**. It covers the available models, deployment and sizing, reasoning and tool calling, and per-request sampling. For catalog loading, switching, and overrides, refer to [Configure Services](configure-services.md).
+Models are declared in the root [`services.yaml`](../../services.yaml), and each example lists the keys it offers in [`examples_registry.yaml`](../../examples_registry.yaml). This page is the **model reference**. It covers the available models, deployment and sizing, reasoning and tool calling, and per-request sampling. For catalog loading, switching, and overrides, refer to [Configure Services](configure-services.md).
 
 ## Models
 
-Three unique Nemotron models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. Nemotron 3 Super is self-hosted only.
+Three models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. Nemotron 3.5 Super VL is self-hosted only, and the examples use it as a text LLM.
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
-| **Nemotron 3 Super 120B A12B**: higher-capability alternative for complex tasks, available self-hosted | [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
+| **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks, available self-hosted | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
 | **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni-nim.yaml`](../../docker/docker-compose.nemotron3-omni-nim.yaml) (NIM), [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 
-Each model is exposed as one or more **catalog keys** in `services.cloud.yaml` / `services.local.yaml`:
+Each model is exposed as one or more **catalog keys** in `services.yaml`:
 
 | Model | Catalog keys |
 |-------|--------------|
-| Nemotron 3.5 Lightning | `nemotron-lightning`, `nemotron-lightning-reasoning` |
-| Nemotron 3 Super | `nemotron-super`, `nemotron-super-reasoning` (self-hosted only) |
+| Nemotron 3.5 Lightning | `nemotron-lightning` |
+| Nemotron 3.5 Super VL | `nemotron-super` (self-hosted only) |
 | Nemotron 3 Nano Omni | `nemotron-omni-nvfp4` |
 
-The `*-reasoning` keys are the **same weights** with thinking enabled (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is set in [`examples_registry.yaml`](../../examples_registry.yaml) under `defaults`.
+Reasoning is a per-session toggle on the same entry, not a separate key (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is the first available key under the example's `services` in [`examples_registry.yaml`](../../examples_registry.yaml).
 
 ### Multilingual Session Languages
 
@@ -34,19 +34,19 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 
 | Built-in LLM | Supported language bases |
 | --- | --- |
-| Nemotron 3.5 Lightning (`nemotron-lightning`, `nemotron-lightning-reasoning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
-| Nemotron 3 Super (`nemotron-super`, `nemotron-super-reasoning`, self-hosted) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
+| Nemotron 3.5 Lightning (`nemotron-lightning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
+| Nemotron 3.5 Super VL (`nemotron-super`, self-hosted) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
 
-The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3.5 Lightning model card](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) and [Nemotron 3 Super model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8).
+The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3.5 Lightning model card](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) and the [Nemotron 3.5 Super VL model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4).
 
-> **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages (for example Hindi). For multilingual deployments where language fidelity matters, self-host **Nemotron 3 Super** (`nemotron-super`) with [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) and add it to the example catalog. It stays more reliably in the target language and reads more naturally across languages.
+> **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages. For multilingual deployments where language fidelity matters, start the **Nemotron 3.5 Super VL** sidecar (see [Run Nemotron 3.5 Super VL](#run-nemotron-35-super-vl)) and select `nemotron-super` in the Services tab. The Generic and Multilingual assistants list it after Lightning. It stays more reliably in the target language and reads more naturally across languages.
 
 ## Hardware Requirements and Deployment Configs
 
 You can self-host the LLM two ways, and the repo wires the right one per profile:
 
-- **NIM** (`nvidia-llm`, `nvidia-llm-omni`, `nemotron-3-super`): a prebuilt, optimized inference microservice with automatic, hardware-aware model-profile selection. It is used by `*/server` recipes.
-- **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`): serves weights directly. The `*/single-gpu` recipes select the serving precision automatically from the host and GPU.
+- **NIM** (`nvidia-llm`, `nvidia-llm-omni`, `nemotron-35-super-vl`): a prebuilt, optimized inference microservice with automatic, hardware-aware model-profile selection. It is used by `*/server` recipes.
+- **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`, `nemotron-35-super-vl-vllm`): serves weights directly. The `*/single-gpu` recipes select the serving precision automatically from the host and GPU.
 
 Both expose the same OpenAI-compatible API, so the pipeline and the request tuning below behave identically against either.
 
@@ -54,18 +54,21 @@ Both expose the same OpenAI-compatible API, so the pipeline and the request tuni
 
 ### VRAM & Hardware Support
 
-The `*/single-gpu` vLLM services select the model checkpoint and precision from the GPU compute capability. They also calculate `--gpu-memory-utilization` at startup. The planner reserves `VLLM_VRAM_HEADROOM_MIB` from currently free memory, validates the usable amount, and caps the resulting utilization for the platform. The default headroom is 4096 MiB. Set `VLLM_GPU_MEMORY_UTILIZATION` only when an explicit override is required. These overrides apply to automatically sized workstation Lightning recipes and Omni recipes. Lightning on DGX Spark and Jetson Thor uses a fixed value of `0.35`.
+The `*/single-gpu` vLLM services select the model checkpoint and precision from the GPU compute capability. They also calculate `--gpu-memory-utilization` at startup. The planner reserves `VLLM_VRAM_HEADROOM_MIB` from currently free memory, validates the usable amount, and caps the resulting utilization for the platform. The default headroom is 4096 MiB. Set `VLLM_GPU_MEMORY_UTILIZATION` only when an explicit override is required. These overrides apply to automatically sized workstation Lightning recipes, Omni recipes, and Super VL. Lightning on DGX Spark and Jetson Thor uses a fixed value of `0.35`.
 
 | Service / hardware | Model selection | Automatic VRAM plan | Device IDs |
 | --- | --- | --- | --- |
 | Lightning on a Blackwell workstation | NVFP4 with DFlash | Free VRAM minus headroom, capped at `0.90`. Requires at least 28 GiB usable. | LLM + ASR + TTS -> `0` |
 | Lightning on Ada or Hopper | NVFP4 W4A16 via Marlin | Free VRAM minus headroom, capped at `0.90`. Requires at least 28 GiB usable. | LLM + ASR + TTS -> `0` |
-| Lightning on DGX Spark | NVFP4 with DSpark | Fixed at `0.35` to preserve unified memory for speech and the system. | LLM + ASR + TTS -> `0` |
+| Lightning on DGX Spark | NVFP4 | Fixed at `0.35` to preserve unified memory for speech and the system. | LLM + ASR + TTS -> `0` |
 | Lightning on Jetson Thor | NVFP4 | Fixed at `0.35` to preserve unified memory for speech and the system. | LLM + ASR + TTS -> `0` |
 | Omni on DGX Spark or Jetson Thor | NVFP4 | Free unified memory minus headroom, capped at `0.70`. Requires at least 24 GiB usable. | Omni + TTS -> `0` |
 | Omni on a Blackwell workstation | NVFP4 | Free VRAM minus headroom, capped at `0.90`. Requires at least 24 GiB usable. | Omni + TTS -> `0` |
 | Omni on Ada or Hopper | FP8 | Free VRAM minus headroom, capped at `0.90`. Requires at least 36 GiB usable. | Omni + TTS -> `0` |
 | Omni on Ampere | BF16 | Free VRAM minus headroom, capped at `0.90`. Requires at least 66 GiB usable. | Omni + TTS -> `0` |
+| Super VL on a Blackwell workstation (96 GB class) | Mixed NVFP4/FP8 with MTP, language model only | Free VRAM minus headroom, capped at `0.90`. Requires at least 78 GiB usable. | Super + ASR + TTS -> `0`, Lightning scaled to zero |
+| Super VL on DGX Spark or Jetson Thor | Mixed NVFP4/FP8 with MTP, language model only | Free unified memory minus headroom, capped at `0.75`. Requires at least 78 GiB usable. On Thor, FlashInfer compiles one kernel at a time (`MAX_JOBS=1`) so the compiler does not run out of unified memory after the weights load. | Super + ASR + TTS -> `0`, Lightning scaled to zero |
+| Super VL on single-GPU service on Hopper, Ada, or Ampere | This service requires Blackwell NVFP4. It exits with `Unsupported GPU for Super single-GPU (needs Blackwell NVFP4)` and restarts. | Depends on the supported NIM profile. | Use the Super VL server NIM (`nemotron-35-super-vl`) with a matching profile: 1× H200, 2× H100 80 GB, or 2× A100 80 GB. L40 / L40S (Ada) GPUs have no listed Super VL NIM profile and are not supported for Super VL server deployment. |
 
 These values are startup checks used by the planner, not guarantees that every workload will fit. Model weights, KV cache, speech services, context length, and concurrency must all fit within the selected budget.
 
@@ -76,9 +79,27 @@ Server recipes use model-specific NIM profiles and scaling controls instead of t
 | Lightning NIM on one GPU | 80 GB | `NIM_KVCACHE_PERCENT=0.6` (default) | LLM + ASR + TTS -> `0` |
 | Lightning NIM split across two GPUs | 40 GB/GPU | `NIM_KVCACHE_PERCENT=0.9` | LLM (`nvidia-llm`) -> `0`, ASR + TTS -> `1` |
 | Omni NIM | See the NIM for VLMs support matrix, plus TTS memory when sharing a GPU | Automatic NIM model profile | Omni + TTS -> `0` |
-| Nemotron 3 Super | 2 × 80 GB (`tp=2`) | NIM defaults | LLM split across two GPUs |
+| Nemotron 3.5 Super VL NIM | See the NIM support matrix for the selected profile (1× H200, 2× H100 80 GB, or 2× A100 80 GB; not supported on L40 / L40S) | Automatic NIM model profile | Super (`nemotron-35-super-vl`) -> `1`, `2` |
 
 Update each service's `device_ids` under `deploy.resources.reservations.devices` when splitting services across GPUs.
+
+### Run Nemotron 3.5 Super VL
+
+Super VL is an optional sidecar. It is not part of any example profile, so add its profile next to the example's. Lightning stays the default LLM; select `nemotron-super` in the Services tab to use Super.
+
+```bash
+# Server: NIM on GPUs 1 and 2. Lightning can keep running on GPU 0.
+docker compose --profile generic-assistant/server --profile nemotron-35-super-vl \
+  up -d --scale nvidia-llm=0
+
+# Single-GPU: vLLM on GPU 0. Lightning must be scaled to zero to free the GPU.
+docker compose --profile generic-assistant/single-gpu --profile nemotron-35-super-vl-single-gpu \
+  up -d --scale nvidia-llm-vllm-lightning=0
+```
+
+Use `multilingual-assistant/*` in place of `generic-assistant/*` for the Multilingual Assistant. On the server recipe, `--scale nvidia-llm=0` is optional and only frees GPU `0` for ASR and TTS. Scaling only applies to that `up`; a later `up` without the flag starts Lightning again. To stop the stack, pass the same `--profile` flags to `down`, without `--scale`, which `down` does not accept.
+
+The single-GPU service downloads the model checkpoint from Hugging Face on first start and requires an `HF_TOKEN`. It loads only the language model (`--language-model-only`), so image input is not served.
 
 ### Deployment Tuning Parameters
 
@@ -90,12 +111,16 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 | **Precision** | Automatic for standard `*/server`. `server-perf` pins `NIM_MODEL_PROFILE=vllm-nvfp4-tp2-pp1-18.0` | Selected automatically from GPU compute capability | Lightning single-GPU loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve it as W4A16 through Marlin. Native NVFP4 compute still needs Blackwell or later. For NIM on older hardware, choose a compatible profile listed by the image. |
 | **Hardware / scaling (TP)** | Automatic from the visible GPUs for standard `*/server`. Pinned to TP2 for `server-perf` | `--tensor-parallel-size N` | A pinned TP=N profile needs N visible `device_ids`. Merely exposing N GPUs does not guarantee automatic selection will use all of them. |
 | **Context length** | Fixed at `32768` by `NIM_MAX_MODEL_LEN` in the stock Compose files | `--max-model-len` | To change the NIM value, use a Compose override or edit the matching Compose service. Larger context costs more KV-cache VRAM. |
-| **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` | Maximum concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this, for example to `64`–`128`. |
+| **Concurrency** | `LLM_MAX_NUM_SEQS` (default `256`) | `--max-num-seqs` (`256` in the Lightning recipe) | Maximum concurrent sequences. Nemotron models are a hybrid **Mamba** model, so each sequence draws one state block from the cache. If startup fails CUDA-graph capture, lower this, for example to `64`–`128`. |
 | **Explicit profile** | Automatic for standard `*/server`. Pinned for `server-perf` | n/a | Add `NIM_MODEL_PROFILE=<id-or-description>` to a Compose override to pin a custom profile. |
 
 **Cascaded NIM sizing (`nvidia-llm`).** Weight memory depends on the profile NIM selects. Confirm the selected precision and memory footprint in the startup logs and support matrix. The default `NIM_KVCACHE_PERCENT=0.6` targets one ~80 GB GPU shared with ASR (~15 GB) and TTS (~14 GB). On a smaller supported GPU, move ASR/TTS to a second card (their `device_ids`) and raise `NIM_KVCACHE_PERCENT` only after verifying that the selected LLM profile still fits.
 
 **Lightning vLLM sizing (`nvidia-llm-vllm-lightning`).** The Single-GPU service loads `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` on every supported GPU. Blackwell workstations, DGX Spark, and Jetson Thor serve native NVFP4. Hopper and Ada serve the same checkpoint as W4A16 through Marlin (`--quantization modelopt_fp4`).
+
+**Streaming input.** The Lightning vLLM service also serves a text StreamingInput WebSocket at `ws://nvidia-llm-vllm:8000/v1/streaming-session`, next to chat completions. The single-GPU Super VL service (`nemotron-35-super-vl-vllm`) serves the same endpoint on its own port. The single-GPU `nemotron-lightning` and `nemotron-super` entries declare it as `streaming_url`. When an example lists `streaming_input` under `capabilities` in `examples_registry.yaml`, each of those cards shows a **Streaming Input** toggle, and turning it on sends the session to that URL. The Generic Assistant then prefills every ASR update while the user speaks, so the answer starts from a warm KV cache. The toggle appears only for self-hosted vLLM entries with a `streaming_url`.
+
+The streaming server holds the latest word until another word arrives or the turn commits. If an ASR correction changes previously queued prompt tokens, the engine request restarts with the updated prompt. Voice activity detection (VAD) stopping does not guarantee that prefill is complete: final ASR updates or pending chunks can still require processing.
 
 **Omni vLLM sizing (`nvidia-llm-vllm-omni`).** The Single-GPU service selects NVFP4, FP8, or BF16 from the supported GPU compute capability. On DGX Spark and Jetson Thor, it also caps free memory using the host's `MemAvailable` value before calculating utilization. Increase `VLLM_VRAM_HEADROOM_MIB` when more memory must remain available for TTS or the system.
 
@@ -106,7 +131,7 @@ For standard `*/server`, inspect the image on its visible LLM GPU:
 ```bash
 docker run --rm --gpus '"device=0"' \
   -e NGC_API_KEY="$NVIDIA_API_KEY" \
-  nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.0.9-variant \
+  nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.1.4 \
   list-model-profiles
 ```
 
@@ -115,7 +140,7 @@ For `server-perf`, inspect the same image with its TP2 GPU assignment:
 ```bash
 docker run --rm --gpus '"device=2,3"' \
   -e NGC_API_KEY="$NVIDIA_API_KEY" \
-  nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.0.9-variant \
+  nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b:2.1.4 \
   list-model-profiles
 ```
 
@@ -134,26 +159,39 @@ docker run --rm --gpus '"device=0"' \
 
 ### Reasoning (Thinking) On/Off
 
-Nemotron LLMs support a chain-of-thought "thinking" mode, controlled per catalog entry through `extra_params`, forwarded to the model as `extra_body`:
+Nemotron LLMs support a chain-of-thought "thinking" mode. Catalog entries reference a [`settings.yaml`](../../settings.yaml) profile that exposes **Reasoning**, **Reasoning Budget**, **Temperature**, **Top P**, **Max Tokens**, and **Seed** under the active LLM in the Services tab. Omni uses `nemotron-omni-nim` / `nemotron-omni-vllm`, whose temperature range goes up to 2.0; its `OMNI_TEMPERATURE`, `OMNI_TOP_P`, and `OMNI_MAX_TOKENS` env values still apply until a user sets the parameter.
 
 ```yaml
-llm:
-  # Reasoning OFF: lowest latency (recommended default for spoken pipelines)
-  nemotron-lightning:
-    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}'
+x-sampling: &sampling
+  temperature: {label: "Temperature", type: float, min: 0.0, max: 1.0}
+  top_p: {label: "Top P", type: float, min: 0.01, max: 1.0}
+  max_tokens: {label: "Max Tokens", type: int, min: 1, max: 16384}
+  seed: {label: "Seed", type: int, min: 0}
 
-  # Reasoning ON: better on complex tasks, higher time-to-first-response
-  nemotron-lightning-reasoning:
-    model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
-    extra_params: '{"extra_body":{"chat_template_kwargs":{"enable_thinking":true},"reasoning_budget":16384}}'
+nemotron-nim:
+  <<: *sampling
+  enable_thinking:
+    label: "Reasoning"
+    type: bool
+    default: false
+    path: extra_body.chat_template_kwargs.enable_thinking
+  reasoning_budget:
+    label: "Reasoning Budget"
+    type: int
+    default: 16384
+    min: 128
+    max: 32768
+    path: extra_body.reasoning_budget
+    requires: enable_thinking
 ```
 
-For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. Select a variant from the Services tab or set the default in [`examples_registry.yaml`](../../examples_registry.yaml).
+For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. NIM reads the budget from `reasoning_budget` and vLLM from `thinking_token_budget`, so `nemotron-nim` and `nemotron-vllm` differ only in that `path`. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
+
+> **Known limitation (Reasoning OFF with tool calling).** With reasoning **OFF** (`enable_thinking: false`), smaller models such as **Nemotron 3.5 Lightning 30B A3B** can occasionally emit tool-selection planning text (function names, argument math, or prompt rules) as normal assistant `content` before or instead of the structured tool call, which TTS then speaks aloud. Once this planning text enters the conversation history, subsequent turns in the same session can continue repeating that pattern. Start a new session to clear the conversation context, or enable **Reasoning** / switch to **Nemotron 3.5 Super VL** for tool-heavy sessions.
 
 ### Reasoning Parser & Tool Calling (Self-Hosted)
 
-Cloud (NVCF) endpoints enable the parsers server-side. **Self-hosted NIM and vLLM do not enable them by default**, so the repo's `docker/docker-compose.nemotron3-*.yaml` set them for you:
+Cloud (NVCF) endpoints enable the parsers server-side. **Self-hosted NIM and vLLM do not enable them by default**, so the repo's `docker/docker-compose.nemotron3*.yaml` files set them for you:
 
 | Capability | Flag | Why |
 |------------|------|-----|
@@ -165,15 +203,16 @@ Cloud (NVCF) endpoints enable the parsers server-side. **Self-hosted NIM and vLL
 
 ## Tuning LLM Request Parameters
 
-LLM request parameters are set per catalog entry using `extra_params`, a JSON string merged into each chat-completion request. OpenAI-standard fields (`temperature`, `top_p`, `max_tokens`) go at the top level of `extra_params`. vLLM/NIM extensions (`repetition_penalty`, `chat_template_kwargs`) go under `extra_body`. Use the following structure to set default sampling in the `llm:` section of `services.cloud.yaml` or `services.local.yaml`:
+LLM request parameters are set per catalog entry using `extra_params`, a JSON string merged into each chat-completion request. OpenAI-standard fields (`temperature`, `top_p`, `max_tokens`) go at the top level of `extra_params`. vLLM/NIM extensions (`repetition_penalty`, `chat_template_kwargs`) go under `extra_body`. Use the following structure to set default sampling for an entry in `services.yaml`:
 
 ```yaml
 llm:
   nemotron-lightning:
     name: "Nemotron 3.5 Lightning 30B A3B"
     model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
-    base_url: "https://integrate.api.nvidia.com/v1"
-    extra_params: '{"temperature":0.6,"top_p":0.95,"max_tokens":1024,"extra_body":{"repetition_penalty":1.05,"chat_template_kwargs":{"enable_thinking":false}}}'
+    base_url: "http://nvidia-llm:8000/v1"
+    extra_params: '{"temperature":0.6,"top_p":0.95,"max_tokens":1024,"extra_body":{"repetition_penalty":1.05}}'
+    settings: nemotron-nim
 ```
 
 | Parameter | Where | Typical | Effect |
@@ -182,9 +221,9 @@ llm:
 | `top_p` | top level | `0.95` | Nucleus-sampling cutoff. |
 | `max_tokens` | top level | `512`–`1024` | Caps response length to keep spoken replies short and latency bounded. |
 | `repetition_penalty` | `extra_body` | `1.05` | `> 1` discourages repeated phrasing. |
-| `chat_template_kwargs.enable_thinking` | `extra_body` | `false` | Reasoning on/off. |
+| `chat_template_kwargs.enable_thinking` | `extra_body` | `false` | Reasoning on/off, set by the entry's `settings` profile. |
 
-> The repo ships `repetition_penalty: 1.05` and the appropriate `enable_thinking` per entry. Add `temperature` / `top_p` / `max_tokens` to the same `extra_params` string to default them. Per session, you can override using the UI or session configurations.
+> The repo ships `repetition_penalty: 1.05` per entry, and `enable_thinking` comes from the `settings` profile. Add `temperature` / `top_p` / `max_tokens` to the same `extra_params` string to default them. Per session, you can override using the UI or session configurations.
 
 ## Reference
 

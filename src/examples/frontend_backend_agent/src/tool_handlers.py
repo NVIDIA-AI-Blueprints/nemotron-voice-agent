@@ -121,6 +121,9 @@ def build_handlers(thinker: ThinkerBackend, *, filler_threshold_seconds: float =
             finally:
                 await _cancel_pending_filler(filler_task)
         except asyncio.CancelledError:
+            if _task_cancellation_requested():
+                logger.info("call_backend cancelled by Pipecat; allowing it to settle the function call")
+                raise
             consecutive_planner_errors = 0
             logger.info("call_backend result suppressed after Thinker abort")
             await params.result_callback(

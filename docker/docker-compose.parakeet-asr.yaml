@@ -9,9 +9,6 @@ x-parakeet-asr: &parakeet-asr-base
   user: "0:0"
   environment:
     <<: *parakeet-asr-env
-  ports:
-    - "50152:50052"
-    - "9001:9001"
   volumes:
     - asr_cache:/opt/nim/.cache
   ulimits:
@@ -42,6 +39,9 @@ services:
     environment:
       <<: *parakeet-asr-env
       NIM_TAGS_SELECTOR: mode=str,vad=silero
+    ports:
+      - "50352:50052"
+      - "9201:9001"
     profiles:
       - parakeet-ctc-asr
     image: nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.5.3
@@ -51,6 +51,9 @@ services:
     environment:
       <<: *parakeet-asr-env
       NIM_TAGS_SELECTOR: mode=str,vad=silero,type=default
+    ports:
+      - "50452:50052"
+      - "9301:9001"
     profiles:
       - parakeet-rnnt-asr
     image: nvcr.io/nim/nvidia/parakeet-1-1b-rnnt-multilingual:1.5.0

@@ -19,7 +19,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -54,6 +54,7 @@ from examples.shared.pipeline_utils import (
     build_smart_turn_stop_strategies,
     build_user_mute_strategies,
     create_transport,
+    latency_metric_group,
     register_session_start_handlers,
     with_realtime_observers,
 )
@@ -179,7 +180,6 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_asr = load_service_entry("asr", "")
     llm_supported_languages = _resolve_llm_supported_languages(body, default_llm)
 
-    # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
@@ -193,6 +193,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
     asr_model = body.get("asr_model", "") or default_asr.get("model", "")
     asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
+    asr_automatic_punctuation = str(body.get("asr_automatic_punctuation", "true")).lower() != "false"
     if not asr_language_code or asr_language_code.strip().lower() == "auto":
         registry_language = examples_registry.default_session_language(body.get("pipeline_mode", ""))
         asr_language_code = registry_language or DEFAULT_SESSION_LANGUAGE
@@ -203,12 +204,13 @@ async def bot(runner_args: RunnerArguments) -> None:
             "function_id": asr_function_id,
             "model_name": asr_model or "custom-asr",
         }
+    asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if fixed_session_language:
-        asr_kwargs["settings"] = NvidiaSTTSettings(language=fixed_session_language)
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
+        asr_kwargs["settings"].language = fixed_session_language
+    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
-        f"language={fixed_session_language}"
+        f"language={fixed_session_language}, punctuation={asr_automatic_punctuation}"
     )
 
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
@@ -231,7 +233,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         llm_supported_languages=llm_supported_languages,
     )
 
-    # --- LLM ---
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
@@ -244,11 +245,12 @@ async def bot(runner_args: RunnerArguments) -> None:
     if raw_temperature in ("", None):
         raw_temperature = default_llm.get("temperature", "")
     llm_temperature = float(raw_temperature) if raw_temperature not in ("", None) else None
+    temperature = base_extra.get("temperature", llm_temperature)
 
     logger.info(
         f"LLM: model={model_id}, base_url={base_url}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
-        f"temperature={llm_temperature if llm_temperature is not None else '(default)'}, "
+        f"temperature={'(default)' if temperature is None else temperature}, "
         f"extra_params={base_extra or '(none)'}"
     )
 
@@ -275,7 +277,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         settings=summary_llm_settings,
     )
 
-    # --- TTS ---
     custom_dictionary = load_ipa_dictionary()
     tts_synthesis_mode = body.get("tts_synthesis_mode", "") or default_tts.get("synthesis_mode", "")
     tts_zero_shot_audio_prompt_file = body.get("tts_zero_shot_audio_prompt_file", "") or default_tts.get(
@@ -323,7 +324,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"text_filters=[NemotronSpeechTextFilter]"
     )
 
-    # --- Context ---
     prompt_catalog = load_prompt_catalog(__file__)
     base_system_content = render_prompt_addon(
         base_system_content,
@@ -364,6 +364,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     latency_observer = UserBotLatencyObserver()
+    latency_turn = 1
+    latest_latency: float | None = None
     summary_lock = asyncio.Lock()
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
@@ -392,6 +394,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_measured")
     async def on_latency(observer, latency):
+        nonlocal latest_latency
+        latest_latency = latency
         logger.info(f"User→Bot latency: {latency:.3f}s")
         await task.queue_frame(
             RTVIServerMessageFrame(
@@ -405,7 +409,13 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def on_breakdown(observer, breakdown):
-        events = breakdown.chronological_events()
+        nonlocal latency_turn, latest_latency
+        if latest_latency is not None:
+            group = latency_metric_group(latency_turn, latest_latency, breakdown)
+            await task.queue_frame(RTVIServerMessageFrame(data=group))
+            latency_turn += 1
+            latest_latency = None
+        events = breakdown.turn_contribution_lines()
         await task.queue_frame(
             RTVIServerMessageFrame(
                 data={
@@ -429,6 +439,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
+        processor_unusable_policy=ProcessorUnusablePolicy.END,
+        setup_timeout_secs=120.0,
     )
 
     @user_aggregator.event_handler("on_user_turn_stopped")

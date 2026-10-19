@@ -32,7 +32,7 @@ Use `HF_TOKEN` or `huggingface-cli login` if needed.
 
 Complete [Download](#download) first so `./datasets/bigbench_audio` (or your chosen `--input_dir`) exists.
 
-Configure the voice agent ([`.env`](../../.env.example) and the selected example's `services.cloud.yaml` / `services.local.yaml`), then start the API from the **nemotron-voice-agent repo root**:
+Configure the voice agent ([`.env`](../../.env.example) and the root `services.yaml`), then start the API from the **nemotron-voice-agent repo root**:
 
 ```bash
 PIPELINE_TLS=false uv run python src/server.py

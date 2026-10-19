@@ -6,6 +6,7 @@ import { TransportSelector } from "../TransportSelector";
 import { PromptSelector } from "../PromptSelector";
 import { ToolsSection } from "../ToolsSection";
 import { VoiceSettings } from "../VoiceSettings";
+import { SpeakerLabelsSettings } from "../SpeakerLabelsSettings";
 
 export function StatusPanel() {
   return (
@@ -15,6 +16,7 @@ export function StatusPanel() {
       <PromptSelector />
       <ToolsSection />
       <VoiceSettings />
+      <SpeakerLabelsSettings />
     </aside>
   );
 }

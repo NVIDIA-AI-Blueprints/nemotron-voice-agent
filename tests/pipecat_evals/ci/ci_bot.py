@@ -32,7 +32,7 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.workers.runner import WorkerRunner
@@ -104,6 +104,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         Pipeline([transport.input(), CIEvalResponder(), transport.output()]),
         params=PipelineParams(enable_metrics=False, enable_usage_metrics=False),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        processor_unusable_policy=ProcessorUnusablePolicy.END,
+        setup_timeout_secs=120.0,
     )
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)

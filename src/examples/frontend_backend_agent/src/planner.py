@@ -31,14 +31,16 @@ class NvidiaThinkerPlanner:
         *,
         llm: NvidiaLLMService,
         system_prompt: str,
-        max_tokens: int | None = None,
     ) -> None:
-        """Create an NVIDIA-backed Thinker planner."""
+        """Create an NVIDIA-backed Thinker planner.
+
+        The token limit comes from the LLM settings, so a Services tab value
+        in ``extra_params`` applies to each plan.
+        """
         if not system_prompt.strip():
             raise ValueError("Thinker planner requires a non-empty system prompt")
         self._llm = llm
         self._system_prompt = system_prompt
-        self._max_tokens = max_tokens
 
     async def plan(self, *, query: str, slots: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Ask the Thinker LLM for internal tool plan JSON."""
@@ -59,7 +61,7 @@ class NvidiaThinkerPlanner:
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ]
         )
-        raw = await self._llm.run_inference(context, max_tokens=self._max_tokens)
+        raw = await self._llm.run_inference(context)
         if not raw:
             raise RuntimeError("Thinker LLM returned an empty plan")
         return parse_plan_json(raw)

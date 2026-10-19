@@ -3,10 +3,16 @@
 
 """Generic cascaded pipeline: NVIDIA STT -> Nemotron LLM -> NVIDIA TTS with function calling.
 
-Uses pipecat's built-in NVIDIA classes directly:
+Uses pipecat's built-in NVIDIA classes:
   - NvidiaSTTService  (Nemotron Streaming ASR)
   - NvidiaLLMService  (NIM-compatible LLM)
   - NvidiaTTSService  (Magpie TTS)
+
+A catalog LLM whose ``base_url`` is ``ws://`` / ``wss://`` swaps in
+NvidiaStreamingLLMService and StreamingLLMUserAggregator, which prefill the
+user's words while they are still speaking.
+
+NVIDIA ASR speaker diarization is optional.
 """
 
 import asyncio
@@ -16,36 +22,52 @@ from loguru import logger
 from pipecat.frames.frames import LLMRunFrame, TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
+    LLMAssistantAggregator,
     LLMContextAggregatorPair,
 )
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
+from pipecat.processors.frameworks.rtvi.observer import RTVIObserverParams
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
+from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy
 from pipecat.workers.runner import WorkerRunner
 
 import examples_registry
+from examples.generic.silent_reply import AddressedReplyMixin, SilentReplyFilter
 from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
     build_pipeline_params,
     build_user_aggregator_params,
     create_transport,
+    latency_metric_group,
     register_session_start_handlers,
     with_realtime_observers,
+)
+from examples.shared.speaker import (
+    SpeakerDiarizationProcessor,
+    finalized_turn_payloads,
+    forward_speaker_events,
+    resolve_asr_speaker_support,
+    send_rtvi_payloads,
+    speaker_diarization_enabled,
 )
 from tracing import IS_TRACING_ENABLED
 from utils import (
     is_nvcf,
+    is_streaming_llm_url,
     load_ipa_dictionary,
+    load_prompt_catalog,
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
@@ -59,6 +81,29 @@ load_dotenv(override=True)
 CHAT_HISTORY_RECENT_TURNS = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
 
 
+class AddressedNvidiaLLMService(AddressedReplyMixin, NvidiaLLMService):
+    """NvidiaLLMService that asks spoken turns for the multi-speaker JSON reply."""
+
+
+class AddressedNvidiaStreamingLLMService(AddressedReplyMixin, NvidiaStreamingLLMService):
+    """NvidiaStreamingLLMService that asks spoken turns for the multi-speaker JSON reply."""
+
+
+GENERIC_INTRO_PROMPT = "Greet the user warmly, introduce yourself, and ask how you can help."
+MULTI_SPEAKER_INTRO_PROMPT = "Nemotron, greet the user warmly, introduce yourself, and ask how you can help."
+
+
+def session_intro_prompt(multi_speaker_support: bool) -> str:
+    """Return the greeting request for this session.
+
+    A multi-speaker session speaks only when the latest line says Nemotron or
+    assistant, so its greeting request has to say the name.
+    """
+    if multi_speaker_support:
+        return MULTI_SPEAKER_INTRO_PROMPT
+    return GENERIC_INTRO_PROMPT
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the NVIDIA cascaded pipeline for a single session."""
     transport = create_transport(runner_args)
@@ -69,12 +114,14 @@ async def bot(runner_args: RunnerArguments) -> None:
         body.get("prompt_content", ""),
         body.get("prompt_key", ""),
     )
+    prompt_entry = load_prompt_catalog(__file__).get(prompt_key)
+    prompt_entry = prompt_entry if isinstance(prompt_entry, dict) else {}
+    multi_speaker_support = prompt_entry.get("multi_speaker_support") is True
     logger.info(f"Starting generic cascaded pipeline (prompt={prompt_key}, tools={list(TOOL_HANDLERS)})")
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
 
-    # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
@@ -85,20 +132,33 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_function_id = body.get("asr_function_id", "") or default_asr.get("function_id", "")
     asr_model = body.get("asr_model", "") or default_asr.get("model", "")
     asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
+    asr_automatic_punctuation = str(body.get("asr_automatic_punctuation", "true")).lower() != "false"
     if asr_function_id or asr_model:
         asr_kwargs["model_function_map"] = {
             "function_id": asr_function_id,
             "model_name": asr_model or "custom-asr",
         }
+    asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if asr_language_code:
-        asr_kwargs["settings"] = NvidiaSTTSettings(language=asr_language_code)
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
+        asr_kwargs["settings"].language = asr_language_code
+    speaker_processor = None
+    if speaker_diarization_enabled(body, default_asr=default_asr, asr_model=asr_model, asr_server=asr_server):
+        asr_kwargs["settings"].speaker_diarization = True
+        asr_kwargs["settings"].word_time_offsets = True
+        _, max_speakers = resolve_asr_speaker_support(body, default_asr)
+        if max_speakers:
+            asr_kwargs["settings"].diarization_max_speakers = max_speakers
+        speaker_processor = SpeakerDiarizationProcessor(multi_speaker_support=multi_speaker_support)
+        logger.info(
+            f"Speaker diarization enabled: max_speakers={max_speakers or '(default)'}, "
+            f"multi_speaker_support={multi_speaker_support}"
+        )
+    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
-        f"language={asr_language_code or '(default)'}"
+        f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
     )
 
-    # --- LLM ---
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
@@ -108,6 +168,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     raw_temperature = body.get("temperature", "")
+    if raw_temperature in ("", None):
+        raw_temperature = prompt_entry.get("temperature", "")
     if raw_temperature in ("", None):
         raw_temperature = default_llm.get("temperature", "")
     llm_temperature = None
@@ -128,13 +190,19 @@ async def bot(runner_args: RunnerArguments) -> None:
         llm_settings.temperature = llm_temperature
     if extra_params:
         llm_settings.extra = extra_params
+    temperature = extra_params.get("temperature", llm_temperature)
     logger.info(
         f"LLM: model={model_id}, base_url={base_url}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
-        f"temperature={llm_temperature if llm_temperature is not None else '(default)'}, "
+        f"temperature={'(default)' if temperature is None else temperature}, "
         f"extra_params={extra_params or '(none)'}"
     )
-    llm = NvidiaLLMService(
+    streaming = is_streaming_llm_url(base_url)
+    if multi_speaker_support:
+        llm_service = AddressedNvidiaStreamingLLMService if streaming else AddressedNvidiaLLMService
+    else:
+        llm_service = NvidiaStreamingLLMService if streaming else NvidiaLLMService
+    llm = llm_service(
         api_key=nvidia_api_key(),
         base_url=base_url,
         settings=llm_settings,
@@ -153,7 +221,6 @@ async def bot(runner_args: RunnerArguments) -> None:
     else:
         logger.info(f"Tool calling disabled for prompt_key={prompt_key!r} (no tools_available in prompts.yaml)")
 
-    # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
@@ -202,7 +269,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"text_filters=[NemotronSpeechTextFilter]"
     )
 
-    # --- Context ---
     messages = build_context_messages(base_system_content, system_prompt)
 
     if tools_enabled:
@@ -210,11 +276,16 @@ async def bot(runner_args: RunnerArguments) -> None:
     else:
         context = LLMContext(messages)
     preserve_prompt_messages = len(messages)
-
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=build_user_aggregator_params(welcome_enabled),
-    )
+    user_params = build_user_aggregator_params(welcome_enabled)
+    if speaker_processor and not multi_speaker_support:
+        user_params.user_turn_strategies.start = [TranscriptionUserTurnStartStrategy(use_interim=False)]
+    if streaming:
+        user_aggregator = StreamingLLMUserAggregator(context, params=user_params)
+        assistant_aggregator = LLMAssistantAggregator(context)
+    else:
+        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
+    if speaker_processor and not multi_speaker_support:
+        logger.info("Barge-in: final transcript from latched speaker only")
     logger.info(
         f"Chat history summarization enabled: recent_turns={CHAT_HISTORY_RECENT_TURNS}, "
         f"preserve_prompt_messages={preserve_prompt_messages}"
@@ -233,12 +304,16 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
     logger.info(f"Proactive activity checks: {'enabled' if activity_check else 'disabled'}")
 
+    silent_reply_filter = SilentReplyFilter() if speaker_processor and multi_speaker_support else None
+
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            *([speaker_processor] if speaker_processor else []),
             user_aggregator,
             llm,
+            *([silent_reply_filter] if silent_reply_filter else []),
             tts,
             transport.output(),
             *([activity_check] if activity_check else []),
@@ -248,6 +323,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     latency_observer = UserBotLatencyObserver()
+    latency_turn = 1
+    latest_latency: float | None = None
     summary_lock = asyncio.Lock()
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
@@ -261,8 +338,6 @@ async def bot(runner_args: RunnerArguments) -> None:
                 summary_system_prompt=system_prompt,
             )
 
-    # Forward custom latency samples over RTVI so the benchmark can stay fully
-    # client-driven and avoid server log scraping.
     @latency_observer.event_handler("on_first_bot_speech_latency")
     async def on_first_bot_speech(observer, latency):
         logger.info(f"First bot speech latency: {latency:.3f}s")
@@ -278,6 +353,8 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_measured")
     async def on_latency(observer, latency):
+        nonlocal latest_latency
+        latest_latency = latency
         logger.info(f"User→Bot latency: {latency:.3f}s")
         await task.queue_frame(
             RTVIServerMessageFrame(
@@ -291,7 +368,13 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def on_breakdown(observer, breakdown):
-        events = breakdown.chronological_events()
+        nonlocal latency_turn, latest_latency
+        if latest_latency is not None:
+            group = latency_metric_group(latency_turn, latest_latency, breakdown)
+            await task.queue_frame(RTVIServerMessageFrame(data=group))
+            latency_turn += 1
+            latest_latency = None
+        events = breakdown.turn_contribution_lines()
         await task.queue_frame(
             RTVIServerMessageFrame(
                 data={
@@ -314,21 +397,20 @@ async def bot(runner_args: RunnerArguments) -> None:
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         observers=with_realtime_observers(latency_observer, transport=transport),
+        rtvi_observer_params=(
+            RTVIObserverParams(ignored_sources=[stt, speaker_processor]) if speaker_processor else None
+        ),
         enable_tracing=IS_TRACING_ENABLED,
+        processor_unusable_policy=ProcessorUnusablePolicy.END,
+        setup_timeout_secs=120.0,
     )
+
+    if speaker_processor:
+        forward_speaker_events(speaker_processor, task)
 
     @user_aggregator.event_handler("on_user_turn_stopped")
     async def on_user_turn_stopped(aggregator, strategy, message):
-        await task.queue_frame(
-            RTVIServerMessageFrame(
-                data={
-                    "type": "user-turn-finalized",
-                    "timestamp": getattr(message, "timestamp", None),
-                    "transcript": getattr(message, "content", None),
-                    "user_id": getattr(message, "user_id", None),
-                }
-            )
-        )
+        await send_rtvi_payloads(task, finalized_turn_payloads(speaker_processor, message))
 
     async def _on_session_start() -> None:
         if audio_recorder:
@@ -341,7 +423,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         task=task,
         context=context,
         runner_args=runner_args,
-        intro_prompt="Greet the user warmly, introduce yourself as Nemotron, and ask how you can help.",
+        intro_prompt=session_intro_prompt(multi_speaker_support),
         on_start=_on_session_start,
         welcome_enabled=welcome_enabled,
     )

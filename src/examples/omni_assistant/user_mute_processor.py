@@ -22,7 +22,7 @@ from pipecat.frames.frames import (
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor, FrameProcessorSetup
 from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 
 _MUTABLE_USER_FRAMES = (
@@ -46,11 +46,11 @@ class UserMuteProcessor(FrameProcessor):
         self._strategies = list(strategies)
         self._user_is_muted = False
 
-    async def start(self, frame: StartFrame) -> None:
-        """Set up mute strategies when the pipeline starts."""
-        await super().start(frame)
+    async def setup(self, setup: FrameProcessorSetup) -> None:
+        """Set up mute strategies with the pipeline configuration."""
+        await super().setup(setup)
         for strategy in self._strategies:
-            await strategy.setup(self.task_manager)
+            await strategy.setup(setup)
 
     async def cleanup(self) -> None:
         """Clean up all configured mute strategies."""

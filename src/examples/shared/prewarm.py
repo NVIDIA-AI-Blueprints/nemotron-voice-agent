@@ -6,6 +6,7 @@
 import concurrent.futures
 import json
 import os
+import threading
 from collections.abc import Iterable
 
 from loguru import logger
@@ -364,6 +365,8 @@ def get_tts_config(
 
 
 _TTS_PREWARM_RPC_TIMEOUT_SECS = parse_env_float("TTS_PREWARM_RPC_TIMEOUT_SECS", 20.0, min_value=1.0)
+_TTS_SYNTHESIS_READY_KEYS: set[tuple[str, str, str, str]] = set()
+_TTS_SYNTHESIS_READY_LOCK = threading.Lock()
 
 
 def prewarm_tts(
@@ -493,28 +496,35 @@ def warmup_tts_synthesis(
     model: str = "",
 ) -> bool:
     """Run a tiny synthesis request to verify the selected TTS is responsive."""
-    logger.info(f"Warming up TTS synthesis on {server}...")
-    try:
-        svc = _create_tts_service(server, voice_id, function_id, model)
-        svc._initialize_client()
+    ready_key = (server, voice_id, function_id, model)
+    with _TTS_SYNTHESIS_READY_LOCK:
+        if ready_key in _TTS_SYNTHESIS_READY_KEYS:
+            logger.debug(f"TTS synthesis warm-up already completed ({server})")
+            return True
 
-        responses = svc._service.synthesize_online(
-            "Hello.",
-            svc._settings.voice,
-            svc._settings.language,
-            sample_rate_hz=16000,
-            zero_shot_audio_prompt_file=None,
-            zero_shot_quality=svc._settings.quality,
-            custom_dictionary={},
-        )
-        for _ in responses:
-            break
+        logger.info(f"Warming up TTS synthesis on {server}...")
+        try:
+            svc = _create_tts_service(server, voice_id, function_id, model)
+            svc._initialize_client()
 
-        logger.info(f"TTS synthesis warm-up completed ({server})")
-        return True
-    except Exception as e:
-        logger.warning(f"TTS synthesis warm-up failed ({server}): {e}")
-        return False
+            responses = svc._service.synthesize_online(
+                "Hello.",
+                svc._settings.voice,
+                svc._settings.language,
+                sample_rate_hz=16000,
+                zero_shot_audio_prompt_file=None,
+                zero_shot_quality=svc._settings.quality,
+                custom_dictionary={},
+            )
+            for _ in responses:
+                break
+
+            _TTS_SYNTHESIS_READY_KEYS.add(ready_key)
+            logger.info(f"TTS synthesis warm-up completed ({server})")
+            return True
+        except Exception as e:
+            logger.warning(f"TTS synthesis warm-up failed ({server}): {e}")
+            return False
 
 
 def load_voice_map(

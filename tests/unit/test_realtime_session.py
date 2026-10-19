@@ -468,8 +468,6 @@ class SanitizeIntegrationTests(unittest.TestCase):
     """Exercise mapping through the real catalog sanitize path (no server import)."""
 
     def test_sanitize_with_generic_catalog(self) -> None:
-        from pathlib import Path
-
         import examples_registry
         from utils import clear_service_context, filter_session_config, set_service_context
 
@@ -484,7 +482,7 @@ class SanitizeIntegrationTests(unittest.TestCase):
             prompt_key = examples_registry.prompt_default_key(example["key"])
             if prompt_key:
                 flat["prompt_key"] = prompt_key
-        set_service_context(Path("src/examples/generic"), example.get("slots") or None)
+        set_service_context(example)
         try:
             sanitized = filter_session_config(flat)
             self.assertEqual(sanitized.get("pipeline_mode"), "generic-assistant")

@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Editable service settings referenced by `settings: <profile>` in
+# `services.yaml`. The UI renders one control per setting. The backend
+# validates client values (type, `min`/`max`, `options`), falls back to the
+# default, and writes the value at `path`: inside `extra_params` for LLM
+# entries, or the entry field of that name for ASR and TTS entries.
+# `path` defaults to the setting name. A setting without a default is sent only
+# when the user sets it; otherwise the model's own default applies.
+#
+# Default precedence: the example's `settings` in `examples_registry.yaml`,
+# then a value already at `path` in the entry, then `default`.
+# A setting with `requires` is sent only while that setting is true.
+#
+# Types: bool, int, float, enum (with `options`). Keys starting with `x-` are
+# shared YAML anchors, not profiles.
+
+x-sampling: &sampling
+  temperature:
+    label: "Temperature"
+    type: float
+    min: 0.0
+    max: 1.0
+  top_p:
+    label: "Top P"
+    type: float
+    min: 0.01
+    max: 1.0
+  max_tokens:
+    label: "Max Tokens"
+    type: int
+    min: 1
+    max: 16384
+  seed:
+    label: "Seed"
+    type: int
+    min: 0
+
+nemotron-nim:
+  <<: *sampling
+  enable_thinking:
+    label: "Reasoning"
+    type: bool
+    default: false
+    path: extra_body.chat_template_kwargs.enable_thinking
+  reasoning_budget:
+    label: "Reasoning Budget"
+    type: int
+    default: 16384
+    min: 128
+    max: 32768
+    path: extra_body.reasoning_budget
+    requires: enable_thinking
+
+nemotron-vllm:
+  <<: *sampling
+  enable_thinking:
+    label: "Reasoning"
+    type: bool
+    default: false
+    path: extra_body.chat_template_kwargs.enable_thinking
+  reasoning_budget:
+    label: "Reasoning Budget"
+    type: int
+    default: 16384
+    min: 128
+    max: 32768
+    path: extra_body.thinking_token_budget
+    requires: enable_thinking
+
+nemotron-omni-nim:
+  <<: *sampling
+  temperature:
+    label: "Temperature"
+    type: float
+    min: 0.0
+    max: 2.0
+  enable_thinking:
+    label: "Reasoning"
+    type: bool
+    default: false
+    path: extra_body.chat_template_kwargs.enable_thinking
+  reasoning_budget:
+    label: "Reasoning Budget"
+    type: int
+    default: 16384
+    min: 128
+    max: 32768
+    path: extra_body.reasoning_budget
+    requires: enable_thinking
+
+nemotron-omni-vllm:
+  <<: *sampling
+  temperature:
+    label: "Temperature"
+    type: float
+    min: 0.0
+    max: 2.0
+  enable_thinking:
+    label: "Reasoning"
+    type: bool
+    default: false
+    path: extra_body.chat_template_kwargs.enable_thinking
+  reasoning_budget:
+    label: "Reasoning Budget"
+    type: int
+    default: 16384
+    min: 128
+    max: 32768
+    path: extra_body.thinking_token_budget
+    requires: enable_thinking
+
+nemotron-super:
+  <<: *sampling
+  enable_thinking:
+    label: "Reasoning"
+    type: bool
+    default: false
+    path: extra_body.chat_template_kwargs.enable_thinking
+
+magpie-tts:
+  synthesis_mode:
+    label: "Synthesis Mode"
+    type: enum
+    options: [stitched, per_sentence]
+    default: stitched
+
+nemo-speech-asr:
+  automatic_punctuation:
+    label: "Punctuation"
+    type: bool
+    default: true

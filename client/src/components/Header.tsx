@@ -8,9 +8,13 @@ import { useApp } from "../context/useApp";
 import {
   createSessionConfig,
   createWebRTCSession,
+  serviceSettingsKey,
+  useServiceCatalog,
   type DeploymentOption,
   type LLMService,
   type Prompt,
+  type ServiceCatalog,
+  type ServiceSettingValues,
   type SimpleService,
 } from "../api";
 import { DevicesSection } from "./status-panel/DevicesSection";
@@ -23,16 +27,21 @@ type StartBotClient = {
 
 const WEBRTC_CONNECT_TIMEOUT_MS = 30_000;
 const WEBRTC_TIMEOUT_ERROR_NAME = "WebRTCConnectionTimeoutError";
+const CLIENT_SELECTED_SLOTS = new Set(["llm", "asr", "tts"]);
 
 type SessionConfigOptions = {
   selectedExample: DeploymentOption;
   selectedLLM?: LLMService;
+  catalog?: ServiceCatalog;
+  serviceSettings: Record<string, ServiceSettingValues>;
+  streamingInput: Record<string, boolean>;
   selectedASR?: SimpleService;
   selectedTTS?: SimpleService;
   selectedVoiceId: string;
   selectedPrompt?: Prompt;
   selectedPromptKey: string;
   selectedSessionLanguage?: string;
+  speakerDiarizationEnabled?: boolean;
 };
 
 type HeaderProps = {
@@ -96,9 +105,11 @@ function applyService(
   prefix: "asr" | "tts",
   service: SimpleService | undefined,
   optional: Record<string, string | undefined>,
+  settings: string | undefined,
 ): void {
   if (!enabled || !service) return;
   config[`${prefix}_id`] = service.id;
+  if (settings) config[`${prefix}_settings`] = settings;
   if (!service.builtIn) {
     config[`${prefix}_server`] = service.server;
     for (const [field, value] of Object.entries(optional)) {
@@ -107,15 +118,23 @@ function applyService(
   }
 }
 
+function settingsParam(values: ServiceSettingValues | undefined): string | undefined {
+  return values && Object.keys(values).length > 0 ? JSON.stringify(values) : undefined;
+}
+
 function buildSessionConfig({
   selectedExample,
   selectedLLM,
+  catalog,
+  serviceSettings,
+  streamingInput,
   selectedASR,
   selectedTTS,
   selectedVoiceId,
   selectedPrompt,
   selectedPromptKey,
   selectedSessionLanguage = "",
+  speakerDiarizationEnabled = false,
 }: SessionConfigOptions): Record<string, string> {
   const slots = new Set(selectedExample.slots);
   const config: Record<string, string> = { pipeline_mode: selectedExample.key };
@@ -129,20 +148,37 @@ function buildSessionConfig({
       if (selectedLLM.systemPrompt) config.system_prompt = selectedLLM.systemPrompt;
       if (selectedLLM.extraParams) config.extra_params = selectedLLM.extraParams;
     }
+    const llmSettings = settingsParam(serviceSettings[serviceSettingsKey("llm", selectedLLM.id)]);
+    if (llmSettings) config.llm_settings = llmSettings;
+    if (selectedLLM.streamingUrl && streamingInput[serviceSettingsKey("llm", selectedLLM.id)]) config.llm_streaming = "true";
+  }
+
+  for (const slot of slots) {
+    const entry = CLIENT_SELECTED_SLOTS.has(slot) ? undefined : catalog?.[slot]?.find((item) => item.selected === true);
+    if (!entry) continue;
+    const field = slot.replace(/-/g, "_");
+    config[`${field}_id`] = entry.id;
+    const settings = settingsParam(serviceSettings[serviceSettingsKey(slot, entry.id)]);
+    if (settings) config[`${field}_settings`] = settings;
   }
 
   applyService(config, slots.has("asr"), "asr", selectedASR, {
     model: selectedASR?.model,
     function_id: selectedASR?.functionId,
-  });
+  }, settingsParam(serviceSettings[serviceSettingsKey("asr", selectedASR?.id ?? "")]));
   if (slots.has("asr") && sessionLanguagesEnabled) {
     config.asr_language_code = selectedSessionLanguage || "auto";
   }
+  const speakerLabelsAvailable = selectedExample.capabilities?.includes("speaker_labels") ?? false;
+  if (slots.has("asr") && speakerLabelsAvailable) {
+    const diarizationEnabled = speakerDiarizationEnabled && selectedASR?.speakerDiarizationSupported === true;
+    config.asr_speaker_diarization = String(diarizationEnabled);
+  }
   applyService(config, slots.has("tts"), "tts", selectedTTS, {
     function_id: selectedTTS?.functionId,
-  });
+  }, settingsParam(serviceSettings[serviceSettingsKey("tts", selectedTTS?.id ?? "")]));
 
-  if (slots.has("tts") && !sessionLanguagesEnabled) {
+  if (slots.has("tts")) {
     const voiceToSend = selectedVoiceId || selectedTTS?.voiceId;
     if (voiceToSend) config.tts_voice_id = voiceToSend;
   }
@@ -174,8 +210,12 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
     selectedPrompt,
     selectedPromptKey,
     selectedSessionLanguage,
+    speakerDiarizationEnabled,
     setCurrentSessionId,
+    serviceSettings,
+    streamingInput,
   } = useApp();
+  const { data: catalog } = useServiceCatalog(selectedExample?.key ?? "");
   const [connectionError, setConnectionError] = useState("");
 
   useLayoutEffect(() => {
@@ -207,12 +247,16 @@ export function Header({ onClientReset }: Readonly<HeaderProps>) {
         const config = buildSessionConfig({
           selectedExample,
           selectedLLM,
+          catalog,
+          serviceSettings,
+          streamingInput,
           selectedASR,
           selectedTTS,
           selectedVoiceId,
           selectedPrompt,
           selectedPromptKey,
           selectedSessionLanguage,
+          speakerDiarizationEnabled,
         });
 
         if (selectedTransport === "websocket") {

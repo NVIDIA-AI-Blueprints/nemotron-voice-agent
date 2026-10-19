@@ -14,7 +14,7 @@ from loguru import logger
 from pipecat.frames.frames import TTSUpdateSettingsFrame
 from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, ProcessorUnusablePolicy
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -117,10 +117,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
-    default_booking_server = load_service_entry("booking-server", "")
     default_thinker_llm = load_service_entry("thinker-llm", "")
 
-    # --- ASR ---
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
     asr_kwargs: dict = {
@@ -131,20 +129,21 @@ async def bot(runner_args: RunnerArguments) -> None:
     asr_function_id = body.get("asr_function_id", "") or default_asr.get("function_id", "")
     asr_model = body.get("asr_model", "") or default_asr.get("model", "")
     asr_language_code = body.get("asr_language_code", "") or default_asr.get("language_code", "")
+    asr_automatic_punctuation = str(body.get("asr_automatic_punctuation", "true")).lower() != "false"
     if asr_function_id or asr_model:
         asr_kwargs["model_function_map"] = {
             "function_id": asr_function_id,
             "model_name": asr_model or "custom-asr",
         }
+    asr_kwargs["settings"] = NvidiaSTTSettings(automatic_punctuation=asr_automatic_punctuation)
     if asr_language_code:
-        asr_kwargs["settings"] = NvidiaSTTSettings(language=asr_language_code)
-    stt = NvidiaSTTService(**asr_kwargs, stop_history=400)
+        asr_kwargs["settings"].language = asr_language_code
+    stt = NvidiaSTTService(**asr_kwargs, stop_history=320)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
-        f"language={asr_language_code or '(default)'}"
+        f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"
     )
 
-    # --- Talker LLM ---
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
     base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
@@ -164,24 +163,21 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info(
         f"Talker LLM: model={model_id}, base_url={base_url}, prompt={prompt_key}, "
         f"system_prompt={'<' + system_prompt + '>' if system_prompt else '(none)'}, "
-        f"max_tokens={talker_max_tokens}, "
+        f"max_tokens={extra_params.get('max_tokens', talker_max_tokens)}, "
         f"extra_params={extra_params or '(none)'}"
     )
 
-    booking_backend_url = _booking_backend_url(default_booking_server)
+    booking_backend_url = _booking_backend_url()
     thinker_model_id = body.get("thinker_model_id", "") or default_thinker_llm.get("model_id", "") or model_id
     thinker_base_url = body.get("thinker_base_url", "") or default_thinker_llm.get("base_url", "") or base_url
-    thinker_max_tokens_raw = body.get("thinker_max_tokens", "") or default_thinker_llm.get("max_tokens")
-    thinker_max_tokens = (
-        _parse_optional_int(thinker_max_tokens_raw, 4096) if thinker_max_tokens_raw not in (None, "") else None
+    thinker_max_tokens = _parse_optional_int(
+        body.get("thinker_max_tokens", "") or default_thinker_llm.get("max_tokens"), 4096
     )
     thinker_extra_params = parse_json_dict(
         body.get("thinker_extra_params", "") or default_thinker_llm.get("extra_params", ""),
         label="thinker_extra_params",
     )
-    thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id)
-    if thinker_max_tokens is not None:
-        thinker_llm_settings.max_tokens = thinker_max_tokens
+    thinker_llm_settings = NvidiaLLMSettings(model=thinker_model_id, max_tokens=thinker_max_tokens)
     if thinker_extra_params:
         thinker_llm_settings.extra = thinker_extra_params
     thinker_llm = NvidiaLLMService(
@@ -192,7 +188,6 @@ async def bot(runner_args: RunnerArguments) -> None:
     thinker_planner = NvidiaThinkerPlanner(
         llm=thinker_llm,
         system_prompt=thinker_prompt,
-        max_tokens=thinker_max_tokens,
     )
     thinker = ThinkerBackend(
         backend=HTTPBookingBackend(booking_backend_url),
@@ -203,7 +198,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     logger.info(f"Thinker booking backend: {booking_backend_url}")
     logger.info(
         f"Thinker LLM: model={thinker_model_id}, base_url={thinker_base_url}, "
-        f"max_tokens={thinker_max_tokens}, extra_params={thinker_extra_params or '(none)'}"
+        f"max_tokens={thinker_extra_params.get('max_tokens', thinker_max_tokens)}, "
+        f"extra_params={thinker_extra_params or '(none)'}"
     )
     logger.info(f"Thinker tool delay: {THINKER_TOOL_DELAY_MIN_SECONDS:.3f}s-{THINKER_TOOL_DELAY_MAX_SECONDS:.3f}s")
     logger.info(f"Thinker filler threshold: {THINKER_FILLER_THRESHOLD_SECONDS:.3f}s")
@@ -221,7 +217,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         )
         logger.info(f"Registered Talker tool: {name}, cancel_on_interruption={cancel_on_interruption}")
 
-    # --- TTS ---
     tts_server = body.get("tts_server", "") or default_tts.get("server", "grpc.nvcf.nvidia.com:443")
     tts_ssl = is_nvcf(tts_server)
     tts_voice = body.get("tts_voice_id", "") or default_tts.get("voice_id", "")
@@ -262,7 +257,6 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}"
     )
 
-    # --- Context + aggregators ---
     messages = _build_context_messages(talker_prompt, system_prompt)
     context = LLMContext(messages, tools=TOOLS_SCHEMA, tool_choice="auto")
     preserve_prompt_messages = len(messages)
@@ -313,6 +307,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         observers=with_realtime_observers(latency_observer, transport=transport),
         enable_tracing=IS_TRACING_ENABLED,
+        processor_unusable_policy=ProcessorUnusablePolicy.END,
+        setup_timeout_secs=120.0,
     )
 
     @user_aggregator.event_handler("on_user_turn_stopped")
@@ -374,24 +370,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     await runner.run()
 
 
-def _default_booking_backend_url() -> str:
-    """Return the default booking-server URL for the current runtime."""
-    if os.environ.get("APP_RUNTIME", "").strip().lower() == "container":
-        return "http://booking-server:8001"
-    return "http://localhost:8001"
-
-
-def _booking_backend_url(default_booking_server: dict) -> str:
-    """Resolve the booking-server URL, preserving explicit user overrides."""
+def _booking_backend_url() -> str:
+    """Return ``BOOKING_BACKEND_URL``, else the booking-server sidecar URL for the current runtime."""
     explicit_url = os.getenv("BOOKING_BACKEND_URL", "").strip()
     if explicit_url:
         return explicit_url
-
-    configured_url = str(default_booking_server.get("server") or "").strip()
-    runtime_default = _default_booking_backend_url()
-    if runtime_default == "http://localhost:8001" and configured_url == "http://booking-server:8001":
-        return runtime_default
-    return configured_url or runtime_default
+    if os.environ.get("APP_RUNTIME", "").strip().lower() == "container":
+        return "http://booking-server:8001"
+    return "http://localhost:8001"
 
 
 def _parse_optional_int(raw: object, default: int) -> int:

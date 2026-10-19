@@ -49,7 +49,7 @@
       "id": "nemotron-voice-agent-upgrade-pipecat-negative-configure",
       "prompt": "Change the default TTS voice for the multilingual assistant.",
       "expected_skill": null,
-      "expected_output": "The upgrade-pipecat skill does not activate because changing a catalog default is a configuration change handled by nemotron-voice-agent-configure-pipeline.",
+      "expected_output": "The upgrade-pipecat skill does not activate because changing a catalog default is a configuration change handled by nemotron-voice-agent-deploy.",
       "assertions": [
         "Did not load or apply nemotron-voice-agent-upgrade-pipecat.",
         "Recognized this as a configuration change."
