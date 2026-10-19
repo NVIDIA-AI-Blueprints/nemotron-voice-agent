@@ -26,15 +26,20 @@ Built on the open-source [Pipecat framework](https://github.com/pipecat-ai/pipec
 
 ## 📣 News
 
+- **[October 2026] v2.3.0**
+  - Nemotron 3.5 Super VL on server and single-GPU hosts.
+  - Speaker labels for the Generic Assistant, with single-speaker and multi-speaker modes.
+  - Streaming-input LLM prefill for lower TTFT with single-GPU Lightning and Super VL.
+  - Live service status in the Services tab, and Pipecat 1.12.0.
+
+<details>
+<summary>Previous releases</summary>
+
 - **[September 2026] v2.2.0**
   - Expanded open model support with Nemotron 3.5 Lightning and Nemotron 3 Nano NIM.
   - Unified local deployment across workstations, DGX Spark, and Jetson Thor.
   - OpenAI Realtime API compatibility for external voice clients.
   - Agent Skills for building voice agents with Nemotron.
-
-<details>
-<summary>Previous releases</summary>
-
 - **[July 2026] v2.0.0**
   - Omni-based example showcasing a single multimodal model replacing the ASR + LLM stages.
   - Omni subagents example demonstrating multi-agent coordination for audio and video understanding.
@@ -99,7 +104,7 @@ These are the minimum requirements, and support varies by example and deployment
 | Cloud | CPU only (no GPU) | Model endpoints from NVIDIA cloud APIs (NVCF). |
 | Server | NVIDIA GPU workstation. GPU count and memory depend on the selected models and scale. | Scaling-oriented NIM deployment. DGX Spark and Jetson Thor are not supported for this profile. Default all-on-one-GPU layout is about 80 GB. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
 | Performance Server | Four-GPU Blackwell workstation | `generic-assistant/server-perf` load benchmark only, not a browser UI session. |
-| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Optionally, deploy the Nemotron 3.5 Super VL model for better intelligence. Check the LLM sizing guide for its deployment requirements. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
+| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Nemotron 3.5 Super VL is optional and needs a Blackwell GPU, DGX Spark, or Jetson Thor with at least 78 GiB usable memory. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
 
 ### Software Requirements
 
@@ -135,7 +140,7 @@ npx skills add .
 
 2. Set `NVIDIA_API_KEY` in `.env`. This Quick Start uses the Server profile, which requires that key (the same key is required for cloud-only and `generic-assistant/server-perf`). Single-GPU uses `HF_TOKEN` instead. Docker Compose passes values from this file into the application and model services.
 
-3. Log in to the NVIDIA NGC Docker Registry (required for Server and Performance Server; skip for cloud-only and Single-GPU).
+3. Log in to the NVIDIA NGC Docker Registry (required for Server and Performance Server, not needed for cloud-only and Single-GPU).
 
     ```bash
     set -a; . ./.env; set +a
@@ -198,7 +203,7 @@ Planned for future releases:
 - LiveKit Agents-based voice agent example.
 - Voice agent integrations for NemoClaw-supported harnesses.
 
-Recent releases are in [News](#-news); see the [CHANGELOG](CHANGELOG.md) for the full release history.
+Recent releases are in [News](#-news). See the [CHANGELOG](CHANGELOG.md) for the full release history.
 
 ---
 
