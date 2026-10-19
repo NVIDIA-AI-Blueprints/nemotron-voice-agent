@@ -2,7 +2,68 @@
 
 Date: September 9, 2026
 
-## Summary
+## Resolution (September 16, 2026)
+
+Cisco identified the multi-socket behavior as an internal bug and deployed a
+fix. Our live tenant now keeps one `/v1/va` socket for the whole conversation,
+matching the documented lifecycle, so the adapter implements the published
+single-socket contract and the compatibility layer described below is removed.
+
+The Service App question in *Service App Documentation Clarification* remains
+open, as does the prompt audio encoding question raised below.
+
+## Prompt Audio Encoding (September 17, 2026)
+
+After the socket lifecycle fix, calls connected and every turn traversed the
+pipeline correctly, but no assistant audio was ever rendered to the caller.
+Webex accepted our audio prompts without error and reported nothing unusual.
+
+We isolated the cause with a series of throwaway probe connectors that replaced
+the adapter and replied with fixed payloads. Holding everything else constant
+and varying one factor at a time showed:
+
+1. Only WAV-contained audio is rendered. Holding the source audio, chunk
+   durations, `is_barge_in_enabled`, `input_mode`, reply timing and the
+   `CHUNK`-then-empty-`FINAL` shape identical, and varying only the encoding:
+
+   | Prompt encoding | Rendered to caller |
+   | --- | --- |
+   | Raw G.711 mu-law 8 kHz, no container | No |
+   | Raw PCM16 8 kHz, no container | No |
+   | PCM16 8 kHz in a WAV container | Yes |
+
+2. The container, not the codec, is the deciding factor. Both raw encodings
+   are accepted on the socket without any error and silently discarded.
+3. Rendering is unaffected by `response_type`. Single `FINAL` replies and
+   streamed `CHUNK` sequences both play when the audio is WAV-contained.
+4. Rendering is unaffected by `is_barge_in_enabled`. Prompts play with the flag
+   set to either value.
+5. Rendering is unaffected by reply position. Replies play immediately after
+   `SESSION_START`, unsolicited mid-call, and in answer to caller turns.
+6. A reply sent while the caller is still speaking is correctly discarded as a
+   barge-in, which is expected behavior.
+
+Encoding our prompt audio as PCM16 8 kHz mono inside a WAV container produced
+working multi-turn conversations with the documented single-socket lifecycle.
+
+This contradicts the published documentation, which prohibits containers. The
+*Audio format and chunking* media profile lists `Container: None; do not
+include WAV, RIFF, or other container headers`, applies that profile to both
+`caller_audio_b64` and `prompts[].audio_content_b64`, and the FAQ answers "Can
+the partner send WAV audio?" with "No. Send raw codec bytes without WAV, RIFF,
+or another container header."
+
+The sample connector does the opposite of its own documentation.
+`AudioFileUtil.audioContentFromResources` base64-encodes each prompt asset
+verbatim with `readAllBytes()`, and those assets are WAV files. Cisco's
+`call-start.wav` is RIFF WAVE, Microsoft PCM, 16 bit, mono, 8 kHz. The sample
+therefore sends WAV-contained PCM16, which matches the live connector's actual
+behavior rather than the documented profile.
+
+Partners following the documentation send audio that is accepted on the wire
+and silently discarded, with no `unsupported_media` error to diagnose from.
+
+## Summary (as reported before the fix)
 
 The documented Webex BYOVA WebSocket lifecycle differs from the behavior
 observed in our live Webex Contact Center tenant. A strict implementation of
@@ -117,6 +178,12 @@ Please confirm:
    Service App per transport the supported production configuration?
 6. If separate Service Apps are required, please update the WebSocket
    documentation accordingly.
+7. Which is authoritative for `prompts[].audio_content_b64`: the documented
+   raw mu-law profile with no container, or the WAV-contained PCM16 that the
+   sample connector sends and the live connector renders? Please align the
+   documentation and the sample, and state the supported sample rates.
+8. Can Webex return `unsupported_media` when prompt audio cannot be decoded,
+   rather than discarding it silently?
 
 No credentials, bearer tokens, caller audio, DTMF values, or transcripts are
 included in this report.

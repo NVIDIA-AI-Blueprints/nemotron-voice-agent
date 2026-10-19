@@ -2,7 +2,7 @@
 
 This example connects the Generic cascaded voice pipeline to Cisco Webex
 Contact Center Bring Your Own Virtual Agent (BYOVA) over WebSocket. A separate
-adapter translates Cisco JSON events and G.711 mu-law audio to the internal
+adapter translates Cisco JSON events and telephony audio to the internal
 Pipecat RTVI WebSocket protocol.
 
 This example does not modify or replace the existing
@@ -105,6 +105,8 @@ and keep authentication enabled. Configure these adapter variables:
 | `CISCO_JWT_AUDIENCE` | Required JWS `aud` value. |
 | `CISCO_JWT_SUBJECT` | Required JWS `sub` value. |
 | `CISCO_JWT_NONCE` | Required JWS `jti` value supplied during Cisco setup. |
+| `CISCO_JWT_NONCE_FILE` | Optional file holding the current `jti`, reread on each connection so rotation needs no restart. Use `/run/secrets/byova-nonce` with Compose. |
+| `BYOVA_NONCE_FILE_HOST` | Absolute host path to the Compose-mounted nonce file. |
 | `CISCO_DATASOURCE_URL` | Required `com.cisco.datasource.url` claim value. |
 | `CISCO_DATASOURCE_SCHEMA_UUID` | Cisco WebSocket schema UUID. Must be `a38a10b7-43e4-4676-a076-a7d6dce9387d`. |
 | `CISCO_ORG_UUID` | Required `com.cisco.org.uuid` claim value. |
@@ -119,6 +121,22 @@ Both `BYOVA_TLS_CERT` and `BYOVA_TLS_KEY` are required together.
 Authentication-enabled startup also requires every Cisco value in the table.
 Use `CISCO_JWKS_TTL_SECONDS` to change the 3,600-second key-cache lifetime and
 `CISCO_AUTH_CLOCK_SKEW_SECONDS` to change the 30-second clock tolerance.
+
+### Datasource JWS rotation
+
+Webex signs the datasource token for a limited lifetime, commonly 12 hours, and
+stops connecting once it expires. Callers then hear only music on hold while the
+adapter logs no connection attempt at all.
+
+`client/scripts/rotate_jws.py` refreshes the Service App access token, rotates
+the datasource nonce, and writes the deployment environment file. Give it a
+`nonce_file_path` in its config to publish the new nonce to the file named by
+`CISCO_JWT_NONCE_FILE`; the adapter rereads that file on the next connection, so
+rotation applies without a restart and cannot interrupt a live call. Without
+`nonce_file_path` the script recreates the adapter container instead.
+
+Run it on a schedule shorter than the token lifetime, for example every 11
+hours, using whichever scheduler the host provides.
 
 The adapter is not a substitute for Cisco sandbox qualification. Validate the
 complete call flow with your Webex Contact Center sandbox before production.
@@ -173,29 +191,36 @@ The adapter maps conversation events as follows:
 | Cisco `SESSION_START` | Opens one internal RTVI connection and sends `client-ready`. |
 | Pipecat `user-started-speaking` | Sends Cisco `START_OF_INPUT` immediately for barge-in. |
 | Pipecat `user-turn-finalized` | Sends Cisco `END_OF_INPUT` at the canonical finalized-turn edge. |
-| Pipecat output audio | Uses the frame's declared sample rate and converts mono PCM16 to raw Base64 G.711 mu-law 8 kHz Cisco `CHUNK` output. |
+| Pipecat output audio | Uses the frame's declared sample rate and converts mono PCM16 to Base64 WAV-contained PCM16 8 kHz Cisco `CHUNK` output. |
 | Adapter output-complete edge | Sends exactly one Cisco `FINAL` after unpaced generated audio is serialized. |
 | Cisco `SESSION_END` or socket closure | Closes the internal connection and releases conversation state. |
 
-The documented contract uses one authenticated Cisco WebSocket for the entire
-conversation. The adapter also supports the continuation sockets observed in
-production: the logical conversation and Nemotron connection remain stable,
-while physical Cisco sockets are attached by `conversation_id` with
-connection-scoped sequence counters.
+One authenticated Cisco WebSocket carries the entire conversation. The socket
+owns its conversation state, so `SESSION_START` must be the first application
+request, a second `SESSION_START` or a foreign `conversation_id` is rejected,
+and losing the socket ends the session without replay. Each side owns one
+monotonic sequence counter for the connection, and a `PONG` echoes its `PING`
+sequence number.
 
 An adapter-owned Pipecat output transport serializes audio without browser
 playback sleeps. Its stop event is therefore an output-written edge rather
 than simulated playback completion.
 
-> **Live qualification (2026-09-09):** the Cisco production connector closed
-> the documented socket immediately after the welcome `FINAL` and opened four
-> continuation sockets. Compatibility handling is enabled so these sockets can
-> resume the existing logical conversation. Cisco should still confirm this
-> behavior because it differs from the published single-socket contract.
-
 Caller audio must be raw Base64 G.711 mu-law, 8 kHz, mono data with
-`encoding=MULAW_FORMAT` and `sample_rate_hertz=8000`. Adapter output chunks
-range from 320 bytes through 32 KB.
+`encoding=MULAW_FORMAT` and `sample_rate_hertz=8000`.
+
+Prompt audio travels the other way as Base64 PCM16 8 kHz mono in a WAV
+container. This deliberately departs from Cisco's documented media profile,
+which requires raw mu-law with no container: live calls confirmed that raw
+mu-law prompt audio is accepted on the wire and never rendered to the caller,
+while WAV-contained audio always is. Cisco's own sample connector sends its
+WAV prompt assets verbatim, so the adapter follows the working behavior.
+`CISCO_FEEDBACK.md` tracks the contradiction.
+
+Generated audio is forwarded as it arrives rather than gathered into fixed
+chunks, which follows the documented instruction to send each chunk as soon as
+it is generated and let Webex pace playback. Chunks range from 640 bytes
+through 32 KB before containerization.
 
 ## Generic Baseline Fit
 

@@ -18,12 +18,11 @@ adapter.
 - `GET /health`: local/operator process health only. This is not part of either
   Cisco AsyncAPI schema and should normally remain behind the operator ingress.
 
-The 2026-09-09 production qualification observed Cisco close the socket after
-the welcome `FINAL` and open continuation sockets. The adapter retains the
-logical conversation for a bounded grace period and attaches those sockets by
-`conversation_id`, preserving the Nemotron session while resetting
-connection-scoped sequence counters. See the example README for qualification
-status.
+Conversation state belongs to its socket. `SESSION_START` must arrive first, a
+repeated `SESSION_START` or a foreign `conversation_id` is a protocol error,
+and a lost socket ends the session because Cisco never replays earlier turns.
+Each sender owns one monotonic sequence counter per connection, except that a
+`PONG` echoes its `PING` sequence number.
 
 The adapter converts raw Base64 G.711 mu-law 8 kHz mono caller media into
 PCM16 16 kHz for Nemotron. Return media is converted back to raw mu-law and
