@@ -1,2 +1,0 @@
-[console_scripts]
-cisco-webex-byova-ws-adapter = webex_byova_ws_adapter.main:main
