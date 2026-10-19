@@ -30,10 +30,11 @@ server:
       settings: nemotron-nim
       nvcf: {}
     nemotron-super:
-      name: "Nemotron 3 Super 120B A12B"
-      model_id: "nvidia/nemotron-3-super-120b-a12b"
-      base_url: "http://nemotron-3-super:8000/v1"
+      name: "Nemotron 3.5 Super VL 120B A12B"
+      model_id: "nvidia/nemotron-3.5-super-vl-120b-a12b"
+      base_url: "http://nemotron-35-super-vl:8000/v1"
       health_path: "/v1/health/ready"
+      supported_languages: [en, de, es, fr, it, ja, zh]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-super
     nemotron-omni-nvfp4:
@@ -72,7 +73,9 @@ server:
     nemotron-asr-streaming-english:
       name: "Nemotron ASR Streaming English"
       server: "nemotron-asr-streaming-english:50052"
-      model: "cache-aware-parakeet-rnnt-multi-asr-streaming-sortformer"
+      model: "cache-aware-parakeet-rnnt-en-US-asr-streaming-sortformer"
+      speaker_diarization_supported: true
+      speaker_diarization_max_speakers: 8
       nvcf:
         function_id: "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
         model: "nemotron-asr-streaming"
@@ -103,6 +106,15 @@ single-gpu:
       supported_languages: [en, de, es, fr, it, ja]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-vllm
+    nemotron-super:
+      name: "Nemotron 3.5 Super VL 120B A12B"
+      model_id: "nvidia/nemotron-3.5-super-vl-120b-a12b"
+      base_url: "http://nemotron-35-super-vl-vllm:8000/v1"
+      health_path: "/health"
+      streaming_url: "ws://nemotron-35-super-vl-vllm:8000/v1/streaming-session"
+      supported_languages: [en, de, es, fr, it, ja, zh]
+      extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
+      settings: nemotron-super
     nemotron-omni-nvfp4:
       name: "Nemotron 3 Nano Omni 30B A3B Reasoning"
       model_id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
@@ -123,6 +135,8 @@ single-gpu:
       server: "nemo-speech:50051"
       model: "nemotron-speech-streaming-en-0.6b"
       settings: nemo-speech-asr
+      speaker_diarization_supported: true
+      speaker_diarization_max_speakers: 8
     nemotron-asr-streaming-multilingual:
       name: "Nemotron 3.5 ASR Streaming Multilingual"
       server: "nemo-speech:50051"

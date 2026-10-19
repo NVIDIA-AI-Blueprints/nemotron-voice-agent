@@ -18,6 +18,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 |-------|-------------|
 | [Configure Services](how-to/configure-services.md) | How the catalog works: switch, add, and override LLM/ASR/TTS services via the UI or YAML |
 | [Configure Prompts](how-to/configure-prompts.md) | Switch and add prompt presets via the UI or example-local prompt catalogs |
+| [Enable Speaker Labels](how-to/enable-speaker-labels.md) | Turn on speaker labels in the Generic Assistant for single-speaker or multi-speaker diarization |
 | [Multilingual Voice Agent](../src/examples/multilingual/README.md) | Prompt-driven multilingual replies with a fixed language and TTS voice per session |
 | [Enable OpenTelemetry Tracing](how-to/enable-opentelemetry-tracing.md) | Monitor latency and conversation flows with Phoenix or any OTLP backend |
 | [Enable a TURN Server](how-to/enable-turn-server.md) | TURN server for remote / cross-network WebRTC access |

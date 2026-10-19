@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+from copy import deepcopy
 
 from pipecat.frames.frames import Frame, InterimTranscriptionFrame, TranscriptionFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -17,7 +18,6 @@ from examples.shared.nvidia_streaming_llm import (
     StreamingLLMInputFrame,
     StreamingLLMUserAggregator,
 )
-from examples.shared.vllm_streaming_input.vllm_patch import patch_scheduler_source
 
 URL = "ws://nvidia-llm-vllm:8000/v1/streaming-session"
 
@@ -106,6 +106,34 @@ def test_service_commits_the_user_turn_and_streams_its_chunks() -> None:
     assert commit["type"] == "input_text_buffer.commit"
 
 
+def test_service_sends_an_answer_with_text_and_tool_calls_as_one_message() -> None:
+    service, websocket = _service()
+    call = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    messages = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "Weather?"},
+        {"role": "assistant", "content": "Let me check."},
+        {"role": "assistant", "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
+    ]
+    context = LLMContext(deepcopy(messages))
+
+    async def run() -> None:
+        service._reset_response_state()
+        stream = await service.get_chat_completions(context)
+        async for _ in stream:
+            pass
+
+    asyncio.run(run())
+
+    assert websocket.sent[0]["request"]["messages"] == [
+        *messages[:2],
+        {"role": "assistant", "content": "Let me check.", "tool_calls": [call]},
+        messages[4],
+    ]
+    assert context.get_messages() == messages
+
+
 def test_user_aggregator_streams_the_turn_so_far_before_aggregating() -> None:
     aggregator = StreamingLLMUserAggregator(LLMContext())
     pushed: list[Frame] = []
@@ -137,15 +165,33 @@ def test_user_aggregator_streams_the_turn_so_far_before_aggregating() -> None:
     ]
 
 
-def test_patch_scheduler_source_is_idempotent() -> None:
-    source = (
-        "        session.sampling_params = update.sampling_params\n"
-        "        if session.status == RequestStatus.WAITING_FOR_STREAMING_REQ:\n"
-    )
-    patched, changed = patch_scheduler_source(source)
-    again, changed_again = patch_scheduler_source(patched)
+def test_queued_prefill_keeps_history_stable_when_the_user_turn_is_committed() -> None:
+    context = LLMContext([{"role": "system", "content": "Be brief."}])
+    aggregator = StreamingLLMUserAggregator(context)
+    queued = []
+    service, websocket = _service()
 
-    assert changed is True
-    assert "        session.max_tokens = update.max_tokens\n" in patched
-    assert changed_again is False
-    assert again == patched
+    async def enqueue(frame, direction=FrameDirection.DOWNSTREAM):
+        if isinstance(frame, StreamingLLMInputFrame):
+            queued.append(frame)
+
+    async def run():
+        aggregator.push_frame = enqueue
+        await aggregator.process_frame(
+            InterimTranscriptionFrame(text="Hi there", user_id="", timestamp=""), FrameDirection.DOWNSTREAM
+        )
+        # The final aggregation runs before the downstream processor drains its
+        # queued prefill frame, appending the user turn to the shared history.
+        context.add_message({"role": "user", "content": "Hi there"})
+        live = queued[0]
+        await service._sync_session(service._session_request_for(live.context), live.text)
+        service._reset_response_state()
+        stream = await service.get_chat_completions(context)
+        async for _ in stream:
+            pass
+
+    asyncio.run(run())
+
+    updates = [event for event in websocket.sent if event["type"] == "session.update"]
+    assert len(updates) == 1
+    assert updates[0]["request"]["messages"] == [{"role": "system", "content": "Be brief."}]

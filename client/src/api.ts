@@ -8,6 +8,8 @@ export const queryClient = new QueryClient({
 });
 
 export type BuiltInServiceSource = "cloud-nim" | "self-hosted";
+export type ServiceStatus = "ready" | "starting" | "error" | "offline";
+const SERVICE_STATUS_POLL_MS = 5000;
 
 export interface LLMService {
   id: string;
@@ -18,6 +20,7 @@ export interface LLMService {
   extraParams: string;
   builtIn: boolean;
   source?: BuiltInServiceSource;
+  status?: ServiceStatus;
   settings?: ServiceSettingsSchema;
   streamingUrl?: string;
 }
@@ -59,6 +62,7 @@ export interface Prompt {
   agent?: string;
   promptName?: string;
   tools?: string[];
+  multiSpeakerSupport?: boolean;
 }
 
 export interface Tool {
@@ -96,6 +100,7 @@ function serviceCatalogQueryOptions(pipelineMode = "") {
   return {
     queryKey: ["services", pipelineMode] as const,
     queryFn: () => fetchJson<ServiceCatalog>(`/api/services${qs}`),
+    refetchInterval: SERVICE_STATUS_POLL_MS,
   };
 }
 
@@ -112,18 +117,27 @@ export function useDefaultLLMs(pipelineMode = "") {
         extraParams: String(e.extra_params ?? ""),
         builtIn: true,
         source: normalizeServiceSource(e.source),
+        status: e.status,
         settings: serviceSettingsSchema(e),
         streamingUrl: e.streaming_url ? String(e.streaming_url) : undefined,
       })),
   });
 }
 
-export function useDefaultPrompts(pipelineMode = "") {
-  const qs = pipelineMode ? `?pipeline_mode=${encodeURIComponent(pipelineMode)}` : "";
+export function useDefaultPrompts(pipelineMode = "", asrId = "") {
+  const params = new URLSearchParams();
+  if (pipelineMode) params.set("pipeline_mode", pipelineMode);
+  if (asrId) params.set("asr_id", asrId);
+  const qs = params.size ? `?${params.toString()}` : "";
   return useQuery<Prompt[]>({
-    queryKey: ["prompts", pipelineMode],
+    queryKey: ["prompts", pipelineMode, asrId],
     queryFn: () => fetchJson<Prompt[]>(`/api/prompts${qs}`),
-    select: (data) => data.map((p) => ({ ...p, builtIn: true, tools: p.tools ?? [] })),
+    select: (data) => data.map((p) => ({
+      ...p,
+      builtIn: true,
+      tools: p.tools ?? [],
+      multiSpeakerSupport: p.multiSpeakerSupport ?? false,
+    })),
   });
 }
 
@@ -151,8 +165,11 @@ export interface SimpleService {
   voiceId?: string;
   functionId?: string;
   languageCode?: string;
+  speakerDiarizationSupported?: boolean;
+  speakerDiarizationMaxSpeakers?: number;
   builtIn: boolean;
   source?: BuiltInServiceSource;
+  status?: ServiceStatus;
   settings?: ServiceSettingsSchema;
 }
 
@@ -166,8 +183,13 @@ export function useDefaultASR(pipelineMode = "") {
         server: String(e.server ?? ""),
         model: e.model ? String(e.model) : undefined,
         functionId: e.function_id ? String(e.function_id) : undefined,
+        speakerDiarizationSupported: e.speaker_diarization_supported === true,
+        speakerDiarizationMaxSpeakers: typeof e.speaker_diarization_max_speakers === "number"
+          ? e.speaker_diarization_max_speakers
+          : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
+        status: e.status,
         settings: serviceSettingsSchema(e),
       })),
   });
@@ -187,6 +209,7 @@ export function useDefaultTTS(pipelineMode = "") {
         languageCode: e.language_code ? String(e.language_code) : undefined,
         builtIn: true,
         source: normalizeServiceSource(e.source),
+        status: e.status,
         settings: serviceSettingsSchema(e),
       })),
   });
@@ -210,6 +233,7 @@ export interface ServiceEntry {
   name: string;
   builtIn: boolean;
   source?: BuiltInServiceSource;
+  status?: ServiceStatus;
   [key: string]: unknown;
 }
 
@@ -334,6 +358,7 @@ export function useVoiceCatalog(
       const url = params.size > 0 ? `/api/tts-config?${params.toString()}` : "/api/tts-config";
       return fetchJson<TTSConfig>(url);
     },
+    refetchInterval: (query) => (query.state.data?.voices.length ? false : SERVICE_STATUS_POLL_MS),
   });
 }
 

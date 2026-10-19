@@ -26,6 +26,7 @@ Session events, shaped after vLLM's ``/v1/realtime`` API with text input::
 
 import json
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
@@ -77,7 +78,14 @@ class StreamingLLMUserAggregator(LLMUserAggregator):
         ):
             part = TextPartForConcatenation(frame.text, includes_inter_part_spaces=frame.includes_inter_frame_spaces)
             text = concatenate_aggregated_text([*self._aggregation, part])
-            await self.push_frame(StreamingLLMInputFrame(context=self._context, text=text))
+            # Downstream frames are queued. Snapshot history before final
+            # aggregation appends this user turn to the shared context.
+            context = LLMContext(
+                deepcopy(self._context.get_messages()),
+                tools=self._context.tools,
+                tool_choice=self._context.tool_choice,
+            )
+            await self.push_frame(StreamingLLMInputFrame(context=context, text=text))
         await super().process_frame(frame, direction)
 
 
@@ -86,6 +94,28 @@ def _http_base_url(url: str) -> str:
     parsed = urlparse(url)
     scheme = {"ws": "http", "wss": "https"}.get(parsed.scheme, parsed.scheme)
     return urlunparse(parsed._replace(scheme=scheme, path=parsed.path.removesuffix(STREAMING_SESSION_PATH)))
+
+
+def _merge_tool_call_turns(messages: list[dict]) -> list[dict]:
+    """Join the spoken text and tool calls of one answer, which the context keeps as two assistant messages.
+
+    The server prefills the follow-up turn with the answer rendered as one
+    message, so only the joined history extends what it holds.
+    """
+    merged: list[dict] = []
+    for message in messages:
+        previous = merged[-1] if merged else {}
+        if (
+            previous.get("role") == message.get("role") == "assistant"
+            and isinstance(previous.get("content"), str)
+            and not previous.get("tool_calls")
+            and message.get("tool_calls")
+            and not message.get("content")
+        ):
+            merged[-1] = {**previous, "tool_calls": message["tool_calls"]}
+        else:
+            merged.append(message)
+    return merged
 
 
 class NvidiaStreamingLLMService(NvidiaLLMService):
@@ -157,6 +187,7 @@ class NvidiaStreamingLLMService(NvidiaLLMService):
             )
         )
         params.update(params.pop("extra_body", None) or {})
+        params["messages"] = _merge_tool_call_turns(list(params.get("messages") or []))
         return {key: value for key, value in params.items() if not isinstance(value, (NotGiven, OpenAINotGiven))}
 
     async def _sync_session(self, request: dict, text: str) -> None:

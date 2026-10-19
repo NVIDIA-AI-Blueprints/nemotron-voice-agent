@@ -47,7 +47,7 @@ name: nemotron-voice-agent
 include:
   - path: docker/docker-compose.nemotron35-lightning-nim.yaml
   - path: docker/docker-compose.nemotron35-lightning.yaml
-  - path: docker/docker-compose.nemotron3-super.yaml
+  - path: docker/docker-compose.nemotron35-super-vl.yaml
   - path: docker/docker-compose.nemotron3-omni-nim.yaml
   - path: docker/docker-compose.nemotron-asr.yaml
   - path: docker/docker-compose.parakeet-asr.yaml

@@ -80,8 +80,7 @@ export function IdleHero({ connecting, fadingOut }: Readonly<{ connecting: boole
       </div>
 
       <div className={`idle-hero__hints ${showSpinner ? "idle-hero__hints--hidden" : ""}`}>
-        <span className="idle-hero__hint">Try: &ldquo;I'd like to order some flowers&rdquo;</span>
-        <span className="idle-hero__hint">Try: &ldquo;What do you recommend for a birthday?&rdquo;</span>
+        <span className="idle-hero__hint">Try: &ldquo;Hi, what can you help me with?&rdquo;</span>
       </div>
     </div>
   );

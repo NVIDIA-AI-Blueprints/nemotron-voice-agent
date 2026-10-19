@@ -80,9 +80,13 @@ To run host-native without Docker, set `selection: generic-assistant` in [`examp
 
 To change models, voices, prompts, or tool wiring, see [Configure Services](../../../docs/how-to/configure-services.md), [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure ASR](../../../docs/how-to/configure-asr.md), [Configure TTS](../../../docs/how-to/configure-tts.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md).
 
+## Speaker labels
+
+Optional. Select **Generic Assistant** with an ASR entry that sets `speaker_diarization_supported: true`, then turn on **Diarization** in **Speaker Labels** before you connect. Default prompts follow the first speaker. `multi_speaker_assistant` labels every speaker and answers only when called by name. Refer to [Enable Speaker Labels](../../../docs/how-to/enable-speaker-labels.md).
+
 ## Tips & best practices
 
 - **Start from this baseline.** The generic example is intentionally minimal. Add domain logic, custom tools, and deployment-specific service choices on top of it rather than starting from scratch.
-- **Pick the model for the deployment.** Nemotron 3.5 Lightning is the default across profiles. Nemotron 3 Super is a higher-capability alternative that you self-host with the `nemotron-3-super` NIM sidecar. Refer to [Configure LLM](../../../docs/how-to/configure-llm.md) for sizing and precision.
+- **Pick the model for the deployment.** Nemotron 3.5 Lightning is the default across profiles. Nemotron 3.5 Super VL is a higher-capability alternative that you self-host with the `nemotron-35-super-vl` (server) or `nemotron-35-super-vl-single-gpu` profile. Refer to [Run Nemotron 3.5 Super VL](../../../docs/how-to/configure-llm.md#run-nemotron-35-super-vl) for commands, sizing, and precision. After you start Super VL, select it in the Services tab, then disconnect and connect again if a session is already running.
 - **Tune turn-taking and latency** with the shared pipeline knobs in [Tune Pipeline Performance](../../../docs/how-to/tune-pipeline-performance.md).
 - For deployment, ASR/LLM/TTS, and general failure modes, see the [Troubleshooting guide](../../../docs/06-troubleshooting.md).

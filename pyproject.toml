@@ -1,6 +1,6 @@
 [project]
 name = "nemotron-voice-agent"
-version = "2.2.0"
+version = "2.3.0"
 description = "End-to-end voice agent blueprint powered by NVIDIA Nemotron ASR, LLM, and TTS"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -18,7 +18,7 @@ dependencies = [
 # Force patched versions for known CVEs
 [tool.uv]
 override-dependencies = [
-    "cryptography>=46.0.5",
+    "cryptography>=50.0.0",
     "idna>=3.15",
     "starlette>=1.0.1",
     "protobuf>=6.33.6",
@@ -26,6 +26,8 @@ override-dependencies = [
     "uuid-utils>=0.16.0",
     "pillow>=12.3.0",
     "nvidia-riva-client>=2.27.0,<3",
+    "multidict>=6.9.1,<7",
+    "urllib3>=2.8.0",
 ]
 
 [dependency-groups]
