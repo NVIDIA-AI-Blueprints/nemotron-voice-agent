@@ -25,6 +25,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |
 | [`frontend-backend-agent`](../src/examples/frontend_backend_agent/README.md) | Frontend LLM with a stateful backend agent (airline-booking reference) | `frontend-backend-agent`, `frontend-backend-agent/server`, `frontend-backend-agent/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`webex-byova-grpc-assistant`](../src/examples/webex_byova_grpc/README.md) | Customer-care pipeline with a separate Cisco Webex BYOVA adapter reached over gRPC+TLS | `webex-byova-grpc-assistant/server` |
 | [`webex-byova-ws-assistant`](../src/examples/webex_byova_ws/README.md) | Generic baseline with a separate Cisco Webex BYOVA WebSocket adapter | `webex-byova-ws-assistant`, `webex-byova-ws-assistant/server`, `webex-byova-ws-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 
 > Observability overlays `tracing` (Phoenix OTel) and Coturn Server `turn` can be added to any profile.
@@ -84,6 +85,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
     docker compose --profile omni-assistant/server up -d            # Nemotron Omni Assistant
     docker compose --profile omni-assistant-subagents/server up -d  # Nemotron Omni Assistant Subagents
     docker compose --profile frontend-backend-agent/server up -d    # Frontend/Backend Agent Airline Assistant
+    docker compose --profile webex-byova-grpc-assistant/server up -d  # Cisco Webex BYOVA gRPC pipeline
     docker compose --profile webex-byova-ws-assistant/server up -d  # Cisco Webex BYOVA WebSocket pipeline
     ```
 
@@ -174,6 +176,7 @@ For development and debugging, you can run the server directly:
     | `omni-assistant` | Lock to Nemotron Omni Assistant |
     | `omni-assistant-subagents` | Lock to Nemotron Omni Assistant Subagents |
     | `frontend-backend-agent` | Lock to Frontend Backend Agent |
+    | `webex-byova-grpc-assistant` | Lock to Cisco Webex BYOVA gRPC Assistant |
     | `webex-byova-ws-assistant` | Lock to Cisco Webex BYOVA WebSocket Assistant |
 
     > **Note:** Docker Compose deployments pin `EXAMPLE_SELECTION=<example>` to a single example. You can set `EXAMPLE_SELECTION=all` to expose every example in the UI selector instead.
