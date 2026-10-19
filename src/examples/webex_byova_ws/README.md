@@ -92,7 +92,14 @@ host port. If you change `PIPELINE_APP_PORT`, update
 ## Configure Cisco TLS and Authentication
 
 For a Cisco-facing deployment, provide a trusted certificate and private key,
-and keep authentication enabled. Configure these adapter variables:
+and keep authentication enabled.
+
+Register the WebSocket data source under its own Service App. Cisco confirmed
+that gRPC and WebSocket data sources cannot coexist in one Service App, so a
+deployment running both transports needs one Service App per transport. The
+published documentation currently advises reusing the gRPC Service App.
+
+Configure these adapter variables:
 
 | Variable | Purpose |
 | --- | --- |

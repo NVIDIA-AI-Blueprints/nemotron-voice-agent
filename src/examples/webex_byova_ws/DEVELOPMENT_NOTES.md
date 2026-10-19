@@ -4,7 +4,8 @@ A running record of building the adapter in [`client/`](./client/) against a
 live Webex Contact Center tenant during September 2026. It exists because
 several behaviors the adapter depends on were not derivable from the published
 documentation, and because for those the route to the answer is more useful
-than the answer by itself.
+than the answer by itself. Every divergence recorded here is resolved; the file
+is kept for the reasoning, not as a list of blockers.
 
 Entries are chronological. Where a later finding overturned an earlier one, the
 earlier conclusion is kept and marked superseded rather than deleted: the wrong
@@ -167,21 +168,37 @@ detection (500 ms VAD hangover, about 0.53 s) and ASR finalization (about
 the caller perceives adds roughly 300–500 ms on top, which we attribute to
 network hops plus the per-chunk playback setup above.
 
-## Still Open
+## Service App Registration
 
-**Service App registration.** The documentation says to reuse the same
-authorized Service App when registering the WebSocket data source and
-explicitly advises against creating a second one for the WebSocket transport.
-During integration we were advised that two data sources cannot be kept in one
-Service App and that a separate Service App should be created for WebSocket. We
-run one Service App and data source per transport, which works, but it
-contradicts the published instruction. Which is the supported production
-configuration is unconfirmed.
+The documentation says to reuse the same authorized Service App when
+registering the WebSocket data source, and explicitly advises against creating
+a second one for the WebSocket transport. That is not what the service does:
+Cisco confirmed that gRPC and WebSocket data sources cannot coexist in one
+Service App, and that a separate Service App per transport is the supported
+configuration.
 
-**Diagnosability of rejected prompt audio.** Both media problems above
-presented as silence with a healthy call on every log we own. An error or
-warning frame when a prompt cannot be decoded or rendered — rather than a
-silent discard — would have removed most of the work recorded here.
+This deployment therefore uses one Service App and data source for gRPC BYOVA
+and a second pair for WebSocket BYOVA.
+
+## Status
+
+The integration is complete and validated end to end against the live tenant:
+single-socket lifecycle, raw mu-law prompt media, barge-in, DTMF collection,
+JWS authentication with unattended nonce rotation, and the latency figures
+above. Every behavioral divergence recorded here has been resolved, each one
+confirmed on live calls rather than inferred.
+
+Two suggestions were passed back to Cisco and are theirs to act on. Neither
+blocks this adapter:
+
+- **Correct the published Service App guidance** so it matches the confirmed
+  one-Service-App-per-transport requirement, and document the prompt-media
+  coupling to `dtmf_config`. Both cost real debugging time precisely because
+  the documentation said something else.
+- **Return an error or warning frame when prompt audio cannot be rendered.**
+  Both media problems above presented as silence with a healthy call on every
+  log either side owns. A rejection frame instead of a silent discard would
+  have removed most of the work recorded here.
 
 ## If You Are Building One of These
 
@@ -195,3 +212,5 @@ silent discard — would have removed most of the work recorded here.
 - Treat the sample connector's behavior as evidence about the live service, but
   not as proof of a rule — it happened to sit in the one working cell of a
   matrix neither it nor the documentation describes.
+- Register the WebSocket data source under its own Service App, regardless of
+  what the documentation says about reusing the gRPC one.
