@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -19,11 +21,41 @@ DATASOURCE_SCHEMA = "com.cisco.datasource.schema.uuid"
 ORG_UUID = "com.cisco.org.uuid"
 JWKS_PATH = "/oauth2/v2/keys/verificationjwk"
 
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class _KeySet:
     keys: dict[str, dict[str, Any]]
     expires: float
+
+
+class DatasourceNonce:
+    """Supply the expected nonce, rereading it whenever rotation rewrites it."""
+
+    def __init__(self, config: AdapterConfig) -> None:
+        """Bind to a static nonce or to the file that rotation rewrites."""
+        self._path = Path(config.nonce_file) if config.nonce_file else None
+        self._static = config.nonce
+        self._value = ""
+        self._stamp: tuple[int, int] | None = None
+
+    def current(self) -> str:
+        """Return the nonce Cisco should present on the next connection."""
+        if self._path is None:
+            return self._static
+        try:
+            status = self._path.stat()
+            stamp = (status.st_mtime_ns, status.st_size)
+            if stamp != self._stamp:
+                self._value = self._path.read_text(encoding="utf-8").strip()
+                self._stamp = stamp
+                LOGGER.info("Loaded rotated Cisco datasource nonce from %s", self._path)
+        except OSError as exc:
+            raise InvalidTokenError("datasource nonce file is unavailable") from exc
+        if not self._value:
+            raise InvalidTokenError("datasource nonce file is empty")
+        return self._value
 
 
 class CiscoJwsValidator:
@@ -32,6 +64,7 @@ class CiscoJwsValidator:
     def __init__(self, config: AdapterConfig) -> None:
         """Create a validator for one adapter configuration."""
         self.config = config
+        self.nonce = DatasourceNonce(config)
         self._cache: dict[str, _KeySet] = {}
         self._lock = asyncio.Lock()
 
@@ -63,7 +96,7 @@ class CiscoJwsValidator:
         )
         expected = {
             "sub": self.config.subject,
-            "jti": self.config.nonce,
+            "jti": self.nonce.current(),
             DATASOURCE_URL: self.config.datasource_url,
             DATASOURCE_SCHEMA: self.config.schema_uuid,
             ORG_UUID: self.config.org_uuid,

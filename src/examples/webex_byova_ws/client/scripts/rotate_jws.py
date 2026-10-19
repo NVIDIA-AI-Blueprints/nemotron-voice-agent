@@ -117,7 +117,34 @@ def rotate_datasource(config: dict, access_token: str, nonce: str) -> dict:
     )
 
 
-def write_deployment_env(config: dict, nonce: str) -> Path:
+def write_nonce_file(path: Path, nonce: str) -> None:
+    """Publish the nonce the adapter watches, keeping the file's inode stable.
+
+    Compose bind-mounts this file into the adapter, and a bind mount follows the
+    inode it was created from, so replacing the file would leave the container
+    reading the old one. The payload is a fixed-length single write.
+    """
+    payload = (nonce + "\n").encode("utf-8")
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o644)
+    with path.open("r+b") as handle:
+        handle.write(payload)
+        handle.truncate()
+        handle.flush()
+        os.fsync(handle.fileno())
+    # The adapter runs as a non-root user, and the nonce is the rotation marker
+    # Cisco echoes back in the token's jti claim, not a signing secret.
+    os.chmod(path, 0o644)
+
+
+def nonce_file(config: dict) -> Path | None:
+    """Return the file the adapter watches for rotated nonces, when configured."""
+    configured = config.get("nonce_file_path")
+    return Path(configured).expanduser() if configured else None
+
+
+def write_deployment_env(config: dict, nonce: str, watched: Path | None) -> Path:
     """Write non-secret adapter deployment settings consumed by Compose."""
     path = Path(config["deployment_env_path"]).expanduser()
     values = {
@@ -145,6 +172,9 @@ def write_deployment_env(config: dict, nonce: str) -> Path:
         ),
         "CISCO_ORG_UUID": config["org_id"],
     }
+    if watched is not None:
+        values["BYOVA_NONCE_FILE_HOST"] = str(watched)
+        values["CISCO_JWT_NONCE_FILE"] = "/run/secrets/byova-nonce"
     atomic_write(path, "".join(f"{key}={value}\n" for key, value in values.items()))
     return path
 
@@ -207,8 +237,13 @@ def main() -> int:
     access_token = refresh_access_token(config, args.config)
     nonce = secrets.token_hex(16)
     response = rotate_datasource(config, access_token, nonce)
-    env_path = write_deployment_env(config, nonce)
-    restart_adapter(config, env_path)
+    watched = nonce_file(config)
+    env_path = write_deployment_env(config, nonce, watched)
+    if watched is None:
+        restart_adapter(config, env_path)
+    else:
+        # The adapter rereads this file, so rotation never interrupts a call.
+        write_nonce_file(watched, nonce)
 
     config["current_nonce"] = nonce
     config["last_rotation_at"] = dt.datetime.now(

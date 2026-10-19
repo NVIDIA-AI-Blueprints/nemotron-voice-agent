@@ -35,6 +35,9 @@ class AdapterConfig:
     audience: str = field(default_factory=lambda: os.getenv("CISCO_JWT_AUDIENCE", ""))
     subject: str = field(default_factory=lambda: os.getenv("CISCO_JWT_SUBJECT", ""))
     nonce: str = field(default_factory=lambda: os.getenv("CISCO_JWT_NONCE", ""))
+    # Reading the nonce from a file lets scheduled rotation take effect without
+    # restarting the adapter and dropping a live conversation.
+    nonce_file: str = field(default_factory=lambda: os.getenv("CISCO_JWT_NONCE_FILE", ""))
     datasource_url: str = field(default_factory=lambda: os.getenv("CISCO_DATASOURCE_URL", ""))
     schema_uuid: str = field(default_factory=lambda: os.getenv("CISCO_DATASOURCE_SCHEMA_UUID", SCHEMA_UUID))
     org_uuid: str = field(default_factory=lambda: os.getenv("CISCO_ORG_UUID", ""))
@@ -85,7 +88,7 @@ class AdapterConfig:
             "CISCO_JWT_ISSUERS": self.valid_issuers,
             "CISCO_JWT_AUDIENCE": self.audience,
             "CISCO_JWT_SUBJECT": self.subject,
-            "CISCO_JWT_NONCE": self.nonce,
+            "CISCO_JWT_NONCE or CISCO_JWT_NONCE_FILE": self.nonce or self.nonce_file,
             "CISCO_DATASOURCE_URL": self.datasource_url,
             "CISCO_DATASOURCE_SCHEMA_UUID": self.schema_uuid,
             "CISCO_ORG_UUID": self.org_uuid,

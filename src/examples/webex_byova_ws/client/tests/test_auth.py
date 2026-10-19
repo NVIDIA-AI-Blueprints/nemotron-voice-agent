@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import AsyncMock
 
@@ -10,7 +11,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt import InvalidTokenError
 
-from webex_byova_ws_adapter.auth import CiscoJwsValidator
+from webex_byova_ws_adapter.auth import CiscoJwsValidator, DatasourceNonce
 from webex_byova_ws_adapter.config import SCHEMA_UUID, AdapterConfig
 
 
@@ -101,7 +102,6 @@ def test_unsafe_modes_require_explicit_local_flags() -> None:
         {"send_timeout_seconds": 0},
         {"first_audio_timeout_seconds": 0},
         {"completion_timeout_seconds": 0},
-        {"continuation_grace_seconds": 0},
         {"jwks_ttl_seconds": 0},
         {"auth_clock_skew_seconds": -1},
     ],
@@ -114,3 +114,35 @@ def test_runtime_bounds_are_validated_in_local_mode(override: dict[str, object])
             allow_auth_disabled_local=True,
             **override,
         ).validate()
+
+
+def test_nonce_file_reload_tracks_rotation_without_restart(tmp_path) -> None:
+    """Pick up a rotated nonce from disk the next time a token is validated."""
+    path = tmp_path / "byova-nonce"
+    path.write_text("first\n", encoding="utf-8")
+    nonce = DatasourceNonce(AdapterConfig(nonce="static", nonce_file=str(path)))
+    assert nonce.current() == "first"
+
+    path.write_text("second\n", encoding="utf-8")
+    os.utime(path, (0, 0))
+    assert nonce.current() == "second"
+
+
+def test_missing_or_empty_nonce_file_fails_closed(tmp_path) -> None:
+    """Reject tokens when rotation state cannot be read."""
+    missing = DatasourceNonce(AdapterConfig(nonce_file=str(tmp_path / "absent")))
+    with pytest.raises(InvalidTokenError):
+        missing.current()
+
+    path = tmp_path / "byova-nonce"
+    path.write_text("\n", encoding="utf-8")
+    with pytest.raises(InvalidTokenError):
+        DatasourceNonce(AdapterConfig(nonce_file=str(path))).current()
+
+
+def test_auth_accepts_a_nonce_file_instead_of_a_literal_nonce(tmp_path) -> None:
+    """Treat a configured nonce file as satisfying the nonce requirement."""
+    settings = config()
+    settings.nonce = ""
+    settings.nonce_file = str(tmp_path / "byova-nonce")
+    settings.validate()

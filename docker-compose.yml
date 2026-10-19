@@ -312,6 +312,7 @@ services:
       CISCO_JWT_AUDIENCE: "${CISCO_JWT_AUDIENCE:-}"
       CISCO_JWT_SUBJECT: "${CISCO_JWT_SUBJECT:-}"
       CISCO_JWT_NONCE: "${CISCO_JWT_NONCE:-}"
+      CISCO_JWT_NONCE_FILE: "${CISCO_JWT_NONCE_FILE:-}"
       CISCO_DATASOURCE_URL: "${CISCO_DATASOURCE_URL:-}"
       CISCO_DATASOURCE_SCHEMA_UUID: "${CISCO_DATASOURCE_SCHEMA_UUID:-a38a10b7-43e4-4676-a076-a7d6dce9387d}"
       CISCO_ORG_UUID: "${CISCO_ORG_UUID:-}"
@@ -326,6 +327,10 @@ services:
       - type: bind
         source: ${BYOVA_TLS_KEY_HOST:-/dev/null}
         target: /run/secrets/byova-tls.key
+        read_only: true
+      - type: bind
+        source: ${BYOVA_NONCE_FILE_HOST:-/dev/null}
+        target: /run/secrets/byova-nonce
         read_only: true
     restart: unless-stopped
     logging:
