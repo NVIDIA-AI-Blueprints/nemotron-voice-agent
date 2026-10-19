@@ -18,7 +18,7 @@ By default the cascaded pipeline uses Pipecat's ML-based [**Smart Turn**](https:
 2. Silero VAD detects a pause in speech.
 3. NVIDIA ASR independently finalizes after its configured 320 ms trailing-silence endpoint and emits a finalized transcript.
 4. The Smart Turn model analyzes the recent audio and classifies the turn as **complete** or **incomplete**. If it is incomplete but silence continues past the Smart Turn stop threshold (default 1.0 s, `SMART_TURN_STOP_SECS`), the turn completes anyway (fallback).
-5. Pipecat's stock turn analyzer strategy closes the semantic turn only when it has both a finalized transcript and a complete-turn signal. The transcript goes to the LLM, and TTS streams the reply back.
+5. Once the turn is complete, Pipecat's stock turn analyzer strategy closes it immediately if a finalized transcript is available. Otherwise, it closes the turn after the speech-to-text (STT) safety-net timeout, provided some transcript text has arrived. The transcript goes to the LLM, and TTS streams the reply back.
 
 ASR endpointing is not triggered directly by the Silero VAD-stop frame. This
 keeps ASR finalization independent from the acoustic pause signal used by

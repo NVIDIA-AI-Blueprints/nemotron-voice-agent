@@ -48,7 +48,7 @@ server:
 
 ## How the active recipe selects entries
 
-Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers never probe endpoints. Host-native runs (`uv run python src/server.py`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
+Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-gpu`, so containers skip recipe detection (status probes still run). Host-native runs (`uv run python src/server.py`) leave it unset, which means `auto`: the backend probes the example's `server` and `single-gpu` endpoints in parallel (cached for 5 seconds), picks the section with more reachable entries, and lists only the reachable entries of each slot. When nothing is reachable, it uses NVIDIA Cloud if `NVIDIA_API_KEY` is set, and otherwise lists the `server` section. Start the sidecars, then start the app. Set `SERVICE_RECIPE` to pin a section.
 
 | `SERVICE_RECIPE` | Self-hosted entries | NVIDIA Cloud entries |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ Each Compose app service sets `SERVICE_RECIPE` to `cloud`, `server`, or `single-
 | `server` | `server` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 | `single-gpu` | `single-gpu` section | `server` entries with `nvcf`, when `NVIDIA_API_KEY` is set |
 
-`NVIDIA_API_KEY` counts as set only when it is a real key. Empty, unset, and the Compose placeholder `not-needed` hide NVIDIA Cloud entries. With an explicit recipe, the catalog lists every entry of the section. The backend checks the selected services when a session starts and reports a clear error when one is not running.
+`NVIDIA_API_KEY` counts as set only when it is a real key. Empty, unset, and the Compose placeholder `not-needed` hide NVIDIA Cloud entries. With an explicit recipe, the catalog lists every entry of the section except hidden offline ones. The backend checks the selected services when a session starts and reports a clear error when one is not running.
 
 ## Per-example services and defaults
 
@@ -77,7 +77,7 @@ The [Examples table](../../README.md#-examples) links to each example README. Ea
 
 ## Switching services in the UI
 
-The Services tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Each self-hosted card shows its sidecar's status: **Starting…** while the container loads, **Ready** once its health check passes, and **Error** if the container stops after the app server has seen it, until it is ready again. Entries whose container the app server has not seen running are hidden. Until you click an entry, the first visible one is used, so a scaled-down Lightning does not stay the default. An entry you clicked stays selected while its card is visible, including when it shows **Starting…** or **Error**; click another entry to change it. Statuses refresh every five seconds, so a sidecar started later appears without a page refresh. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
+The Services tab lists the active recipe's entries for the example. Click an entry to make it the active selection for that category. Each self-hosted card shows its endpoint's status: **Starting…** while it loads, **Ready** once its HTTP readiness check or TCP port probe passes, and **Error** if it goes offline after the app server has seen it, until it is ready again. A TCP probe confirms the port is open, not that the model is loaded. Offline entries that the app server has never seen are hidden, unless that would leave the slot empty. In that case they show **Not running**. Until you click an entry, the first visible one is used, so a scaled-down Lightning does not stay the default. An entry you clicked stays selected while its card is visible, including when it shows **Starting…** or **Error**. Click another entry to change it. Statuses refresh every five seconds with any `SERVICE_RECIPE`, so a sidecar started later appears without a page refresh. Selections and settings last for the browser tab: they survive disconnect and reconnect, and a page refresh resets them to the example's server defaults. Custom services added through the UI live in browser localStorage, so they survive a refresh.
 
 ## Editable settings
 

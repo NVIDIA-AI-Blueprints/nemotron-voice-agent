@@ -17,6 +17,8 @@ and the selected prompt decides how the assistant treats them.
 - For `*/server` deployments, the Compose ASR services run the public
   `nvcr.io/nim/nvidia/nemotron-asr-streaming:1.4.0` NIM, which tags up to eight
   speakers.
+- For `generic-assistant/single-gpu`, download the diarization and VAD models
+  first. Refer to [Deployment Steps](../01-getting-started.md#deployment-steps).
 
 API clients select `generic-assistant` and send
 `"asr_speaker_diarization": true` in the session configuration. A session that

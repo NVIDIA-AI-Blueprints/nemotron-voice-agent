@@ -8,7 +8,7 @@ Before you begin, ensure you have the following:
 
 - Docker Compose v2.20 or newer. Check the version with `docker compose version`.
 - **Cloud (`<example>`), Server (`*/server`), and Performance Server (`generic-assistant/server-perf`):** an NVIDIA API key (`NVIDIA_API_KEY`) from [build.nvidia.com](https://build.nvidia.com/). Server and Performance Server also need NGC access to pull NIM images. Refer to the [NGC Getting Started Guide](https://docs.nvidia.com/ngc/ngc-overview/index.html#registering-activating-ngc-account).
-- **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
+- **Single-GPU (`*/single-gpu`):** Python 3, either the Hugging Face `hf` CLI or `uvx`, and a [Hugging Face token](https://huggingface.co/docs/hub/en/security-tokens) (`HF_TOKEN`) for model downloads. `generic-assistant/single-gpu` also builds its diarization VAD model locally, which needs `uv`, or Python 3 with `gguf==0.19.0` and `numpy==2.2.6`. `NVIDIA_API_KEY` and `docker login nvcr.io` are not required for this family.
 
 For cloud-only profiles, Docker and Docker Compose are sufficient. For local GPU profiles, install Docker with NVIDIA GPU support and verify `nvidia-smi` works inside containers. Refer to the [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
@@ -89,7 +89,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
     **4.3 Single GPU** (one supported GPU). Hardware support varies by example as listed above. `omni-assistant-subagents/single-gpu` is not supported on Jetson Thor. Cascaded recipes run NeMo-Speech.cpp next to Nemotron 3.5 Lightning. Omni recipes retain the multimodal Omni model and use NeMo-Speech.cpp for TTS. The Lightning container loads the NVFP4 checkpoint on every supported GPU. Hopper and Ada serve those weights as W4A16 through Marlin. Blackwell workstations enable DFlash speculative decoding automatically. DGX Spark does not load a DSpark draft model due to a known issue with vLLM streaming prefill. Follow the [Jetson Thor guide](03-jetson-thor.md) when applicable.
 
-    Download the NeMo-Speech.cpp weights **once, as your user** (do not use `sudo`). The script reads `HF_TOKEN` from `.env`, pulls the GGUFs from Hugging Face, and fetches Magpie TTS text-normalization grammars from the [NeMo-Speech.cpp GitHub release](https://github.com/NVIDIA/NeMo-Speech.cpp/releases) into `models/nemo-speech`:
+    Download the NeMo-Speech.cpp weights **as your user** (do not use `sudo`), and rerun this step after upgrading. The script reads `HF_TOKEN` from `.env`, pulls the GGUFs from Hugging Face, and fetches Magpie TTS text-normalization grammars from the [NeMo-Speech.cpp GitHub release](https://github.com/NVIDIA/NeMo-Speech.cpp/releases) into `models/nemo-speech`. For `generic-assistant/single-gpu`, it also installs the diarization and Silero VAD models, which the speech container loads even when diarization is off. A failed VAD build only prints a warning, so check the output before you start that recipe:
 
     ```bash
     bash scripts/download-nemo-speech-models.sh
