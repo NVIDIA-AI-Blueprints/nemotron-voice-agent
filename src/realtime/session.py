@@ -31,8 +31,10 @@ _OPENAI_MAPPED_FLAT_KEYS = frozenset(
 )
 
 # Endpoints / function ids — accepted under ``session.nvidia`` but redacted from public echo.
+# ``token`` is a plain ``session-config`` key only: the Realtime API never accepts or echoes it.
 _NVIDIA_INTERNAL_KEYS = frozenset(
     {
+        "token",
         "base_url",
         "asr_server",
         "asr_function_id",

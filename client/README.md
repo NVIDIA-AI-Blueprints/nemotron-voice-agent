@@ -61,6 +61,8 @@ The client reads its configuration from the backend (`src/server.py`) and starts
 | `/api/webcam-config` | Webcam capture defaults for multimodal examples |
 | `/api/start` | Start a pipeline session |
 
+`POST /api/session-config` also accepts an optional `token` string. The server passes it through to the bot unchanged so an application can verify it before it allocates a pipeline. The server does not interpret it. The Realtime API (`session.nvidia`) does not accept it and never echoes it.
+
 ## Learn more
 
 - [Nemotron Voice Agent](../README.md): the full blueprint, examples, and deployment guides.

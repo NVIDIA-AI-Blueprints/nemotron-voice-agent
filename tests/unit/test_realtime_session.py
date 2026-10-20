@@ -63,6 +63,13 @@ class MapSessionUpdateTests(unittest.TestCase):
         for key in ("base_url", "tts_server", "asr_server", "tts_function_id", "asr_function_id"):
             self.assertNotIn(key, flat)
 
+    def test_nvidia_token_is_ignored_and_never_echoed(self) -> None:
+        flat = map_session_update_to_flat_config(
+            {"nvidia": {"pipeline_mode": "generic-assistant", "token": "header.payload.sig"}}
+        )
+        self.assertEqual(flat["pipeline_mode"], "generic-assistant")
+        self.assertNotIn("token", flat)
+
     def test_nvidia_fields_pass_through_without_voice_duplicate(self) -> None:
         flat = map_session_update_to_flat_config(
             {
