@@ -211,6 +211,12 @@ class ServiceCatalogHydrationTests(_CatalogTestCase):
         filtered = filter_session_config({"tts_id": "custom-tts", "tts_language_code": " en-US "})
         self.assertEqual(filtered["tts_language_code"], "en-US")
 
+    def test_session_config_keeps_the_auth_token_for_the_app_to_verify(self) -> None:
+        filtered = filter_session_config({"pipeline_mode": "jarvis", "token": "header.payload.sig"})
+
+        self.assertEqual(filtered["token"], "header.payload.sig")
+        self.assertIn("token", utils.SESSION_CONFIG_KEYS)
+
     def test_zero_shot_prompt_file_is_catalog_only_not_client_body(self) -> None:
         filtered = filter_session_config(
             {"tts_id": "self-hosted:magpie", "tts_zero_shot_audio_prompt_file": "/evil/client/path.wav"}

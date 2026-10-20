@@ -53,7 +53,9 @@ def service_recipe() -> str:
     return recipe
 
 
-_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset({"pipeline_mode", "prompt_key", "prompt_content", "tool_choice"})
+_SLOT_AGNOSTIC_KEYS: frozenset[str] = frozenset(
+    {"pipeline_mode", "prompt_key", "prompt_content", "tool_choice", "token"}
+)  # "token": an app may pass an auth token here so its server can verify it before allocating work
 
 
 def _example_binding(example: ExampleServiceConfig | None) -> _ExampleBinding:
