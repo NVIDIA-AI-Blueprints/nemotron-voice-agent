@@ -7,6 +7,7 @@ import asyncio
 import os
 import struct
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -287,23 +288,45 @@ class SmartTurnSampleBufferTests(unittest.TestCase):
 
 
 class SileroSampleResetTests(unittest.TestCase):
-    def test_model_resets_at_first_window_after_each_five_source_seconds(self):
+    def test_model_resets_after_first_inference_then_five_source_seconds_since_each_reset(self):
         model = SourceSilero()
         with patch("time.time", side_effect=AssertionError("wall clock used")):
             for position in range(WINDOW, 12 * RATE, WINDOW):
                 model.set_source_window_end(position)
                 model.voice_confidence(pcm(WINDOW, False))
-        self.assertEqual(model.model_reset_offsets, (80384, 160256))
-        self.assertEqual(model._model.reset_count, 2)
+        self.assertEqual(model.model_reset_offsets, (512, 80896, 161280))
+        self.assertEqual(model._model.reset_count, 3)
 
     def test_inference_padding_does_not_advance_reset_schedule(self):
         model = SourceSilero()
-        model.set_source_window_end(5 * RATE - 1)
+        model.set_source_window_end(WINDOW)
         model.voice_confidence(pcm(WINDOW, False))
-        self.assertFalse(model.model_reset_offsets)
-        model.set_source_window_end(5 * RATE)
+        model.set_source_window_end(WINDOW + 5 * RATE - 1)
         model.voice_confidence(pcm(WINDOW, False))
-        self.assertEqual(model.model_reset_offsets, (5 * RATE,))
+        self.assertEqual(model.model_reset_offsets, (WINDOW,))
+        model.set_source_window_end(WINDOW + 5 * RATE)
+        model.voice_confidence(pcm(WINDOW, False))
+        self.assertEqual(model.model_reset_offsets, (WINDOW, WINDOW + 5 * RATE))
+
+    def test_reset_positions_match_native_silero_with_audio_progress_clock(self):
+        """Use native confidence/reset code with scripted model and virtual time."""
+        from pipecat.audio.vad import silero
+
+        native = StubSileroBase()
+        native._last_reset_time = 0
+        model = SourceSilero()
+        native_resets = []
+        now = [1_000_000.0]
+        with patch.object(silero, "time", SimpleNamespace(time=lambda: now[0])):
+            for position in range(WINDOW, 12 * RATE, WINDOW):
+                now[0] = 1_000_000 + position / RATE
+                before = native._model.reset_count
+                silero.SileroVADAnalyzer.voice_confidence(native, pcm(WINDOW, False))
+                if native._model.reset_count != before:
+                    native_resets.append(position)
+                model.set_source_window_end(position)
+                model.voice_confidence(pcm(WINDOW, False))
+        self.assertEqual(model.model_reset_offsets, tuple(native_resets))
 
     def test_backwards_source_positions_are_rejected(self):
         model = SourceSilero()

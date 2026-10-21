@@ -13,7 +13,7 @@ from examples.generic.offline.models import AudioSource
 
 
 class FactoryTests(unittest.TestCase):
-    def build(self, config, local=False):
+    def build(self, config, local=False, *, policy="silero"):
         catalogs = {
             "asr": {"server": "asr:50051", "function_id": "asr-function"},
             "llm": {"model_id": "model", "base_url": "http://llm:8000/v1"},
@@ -23,7 +23,7 @@ class FactoryTests(unittest.TestCase):
         synthesis = Mock()
         client = Mock()
         client.close = AsyncMock()
-        detector = SimpleNamespace(configuration={"policy": "silero", "vad": {"stop_secs": 0.5}})
+        detector = SimpleNamespace(configuration={"policy": policy, "vad": {"stop_secs": 0.5}})
         with ExitStack() as stack:
             prefix = "examples.generic.offline.factory."
             stack.enter_context(patch(prefix + "load_service_entry", side_effect=lambda key, _: catalogs[key]))
@@ -33,10 +33,11 @@ class FactoryTests(unittest.TestCase):
             stack.enter_context(patch(prefix + "load_ipa_dictionary", return_value=None))
             stack.enter_context(patch(prefix + "create_generic_detector", return_value=detector))
             asr_factory = stack.enter_context(patch(prefix + "create_riva_recognizer", return_value=recognizer))
-            tts_factory = stack.enter_context(patch(prefix + "create_riva_synthesis", return_value=synthesis))
+            tts_factory = stack.enter_context(patch(prefix + "create_live_tts_responder", return_value=synthesis))
             stack.enter_context(patch(prefix + "AsyncOpenAI", return_value=client))
             runtime = build_runtime(config)
-        return runtime, asr_factory.call_args.args[0], tts_factory.call_args.args[0]
+            synthesis._text_stream = tts_factory.call_args.args[0]
+        return runtime, asr_factory.call_args.args[0], tts_factory.call_args.args[1]
 
     def test_cloud_default_retains_generic_magpie_function_id(self):
         runtime, asr, tts = self.build({})
@@ -87,6 +88,10 @@ class FactoryTests(unittest.TestCase):
         runtime, _, _ = self.build({"temperature": "0", "max_tokens": "128"})
         self.assertEqual(runtime.configuration["llm_extra_params"], {"temperature": 0.0, "max_tokens": 128})
 
+    def test_unsupported_turn_policy_names_the_actual_configuration_flag(self):
+        with self.assertRaisesRegex(ValueError, "USE_SILERO_VAD_TURN_DETECTION=true"):
+            self.build({}, policy="smart_turn")
+
     def test_summary_explicit_token_limit_overrides_request_settings(self):
         async def invoke_summary(extra, limit):
             runtime, _, _ = self.build({"extra_params": extra})
@@ -99,7 +104,7 @@ class FactoryTests(unittest.TestCase):
                 self.assertEqual(await llm.run_inference(context, max_tokens=limit), "summary")
 
             with patch("examples.generic.offline.factory.apply_pinned_prompt_summary", summarize):
-                await runtime._engine._responder._text_stream._history_preparer([{"role": "user", "content": "old"}])
+                await runtime._engine.responder._text_stream._history_preparer([{"role": "user", "content": "old"}])
             arguments = runtime._client.chat.completions.create.call_args.kwargs
             runtime._client.chat.completions.create = inference
             return arguments
@@ -132,10 +137,12 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         engine = SimpleNamespace(run=AsyncMock(side_effect=RuntimeError("failure")))
         client = SimpleNamespace(close=AsyncMock())
         recognizer, synthesis = Mock(), Mock()
+        synthesis.aclose = AsyncMock()
         runtime = GenericOfflineRuntime(engine, client, recognizer, synthesis, {})
         with self.assertRaises(RuntimeError):
             await runtime.run(AudioSource(bytes(2)))
         await runtime.aclose()
         recognizer.cancel.assert_called_once()
         synthesis.cancel.assert_called_once()
+        synthesis.aclose.assert_awaited_once()
         client.close.assert_awaited_once()

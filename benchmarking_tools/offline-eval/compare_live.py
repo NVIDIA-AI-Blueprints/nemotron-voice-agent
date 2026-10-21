@@ -536,6 +536,27 @@ async def run_live(
                 sender.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sender
+            # Preserve wire evidence even when collection fails its completion
+            # guard. A failed run must not lose already received benchmark PCM
+            # or conceal which gateway state kept it awaiting completion.
+            runner.client.write_pcm(output / "received_output.wav", capture.render(len(pcm) // 2))
+            write_json(
+                output / "capture_state.json",
+                {
+                    "active_response_id": capture.active_response_id,
+                    "awaiting_response": capture.awaiting_response,
+                    "active_user_speech": capture.active_user_speech,
+                    "cancelled_response_ids": sorted(capture.cancelled),
+                    "response_statuses": {key: value.get("status") for key, value in capture.responses.items()},
+                    "source_send_completed": send_done_ns is not None,
+                    "collection_reason": reason,
+                },
+            )
+            write_json(output / "transcripts.json", capture.transcripts)
+            write_json(output / "send_trace.json", sends)
+            (output / "events.jsonl").write_text(
+                "".join(json.dumps(item, allow_nan=False) + "\n" for item in trace), encoding="utf-8"
+            )
     assert origin is not None and send_done_ns is not None
     if reason != "post_input_idle":
         raise TimeoutError("Live output did not settle before the absolute post-input bound")
