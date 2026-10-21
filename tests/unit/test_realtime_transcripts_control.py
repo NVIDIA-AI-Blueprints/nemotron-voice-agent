@@ -574,6 +574,83 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         done = next(e for e in emitted if e["type"] == "response.done")
         self.assertEqual(done["response"]["output"][0]["content"][0]["transcript"], "One. Two.")
 
+    async def test_already_observed_frames_cannot_reopen_completed_response(self) -> None:
+        """A late traversal of the same pipeline frame must stay deduplicated."""
+        from pipecat.frames.frames import LLMTextFrame
+
+        for frame in (
+            LLMTextFrame(text="no"),
+            TTSTextFrame(text="no", aggregated_by=AggregationType.SENTENCE),
+            BotStartedSpeakingFrame(),
+        ):
+            with self.subTest(frame=type(frame).__name__):
+                emitted: list[dict[str, Any]] = []
+
+                async def emit(event: dict[str, Any], events=emitted) -> None:
+                    events.append(event)
+
+                state = ConversationState()
+                observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+                source = MagicMock()
+                transport = MagicMock(spec=BaseOutputTransport)
+
+                async def push(item, frame_source, current_observer=observer) -> None:
+                    await current_observer.on_push_frame(
+                        FramePushed(
+                            source=frame_source,
+                            destination=MagicMock(),
+                            frame=item,
+                            direction=FrameDirection.DOWNSTREAM,
+                            timestamp=0,
+                        )
+                    )
+
+                await push(frame, source)
+                await push(TTSStoppedFrame(), transport)
+                self.assertIsNone(state.response_id)
+                event_count = len(emitted)
+                # The identical object is now seen at a later edge, after
+                # transport TTS stop has completed and cleared the response slot.
+                await push(frame, transport)
+                self.assertEqual(len(emitted), event_count)
+                self.assertIsNone(state.response_id)
+                self.assertEqual(sum(e["type"] == "response.created" for e in emitted), 1)
+                self.assertEqual(sum(e["type"] == "response.done" for e in emitted), 1)
+                # A new frame still legitimately starts the next response.
+                await push(LLMTextFrame(text="next"), source)
+                self.assertEqual(state.response_status, "in_progress")
+                self.assertEqual(sum(e["type"] == "response.created" for e in emitted), 2)
+
+    async def test_response_completion_keeps_frame_dedupe_bounded_until_shutdown(self) -> None:
+        """Retaining response ids must not grow the session dedupe without limit."""
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state, max_frames=4)
+        transport = MagicMock(spec=BaseOutputTransport)
+        seen = []
+        for _ in range(5):
+            for frame in (TTSTextFrame(text="answer", aggregated_by=AggregationType.SENTENCE), TTSStoppedFrame()):
+                seen.append(frame.id)
+                await observer.on_push_frame(
+                    FramePushed(
+                        source=transport,
+                        destination=MagicMock(),
+                        frame=frame,
+                        direction=FrameDirection.DOWNSTREAM,
+                        timestamp=0,
+                    )
+                )
+        self.assertEqual(observer._processed_frames, set(seen[-4:]))
+        self.assertEqual(list(observer._frame_history), seen[-4:])
+        self.assertIsNone(state.response_id)
+        observer.shutdown()
+        self.assertEqual(observer._processed_frames, set())
+        self.assertEqual(list(observer._frame_history), [])
+
     async def test_llm_text_waits_for_tts_stopped_not_llm_end(self) -> None:
         """Buffered LLM text must not finish without TTSStopped."""
         from pipecat.frames.frames import LLMTextFrame
@@ -738,6 +815,47 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SerializerControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_keeps_already_observed_frames_from_reopening_response(self) -> None:
+        """Client cancellation must retain dedupe across its response-slot reset."""
+        from pipecat.frames.frames import LLMTextFrame
+
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        serializer = RealtimeFrameSerializer()
+        serializer.set_emit(emit)
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=serializer.conversation)
+        serializer.set_on_response_cancel(observer.on_response_cancelled)
+
+        async def push(frame) -> None:
+            await observer.on_push_frame(
+                FramePushed(
+                    source=MagicMock(),
+                    destination=MagicMock(),
+                    frame=frame,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=0,
+                )
+            )
+
+        frames = [
+            LLMTextFrame(text="answer"),
+            TTSTextFrame(text="answer", aggregated_by=AggregationType.SENTENCE),
+            BotStartedSpeakingFrame(),
+        ]
+        for frame in frames:
+            await push(frame)
+        cancelled = await serializer.deserialize(json.dumps({"type": "response.cancel"}))
+        self.assertIsInstance(cancelled, InterruptionFrame)
+        self.assertIsNone(serializer.conversation.response_id)
+        event_count = len(emitted)
+        for frame in frames:
+            await push(frame)
+        self.assertEqual(len(emitted), event_count)
+        self.assertIsNone(serializer.conversation.response_id)
+
     async def test_response_cancel_emits_done_cancelled(self) -> None:
         emitted: list[dict[str, Any]] = []
 
