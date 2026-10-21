@@ -189,7 +189,8 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
         self._bot_transcript_from_tts = False
-        self._clear_frame_dedupe()
+        # A frame can still traverse a later pipeline edge after cancellation.
+        # Its id belongs to the session, not the response slot being reset.
         return text
 
     def shutdown(self) -> None:
@@ -431,4 +432,5 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._bot_transcript_from_tts = False
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
-        self._clear_frame_dedupe()
+        # Keep bounded session-level dedupe: replaying an already observed text
+        # or bot-start frame after this finish must not create a phantom response.
