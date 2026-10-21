@@ -97,6 +97,63 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(capture.active_response_id, "r2")
 
 
+class FailedCaptureTests(unittest.IsolatedAsyncioTestCase):
+    """A collection timeout must retain all received audio and completion state."""
+
+    async def test_timeout_keeps_partial_wav_events_and_unfinished_response_state(self):
+        """An absent response.done is diagnosed rather than silently accepted."""
+
+        class Socket:
+            def __init__(self):
+                self.source_sent = asyncio.Event()
+                self.events = [
+                    {"type": "session.updated", "session": {}},
+                    {"type": "response.created", "response": {"id": "r1"}},
+                    audio_event("r1", pcm(7) * 320),
+                ]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def send(self, data):
+                if json.loads(data).get("type") == "input_audio_buffer.append":
+                    self.source_sent.set()
+
+            async def recv(self):
+                if self.events and self.events[0]["type"] != "session.updated":
+                    await self.source_sent.wait()
+                if self.events:
+                    return json.dumps(self.events.pop(0))
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with (
+                patch.object(client.websockets, "connect", return_value=Socket()),
+                self.assertRaisesRegex(TimeoutError, "did not settle"),
+            ):
+                await client.run_live(
+                    "ws://localhost/v1/realtime",
+                    pcm(1) * 16,
+                    directory,
+                    {},
+                    post_input_idle_ms=1,
+                    max_post_input_ms=10,
+                )
+            state = json.loads((directory / "capture_state.json").read_text())
+            self.assertEqual(state["active_response_id"], "r1")
+            self.assertTrue(state["source_send_completed"])
+            self.assertTrue((directory / "events.jsonl").read_text())
+            self.assertTrue((directory / "send_trace.json").exists())
+            self.assertTrue((directory / "transcripts.json").exists())
+            with wave.open(str(directory / "received_output.wav"), "rb") as stream:
+                self.assertIn(pcm(7) * 320, stream.readframes(stream.getnframes()))
+            self.assertFalse((directory / "result.json").exists())
+
+
 class MetricTests(unittest.TestCase):
     """Require documented units and preserve missing server observations."""
 

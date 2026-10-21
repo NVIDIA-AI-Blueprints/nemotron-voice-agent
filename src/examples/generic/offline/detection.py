@@ -91,19 +91,22 @@ class SampleTimedSileroMixin:
         self._offline_source_end_sample = end_sample
 
     def voice_confidence(self, buffer: bytes) -> float:
-        """Run the existing model, then reset on five seconds of source audio."""
+        """Retain native first-window reset and five seconds since each reset."""
         import numpy as np
 
         audio = np.frombuffer(buffer, dtype=np.int16).astype(np.float32) / 32768.0
         confidence = float(np.asarray(self._model(audio, self.sample_rate)).reshape(-1)[0])
         period_samples = 5 * self.sample_rate
-        if self._offline_next_reset_sample is None:
-            self._offline_next_reset_sample = period_samples
-        if self._offline_source_end_sample >= self._offline_next_reset_sample:
+        # Native Silero starts _last_reset_time at zero and resets after its
+        # first inference. Later periods start at the actual reset window,
+        # rather than fixed absolute multiples of five seconds.
+        if (
+            self._offline_next_reset_sample is None
+            or self._offline_source_end_sample >= self._offline_next_reset_sample
+        ):
             self._model.reset_states()
             self._offline_model_reset_offsets.append(self._offline_source_end_sample)
-            while self._offline_next_reset_sample <= self._offline_source_end_sample:
-                self._offline_next_reset_sample += period_samples
+            self._offline_next_reset_sample = self._offline_source_end_sample + period_samples
         return confidence
 
 

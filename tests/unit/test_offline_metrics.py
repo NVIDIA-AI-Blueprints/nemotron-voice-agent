@@ -84,6 +84,33 @@ def recorded_case(directory, *, instrumented=False, playback=True):
 
 
 class MetricsTests(unittest.TestCase):
+    def test_shared_policy_commit_separates_provider_audio_from_output_buffer_wait(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            recorded_case(directory)
+            result = json.loads((directory / "result.json").read_text())
+            record = result["server_completion"]["metrics"]["responses"][0]
+            record.update(
+                turn_ids=["turn-1"],
+                endpoint_sample=4000,
+                latest_vad_speech_end_sample=3200,
+                first_packed_audio_ready_ns=150_000_000,
+            )
+            (directory / "result.json").write_text(json.dumps(result))
+            (directory / "server_events.jsonl").write_text(
+                json.dumps({"type": "bot_audio", "response_id": "r1", "sample": 7200, "end_sample": 11200})
+            )
+            row = metrics.extract_case(directory, "shared")["responses"][0]
+            self.assertEqual(row["response_first_audio_ms"], 100)
+            self.assertEqual(row["output_buffer_wait_ms"], 50)
+            self.assertEqual(row["rendered_turn_gap_ms"], 250)
+            self.assertEqual(row["endpoint_reason"], "shared_Pipecat_turn_commit")
+            record["latest_vad_speech_end_sample"] = None
+            (directory / "result.json").write_text(json.dumps(result))
+            quiet = metrics.extract_case(directory, "quiet")["responses"][0]
+            self.assertIsNone(quiet["rendered_turn_gap_ms"])
+            self.assertIsNone(quiet["endpoint_wait_ms"])
+
     def test_old_recordings_keep_unobserved_timers_null(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

@@ -463,7 +463,7 @@ class OpenAITextStream:
         raise ValueError("Offline tool-call round limit exceeded")
 
 
-def create_riva_recognizer(settings: dict) -> ContinuousASR:
+def create_riva_recognizer(settings: dict, *, capture_events: bool = False):
     """Create one continuous Riva streaming call with generic ASR endpointing."""
     import riva.client
     from riva.client.proto import riva_asr_pb2
@@ -482,7 +482,7 @@ def create_riva_recognizer(settings: dict) -> ContinuousASR:
             enable_automatic_punctuation=settings.get("asr_automatic_punctuation", True),
             verbatim_transcripts=True,
             audio_channel_count=1,
-            enable_word_time_offsets=True,
+            enable_word_time_offsets=not capture_events,
         ),
         interim_results=True,
     )
@@ -509,6 +509,10 @@ def create_riva_recognizer(settings: dict) -> ContinuousASR:
             call.cancel()
         auth.channel.close()
 
+    if capture_events:
+        from .recognition import ChunkProgressASR
+
+        return ChunkProgressASR(stream, cancel=cancel)
     return ContinuousASR(stream, cancel=cancel)
 
 

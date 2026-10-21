@@ -75,6 +75,7 @@ DEFINITIONS = {
         "E2E."
     ),
     "projected_response_first_audio_ms": ("Response first-audio availability rounded forward to a sample boundary."),
+    "output_buffer_wait_ms": "First packed output readiness minus first provider PCM readiness, in sample units.",
     "mean_fields": (
         "Session means use response records with non-null values. Rendered-gap means exclude "
         "responses cancelled before any playback; response_count includes them."
@@ -140,7 +141,15 @@ def extract_case(directory: Path, run_label: str):
     llm_rounds = []
     for response in metrics["responses"]:
         provider = response["provider"]
-        turn = turns[response["turn_ids"][-1]]
+        turn = dict(turns.get(response["turn_ids"][-1], {}))
+        if "endpoint_sample" in response:
+            turn.update(
+                endpoint_sample=response["endpoint_sample"],
+                speech_end_sample=response.get("latest_vad_speech_end_sample"),
+                endpoint_reason="shared_Pipecat_turn_commit",
+            )
+        turn.setdefault("speech_end_sample", None)
+        turn.setdefault("endpoint_sample", None)
         spans = [
             event
             for event in events
@@ -152,6 +161,10 @@ def extract_case(directory: Path, run_label: str):
         projected_audio_samples = (
             None if observed_audio is None else (observed_audio * RATE + 999_999_999) // 1_000_000_000
         )
+        packed_ready = response.get("first_packed_audio_ready_ns", observed_audio)
+        packed_samples = None if packed_ready is None else (packed_ready * RATE + 999_999_999) // 1_000_000_000
+        speech_end = turn["speech_end_sample"]
+        endpoint = turn["endpoint_sample"]
         row = {
             "run_label": run_label,
             "case_id": directory.name,
@@ -166,34 +179,45 @@ def extract_case(directory: Path, run_label: str):
             "response_request_sample": response["request_sample"],
             "first_committed_audio_sample": first,
             "last_committed_audio_sample": end,
-            "endpoint_wait_ms": (turn["endpoint_sample"] - turn["speech_end_sample"]) * 1000 / RATE,
+            "endpoint_wait_ms": None
+            if endpoint is None or speech_end is None
+            else (endpoint - speech_end) * 1000 / RATE,
             "endpoint_compute_ms": turn.get("endpoint_compute_ms"),
-            "post_endpoint_ready_wait_ms": (response["request_sample"] - turn["endpoint_sample"]) * 1000 / RATE,
+            "post_endpoint_ready_wait_ms": None
+            if endpoint is None
+            else (response["request_sample"] - endpoint) * 1000 / RATE,
             "llm_first_text_ms": ms(provider.get("llm_first_text_ns")),
             "llm_text_pipeline_complete_ms": ms(provider.get("llm_complete_ns")),
             "response_first_audio_ms": ms(observed_audio),
             "projected_response_first_audio_ms": None
             if projected_audio_samples is None
             else projected_audio_samples * 1000 / RATE,
+            "output_buffer_wait_ms": None
+            if packed_samples is None or projected_audio_samples is None
+            else (packed_samples - projected_audio_samples) * 1000 / RATE,
             "tts_first_text_queued_ms": ms(provider.get("tts_first_text_queued_ns")),
             "tts_first_input_ms": ms(provider.get("tts_first_input_ns")),
             "tts_first_audio_latency_ms": ms(provider.get("tts_first_audio_latency_ns")),
             "tts_stream_elapsed_ms": ms(provider.get("tts_stream_elapsed_ns")),
             "tts_last_audio_ready_ms": ms(provider.get("tts_last_audio_ready_ns")),
             "response_generation_wall_ms": ms(response["compute_ns"]),
-            "rendered_turn_gap_ms": None if first is None else (first - turn["speech_end_sample"]) * 1000 / RATE,
+            "rendered_turn_gap_ms": None if first is None or speech_end is None else (first - speech_end) * 1000 / RATE,
             "generated_audio_ms": response["generated_samples"] * 1000 / RATE,
             "committed_audio_ms": response["committed_samples"] * 1000 / RATE,
         }
         if first is not None:
-            expected = response["request_sample"] + projected_audio_samples
+            expected = response["request_sample"] + packed_samples
             if first != expected:
                 raise ValueError("First committed audio does not match its recorded availability")
-            parts = (
-                row["endpoint_wait_ms"] + row["post_endpoint_ready_wait_ms"] + row["projected_response_first_audio_ms"]
-            )
-            if abs(parts - row["rendered_turn_gap_ms"]) > 1e-8:
-                raise ValueError("Turn gap decomposition lost source sample alignment")
+            if speech_end is not None and endpoint is not None:
+                parts = (
+                    row["endpoint_wait_ms"]
+                    + row["post_endpoint_ready_wait_ms"]
+                    + row["projected_response_first_audio_ms"]
+                    + row["output_buffer_wait_ms"]
+                )
+                if abs(parts - row["rendered_turn_gap_ms"]) > 1e-8:
+                    raise ValueError("Turn gap decomposition lost source sample alignment")
         rpc = provider.get("llm_provider_metrics", {})
         for round_record in rpc.get("rounds", ()):
             llm_rounds.append(
