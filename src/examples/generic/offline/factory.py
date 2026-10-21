@@ -9,7 +9,6 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     PIPELINE_AUDIO_OUT_SAMPLE_RATE,
     apply_pinned_prompt_summary,
@@ -29,15 +28,14 @@ from utils import (
     resolve_tools_available,
 )
 
+from .causal import CausalSessionEngine
 from .detection import create_generic_detector
-from .engine import OfflineSessionEngine
 from .providers import (
     STANDARD_STT_STOP_HISTORY,
     OpenAITextStream,
-    StreamingResponder,
     create_riva_recognizer,
-    create_riva_synthesis,
 )
+from .tts_trace import create_live_tts_responder
 
 
 class GenericOfflineRuntime:
@@ -58,7 +56,11 @@ class GenericOfflineRuntime:
             self._closed = True
             self._recognizer.cancel()
             self._synthesis.cancel()
-            await self._client.close()
+            try:
+                if hasattr(self._synthesis, "aclose"):
+                    await self._synthesis.aclose()
+            finally:
+                await self._client.close()
 
     async def run(self, source):
         """Run once and release every provider connection on success or failure."""
@@ -133,9 +135,12 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         ):
             tools.append(entry)
             handlers[name] = TOOL_HANDLERS[name]
+    if tools and config.get("tool_choice") != "none":
+        raise ValueError("Chunk-driven offline replay currently requires a prompt without tools or tool_choice=none")
     detector = create_generic_detector()
-    recognizer = create_riva_recognizer(settings)
-    synthesis = create_riva_synthesis(settings)
+    if detector.configuration["policy"] != "silero":
+        raise ValueError("Chunk-driven offline replay currently requires USE_SILERO_VAD_TURN_DETECTION=true")
+    recognizer = create_riva_recognizer(settings, capture_events=True)
     client = AsyncOpenAI(api_key=settings["api_key"] or "not-used-for-local", base_url=base_url, timeout=600)
     messages = build_context_messages(prompt, system_prompt)
     recent_turns = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
@@ -177,13 +182,13 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         tool_choice=config.get("tool_choice") or "auto",
         history_preparer=prepare_history,
     )
-    responder = StreamingResponder(text, synthesis, text_filter=NemotronSpeechTextFilter())
+    responder = create_live_tts_responder(text, {**settings, "tts_model": tts_model})
     configuration = {
         "mode": "offline",
         "sample_rate": 16000,
         "pipeline": "generic-assistant",
         "asr_mode": "continuous_stream",
-        "asr_availability_policy": "source_dependency_plus_observed_bulk_residual",
+        "asr_availability_policy": "serial_chunk_progress_with_incremental_observed_processing",
         "timing_basis": "observed_provider_elapsed_including_transport_and_queueing",
         "automatic_introduction": False,
         "prompt_key": prompt_key,
@@ -197,6 +202,8 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "asr_automatic_punctuation": settings["asr_automatic_punctuation"],
         "asr_stop_history_ms": settings["asr_stop_history"],
         "asr_force_eou": False,
+        "asr_word_timestamps": False,
+        "asr_completeness_barrier": "finite_response_stream_eof",
         "pronunciation_dictionary_sha256": hashlib.sha256(
             json.dumps(settings["custom_dictionary"] or {}, sort_keys=True).encode()
         ).hexdigest(),
@@ -208,15 +215,28 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "tts_synthesis_mode": synthesis_mode,
         "tts_sample_rate": settings["tts_sample_rate"],
         "output_sample_rate": 16000,
-        "tts_resampling": "soxr_vhq_continuous_with_eof_flush",
+        "tts_resampling": "native_live_chunker_then_cumulative_soxr_vhq_recording",
         "asr_function_id": settings["asr_function_id"],
         "tts_function_id": settings["tts_function_id"],
         "tool_names": sorted(handlers),
         "tool_choice": config.get("tool_choice") or "auto",
-        "interrupted_history": "aligned_prefix_else_omit",
+        "interrupted_history": "actual_TTSTextFrame_order_through_live_assistant_aggregator",
+        "turn_policy": "actual_Pipecat_user_aggregator_with_sample_clock_waits",
+        "output_chunks_10ms": parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
         "history_summarization": "generic_pinned_prompt_policy_before_next_request",
         "history_recent_turns": recent_turns,
     }
     return GenericOfflineRuntime(
-        OfflineSessionEngine(detector, recognizer, responder, messages), client, recognizer, synthesis, configuration
+        CausalSessionEngine(
+            detector,
+            recognizer,
+            responder,
+            messages,
+            output_chunks_10ms=configuration["output_chunks_10ms"],
+            output_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+        ),
+        client,
+        recognizer,
+        responder,
+        configuration,
     )
