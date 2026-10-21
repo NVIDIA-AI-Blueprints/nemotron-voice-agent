@@ -77,6 +77,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -171,6 +172,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -423,6 +432,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -517,6 +527,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -779,6 +797,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -873,6 +892,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -1125,6 +1152,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -1219,6 +1247,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -1472,6 +1508,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -1566,6 +1603,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -1816,6 +1861,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -1910,6 +1956,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -2170,6 +2224,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -2264,6 +2319,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -2514,6 +2577,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -2608,6 +2672,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -2861,6 +2933,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -2955,6 +3028,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -3205,6 +3286,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -3299,6 +3381,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -3559,6 +3649,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -3653,6 +3744,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",
@@ -3903,6 +4002,7 @@
        },
        "domain": {
         "capabilities": [],
+        "name": "",
         "policy": "",
         "unsupported_reply": "I can only help with the tasks I am set up for."
        },
@@ -3997,6 +4097,14 @@
         "backend"
        ],
        "cascade_addendum_key": "cascade_voice_addendum",
+       "domain_from_tools": [
+        {
+         "name": "telecom",
+         "tools_any": [
+          "get_customer_by_phone"
+         ]
+        }
+       ],
        "fallback_file": "",
        "fallback_text": "",
        "frontend_capabilities": "from_tools",

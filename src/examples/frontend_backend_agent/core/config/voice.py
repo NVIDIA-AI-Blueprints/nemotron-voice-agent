@@ -71,7 +71,13 @@ IN_PATH_KEYS: tuple[str, ...] = (
 OUT_PATH_KEYS: tuple[str, ...] = ("filler.log_path", "logging.event_log")
 #: Mappings whose keys are free-form (not checked against the schema).
 _FREE_FORM: frozenset[str] = frozenset(
-    {"agent.overrides", "tts.voice_map", "normalization.transcript.separator_words", "write_gate.tools"}
+    {
+        "agent.overrides",
+        "tts.voice_map",
+        "normalization.transcript.separator_words",
+        "write_gate.tools",
+        "instructions.domain_from_tools",
+    }
 )
 
 _SPEECH_DEFAULTS: dict[str, Any] = {
@@ -142,6 +148,7 @@ DEFAULTS: dict[str, Any] = {
         "cascade_addendum_key": "cascade_voice_addendum",
         "strip_patterns": [],
         "frontend_capabilities": "from_tools",
+        "domain_from_tools": {},
     },
     "logging": {"event_log": "", "redact_content": False},
     "normalization": {
@@ -335,6 +342,14 @@ class ToolsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DomainRule:
+    """``instructions.domain_from_tools.<name>``: the session is in domain ``name`` if it has any of ``tools_any``."""
+
+    name: str
+    tools_any: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class InstructionsConfig:
     """How ``session.update.instructions`` reaches the prompts."""
 
@@ -345,6 +360,7 @@ class InstructionsConfig:
     cascade_addendum_key: str
     strip_patterns: tuple[str, ...]
     frontend_capabilities: str
+    domain_from_tools: tuple[DomainRule, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -698,7 +714,25 @@ def _instructions(reader: _Reader) -> InstructionsConfig:
         cascade_addendum_key=reader.str("instructions.cascade_addendum_key").strip(),
         strip_patterns=reader.str_list("instructions.strip_patterns"),
         frontend_capabilities=reader.enum("instructions.frontend_capabilities"),
+        domain_from_tools=_domain_rules(reader),
     )
+
+
+def _domain_rules(reader: _Reader) -> tuple[DomainRule, ...]:
+    """``instructions.domain_from_tools`` in merged order (a profile's inherited rules come first)."""
+    key = "instructions.domain_from_tools"
+    rules: list[DomainRule] = []
+    for name, raw in reader.mapping(key).items():
+        if not isinstance(name, str) or not name.strip():
+            raise VoiceConfigError(f"{key}: domain names must be nonempty strings, got {name!r}")
+        where = f"{key}.{name}"
+        if not isinstance(raw, dict) or set(raw) != {"tools_any"}:
+            raise VoiceConfigError(f"{where}: must be a mapping with exactly one key, tools_any")
+        tools = raw["tools_any"]
+        if not isinstance(tools, list) or not tools or not all(isinstance(t, str) and t.strip() for t in tools):
+            raise VoiceConfigError(f"{where}.tools_any: must be a nonempty list of tool names")
+        rules.append(DomainRule(name=name.strip(), tools_any=tuple(t.strip() for t in tools)))
+    return tuple(rules)
 
 
 def _regex(key: str, pattern: str) -> str:
@@ -879,6 +913,9 @@ def prompt_context(config: VoiceConfig) -> dict[str, Any]:
     }
 
 
+#: The catalog key of the per-domain backend notes (``domain.name``).
+DOMAIN_NOTES_KEY = "backend_domain_notes"
+
 #: A representative ``in_progress`` for the load-time template check.
 SAMPLE_IN_PROGRESS: dict[str, Any] = {
     "query": "Check the status of the user's request.",
@@ -904,6 +941,24 @@ def _check_prompt_templates(config: VoiceConfig) -> None:
             render(catalog.get(key), agent, context, catalog=catalog, key=key)
         except ConfigError as exc:
             raise VoiceConfigError(f"{exc} (loaded from {where})") from None
+    # Every domain a session can get must have notes, so a misspelled name fails here, not silently.
+    # A catalog with no notes, or an empty notes entry (generic, general_qa), has none by design.
+    names = [agent.domain.name] if agent.domain.name else [rule.name for rule in config.instructions.domain_from_tools]
+    if not catalog.prompts.get(DOMAIN_NOTES_KEY, "").strip():
+        names = []
+    for name in names:
+        named = replace(agent, domain=replace(agent.domain, name=name))
+        try:
+            render(catalog.get(agent.backend.prompt_key), named, base, catalog=catalog, key=agent.backend.prompt_key)
+            notes = render(catalog.get(DOMAIN_NOTES_KEY), named, base, catalog=catalog, key=DOMAIN_NOTES_KEY)
+        except ConfigError as exc:
+            raise VoiceConfigError(f"domain {name!r}: {exc} (loaded from {where})") from None
+        if not notes:
+            raise VoiceConfigError(
+                f"domain {name!r} has no branch in prompt {DOMAIN_NOTES_KEY!r} of {agent.prompts_path}: add one, "
+                f"or remove the domain from domain.name or instructions.domain_from_tools "
+                f"(for a rule, instructions.domain_from_tools.{name}: null; loaded from {where})"
+            )
 
 
 def _check_frontend_verdict(config: VoiceConfig) -> None:

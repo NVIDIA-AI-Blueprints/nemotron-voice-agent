@@ -73,6 +73,11 @@ class ScriptedAgentPort:
         """Scripted agents have no frontend, hence no filler."""
         return self._backend_only
 
+    @property
+    def domain(self) -> tuple[str, str]:
+        """Scripted agents have no service domain."""
+        return "", "none"
+
     def configure(self, *, tools: Sequence[Mapping[str, Any]], instructions: str) -> None:
         """Derive the default script from the offered tools."""
         if self._explicit:

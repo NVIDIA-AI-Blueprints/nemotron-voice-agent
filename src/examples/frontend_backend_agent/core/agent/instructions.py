@@ -15,9 +15,11 @@ The frontend never has its contract replaced: when ``frontend`` is in
 ``apply_to`` the policy is appended to its prompt. Independently, the frontend's
 ``{capabilities}`` come from the session's tools by default, so a policy-less
 frontend still knows what is in scope and delegates instead of refusing
-(plan section 11). The cascade addendum is appended to every prompt that
-received instructions. Only frozen dataclasses are replaced; the shared base
-config is never mutated.
+(plan section 11). The service domain (``domain.name``, which selects the
+backend's domain notes) is the configured one, else the first
+``instructions.domain_from_tools`` rule with one of the session's tools. The
+cascade addendum is appended to every prompt that received instructions. Only
+frozen dataclasses are replaced; the shared base config is never mutated.
 """
 
 from __future__ import annotations
@@ -37,10 +39,22 @@ POLICY_HEADING = "Policy you must follow:"
 
 @dataclass(frozen=True, slots=True)
 class ResolvedInstructions:
-    """Which policy text a session uses, and where it came from."""
+    """Which policy text and service domain a session uses, and where they came from."""
 
     text: str
     source: str  # "session" | "fallback_file" | "config"
+    domain_source: str = "none"  # "configured" | "detected" | "none"
+
+
+def resolve_domain(base: Config, cfg: InstructionsConfig, tools: Sequence[ToolSpec]) -> tuple[str, str]:
+    """The session's ``domain.name`` and its source: configured, else the first matching rule, else none."""
+    if base.domain.name:
+        return base.domain.name, "configured"
+    names = {spec.name for spec in tools}
+    for rule in cfg.domain_from_tools:
+        if names.intersection(rule.tools_any):
+            return rule.name, "detected"
+    return "", "none"
 
 
 def resolve_instructions(session_text: str, cfg: InstructionsConfig, base: Config) -> ResolvedInstructions:
@@ -96,10 +110,11 @@ def session_agent_config(
         capabilities = base.domain.capabilities
     else:
         capabilities = ()
+    domain, domain_source = resolve_domain(base, cfg, tools)
 
     config = replace(
         base,
-        domain=replace(base.domain, policy=policy, capabilities=tuple(capabilities)),
+        domain=replace(base.domain, name=domain, policy=policy, capabilities=tuple(capabilities)),
         prompts=replace(base.prompts, inline=inline),
     )
-    return config, resolved
+    return config, replace(resolved, domain_source=domain_source)

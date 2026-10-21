@@ -155,8 +155,13 @@ class BackendConfig:
 
 @dataclass(frozen=True, slots=True)
 class DomainConfig:
-    """Everything domain-specific, injected into prompts at render time."""
+    """Everything domain-specific, injected into prompts at render time.
 
+    ``name`` is the service domain (for example ``telecom``), which selects the catalog's
+    ``backend_domain_notes`` branch; it is not :attr:`Config.name`, the agent name.
+    """
+
+    name: str = ""
     policy: str = ""
     capabilities: tuple[str, ...] = ()
     unsupported_reply: str = "I can only help with the tasks I am set up for."
@@ -402,6 +407,7 @@ def build_config(raw: dict[str, Any], *, source_dir: Path | None = None) -> Conf
         frontend=frontend,
         backend=backend,
         domain=DomainConfig(
+            name=str(domain_raw.get("name") or "").strip(),
             policy=str(domain_raw.get("policy") or ""),
             capabilities=tuple(str(item) for item in (domain_raw.get("capabilities") or [])),
             unsupported_reply=str(

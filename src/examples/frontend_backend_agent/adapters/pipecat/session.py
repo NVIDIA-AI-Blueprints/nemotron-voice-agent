@@ -312,6 +312,7 @@ class PipecatSession:
             self._warned.add("manual")
             logger.warning(f"[{self.session_id}] manual turn detection requested; Pipecat's VAD still ends audio turns")
         self._configured = True
+        domain, domain_source = self.agent.domain
         self.log.write(
             "session_updated",
             input_format=settings.input_format.to_wire(),
@@ -319,6 +320,8 @@ class PipecatSession:
             turn_detection=settings.turn_detection.effective() | {"mode": settings.turn_detection.mode},
             tools=[tool.get("name") for tool in settings.tools],
             instructions_chars=len(settings.instructions),
+            domain=domain,
+            domain_source=domain_source,
         )
         self.emit_urgent(ev.session_updated(self._public_session(active)))
         if first and self.config.protocol.greeting_enabled:

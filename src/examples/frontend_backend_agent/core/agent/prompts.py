@@ -5,7 +5,8 @@
 
 A prompt is rendered in two passes. First it is a Jinja 2 template: ``{% if %}``
 blocks and ``{{ variables }}`` from a caller's context, and ``{% include "<key>" %}``
-of another catalog entry. A prompt without Jinja syntax renders unchanged. Then
+of another catalog entry; ``domain.name`` is always defined. A prompt without Jinja
+syntax renders unchanged. Then
 the domain placeholders (``{persona}`` ...) are substituted by literal
 replacement rather than ``str.format``: the prompts contain JSON examples full
 of single braces, and ``format`` would choke on them.
@@ -100,9 +101,12 @@ def compile_template(template: str, catalog: PromptCatalog | None = None, *, key
 def render_template(
     template: jinja2.Template, config: Config, context: Mapping[str, Any] | None = None, *, key: str = ""
 ) -> str:
-    """Render a compiled prompt template with ``context``, then substitute the domain placeholders."""
+    """Render a compiled prompt template with ``context``, then substitute the domain placeholders.
+
+    ``domain`` (``{"name": config.domain.name}``) is always defined, overriding any caller's value.
+    """
     try:
-        rendered = template.render(**dict(context or {}))
+        rendered = template.render(**{**dict(context or {}), "domain": {"name": config.domain.name}})
     except jinja2.TemplateError as exc:
         raise ConfigError(f"prompt {key or '<inline>'!r} failed to render: {exc}") from None
     return substitute(rendered, config)

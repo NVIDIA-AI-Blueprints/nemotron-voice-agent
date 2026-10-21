@@ -108,7 +108,7 @@ A prompt profile is a named set of the agent's frontend and backend prompts. Eac
 | Prompt profile | Purpose | Default for | File in `core/config/prompts/` |
 | --- | --- | --- | --- |
 | `customer_service` | Customer-service prompts for multi-turn conversations with client tools, such as Tau. The catalog is pinned by SHA-256. | Eval mode, through the eval override file | `customer_service.yaml` |
-| `generic` | The browser demo prompts. Free to tune. The file currently has the same content as `customer_service.yaml` and is planned to become more generic. | The `default` deployment, including its Realtime sessions | `generic.yaml` |
+| `generic` | The browser demo prompts. Free to tune. The file has the keys and structure of `customer_service.yaml`, without that profile's later customer-service rules, and is planned to become more generic. | The `default` deployment, including its Realtime sessions | `generic.yaml` |
 | `general_qa` | A general question-answering assistant. The frontend sends every request to the backend word for word through `call_backend`, with the filler "One moment." The backend answers from the LLM with no tools. It puts the answer first, starts a multiple-choice answer with "The answer is X.", follows formatting instructions literally, and refuses harmful requests with "I'm sorry, but I can't help with that." | No mode. Choose it for single-turn question-answering evaluations, such as VoiceBench. | `general_qa.yaml` |
 
 The `FBA_PROMPT_PROFILE` variable names the profile and replaces the default of the mode. Compose passes `${FBA_PROMPT_PROFILE:-generic}`, and the eval override file passes `${FBA_PROMPT_PROFILE:-customer_service}`. Realtime sessions follow the deployment: on a `default` deployment, they also use `generic`. Use the eval override file for `customer_service`.
@@ -129,6 +129,8 @@ To add a profile, complete the following steps:
 3. Set `FBA_PROMPT_PROFILE=<name>` and rerun the `up -d` command. Compose mounts `src/`, so the change needs no image rebuild.
 
 The unit tests load every profile in `core/config/prompts/`, so a broken profile fails `uv run pytest tests/`.
+
+The backend prompt also includes per-domain notes, the catalog key `backend_domain_notes`, selected by the session's service domain (`domain.name`). Only `customer_service.yaml` has notes: with it, a session that declares the `get_customer_by_phone` tool gets the `telecom` notes, through the `instructions.domain_from_tools` rule in `core/config/profiles/eval.yaml`. In the other profiles, the key is empty. A new profile can leave the key empty or omit it. If its `backend_domain_notes` has content, it needs a branch for every configured or detected domain, or the configuration fails to load with an error that names the domain and `backend_domain_notes`. For the keys, refer to [Domain Notes](../../src/examples/frontend_backend_agent/README.md#domain-notes).
 
 The `customer_service` catalog is pinned by SHA-256 (`TAU_CATALOG_SHA256`) in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. Do not edit `customer_service.yaml` to tune prompts. A change to it requires a new pin and an attached Tau A/B evaluation run. Tune `generic.yaml` instead, or add a profile.
 

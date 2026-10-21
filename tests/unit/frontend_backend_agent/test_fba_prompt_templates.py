@@ -39,12 +39,18 @@ JINJA = re.compile(r"\{[{%#]")
 INCLUDED_ONLY = {"frontend_task_in_progress"}
 
 
-def without_in_progress_branches(template: str) -> str:
-    """The template as it renders with ``in_progress=None`` (non-nested ``{% if in_progress %}`` blocks only)."""
+def without_optional_branches(template: str) -> str:
+    """The template as it renders with ``in_progress=None`` and ``domain.name`` ``""``.
+
+    Handles non-nested ``{% if in_progress %}`` and ``{% if domain.name ... %}`` blocks, and the
+    ``backend_domain_notes`` include (empty without a domain).
+    """
     out, mode = [], "emit"
     for line in template.splitlines(keepends=True):
         tag = line.strip()
-        if tag == "{% if in_progress %}":
+        if tag == '{% include "backend_domain_notes" %}':
+            continue
+        if tag == "{% if in_progress %}" or tag.startswith("{% if domain.name "):
             mode = "skip"
         elif tag == "{% else %}" and mode == "skip":
             mode = "else"
@@ -68,8 +74,8 @@ class ByteIdenticalTests(unittest.TestCase):
                     if JINJA.search(template) is None:
                         self.assertEqual(rendered, substitute(template, config))
                     else:
-                        # Only the in-progress branches differ; with in_progress=None it is the old text.
-                        self.assertEqual(rendered, substitute(without_in_progress_branches(template), config))
+                        # Only the in-progress and domain branches differ; without them it is the old text.
+                        self.assertEqual(rendered, substitute(without_optional_branches(template), config))
                         self.assertIsNone(JINJA.search(rendered))
 
 

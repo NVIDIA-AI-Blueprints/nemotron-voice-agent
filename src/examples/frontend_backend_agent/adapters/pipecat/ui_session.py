@@ -335,6 +335,7 @@ class UiSession(PipecatSession):
         """Give the agent the profile's tools and policy (what a Realtime client does with ``session.update``)."""
         self.agent.configure(tools=[], instructions="")
         self._configured = True
+        domain, domain_source = self.agent.domain
         self.log.write(
             "session_updated",
             input_format=None,
@@ -342,6 +343,8 @@ class UiSession(PipecatSession):
             turn_detection=self.view.settings.turn_detection.effective() | {"mode": "ui"},
             tools=[tool.name for tool in self.config.tools.config_tool_specs],
             instructions_chars=0,
+            domain=domain,
+            domain_source=domain_source,
         )
 
     def _register_rtvi_handlers(self) -> None:

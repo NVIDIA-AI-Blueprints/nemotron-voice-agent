@@ -122,6 +122,10 @@ class AgentPort(Protocol):
     def backend_only(self) -> bool:
         """Whether the agent runs without a frontend (no filler source)."""
 
+    @property
+    def domain(self) -> tuple[str, str]:
+        """The session's service domain and its source (``configured`` | ``detected`` | ``none``)."""
+
     def configure(self, *, tools: Sequence[Mapping[str, Any]], instructions: str) -> None:
         """(Re)build for the session's tools and instructions; conversation state is kept."""
 

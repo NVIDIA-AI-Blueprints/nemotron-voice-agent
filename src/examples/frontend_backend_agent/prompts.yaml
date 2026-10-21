@@ -247,6 +247,7 @@ backend:
 
     Policy you must follow:
     {domain_policy}
+    {% include "backend_domain_notes" %}
 
 cascade_voice_addendum:
   description: "Appended to every prompt that received session instructions: the cascade differs from an audio-native model."
@@ -261,6 +262,17 @@ cascade_voice_addendum:
       markdown, bullets, numbered lists, tables, emoji, or URLs. Read identifiers and codes character
       by character, and say amounts and dates the way a person would.
     - Never mention transcripts, speech recognition, text-to-speech, or that you cannot hear the user.
+
+# --- Domain notes (domain.name) -------------------------------------------------
+# Included by the backend template right after the policy. This profile has no
+# domain notes, so the entry is empty and renders nothing for any domain.name.
+# To add notes for a domain, add an {% if domain.name == "<domain>" %} branch
+# (see customer_service.yaml); a non-empty entry needs a branch for every domain
+# a session can get, or the configuration fails to load.
+
+backend_domain_notes:
+  description: "Operator notes for one service domain (domain.name), included in the backend prompt after the policy. Empty in this profile."
+  content: ""
 
 # --- Backend conversation history (backend.conversation_history) ---------------
 # Used only when backend.conversation_history.enabled is true. The context note

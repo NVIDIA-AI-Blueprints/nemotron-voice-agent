@@ -15,7 +15,8 @@ view that keeps what must be identical and sets aside what the behaviour registe
   :data:`TIMING_KEYS`) are pulled out and compared within the B1 windows by :func:`compare`;
   ``audio_ms`` (the input clock when a record was written) is a timestamp and is ignored;
 * JSONL records are compared the same way, without clock fields and without the fields the
-  adapter adds to v1's records (S21: ``adapter``, ``pipecat``, ``onset_source``; §7.3: ``prompts``);
+  adapter adds to v1's records (S21: ``adapter``, ``pipecat``, ``onset_source``; §7.3: ``prompts``;
+  ``session_updated``'s ``domain`` and ``domain_source``);
 * ``conversation.item.input_audio_transcription.delta`` events are compared per item by text,
   not by position: v1's stub recognizer reports its one interim when the utterance is
   finalized (after the commit), while Pipecat's STT reports interims before the VAD stop, as
@@ -45,8 +46,8 @@ WINDOW_MS = 200.0
 TIMESTAMP_KEYS = frozenset({"audio_ms"})
 #: Pipecat's transport pads each sentence's last chunk to a full 20 ms chunk (``out_10ms_chunks: 2``).
 PAD_MS_PER_SENTENCE = 20.0
-#: Record fields the adapter adds to v1's (S21).
-ADDED_RECORD_KEYS = frozenset({"adapter", "pipecat", "onset_source", "prompts"})
+#: Record fields the adapter adds to v1's (S21, and ``session_updated``'s service domain).
+ADDED_RECORD_KEYS = frozenset({"adapter", "pipecat", "onset_source", "prompts", "domain", "domain_source"})
 INTERIM_DELTA = "conversation.item.input_audio_transcription.delta"
 _PLACEHOLDER = re.compile(r"^<([A-Z_]+?)(\d+)>$")
 

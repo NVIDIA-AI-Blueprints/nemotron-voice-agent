@@ -78,6 +78,10 @@ cascade_voice_addendum:
       always win.
     - Never mention transcripts, speech recognition, text-to-speech, or that you cannot hear the user.
 
+backend_domain_notes:
+  description: "Unused in this profile; kept for the shared key set."
+  content: ""
+
 # --- Backend conversation history (backend.conversation_history) ---------------
 # Used only when backend.conversation_history.enabled is true. The context note
 # (backend_history_context_<include>) is always appended to the backend prompt

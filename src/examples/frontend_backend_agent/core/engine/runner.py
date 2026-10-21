@@ -251,6 +251,12 @@ class TextAgentRunner:
         return not self._base.frontend_enabled
 
     @property
+    def domain(self) -> tuple[str, str]:
+        """The session's ``domain.name`` and its source (``configured`` | ``detected`` | ``none``)."""
+        source = self.resolved_instructions.domain_source if self.resolved_instructions else "none"
+        return self.config.domain.name, source
+
+    @property
     def state(self) -> SessionState:
         """The current (immutable) session state."""
         return self._state

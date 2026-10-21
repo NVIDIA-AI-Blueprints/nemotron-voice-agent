@@ -54,6 +54,10 @@ instructions:
   apply_to: [backend]
   placement: policy_slot
   frontend_capabilities: from_tools
+  # One Realtime endpoint serves every tau2 domain, so the telecom domain notes
+  # (prompt key backend_domain_notes) are selected from the session's tools.
+  domain_from_tools:
+    telecom: {tools_any: [get_customer_by_phone]}
 
 barge_in:
   enabled: true

@@ -103,6 +103,8 @@ instructions:
   cascade_addendum_key: cascade_voice_addendum     # key in the prompt catalog, appended to prompts with instructions
   strip_patterns: []                # regexes removed from client instructions (multiline mode)
   frontend_capabilities: from_tools # from_tools | static (domain.capabilities) | none
+  domain_from_tools: {}             # {<domain>: {tools_any: [<tool>, ...]}}: the session's domain.name when
+                                    # agent domain.name is ""; the first domain with a matching tool wins
 
 logging:
   event_log: "${FBA_VOICE_EVENT_LOG:-}"    # [out-path] JSONL of internal + voice + timing events

@@ -78,6 +78,8 @@ backend:
     max_groups: 40              # used whenever the backend keeps history (stateful)
 
 domain:
+  name: ""                      # service domain for backend_domain_notes (e.g. telecom); not agent.name.
+                                # "" = none, or detected by instructions.domain_from_tools (voice_agent.yaml)
   policy: ""
   capabilities: []
   unsupported_reply: "I can only help with the tasks I am set up for."

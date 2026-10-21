@@ -225,7 +225,7 @@ A prompt profile is one prompt catalog, `core/config/prompts/<profile>.yaml`, wi
 | Prompt profile | File | Default for | Purpose and change rule |
 | --- | --- | --- | --- |
 | `customer_service` | `core/config/prompts/customer_service.yaml` (formerly `tau.yaml`) | The `eval` profile, so eval-mode deployments | Customer-service prompts for multi-turn tool use, such as Tau. Pinned by SHA-256 (`TAU_CATALOG_SHA256`) in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. A change requires a new pin and an attached Tau A/B evaluation run. |
-| `generic` | `core/config/prompts/generic.yaml` | The `default` profile, so browser UI sessions | Free to tune. It currently has the same content as `customer_service.yaml` and is planned to become more generic. |
+| `generic` | `core/config/prompts/generic.yaml` | The `default` profile, so browser UI sessions | Free to tune. It has the keys and structure of `customer_service.yaml`, without that profile's later customer-service rules, and is planned to become more generic. |
 | `general_qa` | `core/config/prompts/general_qa.yaml` | None | A general question-answering assistant for single-turn evaluations. The frontend sends every request to the backend word for word through `call_backend`. The backend answers from the LLM with no tools: the answer first, "The answer is X." for multiple choice, formatting instructions followed literally, and a refusal that starts with "I'm sorry, but I can't help with that." for harmful requests. |
 
 Each profile file sets its default: `core/config/voice_agent.yaml`, which the `eval` profile extends, reads `prompts/${FBA_PROMPT_PROFILE:-customer_service}.yaml`, and `core/config/profiles/default.yaml` reads `../prompts/${FBA_PROMPT_PROFILE:-generic}.yaml`. Compose passes `${FBA_PROMPT_PROFILE:-generic}`, and the eval override file passes `${FBA_PROMPT_PROFILE:-customer_service}`. Realtime sessions therefore follow the deployment: they use `generic` on a `default` Compose deployment and `customer_service` with the eval override file. A host-native run without the variable uses `customer_service` for Realtime sessions and `generic` for browser UI sessions.
@@ -241,6 +241,20 @@ prompts <catalog path> (sha256 <hash>)
 ```
 
 A browser UI session logs `profile=default`, and a Realtime session logs `profile=eval`. The `session_start` record of the event log carries `prompts` with the catalog file name (`catalog`) and its SHA-256 hash (`sha256`), the adapter, and the Pipecat settings summary (`pipecat`).
+
+### Domain Notes
+
+The backend prompt of the `customer_service` and `generic` profiles, and of the example's `prompts.yaml`, includes the catalog key `backend_domain_notes` right after the policy. This Jinja template branches on `domain.name`, the session's service domain, and renders nothing for an empty domain. Only `customer_service.yaml` has a branch, `telecom`, which tells the backend to ask early whether the customer is at home or traveling. In `generic.yaml`, the root `prompts.yaml` and `general_qa.yaml`, the key is empty. Every prompt render defines `domain.name`, so any catalog template can branch on it.
+
+The session's `domain.name` comes from the first of the following sources that gives a value:
+
+1. `domain.name` in `core/config/agent.yaml`, which defaults to `""`. Set it in a profile with `agent.overrides.domain.name`. It names the service domain, such as `telecom`, not the agent.
+2. `instructions.domain_from_tools` in `core/config/voice_agent.yaml`, which defaults to `{}`. Each entry has the form `<domain>: {tools_any: [<tool>, ...]}`. The first domain with one of the session's tools wins, in merged order: rules a profile inherits come before its own. Because one Realtime endpoint serves every Tau domain, `core/config/profiles/eval.yaml` sets `telecom: {tools_any: [get_customer_by_phone]}`, the same rule as FDH. The `default` profile inherits this rule, and the browser UI tools do not match it. To remove an inherited rule, set it to `null`, for example `instructions: {domain_from_tools: {telecom: null}}`.
+3. Otherwise, the domain stays empty.
+
+The configuration fails to load with a `VoiceConfigError` when the configured domain, or a domain in `domain_from_tools`, has no branch in the selected catalog's `backend_domain_notes`. A catalog whose `backend_domain_notes` is empty or missing, such as `generic.yaml` or a custom catalog, has no domain notes and skips this check. To add a domain, add its branch to `backend_domain_notes` and set `domain.name` or a `domain_from_tools` rule. The `session_updated` record of the event log carries the session's `domain` and its `domain_source`.
+
+The notes follow the backend template, so the `instructions.placement` decides where they appear. With `policy_slot`, the default, they follow the client's policy. With `append`, the client's text is appended after the template, so the notes come before it. With `replace_prompt`, the client's text replaces the template and no notes are rendered, although `session_updated` still records the domain.
 
 ### Pipecat Voice Settings
 
@@ -284,7 +298,7 @@ Every OpenAI Realtime session resolves to the following effective values. `core/
 | Speech while tools are out | Goes to the outstanding tool wait. Refer to [Tool Continuation Resume](#tool-continuation-resume). |
 | Write gate | Off. Refer to [Write Gate](#write-gate). |
 | Tools | Client-owned. The client declares tools in `session.update` and returns each function call output. A call with no output after 120 seconds receives a synthesized error result. |
-| Instructions | Client `session.instructions` fill the backend prompt's domain-policy slot. |
+| Instructions | Client `session.instructions` fill the backend prompt's domain-policy slot. With the `customer_service` catalog, a session that declares `get_customer_by_phone` gets the `telecom` domain notes. Refer to [Domain Notes](#domain-notes). |
 | Greeting | Off. The session seeds its history with the client greeting `Hi! How can I help you today?`. |
 | Audio | PCM16 at 24,000 Hz by default. Output audio deltas follow Pipecat's 20 ms transport chunks, and Pipecat's WebSocket output transport sends them at playback pace. |
 | Voice | The catalog voice. A client-requested voice is ignored, and the application log shows a warning. |
@@ -438,6 +452,7 @@ OpenAI Realtime sessions do not use these tools. A Realtime client declares its 
 Set `FBA_VOICE_EVENT_LOG` to record one JSONL record per internal, voice, and timing event of a Realtime session. Each record contains `timestamp`, `kind`, and `session_id`, plus event fields. The following list shows some of the record kinds:
 
 - `session_start`: the session's model, backend history settings, normalization summary, adapter, Pipecat settings summary, and prompt catalog with its SHA-256 hash.
+- `session_updated`: the applied audio formats, turn detection, tool names, instructions length, service domain (`domain`), and its source (`domain_source`: `configured`, `detected`, or `none`).
 - `barge_in_verdict`: the frontend verdict for speech during backend work.
 - `backend_context`: the history settings and history size of each delegated backend request.
 - `transcript_normalized`: an ASR transcript after identifier normalization.

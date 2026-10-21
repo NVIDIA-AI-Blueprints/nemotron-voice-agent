@@ -18,7 +18,11 @@ The scenario fixtures are compared at decision level by ``test_fba_pipecat_wire_
 With ``FBA_GOLDEN_CAPTURE=1`` the test writes these fixtures instead of comparing (each capture runs
 twice and fails if the two normalized runs differ). The fixtures are v1's: capture only from the
 ``fbv-v1-baseline`` tag, never to absorb a change. Both modes run with a pinned environment, so no shell
-variable or credential reaches them.
+variable or credential reaches them. One deliberate exception (2026-10-21): the customer-service prompt
+rules and domain notes changed the ``customer_service`` prompts and added ``domain.name``,
+``instructions.domain_from_tools`` and ``domain_source``. ``configure_and_prompts.json`` was re-captured
+with them; in ``merged_profile_configs.json`` only the two new keys were added by hand, so v1's host-only
+keys stay (a capture from this tree would drop them).
 """
 
 from __future__ import annotations

@@ -40,6 +40,8 @@ IN_SCOPE_REQUEST = {
     "telecom": "My mobile data stopped working this morning.",
 }
 SNAPSHOTS = FIXTURES / "prompt_snapshots"
+#: A ``{% if domain.name == "..." %}`` block of ``backend_domain_notes`` (non-nested).
+DOMAIN_BRANCH = re.compile(r"\{% if domain\.name [^%]*%\}.*?\{% endif %\}", re.DOTALL)
 PLACEHOLDERS = re.compile(r"\{(persona|domain_policy|capabilities|unsupported_reply|agent_name)\}")
 
 
@@ -188,9 +190,14 @@ class VoiceCatalogTests(unittest.TestCase):
             "lookup_not_found_hint_words",
         }
         barge_in_keys = {"frontend_task_in_progress"}
+        domain_keys = {"backend_domain_notes"}
         self.assertEqual(
             set(catalog),
-            {"frontend", "backend", "cascade_voice_addendum", *history_keys, *normalization_keys, *barge_in_keys},
+            {"frontend", "backend", "cascade_voice_addendum"}
+            | history_keys
+            | normalization_keys
+            | barge_in_keys
+            | domain_keys,
         )
         frontend, backend = catalog["frontend"]["content"], catalog["backend"]["content"]
         for placeholder in ("{persona}", "{capabilities}", "{unsupported_reply}", "{agent_name}"):
@@ -200,7 +207,10 @@ class VoiceCatalogTests(unittest.TestCase):
         self.assertEqual(frontend.count('User: "'), 6)
         for name in ("airline", "flight", "retail", "telecom", "banking"):
             for key, item in catalog.items():
-                self.assertIsNone(re.search(rf"\b{name}", item["content"].lower()), f"{name} in {key}")
+                # A domain.name branch renders only for that domain, so it is reviewed like a policy;
+                # everything outside the branches must stay domain neutral.
+                content = DOMAIN_BRANCH.sub("", item["content"])
+                self.assertIsNone(re.search(rf"\b{name}", content.lower()), f"{name} in {key}")
 
     def test_text_catalog_is_not_referenced_by_the_voice_default(self) -> None:
         self.assertEqual(base_config().agent.prompts_path, Path(CONFIG_DIR / "prompts" / "customer_service.yaml"))
