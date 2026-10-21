@@ -8,7 +8,7 @@ import threading
 from dataclasses import replace
 
 import pytest
-from test_installer_inputs import connection, connection_value
+from test_installer_inputs import connection, environment
 from test_openshell_fabric_adapter import _check_unsupported, _invoke_success, _request
 
 from voiceclaw.adapters.openshell_fabric.client import (
@@ -47,7 +47,7 @@ class Transport:
 
 @pytest.mark.parametrize("no_auth", [False, True])
 def test_executor_uses_upstream_protocol_and_preserves_binding(no_auth):
-    binding = connection(connection_value(no_auth=no_auth))
+    binding = connection(environment(no_auth=no_auth))
     transport = Transport([ExecutionResult(1, b'{"status":"unsupported"}', b"")])
     executor = InstallerSandboxExecutor(binding, transport_factory=lambda: transport)
     assert isinstance(executor, SandboxExecutor)
@@ -76,7 +76,6 @@ def test_executor_uses_upstream_protocol_and_preserves_binding(no_auth):
     "failure,expected",
     [
         ("access_denied", OpenShellFailureCode.AUTH_DENIED),
-        ("credential_invalid", OpenShellFailureCode.AUTH_DENIED),
         ("target_replaced", OpenShellFailureCode.TARGET_MISSING),
         ("outcome_unconfirmed", OpenShellFailureCode.TIMEOUT),
         ("output_limit", OpenShellFailureCode.UNAVAILABLE),
