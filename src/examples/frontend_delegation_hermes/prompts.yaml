@@ -3,16 +3,17 @@
 #
 # The registry's prompt catalog for the Frontend Delegation Hermes example (the browser UI's
 # prompt panel and the Realtime model's prompt selector). The agent does not read it: its
-# prompts are its own catalogs, config/prompts.yaml (frontend), config/prompts.voice.yaml (voice
-# notes) and config/prompts.backend.yaml (Hermes), selected by the delegation profile and the
-# gateway config. Edits in the browser UI are not applied.
+# prompts are its own catalogs in the selected prompt profile, config/prompts/<profile>/frontend.yaml
+# (frontend), voice.yaml (voice notes) and backend.yaml (Hermes); FDH_PROMPT_PROFILE selects the
+# profile. Edits in the browser UI are not applied.
 
 frontend:
-  description: "Frontend Delegation Hermes: the frontend's prompt is config/prompts.yaml (frontend_system)."
+  description: "Frontend Delegation Hermes: the frontend's prompt is config/prompts/<profile>/frontend.yaml (frontend_system)."
   content: |
     You are the voice frontend of a delegation agent. You answer simple turns yourself and delegate
     every task to the Hermes backend agent, which does the work and replies through you.
 
-    This example's prompts are not edited here: the frontend prompt is config/prompts.yaml
-    (frontend_system) and the backend prompt is config/prompts.backend.yaml. Edits in this panel
+    This example's prompts are not edited here: the frontend prompt is
+    config/prompts/<profile>/frontend.yaml (frontend_system) and the backend prompt is
+    config/prompts/<profile>/backend.yaml. Edits in this panel
     are not applied.

@@ -13,6 +13,8 @@ services:
       # resources from an evaluation run. Realtime sessions use the `eval` agent settings in every
       # profile.
       FBA_PROFILE: eval
+      # Evaluation runs default to the customer_service prompt profile; FBA_PROMPT_PROFILE overrides it.
+      FBA_PROMPT_PROFILE: ${FBA_PROMPT_PROFILE:-customer_service}
       # Plain HTTP and ws://, so the evaluation client connects without TLS.
       PIPELINE_TLS: "false"
       # Per-turn event log and filler timing log, written to the mounted directory.

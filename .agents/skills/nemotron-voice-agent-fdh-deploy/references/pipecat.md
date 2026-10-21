@@ -42,7 +42,7 @@ The recipe pins `EXAMPLE_SELECTION=frontend-delegation-hermes-agent`. The UI con
 
 - **LLM** selects the frontend model and base URL. The backend (Hermes) model stays the gateway's.
 - **ASR**, **TTS**, and the voice select the speech endpoints from this example's catalogs. A voice change applies from the next sentence on.
-- **Prompt** shows the informational `frontend` prompt of the example's `prompts.yaml`. Edits are not applied. The real frontend prompt is `config/prompts.yaml` (`frontend_system`).
+- **Prompt** shows the informational `frontend` prompt of the example's `prompts.yaml`. Edits are not applied. The real frontend prompt is `config/prompts/<profile>/frontend.yaml` (`frontend_system`); a `default` deployment uses the `generic` profile unless `FDH_PROMPT_PROFILE` names another.
 - **Tools** lists `get_order` and `cancel_order` (`tools.yaml`).
 
 The demo tools know order `5512` (shipped) and `5513` (processing). `cancel_order` works on `5513`, and any other number is "not found." The following table lists what to say and what to expect:

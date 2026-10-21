@@ -29,6 +29,9 @@ hermes:
   # P0.3: the clean controls and the arms record each model request and response for the G2 decision
   # replay (logging only). FDH_BACKEND_TRACE=false turns it off.
   backend_trace: ${FDH_BACKEND_TRACE:-true}
+  # Evaluation runs default to the customer_service prompt profile (FDH_PROMPT_PROFILE overrides it).
+  prompts:
+    path: "prompts/${FDH_PROMPT_PROFILE:-customer_service}/backend.yaml"
 
 domains:
   telecom: {tools_any: [get_customer_by_phone]}

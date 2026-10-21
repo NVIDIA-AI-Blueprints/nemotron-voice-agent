@@ -22,7 +22,9 @@ agent:
   config: "agent.yaml"   # [in-path]
   overrides:                        # deep-merged into agent.yaml before validation
     agent: {mode: frontend_backend}           # frontend_backend (default) | backend_only
-    prompts: {path: "${FBA_VOICE_PROMPTS:-prompts/tau.yaml}"}   # [in-path] -> this directory
+    # The prompt profile prompts/<profile>.yaml (FBA_PROMPT_PROFILE); evaluation runs default to
+    # customer_service. Never set it empty.
+    prompts: {path: "prompts/${FBA_PROMPT_PROFILE:-customer_service}.yaml"}   # [in-path] -> this directory
     backend:
       tools:
         on_incomplete_results: synthesize_error_result

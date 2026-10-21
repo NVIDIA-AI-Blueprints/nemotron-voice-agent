@@ -63,7 +63,7 @@ DEFAULTS: dict[str, Any] = {
         "on_contract_error": "delegate",
         "max_repair_attempts": 1,
         "speak_when_delegating": True,
-        # VoiceBench: delegated fillers and proactive status lines are logged, never spoken (off by default).
+        # Single-turn evaluations: delegated fillers and proactive status lines are logged, not spoken (default off).
         "silent_frontend": False,
         "guards": {
             "backend_question_needs_delegate": True,
@@ -94,7 +94,7 @@ DEFAULTS: dict[str, Any] = {
             # The backchannel list is always delegation.guards.backchannel_words.
             "lexicon": {"en": {key: value for key, value in ENGLISH.items() if key != "backchannel"}},
         },
-        "prompts": {"path": "prompts.yaml"},
+        "prompts": {"path": "prompts/generic/frontend.yaml"},
         # tau3-failure-fixes-plan.md: every behaviour below is off by default (the baseline).
         "spelling_hold": {"enabled": False, "hold_ms": 1500, "complete_patterns": []},
         "replay_unheard_answer": {
@@ -123,7 +123,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "tools": {"executor": "wire", "result_timeout_s": 120, "batch_window_ms": 30},
     "instructions": {"apply_to": ["backend"]},
-    # Frontend prompt variants (``{% if features.<name> %}`` in prompts.yaml); all off = the baseline prompt.
+    # Frontend prompt variants ({% if features.<name> %} in prompts/<profile>/frontend.yaml); all off = the baseline.
     "prompt_features": dict(FRONTEND_FEATURES),
 }
 

@@ -28,7 +28,8 @@ from examples.frontend_backend_agent.core.agent.prompts import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CATALOGS = [
     REPO_ROOT / "src" / "examples" / "frontend_backend_agent" / "core" / "config" / "prompts" / "generic.yaml",
-    REPO_ROOT / "src" / "examples" / "frontend_backend_agent" / "core" / "config" / "prompts" / "tau.yaml",
+    REPO_ROOT / "src" / "examples" / "frontend_backend_agent" / "core" / "config" / "prompts" / "customer_service.yaml",
+    REPO_ROOT / "src" / "examples" / "frontend_backend_agent" / "core" / "config" / "prompts" / "general_qa.yaml",
 ]
 #: A tau2-bench checkout, from ``TAU2_BENCH_ROOT``; the policy test skips when it is unset.
 _TAU2_ROOT = os.environ.get("TAU2_BENCH_ROOT", "").strip()

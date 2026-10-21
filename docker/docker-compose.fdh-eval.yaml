@@ -19,8 +19,11 @@ services:
       FDH_PROFILE: eval
       # Plain HTTP and ws://, so the evaluation client connects without TLS.
       PIPELINE_TLS: "false"
+      # Evaluation runs default to the customer_service prompt profile; FDH_PROMPT_PROFILE overrides it.
+      FDH_PROMPT_PROFILE: ${FDH_PROMPT_PROFILE:-customer_service}
 
   fdh-hermes:
     environment:
       # The evaluation backend settings (it extends gateway.yaml; backend traces on).
       FDH_GATEWAY_CONFIG: gateway.eval.yaml
+      FDH_PROMPT_PROFILE: ${FDH_PROMPT_PROFILE:-customer_service}   # the same profile as the voice service

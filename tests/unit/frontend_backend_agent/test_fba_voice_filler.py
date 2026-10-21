@@ -193,7 +193,7 @@ def _eval_profile(env: dict[str, str]):
 
 
 class FillerModeEnvTests(PipecatTestCase):
-    """``FBA_FILLER_MODE`` (VoiceBench overlay): the eval profile speaks the filler unless it says ``log_only``."""
+    """``FBA_FILLER_MODE`` (silent-frontend overlay): the eval profile speaks the filler unless it says ``log_only``."""
 
     def test_eval_profile_speaks_unless_the_environment_says_log_only(self) -> None:
         self.assertEqual(_eval_profile({}).filler.mode, "speak")

@@ -105,7 +105,7 @@ INVENTED_TOOLS = [
 class BackendPromptTests(unittest.TestCase):
     def _render(self, **features: bool) -> str:
         on = {"spelling_v2": True, "spoken_output": True, "write_consent": True, "phone_format": True, **features}
-        return BackendTemplates(CONFIG / "prompts.backend.yaml", prompt_features=on).render(
+        return BackendTemplates(CONFIG / "prompts" / "customer_service" / "backend.yaml", prompt_features=on).render(
             "backend_system", instructions="POLICY"
         )
 
@@ -161,7 +161,7 @@ class CatalogVariantTests(unittest.TestCase):
     def test_a2_hint_variant_is_the_i3_note_plus_one_sentence(self) -> None:
         import yaml
 
-        catalog = yaml.safe_load((PACKAGE / "config/prompts.voice.yaml").read_text())
+        catalog = yaml.safe_load((PACKAGE / "config/prompts/customer_service/voice.yaml").read_text())
         base = " ".join(catalog["lookup_not_found_hint"]["content"].split())
         variant = " ".join(catalog["lookup_not_found_hint_format"]["content"].split())
         sentence = (

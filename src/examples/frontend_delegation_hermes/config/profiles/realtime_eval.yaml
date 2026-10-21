@@ -23,6 +23,8 @@ delegation:
     ping_as_status: true          # R3: a ping while WORKING is a status request, never a steer
   replay_unheard_answer: {enabled: true, ttl_s: 60, triggers: [backchannel, ping, repeat], whole_if_heard_below: 0.2}
   filler_dedupe: {enabled: true, recent: 3}
+  # Evaluation runs default to the customer_service prompt profile (FDH_PROMPT_PROFILE overrides it).
+  prompts: {path: "../prompts/${FDH_PROMPT_PROFILE:-customer_service}/frontend.yaml"}
 backend:
   link: websocket
   simulated_delay: {seconds: 0, where: per_delegation}

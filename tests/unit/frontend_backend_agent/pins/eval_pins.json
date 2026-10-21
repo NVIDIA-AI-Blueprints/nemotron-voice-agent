@@ -116,7 +116,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -253,7 +253,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -462,7 +462,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -599,7 +599,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -818,7 +818,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -955,7 +955,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -1164,7 +1164,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -1301,7 +1301,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -1511,7 +1511,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -1648,7 +1648,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -1855,7 +1855,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -1992,7 +1992,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -2209,7 +2209,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -2346,7 +2346,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -2553,7 +2553,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -2690,7 +2690,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -2900,7 +2900,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -3037,7 +3037,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -3244,7 +3244,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -3381,7 +3381,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -3598,7 +3598,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -3735,7 +3735,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"
@@ -3942,7 +3942,7 @@
        "persona": "You are a helpful assistant.",
        "prompts": {
         "inline": {},
-        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml"
+        "path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml"
        },
        "source_dir": "src/examples/frontend_backend_agent/core/config"
       },
@@ -4079,7 +4079,7 @@
       },
       "resolved_in_paths": {
        "agent.config": "<root>/src/examples/frontend_backend_agent/core/config/agent.yaml",
-       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/tau.yaml",
+       "agent.overrides.prompts.path": "<root>/src/examples/frontend_backend_agent/core/config/prompts/customer_service.yaml",
        "asr.catalog.example_dir": "<root>/src/examples/frontend_backend_agent",
        "instructions.fallback_file": "",
        "tts.catalog.example_dir": "<root>/src/examples/frontend_backend_agent"

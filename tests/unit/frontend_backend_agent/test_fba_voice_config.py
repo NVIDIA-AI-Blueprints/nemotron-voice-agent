@@ -73,7 +73,7 @@ class ShippedConfigTests(unittest.TestCase):
         self.assertFalse(config.protocol.greeting_enabled)
         self.assertEqual(config.asr.endpoint.server, "nemo-speech:50051")
         self.assertFalse(config.asr.endpoint.use_ssl)
-        self.assertEqual(config.agent.prompts_path, CONFIG_DIR / "prompts" / "tau.yaml")
+        self.assertEqual(config.agent.prompts_path, CONFIG_DIR / "prompts" / "customer_service.yaml")
         self.assertEqual(config.agent.logging.event_sink, "none")
 
     def test_profiles_change_only_their_keys(self) -> None:

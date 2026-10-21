@@ -35,8 +35,9 @@ delegation:
   on_contract_error: delegate        # delegate (delegate=true, no filler) | direct_empty (delegate=false, no filler)
   max_repair_attempts: 1
   speak_when_delegating: true        # D4: the filler of a delegated turn is spoken (false: silent-ack ablation)
-  # VoiceBench (docker/docker-compose.fdh-voicebench.yaml): the filler of a delegated turn and the M1
-  # proactive status line are logged, never spoken; direct answers are. Never set FDH_SILENT_FRONTEND empty.
+  # Single-turn evaluations (docker/docker-compose.fdh-silent-frontend.yaml): the filler of a delegated
+  # turn and the M1 proactive status line are logged, never spoken; direct answers are; a silent turn that
+  # holds a request is delegated (repair silent_delegated). Never set FDH_SILENT_FRONTEND empty.
   silent_frontend: "${FDH_SILENT_FRONTEND:-false}"
   guards:
     backend_question_needs_delegate: true   # IDLE + backend's last heard message asked a question -> delegate
@@ -50,7 +51,8 @@ delegation:
     liveness_reply: false          # R1: a silent reply to "are you still there?" / "could you repeat that?" is delegated
     question_never_silent: false   # R2: a silent reply to a question is delegated
     ping_as_status: false          # R3: a ping while WORKING is a status request (never steers the running call)
-  prompts: {path: "${FDH_PROMPTS:-prompts.yaml}"}
+  # The prompt profile (prompts/<profile>/): FDH_PROMPT_PROFILE, default generic. Never set it empty.
+  prompts: {path: "prompts/${FDH_PROMPT_PROFILE:-generic}/frontend.yaml"}
   # tau3-failure-fixes-plan.md: every delegation-side fix is on here except M2 (experimental).
   # The voice-side fixes (M3.1 spelled-run joining, M3.3 "invalid ID" wording, I3/I4 recovery notes)
   # are set by each voice profile; profiles/realtime_eval.yaml sets its own.
@@ -83,7 +85,7 @@ session:
 output:
   hold_max_ms: 4000                  # marks queued audio stale; audio is never released over the user
   on_stale: {backend_answer: keep, status: drop, filler: drop, apology: keep}
-  # M1: one short line (prompts.yaml status_proactive_lines) after after_s of silence while WORKING,
+  # M1: one short line (frontend.yaml status_proactive_lines) after after_s of silence while WORKING,
   # at most max_per_run per backend run. Calibrate after_s per host (tau3-failure-fixes-plan.md 2).
   proactive_status: {enabled: true, after_s: "${FDH_PROACTIVE_AFTER_S:-15}", max_per_run: 1}
   clean_answers: true                # G2: strip markdown, one sentence per list item, before TTS
@@ -96,7 +98,7 @@ tools:
 instructions:
   apply_to: [backend]                # session.update.instructions (the tau3 policy) -> backend | frontend
 
-# Frontend prompt variants ({% if features.<name> %} in prompts.yaml); all off = the baseline prompt.
+# Frontend prompt variants ({% if features.<name> %} in prompts/<profile>/frontend.yaml); all off = the baseline prompt.
 # replay_intent stays off: M2 is experimental.
 prompt_features:
   replay_intent: false               # M2: tell the frontend its last answer was not heard; "status" in IDLE

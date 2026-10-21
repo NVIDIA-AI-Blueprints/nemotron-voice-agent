@@ -21,7 +21,7 @@ ss -ltn 'sport = :8080'                                   # expect no listener
 
 ## 2. Environment File
 
-`.env` must define `NVIDIA_API_KEY`, an Inference Hub key, and `HF_TOKEN` for the speech model download. Realtime clients need `REALTIME_API_KEY`. The frontend model (`nvidia/nvidia/nemotron-3.5-lightning`) and the backend model (`nvidia/nvidia/nemotron-3-ultra`) both run on the Inference Hub. `NVIDIA_API_KEY` is the only `.env` key that reaches `fdh-hermes`, and `fdh-hermes` refuses to start without it. In the OpenShell runtime the key goes to the OpenShell provider, never into the sandbox.
+`.env` must define `NVIDIA_API_KEY`, an Inference Hub key, and `HF_TOKEN` for the speech model download. Realtime clients need `REALTIME_API_KEY`. The frontend model (`nvidia/nvidia/nemotron-3.5-lightning`) and the backend model (`nvidia/nvidia/nemotron-3-ultra`) both run on the Inference Hub. Apart from the optional `FDH_PROMPT_PROFILE`, `NVIDIA_API_KEY` is the only `.env` key that reaches `fdh-hermes`, and `fdh-hermes` refuses to start without it. In the OpenShell runtime the key goes to the OpenShell provider, never into the sandbox.
 
 Keep any existing `.env`. Check presence only, never values:
 
@@ -30,7 +30,7 @@ test -f .env || cp .env.example .env      # then set NVIDIA_API_KEY, HF_TOKEN, R
 for k in NVIDIA_API_KEY HF_TOKEN REALTIME_API_KEY; do printf '%s ' "$k"; grep -c "^$k=.\+" .env; done   # expect 1 each
 ```
 
-Do not write `FDH_*`, `UVICORN_WS_PING_INTERVAL`, or `FDH_PROFILE` to `.env`. Compose sets them as literals on the voice service, and the eval overlay changes them.
+Do not write `FDH_*`, `UVICORN_WS_PING_INTERVAL`, or `FDH_PROFILE` to `.env`. Compose sets them as literals on the voice service, and the eval overlay changes them. The one exception is `FDH_PROMPT_PROFILE`, the prompt profile, which `.env` or the shell can set; prefer the shell for a single run, and never set it empty (refer to `config-knobs.md`, section Prompt Profiles).
 
 ## 3. Hermes Checkout
 
@@ -54,13 +54,13 @@ The two commit hashes must match. Hermes runs only in the Hermes image (the Open
 
 The recipe builds three images:
 
-- `nemotron-voice-agent:latest`, the shared app image (`docker/Dockerfile`, `uv sync --frozen --extra fdh`). The voice service mounts `src/` read-only, so voice-side code and prompt changes need only a restart. Rebuild it after a dependency change.
+- `nemotron-voice-agent:latest`, the shared app image (`docker/Dockerfile`, `uv sync --frozen --extra fdh`). The voice service mounts `src/` read-only, so voice-side code changes need only a restart. A prompt change also reaches the Hermes image (`backend.yaml`), so keep both sides in step with `up -d --build`. Rebuild it after a dependency change.
 - `nemotron-voice-agent-fdh:local`, the Hermes image (`docker/Dockerfile.fdh`, Python 3.14.7). It copies `src/` at build time, writes the hash of `src/` to `/app/SOURCE_SHA256`, and does not mount `src/`. It has a `sandbox` user (UID/GID 1500) and `WORKDIR /sandbox` for OpenShell, but no `USER` line, so the plain runtime still runs as root.
 - `nemotron-voice-agent-fdh-openshell-cli:local`, the OpenShell controller image (`docker/fdh/openshell/Dockerfile.cli`). It builds the OpenShell CLI from source at the commit in `docker/fdh/openshell/VERSION`, because prerelease tags publish no CLI download. The first build compiles Rust and takes several minutes.
 
 Rebuild with `up -d --build` after a change to any of the following:
 
-- anything under `src/` that the gateway or the Hermes workers run (`core/sidecar`, `core/worker`, `config/gateway*.yaml`, `config/prompts.backend.yaml`, and so on);
+- anything under `src/` that the gateway or the Hermes workers run (`core/sidecar`, `core/worker`, `config/gateway*.yaml`, `config/prompts/<profile>/`, and so on);
 - `docker/fdh/requirements.txt`, `docker/fdh/overrides.txt`, `docker/fdh/gateway.sh`, or `docker/Dockerfile.fdh`;
 - the Hermes checkout or `HERMES_AGENT_DIR`.
 

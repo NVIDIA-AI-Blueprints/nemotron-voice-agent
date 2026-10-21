@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""``delegation.silent_frontend`` (VoiceBench): delegated fillers and proactive status are logged, never spoken."""
+"""``delegation.silent_frontend`` (single-turn evaluations): fillers logged, silent requests delegated."""
 
 from __future__ import annotations
 
@@ -16,10 +16,21 @@ from unittest import mock
 from _fdh_voice_fakes import PROFILES, DelegationHarness, tau2_session_update, tau3_config
 
 from examples.frontend_delegation_hermes.core.config import ProactiveStatusSettings, load_delegation_config
-from examples.frontend_delegation_hermes.core.frontend.decider import RuleDecider
+from examples.frontend_delegation_hermes.core.frontend.decider import (
+    SILENT_DELEGATED,
+    DecisionContext,
+    RuleDecider,
+    apply_guards,
+)
+from examples.frontend_delegation_hermes.core.frontend.delegate_tool import Decision
+from examples.frontend_delegation_hermes.core.frontend.turn_class import classify_turn
 
 TASK = {"delegate": True, "filler_text": "Sure, one moment.", "request": "task"}
 DIRECT = {"delegate": False, "filler_text": "Paris is the capital of France.", "request": "task"}
+SILENT = {"delegate": False, "filler_text": "", "request": "task"}
+REQUEST = "Describe the winning play in the final seconds of a championship game as a sports commentator"
+EVAL = load_delegation_config(PROFILES / "realtime_eval.yaml").delegation
+EN = EVAL.liveness.lexicons["en"]
 ANSWER = "Your order 1 shipped on May third."
 
 
@@ -53,6 +64,69 @@ class SilentFrontendConfigTests(unittest.TestCase):
         self.assertTrue(on.delegation.silent_frontend)
         self.assertTrue(on.effective["delegation"]["silent_frontend"])
         self.assertNotEqual(on.config_hash, load_eval_profile(None).config_hash)
+
+
+def guard(decision: Decision, text: str, state: str = "IDLE", *, classify: bool = True, **flags: bool) -> Decision:
+    context = DecisionContext(system_prompt="", messages=[], user_text=text, state=state)
+    return apply_guards(
+        decision,
+        context,
+        backend_question_needs_delegate=True,
+        backchannel_words=tuple(EVAL.backchannel_words),
+        turn_class=classify_turn(text, EN) if classify else None,
+        liveness_reply=True,
+        question_never_silent=True,
+        ping_as_status=True,
+        **flags,
+    )
+
+
+class SilentTurnGuardTests(unittest.TestCase):
+    """prompt-profiles-plan.md section 5.1: with the silent frontend, a silent request is delegated."""
+
+    def test_a_silent_request_is_delegated_with_or_without_a_turn_class(self) -> None:
+        for text in (REQUEST, "I have a hard time falling asleep . Is there any type of music that can help"):
+            for classify in (True, False):
+                with self.subTest(text=text, classify=classify):
+                    out = guard(Decision(False, ""), text, classify=classify, delegate_silent=True)
+                    self.assertEqual(
+                        (out.delegate, out.filler_text, out.request, out.repair), (True, "", "task", SILENT_DELEGATED)
+                    )
+
+    def test_a_silent_request_after_a_contract_repair_is_delegated(self) -> None:
+        out = guard(Decision(False, "", repair="repaired"), REQUEST, delegate_silent=True)
+        self.assertEqual((out.delegate, out.repair), (True, SILENT_DELEGATED))
+
+    def test_backchannels_pauses_and_empty_turns_stay_silent(self) -> None:
+        for text in ("okay", "Okay.", "thanks", "hold on", "Give me a moment.", "", "   "):
+            for classify in (True, False):
+                with self.subTest(text=text, classify=classify):
+                    if not classify and text in ("hold on", "Give me a moment."):
+                        continue  # without a lexicon a pause is not recognised
+                    out = guard(Decision(False, ""), text, classify=classify, delegate_silent=True)
+                    self.assertFalse(out.delegate)
+
+    def test_a_backchannel_the_model_spoke_is_silenced_not_delegated(self) -> None:
+        out = guard(Decision(True, "One moment.", "task"), "okay", delegate_silent=True)
+        self.assertEqual((out.delegate, out.filler_text, out.repair), (False, "", "guard_backchannel"))
+
+    def test_a_ping_goes_through_r1_as_today(self) -> None:
+        out = guard(Decision(False, ""), "Are you still there?", delegate_silent=True)
+        self.assertEqual(out.repair, "liveness_reply")
+
+    def test_nothing_fires_while_the_backend_works(self) -> None:
+        out = guard(Decision(False, ""), REQUEST, "WORKING", delegate_silent=True)
+        self.assertFalse(out.delegate)
+
+    def test_a_decision_that_speaks_or_delegates_is_unchanged(self) -> None:
+        for decision in (Decision(False, "Paris."), Decision(True, "One moment.", "task")):
+            with self.subTest(decision=decision):
+                self.assertEqual(guard(decision, REQUEST, delegate_silent=True), decision)
+
+    def test_switch_off_changes_nothing(self) -> None:
+        for classify in (True, False):
+            with self.subTest(classify=classify):
+                self.assertEqual(guard(Decision(False, ""), REQUEST, classify=classify), Decision(False, ""))
 
 
 class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
@@ -92,6 +166,33 @@ class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness.transcripts(), ["Paris is the capital of France."])
         self.assertEqual(harness.link.of_type("delegate"), [])
         self.assertEqual(harness.logged("filler_silenced"), [])
+        await harness.close()
+
+    async def test_on_a_silent_request_is_delegated_and_the_backend_answer_is_first(self) -> None:
+        harness = DelegationHarness(silent(), decider=RuleDecider([SILENT]), transcripts=[REQUEST])
+        await harness.start(tau2_session_update("mock"))
+        await harness.speak()
+        await harness.wait_sent("delegate")
+        harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
+        await harness.idle(300)
+        self.assertEqual(harness.of_type("response.created"), [])
+        harness.link.deliver(
+            "answer", answer_id="a1", run_id="run_1", epoch=1, kind="hermes", text=ANSWER, turn_ids=[1]
+        )
+        await harness.wait_for("response.done")
+        self.assertEqual(len(harness.of_type("response.done")), 1)
+        self.assertEqual(harness.transcripts(), [ANSWER])
+        guards = harness.logged("delegation_guard")
+        self.assertEqual([event["guard"] for event in guards], [SILENT_DELEGATED])
+        await harness.close()
+
+    async def test_off_a_silent_request_stays_silent(self) -> None:
+        harness = DelegationHarness(decider=RuleDecider([SILENT]), transcripts=[REQUEST])
+        await harness.start(tau2_session_update("mock"))
+        await harness.speak()
+        await harness.idle(300)
+        self.assertEqual(harness.link.of_type("delegate"), [])
+        self.assertEqual(harness.of_type("response.created"), [])
         await harness.close()
 
     async def test_on_no_proactive_status_is_spoken_while_working(self) -> None:

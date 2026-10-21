@@ -15,7 +15,7 @@ tagger, delegation and backend link are the same objects an OpenAI Realtime sess
 * the UI's choices come in the request body with the keys every example reads (``llm_id``,
   ``asr_id``, ``tts_id``, ``tts_voice_id``): the frontend model, ASR and TTS endpoints are resolved
   from this example's own catalogs; the backend (Hermes) model stays the gateway's. The UI's prompt
-  editor is not applied: FDH's frontend prompt is ``config/prompts.yaml`` (``frontend_system``);
+  editor is not applied: FDH's frontend prompt is ``config/prompts/<profile>/frontend.yaml`` (``frontend_system``);
 * runtimes (frontend model client, gateway check) are cached per frontend model and speech
   endpoints, so their number is bounded by the catalogs; the voice applies per session;
 * all UI runtimes share one admission counter (the ``default`` profile's ``server.max_sessions``),
@@ -389,7 +389,7 @@ async def serve_ui(runner_args: RunnerArguments, *, speech: SpeechFactory | None
     if selection.prompt_edited:
         logger.info(
             f"{EXAMPLE_KEY}: the UI's prompt is not applied; "
-            "the frontend prompt is config/prompts.yaml (frontend_system)"
+            "the frontend prompt is config/prompts/<profile>/frontend.yaml (frontend_system)"
         )
     runtime = ui_runtime_for(selection, speech_factory=speech)
     if not await runtime.ensure_ready():

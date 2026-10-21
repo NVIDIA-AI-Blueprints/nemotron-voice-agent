@@ -28,7 +28,7 @@ class GoldenPromptTests(unittest.TestCase):
                 self.assertEqual(text, golden[name])
 
     def test_each_backend_variant_changes_only_its_own_block(self) -> None:
-        path = PACKAGE / "config" / "prompts.backend.yaml"
+        path = PACKAGE / "config" / "prompts" / "customer_service" / "backend.yaml"
         airline = tau2_session_update("airline")["session"]["instructions"]
         base = BackendTemplates(path).render("backend_system", instructions=airline)
         spelling = BackendTemplates(path, prompt_features={"spelling_v2": True}).render(
@@ -52,7 +52,7 @@ class GoldenPromptTests(unittest.TestCase):
         )
 
     def test_frontend_variant_adds_the_unheard_line_only_when_on(self) -> None:
-        path = PACKAGE / "config" / "prompts.yaml"
+        path = PACKAGE / "config" / "prompts" / "customer_service" / "frontend.yaml"
         values = {
             "state": "IDLE",
             "current_request": "",
@@ -69,7 +69,9 @@ class GoldenPromptTests(unittest.TestCase):
 
     def test_unknown_feature_names_fail(self) -> None:
         with self.assertRaises(TemplateError):
-            BackendTemplates(PACKAGE / "config" / "prompts.backend.yaml", prompt_features={"shorter": True})
+            BackendTemplates(
+                PACKAGE / "config" / "prompts" / "customer_service" / "backend.yaml", prompt_features={"shorter": True}
+            )
 
 
 if __name__ == "__main__":

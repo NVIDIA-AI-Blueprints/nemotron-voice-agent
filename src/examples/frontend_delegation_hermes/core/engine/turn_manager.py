@@ -651,6 +651,7 @@ class DelegationTurnManager:
             liveness_reply=liveness.liveness_reply,
             question_never_silent=liveness.question_never_silent,
             ping_as_status=liveness.ping_as_status,
+            delegate_silent=self._config.delegation.silent_frontend,
         )
         if guarded is not decision:
             details: dict[str, Any] = {}
@@ -878,7 +879,7 @@ class DelegationTurnManager:
 
     @property
     def _speaks_delegated_filler(self) -> bool:
-        """D4 ``speak_when_delegating``, unless the VoiceBench ``silent_frontend`` switch is on."""
+        """D4 ``speak_when_delegating``, unless the ``silent_frontend`` switch is on."""
         delegation = self._config.delegation
         return delegation.speak_when_delegating and not delegation.silent_frontend
 

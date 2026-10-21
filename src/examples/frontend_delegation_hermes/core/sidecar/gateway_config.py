@@ -80,13 +80,13 @@ DEFAULTS: dict[str, Any] = {
         "request_overrides": {
             "extra_body": {"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 1024}
         },
-        "prompts": {"path": "prompts.backend.yaml"},
+        "prompts": {"path": "prompts/generic/backend.yaml"},
     },
     # Backend prompt variants (tau3-failure-fixes-plan.md section 1): all off = the baseline prompts.
     "prompt_features": dict(BACKEND_FEATURES),
     # Domain detection (tau3-identity-fixes-plan.md section 3.2): name -> {tools_any: [tool, ...]}; the first
     # domain with one of its tools in the session's tool list wins. It selects the domain note of
-    # prompts.backend.yaml; no domains (or no match) = no note.
+    # prompts/<profile>/backend.yaml; no domains (or no match) = no note.
     "domains": {},
 }
 
@@ -328,7 +328,10 @@ def default_fake_gateway_config(**overrides: Any) -> GatewayConfig:
     """In-process fake workers, no files: for tests and the voice server's ``--stub-backend``."""
     base = {
         "workers": {"mode": "in_process_fake", "agent_kind": "fake", "start_timeout_s": 5.0, "stop_timeout_s": 2.0},
-        "hermes": {"unwind_timeout_s": 1.0, "prompts": {"path": str(CONFIG_DIR / "prompts.backend.yaml")}},
+        "hermes": {
+            "unwind_timeout_s": 1.0,
+            "prompts": {"path": str(CONFIG_DIR / "prompts" / "generic" / "backend.yaml")},
+        },
     }
     return load_gateway_config(None, overrides=deep_merge(base, overrides))
 

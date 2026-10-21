@@ -1,7 +1,7 @@
 ---
 name: nemotron-voice-agent-fdh-deploy
 description: Build, deploy, and evaluate the Frontend Delegation Hermes (FDH) example on the frontend-delegation-hermes-agent/single-gpu recipe, with the browser UI (default profile) or OpenAI Realtime evaluation runs such as τ² (eval overlay). Use when starting, smoke testing, or troubleshooting the FDH voice service or its Hermes backend (fdh-hermes, by default in an NVIDIA OpenShell sandbox, or the plain baseline overlay).
-version: "2.3.0"
+version: "2.4.0"
 license: CC-BY-4.0 AND Apache-2.0
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
@@ -24,11 +24,12 @@ Do not use this skill for the other registered examples (use `nemotron-voice-age
 - For eval mode, pass `$E` in **every** Compose command (`up`, `ps`, `logs`, `exec`, `down`). A command without it recreates the containers with the `default` profile and `gateway.yaml`.
 - Every benchmark run uses the eval overlay. Only the overlay switches the Hermes gateway to `gateway.eval.yaml`. Realtime sessions on a `default` deployment pair the eval frontend with the wrong gateway.
 - The Hermes backend runs in an NVIDIA OpenShell sandbox by default. Use the plain runtime overlay, `docker/docker-compose.fdh-hermes-plain.yaml`, only when the user asks for it (A/B checks, debugging) or the host cannot run OpenShell. Always pass files in this order: `docker-compose.yml`, then the plain overlay, then the eval overlay. For the plain runtime, set `E="-f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml"` (plain `default`) or `E="-f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml -f docker/docker-compose.fdh-eval.yaml"` (plain `eval`), and pass `$E` in every command.
-- If, and only if, the user says the run is a VoiceBench evaluation, ask: "Keep the frontend silent for VoiceBench? The filler is then logged only, and the backend's answer is the first response. Default: no." Wait for the answer. If yes, append `-f docker/docker-compose.fdh-voicebench.yaml` to `$E` after the eval overlay. Do not ask for Tau, the browser UI, or any other run, and never add the overlay for them. VoiceBench runs use `eval`. Refer to `references/tau.md`.
+- If, and only if, the user says the run is a VoiceBench evaluation, ask two questions and wait for both answers: "Keep the frontend silent? The filler is then logged only, and the backend's answer is the first response. Default: no." and "Which prompt profile? Suggested: `general_qa`." If the first answer is yes, append `-f docker/docker-compose.fdh-silent-frontend.yaml` to `$E` after the eval overlay. Prefix every Compose command that recreates containers with the chosen profile, for example `FDH_PROMPT_PROFILE=general_qa docker compose $E --profile $P up -d --build`. VoiceBench runs use `eval`. Refer to `references/tau.md`.
+- Every other run (Tau, the browser UI, and so on) uses the mode's default prompt profile without asking: `generic` for `default`, `customer_service` for `eval`. Do not ask the two questions, never add the silent-frontend overlay, and do not set `FDH_PROMPT_PROFILE`. If `.env` sets `FDH_PROMPT_PROFILE`, show the value and ask the user to confirm or remove it.
 - OpenShell has not yet been validated on a live host (the go/no-go spike and the eval gates are pending). If it fails on a host, report the failure and offer the plain runtime. Do not edit `docker/fdh/openshell/` files to work around it without the user's approval.
-- `docker-compose.yml` sets every FDH variable of the voice service as a literal. `FDH_*` keys in `.env` have no effect. Do not write them to `.env`.
+- `docker-compose.yml` sets every FDH variable of the voice service as a literal. `FDH_*` keys in `.env` have no effect, with one exception: `FDH_PROMPT_PROFILE` (the prompt profile, `config/prompts/<profile>/`), which Compose passes to both the voice service and `fdh-hermes`. Do not write any other `FDH_*` key to `.env`. Never set `FDH_PROMPT_PROFILE` to an empty value. An unknown name fails with an error that names the missing prompt file.
 - The Hermes checkout in `HERMES_AGENT_DIR` must be clean and at the commit in the header of `docker/fdh/requirements.txt`.
-- The voice service mounts `src/` read-only, but `fdh-hermes` runs the source built into its image. Keep `--build` on every `up` after a source change.
+- The voice service mounts `src/` read-only, but `fdh-hermes` runs the source built into its image. Keep `--build` on every `up` after a source or prompt change.
 - Preserve the existing `.env`. Check only that `NVIDIA_API_KEY` and `REALTIME_API_KEY` are present. Never print their values. Never commit `.env`, `logs/`, traces, or Hermes homes.
 
 ## Containers
@@ -97,14 +98,15 @@ docker compose [$E] --profile $P exec fdh-hermes \
 docker compose [$E] --profile $P logs fdh-hermes | grep 'gateway config'  # controller: image, gateway config gateway[.eval].yaml
 W=$(docker ps --filter ancestor=nemotron-voice-agent-fdh:local --format '{{.Names}}' | head -1)   # sandbox workload
 docker logs "$W" 2>&1 | grep 'FDH gateway'                                # config gateway[.eval].yaml, source <hash>
-docker compose [$E] --profile $P exec frontend-delegation-hermes-agent-single-gpu printenv FDH_PROFILE PIPELINE_TLS
+docker compose [$E] --profile $P exec frontend-delegation-hermes-agent-single-gpu printenv FDH_PROFILE PIPELINE_TLS FDH_PROMPT_PROFILE
+docker compose [$E] --profile $P exec fdh-hermes printenv FDH_PROMPT_PROFILE   # the same prompt profile on both sides
 ```
 
 Plain runtime: the health check is `exec fdh-hermes curl -s http://localhost:8790/health`, and `logs fdh-hermes | grep 'FDH gateway'` shows the gateway line.
 
 Compare the source hash with the checkout: `find src -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1`. A different hash means that the image is stale: rerun `up` with `--build`.
 
-After the first session, read `frontend-delegation-hermes-agent ready (adapter=pipecat, profile=<profile>)` and the `config hash` from `docker compose [$E] --profile $P logs frontend-delegation-hermes-agent-single-gpu`. Report the profile, the gateway configuration, the source hash, and the config hash. Then run the smoke test in the profile's reference.
+After the first session, read `frontend-delegation-hermes-agent ready (adapter=pipecat, profile=<profile>)` and the `config hash` from `docker compose [$E] --profile $P logs frontend-delegation-hermes-agent-single-gpu`. Report the profile, the prompt profile, the gateway configuration, the source hash, and the config hash. Then run the smoke test in the profile's reference.
 
 ### 4. Stop
 
@@ -123,7 +125,7 @@ Open only what the chosen profile needs:
 - Preflight, image rebuild triggers, and speech models: `references/prerequisites.md`
 - Browser UI (`default`): `references/pipecat.md`
 - Eval mode, Realtime smoke test, benchmark runs, and logs (including OpenShell logs and traces): `references/tau.md`
-- Configuration knobs and variables: `references/config-knobs.md`
+- Configuration knobs, variables, and prompt profiles: `references/config-knobs.md`
 - Symptoms and fixes: `references/troubleshooting.md`
 
 The user guide is `docs/how-to/deploy-frontend-delegation-hermes-agent.md`.

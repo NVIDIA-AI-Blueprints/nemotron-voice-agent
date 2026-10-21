@@ -70,7 +70,7 @@ class GatewayConfigTest(unittest.TestCase):
         self.assertNotIn("NVIDIA_API_KEY=", str(settings))
 
     def test_backend_templates_are_complete(self) -> None:
-        templates = BackendTemplates(gc.CONFIG_DIR / "prompts.backend.yaml")
+        templates = BackendTemplates(gc.CONFIG_DIR / "prompts" / "customer_service" / "backend.yaml")
         for key in REQUIRED_KEYS:
             self.assertIsInstance(key, str)
         self.assertIn("POLICY", templates.render("backend_system", instructions="POLICY"))

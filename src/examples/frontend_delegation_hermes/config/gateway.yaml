@@ -50,16 +50,16 @@ hermes:
       chat_template_kwargs: {enable_thinking: true}
       reasoning_budget: 1024
   prompts:
-    path: prompts.backend.yaml
+    path: "prompts/${FDH_PROMPT_PROFILE:-generic}/backend.yaml"   # the prompt profile (FDH_PROMPT_PROFILE)
 
-# Backend prompt variants ({% if features.<name> %} in prompts.backend.yaml; tau3-failure-fixes-plan.md).
+# Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend.yaml; tau3-failure-fixes-plan.md).
 # All on by default. Set one to false to render the backend prompt without that variant.
 prompt_features:
   spelling_v2: true                          # M3.4: after a failed lookup, read back and ask to spell
   spoken_output: true                        # G2: at most two sentences, confirmation override
   write_consent: true                        # G4: consent only to a heard question; read back written names
   phone_format: true                         # <phone_numbers>: lookups XXX-XXX-XXXX plus one format retry
-  domain_notes: true                         # the telecom note only (prompts.backend.yaml backend_domain_notes)
+  domain_notes: true                         # the telecom note only (prompts/<profile>/backend.yaml backend_domain_notes)
   # tau3-geval-failure-fixes-plan.md section 4: on by default.
   format_correction: true                   # A2: a separator or case change is a format correction, not a variant
   write_consent_v2: true                    # B1: the policy's confirmation, to the exact change, before a write
@@ -71,7 +71,7 @@ prompt_features:
   identity_from_identifier: true            # F8: a name inside a spoken identifier, once confirmed
 
 # Domain detection by tool names: the first domain with one of its tools in the session's tool list wins;
-# it picks the <domain_notes> block of prompts.backend.yaml and is reported as backend_domain. Only telecom
+# it picks the <domain_notes> block of prompts/<profile>/backend.yaml and is reported as backend_domain. Only telecom
 # is detected (analysis/2026-10-11_fdh-telecom-gpt55-deep): every other session has no domain and no note,
 # so its backend prompt is the same as without this rule.
 # Format: <domain>: {tools_any: [<tool>, ...]}

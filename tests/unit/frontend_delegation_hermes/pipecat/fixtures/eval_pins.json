@@ -59,7 +59,7 @@
    "use_ssl": false,
    "voice_id": ""
   },
-  "delegation_settings_sha": "b7770269a811ac1d",
+  "delegation_settings_sha": "fdacba81c951cebe",
   "tts": {
    "function_id": "",
    "kind": "tts",
@@ -69,7 +69,7 @@
    "use_ssl": false,
    "voice_id": "John"
   },
-  "voice_settings_sha": "7cbcdb05ce08c680"
+  "voice_settings_sha": "8c9d3472d695f491"
  },
  "eval_gateway": {
   "backend_catalog_sha256": "55639a8b238b7eec",
@@ -131,7 +131,7 @@
    "use_ssl": false,
    "voice_id": ""
   },
-  "delegation_settings_sha": "ad661747cfddef86",
+  "delegation_settings_sha": "dc6f7502327b658a",
   "tts": {
    "function_id": "",
    "kind": "tts",
@@ -141,7 +141,7 @@
    "use_ssl": false,
    "voice_id": "John"
   },
-  "voice_settings_sha": "395c7257f463493d"
+  "voice_settings_sha": "f0bc60ed9b48edbe"
  },
  "pipeline": {
   "demo_settings": {

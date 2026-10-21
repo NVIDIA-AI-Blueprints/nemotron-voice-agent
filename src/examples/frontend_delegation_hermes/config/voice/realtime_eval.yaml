@@ -15,6 +15,11 @@ protocol:
 tools:
   source: client
 
+# Evaluation runs default to the customer_service prompt profile (FDH_PROMPT_PROFILE overrides it).
+agent:
+  overrides:
+    prompts: {path: "../prompts/${FDH_PROMPT_PROFILE:-customer_service}/voice.yaml"}   # [in-path]
+
 normalization:
   transcript:
     spelled_runs: {enabled: true, min_tokens: 3, case: keep}

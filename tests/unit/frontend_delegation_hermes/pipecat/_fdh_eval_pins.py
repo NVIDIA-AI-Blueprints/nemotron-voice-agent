@@ -33,11 +33,13 @@ import copy
 import dataclasses
 import hashlib
 import json
+import os
 import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -58,6 +60,11 @@ DEMO_SETTINGS = "adapters/pipecat.yaml"
 MODEL_PLACEHOLDER = "<model>"
 BACKEND_URL_PLACEHOLDER = "<backend-url>"
 USER_TEXT = "Hi, I need to change something on my account, my user id is mia_li_3668."
+
+
+def without_prompt_profile() -> Any:
+    """An environment without ``FDH_PROMPT_PROFILE``: the pins use each config file's default profile."""
+    return mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != "FDH_PROMPT_PROFILE"}, clear=True)
 
 
 def _sha(value: Any) -> str:
@@ -293,7 +300,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="overwrite the pin file")
     args = parser.parse_args()
-    pins = capture()
+    with without_prompt_profile():
+        pins = capture()
     text = json.dumps(pins, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
     if not args.write:
         print(text)

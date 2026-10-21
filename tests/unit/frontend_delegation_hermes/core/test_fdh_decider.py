@@ -28,7 +28,7 @@ from examples.frontend_delegation_hermes.core.frontend.llm import ChatReply
 from examples.frontend_delegation_hermes.core.frontend.prompts import load_prompts
 from examples.frontend_delegation_hermes.core.frontend.status_verbalizer import LLMVerbalizer, TemplateVerbalizer
 
-PROMPTS = load_prompts(PACKAGE / "config" / "prompts.yaml")
+PROMPTS = load_prompts(PACKAGE / "config" / "prompts" / "customer_service" / "frontend.yaml")
 
 
 def context(state: str = "NO_SESSION", *, asked: bool = False, text: str = "hello") -> DecisionContext:

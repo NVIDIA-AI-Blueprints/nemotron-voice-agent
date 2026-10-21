@@ -25,7 +25,7 @@ from examples.frontend_delegation_hermes.core.tools.result_hints import ResultHi
 from examples.frontend_delegation_hermes.core.voice_config import load_voice_config
 
 CONFIG = PACKAGE / "config"
-BACKEND_PROMPTS = CONFIG / "prompts.backend.yaml"
+BACKEND_PROMPTS = CONFIG / "prompts" / "customer_service" / "backend.yaml"
 ALL_ON = {"spelling_v2": True, "spoken_output": True, "write_consent": True, "phone_format": True}
 ALL_ON_BUT_PHONE = {**ALL_ON, "phone_format": False}
 NOT_FOUND = "Error: User not found"

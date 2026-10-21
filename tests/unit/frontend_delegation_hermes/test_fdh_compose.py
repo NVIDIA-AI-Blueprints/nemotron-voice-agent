@@ -7,7 +7,8 @@
 
 * ``docker/fdh/gateway.env`` holds exactly the gateway variables the former FDH Compose file set, with
   its values, as plain ``KEY=value`` lines (the defaults of FDH_BACKEND_TRACE and friends differ by config);
-* every FDH variable of the voice service is a literal (Compose fills ``${...}`` from ``.env``);
+* every FDH variable of the voice service is a literal (Compose fills ``${...}`` from ``.env``), except
+  ``FDH_PROMPT_PROFILE`` (the prompt profile), which both services get with the same never-empty default;
 * the voice service mentions Hermes only through ``FDH_BACKEND_URL`` and ``depends_on: fdh-hermes``;
 * the eval overlay sets only ``environment`` keys on ``fdh-hermes``, each one listed in ``gateway.env``;
 * the OpenShell runtime is the default, and the plain overlay overrides single fields only (Part B, step 10).
@@ -35,6 +36,7 @@ PROFILE = "frontend-delegation-hermes-agent/single-gpu"
 #: The gateway variables and values of the former docker/docker-compose.frontend-delegation-hermes.yaml.
 GATEWAY_SETTINGS = {
     "FDH_GATEWAY_CONFIG": "gateway.yaml",
+    "FDH_PROMPT_PROFILE": "generic",
     "FDH_GATEWAY_MAX_SESSIONS": "8",
     "BACKEND_LLM_MODEL": "nvidia/nvidia/nemotron-3-ultra",
     "BACKEND_LLM_BASE_URL": "https://inference-api.nvidia.com/v1",
@@ -49,12 +51,15 @@ VOICE_SETTINGS = {
     "FDH_BACKEND_DELAY_S": "5",
     "FDH_PROACTIVE_AFTER_S": "15",
     "FDH_EVENT_LOG": "logs/fdh_voice_events.pipecat.jsonl",
-    "FDH_PROMPTS": "prompts.yaml",
     "FRONTEND_LLM_MODEL": "nvidia/nvidia/nemotron-3.5-lightning",
     "FRONTEND_LLM_BASE_URL": "https://inference-api.nvidia.com/v1",
     "FDH_BACKEND_URL": "ws://default--fdh-hermes.openshell.localhost:8080/v1/backend",
     "UVICORN_WS_PING_INTERVAL": "0",
 }
+#: The one variable the shell or .env may set: the prompt profile, with the default of each mode.
+PROMPT_PROFILE = "FDH_PROMPT_PROFILE"
+PROMPT_PROFILE_BASE = "${FDH_PROMPT_PROFILE:-generic}"
+PROMPT_PROFILE_EVAL = "${FDH_PROMPT_PROFILE:-customer_service}"
 OPENSHELL_HOST = "default--fdh-hermes.openshell.localhost"
 OPENSHELL_SERVICES = {"hermes-openshell-init", "hermes-openshell-gateway"}
 
@@ -99,8 +104,9 @@ class ComposeTests(unittest.TestCase):
         for key, value in VOICE_SETTINGS.items():
             with self.subTest(key=key):
                 self.assertEqual(environment[key], value)
+        self.assertEqual(environment[PROMPT_PROFILE], PROMPT_PROFILE_BASE)
         for key, value in environment.items():
-            if key.startswith(("FDH_", "FRONTEND_", "BACKEND_", "FBA_", "UVICORN_")):
+            if key.startswith(("FDH_", "FRONTEND_", "BACKEND_", "FBA_", "UVICORN_")) and key != PROMPT_PROFILE:
                 with self.subTest(key=key):
                     self.assertNotIn("${", str(value), "a ${...} value can be changed by .env")
 
@@ -113,8 +119,12 @@ class ComposeTests(unittest.TestCase):
         hermes = self.services["fdh-hermes"]
         self.assertEqual(hermes["command"], ["bash", "/cfg/controller.sh"])
         self.assertEqual(hermes["env_file"], ["docker/fdh/gateway.env", "docker/fdh/openshell/controller.env"])
-        # Only the key comes from .env, and an unset key must not break every other recipe's config.
-        self.assertEqual(hermes["environment"], {"NVIDIA_API_KEY": "${NVIDIA_API_KEY:-}"})
+        # Only the key and the prompt profile come from .env, and an unset key must not break every other
+        # recipe's config. The profile is the voice service's, so both sides use the same prompts.
+        self.assertEqual(
+            hermes["environment"], {"NVIDIA_API_KEY": "${NVIDIA_API_KEY:-}", PROMPT_PROFILE: PROMPT_PROFILE_BASE}
+        )
+        self.assertEqual(hermes["environment"][PROMPT_PROFILE], self.services[VOICE]["environment"][PROMPT_PROFILE])
         self.assertNotIn("ports", hermes)
         self.assertTrue(hermes["init"])
         self.assertIn(f"Host: {OPENSHELL_HOST}", hermes["healthcheck"]["test"])
@@ -165,6 +175,18 @@ class ComposeTests(unittest.TestCase):
         self.assertEqual(hermes["environment"]["FDH_GATEWAY_CONFIG"], "gateway.eval.yaml")
         self.assertEqual(self.overlay[VOICE]["environment"]["FDH_PROFILE"], "eval")
         self.assertEqual(set(self.overlay), {VOICE, "fdh-hermes"})
+
+    def test_eval_overlay_defaults_both_services_to_the_customer_service_profile(self) -> None:
+        self.assertEqual(self.overlay[VOICE]["environment"][PROMPT_PROFILE], PROMPT_PROFILE_EVAL)
+        self.assertEqual(self.overlay["fdh-hermes"]["environment"][PROMPT_PROFILE], PROMPT_PROFILE_EVAL)
+        for name, environment in (
+            (VOICE, self.overlay[VOICE]["environment"]),
+            ("fdh-hermes", self.overlay["fdh-hermes"]["environment"]),
+        ):
+            with self.subTest(service=name):
+                fdh_keys = {key for key in environment if key.startswith("FDH_")}
+                literal = {key for key in fdh_keys if "${" not in str(environment[key])}
+                self.assertEqual(fdh_keys - literal, {PROMPT_PROFILE})
 
 
 if __name__ == "__main__":

@@ -100,7 +100,7 @@ The example has the following parts.
 | `core/normalization/` | Transcript and tool-argument identifier normalization. |
 | `core/tools/` | Tool specifications and Realtime client tools. |
 | `core/audio/` | PCM16 and G.711 audio formats and resampling. |
-| `core/config/` | Configuration loader, `voice_agent.yaml`, `agent.yaml`, the two profiles (`profiles/`), and the prompt catalogs (`prompts/`). `profiles.py` validates `FBA_PROFILE`, picks each profile's Pipecat settings file, maps speech to the deployment platform, and checks the WebSocket keepalive. |
+| `core/config/` | Configuration loader, `voice_agent.yaml`, `agent.yaml`, the two profiles (`profiles/`), and the prompt profiles (`prompts/<profile>.yaml`). `profiles.py` validates `FBA_PROFILE`, picks each profile's Pipecat settings file, maps speech to the deployment platform, and checks the WebSocket keepalive. |
 | `adapters/pipecat/` | Pipecat host: the Realtime pipeline and session, the browser UI pipeline (`ui_pipeline.py`) and session (`ui_session.py`), serializer, turn bridge, speech warm-up, the session caps, and the shared speech services. |
 | `adapters/pipecat/settings/` | Pipecat VAD, user-turn, transport-audio, and TTS settings: `default.yaml` for browser UI sessions and `eval.yaml` for Realtime sessions. Refer to [Pipecat Voice Settings](#pipecat-voice-settings). |
 | `tools.yaml`, `tools.py`, `tool_handlers.py` | The five server-run tools of browser UI sessions. Refer to [Tools](#tools). |
@@ -212,24 +212,27 @@ The agent supports no other value. Any other value, including an old `tau3_eval*
 | Tools | Client-owned, from `session.update` | The five server-run tools of `tools.yaml` |
 | Instructions | The client's `session.instructions` fill the backend prompt's domain-policy slot | No client instructions. The UI can replace the `frontend` prompt for the session. |
 | Tool-argument normalization | On, for `get_user_details.user_id`, with the retry guard | Off. It applies only to client tools. |
-| Prompt catalog | `core/config/prompts/tau.yaml`, pinned | `core/config/prompts/generic.yaml`, free to tune |
+| Default prompt profile | `customer_service` (`core/config/prompts/customer_service.yaml`), pinned | `generic` (`core/config/prompts/generic.yaml`), free to tune |
 | Event and filler logs | From `FBA_VOICE_EVENT_LOG` and `FBA_FILLER_LOG` | Off |
 | Audio | The client's format, PCM16 at 24,000 Hz by default | 16 kHz in and 22,050 Hz out on the browser transport |
 
 Both profiles share the rest of the agent: the frontend barge-in verdict, spoken filler, backend conversation history, transcript normalization, the write gate (off), the server keepalive (off), and a cap of 8 concurrent sessions. The browser UI sessions and the Realtime sessions have separate session counters.
 
-### Prompt Variants
+### Prompt Profiles
 
-The profile selects the prompt catalog. The example ships two variants in `core/config/prompts/`.
+A prompt profile is one prompt catalog, `core/config/prompts/<profile>.yaml`, with the frontend and backend prompts. The `FBA_PROMPT_PROFILE` environment variable selects it. The example ships the profiles in the following table.
 
-| Variant | File | Used by | Change rule |
+| Prompt profile | File | Default for | Purpose and change rule |
 | --- | --- | --- | --- |
-| Tau | `core/config/prompts/tau.yaml` | `eval`, so every OpenAI Realtime session | Pinned by SHA-256 in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. A change requires a new pin and an attached Tau A/B evaluation run. |
-| Generic | `core/config/prompts/generic.yaml` | `default`, so every browser UI session | Free to tune. It currently has the same content as `tau.yaml`. |
+| `customer_service` | `core/config/prompts/customer_service.yaml` (formerly `tau.yaml`) | The `eval` profile, so eval-mode deployments | Customer-service prompts for multi-turn tool use, such as Tau. Pinned by SHA-256 (`TAU_CATALOG_SHA256`) in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. A change requires a new pin and an attached Tau A/B evaluation run. |
+| `generic` | `core/config/prompts/generic.yaml` | The `default` profile, so browser UI sessions | Free to tune. It currently has the same content as `customer_service.yaml` and is planned to become more generic. |
+| `general_qa` | `core/config/prompts/general_qa.yaml` | None | A general question-answering assistant for single-turn evaluations. The frontend sends every request to the backend word for word through `call_backend`. The backend answers from the LLM with no tools: the answer first, "The answer is X." for multiple choice, formatting instructions followed literally, and a refusal that starts with "I'm sorry, but I can't help with that." for harmful requests. |
+
+Each profile file sets its default: `core/config/voice_agent.yaml`, which the `eval` profile extends, reads `prompts/${FBA_PROMPT_PROFILE:-customer_service}.yaml`, and `core/config/profiles/default.yaml` reads `../prompts/${FBA_PROMPT_PROFILE:-generic}.yaml`. Compose passes `${FBA_PROMPT_PROFILE:-generic}`, and the eval override file passes `${FBA_PROMPT_PROFILE:-customer_service}`. Realtime sessions therefore follow the deployment: they use `generic` on a `default` Compose deployment and `customer_service` with the eval override file. A host-native run without the variable uses `customer_service` for Realtime sessions and `generic` for browser UI sessions.
+
+Never set `FBA_PROMPT_PROFILE` to an empty value. An unknown profile name fails the session, and the application log shows an error that names `agent.overrides.prompts.path` and the missing `<profile>.yaml` file. To add a profile, copy `customer_service.yaml` to `core/config/prompts/<name>.yaml`, edit it while you keep every key and placeholder, and set `FBA_PROMPT_PROFILE=<name>`. The unit tests load every profile in `core/config/prompts/`. For the deployment steps, refer to [Prompt Profiles](../../../docs/how-to/deploy-frontend-backend-agent.md#prompt-profiles).
 
 The example's `prompts.yaml` mirrors `generic.yaml`, and a unit test checks that the two files are identical. The browser UI shows the `frontend` prompt and can edit it for one session. The agent's other prompt keys stay hidden (`agent_prompt_keys` in `examples_registry.yaml`).
-
-The `FBA_VOICE_PROMPTS` environment variable replaces the catalog path of the `eval` profile. The `default` profile sets `generic.yaml` itself. A relative path resolves against `core/config/`. A missing or invalid catalog fails the session, and the application log shows an error that names `agent.overrides.prompts.path`.
 
 The example loads a profile when the first session of that kind connects. The application log then records the profile in the `frontend/backend agent ready` line and the catalog in a line of the following form:
 
@@ -276,7 +279,7 @@ Every OpenAI Realtime session resolves to the following effective values. `core/
 | Barge-in during backend work | `frontend_verdict`. The frontend decides whether the new speech continues the running task. The verdict deadline is 4,000 ms, after which `cancel_and_merge` applies. A query equal to the running one counts as a continuation (`same_query_guard: true`). |
 | Barge-in history | `truncate_heard`. The history keeps only the heard part of the reply and appends ` [interrupted by the user]`. |
 | Backend history | On, with `include: full` and the default guidance. |
-| Filler | Spoken (`speak`) when the backend is still busy after 300 ms. `FBA_FILLER_MODE` sets the mode. Compose sets `speak`, and only the VoiceBench overlay, `docker/docker-compose.fba-voicebench.yaml`, sets `log_only`, which records the filler in the filler log without speaking it. Refer to [Run a VoiceBench Evaluation](../../../docs/how-to/deploy-frontend-backend-agent.md#run-a-voicebench-evaluation). |
+| Filler | Spoken (`speak`) when the backend is still busy after 300 ms. `FBA_FILLER_MODE` sets the mode. Compose sets `speak`, and only the silent-frontend overlay, `docker/docker-compose.fba-silent-frontend.yaml`, sets `log_only`, which records the filler in the filler log without speaking it. Refer to [Run a VoiceBench Evaluation](../../../docs/how-to/deploy-frontend-backend-agent.md#run-a-voicebench-evaluation). |
 | Identifier normalization | The transcript hook writes spoken identifiers in lowercase written form for the agent. The wire keeps the raw ASR transcript. The tool-argument rule canonicalizes `get_user_details.user_id` to the pattern `^[a-z]+_[a-z]+_\d{4}$` and answers a malformed ID locally. The retry guard answers a repeat of a call that failed with `Error: ... not found` locally. |
 | Speech while tools are out | Goes to the outstanding tool wait. Refer to [Tool Continuation Resume](#tool-continuation-resume). |
 | Write gate | Off. Refer to [Write Gate](#write-gate). |
@@ -296,12 +299,12 @@ The example reads the following environment variables.
 | `NVIDIA_API_KEY` | None | NVIDIA Inference Hub key for both LLMs. NVCF speech on the cloud platform also uses it. |
 | `FBA_PROFILE` | `default` | Selects the served profile: `default` or `eval`. |
 | `REALTIME_SERVICE_PLATFORM` | Unset | Selects the speech catalog: `cloud` reads `services.cloud.yaml`, `server` reads the `server` section of `services.local.yaml`, and `singlegpu` or unset keeps the `singlegpu` section. Compose sets it per recipe. |
-| `FBA_VOICE_PROMPTS` | Empty | Replaces the prompt catalog path of the `eval` profile. |
+| `FBA_PROMPT_PROFILE` | `generic` for browser UI sessions, `customer_service` for Realtime sessions; Compose passes `generic`, and the eval override file `customer_service` | Selects the prompt profile, `core/config/prompts/<profile>.yaml`. Never set it to an empty value. Refer to [Prompt Profiles](#prompt-profiles). |
 | `FBA_ASR_SERVER` | Empty | Replaces the ASR catalog server, for example `localhost:50051` for a host-native run. |
 | `FBA_TTS_SERVER` | Empty | Replaces the TTS catalog server, for example `localhost:50051` for a host-native run. |
 | `FBA_VOICE_EVENT_LOG` | Empty | Path of a JSONL event log for Realtime sessions. Empty turns the log off. Browser UI sessions never write it. |
 | `FBA_FILLER_LOG` | Empty | Path of a JSONL filler log for Realtime sessions. Filler timing is also recorded in the application log and, when it is set, the event log. |
-| `FBA_FILLER_MODE` | `speak` | Filler mode of the profile: `speak` or `log_only`. Compose sets `speak`, and only the VoiceBench overlay sets `log_only`. Never set it to an empty value. |
+| `FBA_FILLER_MODE` | `speak` | Filler mode of the profile: `speak` or `log_only`. Compose sets `speak`, and only the silent-frontend overlay sets `log_only`. Never set it to an empty value. |
 | `WEATHERAPI_KEY`, `FINNHUB_API_KEY`, `PERPLEXITY_API_KEY` | Empty | Keys for the browser UI tools. Refer to [Tools](#tools). |
 | `ENABLE_TRACING` | `false` | Traces browser UI sessions. Refer to [Tracing](#tracing). |
 | `FBA_REALTIME_TRACING` | `false` | With `ENABLE_TRACING=true`, also traces Realtime sessions. Ignored when `FBA_PROFILE=eval`. |
@@ -465,7 +468,7 @@ The gateway hands the whole Realtime session to this pipeline before it sends an
 - By default, `input_audio_buffer.commit` is refused with error code `unsupported_event`, because turns end on the server voice activity detection (VAD). To allow manual turns, refer to [Realtime Turn Modes](#realtime-turn-modes).
 - By default, the session accepts function tools only. A `type: "mcp"` tool is refused with error code `invalid_value`. To allow MCP tools, refer to [MCP Tools](#mcp-tools).
 - A `response.create` with per-response `instructions`, `tools`, or `tool_choice` is refused with error code `unsupported_response_override`.
-- Add `?x_nvidia_filler=1` to the WebSocket URL to receive unspoken filler as non-standard `x_nvidia.filler` events. The `eval` profile speaks its filler, so these events apply only with `filler.mode: log_only`, for example with the VoiceBench overlay.
+- Add `?x_nvidia_filler=1` to the WebSocket URL to receive unspoken filler as non-standard `x_nvidia.filler` events. The `eval` profile speaks its filler, so these events apply only with `filler.mode: log_only`, for example with the silent-frontend overlay.
 - The first session warms up speech with one short ASR request and one short TTS request. Over the session cap, or when the speech warm-up fails, the server sends an `error` event with code `server_busy` and closes the socket with code 1013. The next session retries the warm-up.
 
 ### Realtime Turn Modes
@@ -526,7 +529,7 @@ An `ek_` client secret from `POST /v1/realtime/client_secrets` logs in on this m
 
 ### Evaluate With Tau
 
-Run tau-bench evaluation through `voice-agent-evaluation` with `execution.backend: evaluator_realtime` and `product.profile: openai`. The `tau_native` lane cannot select this model ID and expects a 500 ms turn-detection echo, while this example echoes 800 ms. Deploy in eval mode, so the container serves only Realtime sessions and writes the event and filler logs. Every Realtime session uses the `eval` profile and the pinned Tau prompt catalog. Results record `profile=eval`. For the deployment steps, refer to [Run a Tau Evaluation](../../../docs/how-to/deploy-frontend-backend-agent.md#run-a-tau-evaluation).
+Run tau-bench evaluation through `voice-agent-evaluation` with `execution.backend: evaluator_realtime` and `product.profile: openai`. The `tau_native` lane cannot select this model ID and expects a 500 ms turn-detection echo, while this example echoes 800 ms. Deploy in eval mode, so the container serves only Realtime sessions and writes the event and filler logs. Every Realtime session uses the `eval` profile, and the eval override file selects the pinned `customer_service` prompt profile. Do not set `FBA_PROMPT_PROFILE` for a Tau run. Results record `profile=eval`. For the deployment steps, refer to [Run a Tau Evaluation](../../../docs/how-to/deploy-frontend-backend-agent.md#run-a-tau-evaluation).
 
 ## Test the Example
 
@@ -544,9 +547,9 @@ The unit tests use fake speech and LLM services. They include the prompt-variant
 
 Use `default` for the browser UI and for prompt tuning. Use `eval`, through the eval override, for evaluation runs, so browser sessions cannot share the deployment with an evaluation.
 
-### Tune the Generic Catalog, Not the Tau Catalog
+### Tune the Generic Profile, Not the Customer Service Profile
 
-Edit `core/config/prompts/generic.yaml` and the example's `prompts.yaml` together. A change to `tau.yaml` or `eval.yaml` changes every Realtime session and needs a Tau A/B run.
+Edit `core/config/prompts/generic.yaml` and the example's `prompts.yaml` together, or add a prompt profile. A change to `customer_service.yaml` changes every eval-mode run, and a change to `eval.yaml` changes every Realtime session. Both need a Tau A/B run.
 
 ### Keep the Keepalive Off
 

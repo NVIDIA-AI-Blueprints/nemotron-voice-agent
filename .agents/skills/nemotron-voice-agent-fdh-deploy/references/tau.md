@@ -11,6 +11,8 @@ E="-f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml"
 # E="-f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml -f docker/docker-compose.fdh-eval.yaml"
 ```
 
+The eval overlay defaults the prompt profile to `customer_service` on both services. Do not set `FDH_PROMPT_PROFILE` for Tau; check that the shell and `.env` do not set it (`printenv FDH_PROMPT_PROFILE` in the voice container prints `customer_service`). Only a VoiceBench run sets it (refer to the rule in `SKILL.md`).
+
 The Hermes runtime is OpenShell by default. Use the plain runtime only when the user asks for it, for example for an A/B slice. Record which runtime a run used, and do not mix runtimes inside one comparison.
 
 ## 1. Topology
@@ -100,19 +102,23 @@ Report FDH runs on the shared stack separately from runs on the former FDH conta
 
 ### VoiceBench
 
-VoiceBench (in `voice-agent-evaluation`) never sends `response.create`, ends each case on the first `response.done`, and scores only that response's audio transcript. FDH speaks each filler and proactive status line as its own response. Ask the user whether to keep the frontend silent only when they say the run is VoiceBench (refer to the rule in `SKILL.md`). If yes, add the VoiceBench overlay last:
+VoiceBench (in `voice-agent-evaluation`) never sends `response.create`, ends each case on the first `response.done`, and scores only that response's audio transcript. FDH speaks each filler and proactive status line as its own response. Only when the user says the run is VoiceBench, ask the two questions of the rule in `SKILL.md`: keep the frontend silent (default no), and which prompt profile (suggested `general_qa`). If silent, add the silent-frontend overlay last. Set the chosen profile on every command that recreates containers:
 
 ```bash
-E="-f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml -f docker/docker-compose.fdh-voicebench.yaml"
-# plain runtime: -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml -f docker/docker-compose.fdh-eval.yaml -f docker/docker-compose.fdh-voicebench.yaml
-docker compose $E --profile $P up -d --build
-docker compose $E --profile $P exec frontend-delegation-hermes-agent-single-gpu printenv FDH_SILENT_FRONTEND   # true
+E="-f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml -f docker/docker-compose.fdh-silent-frontend.yaml"
+# plain runtime: -f docker-compose.yml -f docker/docker-compose.fdh-hermes-plain.yaml -f docker/docker-compose.fdh-eval.yaml -f docker/docker-compose.fdh-silent-frontend.yaml
+# not silent: leave out the silent-frontend overlay
+FDH_PROMPT_PROFILE=general_qa docker compose $E --profile $P up -d --build
+docker compose $E --profile $P exec frontend-delegation-hermes-agent-single-gpu printenv FDH_SILENT_FRONTEND FDH_PROMPT_PROFILE   # true, general_qa
+docker compose $E --profile $P exec fdh-hermes printenv FDH_PROMPT_PROFILE                                                         # general_qa
 ```
 
+- `general_qa` makes the frontend delegate every request (`delegate=true`, filler "One moment.") and the backend answer from the LLM with no tools.
+- With the silent frontend, a turn the frontend model leaves silent (`delegate=false`, empty filler) that holds a request is delegated anyway as a `task` with an empty filler, logged as a `delegation_guard` event with `guard=silent_delegated`. Empty turns, backchannels (`backchannel_words`, such as "okay"), pauses ("hold on"), liveness pings (R1), and turns while the backend is WORKING stay silent.
 - After one session, `logs/fdh_voice_events.pipecat.jsonl` has `silent_frontend: true` in the `fdh_session_start` settings and a `filler_silenced` record (reason `silent_frontend`) per delegated turn. `proactive_status_silenced` is logged once per backend run instead of the M1 status line. Direct answers are spoken.
 - Harness: profile `nemotron-fdh-local`, run configuration `configs/runs/voicebench-fdh-realtime-smoke.yaml` in `voice-agent-evaluation`. Do not change the evaluator.
-- The `config hash` of a silent run differs from a normal eval run. With the switch off, the hash is unchanged.
-- To switch back, rerun `up -d --build` without the VoiceBench overlay. Never use the overlay for Tau.
+- The `config hash` of a silent run differs from a normal eval run, and so does a run with another prompt profile (the prompt paths are hashed). With the switch off and no profile set, the hash is unchanged.
+- To switch back, rerun `up -d --build` without the silent-frontend overlay and without `FDH_PROMPT_PROFILE`. Never use the overlay or another profile for Tau.
 
 ## 6. Fingerprint and Hashes
 
@@ -120,7 +126,7 @@ Record the following with every run:
 
 - the Hermes runtime (OpenShell or plain), and for OpenShell the release in `docker/fdh/openshell/VERSION`;
 - the gateway configuration and source hash: the `FDH gateway` line from `docker logs "$W"` (plain: `docker compose $E --profile $P logs fdh-hermes`);
-- the profile and `config hash` from the ready line of the app log;
+- the profile and `config hash` from the ready line of the app log, and the prompt profile (`printenv FDH_PROMPT_PROFILE`);
 - the fingerprint records in `logs/fdh_voice_events.pipecat.jsonl`: `fdh_session_start` (`features`), `frontend_prompt`, and `backend_configured`, which carries the backend fingerprint the gateway reports (`backend_system_sha256`, `backend_catalog_sha256`, `backend_domain`) and `session_tools_sha256`.
 
 `config_hash` includes `backend.url`, which is now `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` (plain runtime: `ws://fdh-hermes:8790/v1/backend`; formerly `ws://host.docker.internal:8790/v1/backend`), so it differs between runtimes and from earlier runs. Group and compare runs by the prompt hashes and `session_tools_sha256`. `backend_system_sha256` differs between `gateway.yaml` and `gateway.eval.yaml`, so it shows a run that missed the eval overlay.

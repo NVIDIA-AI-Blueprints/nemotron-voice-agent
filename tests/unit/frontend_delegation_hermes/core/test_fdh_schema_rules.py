@@ -465,10 +465,9 @@ SUBMISSION_FILES = (
     PACKAGE / "config" / "voice" / "base.yaml",
     PACKAGE / "config" / "gateway.eval.yaml",
     PACKAGE / "config" / "gateway.yaml",
-    PACKAGE / "config" / "prompts.yaml",
-    PACKAGE / "config" / "prompts.backend.yaml",
     ROOT / "src" / "examples" / "frontend_delegation_hermes" / "config" / "voice_agent.yaml",
-    ROOT / "src" / "examples" / "frontend_delegation_hermes" / "config" / "prompts.voice.yaml",
+    # Every prompt profile (config/prompts/<profile>/frontend.yaml, backend.yaml, voice.yaml).
+    *sorted((PACKAGE / "config" / "prompts").glob("*/*.yaml")),
 )
 TAU2_NAMES = re.compile(
     r"get_user_details|find_user_id|get_customer_by_phone|get_reservation_details|telecom|airline|retail"
@@ -476,11 +475,13 @@ TAU2_NAMES = re.compile(
 BENCHMARK_VALUES = re.compile(r"ROSSI|IFOYYZ|NQNU5R|K1NW8N|mia_kim|mia_fancy|555-123|\\d\{4\}")
 #: The one exception, disclosed word for word with the submission (analysis/2026-10-11_fdh-telecom-gpt55-deep):
 #: the telecom detection rule (gateway.yaml, gateway.eval.yaml) and the key of the telecom note
-#: (prompts.backend.yaml). Comments may name domains; they are never sent to a model.
+#: (prompts/<profile>/backend.yaml of the customer_service and generic profiles). Keyed by the path under
+#: config/. Comments may name domains; they are never sent to a model.
 DISCLOSED_DOMAIN_LINES = {
     "gateway.yaml": "telecom: {tools_any: [get_customer_by_phone]}",
     "gateway.eval.yaml": "telecom: {tools_any: [get_customer_by_phone]}",
-    "prompts.backend.yaml": "telecom: |-",
+    "prompts/customer_service/backend.yaml": "telecom: |-",
+    "prompts/generic/backend.yaml": "telecom: |-",
 }
 
 
@@ -496,7 +497,7 @@ def _code_lines(text: str) -> list[str]:
 
 def _tau2_hits(path: Path) -> list[str]:
     """Lines naming a tau2 tool or domain, except the disclosed telecom lines."""
-    allowed = DISCLOSED_DOMAIN_LINES.get(path.name)
+    allowed = DISCLOSED_DOMAIN_LINES.get(path.relative_to(PACKAGE / "config").as_posix())
     return [
         line for line in _code_lines(path.read_text(encoding="utf-8")) if TAU2_NAMES.search(line) and line != allowed
     ]
@@ -506,7 +507,7 @@ class SubmissionConfigTests(unittest.TestCase):
     def test_no_tau2_tool_or_domain_name_and_no_benchmark_value(self) -> None:
         for path in SUBMISSION_FILES:
             text = path.read_text(encoding="utf-8")
-            with self.subTest(path=path.name):
+            with self.subTest(path=path.relative_to(PACKAGE / "config").as_posix()):
                 self.assertEqual(_tau2_hits(path), [])
                 self.assertEqual(BENCHMARK_VALUES.findall(text), [])
 

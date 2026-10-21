@@ -23,7 +23,7 @@ The example has one Docker Compose recipe, `frontend-delegation-hermes-agent/sin
 - `nemo-speech`: automatic speech recognition (ASR) and text-to-speech (TTS) with NeMo-Speech.cpp on one local GPU.
 - `fdh-hermes-image`: a build-only service. It builds the Hermes image and exits.
 
-The `FDH_PROFILE` setting decides what a deployment serves. Refer to [Choose a Profile](#choose-a-profile). The Hermes backend runs in OpenShell by default, or in a plain container with an overlay. Refer to [Choose the Hermes Runtime](#choose-the-hermes-runtime).
+The `FDH_PROFILE` setting decides what a deployment serves. Refer to [Choose a Profile](#choose-a-profile). The Hermes backend runs in OpenShell by default, or in a plain container with an overlay. Refer to [Choose the Hermes Runtime](#choose-the-hermes-runtime). The `FDH_PROMPT_PROFILE` setting decides which prompts the agent uses. Refer to [Prompt Profiles](#prompt-profiles).
 
 > **Note:** The commands in this guide are checked against the repository's Compose files, `docker/Dockerfile.fdh`, `docker/fdh/gateway.sh`, `docker/fdh/openshell/`, `.env.example`, and source code. They were not run on GPU hardware for this revision of the guide. The OpenShell runtime has not yet been validated on a live host. If it does not start on your host, use the plain runtime.
 
@@ -37,7 +37,12 @@ If you are an AI agent that deploys this example for a user, follow these rules:
 4. Use the default OpenShell runtime. Add the plain runtime overlay, `docker/docker-compose.fdh-hermes-plain.yaml`, only when the user asks for it or the host cannot run OpenShell. Pass the Compose files in this order: `docker-compose.yml`, then the plain overlay, then the eval overlay. Refer to [Choose the Hermes Runtime](#choose-the-hermes-runtime).
 5. After startup and the first session, read the profile and the configuration hash from the app log, and the gateway configuration and source hash from the Hermes logs. Report them to the user. Refer to [Verify the Deployment](#verify-the-deployment).
 6. Check only that `NVIDIA_API_KEY` and `REALTIME_API_KEY` are present in `.env`. Do not print their values.
-7. If, and only if, the user says that the run is a VoiceBench evaluation, ask: "Keep the frontend silent for VoiceBench? The filler is then logged only, and the backend's answer is the first response. Default: no." Wait for the answer. If the answer is yes, add `docker/docker-compose.fdh-voicebench.yaml` after the eval overlay. Pass the Compose files in this order: `docker-compose.yml`, the plain overlay if used, the eval overlay, and then the VoiceBench overlay. Do not ask this question for Tau, the browser UI, or any other run, and never add the VoiceBench overlay for them. VoiceBench runs use the `eval` profile. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation).
+7. If, and only if, the user says that the run is a VoiceBench evaluation, ask two questions and wait for both answers:
+    - "Keep the frontend silent? The filler is then logged only, and the backend's answer is the first response. Default: no."
+    - "Which prompt profile? Suggested: `general_qa`."
+
+    If the first answer is yes, add `docker/docker-compose.fdh-silent-frontend.yaml` after the eval overlay. Pass the Compose files in this order: `docker-compose.yml`, the plain overlay if used, the eval overlay, and then the silent-frontend overlay. Set `FDH_PROMPT_PROFILE` to the chosen profile on the Compose command line, for example `FDH_PROMPT_PROFILE=general_qa docker compose ... up -d --build`. VoiceBench runs use the `eval` profile. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation).
+8. Do not ask these questions for Tau, the browser UI, or any other run. Those runs use the default prompt profile of their mode without asking: `generic` for `default` and `customer_service` for `eval`. Never add the silent-frontend overlay for them, and do not set `FDH_PROMPT_PROFILE`. If an existing `.env` sets `FDH_PROMPT_PROFILE`, show the value and ask the user to confirm it or remove it. Refer to [Prompt Profiles](#prompt-profiles).
 
 Do not overwrite other keys in an existing `.env`. For smoke tests, benchmark checks, and logs, load the deploy skill at `.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md`.
 
@@ -69,10 +74,11 @@ The recipe uses the `.env` keys in the following table.
 
 | `.env` key | Required | Purpose |
 | --- | --- | --- |
-| `NVIDIA_API_KEY` | Yes | An NVIDIA Inference Hub key (`sk-...`). Both LLMs send it. It is the only `.env` key that reaches the Hermes side, and `fdh-hermes` refuses to start without it. With OpenShell, the key goes to the OpenShell provider, never into the sandbox. |
+| `NVIDIA_API_KEY` | Yes | An NVIDIA Inference Hub key (`sk-...`). Both LLMs send it. Apart from the optional `FDH_PROMPT_PROFILE`, it is the only `.env` key that reaches the Hermes side, and `fdh-hermes` refuses to start without it. With OpenShell, the key goes to the OpenShell provider, never into the sandbox. |
 | `HF_TOKEN` | Yes | Hugging Face token. The download script reads it to fetch the NeMo-Speech.cpp model weights. |
 | `REALTIME_API_KEY` | Recommended | The Bearer credential that OpenAI Realtime clients send. Leave it unset only for unauthenticated local development. |
 | `HERMES_AGENT_DIR` | No | Path of the Hermes checkout for the image build. The default is `../hermes-agent`. Refer to [Get Hermes](#get-hermes). |
+| `FDH_PROMPT_PROFILE` | No | The prompt profile of both the voice side and the Hermes side. Refer to [Prompt Profiles](#prompt-profiles). |
 
 The recipe does not use `NVIDIA_SPEECH_API_KEY` and does not need `docker login nvcr.io`.
 
@@ -91,7 +97,44 @@ OpenAI Realtime sessions always use the `eval` delegation profile and Pipecat se
 
 The `eval` profile refuses browser UI sessions, so they cannot take resources from an evaluation run. The UI shows no error: the session ends, and the app log shows the error.
 
-`docker-compose.yml` sets every FDH variable of the voice service as a literal value, so `.env` cannot change an evaluation run. Setting `FDH_PROFILE` or another `FDH_*` key in `.env` has no effect on the Compose recipe. Only the eval overlay changes these values. `FDH_PROFILE` accepts only `default` and `eval`. Any other value fails each session with an error that names both.
+`docker-compose.yml` sets every FDH variable of the voice service as a literal value, so `.env` cannot change an evaluation run. Setting `FDH_PROFILE` or another `FDH_*` key in `.env` has no effect on the Compose recipe. Only the overlays change these values. The one exception is `FDH_PROMPT_PROFILE`, which the shell or `.env` can set. Refer to [Prompt Profiles](#prompt-profiles). `FDH_PROFILE` accepts only `default` and `eval`. Any other value fails each session with an error that names both.
+
+## Prompt Profiles
+
+A prompt profile is a named set of the agent's prompts. Each profile is a folder, `src/examples/frontend_delegation_hermes/config/prompts/<profile>/`, with three files:
+
+- `frontend.yaml`: the frontend prompt catalog of the voice side, including `frontend_system`, which makes the delegation decisions.
+- `backend.yaml`: the backend prompt catalog of the Hermes gateway.
+- `voice.yaml`: the voice-side messages about tool calls and formats.
+
+The agent ships the profiles in the following table.
+
+| Prompt profile | Purpose | Default for | Folder in `config/prompts/` |
+| --- | --- | --- | --- |
+| `customer_service` | Customer-service prompts for multi-turn conversations with client tools, such as Tau. The evaluation pins cover its prompt hashes. | Eval mode, through the eval overlay | `customer_service/` |
+| `generic` | The browser demo prompts. The files currently have the same content as `customer_service/` and are planned to become more generic. | The `default` deployment, including its Realtime sessions | `generic/` |
+| `general_qa` | A general question-answering assistant. The frontend delegates every request (`delegate=true`) with the filler "One moment." The backend answers from the LLM with no tools. It puts the answer first, starts a multiple-choice answer with "The answer is X.", follows formatting instructions literally, and refuses harmful requests with "I'm sorry, but I can't help with that." | No mode. Choose it for single-turn question-answering evaluations, such as VoiceBench. | `general_qa/` |
+
+The `FDH_PROMPT_PROFILE` variable names the profile and replaces the default of the mode. It is the one FDH setting that the shell or `.env` can change. Compose passes the same value to the voice service and to `fdh-hermes`, so both sides always use the same profile. In the OpenShell runtime, the controller passes it into the sandbox. Compose passes `${FDH_PROMPT_PROFILE:-generic}`, and the eval overlay passes `${FDH_PROMPT_PROFILE:-customer_service}`. Realtime sessions follow the deployment: on a `default` deployment, they also use `generic`. Use the eval overlay for `customer_service`.
+
+To choose a profile for one run, set the variable on the Compose command line:
+
+```bash
+FDH_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+```
+
+You can also set `FDH_PROMPT_PROFILE` in `.env`. The value then applies to every later run, including Tau runs, until you remove it. Never set the variable to an empty value. An unknown profile name fails the session or the gateway startup with an error that names the missing prompt file.
+
+The Hermes image bakes in `src/`, so keep `--build` on every `up` after a prompt change or a profile change.
+
+To add a profile, complete the following steps:
+
+1. Copy `config/prompts/customer_service/` to a new folder, `config/prompts/<name>/`.
+2. Edit the prompts in the three files. Keep every key of the `customer_service` files.
+3. Set `FDH_PROMPT_PROFILE=<name>` and rerun the `up -d --build` command.
+
+The unit tests load every profile in `config/prompts/`, so a broken profile fails `uv run pytest tests/`.
 
 ## Choose the Hermes Runtime
 
@@ -169,7 +212,8 @@ The following optional keys change the deployment. Leave them unset to keep the 
 | `NEMO_SPEECH_MODEL_LOC` | `models/nemo-speech` | Host directory that holds the speech model weights. |
 | `ENABLE_WELCOME_MESSAGE` | Unset (greets) | `false` turns off the browser UI greeting. Realtime sessions never greet. |
 | `HERMES_AGENT_DIR` | `../hermes-agent` | Path of the Hermes checkout for the image build. Both runtimes use it. |
-| `FDH_SILENT_FRONTEND` | `false` | `true` keeps the frontend silent on delegated turns for VoiceBench. Compose sets `false` as a literal value, and only the VoiceBench overlay sets `true`. Setting it in `.env` has no effect. Never set it to an empty value. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation). |
+| `FDH_PROMPT_PROFILE` | `generic`, or `customer_service` with the eval overlay | The prompt profile: `generic`, `customer_service`, `general_qa`, or a profile that you add. It is the only `FDH_*` key that `.env` can change. Never set it to an empty value. Refer to [Prompt Profiles](#prompt-profiles). |
+| `FDH_SILENT_FRONTEND` | `false` | `true` keeps the frontend silent on delegated turns for single-turn evaluations, such as VoiceBench. Compose sets `false` as a literal value, and only the silent-frontend overlay sets `true`. Setting it in `.env` has no effect. Never set it to an empty value. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation). |
 
 Do not set `UVICORN_WS_PING_INTERVAL` for this recipe. Compose sets it to `0` on the voice service, and Realtime sessions refuse to start when the server pings WebSocket clients.
 
@@ -321,6 +365,14 @@ Run the following checks in order.
 
     The ready line has the form `frontend-delegation-hermes-agent ready (adapter=pipecat, profile=<profile>)`, followed by the loaded configuration files and the `config hash`. A browser UI session logs `profile=default`. A Realtime session logs `profile=eval`, in both profiles.
 
+7. Check the prompt profile of both sides. Both commands print the same profile, `generic` by default:
+
+    ```bash
+    docker compose --profile frontend-delegation-hermes-agent/single-gpu exec \
+      frontend-delegation-hermes-agent-single-gpu printenv FDH_PROMPT_PROFILE
+    docker compose --profile frontend-delegation-hermes-agent/single-gpu exec fdh-hermes printenv FDH_PROMPT_PROFILE
+    ```
+
 If a check fails, refer to [Troubleshooting](#troubleshooting).
 
 ## Use the Browser UI
@@ -335,7 +387,7 @@ The UI offers the following controls and views for this example:
 
 - **LLM**: chooses the frontend LLM from the example's catalogs. The backend LLM is always the gateway's, Nemotron 3 Ultra on the NVIDIA Inference Hub. The UI has no control for it.
 - **ASR**, **TTS**, and the TTS voice: choose the speech endpoints from the example's catalogs. A voice change during a session applies from the next sentence on.
-- **Prompt**: the panel shows the informational `frontend` prompt from `prompts.yaml`. The agent does not apply edits. The frontend prompt is `frontend_system` in `config/prompts.yaml`.
+- **Prompt**: the panel shows the informational `frontend` prompt from `prompts.yaml`. The agent does not apply edits. The frontend prompt is `frontend_system` in `config/prompts/<profile>/frontend.yaml` of the selected [prompt profile](#prompt-profiles).
 - **Tools**: the read-only tools panel lists the two demo tools, `get_order` and `cancel_order`. The server runs them.
 - **Transcripts and latency**: the UI shows the transcripts of both sides and the user-to-bot latency.
 
@@ -387,6 +439,7 @@ Eval mode deploys the `eval` profile for evaluation runs, such as a Tau evaluati
 | `frontend-delegation-hermes-agent-single-gpu` | `FDH_PROFILE` | `eval` | The container serves OpenAI Realtime sessions only and refuses browser UI sessions. |
 | `frontend-delegation-hermes-agent-single-gpu` | `PIPELINE_TLS` | `false` | The server serves plain HTTP and `ws://`, so an evaluation client connects without a certificate. |
 | `fdh-hermes` | `FDH_GATEWAY_CONFIG` | `gateway.eval.yaml` | The gateway uses the evaluation backend settings, which pin every backend prompt variant and record the backend decision trace. |
+| Both | `FDH_PROMPT_PROFILE` | `customer_service`, unless the shell or `.env` sets it | Evaluation runs use the customer-service prompts by default. Refer to [Prompt Profiles](#prompt-profiles). |
 
 Pass the overlay after `docker-compose.yml` in every Compose command for the deployment. A command without it recreates the containers with the `default` profile and `gateway.yaml`.
 
@@ -423,12 +476,12 @@ To deploy in eval mode, complete the following steps:
     curl -f http://localhost:7860/health
     ```
 
-5. Check the eval settings. The first command prints `eval` and `false`. The second prints a controller line that names `gateway.eval.yaml`. In the plain runtime, it prints the `FDH gateway` line:
+5. Check the eval settings. The first command prints `eval`, `false`, and `customer_service`. The second prints a controller line that names `gateway.eval.yaml`. In the plain runtime, it prints the `FDH gateway` line:
 
     ```bash
     docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
       --profile frontend-delegation-hermes-agent/single-gpu exec frontend-delegation-hermes-agent-single-gpu \
-      printenv FDH_PROFILE PIPELINE_TLS
+      printenv FDH_PROFILE PIPELINE_TLS FDH_PROMPT_PROFILE
     docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
       --profile frontend-delegation-hermes-agent/single-gpu logs fdh-hermes | grep -E 'gateway config|FDH gateway'
     ```
@@ -445,7 +498,7 @@ To switch back to the standard deployment, run the `up -d --build` command from 
 
 The Tau evaluation harness is not part of this repository. Use the following steps to point it at this deployment:
 
-1. Deploy in eval mode, as [Deploy in Eval Mode](#deploy-in-eval-mode) describes. Every Tau run must use the eval overlay, because only the overlay switches the gateway to `gateway.eval.yaml`.
+1. Deploy in eval mode, as [Deploy in Eval Mode](#deploy-in-eval-mode) describes. Every Tau run must use the eval overlay, because only the overlay switches the gateway to `gateway.eval.yaml`. Do not set `FDH_PROMPT_PROFILE` in the shell or in `.env`, so that the run uses `customer_service`.
 2. Configure the harness with the WebSocket URL `ws://<host>:7860/v1/realtime`, the model `nvidia/nemotron-realtime-frontend-delegation-hermes`, and your `REALTIME_API_KEY` as the Bearer credential. The former `pine-*` model names and the former ports `8775` and `8776` no longer reach FDH.
 3. Keep the session count within the cap of 4 Realtime sessions.
 4. Record the Hermes runtime, the gateway configuration and the source hash from the Hermes logs, and the profile and `config hash` from the app log, with the results.
@@ -456,42 +509,50 @@ The `config hash` includes the backend URL. The URL is `ws://default--fdh-hermes
 
 VoiceBench in `voice-agent-evaluation` connects through OpenAI Realtime with the server VAD and never sends `response.create`. It ends each case on the first `response.done` and scores only the audio transcript of that response. This agent speaks each filler and each proactive status line as its own response, so on a delegated turn VoiceBench would score the filler instead of the backend's answer.
 
-The VoiceBench overlay, `docker/docker-compose.fdh-voicebench.yaml`, sets `FDH_SILENT_FRONTEND=true`, which turns on the `delegation.silent_frontend` switch. With the switch on, the agent behaves as follows:
+The silent-frontend overlay, `docker/docker-compose.fdh-silent-frontend.yaml`, sets `FDH_SILENT_FRONTEND=true`, which turns on the `delegation.silent_frontend` switch. With the switch on, the agent behaves as follows:
 
 - The filler of a delegated turn is never spoken. The voice event log records it as a `filler_silenced` event with the reason `silent_frontend`.
 - The proactive status line is never spoken. The voice event log records a `proactive_status_silenced` event once per backend run.
 - Direct answers, that is turns that the frontend does not delegate, are still spoken.
+- A turn that the frontend LLM leaves silent (`delegate=false` with an empty filler) but that holds a real request is delegated anyway, as a task with an empty filler. The voice event log records a `delegation_guard` event with `guard=silent_delegated`. Empty turns, backchannels from `backchannel_words`, such as "okay" or "thanks", pauses, such as "hold on", liveness pings, and every turn while the backend is working stay silent.
 
-Use the VoiceBench overlay for VoiceBench runs only. Tau runs need the spoken filler and status lines.
+The switch is off by default, and without the overlay none of these rules apply.
 
-To run a VoiceBench evaluation, complete the following steps:
+A VoiceBench run makes two choices:
 
-1. Complete steps 1 to 4 of [Deploy in Eval Mode](#deploy-in-eval-mode), and start the recipe with the eval overlay and then the VoiceBench overlay. In the plain runtime, pass the plain overlay before the eval overlay:
+- Silent frontend: add the silent-frontend overlay, or leave it out. The default is to leave it out.
+- Prompt profile: set `FDH_PROMPT_PROFILE`. The suggested profile is `general_qa`, whose frontend delegates every request. Without the variable, eval mode uses `customer_service`. Refer to [Prompt Profiles](#prompt-profiles).
+
+Use the silent-frontend overlay for single-turn evaluations, such as VoiceBench, only. Tau runs need the spoken filler and status lines.
+
+To run a VoiceBench evaluation with a silent frontend and the `general_qa` profile, complete the following steps:
+
+1. Complete steps 1 to 4 of [Deploy in Eval Mode](#deploy-in-eval-mode), and start the recipe with the eval overlay and then the silent-frontend overlay. In the plain runtime, pass the plain overlay before the eval overlay. For a spoken filler, leave out the silent-frontend overlay in this and every later command:
 
     ```bash
-    docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
-      -f docker/docker-compose.fdh-voicebench.yaml \
+    FDH_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
+      -f docker/docker-compose.fdh-silent-frontend.yaml \
       --profile frontend-delegation-hermes-agent/single-gpu up -d --build
     ```
 
-    Pass the same `-f` files in every Compose command for this deployment, including `exec`, `logs`, and `down`.
+    Pass the same `-f` files in every Compose command for this deployment, including `exec`, `logs`, and `down`. Commands that recreate the containers, such as `up`, also need the same `FDH_PROMPT_PROFILE` value.
 
-2. Check the switch in the voice container. The command prints `true`:
+2. Check the switch and the prompt profile in the voice container. The command prints `true` and `general_qa`:
 
     ```bash
     docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
-      -f docker/docker-compose.fdh-voicebench.yaml \
+      -f docker/docker-compose.fdh-silent-frontend.yaml \
       --profile frontend-delegation-hermes-agent/single-gpu exec frontend-delegation-hermes-agent-single-gpu \
-      printenv FDH_SILENT_FRONTEND
+      printenv FDH_SILENT_FRONTEND FDH_PROMPT_PROFILE
     ```
 
 3. Connect one session. In `logs/fdh_voice_events.pipecat.jsonl`, the settings of the `fdh_session_start` record carry `silent_frontend: true`, and each delegated turn has a `filler_silenced` record.
 
 4. Run the harness with the profile `nemotron-fdh-local` and the run configuration `configs/runs/voicebench-fdh-realtime-smoke.yaml` in `voice-agent-evaluation`.
 
-5. Record the `config hash` from the app log with the results. The switch is part of the effective settings only when it is on, so the `config hash` of a VoiceBench run differs from that of a normal eval run. With the switch off, the hash is the same as before the switch existed.
+5. Record the prompt profile and the `config hash` from the app log with the results. The switch is part of the effective settings only when it is on, so the `config hash` of a run with a silent frontend differs from that of a normal eval run. The prompt paths are part of the effective settings too, so another prompt profile also changes the hash. With the switch off, the hash is the same as before the switch existed.
 
-To switch back to a Tau or other evaluation deployment, rerun the `up -d --build` command from [Deploy in Eval Mode](#deploy-in-eval-mode) without the VoiceBench overlay. Compose then recreates the voice container with `FDH_SILENT_FRONTEND=false`.
+To switch back to a Tau or other evaluation deployment, rerun the `up -d --build` command from [Deploy in Eval Mode](#deploy-in-eval-mode) without the silent-frontend overlay and without `FDH_PROMPT_PROFILE`. Compose then recreates the containers with `FDH_SILENT_FRONTEND=false` and the `customer_service` prompt profile.
 
 ## Read the Logs
 
@@ -542,7 +603,7 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
 
 In the OpenShell runtime, `fdh-hermes` saves the sandbox's `/app/logs` to `logs/openshell/<time>/` and then deletes the sandbox. The stop can take up to 60 seconds. If the controller crashed and left a sandbox behind, the next start saves its logs and deletes it before it creates a new one.
 
-If you started the deployment with the VoiceBench overlay, pass it after the eval overlay as well.
+If you started the deployment with the silent-frontend overlay, pass it after the eval overlay as well.
 
 In the plain runtime, the gateway closes open sessions one after another, so the stop can take up to 75 seconds. Pass the plain overlay to `down` as well.
 
@@ -573,7 +634,8 @@ The following table lists common failures for this recipe. For general startup i
 | The WebSocket handshake fails, and the server closes it with code 1008 and reason `realtime authentication failed`. | `REALTIME_API_KEY` is set, and the Realtime client sent no credential or a different one. | Send `Authorization: Bearer <your-realtime-api-key>` with the value from `.env`. |
 | `session.update` fails with `worker_start_timeout` or `backend_unavailable`. | A Hermes worker did not start. | Read the worker logs: `logs/fdh_workers_pipecat/` in the plain runtime, or a copy of the sandbox's `/app/logs` in the OpenShell runtime. Rerun the `up` command with `--build` if the Hermes checkout changed. |
 | A code change works on the voice side but not in Hermes, or the source hash in the `FDH gateway` line differs from your checkout. | The Hermes image runs the source that was built into it. | Rerun the `up` command with `--build`. |
-| A benchmark run shows other backend prompt hashes than expected, or the Hermes logs name `gateway.yaml`. | The deployment runs without the eval overlay. | Redeploy with `-f docker/docker-compose.fdh-eval.yaml`, and pass it in every Compose command. |
+| A benchmark run shows other backend prompt hashes than expected, or the Hermes logs name `gateway.yaml`. | The deployment runs without the eval overlay, or `FDH_PROMPT_PROFILE` is set in the shell or in `.env`. | Redeploy with `-f docker/docker-compose.fdh-eval.yaml`, and pass it in every Compose command. Remove `FDH_PROMPT_PROFILE` for a `customer_service` run. |
+| A session, or the FDH gateway at startup, fails with an error that names a missing prompt file under `config/prompts/`. | `FDH_PROMPT_PROFILE` names a prompt profile that does not exist, or it is set to an empty value. | Set `FDH_PROMPT_PROFILE` to an existing profile name, such as `generic`, `customer_service`, or `general_qa`, or remove it from the shell and `.env`. Then rerun the `up -d --build` command. Refer to [Prompt Profiles](#prompt-profiles). |
 | The client fails with `ssl argument is incompatible with a ws:// URI`, or a `wss://` handshake fails with an SSL error. | The client and the server disagree on TLS. Eval mode serves plain `ws://`. | Use `ws://` for an eval-mode deployment and `wss://` for the standard deployment. |
 | The browser does not ask for the microphone. | The page is served over plain HTTP from another machine. | Keep `PIPELINE_TLS=true` (the default) and open the `https://` URL. |
 | The download script fails, or `nemo-speech` cannot find its models. | `HF_TOKEN` is missing or invalid, or the weights are in another directory. | Set `HF_TOKEN` in `.env` and rerun the script as your user, or point `NEMO_SPEECH_MODEL_LOC` at the weights. |

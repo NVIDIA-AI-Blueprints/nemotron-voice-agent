@@ -45,7 +45,7 @@ from examples.frontend_delegation_hermes.core.sidecar.templates import BackendTe
 DOMAINS = ("airline", "retail", "telecom")
 PROFILE = variant("profiles/realtime_eval_124acf7.yaml")
 GATEWAY = variant("gateway.eval_124acf7.yaml")
-VOICE_PROMPTS = PACKAGE / "config" / "prompts.voice.yaml"
+VOICE_PROMPTS = PACKAGE / "config" / "prompts" / "customer_service" / "voice.yaml"
 NOTE_KEYS = ("lookup_not_found_hint_format", "lookup_not_found_hint_words", "tool_argument_invalid_readback")
 
 #: (state, backend asked a question, user text) x the model's decision: silent, speaking, delegating.
@@ -112,7 +112,9 @@ def render_all() -> dict[str, str]:
     """Every deployed-eval render, by name."""
     out: dict[str, str] = {}
     features = gc.load_gateway_config(GATEWAY).prompt_features
-    backend = BackendTemplates(PACKAGE / "config" / "prompts.backend.yaml", prompt_features=features)
+    backend = BackendTemplates(
+        PACKAGE / "config" / "prompts" / "customer_service" / "backend.yaml", prompt_features=features
+    )
     for domain in DOMAINS:
         out[f"frontend_system_{domain}.txt"] = asyncio.run(_frontend_system(domain))
         instructions = tau2_session_update(domain)["session"]["instructions"]

@@ -16,6 +16,7 @@ class EvalPinTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.stored = pins.load_pins()
+        cls.enterClassContext(pins.without_prompt_profile())
 
     def test_profiles_and_endpoints(self) -> None:
         for name, profile in (("eval_profile", pins.EVAL_PROFILE), ("demo_profile", pins.DEMO_PROFILE)):

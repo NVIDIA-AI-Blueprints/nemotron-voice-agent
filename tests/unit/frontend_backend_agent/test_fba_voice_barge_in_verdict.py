@@ -697,7 +697,7 @@ class WiringAndConfigTests(unittest.TestCase):
     def test_a_broken_template_fails_at_load_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            catalog = yaml.safe_load((CONFIG_DIR / "prompts" / "tau.yaml").read_text(encoding="utf-8"))
+            catalog = yaml.safe_load((CONFIG_DIR / "prompts" / "customer_service.yaml").read_text(encoding="utf-8"))
             catalog["frontend_task_in_progress"]["content"] += "{{ in_progress.no_such_field }}"
             (root / "prompts.yaml").write_text(yaml.safe_dump(catalog), encoding="utf-8")
             body = (

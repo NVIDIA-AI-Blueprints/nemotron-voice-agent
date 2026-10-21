@@ -55,7 +55,7 @@ from examples.frontend_delegation_hermes.core.tools.result_hints import ResultHi
 
 LEXICONS = load_delegation_config(PROFILES / "realtime_eval.yaml").delegation.liveness.lexicons
 EN = LEXICONS["en"]
-BACKEND_PROMPTS = PACKAGE / "config" / "prompts.backend.yaml"
+BACKEND_PROMPTS = PACKAGE / "config" / "prompts" / "customer_service" / "backend.yaml"
 FAILURE = r"(?i)\b(users?|customers?|members?|clients?|profiles?)\b[^.]*\b(not found|no such|does not exist)\b"
 
 

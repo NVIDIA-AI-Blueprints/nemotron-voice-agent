@@ -26,7 +26,7 @@ agent:
   config: "text/agent.yaml"   # [in-path]
   overrides:                        # deep-merged into the text agent.yaml before validation
     agent: {mode: frontend_backend}           # frontend_backend (default) | backend_only
-    prompts: {path: "${FBA_VOICE_PROMPTS:-prompts.voice.yaml}"}   # [in-path] -> this directory
+    prompts: {path: "prompts/${FDH_PROMPT_PROFILE:-generic}/voice.yaml"}   # [in-path] -> this directory
     backend:
       tools:
         on_incomplete_results: synthesize_error_result

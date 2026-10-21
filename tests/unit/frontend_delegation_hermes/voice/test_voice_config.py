@@ -59,7 +59,7 @@ class ShippedConfigTests(unittest.TestCase):
         self.assertFalse(config.protocol.greeting_enabled)
         self.assertEqual(config.asr.endpoint.server, "nemo-speech:50051")
         self.assertFalse(config.asr.endpoint.use_ssl)
-        self.assertEqual(config.agent.prompts_path, PACKAGE_DIR / "config" / "prompts.voice.yaml")
+        self.assertEqual(config.agent.prompts_path, PACKAGE_DIR / "config" / "prompts" / "generic" / "voice.yaml")
 
     def test_voice_profiles_change_only_their_keys(self) -> None:
         base = load_voice_config(VOICE_PROFILES / "base.yaml")

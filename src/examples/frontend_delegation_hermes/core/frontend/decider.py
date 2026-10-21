@@ -10,7 +10,8 @@
   for tests and ``--stub-backend`` smoke runs.
 
 :func:`apply_guards` runs after either: the backchannel and ``backend_question_needs_delegate`` guards,
-then the F2 rules R1-R3 (fix-plan-f1-f2-f4-f8.md section 2.3), each behind its own switch.
+then the F2 rules R1-R3 (fix-plan-f1-f2-f4-f8.md section 2.3), each behind its own switch, then, with the
+silent frontend only, the silent-turn rule (prompt-profiles-plan.md section 5.1).
 """
 
 from __future__ import annotations
@@ -33,12 +34,14 @@ from examples.frontend_delegation_hermes.core.frontend.delegate_tool import (
 )
 from examples.frontend_delegation_hermes.core.frontend.llm import ChatModel, ChatReply
 from examples.frontend_delegation_hermes.core.frontend.prompts import PromptCatalog
-from examples.frontend_delegation_hermes.core.frontend.turn_class import CONTENT, LIVENESS, TurnClass
+from examples.frontend_delegation_hermes.core.frontend.turn_class import BACKCHANNEL, CONTENT, HOLD, LIVENESS, TurnClass
 
 #: ``Decision.repair`` of the F2 rules; the turn manager picks their fillers (section 2.3).
 LIVENESS_REPLY = "liveness_reply"
 QUESTION_NEVER_SILENT = "question_never_silent"
 PING_AS_STATUS = "ping_as_status"
+#: ``Decision.repair`` of the silent-turn rule (``delegation.silent_frontend`` only).
+SILENT_DELEGATED = "silent_delegated"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +86,7 @@ def apply_guards(
     liveness_reply: bool = False,
     question_never_silent: bool = False,
     ping_as_status: bool = False,
+    delegate_silent: bool = False,
 ) -> Decision:
     """Code guards on top of the prompt (plan section 3; fix-plan-f1-f2-f4-f8.md section 2.3).
 
@@ -100,9 +104,15 @@ def apply_guards(
       status never steers the running model call); the model's filler is kept.
 
     A decision that speaks or delegates content is never changed by R1-R3.
+
+    Last, with ``delegate_silent`` (the silent frontend), a decision still silent after these rules is
+    delegated as a ``task`` with an empty filler, unless the turn is empty, a backchannel, a pause, a
+    liveness turn, or the backend is WORKING (:func:`_rescue_silent`).
     """
     guarded = _base_guards(decision, context, backend_question_needs_delegate, backchannel_words)
     if turn_class is None:
+        if delegate_silent and _rescue_silent(guarded, context, backchannel_words, turn_class):
+            return replace(guarded, delegate=True, filler_text="", request=REQUEST_TASK, repair=SILENT_DELEGATED)
         return guarded
     silent = not guarded.delegate and not guarded.filler_text
     if liveness_reply and silent and turn_class.kind == LIVENESS:
@@ -118,7 +128,21 @@ def apply_guards(
         and turn_class.kind == LIVENESS
     ):
         return replace(guarded, request=REQUEST_STATUS, repair=PING_AS_STATUS)
+    if delegate_silent and _rescue_silent(guarded, context, backchannel_words, turn_class):
+        return replace(guarded, delegate=True, filler_text="", request=REQUEST_TASK, repair=SILENT_DELEGATED)
     return guarded
+
+
+def _rescue_silent(
+    decision: Decision, context: DecisionContext, backchannel_words: Sequence[str], turn_class: TurnClass | None
+) -> bool:
+    """A silent turn with a real request: not a backchannel, pause or ping, backend not working."""
+    if decision.delegate or decision.filler_text:
+        return False
+    words = re.sub(r"[^\w\s'-]", "", context.user_text.lower()).strip()  # same normalisation as _base_guards
+    if not words or words in backchannel_words or context.state == WORKING:
+        return False
+    return turn_class is None or turn_class.kind not in (BACKCHANNEL, HOLD, LIVENESS)
 
 
 def _base_guards(

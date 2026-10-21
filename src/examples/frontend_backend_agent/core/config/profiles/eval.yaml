@@ -10,7 +10,8 @@
 # This is the former default Tau arm, tau3_eval_frontend_verdict_speak_history, with its extends
 # chain (tau3_eval -> _frontend_verdict -> _speak -> _speak_history) flattened into one file; its
 # merged config is unchanged (tests/unit/frontend_backend_agent/test_fba_golden.py). The prompt
-# catalog is the pinned Tau catalog (core/config/prompts/tau.yaml).
+# catalog is the pinned customer_service profile (core/config/prompts/customer_service.yaml), unless
+# FBA_PROMPT_PROFILE names another one.
 
 extends: ../voice_agent.yaml
 
@@ -41,8 +42,8 @@ protocol:
   resume_on: response_create
 
 # The frontend's filler is spoken, so the tau2 user hears it and can answer it.
-# FBA_FILLER_MODE=log_only (docker/docker-compose.fba-voicebench.yaml only) logs it instead, so a
-# single-turn benchmark such as VoiceBench scores the answer alone. Never set it to an empty value.
+# FBA_FILLER_MODE=log_only (docker/docker-compose.fba-silent-frontend.yaml only) logs it instead, so a
+# single-turn evaluation scores the answer alone. Never set it to an empty value.
 filler:
   mode: "${FBA_FILLER_MODE:-speak}"
 

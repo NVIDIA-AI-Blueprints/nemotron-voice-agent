@@ -177,7 +177,7 @@ class RealtimePipelineBaselineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(runtime.settings.summary(), SETTINGS_SUMMARY)
                 self.assertEqual(runtime.config.turn_detection.silence_duration_ms, 800)
                 self.assertEqual(runtime.config.tools.source, "client")
-                self.assertEqual(runtime.config.agent.prompts_path.name, "tau.yaml")
+                self.assertEqual(runtime.config.agent.prompts_path.name, "customer_service.yaml")
 
 
 class RealtimeSpeechEndpointBaselineTests(unittest.TestCase):

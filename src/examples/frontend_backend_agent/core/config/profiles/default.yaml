@@ -7,8 +7,8 @@
 # live browser user needs, plus what server-run tools require. OpenAI Realtime sessions never use
 # it: they always run with profiles/eval.yaml, so serving the browser does not change them.
 #
-# Tune this file and core/config/prompts/generic.yaml freely; eval.yaml and prompts/tau.yaml
-# change only with a Tau A/B run.
+# Tune this file and core/config/prompts/generic.yaml freely; eval.yaml and
+# prompts/customer_service.yaml change only with a Tau A/B run.
 
 extends: eval.yaml
 
@@ -19,7 +19,8 @@ server:
 
 agent:
   overrides:
-    prompts: {path: "../prompts/generic.yaml"}   # [in-path] -> core/config/prompts/generic.yaml
+    # The prompt profile (FBA_PROMPT_PROFILE); browser sessions default to generic.
+    prompts: {path: "../prompts/${FBA_PROMPT_PROFILE:-generic}.yaml"}   # [in-path] -> core/config/prompts/<profile>.yaml
     # The policy a browser session uses ({domain_policy} in the backend prompt); a Realtime client
     # sends its own instead. Edit it, or the frontend prompt in the UI, to adapt the assistant.
     domain:

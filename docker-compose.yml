@@ -229,7 +229,9 @@ services:
   # `eval` (evaluation runs: browser sessions are refused; set by docker/docker-compose.fba-eval.yaml,
   # single-gpu only). OpenAI Realtime sessions always use the `eval` agent settings. The
   # uvicorn WebSocket keepalive must be off (UVICORN_WS_PING_INTERVAL=0) on every FBA service:
-  # Realtime sessions check that the server matches the `eval` profile.
+  # Realtime sessions check that the server matches the `eval` profile. FBA_PROMPT_PROFILE names the
+  # prompt profile (core/config/prompts/<profile>.yaml): `generic` here, `customer_service` with the
+  # eval overlay; never empty.
   frontend-backend-agent:
     <<: *app-base
     profiles:
@@ -239,6 +241,7 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       LOCAL_SERVICES_ENABLED: "false"
       FBA_PROFILE: ${FBA_PROFILE:-default}
+      FBA_PROMPT_PROFILE: ${FBA_PROMPT_PROFILE:-generic}
       FBA_FILLER_MODE: speak
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
@@ -252,6 +255,7 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       REALTIME_SERVICE_PLATFORM: server
       FBA_PROFILE: ${FBA_PROFILE:-default}
+      FBA_PROMPT_PROFILE: ${FBA_PROMPT_PROFILE:-generic}
       FBA_FILLER_MODE: speak
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
@@ -265,6 +269,7 @@ services:
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-agent}
       REALTIME_SERVICE_PLATFORM: singlegpu
       FBA_PROFILE: ${FBA_PROFILE:-default}
+      FBA_PROMPT_PROFILE: ${FBA_PROMPT_PROFILE:-generic}
       FBA_FILLER_MODE: speak
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
@@ -278,7 +283,9 @@ services:
   # `default` (browser UI) and `eval` (OpenAI Realtime only; set with FDH_GATEWAY_CONFIG by
   # docker/docker-compose.fdh-eval.yaml). OpenAI Realtime sessions always use the `eval` settings.
   # Every FDH setting below is a literal: Compose fills ${...} from .env, so a stale .env value
-  # could otherwise change an evaluation run. Only the overlays change them.
+  # could otherwise change an evaluation run. Only the overlays change them. The one exception is
+  # FDH_PROMPT_PROFILE (the prompt profile, config/prompts/<profile>/), which the shell or .env may
+  # set; it is passed to both the voice service and `fdh-hermes`, never empty.
   frontend-delegation-hermes-agent-single-gpu:
     <<: *app-base
     profiles:
@@ -296,7 +303,7 @@ services:
       FDH_BACKEND_DELAY_S: "5"
       FDH_PROACTIVE_AFTER_S: "15"
       FDH_EVENT_LOG: logs/fdh_voice_events.pipecat.jsonl
-      FDH_PROMPTS: prompts.yaml
+      FDH_PROMPT_PROFILE: ${FDH_PROMPT_PROFILE:-generic}
       FDH_SILENT_FRONTEND: "false"
       FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
       FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
@@ -308,7 +315,6 @@ services:
       FBA_TTS_SERVER: ""
       FBA_VOICE_EVENT_LOG: ""
       FBA_FILLER_LOG: ""
-      FBA_VOICE_PROMPTS: prompts.voice.yaml
       FBA_BACKEND_HISTORY: "false"
       # τ² sends no pings and pauses for seconds: the server must not ping (Realtime sessions check it).
       UVICORN_WS_PING_INTERVAL: "0"
@@ -393,7 +399,7 @@ services:
   # (docker/fdh/openshell/controller.sh, OpenShell CLI) that creates the sandbox, reports its health, and
   # on stop saves the sandbox's logs to logs/openshell/<time>/ and deletes it. Gateway settings come only
   # from docker/fdh/gateway.env and the eval overlay; .env supplies only NVIDIA_API_KEY, which goes to the
-  # OpenShell provider, never into the sandbox.
+  # OpenShell provider, never into the sandbox, and FDH_PROMPT_PROFILE (the same value as the voice service).
   fdh-hermes:
     image: nemotron-voice-agent-fdh-openshell-cli:local
     build:
@@ -415,6 +421,7 @@ services:
       - docker/fdh/openshell/controller.env
     environment:
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      FDH_PROMPT_PROFILE: ${FDH_PROMPT_PROFILE:-generic}
     volumes:
       - ./docker/fdh/openshell:/cfg:ro
       - ./docker/fdh/gateway.env:/cfg-env/gateway.env:ro

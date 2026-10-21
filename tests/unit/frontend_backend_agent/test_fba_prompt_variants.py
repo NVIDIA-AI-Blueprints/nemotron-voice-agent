@@ -3,13 +3,15 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""Prompt variants: the Tau catalog is pinned, the generic one is free to tune (plan §7.3).
+"""Prompt profiles: the customer-service catalog is pinned, the generic one is free to tune (plan §7.3).
 
-The ``eval`` profile (OpenAI Realtime sessions, Tau) uses ``core/config/prompts/tau.yaml``, which
-is v1's ``voice/config/prompts.voice.yaml`` byte for byte. **Tau tuning rule:** changing
-``tau.yaml`` needs a new :data:`TAU_CATALOG_SHA256` and an attached Tau A/B run. The ``default``
-profile (browser UI sessions) uses ``core/config/prompts/generic.yaml``, which any change may tune;
-the root ``prompts.yaml`` (registry and UI) mirrors it.
+``FBA_PROMPT_PROFILE`` names a prompt profile, ``core/config/prompts/<profile>.yaml``. Unset, the
+``eval`` profile (OpenAI Realtime sessions, Tau) uses ``customer_service.yaml``, which is v1's
+``voice/config/prompts.voice.yaml`` byte for byte. **Tau tuning rule:** changing
+``customer_service.yaml`` needs a new :data:`TAU_CATALOG_SHA256` and an attached Tau A/B run. The
+``default`` profile (browser UI sessions) uses ``generic.yaml``, which any change may tune; the root
+``prompts.yaml`` (registry and UI) mirrors it. ``general_qa.yaml`` answers any request directly, with
+no tools.
 
 The ``eval`` profile's merged config and rendered prompts are compared with v1's in
 ``test_fba_golden`` (N4).
@@ -59,13 +61,22 @@ def _placeholders(catalog: dict[str, Any]) -> dict[str, set[str]]:
 
 class CatalogTests(unittest.TestCase):
     def test_tau_catalog_is_pinned(self) -> None:
-        digest = hashlib.sha256((PROMPTS_DIR / "tau.yaml").read_bytes()).hexdigest()
-        self.assertEqual(digest, TAU_CATALOG_SHA256, "tau.yaml changed: update the pin and attach a Tau A/B run")
+        digest = hashlib.sha256((PROMPTS_DIR / "customer_service.yaml").read_bytes()).hexdigest()
+        self.assertEqual(
+            digest, TAU_CATALOG_SHA256, "customer_service.yaml changed: update the pin and attach a Tau A/B run"
+        )
 
     def test_generic_catalog_keeps_the_keys_and_placeholders(self) -> None:
-        tau, generic = _catalog(PROMPTS_DIR / "tau.yaml"), _catalog(PROMPTS_DIR / "generic.yaml")
+        tau = _catalog(PROMPTS_DIR / "customer_service.yaml")
+        generic = _catalog(PROMPTS_DIR / "generic.yaml")
         self.assertEqual(set(generic), set(tau))
         self.assertEqual(_placeholders(generic), _placeholders(tau))
+
+    def test_every_profile_has_the_customer_service_keys(self) -> None:
+        keys = set(_catalog(PROMPTS_DIR / "customer_service.yaml"))
+        for path in sorted(PROMPTS_DIR.glob("*.yaml")):
+            with self.subTest(profile=path.stem):
+                self.assertEqual(set(_catalog(path)), keys)
 
     def test_root_catalog_mirrors_generic(self) -> None:
         self.assertEqual((PACKAGE_ROOT / "prompts.yaml").read_bytes(), (PROMPTS_DIR / "generic.yaml").read_bytes())
@@ -73,7 +84,7 @@ class CatalogTests(unittest.TestCase):
 
 class ProfileCatalogTests(unittest.TestCase):
     def test_each_profile_resolves_to_its_catalog(self) -> None:
-        expected = {DEFAULT_PROFILE: "generic.yaml", REALTIME_PROFILE: "tau.yaml"}
+        expected = {DEFAULT_PROFILE: "generic.yaml", REALTIME_PROFILE: "customer_service.yaml"}
         with pinned_environment():
             for name in SERVED_PROFILES:
                 with self.subTest(profile=name):
@@ -111,15 +122,26 @@ class ProfileCatalogTests(unittest.TestCase):
             self.assertIn("'default'", str(caught.exception))
             self.assertIn("'eval'", str(caught.exception))
 
-    def test_a_bad_prompts_override_fails_at_load(self) -> None:
+    def test_the_prompt_profile_variable_selects_the_catalog_in_both_profiles(self) -> None:
+        for path in sorted(PROMPTS_DIR.glob("*.yaml")):
+            for name in SERVED_PROFILES:
+                with (
+                    self.subTest(prompt_profile=path.stem, profile=name),
+                    pinned_environment(),
+                    mock.patch.dict(os.environ, {"FBA_PROMPT_PROFILE": path.stem}),
+                ):
+                    config = load_voice_config(profile_path(name))
+                    self.assertEqual(config.agent.prompts_path.resolve(), path.resolve())
+
+    def test_an_unknown_prompt_profile_fails_at_load(self) -> None:
         with (
             pinned_environment(),
-            mock.patch.dict(os.environ, {"FBA_VOICE_PROMPTS": "/nonexistent/prompts.yaml"}),
+            mock.patch.dict(os.environ, {"FBA_PROMPT_PROFILE": "no_such_profile"}),
             self.assertRaises(VoiceConfigError) as caught,
         ):
             load_voice_config(profile_path(REALTIME_PROFILE))
         self.assertIn("agent.overrides.prompts.path", str(caught.exception))
-        self.assertIn("/nonexistent/prompts.yaml", str(caught.exception))
+        self.assertIn("no_such_profile.yaml", str(caught.exception))
 
 
 if __name__ == "__main__":

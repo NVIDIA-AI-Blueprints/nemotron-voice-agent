@@ -81,7 +81,7 @@ def render_all() -> dict[str, str]:
     out["frontend_status_template.txt"] = prompts.render(
         "status_template", current_tool="get_reservation_details", current_tool_phrase="looking it up", done_count=2
     )
-    backend = BackendTemplates(PACKAGE / "config" / "prompts.backend.yaml")
+    backend = BackendTemplates(PACKAGE / "config" / "prompts" / "customer_service" / "backend.yaml")
     airline = tau2_session_update("airline")["session"]["instructions"]
     out["backend_soul.txt"] = backend.render("backend_soul")
     out["backend_system_airline.txt"] = backend.render("backend_system", instructions=airline)

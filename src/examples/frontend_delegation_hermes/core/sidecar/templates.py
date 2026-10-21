@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Jinja2 rendering of the backend prompt catalog (``config/prompts.backend.yaml``)."""
+"""Jinja2 rendering of the backend prompt catalog (``config/prompts/<profile>/backend.yaml``)."""
 
 from __future__ import annotations
 
