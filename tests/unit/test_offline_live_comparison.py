@@ -13,7 +13,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 _PATH = Path(__file__).resolve().parents[2] / "benchmarking_tools" / "offline-eval" / "compare_live.py"
 _SPEC = importlib.util.spec_from_file_location("nva_live_comparison_test", _PATH)
@@ -269,10 +269,68 @@ class WireReplayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["responses"][0]["committed_audio_samples"], 2)
             self.assertEqual(result["responses"][0]["llm_ttft_ms"], [40])
             self.assertEqual(result["completion_reason"], "post_input_idle")
+            self.assertEqual(result["input_speed"], 1.0)
+            self.assertEqual(result["mode"], "online_1x_normal_realtime_pipeline")
             trace = [json.loads(line) for line in (output / "events.jsonl").read_text().splitlines()]
             self.assertEqual(sum(value["event"].get("pcm_bytes", 0) for value in trace), 8)
             self.assertNotIn("delta", trace[2]["event"])
             self.assertTrue((output / "comparison.wav").is_file())
+
+    async def test_unpaced_diagnostic_preserves_chunks_without_source_duration_waits(self):
+        """Bulk native input keeps every PCM sample but claims no source clock."""
+
+        class Socket:
+            def __init__(self):
+                self.incoming = asyncio.Queue()
+                self.uploads = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def send(self, raw):
+                event = json.loads(raw)
+                if event["type"] == "session.update":
+                    await self.incoming.put({"type": "session.updated", "session": event["session"]})
+                else:
+                    self.uploads.append(base64.b64decode(event["audio"]))
+
+            async def recv(self):
+                return json.dumps(await self.incoming.get())
+
+        socket = Socket()
+        original = pcm(1, 2, 0, 0, -4)
+        with (
+            tempfile.TemporaryDirectory() as root,
+            patch.object(client.websockets, "connect", return_value=socket),
+            patch.object(client.asyncio, "sleep", new_callable=AsyncMock) as sleep,
+        ):
+            result = await client.run_live(
+                "ws://test/v1/realtime",
+                original,
+                Path(root) / "unpaced",
+                {},
+                chunk_samples=2,
+                input_speed=0,
+                post_input_idle_ms=1,
+                max_post_input_ms=500,
+            )
+        sleep.assert_not_called()
+        self.assertEqual(socket.uploads, [pcm(1, 2), pcm(0, 0), pcm(-4)])
+        self.assertEqual(result["input_speed"], 0)
+        self.assertEqual(result["mode"], "native_pipeline_pacing_diagnostic")
+        self.assertEqual(result["recording_clock"], "client_elapsed_time")
+
+    async def test_invalid_diagnostic_input_speed_prevents_connection(self):
+        """Invalid clock factors must fail before sending audio or creating files."""
+        with tempfile.TemporaryDirectory() as root, patch.object(client.websockets, "connect") as connect:
+            for index, speed in enumerate((-1, float("nan"), float("inf"), True, "fast")):
+                with self.subTest(speed=speed), self.assertRaisesRegex(ValueError, "Input speed"):
+                    await client.run_live("ws://test", pcm(1), Path(root) / str(index), {}, input_speed=speed)
+            connect.assert_not_called()
+            self.assertEqual(list(Path(root).iterdir()), [])
 
     def test_flat_config_maps_selectors_and_never_forwards_service_endpoints_or_keys(self):
         """Live routing is catalog-owned, while prompt/voice/settings stay explicit."""

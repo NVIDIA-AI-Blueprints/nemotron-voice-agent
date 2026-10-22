@@ -421,15 +421,27 @@ async def run_live(
     *,
     api_key: str = "",
     chunk_samples: int = 512,
+    input_speed: float = 1.0,
     setup_timeout_ms: float = 120_000,
     post_input_idle_ms: float = 5_000,
     max_post_input_ms: float = 60_000,
 ) -> dict[str, Any]:
-    """Send exactly one unchanged source at 1x and capture live gateway evidence."""
+    """Capture native behavior; zero input speed diagnoses unpaced ingestion.
+
+    Unpaced ingestion retains native wall-clock policies and output pacing.
+    Its capture uses client elapsed time, not offline source-offset placement.
+    """
     if not pcm or len(pcm) % 2 or not 0 < chunk_samples <= RATE:
         raise ValueError("Provide nonempty whole PCM16 samples and a positive chunk at most 1000 ms")
     if post_input_idle_ms <= 0 or max_post_input_ms < post_input_idle_ms or setup_timeout_ms <= 0:
         raise ValueError("Timeouts must be positive and absolute collection bound must cover idle bound")
+    if (
+        isinstance(input_speed, bool)
+        or not isinstance(input_speed, (int, float))
+        or not math.isfinite(input_speed)
+        or input_speed < 0
+    ):
+        raise ValueError("Input speed must be finite and nonnegative; zero means unpaced diagnostic ingestion")
     if api_key and not url.lower().startswith("wss://"):
         raise ValueError("Refusing to send a Realtime API key over an unencrypted WebSocket")
     if output.exists() and any(output.iterdir()):
@@ -468,8 +480,9 @@ async def run_live(
             nonlocal origin, send_done_ns
             origin = time.monotonic_ns()
             for start in range(0, len(pcm) // 2, chunk_samples):
-                deadline = origin + round(start * 1e9 / RATE)
-                await asyncio.sleep(max(0, (deadline - time.monotonic_ns()) / 1e9))
+                if input_speed:
+                    deadline = origin + round(start * 1e9 / RATE / input_speed)
+                    await asyncio.sleep(max(0, (deadline - time.monotonic_ns()) / 1e9))
                 packet = pcm[start * 2 : (start + chunk_samples) * 2]
                 before = time.monotonic_ns()
                 await asyncio.wait_for(
@@ -487,8 +500,10 @@ async def run_live(
                         "send_complete_ms": (after - origin) / 1e6,
                     }
                 )
-            # Hold until the last short packet's source duration has elapsed.
-            await asyncio.sleep(max(0, (origin + round(len(pcm) / 2 * 1e9 / RATE) - time.monotonic_ns()) / 1e9))
+            # Include the last short packet in the requested source pacing.
+            if input_speed:
+                end_deadline = origin + round(len(pcm) / 2 * 1e9 / RATE / input_speed)
+                await asyncio.sleep(max(0, (end_deadline - time.monotonic_ns()) / 1e9))
             send_done_ns = time.monotonic_ns()
 
         sender = asyncio.create_task(send_source())
@@ -568,7 +583,10 @@ async def run_live(
     for index, row in enumerate(rows, 1):
         row["response_index"] = index
     result = {
-        "mode": "online_1x_normal_realtime_pipeline",
+        "mode": "online_1x_normal_realtime_pipeline" if input_speed == 1 else "native_pipeline_pacing_diagnostic",
+        "input_speed": input_speed,
+        "input_chunk_samples": chunk_samples,
+        "recording_clock": "client_elapsed_time",
         "input_pcm_sha256": hashlib.sha256(pcm).hexdigest(),
         "input_samples": len(pcm) // 2,
         "input_duration_ms": len(pcm) / 2 * 1000 / RATE,
