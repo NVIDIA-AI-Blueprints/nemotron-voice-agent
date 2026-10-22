@@ -17,13 +17,16 @@ is distinct from output playback completion and may follow cancellation.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
+import hashlib
 import json
 import math
 import os
 import threading
 import time
 import uuid
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +38,7 @@ from pipecat.frames.frames import (
     InputAudioRawFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
+    LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
@@ -44,6 +48,7 @@ from pipecat.frames.frames import (
     TTSAudioRawFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
+    TTSTextFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
     VADUserStartedSpeakingFrame,
@@ -52,6 +57,7 @@ from pipecat.frames.frames import (
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
+from pipecat.services.llm_service import LLMService
 from pipecat.services.nvidia.stt import NvidiaSTTService
 from pipecat.services.nvidia.tts import NvidiaTTSService
 from pipecat.transports.base_output import BaseOutputTransport
@@ -77,13 +83,34 @@ TIMING_SCOPES = {
         "Observer callbacks may wait in Pipecat's proxy queue"
     ),
     "input_end_sample": "Received PCM cursor at observation; not a backdated raw speech boundary",
-    "asr_request_supplied": "Parent Riva audio iterator consumed supplied PCM; not socket delivery",
+    "asr_input_ingested": (
+        "STT process_audio_frame entered before the parent handles mute/reconnect/resampling; "
+        "its own cursor is normalized to 16000 Hz and is not proof of provider consumption"
+    ),
+    "asr_request_supplied": (
+        "Parent Riva audio iterator consumed byte-identical PCM; independent cumulative cursor normalized "
+        "to 16000 Hz, not socket delivery or an ASR completeness acknowledgement"
+    ),
     "asr_provider_result": "Existing nonempty-results callback entered on the event loop; not raw gRPC first byte",
+    "audio_processed_seconds": (
+        "Provider-reported processed-audio counter when finite and nonnegative; processed_sample_16k is its "
+        "rounded 16000-Hz equivalent, not word ownership, event time, or a completeness watermark"
+    ),
+    "llm_context_request_edge": (
+        "LLMContextFrame pushed to an LLMService, copied when the delayed observer callback runs. "
+        "pipeline_timestamp_ns is the original edge push, not an HTTP dispatch acknowledgement; "
+        "the mutable context may have changed before this snapshot"
+    ),
     "llm_frames": (
         "Use pipeline_timestamp_ns differences for LLM start/first nonempty text/end: this is the original "
         "frame push clock. elapsed_ns is delayed observer callback time. Neither clock epoch is interchangeable"
     ),
     "tts_text_submitted": "Filtered text entered run_tts; not text consumed by the gRPC request iterator",
+    "tts_text_frame": "First observed TTSTextFrame, distinct from raw LLM token text and from played PCM",
+    "tts_text_output_delivered": (
+        "TTSTextFrame pushed by the native output transport after its FIFO handling; "
+        "not proof of client playback or assistant-context consumption"
+    ),
     "tts_pcm_ready": "Generated PCM entered the TTS audio-context queue, before paced output transport",
     "tts_worker_finished": (
         "Stitched synthesis worker task ended; includes LLM input stalls. A cancelled task is not RPC EOF. "
@@ -134,6 +161,12 @@ class EvaluationTrace(BaseObserver):
         self._seen: set[tuple[str, int]] = set()
         self._contexts: dict[str, int] = {}
         self._input_end_sample = 0
+        self._asr_ingest_samples_16k = Fraction(0)
+        self._asr_ingest_sequence = 0
+        self._asr_supplied_samples_16k = Fraction(0)
+        self._asr_supplied_audio_bytes = 0
+        self._asr_supplied_audio_hash = hashlib.sha256()
+        self._context_version = 0
         self._llm_request_index = 0
         self._max_events = max_events
         self._dropped = 0
@@ -216,26 +249,73 @@ class EvaluationTrace(BaseObserver):
                 asr_service="NvidiaSTTService", asr_stop_history_ms=stop_history, asr_force_eou=False
             )
 
-    def asr_audio(self, audio: bytes) -> None:
+    def asr_input(self, frame: InputAudioRawFrame) -> None:
+        """Tag source-frame ingestion without claiming the parent accepted its PCM."""
+        if not self._once("asr_input", frame):
+            return
+        count = Fraction(len(frame.audio) * 16000, 2 * max(frame.num_channels, 1) * frame.sample_rate)
+        with self._lock:
+            start = round(self._asr_ingest_samples_16k)
+            self._asr_ingest_samples_16k += count
+            tag = {
+                "seq": self._asr_ingest_sequence,
+                "start": start,
+                "end": round(self._asr_ingest_samples_16k),
+                "rate": 16000,
+            }
+            self._asr_ingest_sequence += 1
+            # Preserve any pre-existing metadata. Only this opt-in observer uses
+            # the private tag; the native processors receive the same frame.
+            tagged = "nva_eval_source" not in frame.metadata
+            if tagged:
+                frame.metadata["nva_eval_source"] = copy.deepcopy(tag)
+            self.record(
+                "asr_input_ingested",
+                frame_id=frame.id,
+                source_tag=tag,
+                source_tag_written=tagged,
+                sample_rate=frame.sample_rate,
+                num_channels=frame.num_channels,
+                audio_bytes=len(frame.audio),
+                audio_sha256=hashlib.sha256(frame.audio).hexdigest(),
+            )
+
+    def asr_audio(self, audio: bytes, *, sample_rate: int = 16000, num_channels: int = 1) -> None:
         """Count original PCM when the standard Riva request iterator consumes it."""
-        self.record(
-            "asr_request_supplied",
-            audio_bytes=len(audio),
-            force_eou=False,
-            is_configuration=False,
-        )
+        count = Fraction(len(audio) * 16000, 2 * max(num_channels, 1) * sample_rate)
+        with self._lock:
+            start = round(self._asr_supplied_samples_16k)
+            self._asr_supplied_samples_16k += count
+            self._asr_supplied_audio_bytes += len(audio)
+            self._asr_supplied_audio_hash.update(audio)
+            self.record(
+                "asr_request_supplied",
+                audio_bytes=len(audio),
+                audio_sha256=hashlib.sha256(audio).hexdigest(),
+                asr_supplied_start_sample_16k=start,
+                asr_supplied_end_sample_16k=round(self._asr_supplied_samples_16k),
+                asr_supplied_total_audio_bytes=self._asr_supplied_audio_bytes,
+                sample_rate=sample_rate,
+                num_channels=num_channels,
+                force_eou=False,
+                is_configuration=False,
+            )
 
     def asr_response(self, response) -> None:
         """Read result metadata without putting extraction into provider control flow."""
+        results = []
+        for result in response.results:
+            item = {
+                "is_final": result.is_final,
+                "transcript": result.alternatives[0].transcript if result.alternatives else "",
+            }
+            seconds = _finite_number(getattr(result, "audio_processed", None))
+            if seconds is not None and seconds >= 0:
+                item.update(audio_processed_seconds=seconds, processed_sample_16k=round(seconds * 16000))
+            results.append(item)
         self.record(
             "asr_provider_result",
-            results=[
-                {
-                    "is_final": result.is_final,
-                    "transcript": result.alternatives[0].transcript if result.alternatives else "",
-                }
-                for result in response.results
-            ],
+            results=results,
         )
 
     async def on_push_frame(self, data: FramePushed) -> None:
@@ -258,6 +338,38 @@ class EvaluationTrace(BaseObserver):
                 num_channels=frame.num_channels,
                 pipeline_timestamp_ns=data.timestamp,
             )
+        if (
+            isinstance(frame, LLMContextFrame)
+            and isinstance(data.destination, LLMService)
+            and self._once("llm_context_request", frame)
+        ):
+            messages = copy.deepcopy(frame.context.get_messages())
+            with self._lock:
+                self._context_version += 1
+                self.record(
+                    "llm_context_request_edge",
+                    context_version=self._context_version,
+                    llm_request_index=None,
+                    messages=messages,
+                    speculation=frame.speculation,
+                    frame_id=frame.id,
+                    source=data.source.name,
+                    destination=data.destination.name,
+                    pipeline_timestamp_ns=data.timestamp,
+                )
+        if (
+            isinstance(frame, TTSTextFrame)
+            and isinstance(data.source, BaseOutputTransport)
+            and self._once("tts_text_output", frame)
+        ):
+            self.record(
+                "tts_text_output_delivered",
+                text=frame.text,
+                context_id=frame.context_id,
+                frame_id=frame.id,
+                source=data.source.name,
+                pipeline_timestamp_ns=data.timestamp,
+            )
         if not self._once("frame", frame):
             return
         shared = {"frame_id": frame.id, "source": data.source.name, "pipeline_timestamp_ns": data.timestamp}
@@ -274,6 +386,8 @@ class EvaluationTrace(BaseObserver):
                 audio_bytes=len(frame.audio),
                 **shared,
             )
+        elif isinstance(frame, TTSTextFrame):
+            self.record("tts_text_frame", text=frame.text, context_id=frame.context_id, **shared)
         elif isinstance(frame, LLMTextFrame):
             if frame.text and frame.text.strip():
                 self.record("llm_text", text=frame.text, **shared)
@@ -331,6 +445,11 @@ class EvaluationTrace(BaseObserver):
                     "schema": "nva.evaluation.trace.v1",
                     "session_id": self.session_id,
                     "configuration": self._configuration,
+                    "asr_supplied_audio": {
+                        "audio_bytes": self._asr_supplied_audio_bytes,
+                        "samples_16k": round(self._asr_supplied_samples_16k),
+                        "sha256": self._asr_supplied_audio_hash.hexdigest(),
+                    },
                     "timing_scopes": TIMING_SCOPES,
                     "dropped_events": self._dropped,
                     "observation_errors": self._observation_errors,
@@ -382,7 +501,13 @@ class _ObservedASRClient:
 
         def audio():
             for chunk in audio_chunks:
-                _observe(self._trace, "asr_audio", chunk)
+                _observe(
+                    self._trace,
+                    "asr_audio",
+                    chunk,
+                    sample_rate=streaming_config.config.sample_rate_hertz or 16000,
+                    num_channels=streaming_config.config.audio_channel_count or 1,
+                )
                 yield chunk
 
         return self._client.streaming_response_generator(audio_chunks=audio(), streaming_config=streaming_config)
@@ -414,6 +539,11 @@ class EvaluationNvidiaSTTService(NvidiaSTTService):
         """Timestamp the existing event-loop callback without changing its data."""
         _observe(self._evaluation_trace, "asr_response", response)
         return await super()._handle_response(response)
+
+    async def process_audio_frame(self, frame, direction):
+        """Observe actual source ingestion before delegating its unchanged handling."""
+        _observe(self._evaluation_trace, "asr_input", frame)
+        return await super().process_audio_frame(frame, direction)
 
 
 class EvaluationNvidiaTTSService(NvidiaTTSService):

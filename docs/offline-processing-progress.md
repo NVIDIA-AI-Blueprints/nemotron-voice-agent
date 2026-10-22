@@ -489,3 +489,85 @@ stack on GPUs 4 and 7. Classify differences as content variation, readiness
 variation, or framework ordering defects. Behavioral and scoring consistency
 against realtime streaming remains in progress. This entry records the next
 design and validation gates; the incremental runtime is not yet implemented.
+
+## October 22, 2026: Architecture Review And Native Pacing Diagnostic
+
+### Experiment And Scope
+
+The target remains the shared native conversation graph with clock and
+input/output adapters. The current ASR prepass, custom LLM adapter,
+captured-response replay, and lookahead budgets do not establish streaming
+equivalence.
+
+An isolated CPU application reuses models on GPUs 4 and 7
+without restarting existing services. The five files run through the native
+pipeline at concurrency 1, first paced, then unpaced.
+
+Both modes send identical 512-sample chunks, or 32 ms at 16,000 Hz. The
+[comparison client](../benchmarking_tools/offline-eval/compare_live.py) retains
+default `input_speed=1.0`; callable `input_speed=0` removes source-duration waits.
+Native turn timers and output pacing remain unchanged. Unpaced WAV files use
+client wall-clock offsets, not an aligned source timeline.
+
+### Paired And Repeated Results
+
+All five paced captures succeed. Three unpaced captures succeed; samples `503`
+and `750` fail with a fatal TTS context-completed-with-no-audio error. These are
+pipeline errors, not collection deadlines. Failed audio and traces are retained.
+
+The complete observed backend ASR final-segment sequence matches in all five
+pairs. Provider-supplied PCM hashes match source PCM in all ten initial captures.
+Observed VAD-start counts match: 6, 9, 5, 2, and 2. These counts do not establish
+matching event order or boundaries.
+
+Five fresh unpaced sessions repeat the experiment against the same saved paced
+baseline. The table uses actual native dispatch logs, excluding delayed observer
+context copies. Prefix measurements describe the first paired run.
+
+| Sample | Paced/First Unpaced LLM Requests | Repeat Unpaced LLM Requests | Paced STT Prefix At First Final (ms) | Unpaced STT Prefix At First Final (ms) |
+| --- | --- | --- | --- | --- |
+| `2` | 6 / 15 | 17 | 1,280 | 37,888 |
+| `3` | 9 / 21 | 21 | 1,600 | 49,437.5 |
+| `250` | 5 / 15 | 14 | 1,760 | 22,528 |
+| `503` | 2 / 4 | 7 | 960 | 14,128 |
+| `750` | 3 / 5 | 5 | 960 | 17,704 |
+
+Requests total 25 paced, 60 initially unpaced, and 64 in the unpaced repeat.
+Both unpaced runs preserve observed ASR finals and VAD-start counts but change
+user-message grouping in all five pairs. Four pairs differ at the first request,
+before assistant text exists. LLM wording variation cannot explain those initial
+context differences.
+
+Four repeat captures succeed. Sample `503` instead reaches the 60,000 ms guard
+with the client awaiting a response, despite a completed response. This is a
+timeout, unlike its initial TTS error. Native keepalive adds 100 ms of silence
+after its intact source PCM. Whole-session provider hashes match source in
+14 of 15 captures; this repeat has extra PCM, rather than missing source bytes.
+
+In every unpaced capture, STT ingests the entire source before the first ASR
+final. This does not mean that all VAD processing has finished: VAD notifications
+and ASR results still interleave. Equal chunk sizes preserve packet boundaries,
+but do not preserve the relative progress and readiness of asynchronous stages.
+
+### Required Runtime Boundaries
+
+The next implementation must share the native conversation graph and service
+lifecycle, with clock, ingress, provider-event, and output adapters. A safe
+delivery frontier establishes whether an earlier state-changing event remains
+pending; it does not assign ASR words to chunks. A verified provider watermark
+can permit faster advancement. Correctness can conservatively wait without one;
+an uploaded cursor or reported processed prefix is insufficient by itself.
+
+Finite-input completion also needs an explicit half-close and drain contract.
+The native STT `EndFrame` path closes its iterator and cancels its worker; it is
+not a guarantee that queued input and delayed results drain. A quiet collection
+window followed by WebSocket disconnect does not establish ASR response EOF.
+The diagnostic therefore reports observed captures, not verified stream drain.
+
+The passive trace records independent ingestion, provider supply/progress, text,
+and output edges without changing turn policy. The full local suite passes with
+839 tests, 3 skipped tests, and 181 subtests; lint passes for 279 Python files.
+Controlled identical-event replay against the native and offline paths remains
+pending. The incremental runtime is not implemented. Behavioral and scoring
+consistency remains in progress; this diagnostic establishes neither a fix for
+the current assistant-history difference nor benchmark accuracy equivalence.
