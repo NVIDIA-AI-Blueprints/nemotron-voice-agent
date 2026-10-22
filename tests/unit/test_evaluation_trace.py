@@ -4,6 +4,7 @@
 """Verify evaluation observations preserve the live services and frame flow."""
 
 import asyncio
+import hashlib
 import itertools
 import json
 import tempfile
@@ -17,17 +18,21 @@ import riva.client
 from pipecat.frames.frames import (
     InputAudioRawFrame,
     InterruptionFrame,
+    LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
     MetricsFrame,
     OutputAudioRawFrame,
     TTSAudioRawFrame,
+    TTSTextFrame,
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import TTFBMetricsData
 from pipecat.observers.base_observer import FramePushed
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.llm_service import LLMService
 from pipecat.services.nvidia.stt import NvidiaSTTService
 from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
 from pipecat.transports.base_output import BaseOutputTransport
@@ -114,6 +119,99 @@ class EvaluationTraceTests(unittest.IsolatedAsyncioTestCase):
         events = [event for event in self.saved()["events"] if event["event"] == "output_audio_sent"]
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["audio_bytes"], 320)
+
+    async def test_ingested_supplied_and_observer_cursors_remain_independent(self):
+        """Buffered input is not evidence that Riva consumed or processed that prefix."""
+        first = InputAudioRawFrame(audio=b"\x01\x02" * 512, sample_rate=16000, num_channels=1)
+        second = InputAudioRawFrame(audio=b"\x03\x04" * 512, sample_rate=16000, num_channels=1)
+        await self.push(first)
+        await self.push(second)
+        self.trace.asr_input(first)
+        self.trace.asr_input(first)
+        self.trace.asr_audio(first.audio[:512])
+        document = self.saved()
+        ingested = [event for event in document["events"] if event["event"] == "asr_input_ingested"]
+        supplied = next(event for event in document["events"] if event["event"] == "asr_request_supplied")
+        self.assertEqual(len(ingested), 1)
+        self.assertEqual(first.metadata["nva_eval_source"], {"seq": 0, "start": 0, "end": 512, "rate": 16000})
+        self.assertEqual(ingested[0]["input_end_sample"], 1024)
+        self.assertEqual(supplied["asr_supplied_end_sample_16k"], 256)
+        self.assertEqual(supplied["audio_sha256"], hashlib.sha256(first.audio[:512]).hexdigest())
+        self.assertEqual(document["asr_supplied_audio"]["samples_16k"], 256)
+        self.assertEqual(document["asr_supplied_audio"]["sha256"], supplied["audio_sha256"])
+
+    async def test_context_is_captured_once_at_llm_edge_without_losing_original_clock(self):
+        """Earlier edges must not hide the request snapshot; later mutation cannot rewrite it."""
+        context = LLMContext(messages=[{"role": "user", "content": "Original question"}])
+        frame = LLMContextFrame(context=context)
+        await self.push(frame)
+        llm = MagicMock(spec=LLMService)
+        for timestamp in (10_000_000, 20_000_000):
+            await self.trace.on_push_frame(
+                FramePushed(
+                    source=MagicMock(),
+                    destination=llm,
+                    frame=frame,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=timestamp,
+                )
+            )
+        context.add_message({"role": "assistant", "content": "Later reply"})
+        document = self.saved()
+        requests = [event for event in document["events"] if event["event"] == "llm_context_request_edge"]
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["messages"], [{"role": "user", "content": "Original question"}])
+        self.assertEqual(requests[0]["pipeline_timestamp_ns"], 10_000_000)
+        self.assertEqual(requests[0]["context_version"], 1)
+        self.assertIsNone(requests[0]["llm_request_index"])
+        self.assertIn("mutable context may have changed", document["timing_scopes"]["llm_context_request_edge"])
+
+    async def test_tts_text_first_observation_and_native_output_delivery_are_separate(self):
+        """Queued sentence text must not be mistaken for LLM tokens or output delivery."""
+        await self.push(LLMTextFrame(text="Hello"))
+        frame = TTSTextFrame(text="Hello there.", aggregated_by="sentence", context_id="context-one")
+        await self.push(frame)
+        output = MagicMock(spec=BaseOutputTransport)
+        await self.push(frame, source=output)
+        await self.push(frame, source=output)
+        events = self.saved()["events"]
+        self.assertEqual([event["text"] for event in events if event["event"] == "llm_text"], ["Hello"])
+        text = [event for event in events if event["event"] == "tts_text_frame"]
+        delivered = [event for event in events if event["event"] == "tts_text_output_delivered"]
+        self.assertEqual(len(text), 1)
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]["frame_id"], text[0]["frame_id"])
+        self.assertGreater(delivered[0]["sequence"], text[0]["sequence"])
+
+    def test_processed_audio_metadata_is_optional_and_does_not_invent_source_ownership(self):
+        """Missing or malformed provider counters are omitted, preserving transcript order."""
+        results = [
+            SimpleNamespace(is_final=True, alternatives=[SimpleNamespace(transcript="known")], audio_processed=1.25),
+            SimpleNamespace(is_final=False, alternatives=[SimpleNamespace(transcript="unknown")]),
+        ]
+        for value in (None, "unknown", float("nan"), -1, True):
+            results.append(SimpleNamespace(is_final=False, alternatives=[], audio_processed=value))
+        self.trace.asr_response(SimpleNamespace(results=results))
+        observed = next(event for event in self.saved()["events"] if event["event"] == "asr_provider_result")["results"]
+        self.assertEqual(observed[0]["audio_processed_seconds"], 1.25)
+        self.assertEqual(observed[0]["processed_sample_16k"], 20000)
+        self.assertEqual(observed[1]["transcript"], "unknown")
+        self.assertTrue(all("processed_sample_16k" not in item for item in observed[1:]))
+        self.assertTrue(all("dependency_chunk_end" not in item for item in observed))
+
+    def test_source_metadata_preserves_existing_values_and_cumulative_rate_conversion(self):
+        """Observation cannot overwrite metadata or accumulate per-chunk rounding drift."""
+        frames = [InputAudioRawFrame(audio=b"\0\0" * 7, sample_rate=44100, num_channels=1) for _ in range(10)]
+        frames[0].metadata["nva_eval_source"] = {"owner": "existing"}
+        for frame in frames:
+            self.trace.asr_input(frame)
+            self.trace.asr_audio(frame.audio, sample_rate=44100)
+        document = self.saved()
+        ingested = [event for event in document["events"] if event["event"] == "asr_input_ingested"]
+        self.assertEqual(frames[0].metadata["nva_eval_source"], {"owner": "existing"})
+        self.assertFalse(ingested[0]["source_tag_written"])
+        self.assertEqual(ingested[-1]["source_tag"]["end"], round(70 * 16000 / 44100))
+        self.assertEqual(document["asr_supplied_audio"]["samples_16k"], round(70 * 16000 / 44100))
 
     async def test_interruption_is_observed_upstream_once(self):
         """Retain barge-in even when its first edge travels upstream."""
@@ -353,6 +451,38 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
             "hello",
         )
         self.assertFalse(next(event for event in events if event["event"] == "asr_worker_finished")["iterator_closed"])
+
+    async def test_source_ingestion_observation_precedes_unchanged_parent_handling(self):
+        """The native parent receives the original frame and its return value survives."""
+        service = EvaluationNvidiaSTTService(evaluation_trace=self.trace, use_ssl=False)
+        frame = InputAudioRawFrame(audio=b"\x01\x02" * 512, sample_rate=16000, num_channels=1)
+        frame.metadata["unrelated"] = "preserved"
+
+        async def parent(frame_arg, direction_arg):
+            self.assertIs(frame_arg, frame)
+            self.assertEqual(direction_arg, FrameDirection.DOWNSTREAM)
+            self.assertEqual(frame.metadata["nva_eval_source"]["end"], 512)
+            return "native-result"
+
+        with patch.object(NvidiaSTTService, "process_audio_frame", side_effect=parent) as delegate:
+            self.assertEqual(await service.process_audio_frame(frame, FrameDirection.DOWNSTREAM), "native-result")
+        delegate.assert_awaited_once_with(frame, FrameDirection.DOWNSTREAM)
+        self.assertEqual(frame.audio, b"\x01\x02" * 512)
+        self.assertEqual(frame.metadata["unrelated"], "preserved")
+
+    async def test_failed_ingestion_observation_cannot_mask_native_cancellation(self):
+        """Trace errors remain optional even at the newly observed source edge."""
+        service = EvaluationNvidiaSTTService(evaluation_trace=self.trace, use_ssl=False)
+        frame = InputAudioRawFrame(audio=b"\0\0", sample_rate=16000, num_channels=1)
+        with (
+            patch.object(self.trace, "asr_input", side_effect=RuntimeError("trace failure")),
+            patch.object(NvidiaSTTService, "process_audio_frame", AsyncMock(side_effect=asyncio.CancelledError())),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await service.process_audio_frame(frame, FrameDirection.DOWNSTREAM)
+        self.assertEqual(json.loads(self.trace.path.read_text()) if self.trace.path.exists() else None, None)
+        self.trace.close()
+        self.assertEqual(json.loads(self.trace.path.read_text())["observation_errors"], 1)
 
     async def test_tts_handoff_and_generated_pcm_are_distinct_and_pass_through(self):
         """Stitched run_tts return cannot be mistaken for completion of synthesis."""
