@@ -12,18 +12,18 @@ profiles:
         operations: []
         argument_binding: none
         description: >-
-          Select this route only when the complete useful answer fits in one short spoken reply and needs
-          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
-          a route only; emit no answer or routing reasoning.
+          Select this route only for a social or interactional turn with no Work objective, or for one
+          necessary clarification before a faithful objective can be formed. Do not select it merely because
+          a requested result could be compressed into short speech. This call selects a route only; emit no
+          answer or routing reasoning.
         property_descriptions: {}
       work.delegate:
         operations: [work.submit]
         argument_binding: goal_required
         description: >-
-          Select the configured target whenever the useful result needs code, an artifact, rich display,
-          structured analysis, research, multiple steps, or any substantial answer. Supply a faithful,
-          standalone goal that incorporates the relevant conversation; do not add unstated requirements.
-          The server supplies correlation and routing identities.
+          Select the configured target for every finalized user Work objective or requested deliverable.
+          Supply a faithful, standalone goal that incorporates the relevant conversation; do not add
+          unstated requirements. The server supplies correlation and routing identities.
         property_descriptions:
           goal: >-
             Complete standalone objective reconstructed from the relevant conversation, including the
@@ -31,9 +31,19 @@ profiles:
       work.cancel:
         operations: [work.cancel]
         argument_binding: work_id_required
-        description: Request cancellation of one identified Work item; this does not stop local speech.
+        description: >-
+          Cancel one identified VoiceClaw-local request only while it is still waiting for dispatch.
+          This does not stop local speech and does not claim backend cancellation.
         property_descriptions:
-          work_id: Opaque backend-issued Work identifier from the authoritative projection.
+          work_id: VoiceClaw-local Work identifier from the current runtime projection.
+      work.status:
+        operations: [work.status]
+        argument_binding: work_id_optional
+        description: >-
+          Read VoiceClaw's current local evidence for one request, or the most recent request when
+          omitted. This does not query or invent native backend status.
+        property_descriptions:
+          work_id: Optional VoiceClaw-local Work identifier from the current runtime projection.
 
   single_stateful:
     session_scope: attachment
@@ -43,9 +53,10 @@ profiles:
         operations: []
         argument_binding: none
         description: >-
-          Select this route only when the complete useful answer fits in one short spoken reply and needs
-          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
-          a route only; emit no answer or routing reasoning.
+          Select this route only for a social or interactional turn with no Work objective, or for one
+          necessary clarification before a faithful objective can be formed. Do not select it merely because
+          a requested result could be compressed into short speech. This call selects a route only; emit no
+          answer or routing reasoning.
         property_descriptions: {}
       work.delegate:
         operations: [work.submit, work.steer]
@@ -83,9 +94,10 @@ profiles:
         operations: []
         argument_binding: none
         description: >-
-          Select this route only when the complete useful answer fits in one short spoken reply and needs
-          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
-          a route only; emit no answer or routing reasoning.
+          Select this route only for a social or interactional turn with no Work objective, or for one
+          necessary clarification before a faithful objective can be formed. Do not select it merely because
+          a requested result could be compressed into short speech. This call selects a route only; emit no
+          answer or routing reasoning.
         property_descriptions: {}
       work.delegate:
         operations: [work.submit, work.steer]
@@ -125,9 +137,10 @@ profiles:
         operations: []
         argument_binding: none
         description: >-
-          Select this route only when the complete useful answer fits in one short spoken reply and needs
-          no code, artifact, rich display, structured analysis, research, or backend Work. This call selects
-          a route only; emit no answer or routing reasoning.
+          Select this route only for a social or interactional turn with no Work objective, or for one
+          necessary clarification before a faithful objective can be formed. Do not select it merely because
+          a requested result could be compressed into short speech. This call selects a route only; emit no
+          answer or routing reasoning.
         property_descriptions: {}
       work.delegate:
         operations: [work.submit, work.steer]

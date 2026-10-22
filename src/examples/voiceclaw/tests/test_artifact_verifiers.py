@@ -41,7 +41,8 @@ def test_image_smoke_composes_the_packaged_response_only_adapter(tmp_path: Path)
     composition = compose_backends(config, environ={})
     try:
         assert composition.turn_status == "response_only"
-        assert composition.selected_agent_readiness is not None
+        assert composition.turn_backend is not None
+        assert composition.selected_agent_readiness is None
     finally:
         composition.close()
 

@@ -271,7 +271,7 @@ def _read_healthcheck_target(source: Path) -> tuple[str, str, int]:
 
 
 def _run_healthcheck(source: Path, *, timeout: float = 225.0) -> None:
-    """Probe the selected agent binding used as container readiness."""
+    """Probe the configured facade liveness endpoint."""
     scheme, host, port = _read_healthcheck_target(source)
     connection: http.client.HTTPConnection
     if scheme == "https":
@@ -282,11 +282,11 @@ def _run_healthcheck(source: Path, *, timeout: float = 225.0) -> None:
     else:
         connection = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
-        connection.request("GET", "/readyz", headers={"Connection": "close"})
+        connection.request("GET", "/livez", headers={"Connection": "close"})
         response = connection.getresponse()
         response.read()
         if response.status != 200:
-            raise RuntimeError(f"facade readiness endpoint returned HTTP {response.status}")
+            raise RuntimeError(f"facade liveness endpoint returned HTTP {response.status}")
     finally:
         connection.close()
 

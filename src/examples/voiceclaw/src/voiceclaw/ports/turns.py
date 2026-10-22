@@ -10,7 +10,8 @@ display response; it makes no claim about Work, replay, receipts, or recovery.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -49,19 +50,63 @@ class CommittedTurnError(RuntimeError):
         super().__init__(code)
 
 
+class CommittedTurnDispatchMarker:
+    """Thread-safe, provider-neutral evidence that backend effects may begin."""
+
+    __slots__ = ("_callback", "_lock", "_marked", "_rejected")
+
+    def __init__(self, callback: Callable[[], bool] | None = None) -> None:
+        """Use an optional owner callback to atomically admit the effects boundary."""
+        if callback is not None and not callable(callback):
+            raise TypeError("dispatch marker callback must be callable")
+        self._callback = callback
+        self._lock = threading.Lock()
+        self._marked = False
+        self._rejected = False
+
+    def mark(self) -> bool:
+        """Cross the boundary once, or reject dispatch when its owner fenced it."""
+        with self._lock:
+            if self._marked:
+                return True
+            if self._rejected:
+                return False
+            accepted = True if self._callback is None else self._callback()
+            if not isinstance(accepted, bool):
+                raise TypeError("dispatch marker callback must return a boolean")
+            if accepted:
+                self._marked = True
+            else:
+                self._rejected = True
+            return accepted
+
+    @property
+    def marked(self) -> bool:
+        """Return whether the adapter confirmed that effects may have started."""
+        with self._lock:
+            return self._marked
+
+
 @dataclass(frozen=True, slots=True)
 class CommittedTurnRequest:
-    """One immutable text turn committed by a realtime frontend."""
+    """One immutable text turn plus its provider-neutral effects boundary."""
 
     runtime_conversation_id: str
     commit_id: str
     text: str
+    dispatch_marker: CommittedTurnDispatchMarker = field(
+        default_factory=CommittedTurnDispatchMarker,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         """Reject missing correlation identities or empty input."""
         _required(self.runtime_conversation_id, "runtime_conversation_id")
         _required(self.commit_id, "commit_id")
         _required(self.text, "text")
+        if not isinstance(self.dispatch_marker, CommittedTurnDispatchMarker):
+            raise TypeError("dispatch_marker must be CommittedTurnDispatchMarker")
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +235,12 @@ class CommittedTurnBackend:
 
 
 class EphemeralCommittedTurnPort(Protocol):
-    """Admit one non-durable committed turn and return its terminal response."""
+    """Admit one non-durable committed turn and return its terminal response.
+
+    Implementations must call ``request.dispatch_marker.mark()`` immediately
+    before their first operation that may cause backend effects, and must abort
+    without dispatch when it returns ``False``. The marker is idempotent.
+    """
 
     async def inspect(self) -> CommittedTurnBackend:
         """Verify the configured target binding and return bounded capabilities."""
@@ -208,6 +258,7 @@ class EphemeralCommittedTurnPort(Protocol):
 __all__ = [
     "CommittedTurnBackend",
     "CommittedTurnCompleted",
+    "CommittedTurnDispatchMarker",
     "CommittedTurnDisplayDelta",
     "CommittedTurnError",
     "CommittedTurnEvent",

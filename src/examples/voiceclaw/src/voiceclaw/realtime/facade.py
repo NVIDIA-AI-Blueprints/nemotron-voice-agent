@@ -115,6 +115,12 @@ _PUBLIC_BACKEND_CORRELATION_FIELDS = frozenset(
         "turn_id",
     }
 )
+_LOCAL_CONTROL_TOOL_NAMES = frozenset(
+    {
+        ProtectedTool.WORK_CANCEL.logical_name,
+        ProtectedTool.WORK_STATUS.logical_name,
+    }
+)
 
 
 class RealtimeTransport(Protocol):
@@ -194,6 +200,7 @@ class _ResponsePurpose(StrEnum):
 
     ACKNOWLEDGEMENT = "acknowledgement"
     DIRECT_REPLY = "direct_reply"
+    CONTROL = "control"
     INTERACTIVE = "interactive"
     DELIVERY = "delivery"
 
@@ -202,10 +209,24 @@ _SERVER_SPEECH_PURPOSES = frozenset(
     {
         _ResponsePurpose.ACKNOWLEDGEMENT,
         _ResponsePurpose.DIRECT_REPLY,
+        _ResponsePurpose.CONTROL,
         _ResponsePurpose.DELIVERY,
     }
 )
 _APPLICATION_SPEECH_PURPOSES = frozenset(purpose.value for purpose in FrontendResponsePurpose)
+_RESULT_STATUS_SPEECH_PURPOSES = frozenset(
+    {
+        FrontendResponsePurpose.RESULT_DELIVERY.value,
+        FrontendResponsePurpose.STATUS_DELIVERY.value,
+    }
+)
+_RESPONSE_PURPOSE_PRIORITY = {
+    _ResponsePurpose.INTERACTIVE: 0,
+    _ResponsePurpose.DIRECT_REPLY: 10,
+    _ResponsePurpose.CONTROL: 10,
+    _ResponsePurpose.ACKNOWLEDGEMENT: 20,
+    _ResponsePurpose.DELIVERY: 100,
+}
 
 
 @dataclass(slots=True)
@@ -1242,6 +1263,7 @@ class VoiceClawRealtimeFacade:
             "agent_readiness": "unknown" if binding_verified else "unavailable",
             "capabilities": list(snapshot.capabilities),
             "frontend_tools": [tool.name for tool in snapshot.frontend_tools],
+            "local_control_tools": list(snapshot.local_control_tools),
             "durability": snapshot.durability.value if binding_verified else "unavailable",
             "event_delivery": snapshot.event_delivery.value if binding_verified else "unavailable",
             "max_parallel_work": snapshot.max_parallel_work if binding_verified else 0,
@@ -1902,6 +1924,7 @@ class VoiceClawRealtimeFacade:
         capacity_reserved: bool = False,
         speech_purpose: str | None = None,
         local_request_id: str | None = None,
+        presentation_id: str | None = None,
         client_response_instructions: str = "",
         server_response_context: Mapping[str, str] | None = None,
         frontend_context_request: FrontendContextRequest | None = None,
@@ -1909,7 +1932,8 @@ class VoiceClawRealtimeFacade:
         finalized_user_text: str | None = None,
         finalized_user_item_id: str | None = None,
         bind_pending_user_turn: bool = True,
-    ) -> None:
+        deduplicate_result_status: bool = False,
+    ) -> bool:
         """Queue one response request and send it only when the upstream is idle."""
         event_id = event.get("event_id")
         if event_id is None:
@@ -1929,16 +1953,11 @@ class VoiceClawRealtimeFacade:
             event=event,
             response_template=copy.deepcopy(response_template),
             purpose=purpose,
-            priority={
-                _ResponsePurpose.ACKNOWLEDGEMENT: 0,
-                _ResponsePurpose.DIRECT_REPLY: 0,
-                _ResponsePurpose.INTERACTIVE: 10,
-                _ResponsePurpose.DELIVERY: 100,
-            }[purpose],
+            priority=_RESPONSE_PURPOSE_PRIORITY[purpose],
             requires_speech_floor=requires_speech_floor,
             speech_purpose=speech_purpose,
             local_request_id=local_request_id,
-            presentation_id=self._id_factory("pres_vc"),
+            presentation_id=presentation_id or self._id_factory("pres_vc"),
             playback_receipt_id=self._id_factory("receipt_vc"),
             client_response_instructions=client_response_instructions,
             server_response_context=(None if server_response_context is None else dict(server_response_context)),
@@ -1949,9 +1968,14 @@ class VoiceClawRealtimeFacade:
             awaits_finalized_user_text=finalized_item_id is not None and finalized_user_text is None,
         )
         rejected_manual_response: tuple[str, str] | None = None
+        retired_acknowledgements: list[_QueuedResponseCreate] = []
+        deduplicated = False
         async with self._response_state_lock:
+            if deduplicate_result_status:
+                deduplicated = self._coalesce_result_status_locked(queued)
             if (
-                purpose is _ResponsePurpose.INTERACTIVE
+                not deduplicated
+                and purpose is _ResponsePurpose.INTERACTIVE
                 and finalized_user_text is not None
                 and not bind_pending_user_turn
             ):
@@ -1974,7 +1998,18 @@ class VoiceClawRealtimeFacade:
                         manual_commit.rejection_code,
                         manual_commit.rejection_message,
                     )
-            if rejected_manual_response is None:
+            if not deduplicated and rejected_manual_response is None:
+                if purpose is _ResponsePurpose.INTERACTIVE and self._response_create_queue:
+                    retired_acknowledgements = [
+                        candidate
+                        for candidate in self._response_create_queue
+                        if candidate.purpose is _ResponsePurpose.ACKNOWLEDGEMENT
+                    ]
+                    self._response_create_queue = deque(
+                        candidate
+                        for candidate in self._response_create_queue
+                        if candidate.purpose is not _ResponsePurpose.ACKNOWLEDGEMENT
+                    )
                 bounded_purposes = (
                     _SERVER_SPEECH_PURPOSES
                     if purpose in _SERVER_SPEECH_PURPOSES
@@ -2023,6 +2058,12 @@ class VoiceClawRealtimeFacade:
                     len(self._response_create_queue),
                 )
                 self._response_create_queue.insert(insertion, queued)
+        for retired in retired_acknowledgements:
+            await self._retire_unsent_response_create(retired)
+        if deduplicated:
+            await self._publish_delivery_queue_state()
+            await self._dispatch_next_response_create()
+            return False
         if rejected_manual_response is not None:
             await self._send_public_error(
                 rejected_manual_response[0],
@@ -2032,6 +2073,68 @@ class VoiceClawRealtimeFacade:
         elif queued.awaits_finalized_user_text and queued.finalized_item_id is not None:
             self._arm_finalized_audio_timeout(queued.finalized_item_id)
         await self._dispatch_next_response_create()
+        return rejected_manual_response is None
+
+    def _coalesce_result_status_locked(self, incoming: _QueuedResponseCreate) -> bool:
+        """Coalesce one result/status speech handoff for the same local request."""
+        local_request_id = incoming.local_request_id
+        if local_request_id is None or incoming.speech_purpose not in _RESULT_STATUS_SPEECH_PURPOSES:
+            return False
+
+        existing = next(
+            (
+                candidate
+                for candidate in self._response_create_queue
+                if candidate.local_request_id == local_request_id
+                and candidate.speech_purpose in _RESULT_STATUS_SPEECH_PURPOSES
+            ),
+            None,
+        )
+        if existing is not None:
+            if (
+                incoming.speech_purpose == FrontendResponsePurpose.RESULT_DELIVERY.value
+                and existing.speech_purpose == FrontendResponsePurpose.STATUS_DELIVERY.value
+            ):
+                existing.event = incoming.event
+                existing.response_template = incoming.response_template
+                existing.speech_purpose = incoming.speech_purpose
+                existing.presentation_id = incoming.presentation_id
+                existing.server_response_context = incoming.server_response_context
+                existing.frontend_context_request = incoming.frontend_context_request
+            if (
+                incoming.speech_purpose == FrontendResponsePurpose.STATUS_DELIVERY.value
+                or existing.purpose is _ResponsePurpose.CONTROL
+            ):
+                existing.purpose = _ResponsePurpose.CONTROL
+                existing.priority = _RESPONSE_PURPOSE_PRIORITY[_ResponsePurpose.CONTROL]
+                self._response_create_queue.remove(existing)
+                insertion = next(
+                    (
+                        index
+                        for index, candidate in enumerate(self._response_create_queue)
+                        if candidate.priority > existing.priority
+                    ),
+                    len(self._response_create_queue),
+                )
+                self._response_create_queue.insert(insertion, existing)
+            return True
+
+        in_flight = self._response_create_in_flight
+        if (
+            in_flight is not None
+            and in_flight.local_request_id == local_request_id
+            and in_flight.speech_purpose in _RESULT_STATUS_SPEECH_PURPOSES
+        ):
+            return not (
+                incoming.speech_purpose == FrontendResponsePurpose.RESULT_DELIVERY.value
+                and in_flight.speech_purpose == FrontendResponsePurpose.STATUS_DELIVERY.value
+            )
+        if self._active_speech_local_request_id != local_request_id:
+            return False
+        return not (
+            incoming.speech_purpose == FrontendResponsePurpose.RESULT_DELIVERY.value
+            and self._active_speech_purpose == FrontendResponsePurpose.STATUS_DELIVERY.value
+        )
 
     def _input_event_id_in_use(self, event_id: str) -> bool:
         """Return whether a committed-input id was already accepted in this session."""
@@ -2065,13 +2168,20 @@ class VoiceClawRealtimeFacade:
         event_id: str,
         item_id: str,
     ) -> bool:
-        """Keep a later item from overtaking an earlier unsent response.create."""
+        """Fence only causal interactive responses, never queued application speech."""
         async with self._response_state_lock:
             in_flight = self._response_create_in_flight
             response_barrier = (
                 bool(self._response_admission_barriers)
-                or bool(self._response_create_queue)
-                or (in_flight is not None and not in_flight.sent_upstream)
+                or any(
+                    queued.purpose in {_ResponsePurpose.INTERACTIVE, _ResponsePurpose.DIRECT_REPLY}
+                    for queued in self._response_create_queue
+                )
+                or (
+                    in_flight is not None
+                    and not in_flight.sent_upstream
+                    and in_flight.purpose in {_ResponsePurpose.INTERACTIVE, _ResponsePurpose.DIRECT_REPLY}
+                )
             )
             if not response_barrier:
                 return False
@@ -2086,8 +2196,15 @@ class VoiceClawRealtimeFacade:
             in_flight = self._response_create_in_flight
             if (
                 self._response_admission_barriers
-                or self._response_create_queue
-                or (in_flight is not None and not in_flight.sent_upstream)
+                or any(
+                    queued.purpose in {_ResponsePurpose.INTERACTIVE, _ResponsePurpose.DIRECT_REPLY}
+                    for queued in self._response_create_queue
+                )
+                or (
+                    in_flight is not None
+                    and not in_flight.sent_upstream
+                    and in_flight.purpose in {_ResponsePurpose.INTERACTIVE, _ResponsePurpose.DIRECT_REPLY}
+                )
             ):
                 return
             deferred = list(self._deferred_client_item_creates)
@@ -2221,11 +2338,18 @@ class VoiceClawRealtimeFacade:
             dynamic_projection = self._current_projection(context_request)
             if queued.purpose is _ResponsePurpose.ACKNOWLEDGEMENT:
                 response["instructions"] = self._task_acknowledgement_instructions(dynamic_projection)
-            elif (
-                queued.purpose is _ResponsePurpose.DELIVERY
-                and queued.speech_purpose == FrontendResponsePurpose.RESULT_DELIVERY.value
-            ):
+            elif queued.speech_purpose == FrontendResponsePurpose.RESULT_DELIVERY.value:
                 response["instructions"] = self._result_delivery_instructions(
+                    dynamic_projection,
+                    queued.server_response_context,
+                )
+            elif queued.speech_purpose == FrontendResponsePurpose.STATUS_DELIVERY.value:
+                response["instructions"] = self._status_delivery_instructions(
+                    dynamic_projection,
+                    queued.server_response_context,
+                )
+            elif queued.speech_purpose == FrontendResponsePurpose.CONTROL_DELIVERY.value:
+                response["instructions"] = self._control_delivery_instructions(
                     dynamic_projection,
                     queued.server_response_context,
                 )
@@ -2283,6 +2407,54 @@ class VoiceClawRealtimeFacade:
             delivery_context_json=self._quoted_instruction_json(
                 delivery_context,
             ),
+        )
+        return self._bounded_special_instructions(instructions)
+
+    def _status_delivery_instructions(
+        self,
+        dynamic_projection: str,
+        response_context: Mapping[str, str] | None,
+    ) -> str:
+        """Render a local status answer without turning projection into result facts."""
+        context = dict(response_context or {})
+        if set(context) != {"response_purpose"}:
+            raise ValueError("status delivery context has unexpected fields")
+        if context.get("response_purpose") != FrontendResponsePurpose.STATUS_DELIVERY.value:
+            raise ValueError("status delivery context is invalid")
+        try:
+            projection = json.loads(dynamic_projection)
+            if not isinstance(projection, dict) or not isinstance(projection.get("target_request"), dict):
+                raise ValueError("status delivery projection has no target request")
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError("status delivery projection is invalid") from error
+        instructions = self._model_contracts.render_instruction(
+            "status_delivery",
+            response_context_json=self._quoted_instruction_json(context),
+            status_context_json=self._quoted_instruction_json(projection),
+        )
+        return self._bounded_special_instructions(instructions)
+
+    def _control_delivery_instructions(
+        self,
+        dynamic_projection: str,
+        response_context: Mapping[str, str] | None,
+    ) -> str:
+        """Render a confirmed local control outcome without inventing backend effects."""
+        context = dict(response_context or {})
+        if set(context) != {"response_purpose"}:
+            raise ValueError("control delivery context has unexpected fields")
+        if context.get("response_purpose") != FrontendResponsePurpose.CONTROL_DELIVERY.value:
+            raise ValueError("control delivery context is invalid")
+        try:
+            projection = json.loads(dynamic_projection)
+            if not isinstance(projection, dict) or not isinstance(projection.get("target_request"), dict):
+                raise ValueError("control delivery projection has no target request")
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError("control delivery projection is invalid") from error
+        instructions = self._model_contracts.render_instruction(
+            "control_delivery",
+            response_context_json=self._quoted_instruction_json(context),
+            control_context_json=self._quoted_instruction_json(projection),
         )
         return self._bounded_special_instructions(instructions)
 
@@ -2410,6 +2582,15 @@ class VoiceClawRealtimeFacade:
             failed, error = routing_failure
             await self._retire_unsent_response_create(failed)
             await self._publish_delivery_queue_state()
+            if failed.speech_purpose == FrontendResponsePurpose.RESULT_DELIVERY.value:
+                await self._emit_speech_delivery_failure(
+                    purpose=failed.purpose,
+                    speech_purpose=failed.speech_purpose,
+                    local_request_id=failed.local_request_id,
+                    presentation_id=failed.presentation_id,
+                    phase="failed",
+                    reason=error.code,
+                )
             event_id = failed.event.get("event_id")
             await self._send_public_error(
                 error.code,
@@ -2566,7 +2747,10 @@ class VoiceClawRealtimeFacade:
                 self._response_finalized_user_text[upstream_response_id] = self._pending_finalized_user_text
                 finalized_turn = (self._id_factory("turn_vc"), self._pending_finalized_user_text)
                 self._pending_finalized_user_text = None
-            is_delivery = self._active_upstream_response_purpose is _ResponsePurpose.DELIVERY
+            is_delivery = self._active_upstream_response_purpose in {
+                _ResponsePurpose.CONTROL,
+                _ResponsePurpose.DELIVERY,
+            }
             private_route = self._is_private_route_response(upstream_response_id)
             presentation_id = self._active_presentation_id
             receipt_id = self._active_playback_receipt_id
@@ -3013,6 +3197,7 @@ class VoiceClawRealtimeFacade:
                 server_speech = {
                     _ResponsePurpose.ACKNOWLEDGEMENT,
                     _ResponsePurpose.DIRECT_REPLY,
+                    _ResponsePurpose.CONTROL,
                     _ResponsePurpose.DELIVERY,
                 }
                 waiting_depth = sum(item.purpose in server_speech for item in self._response_create_queue) + int(
@@ -3159,7 +3344,10 @@ class VoiceClawRealtimeFacade:
         private_route = self._is_private_route_response(response_id)
         rewritten = self._rewrite_upstream_event(event)
         rewritten_response = rewritten.get("response")
-        if self._active_upstream_response_purpose is _ResponsePurpose.DELIVERY and isinstance(rewritten_response, dict):
+        if self._active_upstream_response_purpose in {
+            _ResponsePurpose.CONTROL,
+            _ResponsePurpose.DELIVERY,
+        } and isinstance(rewritten_response, dict):
             metadata = rewritten_response.setdefault("metadata", {})
             if isinstance(metadata, dict):
                 metadata["voiceclaw_delivery"] = "true"
@@ -4001,12 +4189,216 @@ class VoiceClawRealtimeFacade:
             arguments=parsed.arguments,
             finalized_user_text=parsed.finalized_user_text,
         )
+        if parsed.name in {ProtectedTool.WORK_STATUS, ProtectedTool.WORK_CANCEL}:
+            await self._consume_local_operation_updates(
+                upstream_call_id,
+                updates,
+                operation_id=commit_id,
+                expected_purposes=(
+                    frozenset(
+                        {
+                            FrontendResponsePurpose.RESULT_DELIVERY,
+                            FrontendResponsePurpose.STATUS_DELIVERY,
+                            FrontendResponsePurpose.FAILURE_DELIVERY,
+                        }
+                    )
+                    if parsed.name is ProtectedTool.WORK_STATUS
+                    else frozenset(
+                        {
+                            FrontendResponsePurpose.CONTROL_DELIVERY,
+                            FrontendResponsePurpose.FAILURE_DELIVERY,
+                        }
+                    )
+                ),
+            )
+            return
         await self._consume_runtime_updates(
             upstream_call_id,
             updates,
             local_request_id=commit_id,
             failure_code="backend_unavailable",
         )
+
+    async def _consume_local_operation_updates(
+        self,
+        upstream_call_id: str,
+        updates: AsyncIterator[InteractionUpdate],
+        *,
+        operation_id: str,
+        expected_purposes: frozenset[FrontendResponsePurpose],
+    ) -> None:
+        """Commit one local status/control operation without backend-terminal assumptions."""
+        update: InteractionUpdate | None = None
+        try:
+            async for candidate in updates:
+                if not isinstance(candidate, InteractionUpdate) or update is not None:
+                    raise FacadeProtocolError(
+                        "runtime_protocol_error",
+                        "The VoiceClaw interaction manager returned invalid local-control updates.",
+                    )
+                update = candidate
+        except asyncio.CancelledError:
+            raise
+        except FacadeProtocolError:
+            close = getattr(updates, "aclose", None)
+            if callable(close):
+                with suppress(Exception):
+                    closing = close()
+                    if inspect.isawaitable(closing):
+                        await closing
+            raise
+        except Exception as error:
+            close = getattr(updates, "aclose", None)
+            if callable(close):
+                with suppress(Exception):
+                    closing = close()
+                    if inspect.isawaitable(closing):
+                        await closing
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager could not complete the local operation.",
+            ) from error
+
+        if (
+            update is None
+            or update.kind is ResponseOnlyUpdateKind.RESULT_DISPLAY
+            or update.tool_output is None
+            or update.frontend_response is None
+            or update.frontend_response.purpose not in expected_purposes
+        ):
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager returned an invalid local-control outcome.",
+            )
+
+        correlation = dict(update.correlation)
+        projected_operation_id = correlation.get("operation_id")
+        if projected_operation_id is not None and projected_operation_id != operation_id:
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager returned inconsistent operation identity.",
+            )
+        identity_authority = correlation.get("identity_authority")
+        if identity_authority is not None and identity_authority not in {
+            "voiceclaw_local",
+            "voiceclaw_volatile",
+        }:
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager returned inconsistent request authority.",
+            )
+
+        output = dict(update.tool_output)
+        frontend_response = update.frontend_response
+        target_ids = {
+            identifier
+            for identifier in (
+                correlation.get("local_request_id"),
+                output.get("local_request_id"),
+                frontend_response.local_request_id,
+            )
+            if identifier is not None
+        }
+        if len(target_ids) > 1 or (
+            not target_ids and frontend_response.purpose is not FrontendResponsePurpose.FAILURE_DELIVERY
+        ):
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager returned inconsistent target identity.",
+            )
+        local_request_id = target_ids.pop() if target_ids else None
+        correlation.setdefault("operation_id", operation_id)
+        correlation.setdefault("identity_authority", identity_authority or "voiceclaw_local")
+        if local_request_id is not None:
+            correlation.setdefault("local_request_id", local_request_id)
+        if frontend_response.local_request_id is None and local_request_id is not None:
+            frontend_response = replace(frontend_response, local_request_id=local_request_id)
+
+        target_contract_refreshed = self._apply_runtime_contract_refresh(update)
+        try:
+            await self._queue_frontend_response(frontend_response)
+        except FacadeProtocolError as error:
+            if frontend_response.purpose is FrontendResponsePurpose.RESULT_DELIVERY:
+                await self._emit_speech_delivery_failure(
+                    purpose=_ResponsePurpose.DELIVERY,
+                    speech_purpose=frontend_response.purpose.value,
+                    local_request_id=frontend_response.local_request_id,
+                    presentation_id=frontend_response.presentation_id,
+                    phase="failed",
+                    reason=error.code,
+                )
+            raise
+        await self._emit_projection(
+            kind=update.kind,
+            phase=update.phase,
+            title=update.title,
+            text=update.text,
+            correlation=correlation,
+            request_summary=update.request_summary,
+        )
+        if target_contract_refreshed:
+            await self._emit_backend_target()
+        private_status = "failed" if output.get("status") in {"failed", "rejected"} else "ok"
+        if not await self._send_tool_output(upstream_call_id, {"status": private_status}):
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager repeated a local-control outcome.",
+            )
+        await self._release_admission_barrier(upstream_call_id)
+
+    def _apply_runtime_contract_refresh(self, update: InteractionUpdate) -> bool:
+        """Apply one authoritative frontend-tool or backend-target replacement."""
+        target = update.backend_target
+        if target is None and update.frontend_tools is None:
+            return False
+        refreshed_tools = target.frontend_tools if target is not None else update.frontend_tools
+        assert refreshed_tools is not None
+        try:
+            self._tools = VoiceClawToolRegistry(
+                tools=refreshed_tools,
+                include_direct_route=bool(refreshed_tools),
+                contracts=self._model_contracts,
+                interaction_profile=self._interaction_profile,
+            )
+        except ValueError as error:
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager returned an invalid tool snapshot.",
+            ) from error
+        if self._session_snapshot is None:
+            raise FacadeProtocolError(
+                "runtime_protocol_error",
+                "The VoiceClaw interaction manager refreshed tools before session initialization.",
+            )
+        if target is None:
+            self._session_snapshot = replace(
+                self._session_snapshot,
+                frontend_tools=refreshed_tools,
+                local_control_tools=tuple(
+                    tool.name for tool in refreshed_tools if tool.name in _LOCAL_CONTROL_TOOL_NAMES
+                ),
+            )
+        else:
+            self._session_snapshot = replace(
+                self._session_snapshot,
+                backend_label=target.backend_label,
+                backend_mode=target.backend_mode,
+                target_binding_verified=target.target_binding_verified,
+                target_ref=target.target_ref,
+                target_availability=target.target_availability,
+                capabilities=target.capabilities,
+                frontend_tools=target.frontend_tools,
+                local_control_tools=target.local_control_tools,
+                durability=target.durability,
+                event_delivery=target.event_delivery,
+                max_parallel_work=target.max_parallel_work,
+                context_continuity=target.context_continuity,
+                capability_source=target.capability_source,
+                capability_source_id=target.capability_source_id,
+                capability_revision=target.capability_revision,
+                capability_hash=target.capability_hash,
+            )
+        return True
 
     async def _consume_runtime_updates(
         self,
@@ -4071,7 +4463,10 @@ class VoiceClawRealtimeFacade:
                         "The VoiceClaw interaction manager returned inconsistent request identity.",
                     )
             identity_authority = correlation.get("identity_authority")
-            if identity_authority is not None and identity_authority != "voiceclaw_local":
+            if identity_authority is not None and identity_authority not in {
+                "voiceclaw_local",
+                "voiceclaw_volatile",
+            }:
                 raise FacadeProtocolError(
                     "runtime_protocol_error",
                     "The VoiceClaw interaction manager returned inconsistent request authority.",
@@ -4079,53 +4474,7 @@ class VoiceClawRealtimeFacade:
             correlation.setdefault("local_request_id", local_request_id)
             correlation.setdefault("identity_authority", "voiceclaw_local")
 
-            target_contract_refreshed = update.backend_target is not None or update.frontend_tools is not None
-            if target_contract_refreshed:
-                target = update.backend_target
-                refreshed_tools = target.frontend_tools if target is not None else update.frontend_tools
-                assert refreshed_tools is not None
-                try:
-                    self._tools = VoiceClawToolRegistry(
-                        tools=refreshed_tools,
-                        include_direct_route=bool(refreshed_tools),
-                        contracts=self._model_contracts,
-                        interaction_profile=self._interaction_profile,
-                    )
-                except ValueError as error:
-                    raise FacadeProtocolError(
-                        "runtime_protocol_error",
-                        "The VoiceClaw interaction manager returned an invalid tool snapshot.",
-                    ) from error
-                if self._session_snapshot is None:
-                    raise FacadeProtocolError(
-                        "runtime_protocol_error",
-                        "The VoiceClaw interaction manager refreshed tools before session initialization.",
-                    )
-                if target is None:
-                    self._session_snapshot = replace(
-                        self._session_snapshot,
-                        frontend_tools=refreshed_tools,
-                        capabilities=(self._session_snapshot.capabilities if refreshed_tools else ()),
-                    )
-                else:
-                    self._session_snapshot = replace(
-                        self._session_snapshot,
-                        backend_label=target.backend_label,
-                        backend_mode=target.backend_mode,
-                        target_binding_verified=target.target_binding_verified,
-                        target_ref=target.target_ref,
-                        target_availability=target.target_availability,
-                        capabilities=target.capabilities,
-                        frontend_tools=target.frontend_tools,
-                        durability=target.durability,
-                        event_delivery=target.event_delivery,
-                        max_parallel_work=target.max_parallel_work,
-                        context_continuity=target.context_continuity,
-                        capability_source=target.capability_source,
-                        capability_source_id=target.capability_source_id,
-                        capability_revision=target.capability_revision,
-                        capability_hash=target.capability_hash,
-                    )
+            target_contract_refreshed = self._apply_runtime_contract_refresh(update)
 
             output = dict(update.tool_output) if update.tool_output is not None else None
             if output is not None:
@@ -4312,7 +4661,7 @@ class VoiceClawRealtimeFacade:
                             purpose=_ResponsePurpose.DELIVERY,
                             speech_purpose=frontend_response.purpose.value,
                             local_request_id=frontend_response.local_request_id,
-                            presentation_id=None,
+                            presentation_id=frontend_response.presentation_id,
                             phase="failed",
                             reason=error.code,
                         )
@@ -4483,17 +4832,31 @@ class VoiceClawRealtimeFacade:
             purpose=(
                 _ResponsePurpose.ACKNOWLEDGEMENT
                 if response.purpose is FrontendResponsePurpose.DELEGATION_ACK
-                else _ResponsePurpose.DELIVERY
+                else (
+                    _ResponsePurpose.CONTROL
+                    if response.purpose
+                    in {
+                        FrontendResponsePurpose.STATUS_DELIVERY,
+                        FrontendResponsePurpose.CONTROL_DELIVERY,
+                    }
+                    else _ResponsePurpose.DELIVERY
+                )
             ),
             requires_speech_floor=True,
             capacity_reserved=capacity_reserved,
             speech_purpose=response.purpose.value,
             local_request_id=response.local_request_id,
+            presentation_id=response.presentation_id,
             server_response_context=context,
             frontend_context_request=FrontendContextRequest(
                 purpose=FrontendContextPurpose(response.purpose.value),
                 local_request_id=response.local_request_id,
             ),
+            deduplicate_result_status=response.purpose
+            in {
+                FrontendResponsePurpose.RESULT_DELIVERY,
+                FrontendResponsePurpose.STATUS_DELIVERY,
+            },
         )
 
     def _frontend_response_context(self, response: FrontendResponse) -> dict[str, str]:
@@ -4528,9 +4891,14 @@ class VoiceClawRealtimeFacade:
             correlation["local_request_id"] = local_request_id
         cancelled = phase == "cancelled"
         if speech_purpose == FrontendResponsePurpose.RESULT_DELIVERY.value and local_request_id is not None:
+            if presentation_id is None:
+                raise FacadeProtocolError(
+                    "runtime_protocol_error",
+                    "The VoiceClaw result delivery is missing its presentation identity.",
+                )
             outcome = FrontendSpeechDeliveryOutcome(
                 local_request_id=local_request_id,
-                presentation_id=presentation_id or self._id_factory("pres_vc"),
+                presentation_id=presentation_id,
                 state=(
                     FrontendSpeechDeliveryOutcomeState.CANCELLED
                     if cancelled

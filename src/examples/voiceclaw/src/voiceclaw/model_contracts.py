@@ -27,7 +27,7 @@ _MAX_FAILURE_CODE_OVERRIDES = 256
 _TOKEN = re.compile(r"\$\{([a-z][a-z0-9_]*)\}")
 _PLACEHOLDER = re.compile(r"\$\{([^}]*)\}")
 _FAILURE_CODE = re.compile(r"[a-z][a-z0-9_]{0,127}")
-_INSTRUCTION_TEMPLATE_TOKENS = {
+_REQUIRED_INSTRUCTION_TEMPLATE_TOKENS = {
     "task_acknowledgement": frozenset({"objective_json"}),
     "result_delivery": frozenset({"delivery_context_json", "response_context_json"}),
     "server_policy": frozenset({"content"}),
@@ -37,6 +37,14 @@ _INSTRUCTION_TEMPLATE_TOKENS = {
     "application_response_turn": frozenset(),
     "dynamic_projection": frozenset({"projection"}),
     "bootstrap_projection": frozenset({"projection"}),
+}
+_OPTIONAL_INSTRUCTION_TEMPLATE_TOKENS = {
+    "status_delivery": frozenset({"response_context_json", "status_context_json"}),
+    "control_delivery": frozenset({"control_context_json", "response_context_json"}),
+}
+_INSTRUCTION_TEMPLATE_TOKENS = {
+    **_REQUIRED_INSTRUCTION_TEMPLATE_TOKENS,
+    **_OPTIONAL_INSTRUCTION_TEMPLATE_TOKENS,
 }
 _RESULT_TEMPLATE_TOKENS = frozenset({"user_goal_json", "result_schema", "speech_budget_bytes", "display_budget_bytes"})
 
@@ -190,7 +198,8 @@ def _parse_catalog(raw: Mapping[str, Any], *, profile: str) -> ModelContractCata
     _validate_tokens(static_instructions, expected=frozenset(), path="frontend.static_instructions")
     instruction_templates = _template_mapping(
         frontend.get("instruction_templates"),
-        expected=_INSTRUCTION_TEMPLATE_TOKENS,
+        required=_REQUIRED_INSTRUCTION_TEMPLATE_TOKENS,
+        optional=_OPTIONAL_INSTRUCTION_TEMPLATE_TOKENS,
         path="frontend.instruction_templates",
     )
     failure_copy_title, default_failure_copy, failure_copy_overrides = _failure_copy_catalog(
@@ -272,13 +281,25 @@ def _failure_text(value: object, path: str, *, maximum: int) -> str:
 def _template_mapping(
     value: object,
     *,
-    expected: Mapping[str, frozenset[str]],
+    required: Mapping[str, frozenset[str]],
+    optional: Mapping[str, frozenset[str]],
     path: str,
 ) -> dict[str, str]:
     raw = _mapping(value, path)
-    _exact_keys(raw, set(expected), path)
+    supported = {**required, **optional}
+    missing = sorted(set(required) - set(raw))
+    unknown = sorted(set(raw) - set(supported))
+    if missing or unknown:
+        details = []
+        if missing:
+            details.append(f"missing {', '.join(missing)}")
+        if unknown:
+            details.append(f"unknown {', '.join(unknown)}")
+        raise ModelContractError(f"{path} has invalid keys: {'; '.join(details)}")
     result: dict[str, str] = {}
-    for name, expected_tokens in expected.items():
+    for name, expected_tokens in supported.items():
+        if name not in raw:
+            continue
         template = _text(raw[name], f"{path}.{name}")
         _validate_tokens(template, expected=expected_tokens, path=f"{path}.{name}")
         result[name] = template

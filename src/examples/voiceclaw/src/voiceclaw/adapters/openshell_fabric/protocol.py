@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Strict codec for the deployed Fabric bridge command contract."""
+"""Strict Fabric 0.5 runtime-server request and response codec."""
 
 from __future__ import annotations
 
@@ -13,28 +13,47 @@ from typing import Any
 
 MAX_FABRIC_REQUEST_BYTES = 512 * 1024
 MAX_FABRIC_RESPONSE_BYTES = 4 * 1024 * 1024
+FABRIC_ADAPTER_KINDS = frozenset({"http", "native_plugin", "process", "python"})
 _OUTER_FIELDS = frozenset({"operation", "status", "changed", "result", "error"})
 _ERROR_FIELDS = frozenset({"code", "stage", "message", "effects"})
+_RUN_REQUIRED_FIELDS = frozenset(
+    {
+        "agent_name",
+        "harness",
+        "adapter_kind",
+        "adapter_id",
+        "runtime_id",
+        "invocation_id",
+        "request_id",
+        "status",
+        "output",
+    }
+)
+_RUN_ERROR_REQUIRED_FIELDS = frozenset({"stage", "code", "message"})
 
 
 class FabricProtocolError(ValueError):
-    """The bridge emitted a malformed or contradictory response."""
-
-
-class FabricFirstTurnQualificationError(FabricProtocolError):
-    """The selected runtime history cannot be qualified as one fresh turn."""
+    """The Fabric runtime server emitted malformed or contradictory data."""
 
 
 class FabricStatus(StrEnum):
-    """Terminal statuses emitted by a bridge command."""
+    """Terminal statuses emitted by the runtime-server command envelope."""
 
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     UNSUPPORTED = "unsupported"
 
 
+class FabricRunStatus(StrEnum):
+    """Terminal statuses emitted by a Fabric invocation."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class FabricEffects(StrEnum):
-    """Whether a failed bridge command may have affected its target."""
+    """Whether a failed runtime-server command may have affected its target."""
 
     NONE = "none"
     APPLIED = "applied"
@@ -43,7 +62,7 @@ class FabricEffects(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class FabricFailure:
-    """Validated failure evidence safe to expose beyond the adapter."""
+    """Validated command failure evidence safe to expose beyond the adapter."""
 
     code: str
     effects: FabricEffects
@@ -51,7 +70,7 @@ class FabricFailure:
 
 @dataclass(frozen=True, slots=True)
 class FabricResponse:
-    """One validated five-field bridge response."""
+    """One validated five-field runtime-server response envelope."""
 
     operation: str
     status: FabricStatus
@@ -61,195 +80,57 @@ class FabricResponse:
 
 
 @dataclass(frozen=True, slots=True)
-class FabricAdapterCodec:
-    """Qualified request and result binding for one selected Fabric adapter."""
+class FabricRunResult:
+    """Validated identity and terminal state from one direct Fabric RunResult."""
 
+    agent_name: str
+    harness: str
+    adapter_kind: str
     adapter_id: str
-    revision: str
-    expected_harness: str
-    expected_adapter_kind: str
-    expected_output_harness: str
-    default_result_pointer: str
-
-    def encode_input(self, *, native_agent: str, prompt: str) -> bytes:
-        """Encode one request through the qualified adapter input shape."""
-        if not isinstance(native_agent, str) or not native_agent or "\x00" in native_agent:
-            raise FabricProtocolError("invalid Fabric native agent")
-        if not isinstance(prompt, str) or not prompt or "\x00" in prompt:
-            raise FabricProtocolError("invalid Fabric invocation input")
-        return _encode_json_request({"agent": native_agent, "message": prompt})
-
-    def validate_first_turn_result(
-        self,
-        *,
-        fabric_result: dict[str, Any],
-        native_agent: str,
-        runtime_id: str,
-        prompt: str,
-    ) -> str:
-        """Validate the fail-closed first-turn shape and return its session key."""
-        return self.validate_turn_result(
-            fabric_result=fabric_result, native_agent=native_agent, runtime_id=runtime_id, prompt=prompt
-        )
-
-    def validate_turn_result(
-        self,
-        *,
-        fabric_result: dict[str, Any],
-        native_agent: str,
-        runtime_id: str,
-        prompt: str,
-        prior_messages: list[dict[str, Any]] | None = None,
-    ) -> str:
-        """Require an exact verified prefix followed by one complete new turn."""
-        output = fabric_result.get("output")
-        if not isinstance(output, dict):
-            raise FabricProtocolError("Fabric result output is invalid")
-        if output.get("harness") != self.expected_output_harness:
-            raise FabricProtocolError("Fabric result output harness mismatch")
-        expected_session_key = f"agent:{native_agent}:fabric-{runtime_id}"
-        if output.get("session_key") != expected_session_key:
-            raise FabricProtocolError("Fabric result session identity mismatch")
-        messages = output.get("messages")
-        if not isinstance(messages, list):
-            raise FabricProtocolError("Fabric result omitted context-isolation evidence")
-        if any(not isinstance(message, dict) for message in messages):
-            raise FabricProtocolError("Fabric result contains malformed context-isolation evidence")
-        if prior_messages is not None:
-            if not prior_messages or json.dumps(messages[: len(prior_messages)], sort_keys=True) != json.dumps(
-                prior_messages, sort_keys=True
-            ):
-                raise FabricFirstTurnQualificationError("Fabric result changed previously verified history")
-            messages = messages[len(prior_messages) :]
-        if len(messages) < 2:
-            raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
-        user_message, assistant_message = messages[0], messages[-1]
-        if set(user_message) != {"role", "content"} or user_message != {"role": "user", "content": prompt}:
-            if len(messages) > 2:
-                raise FabricFirstTurnQualificationError("Fabric result does not satisfy first-turn qualification")
-            raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
-        _validate_tool_history(messages[1:-1])
-        response = output.get("response")
-        history_content = assistant_message.get("content")
-        # OpenClaw history can retain outer JSON whitespace omitted by returned payloads.
-        if (
-            not isinstance(response, str)
-            or not response
-            or set(assistant_message) != {"role", "content", "tool_calls"}
-            or assistant_message.get("role") != "assistant"
-            or not isinstance(history_content, str)
-            or history_content.strip(" \t\r\n") != response.strip(" \t\r\n")
-            or assistant_message.get("tool_calls") != []
-        ):
-            raise FabricProtocolError("Fabric result does not satisfy first-turn qualification")
-        return expected_session_key
+    runtime_id: str
+    invocation_id: str
+    request_id: str
+    status: FabricRunStatus
+    value: dict[str, Any]
 
 
-def _validate_tool_history(messages: list[dict[str, Any]]) -> None:
-    """Require completed function-call batches between the sole user and final answer."""
-    seen: set[str] = set()
-    pending: set[str] = set()
-    for message in messages:
-        if message.get("role") == "assistant":
-            if pending:
-                raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unfinished tool calls")
-            calls = message.get("tool_calls")
-            if (
-                set(message) != {"role", "content", "tool_calls"}
-                or not isinstance(message.get("content"), str)
-                or not isinstance(calls, list)
-            ):
-                raise FabricProtocolError("Fabric result contains malformed tool history")
-            if not calls:
-                raise FabricFirstTurnQualificationError("Fabric first-turn qualification found an extra assistant turn")
-            for call in calls:
-                if not isinstance(call, dict) or set(call) != {"id", "type", "function"}:
-                    raise FabricProtocolError("Fabric result contains malformed tool calls")
-                function = call.get("function")
-                call_id = call.get("id")
-                if (
-                    call.get("type") != "function"
-                    or not isinstance(call_id, str)
-                    or not call_id
-                    or "\x00" in call_id
-                    or not isinstance(function, dict)
-                    or set(function) != {"name", "arguments"}
-                    or not isinstance(function.get("name"), str)
-                    or not function["name"]
-                    or "\x00" in function["name"]
-                    or not isinstance(function.get("arguments"), str)
-                ):
-                    raise FabricProtocolError("Fabric result contains malformed tool calls")
-                if call_id in seen:
-                    raise FabricFirstTurnQualificationError(
-                        "Fabric first-turn qualification found reused tool-call IDs"
-                    )
-                seen.add(call_id)
-                pending.add(call_id)
-        elif message.get("role") == "tool":
-            if set(message) != {"role", "content", "tool_call_id", "is_error"}:
-                raise FabricFirstTurnQualificationError(
-                    "Fabric first-turn qualification found unqualified tool results"
-                )
-            call_id = message.get("tool_call_id")
-            if (
-                not isinstance(message.get("content"), str)
-                or not isinstance(message.get("is_error"), bool)
-                or not isinstance(call_id, str)
-            ):
-                raise FabricProtocolError("Fabric result contains malformed tool results")
-            if call_id not in pending:
-                raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unmatched tool results")
-            pending.remove(call_id)
-        else:
-            raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unrelated history")
-    if pending:
-        raise FabricFirstTurnQualificationError("Fabric first-turn qualification found unfinished tool calls")
-
-
-def adapter_codec(adapter_id: str) -> FabricAdapterCodec:
-    """Resolve only an adapter contract with checked request and result evidence."""
-    if adapter_id != "nvidia.fabric.openclaw":
-        raise FabricProtocolError("incompatible Fabric adapter codec")
-    return FabricAdapterCodec(
-        adapter_id="nvidia.fabric.openclaw",
-        revision="v1",
-        expected_harness="nvidia.fabric.openclaw",
-        expected_adapter_kind="python",
-        expected_output_harness="openclaw",
-        default_result_pointer="/output/response",
+def encode_run_request(
+    *,
+    input_text: str,
+    request_id: str,
+    relay_session_root: str,
+    context: dict[str, Any],
+) -> bytes:
+    """Encode one complete public Fabric RunRequest for ``--request -``."""
+    _required_string(input_text, "Fabric invocation input")
+    _required_identity(request_id, "Fabric request ID")
+    _required_identity(relay_session_root, "Fabric relay session root")
+    if not isinstance(context, dict):
+        raise FabricProtocolError("Fabric request context must be an object")
+    return _encode_json_request(
+        {
+            "input": input_text,
+            "request_id": request_id,
+            "relay_session_root": relay_session_root,
+            "context": context,
+        }
     )
 
 
-def _encode_json_request(value: dict[str, Any]) -> bytes:
-    try:
-        encoded = json.dumps(
-            value,
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, UnicodeEncodeError, ValueError) as error:
-        raise FabricProtocolError("invalid Fabric invocation input") from error
-    if len(encoded) > MAX_FABRIC_REQUEST_BYTES:
-        raise FabricProtocolError("Fabric invocation input exceeds the request limit")
-    return encoded
-
-
 def decode_response(*, operation: str, exit_code: int, stdout: str) -> FabricResponse:
-    """Decode one newline-terminated bridge response without lossy fallback."""
-    if operation not in {"check", "invoke"}:
-        raise FabricProtocolError("unsupported bridge operation")
+    """Decode one newline-terminated runtime-server response without fallback."""
+    if operation != "invoke":
+        raise FabricProtocolError("unsupported Fabric operation")
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
-        raise FabricProtocolError("invalid bridge exit code")
+        raise FabricProtocolError("invalid Fabric exit code")
     if not isinstance(stdout, str):
-        raise FabricProtocolError("invalid bridge output")
+        raise FabricProtocolError("invalid Fabric output")
     try:
         encoded = stdout.encode("utf-8")
     except UnicodeEncodeError as error:
-        raise FabricProtocolError("invalid bridge output") from error
+        raise FabricProtocolError("invalid Fabric output") from error
     if not encoded or len(encoded) > MAX_FABRIC_RESPONSE_BYTES or not encoded.endswith(b"\n"):
-        raise FabricProtocolError("invalid bridge output framing")
+        raise FabricProtocolError("invalid Fabric output framing")
     try:
         value = json.loads(
             stdout,
@@ -259,77 +140,118 @@ def decode_response(*, operation: str, exit_code: int, stdout: str) -> FabricRes
             parse_int=_parse_integer,
         )
     except (ValueError, RecursionError) as error:
-        raise FabricProtocolError("invalid bridge JSON") from error
+        raise FabricProtocolError("invalid Fabric JSON") from error
     _validate_json_strings(value)
     if not isinstance(value, dict) or set(value) != _OUTER_FIELDS:
-        raise FabricProtocolError("invalid bridge response fields")
+        raise FabricProtocolError("invalid Fabric response fields")
     if value["operation"] != operation:
-        raise FabricProtocolError("bridge operation mismatch")
+        raise FabricProtocolError("Fabric operation mismatch")
     try:
         status = FabricStatus(value["status"])
     except (TypeError, ValueError) as error:
-        raise FabricProtocolError("invalid bridge status") from error
+        raise FabricProtocolError("invalid Fabric status") from error
     changed = value["changed"]
     if changed is not None and not isinstance(changed, bool):
-        raise FabricProtocolError("invalid bridge changed value")
+        raise FabricProtocolError("invalid Fabric changed value")
     result = value["result"]
     if result is not None and not isinstance(result, dict):
-        raise FabricProtocolError("invalid bridge result")
+        raise FabricProtocolError("invalid Fabric result")
     failure = _decode_failure(value["error"])
     if exit_code == 0:
-        if status is not FabricStatus.SUCCEEDED or failure is not None or result is None:
-            raise FabricProtocolError("contradictory successful bridge response")
+        if status is not FabricStatus.SUCCEEDED or changed is not None or result is None or failure is not None:
+            raise FabricProtocolError("contradictory successful Fabric response")
     elif exit_code == 1:
-        if status not in {FabricStatus.FAILED, FabricStatus.UNSUPPORTED} or failure is None:
-            raise FabricProtocolError("contradictory failed bridge response")
-    else:
-        raise FabricProtocolError("invalid bridge exit code")
-    if operation == "check":
-        if changed is not False:
-            raise FabricProtocolError("check must not report a mutation")
-        if failure is not None and failure.effects is not FabricEffects.NONE:
-            raise FabricProtocolError("check failure must not report target effects")
-    if operation == "invoke":
-        if status is FabricStatus.SUCCEEDED and changed is not None:
-            raise FabricProtocolError("successful invoke must not report changed")
-        if status is not FabricStatus.SUCCEEDED and changed not in {None, False}:
-            raise FabricProtocolError("failed invoke has invalid changed value")
-        if changed is False and (failure is None or failure.effects is not FabricEffects.NONE):
+        if status not in {FabricStatus.FAILED, FabricStatus.UNSUPPORTED} or failure is None or result is not None:
+            raise FabricProtocolError("contradictory failed Fabric response")
+        if changed not in {None, False}:
+            raise FabricProtocolError("failed Fabric invoke has invalid changed value")
+        if changed is False and failure.effects is not FabricEffects.NONE:
             raise FabricProtocolError("only a rejected invoke may report unchanged")
-    return FabricResponse(
-        operation=operation,
-        status=status,
-        changed=changed,
-        result=result,
-        error=failure,
-    )
+    else:
+        raise FabricProtocolError("invalid Fabric exit code")
+    return FabricResponse(operation=operation, status=status, changed=changed, result=result, error=failure)
 
 
-def successful_fabric_result(response: FabricResponse) -> tuple[str, dict[str, Any]]:
-    """Return the runtime identity and successful public Fabric result."""
+def parse_run_result(
+    response: FabricResponse,
+    *,
+    agent_name: str,
+    runtime_id: str,
+    adapter_id: str,
+    harness: str,
+    adapter_kind: str,
+    request_id: str,
+) -> FabricRunResult:
+    """Validate a direct Fabric RunResult against the provisioned binding."""
     if response.operation != "invoke" or response.status is not FabricStatus.SUCCEEDED:
-        raise FabricProtocolError("invoke did not succeed")
-    result = response.result
-    if not isinstance(result, dict):
-        raise FabricProtocolError("invoke result is missing")
-    runtime_id = result.get("runtime_id")
-    fabric_result = result.get("fabric_result")
+        raise FabricProtocolError("Fabric invoke did not return a RunResult")
+    value = response.result
+    if not isinstance(value, dict) or not _RUN_REQUIRED_FIELDS.issubset(value):
+        raise FabricProtocolError("Fabric RunResult fields are invalid")
+    expected = {
+        "agent_name": agent_name,
+        "runtime_id": runtime_id,
+        "adapter_id": adapter_id,
+        "harness": harness,
+        "adapter_kind": adapter_kind,
+        "request_id": request_id,
+    }
+    for field, selected in expected.items():
+        observed = value.get(field)
+        _required_identity(observed, f"Fabric RunResult {field}")
+        if observed != selected:
+            raise FabricProtocolError(f"Fabric RunResult {field} mismatch")
+    invocation_id = value.get("invocation_id")
+    _required_identity(invocation_id, "Fabric invocation ID")
+    try:
+        status = FabricRunStatus(value.get("status"))
+    except (TypeError, ValueError) as error:
+        raise FabricProtocolError("invalid Fabric RunResult status") from error
+    error_value = value.get("error")
+    if status is FabricRunStatus.SUCCEEDED:
+        if error_value is not None:
+            raise FabricProtocolError("successful Fabric RunResult contains an error")
+    elif error_value is not None:
+        _validate_run_error(error_value)
+    usage = value.get("usage")
+    if usage is not None and not isinstance(usage, dict):
+        raise FabricProtocolError("Fabric RunResult usage is invalid")
+    artifacts = value.get("artifacts", {})
+    artifact_entries = artifacts.get("artifacts", []) if isinstance(artifacts, dict) else None
     if (
-        not isinstance(runtime_id, str)
-        or not runtime_id.strip()
-        or "\x00" in runtime_id
-        or not isinstance(fabric_result, dict)
-        or fabric_result.get("status") != "succeeded"
+        not isinstance(artifacts, dict)
+        or not isinstance(artifact_entries, list)
+        or any(not isinstance(artifact, dict) for artifact in artifact_entries)
+        or (artifacts.get("root") is not None and not isinstance(artifacts.get("root"), str))
     ):
-        raise FabricProtocolError("invalid successful invoke result")
-    return runtime_id, fabric_result
+        raise FabricProtocolError("Fabric RunResult artifacts are invalid")
+    telemetry = value.get("telemetry")
+    if telemetry is not None and not isinstance(telemetry, (dict, list)):
+        raise FabricProtocolError("Fabric RunResult telemetry is invalid")
+    if isinstance(telemetry, list) and any(not isinstance(reference, dict) for reference in telemetry):
+        raise FabricProtocolError("Fabric RunResult telemetry is invalid")
+    events = value.get("events", [])
+    if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+        raise FabricProtocolError("Fabric RunResult events are invalid")
+    if not isinstance(value.get("metadata", {}), dict):
+        raise FabricProtocolError("Fabric RunResult metadata is invalid")
+    return FabricRunResult(
+        agent_name=agent_name,
+        harness=harness,
+        adapter_kind=adapter_kind,
+        adapter_id=adapter_id,
+        runtime_id=runtime_id,
+        invocation_id=invocation_id,
+        request_id=request_id,
+        status=status,
+        value=value,
+    )
 
 
 def resolve_json_pointer(value: Any, pointer: str) -> Any:
     """Resolve one RFC 6901 JSON Pointer without implicit coercion."""
-    tokens = parse_json_pointer(pointer)
     current = value
-    for token in tokens:
+    for token in parse_json_pointer(pointer):
         if isinstance(current, dict):
             if token not in current:
                 raise FabricProtocolError("result pointer does not exist")
@@ -372,39 +294,75 @@ def parse_json_pointer(pointer: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
+def _encode_json_request(value: dict[str, Any]) -> bytes:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    except (TypeError, UnicodeEncodeError, ValueError) as error:
+        raise FabricProtocolError("invalid Fabric invocation request") from error
+    if len(encoded) > MAX_FABRIC_REQUEST_BYTES:
+        raise FabricProtocolError("Fabric invocation request exceeds the request limit")
+    return encoded
+
+
+def _required_string(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        raise FabricProtocolError(f"{name} is invalid")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise FabricProtocolError(f"{name} is invalid") from error
+    return value
+
+
+def _required_identity(value: object, name: str) -> str:
+    resolved = _required_string(value, name)
+    encoded = resolved.encode("utf-8")
+    if len(encoded) > 512 or any(ord(character) < 0x20 or ord(character) == 0x7F for character in resolved):
+        raise FabricProtocolError(f"{name} is invalid")
+    return resolved
+
+
+def _validate_run_error(value: object) -> None:
+    if not isinstance(value, dict) or not _RUN_ERROR_REQUIRED_FIELDS.issubset(value):
+        raise FabricProtocolError("failed Fabric RunResult has invalid error metadata")
+    for field in ("stage", "code", "message"):
+        _required_string(value.get(field), f"Fabric RunResult error {field}")
+    if "retryable" in value and not isinstance(value["retryable"], bool):
+        raise FabricProtocolError("failed Fabric RunResult has invalid error metadata")
+    if "metadata" in value and not isinstance(value["metadata"], dict):
+        raise FabricProtocolError("failed Fabric RunResult has invalid error metadata")
+
+
 def _decode_failure(value: Any) -> FabricFailure | None:
     if value is None:
         return None
     if not isinstance(value, dict) or set(value) != _ERROR_FIELDS:
-        raise FabricProtocolError("invalid bridge error fields")
-    code = value["code"]
-    stage = value["stage"]
-    message = value["message"]
-    if not all(isinstance(item, str) and item and "\x00" not in item for item in (code, stage, message)):
-        raise FabricProtocolError("invalid bridge error")
-    if any(len(item.encode("utf-8")) > 4096 for item in (code, stage, message)):
-        raise FabricProtocolError("bridge error is too large")
+        raise FabricProtocolError("invalid Fabric error fields")
+    for field in ("code", "stage", "message"):
+        item = value[field]
+        _required_string(item, f"Fabric error {field}")
+        if len(item.encode("utf-8")) > 4096:
+            raise FabricProtocolError("Fabric error is too large")
     try:
         effects = FabricEffects(value["effects"])
     except (TypeError, ValueError) as error:
-        raise FabricProtocolError("invalid bridge effects") from error
-    return FabricFailure(code=code, effects=effects)
+        raise FabricProtocolError("invalid Fabric effects") from error
+    return FabricFailure(code=value["code"], effects=effects)
 
 
 def _validate_json_strings(value: Any) -> None:
-    """Reject decoded JSON strings that cannot cross the UTF-8 boundary."""
     pending = [(value, 0)]
     nodes = 0
     while pending:
         current, depth = pending.pop()
         nodes += 1
         if depth > 64 or nodes > 100_000:
-            raise FabricProtocolError("bridge JSON exceeds structural limits")
+            raise FabricProtocolError("Fabric JSON exceeds structural limits")
         if isinstance(current, str):
             try:
                 current.encode("utf-8")
             except UnicodeEncodeError as error:
-                raise FabricProtocolError("invalid bridge JSON string") from error
+                raise FabricProtocolError("invalid Fabric JSON string") from error
         elif isinstance(current, dict):
             pending.extend((item, depth + 1) for item in current)
             pending.extend((item, depth + 1) for item in current.values())
@@ -441,17 +399,19 @@ def _parse_float(value: str) -> float:
 
 
 __all__ = [
-    "FabricAdapterCodec",
+    "FABRIC_ADAPTER_KINDS",
     "FabricEffects",
     "FabricFailure",
     "FabricProtocolError",
     "FabricResponse",
+    "FabricRunResult",
+    "FabricRunStatus",
     "FabricStatus",
     "MAX_FABRIC_REQUEST_BYTES",
     "MAX_FABRIC_RESPONSE_BYTES",
-    "adapter_codec",
     "decode_response",
+    "encode_run_request",
     "parse_json_pointer",
+    "parse_run_result",
     "resolve_json_pointer",
-    "successful_fabric_result",
 ]

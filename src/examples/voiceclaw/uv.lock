@@ -233,7 +233,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.135,<1" },
-    { name = "openshell", marker = "extra == 'openshell'", specifier = "==0.1.2" },
+    { name = "openshell", marker = "extra == 'openshell'", specifier = "==0.1.4" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.42,<1" },
     { name = "websockets", marker = "extra == 'server'", specifier = ">=15,<17" },
@@ -249,7 +249,7 @@ dev = [
 
 [[package]]
 name = "openshell"
-version = "0.1.2"
+version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cloudpickle" },
@@ -259,7 +259,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/0d/9f0c2e133bd4bfc96b9e261b870d58230d7d98fc6c51ae8f7f71f8520157/openshell-0.1.2-py3-none-any.whl", hash = "sha256:8c409da4f176d42418d92366fe201f47cceef2c0fa432bfbce2bf938649d59cf", size = 150901, upload-time = "2026-09-28T03:58:28.39Z" },
+    { url = "https://files.pythonhosted.org/packages/09/7f/0f2132b67d3d6e606d8d7a1bce67abe6dd3f4e631ccf1a20608f1c132309/openshell-0.1.4-py3-none-any.whl", hash = "sha256:2a25991a4c050e9d40d947b9df537d5c5370cf9a569b7a4e8c92cea882f5ddcb", size = 138757, upload-time = "2026-10-13T20:49:52.401Z" },
 ]
 
 [[package]]

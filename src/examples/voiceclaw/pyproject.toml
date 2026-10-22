@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 openshell = [
-    "openshell==0.1.2",
+    "openshell==0.1.4",
 ]
 server = [
     "fastapi>=0.135,<1",

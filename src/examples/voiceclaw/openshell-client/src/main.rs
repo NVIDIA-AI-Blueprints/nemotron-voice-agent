@@ -85,6 +85,10 @@ fn append_bound(
     Ok(())
 }
 
+fn command_identity(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
+}
+
 fn validate(input: &Input) -> Result<Vec<u8>, &'static str> {
     let url = url::Url::parse(&input.endpoint).map_err(|_| "protocol_error")?;
     if !url.username().is_empty()
@@ -93,10 +97,11 @@ fn validate(input: &Input) -> Result<Vec<u8>, &'static str> {
         || url.fragment().is_some()
         || url.path() != "/"
         || input.workspace.is_empty()
+        || input.sandbox.is_empty()
         || input.sandbox_id.is_empty()
         || !input.seconds.is_finite()
         || input.seconds <= 0.0
-        || input.seconds > 120.0
+        || input.seconds > 330.0
     {
         return Err("protocol_error");
     }
@@ -127,33 +132,28 @@ fn validate(input: &Input) -> Result<Vec<u8>, &'static str> {
         }
     }
     // Python validates the descriptor. Independently constrain the helper to
-    // the two allowed bridge argv forms before touching the network.
-    let invoke = input.argv.len() == 6
-        && input.argv[0] == "/usr/local/bin/fabric-agent"
+    // the one pre-provisioned Fabric runtime operation before touching the network.
+    let invoke = input.argv.len() == 8
+        && input.argv[0] == "/opt/fabric/bin/fabric-agent-ctl"
         && input.argv[1] == "invoke"
         && input.argv[2] == "--agent"
-        && !input.argv[3].is_empty()
-        && input.argv[4] == "--input"
-        && input.argv[5] == "-";
-    let check = input.argv.len() == 5
-        && input.argv[0] == "/usr/local/bin/fabric-agent"
-        && input.argv[1] == "check"
-        && input.argv[2] == "--agent"
-        && !input.argv[3].is_empty()
-        && input.argv[4] == "--live";
-    if !invoke && !check {
+        && command_identity(&input.argv[3])
+        && input.argv[4] == "--runtime-id"
+        && command_identity(&input.argv[5])
+        && input.argv[6] == "--request"
+        && input.argv[7] == "-";
+    if !invoke {
         return Err("protocol_error");
     }
     let stdin = STANDARD
         .decode(&input.stdin)
         .map_err(|_| "protocol_error")?;
-    if stdin.len() > INPUT_LIMIT || (check && !stdin.is_empty()) {
+    if stdin.len() > INPUT_LIMIT {
         return Err("protocol_error");
     }
-    if invoke
-        && !serde_json::from_slice::<serde_json::Value>(&stdin)
-            .map_err(|_| "protocol_error")?
-            .is_object()
+    if !serde_json::from_slice::<serde_json::Value>(&stdin)
+        .map_err(|_| "protocol_error")?
+        .is_object()
     {
         return Err("protocol_error");
     }
@@ -271,7 +271,7 @@ async fn execute(
 async fn main() {
     if std::env::args().skip(1).eq(["--version"]) {
         println!(
-            "voiceclaw-openshell-exec 0.1.0 openshell@6648bd0c290efbc41ba131ee9831ee45cd431f94"
+            "voiceclaw-openshell-exec 0.1.0 openshell@5a7728c304b5528e954e9ae900cf21f84e1a12b1"
         );
         return;
     }
@@ -322,11 +322,13 @@ mod tests {
             sandbox: "assistant".into(),
             sandbox_id: "7e68ff54-a8a6-4b8c-b639-ae35939f6ba5".into(),
             argv: vec![
-                "/usr/local/bin/fabric-agent",
+                "/opt/fabric/bin/fabric-agent-ctl",
                 "invoke",
                 "--agent",
                 "assistant",
-                "--input",
+                "--runtime-id",
+                "runtime-fixture-1",
+                "--request",
                 "-",
             ]
             .into_iter()
@@ -348,7 +350,7 @@ mod tests {
                 1 => value.workspace.clear(),
                 2 => value.bearer = Some("fixture\r\nAuthorization: another".into()),
                 3 => value.argv = vec!["sh".into(), "-c".into(), "echo fixture".into()],
-                _ => value.seconds = 121.0,
+                _ => value.seconds = 331.0,
             }
             assert_eq!(validate(&value), Err("protocol_error"));
         }
@@ -364,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn helper_accepts_only_upstream_absolute_invoke_and_live_check_commands() {
+    fn helper_accepts_only_native_invoke_for_the_bound_runtime() {
         let mut value = input();
         assert!(validate(&value).is_ok());
         value.argv = [
@@ -378,11 +380,12 @@ mod tests {
         .map(str::to_owned)
         .collect();
         value.stdin = STANDARD.encode(b"");
-        assert!(validate(&value).is_ok());
-        value.argv[4] = "--ready".into();
         assert_eq!(validate(&value), Err("protocol_error"));
-        value.argv[4] = "--live".into();
-        value.argv[0] = "fabric-agent".into();
+        let mut value = input();
+        value.argv[5] = "".into();
+        assert_eq!(validate(&value), Err("protocol_error"));
+        let mut value = input();
+        value.argv[3] = "assistant\nother".into();
         assert_eq!(validate(&value), Err("protocol_error"));
     }
 

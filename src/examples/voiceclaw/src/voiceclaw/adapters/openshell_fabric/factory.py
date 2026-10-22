@@ -19,12 +19,11 @@ from voiceclaw.adapters.openshell_fabric.client import (
     SdkSandboxExecutor,
 )
 from voiceclaw.adapters.openshell_fabric.committed_turn import (
-    DEFAULT_CHECK_TIMEOUT_SECONDS,
     DEFAULT_INVOCATION_TIMEOUT_SECONDS,
     OpenShellFabricAdapter,
     validate_fabric_binding_identity,
 )
-from voiceclaw.adapters.openshell_fabric.protocol import FabricProtocolError, adapter_codec, parse_json_pointer
+from voiceclaw.adapters.openshell_fabric.protocol import FABRIC_ADAPTER_KINDS, parse_json_pointer
 from voiceclaw.adapters.openshell_fabric.security import client_secret_loader
 from voiceclaw.adapters.result_envelope import (
     DEFAULT_RESULT_SPEECH_BUDGET_BYTES,
@@ -42,8 +41,10 @@ _ALLOWED_SETTINGS = frozenset(
         "workspace",
         "sandbox",
         "fabric_agent",
+        "runtime_id",
         "adapter_id",
-        "native_agent",
+        "harness",
+        "adapter_kind",
         "label",
         "issuer",
         "client_id",
@@ -53,7 +54,6 @@ _ALLOWED_SETTINGS = frozenset(
         "tls_ca_file",
         "rpc_timeout_seconds",
         "invoke_timeout_seconds",
-        "check_timeout_seconds",
         "result_pointer",
         "result_display_budget_bytes",
         "result_speech_budget_bytes",
@@ -101,27 +101,19 @@ def build_openshell_fabric_backend(
         client_id = _required(profile, "client_id")
         scopes = _scopes(profile.settings.get("scopes", ()))
         audience = _optional(profile, "audience")
-    result_pointer = _optional(profile, "result_pointer")
-    if result_pointer is not None:
-        try:
-            parse_json_pointer(result_pointer)
-        except ValueError as error:
-            raise ConfigurationError("openshell_fabric result_pointer is invalid") from error
-    adapter_id = _required(profile, "adapter_id")
+    result_pointer = _required(profile, "result_pointer")
     try:
-        adapter_codec(adapter_id)
-    except FabricProtocolError as error:
-        raise ConfigurationError("openshell_fabric adapter_id has no installed codec") from error
-    try:
-        workspace = validate_fabric_binding_identity(_required(profile, "workspace"), name="workspace")
-        sandbox = validate_fabric_binding_identity(_required(profile, "sandbox"), name="sandbox")
-        fabric_agent = validate_fabric_binding_identity(_required(profile, "fabric_agent"), name="fabric_agent")
+        parse_json_pointer(result_pointer)
     except ValueError as error:
-        raise ConfigurationError(str(error)) from error
-    native_agent = _optional(profile, "native_agent")
+        raise ConfigurationError("openshell_fabric result_pointer is invalid") from error
+    workspace = _binding(profile, "workspace")
+    sandbox = _binding(profile, "sandbox")
+    fabric_agent = _binding(profile, "fabric_agent")
+    runtime_id = _binding(profile, "runtime_id")
+    adapter_id = _binding(profile, "adapter_id")
+    harness = _binding(profile, "harness")
+    adapter_kind = _adapter_kind(profile)
     try:
-        if native_agent is not None:
-            native_agent = validate_fabric_binding_identity(native_agent, name="native_agent")
         label = validate_fabric_binding_identity(
             _optional(profile, "label") or "OpenShell / Fabric",
             name="label",
@@ -136,13 +128,6 @@ def build_openshell_fabric_backend(
         DEFAULT_INVOCATION_TIMEOUT_SECONDS,
         minimum=1,
         maximum=3600,
-    )
-    check_timeout_seconds = _bounded_integer(
-        profile,
-        "check_timeout_seconds",
-        DEFAULT_CHECK_TIMEOUT_SECONDS,
-        minimum=1,
-        maximum=120,
     )
     result_display_budget_bytes = _bounded_integer(
         profile,
@@ -182,11 +167,12 @@ def build_openshell_fabric_backend(
             workspace=workspace,
             sandbox=sandbox,
             fabric_agent=fabric_agent,
+            runtime_id=runtime_id,
             adapter_id=adapter_id,
-            native_agent=native_agent,
+            harness=harness,
+            adapter_kind=adapter_kind,
             label=label,
             invoke_timeout_seconds=invoke_timeout_seconds,
-            check_timeout_seconds=check_timeout_seconds,
             result_pointer=result_pointer,
             result_display_budget_bytes=result_display_budget_bytes,
             result_speech_budget_bytes=result_speech_budget_bytes,
@@ -195,7 +181,7 @@ def build_openshell_fabric_backend(
         return BackendComposition(
             turn_backend=adapter,
             turn_status="response_only",
-            selected_agent_readiness=adapter,
+            selected_agent_readiness=None,
         )
     except (TypeError, ValueError) as error:
         with suppress(OpenShellClientError):
@@ -212,6 +198,22 @@ def _required(profile: BackendProfile, name: str) -> str:
     if not isinstance(value, str) or not value.strip() or "\x00" in value:
         raise ConfigurationError(f"openshell_fabric requires a non-empty {name!r} setting")
     return value.strip()
+
+
+def _binding(profile: BackendProfile, name: str) -> str:
+    value = _required(profile, name)
+    try:
+        return validate_fabric_binding_identity(value, name=name)
+    except ValueError as error:
+        raise ConfigurationError(str(error)) from error
+
+
+def _adapter_kind(profile: BackendProfile) -> str:
+    value = _binding(profile, "adapter_kind")
+    if value not in FABRIC_ADAPTER_KINDS:
+        choices = ", ".join(sorted(FABRIC_ADAPTER_KINDS))
+        raise ConfigurationError(f"openshell_fabric adapter_kind must be one of: {choices}")
+    return value
 
 
 def _authentication(profile: BackendProfile) -> OpenShellAuthenticationMode:

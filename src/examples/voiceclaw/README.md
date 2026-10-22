@@ -7,7 +7,8 @@ connection.
 
 The current example runs VoiceClaw as an independent service. A NemoClaw
 deployment supplies the OpenShell workspace, sandbox, and Fabric agent that
-receive delegated work.
+receive delegated work. VoiceClaw binds to the Fabric runtime that NemoClaw
+already provisioned; it does not create or stop that runtime.
 
 ## Architecture
 
@@ -44,7 +45,8 @@ the deployed agent directly.
 
 Run all commands from the repository root. You need Docker Compose v2.20 or
 newer, a NemoClaw-deployed agent, and the target's applied OpenShell endpoint,
-workspace, sandbox, and Fabric agent name.
+workspace, sandbox, Fabric agent name, runtime ID, adapter identity, and result
+pointer.
 
 The default local frontend also requires one supported NVIDIA GPU or DGX Spark
 and an `HF_TOKEN` in the repository `.env`. Refer to the
@@ -54,27 +56,34 @@ prerequisites.
 ## Deploy as a NemoClaw Container Service
 
 The `nemoclaw-container-v1` image target implements the VoiceClaw side of the
-NemoClaw [Container Service Contract v1](https://github.com/NVIDIA/NemoClaw/blob/bf93570b92c08230cee3816f382b93f97cd519e5/docs/design/container-contract.md).
+NemoClaw [Container Service Contract v1](https://github.com/NVIDIA/NemoClaw/blob/bf93570b92c08230cee3816f382b93f97cd519e5/docs/design/container-contract.md),
+pinned to the revision reviewed for this profile.
 NemoClaw deploys it as an ordinary `kind: container` service with literal
 environment values. There is no application-specific installer, generated
 connection descriptor, or credential file. VoiceClaw does not install or manage
 the agent.
 
-This profile preserves the upstream OpenShell/Fabric adapter, request codec,
-and result validation. A narrow executor connects that adapter to the pinned
-OpenShell SDK client. It does not replace the default image supervisor,
-developer Compose recipe, or cloud configuration.
-The profile starts with a fresh target and permits one non-durable delegated
-turn. A successful or ambiguous invocation consumes that target; provision a
-fresh target for another delegated request. Matched native tool calls and
-results can run within the invocation, but VoiceClaw does not claim session
-continuity or reconnect recovery.
+This profile uses Fabric 0.5's public runtime command contract. A narrow
+executor connects the OpenShell adapter to the pinned OpenShell SDK client.
+NemoClaw owns runtime start and stop. VoiceClaw invokes only the supplied
+runtime ID and verifies the returned agent, runtime, adapter, harness, and
+request identities before accepting a result.
+
+The profile permits ordered, non-durable delegated turns from one connected
+VoiceClaw conversation to one pre-provisioned Fabric runtime. A different
+VoiceClaw conversation cannot delegate through an already-bound runtime. The
+profile also admits only one concurrent browser session. Fabric 0.5 does not
+supply evidence that qualifies context continuity or isolation between
+invocations, so each delegated goal remains self-contained. A disconnect,
+process restart, ambiguous invocation, or runtime replacement does not provide
+replay or recovery.
 
 The profile sets `interaction.turn_routing_mode: model`. Delegation requires
 the currently advertised `work.delegate` operation; an unavailable or consumed
 backend rejects the request. The runtime sends the validated standalone goal
 selected by the frontend. Argument, source-text, readiness, and availability
-checks still apply.
+checks still apply; readiness here is local application readiness, not Fabric
+agent attestation.
 
 Copy the gateway URL, workspace, and sandbox ID from the operator's deployment.
 This fragment uses trusted local plaintext mode:
@@ -87,9 +96,22 @@ environment:
   VOICECLAW_SANDBOX_NAME: assistant
   VOICECLAW_SANDBOX_ID: "ACTUAL_SANDBOX_ID"
   VOICECLAW_AGENT_NAME: main
+  VOICECLAW_FABRIC_RUNTIME_ID: "ACTUAL_RUNTIME_ID"
+  VOICECLAW_FABRIC_ADAPTER_ID: "ACTUAL_ADAPTER_ID"
+  VOICECLAW_FABRIC_HARNESS: "ACTUAL_HARNESS_ID"
+  VOICECLAW_FABRIC_ADAPTER_KIND: "ACTUAL_ADAPTER_KIND"
+  VOICECLAW_FABRIC_RESULT_POINTER: "/output/response"
   VOICECLAW_AUTH_MODE: none
   VOICECLAW_SPEECH_KEY: "REPLACE_AT_DEPLOY_TIME"
 ```
+
+All `VOICECLAW_FABRIC_*` values must describe the same provisioned
+`fabric_agent`. The generic container environment is literal and does not
+discover or interpolate the runtime ID. Use the runtime ID retained for the
+applied agent and the exact RunResult identity expected from its adapter. The
+result pointer is adapter-specific. These Fabric bindings are a VoiceClaw
+profile extension; the pinned generic container contract does not define or
+synthesize them.
 
 For HTTPS, set `VOICECLAW_AUTH_MODE: oidcBearer` and supply the application's
 service token in `VOICECLAW_GATEWAY_TOKEN`. Literal environment values are
@@ -101,22 +123,27 @@ for validation rules, the image build, and qualification requirements.
 The profile serves the packaged browser console at `GET /` and
 `WS /v1/realtime` on `VOICECLAW_PORT`. Publish it only on host loopback or the
 approved private deployment network. After NemoClaw apply returns, check local
-health on the Linux host:
+application readiness on the Linux host:
+
+For a nondefault port, the container service port, publication port,
+`VOICECLAW_PORT`, health endpoint, and client URL must all use the same value.
 
 ```bash
 curl --fail --max-time 15 http://127.0.0.1:18790/health
 ```
 
-An empty `200` response confirms initialized local components and the bundled
-frontend listener. It does not prove native Fabric health, provider
-credentials, model responses, or a complete voice turn. Agent checks and
-invocations retain upstream validation; unsupported native health is not
-reported as healthy. The profile needs a fresh agent target for its first
-delegated turn; verified successful turns can then share that native context.
+An empty `200` response confirms local application readiness. NemoClaw
+deployment readiness and the managed image `HEALTHCHECK` use this endpoint.
+`GET /livez` checks only that the VoiceClaw process is serving. Neither
+endpoint invokes the agent. Fabric 0.5 has no read-only runtime status command,
+so these responses do not prove that the Fabric runtime can answer, provider
+credentials work, or a
+voice turn completes. `GET /readyz` remains the optional selected-agent
+attestation endpoint and returns `503` for this profile.
 
 Earlier manual results used the retired descriptor-based revision and do not
 qualify this revision; refer to the
-[evidence boundaries](NEMOCLAW_CONTAINER_V1.md#validation-and-evidence).
+[validation boundaries](NEMOCLAW_CONTAINER_V1.md#validation).
 
 ### Open the Installed Browser Console
 
@@ -141,9 +168,10 @@ WebSocket share port `18790`; no separate browser server is required.
 3. Wait for **Session ready**, then select **Start listening** and grant
    microphone access. Follow the negotiated turn behavior shown below the
    composer, or enter a typed request and press **Enter**.
-4. Ask for one delegated agent task against a fresh target. Inspect the result
-   in **Backend turns** and check audible result playback separately. Provision
-   a fresh target before testing another delegated request.
+4. Ask for a delegated agent task. Inspect the result in **Backend turns** and
+   check audible result playback separately. You can send ordered follow-up
+   work in the same connected conversation, but keep every delegated goal
+   self-contained because native context continuity is not qualified.
 
 Microphone capture requires a secure browser context, such as localhost.
 Opening the remote host's plain HTTP address does not provide that context.
@@ -153,9 +181,9 @@ The result prompt asks for useful spoken material about the outcome, needed
 clarification, or a missing requirement. A valid result can still contain
 `speech: null`. VoiceClaw displays that result without queuing or inventing
 result speech. Display success alone does not prove hosted speech-provider
-access or audible playback. An ambiguous invocation consumes the target;
-provision a fresh target before retrying. An application restart loses the
-verified history prefix and cannot resume a target with existing native history.
+access or audible playback. Do not retry an ambiguous invocation automatically.
+Provision a replacement runtime before continuing because VoiceClaw cannot
+recover or safely adopt the prior runtime after losing the invocation outcome.
 
 ## Run the Developer Stack
 
@@ -178,9 +206,12 @@ verified history prefix and cannot resume a target with existing native history.
    VOICECLAW_OPENSHELL_ENDPOINT=http://127.0.0.1:17723
    VOICECLAW_OPENSHELL_WORKSPACE=nc-example
    VOICECLAW_OPENSHELL_SANDBOX=assistant
-   VOICECLAW_FABRIC_ADAPTER_ID=nvidia.fabric.openclaw
+   VOICECLAW_FABRIC_RUNTIME_ID=ACTUAL_RUNTIME_ID
+   VOICECLAW_FABRIC_ADAPTER_ID=ACTUAL_ADAPTER_ID
+   VOICECLAW_FABRIC_HARNESS=ACTUAL_HARNESS_ID
+   VOICECLAW_FABRIC_ADAPTER_KIND=ACTUAL_ADAPTER_KIND
+   VOICECLAW_FABRIC_RESULT_POINTER=/output/response
    VOICECLAW_FABRIC_AGENT=main
-   VOICECLAW_NATIVE_AGENT=main
    ```
 
    Replace `1000` with `id -g`. Use the exact endpoint and workspace returned
@@ -272,15 +303,15 @@ Omit `--ui` for a headless facade.
 
 ## Verify the Deployment
 
-`/livez` checks the process. `/readyz` checks the configured agent binding
-without invoking the agent.
+`/livez` checks the process. Fabric 0.5 does not provide the read-only runtime
+status needed for selected-agent attestation, so `/readyz` returns `503` for
+this profile. Use an end-to-end delegated turn for agent qualification.
 
 ```bash
 curl --fail http://127.0.0.1:7860/livez
-curl --fail http://127.0.0.1:7860/readyz
 ```
 
-Run a typed delegation check against a fresh target:
+Run a typed delegation check against the configured runtime:
 
 ```bash
 uv run --project src/examples/voiceclaw --extra server --extra openshell \
@@ -322,9 +353,9 @@ uv run --project src/examples/voiceclaw --extra server --extra openshell \
   --output-audio-wav /absolute/path/agent-result.wav
 ```
 
-For the developer stack, use port `7860`. The default verifier context contract
-is `unqualified`, including for the container profile. Audio input and
-`--query` are mutually exclusive; the recorded-input check sends no typed fallback.
+For the developer stack, use port `7860`. The verifier's `unqualified` context
+contract matches this Fabric 0.5 profile. Audio input and `--query` are mutually
+exclusive; the recorded-input check sends no typed fallback.
 The verifier sends paced 20 ms audio chunks and follows the session's
 negotiated automatic or manual turn behavior. It preserves the cascade's
 startup turn-detection mode.
@@ -345,17 +376,19 @@ The saved WAV records generated result audio. The verifier reports
 prove audible delivery. Listen to the saved result separately before reporting
 that you heard the reply.
 
-Start qualification with a fresh target. A successful or ambiguous invocation
-consumes it. Do not replay a recording after an uncertain invocation; use a
-fresh target. Restarting the container cannot recover prior native history or
+Start qualification with a pre-provisioned runtime that has not been attached
+to another VoiceClaw conversation. Successful ordered turns can use that same
+runtime in the original conversation, but this does not qualify native context
+continuity. Do not replay a recording after an uncertain invocation; replace
+the runtime. Restarting the container cannot recover prior native history or
 pending work.
 
 ### Troubleshoot Route Selection
 
 In `agent` mode, `operation_unavailable` means the current session does not
 advertise the required delegation operation. This rejects the finalized request
-before dispatch. An ambiguous invocation still consumes the target; use a fresh
-target rather than replaying it.
+before dispatch. After an ambiguous invocation, replace the runtime rather than
+replaying the request.
 
 `routing_unavailable` can indicate a failed, incomplete, or canceled private
 model route-selection response. This terminal failure stops before delegated
@@ -375,12 +408,13 @@ result before repeating agent work. Provider error details remain private.
 ## Current Limitations
 
 - The OpenShell profile supports one concurrent VoiceClaw session.
-- The container OpenShell/Fabric profile supports one non-durable delegated
-  turn for each fresh target.
+- The container OpenShell/Fabric profile supports ordered non-durable turns for
+  one connected VoiceClaw conversation bound to one pre-provisioned runtime.
 - Agent results are terminal responses. Backend event streaming, durable
   acceptance, replay, steering, confirmed remote cancellation, and reconnect
   recovery are not available yet.
-- SQLite stores local request and presentation state, not durable backend work.
+- The active response-only Work/result lifecycle is process-local. SQLite does
+  not make backend execution durable or recoverable after restart.
 
 Refer to the repository [Troubleshooting guide](../../../docs/06-troubleshooting.md)
 for model-service and browser-access problems.

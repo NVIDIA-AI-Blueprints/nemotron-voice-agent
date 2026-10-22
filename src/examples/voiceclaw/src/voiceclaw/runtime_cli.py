@@ -24,7 +24,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--ui", action="store_true", help="serve the optional VoiceClaw browser UI")
 
-    commands.add_parser("healthcheck", help="probe selected-agent readiness")
+    commands.add_parser("healthcheck", help="probe the configured container health endpoint")
     return parser
 
 

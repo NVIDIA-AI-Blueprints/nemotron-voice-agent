@@ -10,7 +10,7 @@ WORKDIR /client
 COPY src/examples/voiceclaw/openshell-client/ ./
 RUN cargo build --release --locked \
     && install -d /client/legal \
-    && cp /usr/local/cargo/git/checkouts/openshell-*/6648bd0/LICENSE /client/legal/OpenShell-LICENSE \
+    && cp /usr/local/cargo/git/checkouts/openshell-*/5a7728c/LICENSE /client/legal/OpenShell-LICENSE \
     && cp Cargo.lock /client/legal/Cargo.lock \
     && rustc -vV > /client/legal/compiler.txt \
     && voiceclaw_target="$(rustc -vV | sed -n 's/^host: //p')" \
@@ -153,7 +153,7 @@ RUN test "${#VOICECLAW_SOURCE_REVISION}" -eq 40 \
     && case "${VOICECLAW_SOURCE_REVISION}" in *[!0-9a-f]*) false ;; *) true ;; esac
 COPY --from=openshell-client-builder /client/target/release/voiceclaw-openshell-exec /usr/local/bin/voiceclaw-openshell-exec
 COPY --from=openshell-client-builder /client/legal/ /app/legal/openshell/
-LABEL com.nvidia.voiceclaw.openshell-revision="6648bd0c290efbc41ba131ee9831ee45cd431f94"
+LABEL com.nvidia.voiceclaw.openshell-revision="5a7728c304b5528e954e9ae900cf21f84e1a12b1"
 RUN groupadd --gid 65532 voiceclaw-managed \
     && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin voiceclaw-managed \
     && chown 65532:65532 /var/lib/voiceclaw /var/lib/voiceclaw/state \

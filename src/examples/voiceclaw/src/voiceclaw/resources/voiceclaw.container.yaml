@@ -78,9 +78,12 @@ backend_profiles:
       endpoint: ${VOICECLAW_OPENSHELL_ENDPOINT}
       workspace: ${VOICECLAW_OPENSHELL_WORKSPACE}
       sandbox: ${VOICECLAW_OPENSHELL_SANDBOX}
+      runtime_id: ${VOICECLAW_FABRIC_RUNTIME_ID}
       adapter_id: ${VOICECLAW_FABRIC_ADAPTER_ID}
+      harness: ${VOICECLAW_FABRIC_HARNESS}
+      adapter_kind: ${VOICECLAW_FABRIC_ADAPTER_KIND}
+      result_pointer: ${VOICECLAW_FABRIC_RESULT_POINTER}
       fabric_agent: ${VOICECLAW_FABRIC_AGENT}
-      native_agent: ${VOICECLAW_NATIVE_AGENT}
       issuer: ${VOICECLAW_OPENSHELL_ISSUER}
       client_id: ${VOICECLAW_OPENSHELL_CLIENT_ID}
       scopes: [sandbox:write]

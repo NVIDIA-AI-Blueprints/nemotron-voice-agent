@@ -20,7 +20,7 @@ INPUT_LIMIT = 512 * 1024
 OUTPUT_LIMIT = 4 * 1024 * 1024
 HELPER_LIMIT = ((OUTPUT_LIMIT + 2) // 3) * 4 + 1024
 CLIENT = "/usr/local/bin/voiceclaw-openshell-exec"
-OPEN_SHELL_REVISION = "6648bd0c290efbc41ba131ee9831ee45cd431f94"
+OPEN_SHELL_REVISION = "5a7728c304b5528e954e9ae900cf21f84e1a12b1"
 _FAILURES = frozenset(
     {
         "access_denied",
@@ -84,7 +84,8 @@ async def _reap(process: asyncio.subprocess.Process) -> None:
     if process.returncode is None:
         with suppress(ProcessLookupError):
             process.kill()
-    await process.wait()
+    while process.returncode is None:
+        await asyncio.sleep(0.01)
 
 
 def _credential_echo(payload: bytes, bearer: str) -> bool:
@@ -132,17 +133,22 @@ class SDKExecutionTransport:
         self, connection: AgentConnection, argv: list[str], stdin: bytes, deadline: float
     ) -> ExecutionResult:
         """Bound input, stream output and the entire client exchange."""
-        invoke = ["/usr/local/bin/fabric-agent", "invoke", "--agent", connection.agent, "--input", "-"]
-        check = ["/usr/local/bin/fabric-agent", "check", "--agent", connection.agent, "--live"]
-        if argv not in (invoke, check) or not isinstance(stdin, bytes) or len(stdin) > INPUT_LIMIT:
+        invoke = [
+            "/opt/fabric/bin/fabric-agent-ctl",
+            "invoke",
+            "--agent",
+            connection.agent,
+            "--runtime-id",
+            connection.fabric_runtime_id,
+            "--request",
+            "-",
+        ]
+        if argv != invoke or not isinstance(stdin, bytes) or len(stdin) > INPUT_LIMIT:
             raise TransportFailure("protocol_error")
-        if argv == check and stdin:
-            raise TransportFailure("protocol_error")
-        if argv == invoke:
-            try:
-                strict_json(stdin, INPUT_LIMIT)
-            except ContainerInputError:
-                raise TransportFailure("protocol_error") from None
+        try:
+            strict_json(stdin, INPUT_LIMIT)
+        except ContainerInputError:
+            raise TransportFailure("protocol_error") from None
         if self._closed:
             raise TransportFailure("adapter_closed")
         task = asyncio.current_task()
@@ -191,7 +197,6 @@ class SDKExecutionTransport:
                     process.stdin.write(control)
                     await process.stdin.drain()
                     process.stdin.close()
-                    await process.stdin.wait_closed()
 
                 io_tasks = [
                     asyncio.create_task(feed()),
@@ -199,7 +204,8 @@ class SDKExecutionTransport:
                     asyncio.create_task(_read_bound(process.stderr, 1024)),
                 ]
                 _, raw, diagnostics = await asyncio.gather(*io_tasks)
-                await process.wait()
+                while process.returncode is None:
+                    await asyncio.sleep(0.01)
                 # The helper emits only the fixed protocol. Unexpected stderr
                 # fails closed; it is never logged or returned to the browser.
                 if process.returncode != 0 or diagnostics:

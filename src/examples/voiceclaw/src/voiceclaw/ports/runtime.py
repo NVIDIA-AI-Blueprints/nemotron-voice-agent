@@ -41,6 +41,8 @@ class FrontendResponsePurpose(StrEnum):
 
     DELEGATION_ACK = "delegation_ack"
     RESULT_DELIVERY = "result_delivery"
+    STATUS_DELIVERY = "status_delivery"
+    CONTROL_DELIVERY = "control_delivery"
     FAILURE_DELIVERY = "failure_delivery"
 
 
@@ -50,6 +52,8 @@ class FrontendContextPurpose(StrEnum):
     CONVERSATION = "conversation"
     DELEGATION_ACK = "delegation_ack"
     RESULT_DELIVERY = "result_delivery"
+    STATUS_DELIVERY = "status_delivery"
+    CONTROL_DELIVERY = "control_delivery"
     FAILURE_DELIVERY = "failure_delivery"
 
 
@@ -258,6 +262,7 @@ class SessionSnapshot:
     target_availability: ResponseOnlyTargetAvailability | None = None
     capabilities: tuple[str, ...] = ()
     frontend_tools: tuple[SemanticTool, ...] = ()
+    local_control_tools: tuple[str, ...] = ()
     durability: Durability = Durability.NONE
     event_delivery: EventDelivery = EventDelivery.RESPONSE_ONLY
     max_parallel_work: int = 1
@@ -285,6 +290,7 @@ class BackendTargetSnapshot:
     target_availability: ResponseOnlyTargetAvailability | None = None
     capabilities: tuple[str, ...] = ()
     frontend_tools: tuple[SemanticTool, ...] = ()
+    local_control_tools: tuple[str, ...] = ()
     durability: Durability = Durability.NONE
     event_delivery: EventDelivery = EventDelivery.RESPONSE_ONLY
     max_parallel_work: int = 1
@@ -301,6 +307,15 @@ class BackendTargetSnapshot:
         if not all(isinstance(tool, SemanticTool) for tool in tools):
             raise TypeError("frontend_tools must contain SemanticTool values")
         object.__setattr__(self, "frontend_tools", tools)
+        local_control_tools = tuple(self.local_control_tools)
+        if not all(isinstance(name, str) and name for name in local_control_tools) or len(
+            set(local_control_tools)
+        ) != len(local_control_tools):
+            raise ValueError("local_control_tools must contain unique non-empty names")
+        tool_names = {tool.name for tool in tools}
+        if not set(local_control_tools).issubset(tool_names):
+            raise ValueError("local_control_tools must be a subset of frontend_tools")
+        object.__setattr__(self, "local_control_tools", local_control_tools)
         if self.target_availability is not None:
             try:
                 availability = ResponseOnlyTargetAvailability(self.target_availability)
@@ -309,8 +324,10 @@ class BackendTargetSnapshot:
             object.__setattr__(self, "target_availability", availability)
         if not self.target_binding_verified and self.target_availability is not None:
             raise ValueError("an unavailable backend target cannot advertise target availability")
-        if not self.target_binding_verified and (self.capabilities or tools):
-            raise ValueError("an unavailable backend target cannot advertise capabilities or tools")
+        if not self.target_binding_verified and self.capabilities:
+            raise ValueError("an unavailable backend target cannot advertise backend capabilities")
+        if not self.target_binding_verified and tool_names != set(local_control_tools):
+            raise ValueError("an unavailable backend target may advertise only application-local controls")
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,15 +336,19 @@ class FrontendResponse:
 
     ``payload_text`` is quoted data whose meaning is fixed by ``purpose``:
     backend-authorized presentation material for a result or a safe public reason
-    for failure. A delegation acknowledgement carries no duplicate payload; its
-    frozen objective and admission evidence come from ``FrontendContextRequest``.
+    for failure. A delegation acknowledgement and local status/control response
+    carry no duplicate payload; their correlated facts come from
+    ``FrontendContextRequest``.
     ``local_request_id`` is transport/UI correlation only and is never a
-    backend-issued Work ID.
+    backend-issued Work ID. ``presentation_id`` is the Interaction Manager's
+    exact result-speech identity; the Realtime facade must preserve it through
+    generated turns and playback evidence.
     """
 
     purpose: FrontendResponsePurpose
     payload_text: str | None
     local_request_id: str | None = None
+    presentation_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the typed payload crossing the application port."""
@@ -335,11 +356,15 @@ class FrontendResponse:
             purpose = FrontendResponsePurpose(self.purpose)
         except (TypeError, ValueError) as error:
             raise ValueError("frontend response purpose is invalid") from error
-        if purpose is FrontendResponsePurpose.DELEGATION_ACK:
+        if purpose in {
+            FrontendResponsePurpose.DELEGATION_ACK,
+            FrontendResponsePurpose.STATUS_DELIVERY,
+            FrontendResponsePurpose.CONTROL_DELIVERY,
+        }:
             if self.payload_text is not None:
-                raise ValueError("delegation acknowledgement must not carry payload_text")
+                raise ValueError(f"{purpose.value} must not carry payload_text")
         elif not isinstance(self.payload_text, str) or not self.payload_text.strip() or "\x00" in self.payload_text:
-            raise ValueError("result and failure responses require non-empty payload_text without NUL")
+            raise ValueError("application responses require non-empty payload_text without NUL")
         local_request_id = self.local_request_id
         if local_request_id is not None and (
             not isinstance(local_request_id, str)
@@ -348,8 +373,16 @@ class FrontendResponse:
             or any(ord(character) < 32 or ord(character) == 127 for character in local_request_id)
         ):
             raise ValueError("local_request_id is invalid")
+        presentation_id = _runtime_identifier(
+            self.presentation_id,
+            "presentation_id",
+            required=purpose is FrontendResponsePurpose.RESULT_DELIVERY,
+        )
+        if purpose is not FrontendResponsePurpose.RESULT_DELIVERY and presentation_id is not None:
+            raise ValueError("only result_delivery may carry presentation_id")
         object.__setattr__(self, "purpose", purpose)
         object.__setattr__(self, "local_request_id", local_request_id)
+        object.__setattr__(self, "presentation_id", presentation_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,7 +408,15 @@ class FrontendContextRequest:
             raise ValueError("local_request_id is invalid")
         if purpose is FrontendContextPurpose.CONVERSATION and local_request_id is not None:
             raise ValueError("conversation context must not target a local request")
-        if purpose is FrontendContextPurpose.DELEGATION_ACK and local_request_id is None:
+        if (
+            purpose
+            in {
+                FrontendContextPurpose.DELEGATION_ACK,
+                FrontendContextPurpose.STATUS_DELIVERY,
+                FrontendContextPurpose.CONTROL_DELIVERY,
+            }
+            and local_request_id is None
+        ):
             raise ValueError(f"{purpose.value} context requires local_request_id")
         object.__setattr__(self, "purpose", purpose)
         object.__setattr__(self, "local_request_id", local_request_id)

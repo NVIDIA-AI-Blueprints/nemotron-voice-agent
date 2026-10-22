@@ -18,6 +18,7 @@ from voiceclaw.adapters.openshell_fabric.client import (
     OpenShellAuthenticationMode,
     OpenShellClientError,
     OpenShellFailureCode,
+    OpenShellFailurePhase,
     SdkSandboxExecutor,
 )
 
@@ -62,6 +63,14 @@ def _result(exit_code: int = 0) -> openshell.ExecResult:
     return openshell.ExecResult(exit_code=exit_code, stdout="ignored", stderr="ignored")
 
 
+class _SdkError(RuntimeError):
+    def __init__(self, code_name: str) -> None:
+        self._code_name = code_name
+
+    def code(self):
+        return type("StatusCode", (), {"name": self._code_name})()
+
+
 def test_anonymous_executor_omits_client_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -94,20 +103,27 @@ def test_exec_stream_preserves_exact_stdout_and_split_utf8(monkeypatch: pytest.M
         ),
     )
 
-    execution = executor.execute(
-        ("/usr/local/bin/fabric-agent", "invoke", "--input", "-"),
-        stdin=b'{"message":"hello"}',
-        timeout_seconds=330,
+    command = (
+        "/opt/fabric/bin/fabric-agent-ctl",
+        "invoke",
+        "--agent",
+        "researcher",
+        "--runtime-id",
+        "runtime-1",
+        "--request",
+        "-",
     )
+    payload = b'{"input":"hello","request_id":"commit-1"}'
+    execution = executor.execute(command, stdin=payload, timeout_seconds=330)
 
     assert execution.exit_code == 0
     assert execution.stdout == '{"value":"€"}\n'
     assert client.calls == [
         (
-            ("deployed-agent", ("/usr/local/bin/fabric-agent", "invoke", "--input", "-")),
+            ("deployed-agent", command),
             {
                 "workspace": "voice",
-                "stdin": b'{"message":"hello"}',
+                "stdin": payload,
                 "timeout_seconds": 330,
                 "no_login_shell": True,
             },
@@ -240,3 +256,63 @@ def test_exec_stream_preserves_sdk_timeout_classification(monkeypatch: pytest.Mo
         executor.execute(("bridge", "invoke"), stdin=None, timeout_seconds=330)
 
     assert raised.value.code is OpenShellFailureCode.TIMEOUT
+    assert raised.value.phase is OpenShellFailurePhase.ADMITTED_STREAM
+
+
+@pytest.mark.parametrize(
+    ("code_name", "expected"),
+    [
+        ("PERMISSION_DENIED", OpenShellFailureCode.AUTH_DENIED),
+        ("NOT_FOUND", OpenShellFailureCode.TARGET_MISSING),
+    ],
+)
+def test_exec_stream_classifies_synchronous_rejection_before_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    code_name: str,
+    expected: OpenShellFailureCode,
+) -> None:
+    class RejectingClient(_CapturedClient):
+        def exec_stream(self, *args: object, **kwargs: object) -> Iterable[object]:
+            raise _SdkError(code_name)
+
+    monkeypatch.setattr(openshell, "SandboxClient", lambda *_args, **_kwargs: RejectingClient(()))
+    executor = SdkSandboxExecutor(
+        endpoint="127.0.0.1:8080",
+        workspace="voice",
+        sandbox="deployed-agent",
+        client_secret=lambda: "secret-value",
+        issuer="http://127.0.0.1:8081/realms/voice",
+        client_id="voiceclaw",
+        tls=False,
+    )
+
+    with pytest.raises(OpenShellClientError) as raised:
+        executor.execute(("bridge", "invoke"), stdin=None, timeout_seconds=330)
+
+    assert raised.value.code is expected
+    assert raised.value.phase is OpenShellFailurePhase.BEFORE_ADMISSION
+
+
+@pytest.mark.parametrize(
+    ("code_name", "expected"),
+    [
+        ("PERMISSION_DENIED", OpenShellFailureCode.AUTH_DENIED),
+        ("NOT_FOUND", OpenShellFailureCode.TARGET_MISSING),
+    ],
+)
+def test_exec_stream_marks_failures_while_consuming_the_stream_as_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+    code_name: str,
+    expected: OpenShellFailureCode,
+) -> None:
+    def events():
+        raise _SdkError(code_name)
+        yield
+
+    executor, _client = _executor(monkeypatch, events())
+
+    with pytest.raises(OpenShellClientError) as raised:
+        executor.execute(("bridge", "invoke"), stdin=None, timeout_seconds=330)
+
+    assert raised.value.code is expected
+    assert raised.value.phase is OpenShellFailurePhase.ADMITTED_STREAM

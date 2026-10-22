@@ -22,6 +22,8 @@ from voiceclaw.installer_inputs import AgentConnection
 from voiceclaw.installer_transport import SDKExecutionTransport, TransportFailure
 from voiceclaw.model_contracts import ModelContractCatalog
 
+_CLOSE_POLL_SECONDS = 0.05
+
 
 class InstallerSandboxExecutor:
     """Supply the upstream executor protocol without operator credential discovery.
@@ -54,16 +56,22 @@ class InstallerSandboxExecutor:
         timeout_seconds: int,
     ) -> SandboxExecution:
         """Adapt one bounded helper exchange on the upstream worker thread."""
-        invoke = (FABRIC_AGENT_BINARY, "invoke", "--agent", self._connection.agent, "--input", "-")
-        check = (FABRIC_AGENT_BINARY, "check", "--agent", self._connection.agent, "--live")
+        invoke = (
+            FABRIC_AGENT_BINARY,
+            "invoke",
+            "--agent",
+            self._connection.agent,
+            "--runtime-id",
+            self._connection.fabric_runtime_id,
+            "--request",
+            "-",
+        )
         argv = tuple(command)
-        maximum = self._connection.invoke_seconds if argv == invoke else self._connection.health_seconds
         if (
-            argv not in (invoke, check)
+            argv != invoke
             or type(timeout_seconds) is not int
-            or not 1 <= timeout_seconds <= maximum
-            or (argv == check and stdin is not None)
-            or (argv == invoke and not isinstance(stdin, bytes))
+            or not 1 <= timeout_seconds <= self._connection.invoke_seconds
+            or not isinstance(stdin, bytes)
         ):
             raise OpenShellClientError(OpenShellFailureCode.UNAVAILABLE)
 
@@ -77,12 +85,23 @@ class InstallerSandboxExecutor:
                 self._active.add((loop, task))
                 self._idle.clear()
             transport = self._transport_factory()
+            operation: asyncio.Task | None = None
             try:
-                return await transport.execute(
-                    self._connection, list(argv), stdin or b"", time.monotonic() + timeout_seconds
+                operation = asyncio.create_task(
+                    transport.execute(self._connection, list(argv), stdin or b"", time.monotonic() + timeout_seconds)
                 )
+                while True:
+                    done, _ = await asyncio.wait({operation}, timeout=_CLOSE_POLL_SECONDS)
+                    if operation in done:
+                        return await operation
+                    with self._lock:
+                        if self._closed:
+                            raise asyncio.CancelledError
             finally:
                 try:
+                    if operation is not None and not operation.done():
+                        operation.cancel()
+                        await asyncio.gather(operation, return_exceptions=True)
                     await transport.shutdown()
                 finally:
                     with self._lock:
@@ -123,7 +142,7 @@ def compose_installer_backend(
     *,
     executor: InstallerSandboxExecutor | None = None,
 ) -> BackendComposition:
-    """Reuse the upstream adapter with the container contract's OpenClaw binding."""
+    """Bind VoiceClaw to the exact runtime NemoClaw already provisioned."""
     executor = executor or InstallerSandboxExecutor(connection)
     try:
         adapter = OpenShellFabricAdapter(
@@ -131,14 +150,15 @@ def compose_installer_backend(
             workspace=connection.workspace,
             sandbox=connection.sandbox,
             fabric_agent=connection.agent,
-            adapter_id="nvidia.fabric.openclaw",
-            native_agent=connection.agent,
+            runtime_id=connection.fabric_runtime_id,
+            adapter_id=connection.fabric_adapter_id,
+            harness=connection.fabric_harness,
+            adapter_kind=connection.fabric_adapter_kind,
+            result_pointer=connection.fabric_result_pointer,
             invoke_timeout_seconds=connection.invoke_seconds,
-            check_timeout_seconds=connection.health_seconds,
             model_contracts=contracts,
-            allow_shared_context=False,
         )
-        return BackendComposition(turn_backend=adapter, turn_status="response_only", selected_agent_readiness=adapter)
+        return BackendComposition(turn_backend=adapter, turn_status="response_only")
     except BaseException:
         executor.close()
         raise

@@ -33,6 +33,13 @@ class OpenShellFailureCode(StrEnum):
     UNAVAILABLE = "openshell_unavailable"
 
 
+class OpenShellFailurePhase(StrEnum):
+    """Whether an SDK failure happened before or after exec admission."""
+
+    BEFORE_ADMISSION = "before_admission"
+    ADMITTED_STREAM = "admitted_stream"
+
+
 class OpenShellAuthenticationMode(StrEnum):
     """Authentication modes supported by the OpenShell SDK boundary."""
 
@@ -43,12 +50,21 @@ class OpenShellAuthenticationMode(StrEnum):
 class OpenShellClientError(RuntimeError):
     """An OpenShell call failed without exposing provider diagnostics."""
 
-    def __init__(self, code: OpenShellFailureCode | str) -> None:
-        """Retain one allowlisted failure code."""
+    def __init__(
+        self,
+        code: OpenShellFailureCode | str,
+        *,
+        phase: OpenShellFailurePhase | str = OpenShellFailurePhase.BEFORE_ADMISSION,
+    ) -> None:
+        """Retain one allowlisted failure code and its effects boundary."""
         try:
             self.code = OpenShellFailureCode(code)
         except (TypeError, ValueError):
             self.code = OpenShellFailureCode.UNAVAILABLE
+        try:
+            self.phase = OpenShellFailurePhase(phase)
+        except (TypeError, ValueError):
+            self.phase = OpenShellFailurePhase.ADMITTED_STREAM
         super().__init__(self.code.value)
 
 
@@ -87,7 +103,7 @@ class SandboxExecutor(Protocol):
 
 
 class SdkSandboxExecutor:
-    """OpenShell SDK v0.1.2 executor bound to one workspace and sandbox."""
+    """OpenShell SDK v0.1.4 executor bound to one workspace and sandbox."""
 
     def __init__(
         self,
@@ -167,11 +183,19 @@ class SdkSandboxExecutor:
                 timeout_seconds=timeout_seconds,
                 no_login_shell=True,
             )
-            return self._consume_stream(stream)
-        except OpenShellClientError:
-            raise
         except Exception as error:
             raise OpenShellClientError(_classify_sdk_error(error)) from error
+        try:
+            return self._consume_stream(stream)
+        except OpenShellClientError as error:
+            if error.phase is OpenShellFailurePhase.ADMITTED_STREAM:
+                raise
+            raise OpenShellClientError(error.code, phase=OpenShellFailurePhase.ADMITTED_STREAM) from error
+        except Exception as error:
+            raise OpenShellClientError(
+                _classify_sdk_error(error),
+                phase=OpenShellFailurePhase.ADMITTED_STREAM,
+            ) from error
 
     def _consume_stream(self, stream: Any) -> SandboxExecution:
         """Decode one bounded SDK stream without trusting its lossy aggregate."""
@@ -216,7 +240,10 @@ class SdkSandboxExecutor:
             stderr_decoder.decode(b"", final=True)
             return SandboxExecution(exit_code=exit_code, stdout="".join(stdout_parts))
         except (UnicodeDecodeError, _SandboxOutputError) as error:
-            raise OpenShellClientError(OpenShellFailureCode.UNAVAILABLE) from error
+            raise OpenShellClientError(
+                OpenShellFailureCode.UNAVAILABLE,
+                phase=OpenShellFailurePhase.ADMITTED_STREAM,
+            ) from error
         finally:
             close = getattr(stream, "close", None)
             if callable(close):
@@ -257,6 +284,7 @@ __all__ = [
     "OpenShellAuthenticationMode",
     "OpenShellClientError",
     "OpenShellFailureCode",
+    "OpenShellFailurePhase",
     "SandboxExecution",
     "SandboxExecutor",
     "SdkSandboxExecutor",

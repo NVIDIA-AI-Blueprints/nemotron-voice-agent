@@ -41,6 +41,10 @@ def test_packaged_example_profiles_are_versioned_deterministic_and_complete() ->
     assert first.resolve("conductor").session_scope is SessionScope.ATTACHMENT
     assert first.resolve("specialized").work_cardinality is WorkCardinality.PER_TARGET
     assert all("conversation.respond" in profile.tools for profile in first.profiles.values())
+    assert all(
+        "no Work objective" in profile.tool("conversation.respond").description for profile in first.profiles.values()
+    )
+    assert "every finalized user Work objective" in first.resolve("stateless").tool("work.delegate").description
 
 
 def test_profiles_render_only_closed_canonical_argument_schemas() -> None:

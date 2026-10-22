@@ -33,6 +33,17 @@ FRONTEND_HEADER_LIMIT = 4096
 FRONTEND_BODY_LIMIT = 1024
 
 
+async def _wait_for_process_exit(process: asyncio.subprocess.Process, timeout_seconds: float) -> bool:
+    """Observe the child-watcher result without registering a racy second waiter."""
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while process.returncode is None:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(0.01, remaining))
+    return True
+
+
 async def _terminate_process(process: asyncio.subprocess.Process | None) -> None:
     if process is None:
         return
@@ -41,11 +52,11 @@ async def _terminate_process(process: asyncio.subprocess.Process | None) -> None
     if process.returncode is None:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
-        with suppress(TimeoutError):
-            await asyncio.wait_for(process.wait(), 2)
+        await _wait_for_process_exit(process, 2)
     with suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGKILL)
-    await process.wait()
+    if not await _wait_for_process_exit(process, 1):
+        raise RuntimeError("local frontend process cleanup did not complete")
 
 
 class InstallerApplication:
@@ -199,7 +210,7 @@ class InstallerApplication:
             pass
         finally:
             if executor is not None:
-                await asyncio.to_thread(executor.wait_closed, 2)
+                executor.wait_closed(2)
             await _terminate_process(self.process)
             self.process = None
             self.delegate = None

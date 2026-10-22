@@ -10,7 +10,7 @@ from enum import StrEnum
 
 RESULT_ENVELOPE_SCHEMA = "voiceclaw.result.v1"
 REALTIME_PROJECTION_SCHEMA = "voiceclaw.projection.v2"
-RUNTIME_PROJECTION_SCHEMA = "voiceclaw.runtime.v5"
+RUNTIME_PROJECTION_SCHEMA = "voiceclaw.runtime.v6"
 
 
 class ResponseOnlyRequestState(StrEnum):
@@ -22,6 +22,7 @@ class ResponseOnlyRequestState(StrEnum):
     WAITING_FOR_RESPONSE = "waiting_for_response"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     OUTCOME_UNKNOWN = "outcome_unknown"
 
     @property
@@ -36,7 +37,7 @@ class ResponseOnlyRequestState(StrEnum):
     @property
     def terminal(self) -> bool:
         """Return whether the local request lifecycle has ended."""
-        return self in {self.SUCCEEDED, self.FAILED, self.OUTCOME_UNKNOWN}
+        return self in {self.SUCCEEDED, self.FAILED, self.CANCELLED, self.OUTCOME_UNKNOWN}
 
 
 class ResponseOnlyTerminalOutcome(StrEnum):
@@ -45,6 +46,7 @@ class ResponseOnlyTerminalOutcome(StrEnum):
     NONE = "none"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     OUTCOME_UNKNOWN = "outcome_unknown"
 
 

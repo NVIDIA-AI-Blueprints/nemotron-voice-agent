@@ -299,8 +299,8 @@ def test_latency_uses_monotonic_nanoseconds_and_never_accepts_time_reversal() ->
         _VERIFIER._latency_ms(20, 19)
 
 
-def test_target_contract_validates_initial_binding_and_terminal_tool_withdrawal() -> None:
-    """The verifier proves both ends of the one-shot capability transition."""
+def test_target_contract_validates_initial_and_sequential_terminal_tools() -> None:
+    """The verifier proves both ends of the ordered sequential capability transition."""
     projection = {
         "backend_name": "NemoClaw",
         "backend_mode": "response_only",
@@ -313,6 +313,7 @@ def test_target_contract_validates_initial_binding_and_terminal_tool_withdrawal(
         "agent_readiness": "unknown",
         "capabilities": ["work.submit"],
         "frontend_tools": ["work.delegate"],
+        "local_control_tools": [],
         "durability": "none",
         "event_delivery": "response_only",
         "max_parallel_work": 1,
@@ -321,9 +322,8 @@ def test_target_contract_validates_initial_binding_and_terminal_tool_withdrawal(
     }
     terminal = {
         **initial,
-        "capabilities": [],
-        "frontend_tools": [],
-        "target_state": "consumed",
+        "frontend_tools": ["work.delegate", "work.status"],
+        "local_control_tools": ["work.status"],
     }
 
     assert (
@@ -333,19 +333,18 @@ def test_target_contract_validates_initial_binding_and_terminal_tool_withdrawal(
             expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
             expected_capabilities=frozenset({"work.submit"}),
             expected_tools=frozenset({"work.delegate"}),
+            expected_local_controls=frozenset(),
         )["target_state"]
         == "available"
     )
-    assert (
-        _VERIFIER._target_contract_payload(
-            json.dumps(terminal),
-            projection,
-            expected_state=ResponseOnlyTargetAvailability.CONSUMED,
-            expected_capabilities=frozenset(),
-            expected_tools=frozenset(),
-        )["frontend_tools"]
-        == []
-    )
+    assert _VERIFIER._target_contract_payload(
+        json.dumps(terminal),
+        projection,
+        expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
+        expected_capabilities=frozenset({"work.submit"}),
+        expected_tools=frozenset({"work.delegate", "work.status"}),
+        expected_local_controls=frozenset({"work.status"}),
+    )["frontend_tools"] == ["work.delegate", "work.status"]
 
 
 def test_shared_target_contract_keeps_delegation_available_only_when_explicitly_selected() -> None:
@@ -358,6 +357,7 @@ def test_shared_target_contract_keeps_delegation_available_only_when_explicitly_
         "agent_readiness": "unknown",
         "capabilities": ["work.submit"],
         "frontend_tools": ["work.delegate"],
+        "local_control_tools": [],
         "durability": "none",
         "event_delivery": "response_only",
         "max_parallel_work": 1,
@@ -368,6 +368,7 @@ def test_shared_target_contract_keeps_delegation_available_only_when_explicitly_
         expected_state=ResponseOnlyTargetAvailability.AVAILABLE,
         expected_capabilities=frozenset({"work.submit"}),
         expected_tools=frozenset({"work.delegate"}),
+        expected_local_controls=frozenset(),
     )
     with pytest.raises(RuntimeError, match="qualified response-only contract"):
         _VERIFIER._target_contract_payload(json.dumps(payload), projection, **parameters)
@@ -393,6 +394,7 @@ def test_target_contract_rejects_a_consumed_target_that_still_advertises_delegat
         "agent_readiness": "unknown",
         "capabilities": ["work.submit"],
         "frontend_tools": ["work.delegate"],
+        "local_control_tools": [],
         "durability": "none",
         "event_delivery": "response_only",
         "max_parallel_work": 1,
@@ -407,6 +409,7 @@ def test_target_contract_rejects_a_consumed_target_that_still_advertises_delegat
             expected_state=ResponseOnlyTargetAvailability.CONSUMED,
             expected_capabilities=frozenset(),
             expected_tools=frozenset(),
+            expected_local_controls=frozenset(),
         )
 
 
@@ -716,6 +719,7 @@ def test_full_verifier_requires_agent_lifecycle_after_recorded_audio(
         "agent_readiness": "unknown",
         "capabilities": ["work.submit"],
         "frontend_tools": ["work.delegate"],
+        "local_control_tools": [],
         "durability": "none",
         "event_delivery": "response_only",
         "max_parallel_work": 1,
@@ -793,9 +797,33 @@ def test_full_verifier_requires_agent_lifecycle_after_recorded_audio(
     display = "Balanced trees provide logarithmic lookups."
     delegated_events = [
         projection("delivery_queue", "queued", json.dumps({"queue_depth": 1})),
-        *(
-            projection("backend_turn", phase, **base)
-            for phase in ("locally_queued", "dispatching", "waiting_for_response")
+        projection("backend_turn", "locally_queued", **base),
+        projection(
+            "backend_target",
+            "verified",
+            json.dumps(
+                {
+                    **target,
+                    "frontend_tools": ["work.cancel", "work.delegate", "work.status"],
+                    "local_control_tools": ["work.cancel", "work.status"],
+                }
+            ),
+            **binding,
+        ),
+        projection("backend_turn", "dispatching", **base),
+        projection("backend_turn", "waiting_for_response", **base),
+        projection(
+            "backend_target",
+            "verified",
+            json.dumps(
+                {
+                    **target,
+                    "target_state": "in_flight",
+                    "frontend_tools": ["work.delegate", "work.status"],
+                    "local_control_tools": ["work.status"],
+                }
+            ),
+            **binding,
         ),
         *speech("ack-1", "delegation_ack", "I will ask the connected agent."),
         projection("delivery_queue", "drained", json.dumps({"queue_depth": 0})),
@@ -807,7 +835,13 @@ def test_full_verifier_requires_agent_lifecycle_after_recorded_audio(
         projection(
             "backend_target",
             "verified",
-            json.dumps({**target, "capabilities": [], "frontend_tools": [], "target_state": "consumed"}),
+            json.dumps(
+                {
+                    **target,
+                    "frontend_tools": ["work.delegate", "work.status"],
+                    "local_control_tools": ["work.status"],
+                }
+            ),
             **binding,
         ),
         projection("delivery_queue", "queued", json.dumps({"queue_depth": 1})),
@@ -879,6 +913,13 @@ def test_full_verifier_requires_agent_lifecycle_after_recorded_audio(
         assert result["query"] == "Use the agent to compare balanced trees."
         assert result["backend_turn_phases"] == ["locally_queued", "dispatching", "waiting_for_response", "succeeded"]
         assert result["backend_response_id"] == "native-result-1"
+        assert result["intermediate_target_contracts_verified"] == [
+            "locally_queued",
+            "waiting_for_response",
+        ]
+        assert result["terminal_target_state"] == "available"
+        assert result["terminal_frontend_tools"] == ["work.delegate", "work.status"]
+        assert result["terminal_delegation_withdrawn"] is False
         assert result["playback_receipts_acknowledged"] == 2
         assert result["audio_played_ms"] == 0
         assert result["result_audio_wav"]["response_id"] == "result-1"

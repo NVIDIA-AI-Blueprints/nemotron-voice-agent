@@ -13,12 +13,14 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from voiceclaw.adapters.openshell_fabric.protocol import FABRIC_ADAPTER_KINDS
+
 DEFAULT_PORT = 18790
 CREDENTIAL_LIMIT = 16 * 1024
-HEALTH_SECONDS = 12
-INVOKE_SECONDS = 120
+INVOKE_SECONDS = 330
 _NAME = re.compile(r"[a-z][a-z0-9-]{0,62}\Z")
 _WORKSPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+_FABRIC_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}\Z")
 _BEARER = re.compile(rb"[A-Za-z0-9._~+/-]+=*\Z")
 
 
@@ -81,6 +83,29 @@ def _uuid(value: object) -> str:
             raise ContainerInputError
     except (ValueError, TypeError, AttributeError):
         raise ContainerInputError from None
+    return value
+
+
+def _adapter_kind(value: object) -> str:
+    kind = _identity(value, _FABRIC_ID)
+    if kind not in FABRIC_ADAPTER_KINDS:
+        raise ContainerInputError
+    return kind
+
+
+def _json_pointer(value: object) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= 512 or not value.startswith("/"):
+        raise ContainerInputError
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if ord(character) < 33 or ord(character) > 126:
+            raise ContainerInputError
+        if character == "~":
+            index += 1
+            if index == len(value) or value[index] not in "01":
+                raise ContainerInputError
+        index += 1
     return value
 
 
@@ -164,8 +189,12 @@ class AgentConnection:
     sandbox: str
     sandbox_id: str
     agent: str
+    fabric_runtime_id: str
+    fabric_adapter_id: str
+    fabric_harness: str
+    fabric_adapter_kind: str
+    fabric_result_pointer: str
     bearer: str | None = field(default=None, repr=False)
-    health_seconds: int = HEALTH_SECONDS
     invoke_seconds: int = INVOKE_SECONDS
 
 
@@ -200,6 +229,11 @@ class ContainerSettings:
             sandbox=_identity(environ.get("VOICECLAW_SANDBOX_NAME"), _NAME),
             sandbox_id=_uuid(environ.get("VOICECLAW_SANDBOX_ID")),
             agent=_identity(environ.get("VOICECLAW_AGENT_NAME"), _NAME),
+            fabric_runtime_id=_identity(environ.get("VOICECLAW_FABRIC_RUNTIME_ID"), _FABRIC_ID),
+            fabric_adapter_id=_identity(environ.get("VOICECLAW_FABRIC_ADAPTER_ID"), _FABRIC_ID),
+            fabric_harness=_identity(environ.get("VOICECLAW_FABRIC_HARNESS"), _FABRIC_ID),
+            fabric_adapter_kind=_adapter_kind(environ.get("VOICECLAW_FABRIC_ADAPTER_KIND")),
+            fabric_result_pointer=_json_pointer(environ.get("VOICECLAW_FABRIC_RESULT_POINTER")),
             bearer=bearer,
         )
         return cls(

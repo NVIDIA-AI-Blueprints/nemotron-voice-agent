@@ -7,6 +7,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
+import yaml
 
 from voiceclaw.model_contracts import (
     MODEL_CONTRACT_SCHEMA,
@@ -15,6 +16,16 @@ from voiceclaw.model_contracts import (
 )
 
 CATALOG = Path(__file__).parents[1] / "src" / "voiceclaw" / "resources" / "model_contracts.v1.yaml"
+
+
+def _without_optional_delivery_templates(tmp_path: Path, *names: str) -> Path:
+    raw = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
+    templates = raw["profiles"]["default"]["frontend"]["instruction_templates"]
+    for name in names:
+        templates.pop(name)
+    override = tmp_path / "legacy-model-contracts.v1.yaml"
+    override.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return override
 
 
 def test_packaged_catalog_is_versioned_deterministic_and_complete() -> None:
@@ -49,12 +60,20 @@ def test_packaged_catalog_is_versioned_deterministic_and_complete() -> None:
     assert "Use only facts in payload_text" in delivery
     assert "supplies no result facts" in delivery
     assert "hidden component boundaries" in delivery
+    status_delivery = " ".join(first.instruction_templates["status_delivery"].split())
+    assert "current local status of target_request" in status_delivery
+    assert "Do not guess progress" in status_delivery
+    control_delivery = " ".join(first.instruction_templates["control_delivery"].split())
+    assert "confirmed local control outcome" in control_delivery
+    assert "Do not claim backend cancellation" in control_delivery
     assert "Do not repeat, summarize, explain, answer, or elaborate the goal" not in normalized_instructions
     assert "supplies the exact finalized turn" not in normalized_instructions
     assert "do not narrate rich display content" in normalized_instructions
     assert set(first.instruction_templates) == {
         "task_acknowledgement",
         "result_delivery",
+        "status_delivery",
+        "control_delivery",
         "server_policy",
         "untrusted_session",
         "untrusted_response",
@@ -67,6 +86,58 @@ def test_packaged_catalog_is_versioned_deterministic_and_complete() -> None:
     assert first.failure_copy("session_busy").title == "Request failed"
     assert first.failure_copy("session_busy").display == "Another request is already active."
     assert first.failure_copy("session_busy").speech == "Another request is already active."
+
+
+def test_v1_catalog_accepts_absent_local_control_delivery_extensions(tmp_path: Path) -> None:
+    catalog = load_model_contract_catalog(
+        _without_optional_delivery_templates(tmp_path, "status_delivery", "control_delivery")
+    )
+
+    assert catalog.schema_version == MODEL_CONTRACT_SCHEMA
+    assert "status_delivery" not in catalog.instruction_templates
+    assert "control_delivery" not in catalog.instruction_templates
+    with pytest.raises(ModelContractError, match="unknown instruction template: status_delivery"):
+        catalog.render_instruction(
+            "status_delivery",
+            response_context_json="{}",
+            status_context_json="{}",
+        )
+
+
+def test_optional_v1_delivery_extension_still_validates_its_placeholders(tmp_path: Path) -> None:
+    override = tmp_path / "contracts.yaml"
+    override.write_text(
+        CATALOG.read_text(encoding="utf-8").replace("${status_context_json}", "${content}", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelContractError, match="status_delivery placeholders must be"):
+        load_model_contract_catalog(override)
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("remove_required", "missing task_acknowledgement"),
+        ("add_unknown", "unknown future_delivery"),
+    ],
+)
+def test_optional_v1_extensions_do_not_relax_template_key_validation(
+    tmp_path: Path,
+    change: str,
+    expected: str,
+) -> None:
+    raw = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
+    templates = raw["profiles"]["default"]["frontend"]["instruction_templates"]
+    if change == "remove_required":
+        templates.pop("task_acknowledgement")
+    else:
+        templates["future_delivery"] = "Unsupported extension."
+    override = tmp_path / "contracts.yaml"
+    override.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ModelContractError, match=expected):
+        load_model_contract_catalog(override)
 
 
 def test_failure_copy_uses_default_for_unknown_stable_code() -> None:

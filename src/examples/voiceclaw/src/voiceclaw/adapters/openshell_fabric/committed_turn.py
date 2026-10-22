@@ -1,33 +1,33 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Response-only committed turns through OpenShell and the Fabric bridge."""
+"""Non-durable committed turns through OpenShell and a Fabric 0.5 runtime."""
 
 from __future__ import annotations
 
 import asyncio
-import copy
-import math
 import re
 import threading
-import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 
 from voiceclaw.adapters.openshell_fabric.client import (
     OpenShellClientError,
     OpenShellFailureCode,
+    OpenShellFailurePhase,
     SandboxExecutor,
 )
 from voiceclaw.adapters.openshell_fabric.protocol import (
+    FABRIC_ADAPTER_KINDS,
     FabricEffects,
-    FabricFirstTurnQualificationError,
     FabricProtocolError,
+    FabricRunStatus,
     FabricStatus,
-    adapter_codec,
     decode_response,
+    encode_run_request,
     parse_json_pointer,
+    parse_run_result,
     resolve_json_pointer,
-    successful_fabric_result,
 )
 from voiceclaw.adapters.result_envelope import (
     DEFAULT_RESULT_SPEECH_BUDGET_BYTES,
@@ -46,7 +46,6 @@ from voiceclaw.domain.models import (
 )
 from voiceclaw.domain.response_only import ResponseOnlyContextContinuity, ResponseOnlyTargetAvailability
 from voiceclaw.model_contracts import ModelContractCatalog, load_model_contract_catalog
-from voiceclaw.ports.readiness import SelectedAgentReadinessCode, SelectedAgentReadinessError
 from voiceclaw.ports.turns import (
     MAX_COMMITTED_TURN_GOAL_BYTES,
     CommittedTurnBackend,
@@ -58,21 +57,26 @@ from voiceclaw.ports.turns import (
     CommittedTurnResult,
 )
 
-FABRIC_AGENT_BINARY = "/usr/local/bin/fabric-agent"
+FABRIC_AGENT_BINARY = "/opt/fabric/bin/fabric-agent-ctl"
 DEFAULT_INVOCATION_TIMEOUT_SECONDS = 330
-DEFAULT_CHECK_TIMEOUT_SECONDS = 30
-DEFAULT_READINESS_CACHE_TTL_SECONDS = 30.0
+MAX_VOLATILE_SEQUENTIAL_TURNS = 4096
 _IDENTITY = re.compile(r"^[^\x00\r\n]{1,512}$")
+_VOICECLAW_RELAY_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL,
+    "https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent/voiceclaw",
+)
 
 
 def validate_fabric_binding_identity(value: str, *, name: str, maximum_characters: int = 512) -> str:
-    """Validate one operator-selected Fabric/OpenShell identity."""
-    if not isinstance(value, str) or _IDENTITY.fullmatch(value) is None or len(value) > maximum_characters:
+    """Validate one operator-selected OpenShell/Fabric binding identity."""
+    if not isinstance(value, str) or _IDENTITY.fullmatch(value) is None:
         raise ValueError(f"{name} is invalid")
     try:
-        value.encode("utf-8")
+        encoded = value.encode("utf-8")
     except UnicodeEncodeError as error:
         raise ValueError(f"{name} is invalid") from error
+    if len(encoded) > maximum_characters or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError(f"{name} is invalid")
     return value
 
 
@@ -102,19 +106,19 @@ class OpenShellFabricError(CommittedTurnError):
 
 
 class OpenShellFabricRejected(OpenShellFabricError):
-    """The bridge confirmed that execution did not begin."""
+    """The invocation was rejected before backend execution began."""
 
 
 class OpenShellFabricAmbiguous(OpenShellFabricError):
-    """Invocation may have executed and must not be retried automatically."""
+    """The invocation may have executed and its runtime is fenced."""
 
 
 class OpenShellFabricProtocolError(OpenShellFabricError):
-    """A bridge or selected adapter response violated its public contract."""
+    """The configured binding or request violated the Fabric contract."""
 
 
 class OpenShellFabricAdapter:
-    """Invoke one deployed Fabric agent without making durability claims."""
+    """Invoke one NemoClaw-provisioned Fabric runtime without owning its lifecycle."""
 
     def __init__(
         self,
@@ -123,48 +127,37 @@ class OpenShellFabricAdapter:
         workspace: str,
         sandbox: str,
         fabric_agent: str,
+        runtime_id: str,
         adapter_id: str,
-        native_agent: str | None = None,
+        harness: str,
+        adapter_kind: str,
+        result_pointer: str,
         label: str = "OpenShell / Fabric",
         invoke_timeout_seconds: int = DEFAULT_INVOCATION_TIMEOUT_SECONDS,
-        check_timeout_seconds: int = DEFAULT_CHECK_TIMEOUT_SECONDS,
-        readiness_cache_ttl_seconds: float = DEFAULT_READINESS_CACHE_TTL_SECONDS,
-        result_pointer: str | None = None,
         result_display_budget_bytes: int = MAX_RESULT_DISPLAY_BYTES,
         result_speech_budget_bytes: int = DEFAULT_RESULT_SPEECH_BUDGET_BYTES,
         model_contracts: ModelContractCatalog | None = None,
-        allow_shared_context: bool = False,
     ) -> None:
-        """Bind one service identity to one deployed agent target."""
+        """Bind to one already-started runtime owned by NemoClaw."""
         if not isinstance(executor, SandboxExecutor):
             raise TypeError("executor must implement SandboxExecutor")
         for name, value in (
             ("workspace", workspace),
             ("sandbox", sandbox),
             ("fabric_agent", fabric_agent),
+            ("runtime_id", runtime_id),
             ("adapter_id", adapter_id),
+            ("harness", harness),
+            ("adapter_kind", adapter_kind),
         ):
             validate_fabric_binding_identity(value, name=name)
+        if adapter_kind not in FABRIC_ADAPTER_KINDS:
+            raise ValueError("adapter_kind is not supported by Fabric 0.5")
         validate_fabric_binding_identity(label, name="label", maximum_characters=128)
-        try:
-            codec = adapter_codec(adapter_id)
-        except FabricProtocolError as error:
-            raise ValueError("adapter_id has no installed codec") from error
-        selected_native_agent = fabric_agent if native_agent is None else native_agent
-        validate_fabric_binding_identity(selected_native_agent, name="native_agent")
-        for name, value in (
-            ("invoke_timeout_seconds", invoke_timeout_seconds),
-            ("check_timeout_seconds", check_timeout_seconds),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 3600:
-                raise ValueError(f"{name} must be an integer from 1 through 3600")
-        if (
-            isinstance(readiness_cache_ttl_seconds, bool)
-            or not isinstance(readiness_cache_ttl_seconds, (int, float))
-            or not math.isfinite(readiness_cache_ttl_seconds)
-            or not 0 <= readiness_cache_ttl_seconds <= 300
-        ):
-            raise ValueError("readiness_cache_ttl_seconds must be in [0, 300]")
+        if isinstance(invoke_timeout_seconds, bool) or not isinstance(invoke_timeout_seconds, int):
+            raise ValueError("invoke_timeout_seconds must be an integer")
+        if not 1 <= invoke_timeout_seconds <= 3600:
+            raise ValueError("invoke_timeout_seconds must be from 1 through 3600")
         if (
             isinstance(result_display_budget_bytes, bool)
             or not isinstance(result_display_budget_bytes, int)
@@ -177,67 +170,51 @@ class OpenShellFabricAdapter:
             or not 1 <= result_speech_budget_bytes <= MAX_RESULT_SPEECH_BYTES
         ):
             raise ValueError("result_speech_budget_bytes is invalid")
-        if result_pointer is not None:
-            parse_json_pointer(result_pointer)
+        parse_json_pointer(result_pointer)
         self._executor = executor
         self._workspace = workspace
         self._sandbox = sandbox
         self._fabric_agent = fabric_agent
-        self._codec = codec
-        self._native_agent = selected_native_agent
+        self._runtime_id = runtime_id
+        self._adapter_id = adapter_id
+        self._harness = harness
+        self._adapter_kind = adapter_kind
+        self._result_pointer = result_pointer
         self._label = label
         self._invoke_timeout_seconds = invoke_timeout_seconds
-        self._check_timeout_seconds = check_timeout_seconds
-        self._readiness_cache_ttl_seconds = float(readiness_cache_ttl_seconds)
-        self._result_pointer = result_pointer
         self._result_display_budget_bytes = result_display_budget_bytes
         self._result_speech_budget_bytes = result_speech_budget_bytes
         self._model_contracts = model_contracts or load_model_contract_catalog()
-        if not isinstance(allow_shared_context, bool):
-            raise ValueError("allow_shared_context must be boolean")
-        self._allow_shared_context = allow_shared_context
-        self._qualified_conversation_id: str | None = None
-        self._qualified_history: list[dict[str, object]] | None = None
-        self._qualified_runtime_id: str | None = None
-        self._qualified_turn_ids: set[str] = set()
-        self._qualified_response_ids: set[str] = set()
         self._invoke_gate = threading.Lock()
-        self._invocation_state_lock = threading.Lock()
-        self._invocation_state = ResponseOnlyTargetAvailability.AVAILABLE
+        self._state_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
-        self._readiness_condition = threading.Condition(self._lifecycle_lock)
-        self._readiness_inflight = False
-        self._readiness_generation = 0
-        self._readiness_failure: str | None = None
+        self._invocation_state = ResponseOnlyTargetAvailability.AVAILABLE
+        self._bound_conversation_id: str | None = None
+        self._request_ids: set[str] = set()
+        self._invocation_ids: set[str] = set()
+        self._maximum_sequential_turns = MAX_VOLATILE_SEQUENTIAL_TURNS
         self._closed = False
         self._client_closed = False
-        self._binding_verified = False
-        self._binding_verified_at: float | None = None
-        self._binding_health_supported = False
 
     async def inspect(self) -> CommittedTurnBackend:
-        """Check the runtime binding without generating an agent response."""
-        availability = self._target_availability()
-        if availability is ResponseOnlyTargetAvailability.AVAILABLE:
-            await _run_daemon(self._check_sync, name="voiceclaw-fabric-inspect")
-            availability = self._target_availability()
-        return self._backend_descriptor(availability=availability)
+        """Return configured capability evidence without inventing a health probe."""
+        return self._backend_descriptor(availability=self._target_availability())
 
     def _backend_descriptor(self, *, availability: ResponseOnlyTargetAvailability) -> CommittedTurnBackend:
-        """Project the verified binding and its current one-shot availability."""
+        operations = (
+            frozenset({BackendOperation.SUBMIT})
+            if availability is not ResponseOnlyTargetAvailability.CONSUMED
+            else frozenset()
+        )
         return CommittedTurnBackend(
             label=self._label,
-            target_ref=f"{self._workspace}/{self._sandbox}/{self._fabric_agent}",
+            target_ref=f"{self._workspace}/{self._sandbox}/{self._fabric_agent}/{self._runtime_id}",
             mode="response_only",
             capabilities=BackendCapabilities(
                 backend_kind="response_only",
                 target_label=self._label,
-                revision=f"openshell-fabric-{self._codec.revision}",
-                operations=(
-                    frozenset({BackendOperation.SUBMIT})
-                    if availability is ResponseOnlyTargetAvailability.AVAILABLE
-                    else frozenset()
-                ),
+                revision="openshell-fabric-0.5",
+                operations=operations,
                 durability=Durability.NONE,
                 event_delivery=EventDelivery.RESPONSE_ONLY,
                 agent_targets=(),
@@ -247,76 +224,79 @@ class OpenShellFabricAdapter:
             ),
             capability_source=CapabilitySource.OPERATOR_CONFIGURED,
             capability_source_id="openshell_fabric",
-            context_continuity=(
-                ResponseOnlyContextContinuity.SHARED_TARGET
-                if self._allow_shared_context
-                else ResponseOnlyContextContinuity.UNQUALIFIED
-            ),
+            context_continuity=ResponseOnlyContextContinuity.UNQUALIFIED,
             target_availability=availability,
         )
 
     def _target_availability(self) -> ResponseOnlyTargetAvailability:
-        """Read the one-shot target state without waiting for invocation."""
-        with self._invocation_state_lock:
+        with self._state_lock:
             return self._invocation_state
 
-    def _claim_target(self) -> None:
-        """Atomically claim the target before any potentially blocking work."""
-        with self._invocation_state_lock:
+    def _claim_target(self, *, conversation_id: str, request_id: str) -> None:
+        with self._state_lock:
             if self._invocation_state is not ResponseOnlyTargetAvailability.AVAILABLE:
+                raise OpenShellFabricRejected("target_context_consumed")
+            if self._bound_conversation_id not in (None, conversation_id):
+                raise OpenShellFabricRejected("target_context_mismatch")
+            if request_id in self._request_ids:
+                raise OpenShellFabricRejected("duplicate_request")
+            if len(self._request_ids) >= self._maximum_sequential_turns:
+                self._invocation_state = ResponseOnlyTargetAvailability.CONSUMED
                 raise OpenShellFabricRejected("target_context_consumed")
             self._invocation_state = ResponseOnlyTargetAvailability.IN_FLIGHT
 
+    def _record_dispatch(self, *, conversation_id: str, request_id: str) -> None:
+        with self._state_lock:
+            if (
+                self._invocation_state is not ResponseOnlyTargetAvailability.IN_FLIGHT
+                or self._bound_conversation_id not in (None, conversation_id)
+                or request_id in self._request_ids
+                or len(self._request_ids) >= self._maximum_sequential_turns
+            ):
+                self._invocation_state = ResponseOnlyTargetAvailability.CONSUMED
+                raise OpenShellFabricAmbiguous("invocation_outcome_unknown")
+            self._bound_conversation_id = conversation_id
+            self._request_ids.add(request_id)
+
     def _release_target(self) -> None:
-        """Return a conclusively unused target to the available state."""
-        with self._invocation_state_lock:
+        with self._state_lock:
             if self._invocation_state is ResponseOnlyTargetAvailability.IN_FLIGHT:
-                self._invocation_state = ResponseOnlyTargetAvailability.AVAILABLE
+                self._invocation_state = (
+                    ResponseOnlyTargetAvailability.CONSUMED
+                    if len(self._request_ids) >= self._maximum_sequential_turns
+                    else ResponseOnlyTargetAvailability.AVAILABLE
+                )
 
     def _consume_target(self) -> None:
-        """Fence a target whose invocation ran or may have run."""
-        with self._invocation_state_lock:
+        with self._state_lock:
             self._invocation_state = ResponseOnlyTargetAvailability.CONSUMED
 
-    def _consume_target_if_in_flight(self) -> None:
-        """Fence an invocation that escaped through an unexpected failure."""
-        with self._invocation_state_lock:
-            if self._invocation_state is ResponseOnlyTargetAvailability.IN_FLIGHT:
-                self._invocation_state = ResponseOnlyTargetAvailability.CONSUMED
-
-    async def check_selected_agent(self) -> None:
-        """Verify only the selected bridge/runtime binding, not inference health."""
-        try:
-            await _run_daemon(self._check_sync, name="voiceclaw-fabric-readiness")
-        except OpenShellFabricError as error:
-            mapping = {
-                "auth_denied": SelectedAgentReadinessCode.ACCESS_DENIED,
-                "bridge_protocol_error": SelectedAgentReadinessCode.PROTOCOL_ERROR,
-                "openshell_unavailable": SelectedAgentReadinessCode.ENDPOINT_UNAVAILABLE,
-                "target_missing": SelectedAgentReadinessCode.WRONG_AGENT,
-                "timeout": SelectedAgentReadinessCode.ENDPOINT_UNAVAILABLE,
-            }
-            raise SelectedAgentReadinessError(
-                mapping.get(error.code, SelectedAgentReadinessCode.UNAVAILABLE)
-            ) from error
-
     async def commit_turn(self, request: CommittedTurnRequest) -> CommittedTurnResult:
-        """Execute one invocation exactly once and return one terminal result."""
+        """Execute one ordered invocation against the provisioned runtime."""
         if not isinstance(request, CommittedTurnRequest):
             raise OpenShellFabricError("invalid_request")
+        dispatched = threading.Event()
+        cancelled = threading.Event()
+        dispatch_gate = threading.Lock()
         try:
             return await _run_daemon(
-                lambda: self._commit_sync(request),
+                lambda: self._commit_sync(
+                    request,
+                    dispatched=dispatched,
+                    cancelled=cancelled,
+                    dispatch_gate=dispatch_gate,
+                ),
                 name="voiceclaw-fabric-invoke",
             )
         except asyncio.CancelledError:
-            # The native invocation runs on a worker thread and may still
-            # complete. Fence its context before releasing the caller.
-            self._consume_target()
+            with dispatch_gate:
+                cancelled.set()
+                if dispatched.is_set():
+                    self._consume_target()
             raise
 
     async def stream_turn(self, request: CommittedTurnRequest) -> AsyncIterator[CommittedTurnEvent]:
-        """Expose the terminal-only bridge through the committed-turn stream port."""
+        """Expose Fabric's terminal result through the committed-turn stream port."""
         result = await self.commit_turn(request)
         yield CommittedTurnDisplayDelta(
             backend_session_id=result.backend_session_id,
@@ -328,144 +308,91 @@ class OpenShellFabricAdapter:
         yield CommittedTurnCompleted(result=result)
 
     async def shutdown(self) -> None:
-        """Reject new calls and release the OpenShell transport when idle."""
+        """Release only the OpenShell transport; NemoClaw retains runtime ownership."""
         self.close()
 
     def close(self) -> None:
-        """Reject new calls and close the transport once active calls finish."""
-        with self._readiness_condition:
+        """Reject new calls and close the OpenShell client once invokes finish."""
+        with self._lifecycle_lock:
             self._closed = True
-            self._readiness_condition.notify_all()
         self._close_executor_if_idle()
 
-    def _check_sync(self) -> bool:
-        with self._readiness_condition:
-            if self._closed:
-                raise OpenShellFabricError("adapter_closed")
-            cached = self._cached_readiness_locked()
-            if cached is not None:
-                return cached
-            observed_generation = self._readiness_generation
-            if self._readiness_inflight:
-                while (
-                    self._readiness_inflight and self._readiness_generation == observed_generation and not self._closed
-                ):
-                    self._readiness_condition.wait()
-                if self._closed:
-                    raise OpenShellFabricError("adapter_closed")
-                if self._readiness_generation != observed_generation and self._readiness_failure is not None:
-                    raise OpenShellFabricError(self._readiness_failure)
-                cached = self._cached_readiness_locked()
-                if cached is not None:
-                    return cached
-                if self._readiness_generation != observed_generation and self._binding_verified:
-                    return self._binding_health_supported
-            self._readiness_inflight = True
+    def _commit_sync(
+        self,
+        request: CommittedTurnRequest,
+        *,
+        dispatched: threading.Event,
+        cancelled: threading.Event,
+        dispatch_gate: threading.Lock,
+    ) -> CommittedTurnResult:
+        self._acquire_operation()
+        claimed = False
+        invocation_dispatched = False
+        terminal_known = False
         try:
-            execution = self._execute(
-                (
-                    FABRIC_AGENT_BINARY,
-                    "check",
-                    "--agent",
-                    self._fabric_agent,
-                    "--live",
-                ),
-                stdin=None,
-                timeout_seconds=self._check_timeout_seconds,
+            if cancelled.is_set():
+                raise OpenShellFabricRejected("invocation_cancelled")
+            self._validate_request(request)
+            self._claim_target(
+                conversation_id=request.runtime_conversation_id,
+                request_id=request.commit_id,
             )
+            claimed = True
+            prompt = self._build_prompt(request.text)
             try:
-                response = decode_response(
-                    operation="check",
-                    exit_code=execution.exit_code,
-                    stdout=execution.stdout,
+                payload = encode_run_request(
+                    input_text=prompt,
+                    request_id=request.commit_id,
+                    relay_session_root=str(uuid.uuid5(_VOICECLAW_RELAY_NAMESPACE, request.runtime_conversation_id)),
+                    context={
+                        "voiceclaw_conversation_id": request.runtime_conversation_id,
+                        "voiceclaw_commit_id": request.commit_id,
+                    },
                 )
             except FabricProtocolError as error:
-                raise OpenShellFabricProtocolError("bridge_protocol_error") from error
-            if response.status is FabricStatus.SUCCEEDED and self._running_snapshot(response.result):
-                return self._publish_readiness_success(health_supported=True)
-            if (
-                response.status is FabricStatus.UNSUPPORTED
-                and response.error is not None
-                and response.error.code == "fabric_health_unsupported"
-                and self._running_snapshot(response.result, unsupported=True)
-            ):
-                return self._publish_readiness_success(health_supported=False)
-            self._raise_bridge_failure(response.error.code if response.error is not None else "")
-            raise OpenShellFabricError("target_unavailable")
-        except OpenShellFabricError as error:
-            self._publish_readiness_failure(error.code)
-            raise
-        except BaseException:
-            self._publish_readiness_failure("openshell_unavailable")
-            raise
-
-    def _commit_sync(self, request: CommittedTurnRequest) -> CommittedTurnResult:
-        if not self._acquire_operation(self._invoke_gate):
-            raise OpenShellFabricError("backend_busy")
-        dispatched = False
-        try:
-            if (
-                self._allow_shared_context
-                and self._qualified_conversation_id is not None
-                and request.runtime_conversation_id != self._qualified_conversation_id
-            ):
-                self._consume_target()
-                raise OpenShellFabricRejected("target_context_consumed")
-            self._claim_target()
+                raise OpenShellFabricProtocolError("invalid_fabric_request") from error
             try:
-                request_bytes = request.text.encode("utf-8")
-            except UnicodeEncodeError as error:
-                raise OpenShellFabricError("invalid_text") from error
-            if len(request_bytes) > MAX_COMMITTED_TURN_GOAL_BYTES:
-                raise OpenShellFabricError("goal_too_large")
-            try:
-                prompt = build_result_envelope_prompt(
-                    request.text,
-                    display_budget_bytes=self._result_display_budget_bytes,
-                    speech_budget_bytes=self._result_speech_budget_bytes,
-                    contracts=self._model_contracts,
-                )
-                payload = self._codec.encode_input(
-                    native_agent=self._native_agent,
-                    prompt=prompt,
-                )
-            except FabricProtocolError as error:
-                raise OpenShellFabricProtocolError("incompatible_result") from error
-            except ResultEnvelopeProtocolError as error:
-                raise OpenShellFabricProtocolError("invalid_result_contract") from error
-            try:
-                dispatched = True
+                with dispatch_gate:
+                    if cancelled.is_set():
+                        raise OpenShellFabricRejected("invocation_cancelled")
+                    if not request.dispatch_marker.mark():
+                        raise OpenShellFabricRejected("invocation_cancelled")
+                    self._record_dispatch(
+                        conversation_id=request.runtime_conversation_id,
+                        request_id=request.commit_id,
+                    )
+                    invocation_dispatched = True
+                    dispatched.set()
                 execution = self._execute(
                     (
                         FABRIC_AGENT_BINARY,
                         "invoke",
                         "--agent",
                         self._fabric_agent,
-                        "--input",
+                        "--runtime-id",
+                        self._runtime_id,
+                        "--request",
                         "-",
                     ),
                     stdin=payload,
                     timeout_seconds=self._invoke_timeout_seconds,
-                    invocation=True,
                 )
             except OpenShellFabricRejected:
+                terminal_known = True
                 self._release_target()
                 raise
             except OpenShellFabricAmbiguous:
                 self._consume_target()
                 raise
             try:
-                response = decode_response(
-                    operation="invoke",
-                    exit_code=execution.exit_code,
-                    stdout=execution.stdout,
-                )
+                response = decode_response(operation="invoke", exit_code=execution.exit_code, stdout=execution.stdout)
             except FabricProtocolError as error:
                 self._consume_target()
                 raise OpenShellFabricAmbiguous("invocation_outcome_unknown") from error
             if response.status is not FabricStatus.SUCCEEDED:
                 assert response.error is not None
                 if response.error.effects is FabricEffects.NONE:
+                    terminal_known = True
                     self._release_target()
                     if response.error.code == "wrong_agent":
                         raise OpenShellFabricRejected("target_missing")
@@ -473,27 +400,30 @@ class OpenShellFabricAdapter:
                 self._consume_target()
                 raise OpenShellFabricAmbiguous("invocation_outcome_unknown")
             try:
-                runtime_id, fabric_result = successful_fabric_result(response)
-                turn_id, response_id = self._validate_correlation(runtime_id, fabric_result)
-                if self._qualified_runtime_id is not None and (
-                    runtime_id != self._qualified_runtime_id
-                    or turn_id in self._qualified_turn_ids
-                    or response_id in self._qualified_response_ids
-                ):
-                    raise FabricFirstTurnQualificationError(
-                        "Fabric result changed runtime or reused invocation identity"
-                    )
-                backend_session_id = self._codec.validate_turn_result(
-                    fabric_result=fabric_result,
-                    native_agent=self._native_agent,
-                    runtime_id=runtime_id,
-                    prompt=prompt,
-                    prior_messages=self._qualified_history,
+                result = parse_run_result(
+                    response,
+                    agent_name=self._fabric_agent,
+                    runtime_id=self._runtime_id,
+                    adapter_id=self._adapter_id,
+                    harness=self._harness,
+                    adapter_kind=self._adapter_kind,
+                    request_id=request.commit_id,
                 )
-                pointer = self._result_pointer or self._codec.default_result_pointer
-                text = resolve_json_pointer(fabric_result, pointer)
+                with self._state_lock:
+                    if result.invocation_id in self._invocation_ids:
+                        raise FabricProtocolError("Fabric invocation identity was reused")
+                    self._invocation_ids.add(result.invocation_id)
+                if result.status is FabricRunStatus.FAILED:
+                    terminal_known = True
+                    self._release_target()
+                    raise OpenShellFabricError("invocation_failed")
+                if result.status is FabricRunStatus.CANCELLED:
+                    terminal_known = True
+                    self._release_target()
+                    raise OpenShellFabricError("invocation_cancelled")
+                text = resolve_json_pointer(result.value, self._result_pointer)
                 if not isinstance(text, str):
-                    raise FabricProtocolError("selected result is not text")
+                    raise FabricProtocolError("selected Fabric result is not text")
                 parser = ResultEnvelopeStreamParser(
                     lambda _delta: None,
                     maximum_display_bytes=self._result_display_budget_bytes,
@@ -501,190 +431,86 @@ class OpenShellFabricAdapter:
                 )
                 parser.push(text)
                 envelope = parser.finish()
-            except FabricFirstTurnQualificationError as error:
-                self._consume_target()
-                raise OpenShellFabricAmbiguous("target_context_reused") from error
+            except OpenShellFabricError:
+                raise
             except (FabricProtocolError, ResultEnvelopeProtocolError, TypeError, ValueError) as error:
                 self._consume_target()
                 raise OpenShellFabricAmbiguous("invocation_result_unusable") from error
-            if self._allow_shared_context:
-                # Retain only fully validated native evidence, independently of
-                # delivery or model-authored narration, and bind it to the
-                # Realtime conversation that established the native context.
-                if self._qualified_conversation_id is None:
-                    self._qualified_conversation_id = request.runtime_conversation_id
-                self._qualified_history = copy.deepcopy(fabric_result["output"]["messages"])
-                self._qualified_runtime_id = runtime_id
-                self._qualified_turn_ids.add(turn_id)
-                self._qualified_response_ids.add(response_id)
-                self._release_target()
-            else:
-                self._consume_target()
+            terminal_known = True
+            self._release_target()
             return CommittedTurnResult(
-                backend_session_id=backend_session_id,
-                turn_id=turn_id,
-                response_id=response_id,
+                backend_session_id=self._runtime_id,
+                turn_id=result.request_id,
+                response_id=result.invocation_id,
                 display_text=envelope.display,
                 speak_text=envelope.speech,
             )
         finally:
-            if not dispatched:
+            if claimed and not invocation_dispatched:
                 self._release_target()
-            else:
-                self._consume_target_if_in_flight()
-            self._release_operation(self._invoke_gate)
+            elif claimed and invocation_dispatched and not terminal_known:
+                self._consume_target()
+            self._release_operation()
 
-    def _validate_correlation(self, runtime_id: str, fabric_result: dict[str, object]) -> tuple[str, str]:
-        required = (
-            "agent_name",
-            "harness",
-            "adapter_kind",
-            "runtime_id",
-            "invocation_id",
-            "request_id",
-        )
-        identities = {name: fabric_result.get(name) for name in required}
-        for value in identities.values():
-            if not isinstance(value, str) or _IDENTITY.fullmatch(value) is None:
-                raise FabricProtocolError("Fabric result identity is invalid")
-        adapter_id = fabric_result.get("adapter_id")
-        if (
-            not isinstance(adapter_id, str)
-            or _IDENTITY.fullmatch(adapter_id) is None
-            or adapter_id != self._codec.adapter_id
-        ):
-            raise FabricProtocolError("Fabric adapter identity mismatch")
-        if (
-            identities["runtime_id"] != runtime_id
-            or identities["agent_name"] != self._fabric_agent
-            or identities["harness"] != self._codec.expected_harness
-            or identities["adapter_kind"] != self._codec.expected_adapter_kind
-        ):
-            raise FabricProtocolError("Fabric result identity mismatch")
-        return identities["request_id"], identities["invocation_id"]
+    @staticmethod
+    def _validate_request(request: CommittedTurnRequest) -> None:
+        try:
+            validate_fabric_binding_identity(request.runtime_conversation_id, name="runtime_conversation_id")
+            validate_fabric_binding_identity(request.commit_id, name="commit_id")
+        except ValueError as error:
+            raise OpenShellFabricProtocolError("invalid_fabric_correlation") from error
+        try:
+            encoded = request.text.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise OpenShellFabricError("invalid_text") from error
+        if len(encoded) > MAX_COMMITTED_TURN_GOAL_BYTES:
+            raise OpenShellFabricError("goal_too_large")
 
-    def _execute(
-        self,
-        command: tuple[str, ...],
-        *,
-        stdin: bytes | None,
-        timeout_seconds: int,
-        invocation: bool = False,
-    ):
+    def _build_prompt(self, text: str) -> str:
+        try:
+            return build_result_envelope_prompt(
+                text,
+                display_budget_bytes=self._result_display_budget_bytes,
+                speech_budget_bytes=self._result_speech_budget_bytes,
+                contracts=self._model_contracts,
+            )
+        except ResultEnvelopeProtocolError as error:
+            raise OpenShellFabricProtocolError("invalid_result_contract") from error
+
+    def _execute(self, command: tuple[str, ...], *, stdin: bytes, timeout_seconds: int):
         try:
             return self._executor.execute(command, stdin=stdin, timeout_seconds=timeout_seconds)
         except OpenShellClientError as error:
-            if error.code is OpenShellFailureCode.AUTH_DENIED:
-                failure = OpenShellFabricRejected if invocation else OpenShellFabricError
-                raise failure("auth_denied") from error
-            if error.code is OpenShellFailureCode.TARGET_MISSING:
-                failure = OpenShellFabricRejected if invocation else OpenShellFabricError
-                raise failure("target_missing") from error
-            if error.code is OpenShellFailureCode.TIMEOUT:
-                code = "invocation_outcome_unknown" if invocation else "timeout"
-                failure = OpenShellFabricAmbiguous if invocation else OpenShellFabricError
-                raise failure(code) from error
-            code = "invocation_outcome_unknown" if invocation else "openshell_unavailable"
-            failure = OpenShellFabricAmbiguous if invocation else OpenShellFabricError
-            raise failure(code) from error
+            if error.phase is OpenShellFailurePhase.BEFORE_ADMISSION and error.code is OpenShellFailureCode.AUTH_DENIED:
+                raise OpenShellFabricRejected("auth_denied") from error
+            if (
+                error.phase is OpenShellFailurePhase.BEFORE_ADMISSION
+                and error.code is OpenShellFailureCode.TARGET_MISSING
+            ):
+                raise OpenShellFabricRejected("target_missing") from error
+            raise OpenShellFabricAmbiguous("invocation_outcome_unknown") from error
 
-    @staticmethod
-    def _raise_bridge_failure(code: str) -> None:
-        if code == "wrong_agent":
-            raise OpenShellFabricError("target_missing")
-        if code in {"runtime_unavailable", "host_stopping"}:
-            raise OpenShellFabricError("target_unavailable")
-        raise OpenShellFabricError("target_check_failed")
-
-    def _running_snapshot(self, result: dict[str, object] | None, *, unsupported: bool = False) -> bool:
-        if not isinstance(result, dict):
-            return False
-        required = {"runtime_id", "runtime_state", "generation", "applied_config", "health"}
-        if not required.issubset(result):
-            return False
-        runtime_id = result["runtime_id"]
-        generation = result["generation"]
-        applied_config = result["applied_config"]
-        if (
-            result["runtime_state"] != "running"
-            or not isinstance(runtime_id, str)
-            or _IDENTITY.fullmatch(runtime_id) is None
-            or not isinstance(generation, str)
-            or _IDENTITY.fullmatch(generation) is None
-            or not isinstance(applied_config, dict)
-        ):
-            return False
-        metadata = applied_config.get("metadata")
-        harness = applied_config.get("harness")
-        if (
-            not isinstance(metadata, dict)
-            or metadata.get("name") != self._fabric_agent
-            or not isinstance(harness, dict)
-            or harness.get("adapter_id") != self._codec.adapter_id
-            or not self._native_binding_matches(harness)
-        ):
-            return False
-        health = result["health"]
-        return health is None if unsupported else isinstance(health, dict)
-
-    def _native_binding_matches(self, harness: dict[str, object]) -> bool:
-        if self._codec.adapter_id != "nvidia.fabric.openclaw":
-            return True
-        settings = harness.get("settings", {})
-        if not isinstance(settings, dict):
-            return False
-        return settings.get("agent_name", "main") == self._native_agent
-
-    def _cached_readiness_locked(self) -> bool | None:
-        if not self._binding_verified:
-            return None
-        if self._invoke_gate.locked():
-            return self._binding_health_supported
-        verified_at = self._binding_verified_at
-        if (
-            verified_at is not None
-            and self._readiness_cache_ttl_seconds > 0
-            and time.monotonic() - verified_at <= self._readiness_cache_ttl_seconds
-        ):
-            return self._binding_health_supported
-        return None
-
-    def _publish_readiness_success(self, *, health_supported: bool) -> bool:
-        with self._readiness_condition:
-            self._binding_verified = True
-            self._binding_verified_at = time.monotonic()
-            self._binding_health_supported = health_supported
-            self._readiness_failure = None
-            self._readiness_generation += 1
-            self._readiness_inflight = False
-            self._readiness_condition.notify_all()
-        self._close_executor_if_idle()
-        return health_supported
-
-    def _publish_readiness_failure(self, code: str) -> None:
-        with self._readiness_condition:
-            self._binding_verified = False
-            self._binding_verified_at = None
-            self._binding_health_supported = False
-            self._readiness_failure = code
-            self._readiness_generation += 1
-            self._readiness_inflight = False
-            self._readiness_condition.notify_all()
-        self._close_executor_if_idle()
-
-    def _acquire_operation(self, gate: threading.Lock) -> bool:
+    def _acquire_operation(self) -> None:
         with self._lifecycle_lock:
             if self._closed:
                 raise OpenShellFabricError("adapter_closed")
-            return gate.acquire(blocking=False)
+        self._invoke_gate.acquire()
+        closed = False
+        with self._lifecycle_lock:
+            if self._closed:
+                self._invoke_gate.release()
+                closed = True
+        if closed:
+            self._close_executor_if_idle()
+            raise OpenShellFabricError("adapter_closed")
 
-    def _release_operation(self, gate: threading.Lock) -> None:
-        gate.release()
+    def _release_operation(self) -> None:
+        self._invoke_gate.release()
         self._close_executor_if_idle()
 
     def _close_executor_if_idle(self) -> None:
         with self._lifecycle_lock:
-            if not self._closed or self._client_closed or self._invoke_gate.locked() or self._readiness_inflight:
+            if not self._closed or self._client_closed or self._invoke_gate.locked():
                 return
             self._client_closed = True
         try:
@@ -694,10 +520,9 @@ class OpenShellFabricAdapter:
 
 
 __all__ = [
-    "DEFAULT_CHECK_TIMEOUT_SECONDS",
     "DEFAULT_INVOCATION_TIMEOUT_SECONDS",
-    "DEFAULT_READINESS_CACHE_TTL_SECONDS",
     "FABRIC_AGENT_BINARY",
+    "MAX_VOLATILE_SEQUENTIAL_TURNS",
     "OpenShellFabricAdapter",
     "OpenShellFabricAmbiguous",
     "OpenShellFabricError",

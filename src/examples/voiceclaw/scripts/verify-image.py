@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 _MANIFEST_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
-_OPEN_SHELL_REVISION = "6648bd0c290efbc41ba131ee9831ee45cd431f94"
+_OPEN_SHELL_REVISION = "5a7728c304b5528e954e9ae900cf21f84e1a12b1"
 _MAX_WHEEL_BYTES = 16 * 1024 * 1024
 _MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 _MAX_PACKAGE_MEMBER_BYTES = 8 * 1024 * 1024
@@ -74,11 +74,14 @@ backend_profiles:
       authentication: anonymous
       workspace: smoke-workspace
       sandbox: smoke-sandbox
+      runtime_id: smoke-runtime
       adapter_id: nvidia.fabric.openclaw
+      harness: nvidia.fabric.openclaw
+      adapter_kind: python
+      result_pointer: /output/response
       fabric_agent: main
       rpc_timeout_seconds: 1
       invoke_timeout_seconds: 1
-      check_timeout_seconds: 1
     interaction:
       profile: stateless
       tool_copy: {}

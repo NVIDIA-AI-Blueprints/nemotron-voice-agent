@@ -22,11 +22,20 @@ def helper(tmp_path: Path, code: str) -> str:
     return str(path)
 
 
-def execute(client, *, seconds=1, no_auth=False):
+def execute(client, *, seconds=30, no_auth=False):
     c = connection(environment(no_auth=no_auth))
     return client.execute(
         c,
-        ["/usr/local/bin/fabric-agent", "invoke", "--agent", c.agent, "--input", "-"],
+        [
+            "/opt/fabric/bin/fabric-agent-ctl",
+            "invoke",
+            "--agent",
+            c.agent,
+            "--runtime-id",
+            c.fabric_runtime_id,
+            "--request",
+            "-",
+        ],
         b"{}",
         time.monotonic() + seconds,
     )
@@ -46,9 +55,12 @@ assert control['authenticationMode'] == 'oidcBearer'
 assert control['workspace'] == 'explicit-workspace'
 assert control['sandboxId'] == '893ed65e-1972-48ba-b5b7-764119c24d07'
 assert control['endpoint'] == 'https://openshell.example.com:8443'
-assert control['argv'] == ['/usr/local/bin/fabric-agent','invoke','--agent','assistant','--input','-']
+assert control['argv'] == [
+    '/opt/fabric/bin/fabric-agent-ctl','invoke','--agent','assistant',
+    '--runtime-id','runtime-fixture-1','--request','-',
+]
 assert base64.b64decode(control['stdin']) == b'{}'
-assert 0 < control['seconds'] <= 1
+assert 0 < control['seconds'] <= 30
 print(json.dumps({'exitCode':0,'stdout':base64.b64encode(b'fixture output').decode(),'stderr':''}))
 """,
         )
@@ -159,7 +171,16 @@ def test_mismatched_credential_selection_prevents_child_launch(no_auth):
     c = connection(environment(no_auth=no_auth))
     c = dataclasses.replace(c, bearer=None if c.bearer else "fixture.bearer")
     client = SDKExecutionTransport(client="/never-launched")
-    argv = ["/usr/local/bin/fabric-agent", "invoke", "--agent", c.agent, "--input", "-"]
+    argv = [
+        "/opt/fabric/bin/fabric-agent-ctl",
+        "invoke",
+        "--agent",
+        c.agent,
+        "--runtime-id",
+        c.fabric_runtime_id,
+        "--request",
+        "-",
+    ]
     with pytest.raises(TransportFailure, match="protocol_error"):
         asyncio.run(client.execute(c, argv, b"{}", time.monotonic() + 1))
     assert not client._children

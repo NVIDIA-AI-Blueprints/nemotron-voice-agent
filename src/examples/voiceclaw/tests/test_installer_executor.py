@@ -9,7 +9,7 @@ from dataclasses import replace
 
 import pytest
 from test_installer_inputs import connection, environment
-from test_openshell_fabric_adapter import _check_unsupported, _invoke_success, _request
+from test_openshell_fabric_adapter import _invoke_success, _request
 
 from voiceclaw.adapters.openshell_fabric.client import (
     OpenShellClientError,
@@ -48,26 +48,53 @@ class Transport:
 @pytest.mark.parametrize("no_auth", [False, True])
 def test_executor_uses_upstream_protocol_and_preserves_binding(no_auth):
     binding = connection(environment(no_auth=no_auth))
-    transport = Transport([ExecutionResult(1, b'{"status":"unsupported"}', b"")])
+    transport = Transport([ExecutionResult(0, b'{"status":"completed"}', b"")])
     executor = InstallerSandboxExecutor(binding, transport_factory=lambda: transport)
     assert isinstance(executor, SandboxExecutor)
     result = executor.execute(
-        (FABRIC_AGENT_BINARY, "check", "--agent", binding.agent, "--live"),
-        stdin=None,
-        timeout_seconds=binding.health_seconds,
+        (
+            FABRIC_AGENT_BINARY,
+            "invoke",
+            "--agent",
+            binding.agent,
+            "--runtime-id",
+            binding.fabric_runtime_id,
+            "--request",
+            "-",
+        ),
+        stdin=b"{}",
+        timeout_seconds=binding.invoke_seconds,
     )
-    assert result.exit_code == 1 and result.stdout == '{"status":"unsupported"}'
+    assert result.exit_code == 0 and result.stdout == '{"status":"completed"}'
     assert transport.calls[0][:3] == (
         binding,
-        [FABRIC_AGENT_BINARY, "check", "--agent", binding.agent, "--live"],
-        b"",
+        [
+            FABRIC_AGENT_BINARY,
+            "invoke",
+            "--agent",
+            binding.agent,
+            "--runtime-id",
+            binding.fabric_runtime_id,
+            "--request",
+            "-",
+        ],
+        b"{}",
     )
     assert transport.closed
     executor.close()
     with pytest.raises(OpenShellClientError):
         executor.execute(
-            (FABRIC_AGENT_BINARY, "check", "--agent", binding.agent, "--live"),
-            stdin=None,
+            (
+                FABRIC_AGENT_BINARY,
+                "invoke",
+                "--agent",
+                binding.agent,
+                "--runtime-id",
+                binding.fabric_runtime_id,
+                "--request",
+                "-",
+            ),
+            stdin=b"{}",
             timeout_seconds=1,
         )
 
@@ -88,7 +115,16 @@ def test_executor_maps_safe_failures_without_retries(failure, expected):
     executor = InstallerSandboxExecutor(binding, transport_factory=lambda: transport)
     with pytest.raises(OpenShellClientError) as error:
         executor.execute(
-            (FABRIC_AGENT_BINARY, "invoke", "--agent", binding.agent, "--input", "-"),
+            (
+                FABRIC_AGENT_BINARY,
+                "invoke",
+                "--agent",
+                binding.agent,
+                "--runtime-id",
+                binding.fabric_runtime_id,
+                "--request",
+                "-",
+            ),
             stdin=b"{}",
             timeout_seconds=1,
         )
@@ -96,22 +132,36 @@ def test_executor_maps_safe_failures_without_retries(failure, expected):
     assert len(transport.calls) == 1 and transport.closed
 
 
-@pytest.mark.parametrize("fault", ["shell", "wrong-agent", "ready", "check-input", "timeout", "bool-timeout"])
+@pytest.mark.parametrize(
+    "fault",
+    ["shell", "wrong-agent", "wrong-runtime", "input-flag", "empty-input", "timeout", "bool-timeout"],
+)
 def test_executor_rejects_commands_outside_the_installer_binding(fault):
     binding = connection()
-    argv = [FABRIC_AGENT_BINARY, "check", "--agent", binding.agent, "--live"]
-    stdin = None
+    argv = [
+        FABRIC_AGENT_BINARY,
+        "invoke",
+        "--agent",
+        binding.agent,
+        "--runtime-id",
+        binding.fabric_runtime_id,
+        "--request",
+        "-",
+    ]
+    stdin = b"{}"
     seconds = 1
     if fault == "shell":
         argv = ["sh", "-c", "true"]
     elif fault == "wrong-agent":
         argv[3] = "another"
-    elif fault == "ready":
-        argv[-1] = "--ready"
-    elif fault == "check-input":
-        stdin = b"{}"
+    elif fault == "wrong-runtime":
+        argv[5] = "another-runtime"
+    elif fault == "input-flag":
+        argv[-2] = "--input"
+    elif fault == "empty-input":
+        stdin = None
     elif fault == "timeout":
-        seconds = binding.health_seconds + 1
+        seconds = binding.invoke_seconds + 1
     else:
         seconds = True
     transport = Transport([])
@@ -121,18 +171,9 @@ def test_executor_rejects_commands_outside_the_installer_binding(fault):
     assert transport.calls == []
 
 
-def test_installer_composes_a_single_use_upstream_adapter(monkeypatch):
-    binding = replace(connection(), agent="researcher")
-    check = json.loads(_check_unsupported().stdout)
-    check["result"]["applied_config"]["harness"]["settings"]["agent_name"] = "researcher"
-    invoke = json.loads(_invoke_success().stdout)
-    invoke["result"]["fabric_result"]["output"]["session_key"] = "agent:researcher:fabric-runtime-1"
-    transport = Transport(
-        [
-            ExecutionResult(1, (json.dumps(check) + "\n").encode(), b""),
-            ExecutionResult(0, (json.dumps(invoke) + "\n").encode(), b""),
-        ]
-    )
+def test_installer_composes_the_preprovisioned_runtime(monkeypatch):
+    binding = replace(connection(), agent="researcher", fabric_runtime_id="runtime-1")
+    transport = Transport([ExecutionResult(0, _invoke_success().stdout.encode(), b"")])
     monkeypatch.setattr(
         "voiceclaw.installer_executor.InstallerSandboxExecutor",
         lambda selected: InstallerSandboxExecutor(selected, transport_factory=lambda: transport),
@@ -141,23 +182,21 @@ def test_installer_composes_a_single_use_upstream_adapter(monkeypatch):
     assert type(composition.turn_backend) is OpenShellFabricAdapter
     backend = asyncio.run(composition.turn_backend.inspect())
     assert backend.target_availability is ResponseOnlyTargetAvailability.AVAILABLE
-    asyncio.run(composition.check_selected_agent_readiness())
-    assert composition.turn_backend._binding_health_supported is False
     result = asyncio.run(composition.turn_backend.commit_turn(_request()))
     assert result.display_text == "## Result\n\nDone."
     assert result.speak_text == "The result is ready."
     final_backend = asyncio.run(composition.turn_backend.inspect())
     assert final_backend.context_continuity is ResponseOnlyContextContinuity.UNQUALIFIED
-    assert final_backend.target_availability is ResponseOnlyTargetAvailability.CONSUMED
-    assert final_backend.capabilities.operations == frozenset()
-    with pytest.raises(OpenShellFabricRejected, match="target_context_consumed"):
+    assert final_backend.target_availability is ResponseOnlyTargetAvailability.AVAILABLE
+    assert final_backend.capabilities.operations
+    with pytest.raises(OpenShellFabricRejected, match="target_context_mismatch"):
         asyncio.run(
             composition.turn_backend.commit_turn(
                 CommittedTurnRequest("conversation-2", "commit-2", "Perform another request.")
             )
         )
-    assert [call[1][1] for call in transport.calls] == ["check", "invoke"]
-    assert json.loads(transport.calls[-1][2])["agent"] == "researcher"
+    assert [call[1][1] for call in transport.calls] == ["invoke"]
+    assert json.loads(transport.calls[-1][2])["request_id"] == "commit-1"
     asyncio.run(composition.shutdown())
 
 
@@ -179,7 +218,16 @@ def test_executor_close_cancels_local_helper_without_waiting_for_remote_stop():
     def run():
         try:
             executor.execute(
-                (FABRIC_AGENT_BINARY, "invoke", "--agent", "assistant", "--input", "-"),
+                (
+                    FABRIC_AGENT_BINARY,
+                    "invoke",
+                    "--agent",
+                    "assistant",
+                    "--runtime-id",
+                    connection().fabric_runtime_id,
+                    "--request",
+                    "-",
+                ),
                 stdin=b"{}",
                 timeout_seconds=1,
             )

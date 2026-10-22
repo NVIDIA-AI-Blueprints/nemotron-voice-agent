@@ -142,7 +142,7 @@ def test_healthcheck_target_tracks_effective_scheme_host_and_port(tmp_path) -> N
     assert target.stat().st_mode & 0o777 == 0o644
 
 
-def test_container_healthcheck_probes_selected_agent_readiness(tmp_path, monkeypatch) -> None:
+def test_container_healthcheck_probes_process_liveness(tmp_path, monkeypatch) -> None:
     target = tmp_path / "healthcheck.json"
     _write_healthcheck_target(
         target,
@@ -178,7 +178,7 @@ def test_container_healthcheck_probes_selected_agent_readiness(tmp_path, monkeyp
     monkeypatch.setattr("voiceclaw.container.http.client.HTTPConnection", Connection)
     _run_healthcheck(target)
 
-    assert requests == [("GET", "/readyz", {"Connection": "close"})]
+    assert requests == [("GET", "/livez", {"Connection": "close"})]
 
 
 def test_container_uses_one_root_owned_configuration_snapshot(tmp_path) -> None:

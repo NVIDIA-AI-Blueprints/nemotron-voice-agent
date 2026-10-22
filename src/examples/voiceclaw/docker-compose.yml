@@ -33,9 +33,12 @@ services:
       - no-new-privileges:true
     environment:
       VOICECLAW_CONFIG: /run/voiceclaw/config/voiceclaw.yaml
-      VOICECLAW_FABRIC_ADAPTER_ID: ${VOICECLAW_FABRIC_ADAPTER_ID:-nvidia.fabric.openclaw}
-      VOICECLAW_FABRIC_AGENT: ${VOICECLAW_FABRIC_AGENT:-main}
-      VOICECLAW_NATIVE_AGENT: ${VOICECLAW_NATIVE_AGENT:-main}
+      VOICECLAW_FABRIC_ADAPTER_ID: ${VOICECLAW_FABRIC_ADAPTER_ID:?Set the provisioned Fabric adapter ID}
+      VOICECLAW_FABRIC_ADAPTER_KIND: ${VOICECLAW_FABRIC_ADAPTER_KIND:?Set the provisioned Fabric adapter kind}
+      VOICECLAW_FABRIC_AGENT: ${VOICECLAW_FABRIC_AGENT:?Set the provisioned Fabric agent name}
+      VOICECLAW_FABRIC_HARNESS: ${VOICECLAW_FABRIC_HARNESS:?Set the provisioned Fabric harness ID}
+      VOICECLAW_FABRIC_RESULT_POINTER: ${VOICECLAW_FABRIC_RESULT_POINTER:?Set the Fabric result JSON pointer}
+      VOICECLAW_FABRIC_RUNTIME_ID: ${VOICECLAW_FABRIC_RUNTIME_ID:?Set the provisioned Fabric runtime ID}
       VOICECLAW_OPENSHELL_ENDPOINT: ${VOICECLAW_OPENSHELL_ENDPOINT:?Set connection.gatewayEndpoint URL}
       VOICECLAW_OPENSHELL_SANDBOX: ${VOICECLAW_OPENSHELL_SANDBOX:?Set the authored sandbox name}
       VOICECLAW_OPENSHELL_WORKSPACE: ${VOICECLAW_OPENSHELL_WORKSPACE:?Set the applied workspace}

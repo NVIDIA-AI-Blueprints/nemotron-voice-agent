@@ -40,9 +40,11 @@ def _wire(*, speech: str | None = "The tests passed.", display: str = "## Result
 
 def test_provider_neutral_protocol_symbols_are_stable() -> None:
     assert REALTIME_PROJECTION_SCHEMA == "voiceclaw.projection.v2"
-    assert RUNTIME_PROJECTION_SCHEMA == "voiceclaw.runtime.v5"
+    assert RUNTIME_PROJECTION_SCHEMA == "voiceclaw.runtime.v6"
     assert ResponseOnlyRequestState.WAITING_FOR_RESPONSE.active
     assert ResponseOnlyRequestState.SUCCEEDED.terminal
+    assert ResponseOnlyRequestState.CANCELLED.terminal
+    assert not ResponseOnlyRequestState.CANCELLED.active
     assert ResponseOnlyUpdateKind.RESULT_DISPLAY == "result_display"
 
 

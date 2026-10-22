@@ -96,6 +96,10 @@ class LocalRequestContext:
     display_available: bool = False
     speech_source: ResponseOnlySpeechSource = ResponseOnlySpeechSource.NONE
     delivery_state: str = "not_requested"
+    local_work_id: str | None = None
+    attempt_id: str | None = None
+    result_id: str | None = None
+    delivery_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +121,7 @@ class FrontendContextSnapshot:
 class FrontendContextProjector:
     """Serialize deterministic purpose-specific context without provider details."""
 
-    SCHEMA = "voiceclaw.frontend-context.v1"
+    SCHEMA = "voiceclaw.frontend-context.v2"
 
     def __init__(self, *, maximum_characters: int) -> None:
         """Bound every serialized context before it reaches a model adapter."""
@@ -199,13 +203,15 @@ class FrontendContextProjector:
     @staticmethod
     def _acknowledgement_request(request: LocalRequestContext) -> dict[str, Any]:
         """Project only immutable local-admission facts for acknowledgement speech."""
-        return {
+        value: dict[str, Any] = {
             "request_summary": request.summary,
             "operation": request.operation,
             "state": request.state.value,
             "backend_acceptance": request.backend_acceptance,
             "durability": request.durability.value,
         }
+        FrontendContextProjector._add_request_identifiers(value, request, include_result=False)
+        return value
 
     @staticmethod
     def _request(request: LocalRequestContext) -> dict[str, Any]:
@@ -225,7 +231,28 @@ class FrontendContextProjector:
         }
         if request.failure_code is not None:
             value["failure_code"] = request.failure_code
+        FrontendContextProjector._add_request_identifiers(value, request, include_result=True)
         return value
+
+    @staticmethod
+    def _add_request_identifiers(
+        value: dict[str, Any],
+        request: LocalRequestContext,
+        *,
+        include_result: bool,
+    ) -> None:
+        """Add canonical volatile correlations without removing legacy fields."""
+        if request.local_work_id is not None:
+            value["local_work_id"] = request.local_work_id
+        if request.attempt_id is not None:
+            value["attempt_id"] = request.attempt_id
+        if not include_result:
+            return
+        result: dict[str, Any] = value["result"]
+        if request.result_id is not None:
+            result["result_id"] = request.result_id
+        if request.delivery_id is not None:
+            result["delivery_id"] = request.delivery_id
 
     @staticmethod
     def _conversation_turn(turn: ConversationTurn) -> dict[str, Any]:

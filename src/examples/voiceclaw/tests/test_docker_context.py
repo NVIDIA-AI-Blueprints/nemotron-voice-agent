@@ -86,10 +86,10 @@ def test_container_installs_the_hash_locked_openshell_release_without_git() -> N
     lock = (example / "uv.lock").read_text(encoding="utf-8")
     third_party_licenses = (repository / "third_party_oss_license.txt").read_text(encoding="utf-8")
 
-    assert '"openshell==0.1.2"' in pyproject
-    assert 'name = "openshell"\nversion = "0.1.2"\nsource = { registry = "https://pypi.org/simple" }' in lock
-    assert 'name = "openshell", marker = "extra == \'openshell\'", specifier = "==0.1.2"' in lock
-    assert "sha256:8c409da4f176d42418d92366fe201f47cceef2c0fa432bfbce2bf938649d59cf" in lock
+    assert '"openshell==0.1.4"' in pyproject
+    assert 'name = "openshell"\nversion = "0.1.4"\nsource = { registry = "https://pypi.org/simple" }' in lock
+    assert 'name = "openshell", marker = "extra == \'openshell\'", specifier = "==0.1.4"' in lock
+    assert "sha256:2a25991a4c050e9d40d947b9df537d5c5370cf9a569b7a4e8c92cea882f5ddcb" in lock
     assert "--extra openshell" in dockerfile
     assert "git+https://" not in pyproject
     assert "git \\" not in dockerfile
@@ -156,6 +156,13 @@ def test_compose_does_not_bulk_inject_the_substitution_environment() -> None:
     assert "VOICECLAW_OPENSHELL_ENDPOINT:?Set connection.gatewayEndpoint URL" in compose
     assert "VOICECLAW_OPENSHELL_WORKSPACE:?Set the applied workspace" in compose
     assert "VOICECLAW_OPENSHELL_SANDBOX:?Set the authored sandbox name" in compose
+    assert "VOICECLAW_FABRIC_RUNTIME_ID:?Set the provisioned Fabric runtime ID" in compose
+    assert "VOICECLAW_FABRIC_AGENT:?Set the provisioned Fabric agent name" in compose
+    assert "VOICECLAW_FABRIC_ADAPTER_ID:?Set the provisioned Fabric adapter ID" in compose
+    assert "VOICECLAW_FABRIC_HARNESS:?Set the provisioned Fabric harness ID" in compose
+    assert "VOICECLAW_FABRIC_ADAPTER_KIND:?Set the provisioned Fabric adapter kind" in compose
+    assert "VOICECLAW_FABRIC_RESULT_POINTER:?Set the Fabric result JSON pointer" in compose
+    assert "VOICECLAW_NATIVE_AGENT" not in compose
     assert "127.0.0.1:8080" not in compose
     assert "VOICECLAW_OPENSHELL_WORKSPACE:-default" not in compose
 

@@ -220,6 +220,18 @@ class CapabilityToolRegistry:
         """Return the immutable profile used by this registry."""
         return self._profile
 
+    def definition(self, tool_name: str) -> SemanticTool:
+        """Return one configured semantic definition without granting authority.
+
+        Application-owned controls such as volatile status and pre-dispatch
+        cancellation are admitted by the Interaction Manager, not by a backend
+        capability claim.  This method exposes only the reviewed schema and
+        copy; callers must still establish their own authority and state gate.
+        """
+        if tool_name not in self._profile.tools or tool_name == "conversation.respond":
+            raise KeyError(tool_name)
+        return self._base_definition(tool_name)
+
     def project(
         self,
         capabilities: BackendCapabilities,

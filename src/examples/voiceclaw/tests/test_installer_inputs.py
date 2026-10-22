@@ -7,6 +7,7 @@ import pytest
 from voiceclaw.installer_inputs import ContainerInputError, ContainerSettings, strict_json, validate_bearer
 
 SANDBOX_ID = "893ed65e-1972-48ba-b5b7-764119c24d07"
+RUNTIME_ID = "runtime-fixture-1"
 
 
 def environment(*, no_auth=False, **overrides):
@@ -16,6 +17,11 @@ def environment(*, no_auth=False, **overrides):
         "VOICECLAW_SANDBOX_NAME": "assistant",
         "VOICECLAW_SANDBOX_ID": SANDBOX_ID,
         "VOICECLAW_AGENT_NAME": "assistant",
+        "VOICECLAW_FABRIC_RUNTIME_ID": RUNTIME_ID,
+        "VOICECLAW_FABRIC_ADAPTER_ID": "nvidia.fabric.hermes",
+        "VOICECLAW_FABRIC_HARNESS": "nvidia.fabric.hermes",
+        "VOICECLAW_FABRIC_ADAPTER_KIND": "python",
+        "VOICECLAW_FABRIC_RESULT_POINTER": "/output/response",
         "VOICECLAW_AUTH_MODE": "oidcBearer",
         "VOICECLAW_GATEWAY_TOKEN": "fixture.bearer",
         "VOICECLAW_SPEECH_KEY": "nvapi-fixture",
@@ -50,8 +56,21 @@ def test_valid_environment_settings():
         SANDBOX_ID,
         "assistant",
     )
+    assert (
+        c.fabric_runtime_id,
+        c.fabric_adapter_id,
+        c.fabric_harness,
+        c.fabric_adapter_kind,
+        c.fabric_result_pointer,
+    ) == (
+        RUNTIME_ID,
+        "nvidia.fabric.hermes",
+        "nvidia.fabric.hermes",
+        "python",
+        "/output/response",
+    )
     assert c.authentication_mode == "oidcBearer" and c.bearer == "fixture.bearer"
-    assert c.health_seconds == 12 and c.invoke_seconds == 120
+    assert c.invoke_seconds == 330
     assert settings(environment(VOICECLAW_PORT="18791")).port == 18791
     assert "fixture.bearer" not in repr(s) and "nvapi-fixture" not in repr(s)
 
@@ -60,6 +79,11 @@ def test_no_auth_selects_plaintext_without_any_token():
     c = connection(environment(no_auth=True))
     assert c.authentication_mode == "none" and c.bearer is None
     assert c.endpoint == "http://172.18.0.2:8080"
+
+
+@pytest.mark.parametrize("kind", ["http", "native_plugin", "process", "python"])
+def test_fabric_adapter_kind_accepts_the_native_descriptor_values(kind):
+    assert connection(environment(VOICECLAW_FABRIC_ADAPTER_KIND=kind)).fabric_adapter_kind == kind
 
 
 @pytest.mark.parametrize(
@@ -93,6 +117,17 @@ def test_rejects_inconsistent_authentication_and_transport(no_auth, overrides):
         ("VOICECLAW_SANDBOX_ID", "00000000-0000-0000-0000-000000000000"),
         ("VOICECLAW_AGENT_NAME", None),
         ("VOICECLAW_AGENT_NAME", "../assistant"),
+        ("VOICECLAW_FABRIC_RUNTIME_ID", None),
+        ("VOICECLAW_FABRIC_RUNTIME_ID", "runtime id"),
+        ("VOICECLAW_FABRIC_ADAPTER_ID", None),
+        ("VOICECLAW_FABRIC_ADAPTER_ID", "adapter id"),
+        ("VOICECLAW_FABRIC_HARNESS", None),
+        ("VOICECLAW_FABRIC_HARNESS", "harness id"),
+        ("VOICECLAW_FABRIC_ADAPTER_KIND", None),
+        ("VOICECLAW_FABRIC_ADAPTER_KIND", "shell"),
+        ("VOICECLAW_FABRIC_RESULT_POINTER", None),
+        ("VOICECLAW_FABRIC_RESULT_POINTER", "output.response"),
+        ("VOICECLAW_FABRIC_RESULT_POINTER", "/output/~2response"),
         ("VOICECLAW_GATEWAY_TOKEN", "bearer with spaces"),
         ("VOICECLAW_GATEWAY_TOKEN", ""),
         ("VOICECLAW_SPEECH_KEY", None),

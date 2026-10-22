@@ -29,7 +29,10 @@ CONTAINER_CONFIG = Path(__file__).parents[1] / "src" / "voiceclaw" / "resources"
 EXAMPLE_ENV = {
     "VOICECLAW_FABRIC_ADAPTER_ID": "nvidia.fabric.openclaw",
     "VOICECLAW_FABRIC_AGENT": "main",
-    "VOICECLAW_NATIVE_AGENT": "main",
+    "VOICECLAW_FABRIC_RUNTIME_ID": "runtime-fixture-1",
+    "VOICECLAW_FABRIC_HARNESS": "nvidia.fabric.openclaw",
+    "VOICECLAW_FABRIC_ADAPTER_KIND": "python",
+    "VOICECLAW_FABRIC_RESULT_POINTER": "/output/response",
     "VOICECLAW_OPENSHELL_CLIENT_ID": "voiceclaw-gateway",
     "VOICECLAW_OPENSHELL_CLIENT_SECRET_FILE": "/run/voiceclaw/operator/secrets/openshell-client-secret",
     "VOICECLAW_OPENSHELL_ENDPOINT": "127.0.0.1:8080",
@@ -128,9 +131,12 @@ def test_example_configuration_loads_with_backend_and_realtime_profiles() -> Non
     assert backend.settings["authentication"] == "anonymous"
     assert backend.settings["workspace"] == "default"
     assert backend.settings["sandbox"] == "assistant"
+    assert backend.settings["runtime_id"] == "runtime-fixture-1"
     assert backend.settings["adapter_id"] == "nvidia.fabric.openclaw"
+    assert backend.settings["harness"] == "nvidia.fabric.openclaw"
+    assert backend.settings["adapter_kind"] == "python"
+    assert backend.settings["result_pointer"] == "/output/response"
     assert backend.settings["fabric_agent"] == "main"
-    assert backend.settings["native_agent"] == "main"
     assert "issuer" not in backend.settings
     assert "client_id" not in backend.settings
     assert backend.settings["invoke_timeout_seconds"] == 330
@@ -1016,6 +1022,10 @@ def test_environment_expansion_is_limited_to_operational_urls_and_paths(tmp_path
             "endpoint": "${OPENSHELL_ENDPOINT}",
             "adapter_id": "${FABRIC_ADAPTER_ID}",
             "fabric_agent": "${FABRIC_AGENT}",
+            "runtime_id": "${FABRIC_RUNTIME_ID}",
+            "harness": "${FABRIC_HARNESS}",
+            "adapter_kind": "${FABRIC_ADAPTER_KIND}",
+            "result_pointer": "${FABRIC_RESULT_POINTER}",
             "issuer": "${OPENSHELL_ISSUER}",
             "client_id": "${OPENSHELL_CLIENT_ID}",
             "workspace": "${OPENSHELL_WORKSPACE}",
@@ -1040,6 +1050,10 @@ def test_environment_expansion_is_limited_to_operational_urls_and_paths(tmp_path
         "OPENSHELL_ENDPOINT": "gateway.example.test:443",
         "FABRIC_ADAPTER_ID": "nvidia.fabric.openclaw",
         "FABRIC_AGENT": "assistant",
+        "FABRIC_RUNTIME_ID": "runtime-fixture-1",
+        "FABRIC_HARNESS": "nvidia.fabric.openclaw",
+        "FABRIC_ADAPTER_KIND": "python",
+        "FABRIC_RESULT_POINTER": "/output/response",
         "OPENSHELL_ISSUER": "https://identity.example.test/realms/openshell",
         "OPENSHELL_CLIENT_ID": "voiceclaw",
         "OPENSHELL_WORKSPACE": "voice-agents",
@@ -1061,6 +1075,10 @@ def test_environment_expansion_is_limited_to_operational_urls_and_paths(tmp_path
         "endpoint": "gateway.example.test:443",
         "adapter_id": "nvidia.fabric.openclaw",
         "fabric_agent": "assistant",
+        "runtime_id": "runtime-fixture-1",
+        "harness": "nvidia.fabric.openclaw",
+        "adapter_kind": "python",
+        "result_pointer": "/output/response",
         "issuer": "https://identity.example.test/realms/openshell",
         "client_id": "voiceclaw",
         "workspace": "voice-agents",
@@ -1186,6 +1204,11 @@ def test_frontend_and_backend_cannot_reuse_hard_link_credential_identity(tmp_pat
         "VOICECLAW_OPERATOR_FILES_HOST",
         "VOICECLAW_STATE_PATH",
         "VOICECLAW_OPENSHELL_ENDPOINT",
+        "VOICECLAW_FABRIC_RUNTIME_ID",
+        "VOICECLAW_FABRIC_ADAPTER_ID",
+        "VOICECLAW_FABRIC_HARNESS",
+        "VOICECLAW_FABRIC_ADAPTER_KIND",
+        "VOICECLAW_FABRIC_RESULT_POINTER",
     ],
 )
 def test_credentials_cannot_reuse_operational_environment_variables(name: str) -> None:

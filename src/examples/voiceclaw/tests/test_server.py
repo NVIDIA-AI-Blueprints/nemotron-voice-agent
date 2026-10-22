@@ -49,8 +49,11 @@ def base_env(tmp_path: Path) -> dict[str, str]:
         "VOICECLAW_OPENSHELL_WORKSPACE": "test-workspace",
         "VOICECLAW_OPENSHELL_SANDBOX": "test-sandbox",
         "VOICECLAW_FABRIC_ADAPTER_ID": "nvidia.fabric.openclaw",
+        "VOICECLAW_FABRIC_ADAPTER_KIND": "python",
         "VOICECLAW_FABRIC_AGENT": "main",
-        "VOICECLAW_NATIVE_AGENT": "main",
+        "VOICECLAW_FABRIC_HARNESS": "nvidia.fabric.openclaw",
+        "VOICECLAW_FABRIC_RESULT_POINTER": "/output/response",
+        "VOICECLAW_FABRIC_RUNTIME_ID": "runtime-fixture-1",
         "VOICECLAW_OPENSHELL_ISSUER": "https://identity.example.test",
         "VOICECLAW_OPENSHELL_CLIENT_ID": "voiceclaw-test",
         "REALTIME_UPSTREAM_ENDPOINT": "ws://127.0.0.1:7861/v1/realtime",
@@ -187,6 +190,30 @@ def test_headless_server_does_not_publish_ui_routes(base_env: dict[str, str]) ->
     assert health.status_code == 200
     assert page.status_code == 404
     assert script.status_code == 404
+
+
+def test_fabric_binding_projects_delegation_without_claiming_context_continuity(
+    base_env: dict[str, str],
+) -> None:
+    config = _config(server=ServerConfig(host="127.0.0.1", port=7860), environ=base_env)
+    app = create_app(config, environ=base_env)
+
+    async def exercise():
+        snapshot = await app.state.voiceclaw_runtime.open_session(
+            "session-fabric-05",
+            "conversation-fabric-05",
+        )
+        await app.state.voiceclaw_runtime.close_session("session-fabric-05", "test-complete")
+        return snapshot
+
+    try:
+        snapshot = asyncio.run(exercise())
+    finally:
+        app.state.voiceclaw_state_store.close()
+
+    assert tuple(tool.name for tool in snapshot.frontend_tools) == ("work.delegate",)
+    assert snapshot.context_continuity.value == "unqualified"
+    assert snapshot.max_parallel_work == 1
 
 
 def test_liveness_is_content_free(base_env: dict[str, str]) -> None:
