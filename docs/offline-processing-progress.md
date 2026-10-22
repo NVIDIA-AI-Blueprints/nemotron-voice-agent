@@ -341,3 +341,151 @@ server-text evidence, not transcription of the played WAV files or a judge
 score. Behavioral and scoring consistency against realtime streaming remains in
 progress. AA-BigBench and FDB scoring validation is not established by this
 comparison.
+
+## October 22, 2026: Stateful Scheduling And Remaining Timing Questions
+
+The next architecture target is one conversation runtime with a shared session
+timeline and independent component cursors. Online and offline execution should
+share turn detection, context commits, cancellation, and service lifecycle.
+Changing input pacing alone cannot guarantee identical events when provider
+processing times also change.
+
+### Findings From The Current Implementation
+
+The [live pipeline](../src/examples/generic/pipeline.py) processes input, ASR,
+context aggregation, LLM, TTS, and output asynchronously. Components do not
+process the same audio chunk simultaneously. At session offset 10,000 ms, VAD
+can have consumed 10,000 ms of input while ASR has processed 9,700 ms and output
+plays a response to an earlier turn. Real input arrival and output presentation
+anchor their different positions to a common timeline.
+
+The current [offline engine](../src/examples/generic/offline/causal.py) drains
+the complete continuous ASR request before conversation replay. It also awaits
+each response trace before scheduling its output frames. LLM and TTS overlap
+within that response, but ASR and TTS do not overlap. The
+[ASR processing clock](../src/examples/generic/offline/recognition.py) projects
+observed bulk processing intervals onto source offsets. That projection is a
+timing model; it does not reconstruct the corresponding online execution.
+
+The five-sample comparison preserves all backend final transcript sequences
+and user-message grouping at every model request. Samples `2`, `3`, and `250`
+first differ in assistant context at request 2. Offline has delivered assistant
+text before interruption; online publishes no response content before that
+interruption in each inspected trace. This difference in delivered context
+requires separating content-dependent framing, provider readiness, and runtime
+lifecycle ordering. The saved traces do not isolate those causes.
+
+Assistant text can reach the native aggregator before synthesized PCM. Context
+commits must follow the shared native frame lifecycle. Inferring committed text
+from the audible WAV prefix would introduce a different policy. Also, an
+interruption can stop a pending first-token timer: such a value represents a
+cancelled measurement, rather than a successful token arrival.
+
+### Proposed Session State And Chunk Provenance
+
+Track each input chunk with `session_id`, `chunk_sequence`, `sample_start`,
+`sample_end`, and `sample_rate`. Keep uploaded input separate from input
+released to the conversation. Uploading the whole recording must not expose
+future speech to context or interruption logic.
+
+Each stage retains its own cursor: input release, VAD consumption, ASR
+submission and reported progress, generated output PCM, transport delivery,
+and client presentation. Use integer sample positions with explicit rates and
+cumulative resampling conversions. Measure provider dispatch-to-readiness
+intervals with a monotonic clock, retaining their queueing, transport, and
+input-wait scope. Project those intervals onto the session timeline; audio
+offsets cannot measure processing durations themselves.
+
+Each event carries a sequence, causal predecessor, turn and response generation,
+context version, input dependency prefix when known, and logical availability.
+Record provider dispatch and readiness separately. A dependency identifies what
+input enabled an event; availability identifies when the event can affect state.
+Concurrent processing intervals overlap rather than being added as sequential
+delays.
+
+The following boundaries define what tags can establish.
+
+| Stage | Supported Correlation | Remaining Contract |
+| --- | --- | --- |
+| VAD | Exact consumed PCM prefix and decision offset | Preserve detector state, reset policy, and decision delay. |
+| Continuous ASR | Submitted chunks, result order, and reported processed prefix | Prove completeness through silence and delayed finals or revisions. |
+| LLM | Context version, triggering turn, response generation, and token order | Tokens have no one-to-one mapping to source PCM chunks. |
+| TTS | Response/context ID, submitted text, and generated output sample ranges | Ordinary stitched output has no exact source-chunk or word-to-PCM mapping. |
+| WebSocket Output | Send completion and independent PCM presentation position | Control delivery and audible completion occur at different times. |
+
+ASR consumes audio and produces text; TTS produces audio. LLM and TTS adapters
+can carry correlation tags around model requests without requiring the models
+to understand those tags. Such tags establish provenance, not missing timing
+or completeness guarantees.
+
+### Proposed Incremental Runtime
+
+Keep one continuous ASR stream while LLM and TTS remain active. Replace the
+full-file recognition barrier and full-response await with incremental event
+delivery. Share the native pipeline actors and lifecycle in both modes, with
+interfaces for the session clock, ingress, provider events, and output sink.
+The recorder consumes delivered output events and sample ranges; it does not
+decide conversation state.
+
+The scheduler releases input chunks and ready events in causal order. It can
+advance beyond idle periods only when active components guarantee that no
+earlier relevant event remains unresolved. This guarantee is a safe progress
+frontier. A submitted chunk or an empty local queue is not that guarantee.
+Source analysis can run ahead only where it is independent of conversation
+feedback, and its results remain gated before state changes.
+
+The current ASR `audio_processed` field reports progress. It has not been
+verified as a promise that all events for an earlier logical interval have
+already arrived. Attaching the latest uploaded chunk index to a delayed final
+would invent its dependency. Response-stream EOF is the current verified
+completeness barrier.
+
+An incremental ASR adapter therefore needs a verified acknowledgement or
+watermark contract, including silence and delayed revisions. Provider adapters
+must also distinguish actual completion from pending work. Without a safe
+frontier, the scheduler waits instead of jumping over unresolved events. A
+declared timing model or a recorded provider trace supports controlled replay,
+but does not establish identical fresh online behavior. Strict waiting can
+reduce acceleration; the previous measured speedup is not a guarantee for this
+proposed runtime.
+
+On interruption, apply the same native turn policy at its detection offset,
+cancel the active response generation, discard server-queued output, and fence
+late callbacks from that generation. Match the client playback-buffer
+cancellation policy: the server cannot recall PCM already sent. Preserve text
+and control events already delivered under the native lifecycle. Keep input
+EOF, ASR drain, and final response completion separate so late finals and
+response tails are retained.
+
+### Why Identical Input Can Still Produce Different Events
+
+Consider a turn released at 10,500 ms and resumed user speech detected at
+10,900 ms. If bot PCM becomes ready at 10,650 ms, playback starts and the next
+speech interrupts it. If PCM becomes ready at 11,000 ms, interruption occurs
+before any bot audio plays. Both outcomes can follow the same policy with the
+same input dependencies. Different compute readiness can legitimately change
+the next context, even with identical generated wording.
+
+The framework must produce identical decisions for identical provider events
+and readiness times. Fresh model executions require repeated behavioral and
+scoring comparisons because both content and processing times can vary.
+
+### Next Validation Gates
+
+First, capture provider dispatch, text, PCM, control delivery, interruption,
+and context-commit events in both modes. Replay identical provider content and
+readiness through both adapters, checking every context version, cancellation,
+turn decision, and output sample range. Preserve causal ordering for events
+with equal logical offsets, and test alternate concurrent orders explicitly.
+
+Cover silence without ASR responses, late finals, revisions, burst delivery,
+short pauses, interruption before text, interruption between text and PCM,
+partial output chunks, stale callbacks, trailing silence, EOF flush, and final
+response extension. Verify the incremental ASR frontier contract before
+enabling unrestricted advancement.
+
+After those checks, repeat the same five real samples using the shared model
+stack on GPUs 4 and 7. Classify differences as content variation, readiness
+variation, or framework ordering defects. Behavioral and scoring consistency
+against realtime streaming remains in progress. This entry records the next
+design and validation gates; the incremental runtime is not yet implemented.
