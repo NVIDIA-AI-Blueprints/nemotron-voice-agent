@@ -29,7 +29,7 @@ examples:
   generic-assistant:
     label: Generic Assistant
     services:
-      llm: [nemotron-lightning, nemotron-super]
+      llm: [nemotron-lightning, nemotron-super, nemotron-bolt-74b]
       asr: [nemotron-asr-streaming-english, parakeet-ctc, parakeet-rnnt]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     capabilities: [streaming_input, speaker_labels]
@@ -44,7 +44,7 @@ examples:
   multilingual-assistant:
     label: Multilingual Assistant
     services:
-      llm: [nemotron-lightning, nemotron-super]
+      llm: [nemotron-lightning, nemotron-super, nemotron-bolt-74b]
       asr: [nemotron-asr-streaming-multilingual, parakeet-rnnt]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     capabilities: [session_languages]
