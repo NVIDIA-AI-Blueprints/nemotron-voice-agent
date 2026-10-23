@@ -409,6 +409,15 @@ class IncrementalEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.metrics["responses"][0]["provider"]["tts_rpc_eof_drained"])
         self.assertTrue(any(m["role"] == "assistant" for m in result.messages))
         self.assertTrue(instances["llm"]._client.is_closed())
+        observed = [event for event in result.events if event["type"] == "provider_observation"]
+        tokens = [event for event in observed if event["frame"] == "LLMTextFrame"]
+        self.assertEqual([event["text"] for event in tokens], ["Hello world. More ", "words."])
+        self.assertTrue(all(event["source"] == "llm" and event["direction"] == "DOWNSTREAM" for event in tokens))
+        self.assertTrue(all(event["response_id"] == "response-1" for event in tokens))
+        self.assertEqual(
+            [event["frame"] for event in observed if event["frame"].startswith("LLMFullResponse")],
+            ["LLMFullResponseStartFrame", "LLMFullResponseEndFrame"],
+        )
 
     async def test_provider_failure_cancels_an_incomplete_detector(self):
         """Session cleanup must cancel a waiting source actor rather than await it forever."""
