@@ -7,11 +7,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from openai import AsyncOpenAI
+from loguru import logger
+from pipecat.services.nvidia.llm import NvidiaLLMSettings
+from pipecat.services.nvidia.tts import NvidiaTTSSettings
 
+from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.pipeline_utils import (
     PIPELINE_AUDIO_OUT_SAMPLE_RATE,
-    apply_pinned_prompt_summary,
     build_context_messages,
 )
 from utils import (
@@ -28,14 +30,16 @@ from utils import (
     resolve_tools_available,
 )
 
-from .causal import CausalSessionEngine
 from .detection import create_generic_detector
+from .native_response import (
+    CapturingNativeNvidiaLLMService,
+    CapturingNativeNvidiaTTSService,
+    NativeResponseSession,
+)
 from .providers import (
     STANDARD_STT_STOP_HISTORY,
-    OpenAITextStream,
     create_riva_recognizer,
 )
-from .tts_trace import create_live_tts_responder
 
 
 class GenericOfflineRuntime:
@@ -55,12 +59,16 @@ class GenericOfflineRuntime:
         if not self._closed:
             self._closed = True
             self._recognizer.cancel()
-            self._synthesis.cancel()
+            # Legacy finite-tape responders expose cancel(); the persistent
+            # native session owns cancellation and cleanup through aclose().
+            if hasattr(self._synthesis, "cancel"):
+                self._synthesis.cancel()
             try:
                 if hasattr(self._synthesis, "aclose"):
                     await self._synthesis.aclose()
             finally:
-                await self._client.close()
+                if self._client is not None:
+                    await self._client.close()
 
     async def run(self, source):
         """Run once and release every provider connection on success or failure."""
@@ -73,6 +81,8 @@ class GenericOfflineRuntime:
 def build_runtime(config: dict) -> GenericOfflineRuntime:
     """Use the same generic prompt, service entries, text filter, and tool schemas."""
     from examples.generic.tool_handlers import TOOL_HANDLERS
+
+    from .incremental import IncrementalSessionEngine
 
     module_file = Path(__file__).resolve().parents[1] / "pipeline.py"
     prompt_key, prompt = resolve_prompt(module_file, config.get("prompt_content", ""), config.get("prompt_key", ""))
@@ -91,7 +101,9 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         ).lower()
         != "false",
         "tts_server": config.get("tts_server") or tts.get("server", "grpc.nvcf.nvidia.com:443"),
-        "tts_function_id": config.get("tts_function_id") or tts.get("function_id", ""),
+        "tts_function_id": (
+            str(config["tts_function_id"]) if config.get("tts_function_id") is not None else tts.get("function_id", "")
+        ),
         "tts_voice_id": config.get("tts_voice_id") or tts.get("voice_id", "Magpie-Multilingual.EN-US.Aria"),
         "tts_language_code": normalize_lang_code(
             config.get("tts_language_code") or tts.get("language_code") or "en-US"
@@ -103,7 +115,8 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
     tts_model = config.get("tts_model") or tts.get("model", "")
     if synthesis_mode != "stitched" or "zeroshot" in tts_model.lower() or config.get("tts_zero_shot_audio_prompt_file"):
         raise ValueError("Offline execution currently supports stitched Magpie synthesis without zero-shot prompts")
-    if is_nvcf(settings["tts_server"]) and not settings["tts_function_id"]:
+    explicit_tts_function = settings["tts_function_id"]
+    if is_nvcf(settings["tts_server"]) and not explicit_tts_function and not tts_model:
         # Match NvidiaTTSService's default model_function_map in the generic pipeline.
         settings["tts_function_id"] = "877104f7-e885-42b9-8de8-f6e4c6303969"
     model = config.get("model_id") or llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
@@ -112,14 +125,23 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         raise ValueError("Offline execution requires an HTTP chat-completions LLM endpoint; disable streaming input")
     extra_params = parse_json_dict(config.get("extra_params") or llm.get("extra_params", ""), label="extra_params")
     extra = {}
+    llm_settings = NvidiaLLMSettings(model=model)
     for key, convert in (("temperature", float), ("max_tokens", int)):
         value = config.get(key)
         if value in ("", None):
             value = llm.get(key)
         if value not in ("", None):
-            extra[key] = convert(value)
+            try:
+                converted = convert(value)
+            except (TypeError, ValueError):
+                logger.warning(f"Ignoring invalid {key}={value!r}")
+            else:
+                extra[key] = converted
+                setattr(llm_settings, key, converted)
     # Pipecat's live chat request applies extra parameters after scalar settings.
     extra.update(extra_params)
+    if extra_params:
+        llm_settings.extra = extra_params
     system_prompt = config.get("system_prompt") or llm.get("system_prompt", "")
     names = resolve_tools_available(module_file, prompt_key)
     catalog = load_tools_catalog(module_file)
@@ -135,54 +157,43 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         ):
             tools.append(entry)
             handlers[name] = TOOL_HANDLERS[name]
-    if tools and config.get("tool_choice") != "none":
-        raise ValueError("Chunk-driven offline replay currently requires a prompt without tools or tool_choice=none")
+    if tools:
+        raise ValueError("Incremental offline execution currently requires a prompt without tools")
     detector = create_generic_detector()
     if detector.configuration["policy"] != "silero":
         raise ValueError("Chunk-driven offline replay currently requires USE_SILERO_VAD_TURN_DETECTION=true")
     recognizer = create_riva_recognizer(settings, capture_events=True)
-    client = AsyncOpenAI(api_key=settings["api_key"] or "not-used-for-local", base_url=base_url, timeout=600)
     messages = build_context_messages(prompt, system_prompt)
     recent_turns = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
 
-    class SummaryInference:
-        """Expose the generic summary helper's small inference contract."""
-
-        async def run_inference(self, context, *, max_tokens=None, system_instruction=None):
-            """Generate a summary against the same NIM model and settings."""
-            request_messages = context.get_messages()
-            if system_instruction:
-                request_messages = [{"role": "system", "content": system_instruction}, *request_messages]
-            arguments = {"model": model, "messages": request_messages, **extra}
-            if max_tokens is not None:
-                token_limit = "max_completion_tokens" if "max_completion_tokens" in arguments else "max_tokens"
-                arguments[token_limit] = max_tokens
-            response = await client.chat.completions.create(**arguments)
-            return response.choices[0].message.content
-
-    async def prepare_history(history):
-        from pipecat.processors.aggregators.llm_context import LLMContext
-
-        context = LLMContext(history)
-        await apply_pinned_prompt_summary(
-            context=context,
-            llm=SummaryInference(),
-            preserve_prompt_messages=len(messages),
-            recent_turns=recent_turns,
-            summary_system_prompt=system_prompt,
+    def llm_factory(capture):
+        return CapturingNativeNvidiaLLMService(
+            capture=capture,
+            api_key=settings["api_key"],
+            base_url=base_url,
+            settings=llm_settings,
         )
-        return context.get_messages()
 
-    text = OpenAITextStream(
-        client,
-        model=model,
-        extra=extra,
-        tools=tools,
-        handlers=handlers,
-        tool_choice=config.get("tool_choice") or "auto",
-        history_preparer=prepare_history,
-    )
-    responder = create_live_tts_responder(text, {**settings, "tts_model": tts_model})
+    def tts_factory(capture):
+        model_map = {}
+        if explicit_tts_function or tts_model:
+            model_map["model_function_map"] = {"function_id": explicit_tts_function, "model_name": tts_model}
+        return CapturingNativeNvidiaTTSService(
+            capture=capture,
+            api_key=settings["api_key"],
+            server=settings["tts_server"],
+            use_ssl=is_nvcf(settings["tts_server"]),
+            settings=NvidiaTTSSettings(
+                voice=settings["tts_voice_id"],
+                language=settings["tts_language_code"],
+                synthesis_mode=synthesis_mode,
+            ),
+            text_filters=[NemotronSpeechTextFilter()],
+            custom_dictionary=settings["custom_dictionary"],
+            **model_map,
+        )
+
+    responder = NativeResponseSession(llm_factory, tts_factory, sample_rate=settings["tts_sample_rate"])
     configuration = {
         "mode": "offline",
         "sample_rate": 16000,
@@ -204,6 +215,10 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "asr_force_eou": False,
         "asr_word_timestamps": False,
         "asr_completeness_barrier": "finite_response_stream_eof",
+        "asr_delivery_mode": "incremental_callback_actor",
+        "provider_execution": "overlapping_continuous_ASR_and_persistent_native_LLM_TTS",
+        "llm_service": "pipecat.NvidiaLLMService",
+        "tts_service": "pipecat.NvidiaTTSService",
         "pronunciation_dictionary_sha256": hashlib.sha256(
             json.dumps(settings["custom_dictionary"] or {}, sort_keys=True).encode()
         ).hexdigest(),
@@ -223,19 +238,21 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "interrupted_history": "actual_TTSTextFrame_order_through_live_assistant_aggregator",
         "turn_policy": "actual_Pipecat_user_aggregator_with_sample_clock_waits",
         "output_chunks_10ms": parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
-        "history_summarization": "generic_pinned_prompt_policy_before_next_request",
+        "history_summarization": "unsupported_guarded_at_native_assistant_turn_stop",
         "history_recent_turns": recent_turns,
     }
     return GenericOfflineRuntime(
-        CausalSessionEngine(
+        IncrementalSessionEngine(
             detector,
             recognizer,
             responder,
             messages,
             output_chunks_10ms=configuration["output_chunks_10ms"],
             output_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+            history_recent_turns=recent_turns,
+            preserve_prompt_messages=len(messages),
         ),
-        client,
+        None,
         recognizer,
         responder,
         configuration,

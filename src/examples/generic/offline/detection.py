@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from time import perf_counter_ns
 from typing import Any, Protocol
 
-from .models import RATE, AudioSource, DetectionTrace, SpeechInterval, UserTurn
+from .models import RATE, AudioSource, DetectionTrace, SpeechInterval, UserTurn, samples_to_ns
 
 
 class VADPort(Protocol):
@@ -220,19 +220,19 @@ class AudioOffsetDetector:
             "model_reset_samples": 5 * RATE,
         }
 
-    async def detect(self, source: AudioSource) -> DetectionTrace:
+    async def detect(self, source: AudioSource, *, on_checkpoint=None) -> DetectionTrace:
         """Return ordered source decisions and explicitly flush at source EOF."""
         if self._used:
             raise RuntimeError("Create a new detector for each offline session")
         self._used = True
         try:
-            return await self._detect_source(source)
+            return await self._detect_source(source, on_checkpoint=on_checkpoint)
         finally:
             await self._vad.cleanup()
             if self._turn is not None:
                 await self._turn.cleanup()
 
-    async def _detect_source(self, source: AudioSource) -> DetectionTrace:
+    async def _detect_source(self, source: AudioSource, *, on_checkpoint=None) -> DetectionTrace:
         """Consume fixed analysis windows without losing within-upload transitions."""
         self._vad.set_sample_rate(source.sample_rate)
         window_samples = self._vad.num_frames_required()
@@ -253,6 +253,8 @@ class AudioOffsetDetector:
         previous_state = "QUIET"
         total_vad_ns = 0
         total_turn_ns = 0
+        available_ns = 0
+        emitted = 0
 
         def close_speech(end_sample: int, decision_sample: int, reason: str) -> None:
             nonlocal speech_start, confirmed_start, tentative_stop, pending
@@ -289,9 +291,8 @@ class AudioOffsetDetector:
             if self._turn is not None:
                 self._turn.clear()
 
-        for start_sample in range(0, source.sample_count, window_samples):
-            end_sample = min(start_sample + window_samples, source.sample_count)
-            audio = source.pcm[start_sample * 2 : end_sample * 2]
+        for chunk in source.chunks(window_samples):
+            start_sample, end_sample, audio = chunk.start_sample, chunk.end_sample, chunk.pcm
             inference_audio = audio.ljust(window_samples * 2, b"\0")
             set_window_end = getattr(self._vad, "set_source_window_end", None)
             if set_window_end is not None:
@@ -301,6 +302,7 @@ class AudioOffsetDetector:
             vad_compute_ns = perf_counter_ns() - before_vad
             total_vad_ns += vad_compute_ns
             stopped = False
+            turn_compute_ns = 0
 
             if end_sample - start_sample < window_samples:
                 # Padding lets the model inspect the final real samples, but is
@@ -361,6 +363,10 @@ class AudioOffsetDetector:
                 total_turn_ns += turn_compute_ns
 
             previous_state = state
+            available_ns = max(samples_to_ns(end_sample), available_ns) + vad_compute_ns + turn_compute_ns
+            if on_checkpoint is not None:
+                await on_checkpoint(tuple(events[emitted:]), available_ns, chunk)
+                emitted = len(events)
 
         if speech_start is not None:
             close_speech(
@@ -379,6 +385,8 @@ class AudioOffsetDetector:
                 "model_reset_samples": list(getattr(self._vad, "model_reset_offsets", ())),
             }
         )
+        if on_checkpoint is not None:
+            await on_checkpoint(tuple(events[emitted:]), max(available_ns, samples_to_ns(source.sample_count)), None)
         return DetectionTrace(tuple(intervals), tuple(turns), tuple(events))
 
 
