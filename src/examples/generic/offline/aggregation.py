@@ -427,7 +427,7 @@ class SharedUserAggregation:
         """Deliver one event, then execute timers due at its audio position."""
         await self.feed_batch((event,))
 
-    async def feed_batch(self, events: Sequence[ChunkPositionedFrame]) -> None:
+    async def feed_batch(self, events: Sequence[ChunkPositionedFrame], *, settle_timers: bool = True) -> None:
         """Deliver a same-position batch before timers tied to that position."""
         if self._closed:
             raise RuntimeError("Cannot deliver frames after session close")
@@ -440,7 +440,10 @@ class SharedUserAggregation:
         for event in events:
             _validate_cascaded_frame(event.frame)
             await self._aggregator.queue_frame(event.frame, event.direction)
-        await self.clock.advance_to(events[0].sample)
+        if settle_timers:
+            await self.clock.advance_to(events[0].sample)
+        else:
+            await self.clock.settle()
 
     async def advance_to(self, sample: int) -> None:
         """Execute policy timers through source or playback progress."""
@@ -510,7 +513,8 @@ class SharedAssistantAggregation:
     Use the user adapter's exact context and clock. This adapter never advances
     that shared clock: its caller must already be at each frame's scheduled
     presentation position. Only text released by the output sequencer belongs
-    here; passing a whole generated response early would commit unheard text.
+    here. Native text delivery can precede client PCM playback; history follows
+    those frame semantics, without estimating spoken words from the waveform.
     The caller must send interruption before discarding pending output frames.
     """
 

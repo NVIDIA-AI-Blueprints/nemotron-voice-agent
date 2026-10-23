@@ -571,3 +571,86 @@ Controlled identical-event replay against the native and offline paths remains
 pending. The incremental runtime is not implemented. Behavioral and scoring
 consistency remains in progress; this diagnostic establishes neither a fix for
 the current assistant-history difference nor benchmark accuracy equivalence.
+
+## October 23, 2026: Incremental Runtime Implementation Checkpoint
+
+### Implemented Execution Path
+
+The [runtime factory](../src/examples/generic/offline/factory.py) now selects the
+[incremental session engine](../src/examples/generic/offline/incremental.py).
+Continuous ASR callbacks and VAD analysis-window checkpoints feed the scheduler
+while their producers remain active. Conversation replay no longer waits for
+whole-file recognition or a complete response trace. The previous tape engine
+remains a reference implementation, rather than the selected execution path.
+
+The [event actors](../src/examples/generic/offline/actors.py) publish callback
+batches and future availability bounds atomically. The scheduler advances the
+sample clock only after checking pending actor events, policy deadlines, and
+output work. Equal-offset events retain explicit ordering. No future user-speech
+lookahead determines a response compute budget.
+
+The [continuous ASR adapter](../src/examples/generic/offline/recognition.py)
+retains one request and delivers interim and final results incrementally.
+Finite source exhaustion and response-stream EOF remain separate. EOF is
+recorded after the response iterator drains, not inferred from input exhaustion
+or an empty queue. ASR word timestamps remain disabled, and the standard
+320 ms stop history remains unchanged without force-EOU.
+
+Actor bounds describe the selected observed-compute timing model. They are not
+backend completeness acknowledgements. Before source supply completes, ASR
+advancement is conservative; later pending-work bounds retain the modeled
+processing delay. These intervals include transport and queueing. Incremental
+execution does not reconstruct the corresponding online arrival schedule.
+
+### Native Services, Interruption, And Recording
+
+The [response session](../src/examples/generic/offline/native_response.py)
+keeps native NVIDIA LLM and TTS processors alive across turns. Their queues,
+text filtering, sentence aggregation, and synthesis lifecycle remain active.
+Actual frames become available before provider completion. User and assistant
+context still use Pipecat's aggregators with sample-clock policy waits.
+
+Interruption reaches the native processor queues and waits for acknowledgement
+before a new generation starts. Generation identifiers fence late callbacks.
+Context receives delivered text and control frames; the recorder does not infer
+committed text from the audible PCM prefix.
+
+The [incremental output adapter](../src/examples/generic/offline/output_stream.py)
+retains native `MediaSender` buffering, FIFO order, partial-chunk flush, and
+starvation resets. `WebsocketSinkClock` separates transport write completion
+from client PCM presentation. Recording uses cumulative sample conversions,
+fills gaps with silence, and retains final output beyond input duration.
+
+The current scope requires a fixed recording, source-only ASR/VAD observation,
+Silero turn detection, stitched Magpie synthesis, and no tools. History
+summarization is explicitly rejected when the native eligibility condition is
+reached; an incremental summarization adapter remains future work.
+
+### Verification And Remaining Validation
+
+Ten controlled engine tests cover early response generation before ASR EOF,
+burst delivery, interruption, tied events, EOF policy, failure cleanup, and
+acoustic-end versus VAD-stop offsets. One compares every request context and
+final context against unmodified native aggregators receiving the same events.
+Another exercises the full engine, queued native LLM/TTS, and output chain with
+model I/O replaced. Additional tests cover provider lifecycle, actor/ASR
+contracts, and output handling.
+
+The full local suite passes with 888 tests, 3 skipped tests, and 178 subtests.
+Ruff lint passes, and formatting checks pass for 289 Python files. These are
+local controlled checks, not fresh ASR/LLM/TTS benchmark inference results.
+
+Fresh local Silero inference on all five saved inputs (141,685.5 ms) matches the
+reference decisions, intervals, and reset offsets. Incremental callback events
+match the final trace, with monotone progress bounds. This checks VAD only.
+
+Fresh paired runs for samples `2`, `3`, `250`, `503`, and `750` are planned
+against the shared GPU 4 LLM and GPU 7 ASR/TTS services. The isolated CPU app
+configuration uses port 17925. SSH connections time out before remote commands
+execute, so the new real-service runs have not occurred. No new response WAVs,
+latency results, or benchmark scores are available for this implementation.
+
+The October 21 and October 22 experiments remain evidence for their recorded
+implementations. They do not validate this runtime. Behavioral and scoring
+consistency against realtime streaming remains in progress, including the
+previously observed assistant-history differences.
