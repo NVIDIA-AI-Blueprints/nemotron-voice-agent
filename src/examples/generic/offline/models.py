@@ -10,6 +10,16 @@ RATE = 16000
 NANOSECONDS = 1_000_000_000
 
 
+@dataclass(frozen=True)
+class SourceChunk:
+    """A stable PCM range shared by independent source-analysis producers."""
+
+    sequence: int
+    start_sample: int
+    end_sample: int
+    pcm: bytes
+
+
 def samples_to_ns(samples: int, rate: int = RATE) -> int:
     """Convert a cumulative sample position; avoid rounding each packet."""
     return samples * NANOSECONDS // rate
@@ -36,6 +46,14 @@ class AudioSource:
     def sample_count(self) -> int:
         """Number of frames on the source timeline."""
         return len(self.pcm) // 2
+
+    def chunks(self, samples: int = 512):
+        """Yield identical chunk IDs and ranges without depending on upload pacing."""
+        if samples <= 0:
+            raise ValueError("Source chunk length must be positive")
+        for sequence, start in enumerate(range(0, self.sample_count, samples)):
+            end = min(start + samples, self.sample_count)
+            yield SourceChunk(sequence, start, end, self.pcm[start * 2 : end * 2])
 
 
 @dataclass(frozen=True)
