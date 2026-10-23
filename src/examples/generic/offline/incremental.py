@@ -18,6 +18,7 @@ from pipecat.frames.frames import (
     EndFrame,
     InterimTranscriptionFrame,
     InterruptionFrame,
+    LLMTextFrame,
     OutputAudioRawFrame,
     STTMetadataFrame,
     SystemFrame,
@@ -295,7 +296,22 @@ class _Session:
                     [ChunkPositionedFrame(sample, value.frame, value.direction)], settle_timers=False
                 )
         elif event.kind == "provider_observation":
-            self.emit("provider_observation", response_id=event.generation, frame=type(event.payload.frame).__name__)
+            value = event.payload
+            details = {
+                "response_id": event.generation,
+                "frame": type(value.frame).__name__,
+                "source": value.source,
+                "direction": value.direction.name,
+            }
+            if (
+                value.source == "llm"
+                and value.direction == FrameDirection.DOWNSTREAM
+                and isinstance(value.frame, LLMTextFrame)
+            ):
+                # Preserve the native pre-TTS stream for text-scored benchmarks.
+                # TTS filtering and assistant-history commits have other semantics.
+                details["text"] = value.frame.text
+            self.emit("provider_observation", **details)
         elif event.kind == "output_forward":
             await self.assistant.feed(ChunkPositionedFrame(sample, event.payload))
         elif event.kind == "response_end":

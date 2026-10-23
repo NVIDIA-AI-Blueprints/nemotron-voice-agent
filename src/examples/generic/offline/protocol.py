@@ -18,7 +18,14 @@ from .models import RATE, AudioSource, SessionResult
 
 PROTOCOL = "nva.offline.v1"
 HEADER = struct.Struct("!4sQQI")
-CAPABILITIES = ("aligned_output", "explicit_eof", "offset_audio", "service_trace")
+CAPABILITIES = (
+    "aligned_output",
+    "explicit_eof",
+    "offset_audio",
+    "service_trace",
+    "raw_llm_text_events_v1",
+    "effective_configuration_v1",
+)
 _PRIVATE_KEYS = frozenset({"api_key", "authorization", "password", "secret", "token", "credentials"})
 
 
