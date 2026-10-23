@@ -24,6 +24,7 @@ from utils import (
     load_tools_catalog,
     normalize_lang_code,
     nvidia_api_key,
+    nvidia_llm_api_key,
     parse_env_int,
     parse_json_dict,
     resolve_prompt,
@@ -89,6 +90,8 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
     asr = load_service_entry("asr", "")
     llm = load_service_entry("llm", "")
     tts = load_service_entry("tts", "")
+    base_url = config.get("base_url") or llm.get("base_url", "https://integrate.api.nvidia.com/v1")
+    llm_api_key = nvidia_llm_api_key(config.get("llm_id", ""), base_url=base_url)
     settings = {
         "api_key": nvidia_api_key(),
         "asr_server": config.get("asr_server") or asr.get("server", "grpc.nvcf.nvidia.com:443"),
@@ -120,7 +123,6 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         # Match NvidiaTTSService's default model_function_map in the generic pipeline.
         settings["tts_function_id"] = "877104f7-e885-42b9-8de8-f6e4c6303969"
     model = config.get("model_id") or llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
-    base_url = config.get("base_url") or llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     if is_streaming_llm_url(base_url):
         raise ValueError("Offline execution requires an HTTP chat-completions LLM endpoint; disable streaming input")
     extra_params = parse_json_dict(config.get("extra_params") or llm.get("extra_params", ""), label="extra_params")
@@ -169,7 +171,7 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
     def llm_factory(capture):
         return CapturingNativeNvidiaLLMService(
             capture=capture,
-            api_key=settings["api_key"],
+            api_key=llm_api_key,
             base_url=base_url,
             settings=llm_settings,
         )

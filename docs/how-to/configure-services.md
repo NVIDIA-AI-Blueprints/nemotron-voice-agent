@@ -17,6 +17,33 @@ Set one key per recipe family. Do not mix them.
 
 `NVIDIA_API_KEY` is required for cloud-only, Server, and Performance Server. Those recipes also expose NVIDIA Cloud catalog entries in the Services tab. Server and Performance Server additionally need `docker login nvcr.io` before `up`. Single-GPU requires `HF_TOKEN` for Hugging Face model downloads and does not use `NVIDIA_API_KEY`.
 
+### LLM Service Credentials
+
+The Generic Assistant supports a separate credential for its selected LLM in
+both the normal pipeline and offline processing. Add `api_key_env` beside
+`base_url` in the trusted server-side LLM catalog entry. The value names an
+environment variable, for example:
+
+```yaml
+api_key_env: EVALUATION_LLM_API_KEY
+```
+
+Supply that variable securely to the application process or container. Store
+only the variable name in the catalog. Use uppercase letters, digits, and
+underscores, starting with a letter or underscore. An explicitly configured name
+must resolve to a nonempty credential; otherwise session setup fails
+without falling back to another key. Session requests cannot select a credential
+variable through `api_key_env`.
+
+With `api_key_env` configured, the resolved LLM URL must match the selected
+catalog's `base_url` or `streaming_url`, allowing a trailing slash. A mismatch
+fails before any provider is created.
+
+When the catalog omits this field, the LLM retains its `NVIDIA_API_KEY` behavior,
+including the local-endpoint placeholder. ASR and TTS continue using their
+existing `NVIDIA_API_KEY` configuration. This field does not change recipe
+credentials, NVIDIA Cloud catalog availability, or registry authentication.
+
 ## Catalog layout
 
 `services.yaml` has one section per self-hosted stack:

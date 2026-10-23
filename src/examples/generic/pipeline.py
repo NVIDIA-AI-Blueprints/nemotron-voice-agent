@@ -62,6 +62,7 @@ from utils import (
     load_service_entry,
     normalize_lang_code,
     nvidia_api_key,
+    nvidia_llm_api_key,
     parse_env_int,
     parse_json_dict,
     resolve_prompt,
@@ -88,6 +89,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     default_llm = load_service_entry("llm", "")
     default_tts = load_service_entry("tts", "")
     default_asr = load_service_entry("asr", "")
+    base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
+    llm_api_key = nvidia_llm_api_key(body.get("llm_id", ""), base_url=base_url)
 
     asr_server = body.get("asr_server", "") or default_asr.get("server", "grpc.nvcf.nvidia.com:443")
     asr_ssl = is_nvcf(asr_server)
@@ -116,7 +119,6 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     model_id = body.get("model_id", "") or default_llm.get("model_id", "nvidia/nemotron-3.5-lightning-30b-a3b")
-    base_url = body.get("base_url", "") or default_llm.get("base_url", "https://integrate.api.nvidia.com/v1")
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
     extra_params = parse_json_dict(
         body.get("extra_params", "") or default_llm.get("extra_params", ""),
@@ -153,7 +155,7 @@ async def bot(runner_args: RunnerArguments) -> None:
     streaming = is_streaming_llm_url(base_url)
     llm_service = NvidiaStreamingLLMService if streaming else NvidiaLLMService
     llm = llm_service(
-        api_key=nvidia_api_key(),
+        api_key=llm_api_key,
         base_url=base_url,
         settings=llm_settings,
     )

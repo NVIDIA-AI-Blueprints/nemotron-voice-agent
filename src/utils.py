@@ -7,6 +7,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 import socket
 import time
 from collections.abc import Iterable, Mapping
@@ -944,6 +945,30 @@ def nvidia_api_key(default: str = "not-needed") -> str:
     """
     key = (os.getenv("NVIDIA_API_KEY") or "").strip()
     return key or default
+
+
+def nvidia_llm_api_key(entry_id: str = "", *, base_url: str | None = None) -> str:
+    """Resolve a generic LLM credential from its trusted service catalog entry.
+
+    Only the selected server catalog can name ``api_key_env``. Session detail
+    fields cannot choose an environment variable. Entries without this setting
+    retain the shared ``NVIDIA_API_KEY`` behavior; an explicit setting must be
+    valid and populated, so a missing LLM key cannot silently use a speech key.
+    """
+    entry = load_service_entry_by_id("llm", entry_id) if entry_id else load_service_entry("llm", "")
+    if "api_key_env" not in entry:
+        return nvidia_api_key()
+    if base_url is not None:
+        endpoints = {str(entry[field]).rstrip("/") for field in ("base_url", "streaming_url") if entry.get(field)}
+        if base_url.rstrip("/") not in endpoints:
+            raise ValueError("A catalog LLM credential requires the selected catalog endpoint")
+    name = entry["api_key_env"]
+    if not isinstance(name, str) or re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None:
+        raise ValueError("LLM catalog api_key_env must name an environment variable")
+    key = (os.getenv(name) or "").strip()
+    if not key:
+        raise RuntimeError(f"LLM credential environment variable {name} is not set")
+    return key
 
 
 def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:
