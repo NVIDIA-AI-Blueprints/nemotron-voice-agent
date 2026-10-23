@@ -690,3 +690,95 @@ establish complete behavioral equivalence.
 WAV files, traces, and detailed reports remain outside Git. Behavioral and
 scoring consistency remains in progress. No AA-BigBench or FDB scores are
 claimed.
+
+## October 23, 2026: Eight-Question Scored Comparison
+
+The incremental runtime at `4220eb5` completes 32 captures: eight unique
+questions, two repeats per mode, and concurrency 1 in both modes. Dataset
+`ArtificialAnalysis/big_bench_audio` revision
+`af7bb9c25b015792583ca4da3ee27ec62cb79fe6` supplies two midpoint-quantile samples
+per category: formal fallacies `62`/`187`, navigation `312`/`437`, object
+counting `562`/`687`, and web of lies `812`/`937`. Selection does not use answers.
+Each pass contains 220,034.5 ms of source, including 4,000 ms trailing silence
+per case. Repeat 1 runs online then offline; repeat 2 reverses the order.
+
+The CPU application shares unchanged LLM GPU 4 and ASR/TTS GPU 7 services.
+Pipecat is 1.12.0, TTS batch size is 32, and welcome messages are disabled.
+Both modes use Silero, configured 400 ms output chunks, standard 320 ms STT
+stop history, and no force-EOU injection. Both disable history summarization
+with `CHAT_HISTORY_RECENT_TURNS=0`; default summarization is outside this result.
+
+All 32 captures pass source, output-coverage, span, and zero-gap checks. All
+16 pairs match final-ASR segment sequences, user-message groups, and VAD event
+counts. Both modes make 43 actual LLM requests per repeat. Equal counts do not
+establish identical delivery times. Every offline capture drains one continuous
+ASR request and produces native TTS PCM before ASR EOF.
+
+The primary candidate is independent ASR of the entire committed output WAV,
+including interrupted speech. Sonnet 4.6 judges against the official target
+with the frozen user rubric, temperature 0, and one strict format policy.
+This differs from historical Sonnet 3.5 judging. All 32 strict verdicts are
+present. The earlier 31-valid/1-malformed pass and retry remain audit evidence;
+uniform rejudging changes no pipeline execution or audio transcription.
+
+| Repeat | Online Correct | Offline Correct | Paired Verdict Agreement |
+| --- | ---: | ---: | ---: |
+| 1 | 4/8 | 4/8 | 6/8 |
+| 2 | 3/8 | 4/8 | 7/8 |
+| Total | 7/16 (43.75%) | 8/16 (50%) | 13/16 |
+
+Within-mode verdict agreement is 7/8 online and 8/8 offline. Case `937` repeat
+2 online receives INCORRECT for a conditional answer, a possible
+judge-interpretation ambiguity. The primary result retains that verdict.
+
+Across two passes, 440,069 ms of source completes offline in 41,566.944 ms:
+a 10.587-times source-duration/client-elapsed ratio. Online totals
+524,303.096 ms. Both include setup, execution, and collection; online includes
+pacing and 5,000 ms post-input idle per case. Post-inference ASR and judging
+are excluded. These totals are evaluation turnaround, not response latency.
+
+Structural assistant-context differences in `62` and `187` occur in repeat 1
+and disappear in repeat 2. Online itself changes from cancellation before
+text/audio to emission before cancellation; the initial delay's cause remains
+unproven. Assistant wording and complete contexts vary across repeats. Matching
+user grouping does not establish complete conversational equivalence.
+
+Detailed reports, all verdicts, WAVs, and audit hashes remain in the delivered
+evaluation bundle outside Git. Eight questions cannot establish benchmark-wide
+equivalence. Broader behavioral and scoring validation remains in progress.
+VoiceBench GitLab CI adaptation, offline concurrency 1 with Lightning thinking
+disabled, is planned; this checkpoint does not claim a VoiceBench run or score.
+
+## October 23, 2026: Raw Text Contract for VoiceBench Adaptation
+
+VoiceBench scores the first eligible native LLM completion epoch under its
+existing online collector policy. This differs from the preceding AA-BigBench
+experiment, which judges ASR of the entire spoken output WAV.
+
+The offline handshake now advertises `raw_llm_text_events_v1`. Provider events
+retain source, direction, frame type, response identity, and logical sample.
+Only downstream native `LLMTextFrame` observations from the LLM contain verbatim
+text fragments. TTS filtering, audible playback, and assistant-context commits
+remain distinct evidence. Generation fencing excludes stale cancelled callbacks.
+
+The evaluation adapter must require the capability, preserve raw fragment order,
+and apply the same interruption, epoch-reset, and first-eligible completion
+policy as online. It must not choose the final assistant context or played-text
+transcript as a replacement candidate. Source progress follows logical sample
+offsets, not bulk-upload completion or socket arrival time.
+
+Raw-text provenance and stale-generation regression tests accompany this change,
+with assertions through the complete incremental engine. Validation of the new
+instrumentation passes 49 targeted tests and 40 subtests. The complete suite
+passes 890 tests and 178 subtests, with 3 tests skipped. Ruff lint passes, and
+formatting checks pass for 290 Python files. These results extend the earlier
+888-test production baseline without changing its recorded benchmark evidence.
+VoiceBench GitLab CI execution at offline concurrency 1 with Lightning thinking
+disabled remains planned; this checkpoint reports no VoiceBench score.
+
+The additive `effective_configuration_v1` capability returns redacted resolved
+runtime settings and their fingerprint in session completion. The adapter can
+verify the fingerprint, Lightning model identifier, and disabled thinking against
+those settings. Wire tests cover redaction and fingerprint agreement. Backend
+identity still needs deployment provenance; requested configuration alone does
+not establish it. This capability does not change scheduling or score selection.

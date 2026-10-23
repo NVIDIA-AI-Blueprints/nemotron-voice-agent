@@ -257,3 +257,86 @@ The proposed mode targets faster accuracy and task-completion evaluation.
 Real-world latency and concurrency benchmarks still require live execution.
 Further provider modes, examples, and transport gateways need adapters that
 preserve the same causality, completion, interruption, and recording contracts.
+
+## October 23, 2026: Current Implementation and Scored Validation
+
+The preceding proposal preserves the design history. The factory now selects
+the incremental architecture described below and in the
+[implementation reference](offline-processing-reference.md). It supersedes the
+earlier transcript-ownership, private-history, and completed-response replay
+rules above.
+
+### Implemented Architecture
+
+After finite upload validation, source-indexed VAD checkpoints and continuous
+ASR callbacks feed active actors. The scheduler advances an integer sample clock
+when their published readiness bounds permit it. ASR processed prefixes identify
+supplied audio chunks; word timestamps remain disabled. Bounds represent the
+observed processing schedule, not backend completeness acknowledgements or
+reconstructed arrival times from a separate realtime run.
+
+The scheduler feeds actual Pipecat user and assistant aggregators. Their frame
+order and sample-clock waits decide user turns and context commitment.
+Persistent native NVIDIA LLM/TTS processors generate responses incrementally.
+There is no whole-file ASR barrier, whole-response capture barrier, or
+future-speech response budget. ASR and response generation can overlap.
+
+Native interruption cancels work, waits for acknowledgement, and fences stale
+callbacks before the next generation. Output retains native FIFO buffering and
+control-frame order. Separate clocks represent WebSocket write completion and
+client PCM presentation. The recorder converts cumulative sample counts,
+clips interrupted playback, fills gaps with silence, and preserves the final
+response tail.
+
+Current scope is fixed input, continuous Riva ASR, Silero detection, HTTP chat
+completion, stitched Magpie TTS, and a prompt without tools. History
+summarization requires an additional adapter. Both evaluated modes disable it
+with `CHAT_HISTORY_RECENT_TURNS=0`. Standard STT retains 320 ms stop history
+without force-EOU injection. The normal gateway and offline endpoint share the
+same deployed model services.
+
+### Eight-Question Comparison
+
+Eight deterministically selected AA-BigBench questions cover four categories.
+Each mode runs twice at concurrency 1: 32 captures, with eight unique questions.
+All captures pass source and recording-integrity checks. All 16 pairs match
+observed final-ASR sequences and user-message grouping. Both modes make 43
+native LLM requests per repeat. Every offline capture emits native TTS PCM
+before its continuous-ASR EOF.
+
+The primary score judges independent ASR of each complete spoken output WAV,
+including interrupted speech, against the official answer.
+
+| Result | Online | Offline |
+| --- | ---: | ---: |
+| Repeat 1 correct | 4/8 | 4/8 |
+| Repeat 2 correct | 3/8 | 4/8 |
+| Total correct | 7/16 (43.75%) | 8/16 (50%) |
+| Verdict agreement across repeats | 7/8 | 8/8 |
+| Total client completion (ms) | 524,303.096 | 41,566.944 |
+
+Paired verdicts agree in 13/16 comparisons. Offline completes 440,069 ms of source
+in 41,566.944 ms, a 10.587-times source-duration/elapsed ratio. Client totals include
+setup, upload, execution, and collection. Online additionally includes input
+pacing and a 5,000 ms idle window per case. Post-inference ASR and judging are
+excluded. These measurements do not estimate realtime response latency.
+
+The judge is Sonnet 4.6, differing from historical Sonnet 3.5 evaluation. All 32
+verdicts use one frozen user rubric and strict output-format policy. One
+conditional online answer has possible judge-interpretation ambiguity; its
+original verdict remains in the score.
+
+Assistant-context timing differences in cases `62` and `187` occur in repeat 1
+and disappear in repeat 2. Wording also varies within each mode. This evidence
+supports faster evaluation and matching observed user grouping on this subset;
+it does not establish benchmark-wide accuracy or complete behavioral equivalence.
+Refer to the [scored progress checkpoint](offline-processing-progress.md#october-23-2026-eight-question-scored-comparison)
+for provenance and remaining limits.
+
+### Next Validation
+
+Broader behavioral and scoring consistency remains in progress. The next planned
+adaptation runs VoiceBench through its GitLab CI evaluation flow in offline mode
+at concurrency 1, using Lightning with thinking disabled. That execution and its
+scores are not validated by this AA-BigBench result. Latency-sensitive benchmarks
+continue to require realtime execution.

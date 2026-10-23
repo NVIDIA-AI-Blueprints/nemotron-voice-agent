@@ -164,6 +164,7 @@ async def _send_result(
     fingerprint: str,
     receiver: asyncio.Task,
     *,
+    configuration: dict[str, Any],
     before_complete: Callable[[int | None], Awaitable[SessionResult]] | None = None,
     clock: Callable[[], int] = time.monotonic_ns,
 ):
@@ -198,6 +199,7 @@ async def _send_result(
             "rendered_samples": result.rendered_samples,
             "output_packets": sequence,
             "configuration_fingerprint": fingerprint,
+            "configuration": redact_private(configuration),
             "metrics": redact_private(result.metrics),
         }
     )
@@ -319,6 +321,7 @@ async def serve_offline_session(
                     limits,
                     fingerprint,
                     receiver,
+                    configuration=configuration,
                     before_complete=finalize_metrics,
                     clock=clock,
                 )

@@ -243,6 +243,10 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     complete["configuration_fingerprint"], configuration_fingerprint(runtime.configuration)
                 )
+                self.assertEqual(complete["configuration"], {"model": "scripted-marker", "api_key": "[redacted]"})
+                self.assertEqual(
+                    complete["configuration_fingerprint"], configuration_fingerprint(complete["configuration"])
+                )
                 self.assertNotIn(
                     "private-provider-key", json.dumps([item for item in socket.sent if isinstance(item, dict)])
                 )
