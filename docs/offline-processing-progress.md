@@ -654,3 +654,39 @@ The October 21 and October 22 experiments remain evidence for their recorded
 implementations. They do not validate this runtime. Behavioral and scoring
 consistency against realtime streaming remains in progress, including the
 previously observed assistant-history differences.
+
+## October 23, 2026: Fresh Incremental Runtime Validation
+
+After connectivity returns, the CPU application on port 17925 runs commit
+`4220eb5`, verified against 142 source-file hashes, with Pipecat 1.12.0. It
+reuses the unchanged GPU 4 LLM and GPU 7 ASR/TTS services. All five online and
+five offline sessions succeed at concurrency 1 for samples `2`, `3`, `250`,
+`503`, and `750`. Corresponding input PCM matches exactly. Output files cover
+the source duration, contain nonoverlapping spans, and retain exact-zero gaps.
+
+The 141,685.5 ms of source audio takes 11,580.49 ms across offline client
+completions, approximately 12.23 times faster than source duration. This includes
+upload, setup, processing, and client output handling; it is not isolated
+inference latency or reconstructed online response latency.
+
+Each offline session explicitly drains its continuous ASR response stream.
+Actual first TTS PCM precedes ASR EOF in all five cases, verifying overlapping
+ASR/TTS work. Backend final-ASR segments, user-message grouping, and request
+counts match in all five pairs: 6, 9, 5, 2, and 3 requests, or 25 per mode.
+Final server-published assistant text also matches in every pair. This is text
+evidence, not transcription of the played WAV files or judge scoring.
+
+Complete request contexts match only in `250` and `750`. Differences include
+casing and punctuation in `3`, assistant wording in `503`, and a partial versus
+full first assistant commit in `2`. The initial online LLM TTFB for `2` is
+431.010 ms, compared with approximately 25 ms offline before interruption.
+
+A targeted repeat of `2` succeeds in both modes with six audible responses
+each and matching user grouping. Online first LLM TTFB is then 26.292 ms, and
+both modes commit a full first assistant message, with ordinary wording
+differences. This demonstrates variation within online execution; it does not
+establish complete behavioral equivalence.
+
+WAV files, traces, and detailed reports remain outside Git. Behavioral and
+scoring consistency remains in progress. No AA-BigBench or FDB scores are
+claimed.
