@@ -72,7 +72,8 @@ COPY pyproject.toml uv.lock ./
 # Note: Python package source code is available via uv's cache and can be
 # extracted using: uv pip show <package> --files
 # For full source compliance, see /app/legal/THIRD_PARTY_NOTICES.txt
-RUN uv venv --python python3.12 && . .venv/bin/activate && uv sync --frozen
+# `--extra fdh`: the Frontend Delegation Hermes voice side (also in the dev group, which `uv sync` installs).
+RUN uv venv --python python3.12 && . .venv/bin/activate && uv sync --frozen --extra fdh
 
 COPY src/ src/
 COPY examples_registry.yaml examples_registry.yaml

@@ -21,6 +21,26 @@ dependencies = [
 ]
 
 # Force patched versions for known CVEs
+[project.optional-dependencies]
+# The Frontend Delegation Hermes example (src/examples/frontend_delegation_hermes) imports these
+# directly. Hermes itself is never a dependency: it runs in the example's own Python 3.14 image
+# (docker/Dockerfile.fdh). Keep this list and the package list in docker/fdh/requirements.txt's
+# header in sync (tests/unit/frontend_delegation_hermes/test_fdh_dependencies.py checks it).
+fdh = [
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.0",
+    "websockets>=14.0",
+    "jinja2>=3.1",
+    "rich>=13.9.4",
+    "nvidia-riva-client>=2.27.0,<3",
+    "soxr>=1.0.0",
+    "numpy>=2.0.0",
+    "pyyaml>=6.0.3",
+    "loguru>=0.7.3",
+    "openai>=1.109.1",
+    "python-dotenv>=1.2.2",
+]
+
 [tool.uv]
 override-dependencies = [
     "cryptography>=46.0.5",
@@ -39,6 +59,7 @@ dev = [
     "ruff>=0.15.6",
     "pre-commit>=4.0.0",
     "pytest>=9.1.1",
+    "nemotron-voice-agent[fdh]",
 ]
 eval = [
     "pipecat-ai[evals]==1.11.0",

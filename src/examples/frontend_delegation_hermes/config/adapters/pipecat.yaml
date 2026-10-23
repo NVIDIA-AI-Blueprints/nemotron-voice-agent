@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pipecat head, demo mode. Turn taking and VAD are Pipecat-native: Silero VAD with Pipecat's
+# VADParams defaults, Pipecat's default user-turn start strategies, and the speech-timeout stop
+# strategy (Smart Turn disabled). `null` keeps Pipecat's own default. These keys never enter the
+# shared delegation config or its config_hash. The `default` profile (adapters/pipecat/profiles.py).
+
+vad:
+  confidence: null
+  start_secs: null
+  stop_secs: null
+  min_volume: null
+  audio_idle_timeout: null       # VADProcessor default (1.0 s, wall-clock forced speech stop)
+
+turn:
+  user_speech_timeout: null      # SpeechTimeoutUserTurnStopStrategy default
+  user_turn_stop_timeout: null   # UserTurnProcessor default
+
+audio:
+  in_sample_rate: 16000          # pipeline input rate (client audio is resampled to it)
+  out_sample_rate: 24000         # pipeline output rate (resampled to the client's format on the wire)
+  out_10ms_chunks: 10            # 100 ms output chunks, the τ³ head's delta size
+  write_timeout_s: 120.0         # τ² can stop reading the socket for a long time
+
+tts:
+  synthesis_mode: per_sentence   # one request per sentence; overrides the catalog's `stitched`

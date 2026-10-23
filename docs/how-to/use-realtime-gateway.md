@@ -95,7 +95,8 @@ The repository defines these profiles:
 | `nvidia/nemotron-realtime-multilingual` | Multilingual cascaded pipeline |
 | `nvidia/nemotron-realtime-omni` | Direct Omni pipeline with optional client-owned functions |
 | `nvidia/nemotron-realtime-omni-subagents` | Omni multi-agent pipeline without client-defined functions |
-| `nvidia/nemotron-realtime-frontend-backend-verdict` | Frontend/Backend Verdict Agent, with a frontend LLM and a reasoning backend LLM, that owns the whole Realtime session and runs client-owned function tools. Refer to the [Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md) and [Deploy the Frontend/Backend Verdict Agent](deploy-frontend-backend-verdict-agent.md). |
+| `nvidia/nemotron-realtime-frontend-backend` | Frontend/Backend Agent, with a frontend LLM and a reasoning backend LLM, that owns the whole Realtime session and runs client-owned function tools. Refer to the [Frontend/Backend Agent README](../../src/examples/frontend_backend_agent/README.md) and [Deploy the Frontend/Backend Agent](deploy-frontend-backend-agent.md). |
+| `nvidia/nemotron-realtime-frontend-delegation-hermes` | Frontend Delegation Hermes Agent, with a frontend LLM that delegates to a Hermes agent backend, that owns the whole Realtime session and runs client-owned function tools. Refer to the [Frontend Delegation Hermes README](../../src/examples/frontend_delegation_hermes/README.md) and [Deploy the Frontend Delegation Hermes Agent](deploy-frontend-delegation-hermes-agent.md). |
 
 Select a model in the WebSocket URL:
 
@@ -591,16 +592,16 @@ queue, Agent Communication Protocol (ACP), agent-to-agent (A2A), or another
 transport without changing the Realtime contract.
 
 Use `nvidia/nemotron-realtime-client-tools` when the client application owns
-that delegation boundary. Use `nvidia/nemotron-realtime-frontend-backend-verdict`
+that delegation boundary. Use `nvidia/nemotron-realtime-frontend-backend`
 when you want the deployed pipeline to split the conversation between a fast
 frontend LLM and a reasoning backend LLM that calls your client-owned function
 tools. By default, that profile refuses `type: "mcp"` tools and
 `input_audio_buffer.commit`, and it approximates `semantic_vad` with silence.
 The deployment can opt in to manual commits and Smart Turn `semantic_vad` with
-`FBV_REALTIME_TURN_MODES`, and to MCP tools with `FBV_REALTIME_MCP=true`. Its
+`FBA_REALTIME_TURN_MODES`, and to MCP tools with `FBA_REALTIME_MCP=true`. Its
 MCP calls run on the server without client approval and stay hidden from the
 client, so they need `require_approval: "never"`. Refer to the
-[Frontend/Backend Verdict Agent README](../../src/examples/frontend_backend_verdict/README.md#use-the-openai-realtime-api).
+[Frontend/Backend Agent README](../../src/examples/frontend_backend_agent/README.md#use-the-openai-realtime-api).
 
 ### Run an MCP Tool
 

@@ -1,0 +1,29 @@
+# Optional local LLM for the Frontend/Backend Agent. Without this file the agent uses the
+# NVIDIA Inference Hub for both LLMs and no LLM container starts. With it, the recipe also starts
+# Nemotron 3.5 Lightning on this host, and the browser UI's LLM menu offers it as
+# "Nemotron 3.5 Lightning frontend (local ...)" (services.local.yaml, id nemotron-3.5-lightning-local).
+# The Inference Hub entries stay first and remain the default; the backend LLM stays the profile's.
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fba-local-llm.yaml \
+#     --profile frontend-backend-agent/single-gpu up -d
+#
+# The same works with --profile frontend-backend-agent/server (the Lightning NIM).
+# Evaluation runs (FBA_PROFILE=eval, docker/docker-compose.fba-eval.yaml) never use the local LLM.
+#
+# Single GPU: the vLLM service sizes its memory from the free VRAM at start-up (it needs about
+# 28 GiB after VLLM_VRAM_HEADROOM_MIB, 4 GiB by default) and caps --gpu-memory-utilization at 0.90.
+# Start it after the speech sidecar (nemo-speech) has loaded, as generic-assistant/single-gpu does.
+#
+# Relative paths resolve from the repository root (the directory of the first -f file).
+
+# Compose adds these profiles to the services' own profiles (the other recipes are unchanged).
+services:
+  # docker/docker-compose.nemotron35-lightning.yaml (network alias nvidia-llm-vllm)
+  nvidia-llm-vllm-lightning:
+    profiles:
+      - frontend-backend-agent/single-gpu
+
+  # docker/docker-compose.nemotron35-lightning-nim.yaml (nvidia-llm)
+  nvidia-llm:
+    profiles:
+      - frontend-backend-agent/server

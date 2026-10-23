@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Tools of the browser profile (`default`): the demo tools of config/voice/browser.yaml
+# (core/text/demo_tools.py), listed by the UI's tools panel (/api/tools) and run in this process.
+# OpenAI Realtime sessions (the `eval` profile, Tau) never use these: their client sends its own
+# tools. test_fdh_registry.py checks that this list matches the demo tools.
+
+get_order:
+  type: function
+  function:
+    name: get_order
+    description: Look up one order by its id.
+    parameters:
+      type: object
+      properties:
+        order_id:
+          type: string
+          description: The order id.
+      required:
+      - order_id
+cancel_order:
+  type: function
+  function:
+    name: cancel_order
+    description: Cancel an order that has not shipped yet.
+    parameters:
+      type: object
+      properties:
+        order_id:
+          type: string
+          description: The order id.
+      required:
+      - order_id

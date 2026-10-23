@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Silent frontend for the Frontend/Backend Agent, for single-turn evaluations. Apply after the eval
+# overlay:
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml \
+#     -f docker/docker-compose.fba-silent-frontend.yaml \
+#     --profile frontend-backend-agent/single-gpu up -d --build
+#
+# A single-turn evaluation ends each case on the first response.done and scores its transcript only.
+# The frontend's filler shares the answer's response, so it is logged (filler log) and never spoken.
+# Direct answers are still spoken. Use it for single-turn evaluations only, never for multi-turn ones
+# such as Tau. Pick the prompt profile with FBA_PROMPT_PROFILE (for example general_qa).
+
+services:
+  frontend-backend-agent-single-gpu:
+    environment:
+      FBA_FILLER_MODE: log_only
