@@ -3,6 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
+import os
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -13,17 +14,21 @@ from examples.generic.offline.models import AudioSource
 
 
 class FactoryTests(unittest.TestCase):
-    def build(self, config, local=False, *, policy="silero", tools=False):
+    def build(self, config, local=False, *, policy="silero", tools=False, llm_api_key_env=None):
         catalogs = {
             "asr": {"server": "asr:50051", "function_id": "asr-function"},
             "llm": {"model_id": "model", "base_url": "http://llm:8000/v1"},
             "tts": {"server": "tts:50051" if local else "grpc.nvcf.nvidia.com:443", "function_id": ""},
         }
+        if llm_api_key_env is not None:
+            catalogs["llm"]["api_key_env"] = llm_api_key_env
         recognizer = Mock()
         detector = SimpleNamespace(configuration={"policy": policy, "vad": {"stop_secs": 0.5}})
         with ExitStack() as stack:
             prefix = "examples.generic.offline.factory."
             stack.enter_context(patch(prefix + "load_service_entry", side_effect=lambda key, _: catalogs[key]))
+            stack.enter_context(patch("utils.load_service_entry", side_effect=lambda key, _: catalogs[key]))
+            stack.enter_context(patch("utils.load_service_entry_by_id", side_effect=lambda key, _: catalogs[key]))
             stack.enter_context(patch(prefix + "resolve_prompt", return_value=("test", "test prompt")))
             tool_catalog = {"lookup": {"function": {"name": "lookup"}}} if tools else {}
             stack.enter_context(patch(prefix + "load_tools_catalog", return_value=tool_catalog))
@@ -31,6 +36,7 @@ class FactoryTests(unittest.TestCase):
             stack.enter_context(patch("examples.generic.tool_handlers.TOOL_HANDLERS", {"lookup": Mock()}))
             stack.enter_context(patch(prefix + "load_ipa_dictionary", return_value=None))
             stack.enter_context(patch(prefix + "nvidia_api_key", return_value="test-key"))
+            stack.enter_context(patch("utils.nvidia_api_key", return_value="test-key"))
             stack.enter_context(patch(prefix + "create_generic_detector", return_value=detector))
             asr_factory = stack.enter_context(patch(prefix + "create_riva_recognizer", return_value=recognizer))
             llm_factory = stack.enter_context(patch(prefix + "CapturingNativeNvidiaLLMService"))
@@ -50,6 +56,29 @@ class FactoryTests(unittest.TestCase):
         self.assertFalse(runtime.configuration["automatic_introduction"])
         self.assertNotIn("api_key", runtime.configuration)
         self.assertEqual(runtime.configuration["detector"]["vad"]["stop_secs"], 0.5)
+
+    def test_hub_llm_key_does_not_replace_speech_credentials(self):
+        with patch.dict(os.environ, {"TEST_NVA_LLM_KEY": "hub-only-key"}):
+            runtime, asr, tts = self.build({}, llm_api_key_env="TEST_NVA_LLM_KEY")
+        self.assertEqual(runtime.test_llm_kwargs["api_key"], "hub-only-key")
+        self.assertEqual(asr["api_key"], "test-key")
+        self.assertEqual(tts["api_key"], "test-key")
+        self.assertNotIn("hub-only-key", str(runtime.configuration))
+        self.assertNotIn("test-key", str(runtime.configuration))
+
+    def test_missing_explicit_llm_credential_fails_before_provider_construction(self):
+        with (
+            patch.dict(os.environ, {"TEST_NVA_LLM_KEY": ""}),
+            self.assertRaisesRegex(RuntimeError, "TEST_NVA_LLM_KEY is not set"),
+        ):
+            self.build({}, llm_api_key_env="TEST_NVA_LLM_KEY")
+
+    def test_custom_endpoint_without_a_selection_cannot_receive_catalog_credentials(self):
+        with (
+            patch.dict(os.environ, {"TEST_NVA_LLM_KEY": "hub-only-key"}),
+            self.assertRaisesRegex(ValueError, "selected catalog endpoint"),
+        ):
+            self.build({"base_url": "https://client-selected.example/v1"}, llm_api_key_env="TEST_NVA_LLM_KEY")
 
     def test_explicit_function_id_wins(self):
         _, _, tts = self.build({"tts_function_id": "custom"})
