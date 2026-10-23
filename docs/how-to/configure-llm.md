@@ -10,12 +10,13 @@ Models are declared in the root [`services.yaml`](../../services.yaml), and each
 
 ## Models
 
-Three models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. Nemotron 3.5 Super VL is self-hosted only, and the examples use it as a text LLM.
+Four models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. Nemotron 3.5 Super VL is self-hosted only, and the examples use it as a text LLM. Nemotron 3.5 Bolt is self-hosted on single-GPU hosts only, and the examples use it as a text LLM.
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
 | **Nemotron 3.5 Super VL 120B A12B**: higher-capability alternative for complex tasks, available self-hosted | [`docker-compose.nemotron35-super-vl.yaml`](../../docker/docker-compose.nemotron35-super-vl.yaml) (`nemotron-35-super-vl` NIM, `nemotron-35-super-vl-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4) |
+| **Nemotron 3.5 Bolt 74B A9B**: higher-capability alternative, available self-hosted on single-GPU hosts only | [`docker-compose.nemotron35-bolt.yaml`](../../docker/docker-compose.nemotron35-bolt.yaml) (`nemotron-35-bolt-vllm` vLLM) | [Hugging Face](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB) |
 | **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni-nim.yaml`](../../docker/docker-compose.nemotron3-omni-nim.yaml) (NIM), [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 
 Each model is exposed as one or more **catalog keys** in `services.yaml`:
@@ -24,6 +25,7 @@ Each model is exposed as one or more **catalog keys** in `services.yaml`:
 |-------|--------------|
 | Nemotron 3.5 Lightning | `nemotron-lightning` |
 | Nemotron 3.5 Super VL | `nemotron-super` (self-hosted only) |
+| Nemotron 3.5 Bolt | `nemotron-bolt-74b` (self-hosted single-GPU only) |
 | Nemotron 3 Nano Omni | `nemotron-omni-nvfp4` |
 
 Reasoning is a per-session toggle on the same entry, not a separate key (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is the first available key under the example's `services` in [`examples_registry.yaml`](../../examples_registry.yaml).
@@ -36,8 +38,9 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 | --- | --- |
 | Nemotron 3.5 Lightning (`nemotron-lightning`) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 | Nemotron 3.5 Super VL (`nemotron-super`, self-hosted) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`), Chinese (`zh`) |
+| Nemotron 3.5 Bolt (`nemotron-bolt-74b`, self-hosted single-GPU) | English (`en`), German (`de`), Spanish (`es`), French (`fr`), Italian (`it`), Japanese (`ja`) |
 
-The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3.5 Lightning model card](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) and the [Nemotron 3.5 Super VL model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4).
+The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3.5 Lightning model card](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard), the [Nemotron 3.5 Super VL model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4), and the [Nemotron 3.5 Bolt model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB).
 
 > **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages. For multilingual deployments where language fidelity matters, start the **Nemotron 3.5 Super VL** sidecar (see [Run Nemotron 3.5 Super VL](#run-nemotron-35-super-vl)) and select `nemotron-super` in the Services tab. The Generic and Multilingual assistants list it after Lightning. It stays more reliably in the target language and reads more naturally across languages.
 
@@ -46,7 +49,7 @@ The source of truth for the built-in capability metadata is the NVIDIA [Nemotron
 You can self-host the LLM two ways, and the repo wires the right one per profile:
 
 - **NIM** (`nvidia-llm`, `nvidia-llm-omni`, `nemotron-35-super-vl`): a prebuilt, optimized inference microservice with automatic, hardware-aware model-profile selection. It is used by `*/server` recipes.
-- **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`, `nemotron-35-super-vl-vllm`): serves weights directly. The `*/single-gpu` recipes select the serving precision automatically from the host and GPU.
+- **vLLM** (`nvidia-llm-vllm*`, `nvidia-llm-vllm-omni`, `nemotron-35-super-vl-vllm`, `nemotron-35-bolt-vllm`): serves weights directly. The `*/single-gpu` recipes select the serving precision automatically from the host and GPU.
 
 Both expose the same OpenAI-compatible API, so the pipeline and the request tuning below behave identically against either.
 
@@ -54,7 +57,7 @@ Both expose the same OpenAI-compatible API, so the pipeline and the request tuni
 
 ### VRAM & Hardware Support
 
-The `*/single-gpu` vLLM services select the model checkpoint and precision from the GPU compute capability. They also calculate `--gpu-memory-utilization` at startup. The planner reserves `VLLM_VRAM_HEADROOM_MIB` from currently free memory, validates the usable amount, and caps the resulting utilization for the platform. The default headroom is 4096 MiB. Set `VLLM_GPU_MEMORY_UTILIZATION` only when an explicit override is required. These overrides apply to automatically sized workstation Lightning recipes, Omni recipes, and Super VL. Lightning on DGX Spark and Jetson Thor uses a fixed value of `0.35`.
+The `*/single-gpu` vLLM services select the model checkpoint and precision from the GPU compute capability, except Bolt, which uses its fixed IQ2 checkpoint and selects only the platform memory cap. They also calculate `--gpu-memory-utilization` at startup. The planner reserves `VLLM_VRAM_HEADROOM_MIB` from currently free memory, validates the usable amount, and caps the resulting utilization for the platform. The default headroom is 4096 MiB. Set `VLLM_GPU_MEMORY_UTILIZATION` only when an explicit override is required. These overrides apply to automatically sized workstation Lightning recipes, Omni recipes, Super VL, and Bolt. Lightning on DGX Spark and Jetson Thor uses a fixed value of `0.35`.
 
 | Service / hardware | Model selection | Automatic VRAM plan | Device IDs |
 | --- | --- | --- | --- |
@@ -69,6 +72,9 @@ The `*/single-gpu` vLLM services select the model checkpoint and precision from 
 | Super VL on a Blackwell workstation (96 GB class) | Mixed NVFP4/FP8 with MTP, language model only | Free VRAM minus headroom, capped at `0.90`. Requires at least 78 GiB usable. | Super + ASR + TTS -> `0`, Lightning scaled to zero |
 | Super VL on DGX Spark or Jetson Thor | Mixed NVFP4/FP8 with MTP, language model only | Free unified memory minus headroom, capped at `0.75`. Requires at least 78 GiB usable. On Thor, FlashInfer compiles one kernel at a time (`MAX_JOBS=1`) so the compiler does not run out of unified memory after the weights load. | Super + ASR + TTS -> `0`, Lightning scaled to zero |
 | Super VL on single-GPU service on Hopper, Ada, or Ampere | This service requires Blackwell NVFP4. It exits with `Unsupported GPU for Super single-GPU (needs Blackwell NVFP4)` and restarts. | Depends on the supported NIM profile. | Use the Super VL server NIM (`nemotron-35-super-vl`) with a matching profile: 1× H200, 2× H100 80 GB, or 2× A100 80 GB. L40 / L40S (Ada) GPUs have no listed Super VL NIM profile and are not supported for Super VL server deployment. |
+| Bolt on a Blackwell workstation (SM120) | IQ2 with LiLiCorr DFlash, b12x kernels, language model only | Free VRAM minus headroom, capped at `0.90`. Requires at least 32 GiB usable. | Bolt + ASR + TTS -> `0`, Lightning scaled to zero |
+| Bolt on DGX Spark (SM121) | IQ2 with LiLiCorr DFlash, b12x kernels, language model only | Free unified memory minus headroom, capped at `0.75`. Requires at least 32 GiB usable. | Bolt + ASR + TTS -> `0`, Lightning scaled to zero |
+| Bolt on Jetson Thor, Hopper, Ada, Ampere, or Blackwell data center GPUs | The b12x kernels target only SM120 and SM121. It exits with `Unsupported GPU for Bolt single-GPU (needs SM120 or SM121): <name> <cc>` and restarts. | Not supported. | No NIM exists for Bolt. Use Lightning or Super VL instead. |
 
 These values are startup checks used by the planner, not guarantees that every workload will fit. Model weights, KV cache, speech services, context length, and concurrency must all fit within the selected budget.
 
@@ -80,6 +86,7 @@ Server recipes use model-specific NIM profiles and scaling controls instead of t
 | Lightning NIM split across two GPUs | 40 GB/GPU | `NIM_KVCACHE_PERCENT=0.9` | LLM (`nvidia-llm`) -> `0`, ASR + TTS -> `1` |
 | Omni NIM | See the NIM for VLMs support matrix, plus TTS memory when sharing a GPU | Automatic NIM model profile | Omni + TTS -> `0` |
 | Nemotron 3.5 Super VL NIM | See the NIM support matrix for the selected profile (1× H200, 2× H100 80 GB, or 2× A100 80 GB; not supported on L40 / L40S) | Automatic NIM model profile | Super (`nemotron-35-super-vl`) -> `1`, `2` |
+| Nemotron 3.5 Bolt | No NIM exists for Bolt. It runs on single-GPU hosts only. | n/a | n/a |
 
 Update each service's `device_ids` under `deploy.resources.reservations.devices` when splitting services across GPUs.
 
@@ -101,6 +108,20 @@ Use `multilingual-assistant/*` in place of `generic-assistant/*` for the Multili
 
 The single-GPU service downloads the model checkpoint from Hugging Face on first start and requires an `HF_TOKEN`. It loads only the language model (`--language-model-only`), so image input is not served.
 
+### Run Nemotron 3.5 Bolt 74B
+
+Bolt is an optional sidecar for single-GPU hosts. It is not part of any example profile, so add its profile next to the example's. No NIM exists for Bolt, so there is no server command. Lightning stays the default LLM. Select `nemotron-bolt-74b` in the Services tab to use Bolt.
+
+```bash
+# Single-GPU: vLLM on GPU 0. Lightning must be scaled to zero to free the GPU.
+docker compose --profile generic-assistant/single-gpu --profile nemotron-35-bolt-single-gpu \
+  up -d --scale nvidia-llm-vllm-lightning=0
+```
+
+Use `multilingual-assistant/single-gpu` in place of `generic-assistant/single-gpu` for the Multilingual Assistant. Scaling only applies to that `up`. A later `up` without the flag starts Lightning again. To stop the stack, pass the same `--profile` flags to `down`, without `--scale`, which `down` does not accept.
+
+The service runs only on Blackwell workstation GPUs (SM120), such as RTX PRO 6000 and RTX PRO 5000, and on DGX Spark (SM121). It downloads the model checkpoint and the LiLiCorr DFlash drafter from Hugging Face on first start and requires an `HF_TOKEN`. It loads only the language model (`--language-model-only`), so image input is not served.
+
 ### Deployment Tuning Parameters
 
 Single-GPU Compose services select precision and VRAM utilization automatically. Use `.env` only for the optional headroom or utilization override. Standard NIM Server deployments also use hardware-aware automatic profile selection. Only specialized recipes such as `server-perf` pin a profile. For Server deployments, the stock Compose files expose only the NIM settings shown as environment variables below. Use a Compose override for controls that the stock files fix or omit.
@@ -118,7 +139,7 @@ Single-GPU Compose services select precision and VRAM utilization automatically.
 
 **Lightning vLLM sizing (`nvidia-llm-vllm-lightning`).** The Single-GPU service loads `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` on every supported GPU. Blackwell workstations, DGX Spark, and Jetson Thor serve native NVFP4. Hopper and Ada serve the same checkpoint as W4A16 through Marlin (`--quantization modelopt_fp4`).
 
-**Streaming input.** The Lightning vLLM service also serves a text StreamingInput WebSocket at `ws://nvidia-llm-vllm:8000/v1/streaming-session`, next to chat completions. The single-GPU Super VL service (`nemotron-35-super-vl-vllm`) serves the same endpoint on its own port. The single-GPU `nemotron-lightning` and `nemotron-super` entries declare it as `streaming_url`. When an example lists `streaming_input` under `capabilities` in `examples_registry.yaml`, each of those cards shows a **Streaming Input** toggle, and turning it on sends the session to that URL. The Generic Assistant then prefills every ASR update while the user speaks, so the answer starts from a warm KV cache. The toggle appears only for self-hosted vLLM entries with a `streaming_url`.
+**Streaming input.** The Lightning vLLM service also serves a text StreamingInput WebSocket at `ws://nvidia-llm-vllm:8000/v1/streaming-session`, next to chat completions. The single-GPU Super VL service (`nemotron-35-super-vl-vllm`) serves the same endpoint on its own port. The Bolt service (`nemotron-35-bolt-vllm`) also serves it on its own port. The single-GPU `nemotron-lightning`, `nemotron-super`, and `nemotron-bolt-74b` entries declare it as `streaming_url`. When an example lists `streaming_input` under `capabilities` in `examples_registry.yaml`, each of those cards shows a **Streaming Input** toggle, and turning it on sends the session to that URL. The Generic Assistant then prefills every ASR update while the user speaks, so the answer starts from a warm KV cache. The toggle appears only for self-hosted vLLM entries with a `streaming_url`.
 
 The streaming server holds the latest word until another word arrives or the turn commits. If an ASR correction changes previously queued prompt tokens, the engine request restarts with the updated prompt. Voice activity detection (VAD) stopping does not guarantee that prefill is complete: final ASR updates or pending chunks can still require processing.
 

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - TBD
+
+### Added
+
+- **Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.** The `nemotron-35-bolt-single-gpu` profile serves it with vLLM on GPU `0` of a Blackwell workstation or DGX Spark, with LiLiCorr speculative decoding, the language model only, and Streaming Input. Scale Lightning to zero with `--scale nvidia-llm-vllm-lightning=0`.
+
 ## [2.3.0] - 2026-10-19
 
 This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-independent Smart Turn handling for audio-only user turns, adds streaming-input prefill and speaker labels to the Generic Assistant, replaces Nemotron 3 Super with Nemotron 3.5 Super VL on server and single-GPU hosts, and upgrades the single-GPU Lightning vLLM image to 0.31.0.

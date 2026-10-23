@@ -702,6 +702,19 @@ class RepositoryCatalogTests(unittest.TestCase):
                 llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]
                 self.assertEqual(llm_keys[:2], ["nemotron-lightning", "nemotron-super"])
 
+    def test_bolt_is_an_optional_single_gpu_only_llm(self) -> None:
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker" / "docker-compose.nemotron35-bolt.yaml")
+        entry = catalog["single-gpu"]["llm"]["nemotron-bolt-74b"]
+        self.assertEqual(urlparse(entry["base_url"]).hostname, "nemotron-35-bolt-vllm")
+        self.assertEqual(urlparse(entry["streaming_url"]).hostname, "nemotron-35-bolt-vllm")
+        self.assertEqual(compose["services"]["nemotron-35-bolt-vllm"]["profiles"], ["nemotron-35-bolt-single-gpu"])
+        self.assertNotIn("nemotron-bolt-74b", catalog["server"]["llm"])
+        for key in ("generic-assistant", "multilingual-assistant"):
+            with self.subTest(example=key):
+                llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]
+                self.assertEqual(llm_keys, ["nemotron-lightning", "nemotron-super", "nemotron-bolt-74b"])
+
     def test_lightning_budget_key_follows_the_serving_engine(self) -> None:
         example = examples_registry.EXAMPLES["frontend-backend-agent"]
         set_service_context(example)
@@ -752,6 +765,7 @@ class HostRuntimeRewriteTests(unittest.TestCase):
             ("base_url", "ws://nvidia-llm-vllm:8000/v1/streaming-session"): "ws://localhost:18000/v1/streaming-session",
             ("base_url", "http://nemotron-35-super-vl:8000/v1"): "http://localhost:18001/v1",
             ("base_url", "http://nemotron-35-super-vl-vllm:8000/v1"): "http://localhost:18001/v1",
+            ("base_url", "http://nemotron-35-bolt-vllm:8000/v1"): "http://localhost:18003/v1",
             ("server", "magpie-multilingual-tts-service:50051"): "localhost:50151",
             ("server", "parakeet-ctc-asr:50052"): "localhost:50352",
             ("server", "nemo-speech:50051"): "localhost:50051",

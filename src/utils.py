@@ -260,6 +260,7 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nemotron-35-super-vl", 8000): 18001,
     ("nemotron-35-super-vl-vllm", 8000): 18001,
     ("nvidia-llm-omni", 8000): 18002,
+    ("nemotron-35-bolt-vllm", 8000): 18003,
     ("nvidia-llm-vllm", 8000): 18000,
     **{
         (service, ports.grpc): ports.host_grpc

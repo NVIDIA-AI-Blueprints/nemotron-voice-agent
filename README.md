@@ -72,6 +72,7 @@ See the [CHANGELOG](CHANGELOG.md) for the full release history.
 | | [Chatterbox TTS Multilingual](https://build.nvidia.com/resembleai/chatterbox-multilingual-tts/modelcard) | |
 | **LLM** | [Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) | Any OpenAI-compatible |
 | | [Nemotron 3.5 Super VL 120B A12B](https://build.nvidia.com/nvidia/nemotron-3.5-super-vl-120b-a12b/modelcard) | |
+| | [Nemotron 3.5 Bolt 74B A9B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB) | |
 | | [Nemotron 3 Nano Omni 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) | |
 | **Orchestration** | [Pipecat](https://github.com/pipecat-ai/pipecat) | [LiveKit Agents with NVIDIA plugin](https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-nvidia) |
 
@@ -104,7 +105,7 @@ These are the minimum requirements, and support varies by example and deployment
 | Cloud | CPU only (no GPU) | Model endpoints from NVIDIA cloud APIs (NVCF). |
 | Server | NVIDIA GPU workstation. GPU count and memory depend on the selected models and scale. | Scaling-oriented NIM deployment. DGX Spark and Jetson Thor are not supported for this profile. Default all-on-one-GPU layout is about 80 GB. Size it using the [NIM support matrix and LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support). |
 | Performance Server | Four-GPU Blackwell workstation | `generic-assistant/server-perf` load benchmark only, not a browser UI session. |
-| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Nemotron 3.5 Super VL is optional and needs a Blackwell GPU, DGX Spark, or Jetson Thor with at least 78 GiB usable memory. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
+| Single GPU | 1 workstation GPU, DGX Spark, or Jetson Thor | Uses the universal `*/single-gpu` recipes. Nemotron 3.5 Lightning workstations need at least 28 GiB usable VRAM. Nemotron 3.5 Super VL is optional and needs a Blackwell GPU, DGX Spark, or Jetson Thor with at least 78 GiB usable memory. Nemotron 3.5 Bolt is optional and needs a Blackwell workstation GPU (SM120) or DGX Spark with at least 32 GiB usable memory. Jetson Thor requires JetPack 7.0. Orin is not supported. Follow the [LLM sizing guide](docs/how-to/configure-llm.md#vram--hardware-support) and, when applicable, the [Jetson Thor guide](docs/03-jetson-thor.md). |
 
 ### Software Requirements
 

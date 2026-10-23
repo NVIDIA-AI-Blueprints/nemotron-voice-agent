@@ -48,6 +48,7 @@ include:
   - path: docker/docker-compose.nemotron35-lightning-nim.yaml
   - path: docker/docker-compose.nemotron35-lightning.yaml
   - path: docker/docker-compose.nemotron35-super-vl.yaml
+  - path: docker/docker-compose.nemotron35-bolt.yaml
   - path: docker/docker-compose.nemotron3-omni-nim.yaml
   - path: docker/docker-compose.nemotron-asr.yaml
   - path: docker/docker-compose.parakeet-asr.yaml
@@ -65,6 +66,7 @@ x-app: &app-base
     context: .
     dockerfile: docker/Dockerfile
   image: nemotron-voice-agent:latest
+  pull_policy: build
   command: ["uv", "run", "python", "src/server.py", "--host", "0.0.0.0"]
   ports:
     - "${PIPELINE_APP_PORT:-7860}:7860"
