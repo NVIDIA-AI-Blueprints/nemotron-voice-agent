@@ -1,0 +1,258 @@
+{
+  "gateway.eval.yaml|-": {
+    "backend_catalog_sha256": "55639a8b238b7eec",
+    "backend_soul_sha256": "d83c4a8d4c4dbcc2",
+    "backend_system": {
+      "plain": {
+        "chars": 6684,
+        "sha256": "b2ce64af8f2ff733"
+      },
+      "telecom": {
+        "chars": 7045,
+        "sha256": "40a7e919af36fb7f"
+      }
+    },
+    "config_yaml": "model:\n  context_length: 131072\ntools:\n  tool_search:\n    enabled: 'off'\nagent:\n  coding_context: 'off'\n  task_completion_guidance: false\n  parallel_tool_call_guidance: false\n  tool_use_enforcement: false\n  execution_guidance: false\n",
+    "domains": [
+      [
+        "telecom",
+        [
+          "get_customer_by_phone"
+        ]
+      ]
+    ],
+    "prompt_features": {
+      "capability_check": true,
+      "domain_notes": true,
+      "format_correction": true,
+      "identity_from_identifier": true,
+      "phone_format": true,
+      "policy_check": true,
+      "request_scope": true,
+      "situational_facts": true,
+      "spelling_v2": true,
+      "spoken_output": true,
+      "transfer_check": true,
+      "write_consent": true,
+      "write_consent_v2": true
+    },
+    "prompts_path": "prompts/customer_service/backend/hermes.yaml",
+    "soul_md": "You are the backend agent of a voice customer-service assistant. A separate voice\nfrontend talks to the user and hands you their requests. Everything you write in your\nfinal answer is read aloud by text-to-speech, so answer in one to three short, plain\nsentences: no markdown, no lists, no emojis, no URLs. Use your tools to look things up\nor change anything; never claim to have done something you did not do with a tool.\n",
+    "worker_settings": {
+      "agent_construct": "eager",
+      "api_key_env": "NVIDIA_API_KEY",
+      "backend_trace_dir": "<ROOT>/logs/fdh_workers",
+      "base_url": "https://inference-api.nvidia.com/v1",
+      "context_length": 131072,
+      "disable_streaming": false,
+      "fake_default_tool": false,
+      "load_soul_identity": true,
+      "max_iterations": 30,
+      "model": "nvidia/nvidia/nemotron-3-ultra",
+      "provider": "custom",
+      "request_overrides": {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 1024
+        }
+      },
+      "run_budget_seconds": 300.0,
+      "tool_result_timeout_s": 120.0,
+      "unwind_timeout_s": 10.0
+    }
+  },
+  "gateway.eval.yaml|general_qa": {
+    "backend_catalog_sha256": "656cd1d0ce284e34",
+    "backend_soul_sha256": "c67b9f19ad8295ff",
+    "backend_system": {
+      "plain": {
+        "chars": 2380,
+        "sha256": "ba16a45c5d644e57"
+      },
+      "telecom": {
+        "chars": 2380,
+        "sha256": "ba16a45c5d644e57"
+      }
+    },
+    "config_yaml": "model:\n  context_length: 131072\ntools:\n  tool_search:\n    enabled: 'off'\nagent:\n  coding_context: 'off'\n  task_completion_guidance: false\n  parallel_tool_call_guidance: false\n  tool_use_enforcement: false\n  execution_guidance: false\n",
+    "domains": [
+      [
+        "telecom",
+        [
+          "get_customer_by_phone"
+        ]
+      ]
+    ],
+    "prompt_features": {
+      "capability_check": true,
+      "domain_notes": true,
+      "format_correction": true,
+      "identity_from_identifier": true,
+      "phone_format": true,
+      "policy_check": true,
+      "request_scope": true,
+      "situational_facts": true,
+      "spelling_v2": true,
+      "spoken_output": true,
+      "transfer_check": true,
+      "write_consent": true,
+      "write_consent_v2": true
+    },
+    "prompts_path": "prompts/general_qa/backend/hermes.yaml",
+    "soul_md": "You are the answering agent of a general-purpose voice assistant. Follow the system instructions\nfor every reply.\n",
+    "worker_settings": {
+      "agent_construct": "eager",
+      "api_key_env": "NVIDIA_API_KEY",
+      "backend_trace_dir": "<ROOT>/logs/fdh_workers",
+      "base_url": "https://inference-api.nvidia.com/v1",
+      "context_length": 131072,
+      "disable_streaming": false,
+      "fake_default_tool": false,
+      "load_soul_identity": true,
+      "max_iterations": 30,
+      "model": "nvidia/nvidia/nemotron-3-ultra",
+      "provider": "custom",
+      "request_overrides": {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 1024
+        }
+      },
+      "run_budget_seconds": 300.0,
+      "tool_result_timeout_s": 120.0,
+      "unwind_timeout_s": 10.0
+    }
+  },
+  "gateway.yaml|-": {
+    "backend_catalog_sha256": "55639a8b238b7eec",
+    "backend_soul_sha256": "d83c4a8d4c4dbcc2",
+    "backend_system": {
+      "plain": {
+        "chars": 6684,
+        "sha256": "b2ce64af8f2ff733"
+      },
+      "telecom": {
+        "chars": 7045,
+        "sha256": "40a7e919af36fb7f"
+      }
+    },
+    "config_yaml": "model:\n  context_length: 131072\ntools:\n  tool_search:\n    enabled: 'off'\nagent:\n  coding_context: 'off'\n  task_completion_guidance: false\n  parallel_tool_call_guidance: false\n  tool_use_enforcement: false\n  execution_guidance: false\n",
+    "domains": [
+      [
+        "telecom",
+        [
+          "get_customer_by_phone"
+        ]
+      ]
+    ],
+    "prompt_features": {
+      "capability_check": true,
+      "domain_notes": true,
+      "format_correction": true,
+      "identity_from_identifier": true,
+      "phone_format": true,
+      "policy_check": true,
+      "request_scope": true,
+      "situational_facts": true,
+      "spelling_v2": true,
+      "spoken_output": true,
+      "transfer_check": true,
+      "write_consent": true,
+      "write_consent_v2": true
+    },
+    "prompts_path": "prompts/generic/backend/hermes.yaml",
+    "soul_md": "You are the backend agent of a voice customer-service assistant. A separate voice\nfrontend talks to the user and hands you their requests. Everything you write in your\nfinal answer is read aloud by text-to-speech, so answer in one to three short, plain\nsentences: no markdown, no lists, no emojis, no URLs. Use your tools to look things up\nor change anything; never claim to have done something you did not do with a tool.\n",
+    "worker_settings": {
+      "agent_construct": "eager",
+      "api_key_env": "NVIDIA_API_KEY",
+      "backend_trace_dir": "",
+      "base_url": "https://inference-api.nvidia.com/v1",
+      "context_length": 131072,
+      "disable_streaming": false,
+      "fake_default_tool": false,
+      "load_soul_identity": true,
+      "max_iterations": 30,
+      "model": "nvidia/nvidia/nemotron-3-ultra",
+      "provider": "custom",
+      "request_overrides": {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 1024
+        }
+      },
+      "run_budget_seconds": 300.0,
+      "tool_result_timeout_s": 120.0,
+      "unwind_timeout_s": 10.0
+    }
+  },
+  "gateway.yaml|general_qa": {
+    "backend_catalog_sha256": "656cd1d0ce284e34",
+    "backend_soul_sha256": "c67b9f19ad8295ff",
+    "backend_system": {
+      "plain": {
+        "chars": 2380,
+        "sha256": "ba16a45c5d644e57"
+      },
+      "telecom": {
+        "chars": 2380,
+        "sha256": "ba16a45c5d644e57"
+      }
+    },
+    "config_yaml": "model:\n  context_length: 131072\ntools:\n  tool_search:\n    enabled: 'off'\nagent:\n  coding_context: 'off'\n  task_completion_guidance: false\n  parallel_tool_call_guidance: false\n  tool_use_enforcement: false\n  execution_guidance: false\n",
+    "domains": [
+      [
+        "telecom",
+        [
+          "get_customer_by_phone"
+        ]
+      ]
+    ],
+    "prompt_features": {
+      "capability_check": true,
+      "domain_notes": true,
+      "format_correction": true,
+      "identity_from_identifier": true,
+      "phone_format": true,
+      "policy_check": true,
+      "request_scope": true,
+      "situational_facts": true,
+      "spelling_v2": true,
+      "spoken_output": true,
+      "transfer_check": true,
+      "write_consent": true,
+      "write_consent_v2": true
+    },
+    "prompts_path": "prompts/general_qa/backend/hermes.yaml",
+    "soul_md": "You are the answering agent of a general-purpose voice assistant. Follow the system instructions\nfor every reply.\n",
+    "worker_settings": {
+      "agent_construct": "eager",
+      "api_key_env": "NVIDIA_API_KEY",
+      "backend_trace_dir": "",
+      "base_url": "https://inference-api.nvidia.com/v1",
+      "context_length": 131072,
+      "disable_streaming": false,
+      "fake_default_tool": false,
+      "load_soul_identity": true,
+      "max_iterations": 30,
+      "model": "nvidia/nvidia/nemotron-3-ultra",
+      "provider": "custom",
+      "request_overrides": {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 1024
+        }
+      },
+      "run_budget_seconds": 300.0,
+      "tool_result_timeout_s": 120.0,
+      "unwind_timeout_s": 10.0
+    }
+  }
+}

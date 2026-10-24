@@ -131,15 +131,15 @@ def gateway_pins(path: Path) -> dict[str, Any]:
     from examples.frontend_delegation_hermes.core.sidecar.templates import BackendTemplates  # noqa: PLC0415
 
     config = gc.load_gateway_config(path)
-    templates = BackendTemplates(config.hermes.prompts_path, prompt_features=config.prompt_features)
+    templates = BackendTemplates(config.backend.prompts_path, prompt_features=config.prompt_features)
     out: dict[str, Any] = {
         "settings_sha": _sha(_relative(config.summary())),
         "hermes": _relative(
             {
-                "model": config.hermes.model,
-                "base_url": config.hermes.base_url,
-                "request_overrides": config.hermes.request_overrides,
-                "backend_trace": config.hermes.backend_trace,
+                "model": config.backend.model,
+                "base_url": config.backend.base_url,
+                "request_overrides": config.backend.request_overrides,
+                "backend_trace": config.backend.backend_trace,
             }
         ),
         "backend_features": dict(templates.features),
@@ -273,7 +273,7 @@ def _stub_eval_config(log_path: Path) -> Any:
     )
     backend = replace(
         config.backend,
-        link="in_process_fake",
+        link="in_process",
         verbalizer_mode="template",
         gateway_config=CONFIG / "gateway.stub_gate.yaml",
     )

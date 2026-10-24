@@ -1,6 +1,36 @@
 # Configuration Knobs
 
-Profiles and gateway configurations are in `src/examples/frontend_delegation_hermes/config/`. Unknown keys fail at load time. The voice service mounts `src/` read-only, so a voice-side configuration change needs a restart: `docker compose [$E] --profile $P restart frontend-delegation-hermes-agent-single-gpu`. The Hermes runtime (the OpenShell sandbox, or the plain `fdh-hermes` container) runs the source built into the Hermes image, so a change to a gateway configuration, a prompt, or other gateway code needs `up -d --build`.
+Profiles and gateway configurations are in `src/examples/frontend_delegation_hermes/config/`. Unknown keys fail at load time. The voice service mounts `src/` read-only, so a voice-side configuration change needs a restart: `docker compose [$E] --profile $P restart frontend-delegation-hermes-agent-single-gpu`. The Hermes runtime (the OpenShell sandbox, or the plain `fdh-hermes` container) runs the source built into the Hermes image, so with Hermes a change to a gateway configuration, a prompt, or other gateway code needs `up -d --build`. The LLM backend runs in the voice service, so a restart is enough for it.
+
+## Backends
+
+`backend.kind` in `config/gateway*.yaml`, from `FDH_BACKEND`, selects the backend (registry: `core/backends/__init__.py`, one folder per backend in `core/backends/<kind>/`):
+
+| `backend.kind` | Runs | How to select | Backend prompt file |
+| --- | --- | --- | --- |
+| `hermes` (default) | One Hermes worker process per session in `fdh-hermes` (OpenShell sandbox or plain) | No backend overlay | `prompts/<profile>/backend/hermes.yaml` |
+| `llm` | One OpenAI SDK tool loop per session in the voice process | `docker/docker-compose.fdh-llm.yaml` (after the eval overlay; never with the plain overlay) | `prompts/<profile>/backend/llm.yaml` |
+| `fake` | In-process scripted agent | Tests and `--stub-backend` only (`gateway.fake.yaml`) | None |
+
+The LLM overlay sets the following on the voice service and removes `depends_on` and the four Hermes and OpenShell services (`hermes-openshell-init`, `hermes-openshell-gateway`, `fdh-hermes`, `fdh-hermes-image`) from the recipe profile:
+
+| Variable | Value | Meaning |
+| --- | --- | --- |
+| `FDH_BACKEND` | `llm` | `backend.kind` |
+| `FDH_BACKEND_LINK` | `in_process` | The voice side's `backend.link`: the gateway and the worker run in the voice process (default `websocket`) |
+| `BACKEND_LLM_MODEL`, `BACKEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3-ultra`, `https://inference-api.nvidia.com/v1` | The backend model, as `gateway.env` sets it for Hermes |
+| `FDH_GATEWAY_LOG` | `logs/fdh_gateway_events.pipecat.jsonl` | The gateway event log, at the Hermes path |
+| `FDH_WORKER_LOG_DIR` | `logs/fdh_workers_pipecat` | The backend traces, at the Hermes path |
+
+With `link: in_process`, the voice side loads the gateway file in `backend.gateway_config`, `${FDH_GATEWAY_CONFIG:-gateway.fake.yaml}` in `delegation_agent.yaml`. Compose sets `FDH_GATEWAY_CONFIG=gateway.yaml` on the voice service, and the eval overlay sets `gateway.eval.yaml`; Hermes ignores it there. Both backends therefore read the same gateway settings, prompt features, and domains. `profiles/realtime_eval.yaml` also reads `FDH_BACKEND_LINK`.
+
+Gateway configuration sections (`config/gateway.yaml`):
+
+- `backend:` (shared by every backend): `kind`, `model`, `base_url`, `api_key_env`, `agent_construct`, `max_iterations`, `run_budget_seconds`, `run_hard_deadline_s`, `unwind_timeout_s`, `tool_result_timeout_s`, `backend_trace`, `steer_timeout_s`, `status_timeout_s`, `request_overrides`, and `prompts.path` (`prompts/${FDH_PROMPT_PROFILE:-generic}/backend/{kind}.yaml`).
+- `hermes:` (Hermes only): `provider`, `context_length`, `load_soul_identity`, `disable_streaming`.
+- `llm:` (LLM only): `reasoning_effort` (`medium`), `request_timeout_s` (180), `max_retries` (3).
+
+Renamed keys fail at load with an error that names the new one: `workers.agent_kind` and `FDH_AGENT_KIND` are now `backend.kind` and `FDH_BACKEND`; shared keys under `hermes:` moved to `backend:`; `workers.mode: in_process_fake` and the voice `backend.link: in_process_fake` are now `in_process`. The backend worker protocol is version 2, so a Hermes image built from older source needs `up -d --build`.
 
 ## Profiles
 
@@ -10,13 +40,13 @@ Profiles and gateway configurations are in `src/examples/frontend_delegation_her
 | --- | --- | --- |
 | Delegation profile | `profiles/pipecat_demo.yaml` | `profiles/pipecat_realtime_eval.yaml` |
 | Pipecat settings | `adapters/pipecat.yaml` | `adapters/pipecat.eval.yaml` |
-| Gateway configuration (Hermes runtime, `FDH_GATEWAY_CONFIG`) | `gateway.yaml` | `gateway.eval.yaml` (eval overlay) |
+| Gateway configuration (`FDH_GATEWAY_CONFIG`; on `fdh-hermes` for Hermes, on the voice service for `llm`) | `gateway.yaml` | `gateway.eval.yaml` (eval overlay) |
 
 Realtime sessions always use the `eval` delegation profile and Pipecat settings. The code passes each profile's Pipecat settings file explicitly, so `FDH_PIPECAT_SETTINGS` has no effect on the Compose recipe.
 
 ## Prompt Profiles
 
-A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (voice side, `frontend_system` and the frontend lines), `backend.yaml` (Hermes gateway), and `voice.yaml` (voice-layer messages). `FDH_PROMPT_PROFILE` selects it. The following table lists the shipped profiles:
+A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (voice side, `frontend_system` and the frontend lines), `backend/hermes.yaml` (Hermes backend; the former `backend.yaml`, byte-identical), `backend/llm.yaml` (LLM backend: an independent full copy of the backend prompts plus the `harness_*` keys, the text Hermes adds itself; Hermes' machine-description lines are omitted on purpose), and `voice.yaml` (voice-layer messages). The two backend files are independent: edit both when a change applies to both backends. `FDH_PROMPT_PROFILE` selects it. The following table lists the shipped profiles:
 
 | Profile | Default for | Content |
 | --- | --- | --- |
@@ -24,11 +54,11 @@ A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (v
 | `generic` | `default` deployment, including its Realtime sessions (`${FDH_PROMPT_PROFILE:-generic}`; `delegation_agent.yaml`, `voice_agent.yaml`, and `gateway.yaml` default to it) | A copy of `customer_service/` today; to become more generic |
 | `general_qa` | None | General question answering: the frontend delegates every request (`delegate=true`, filler "One moment."); the backend answers from the LLM with no tools |
 
-`FDH_PROMPT_PROFILE` is the one FDH setting the shell or `.env` can set. Compose passes it to the voice service and `fdh-hermes` (and the OpenShell controller into the sandbox), so both sides use the same profile. Never set it empty; an unknown name fails with an error that names the missing prompt file. Choose one per run with `FDH_PROMPT_PROFILE=<name> docker compose $E --profile $P up -d --build`. To add one, copy `config/prompts/customer_service/` to `config/prompts/<name>/`, edit, and set the variable; `test_fdh_prompt_profiles.py` loads every profile. The prompt paths are part of the delegation and voice settings, so another profile changes the `config hash`.
+`FDH_PROMPT_PROFILE` is the one FDH setting the shell or `.env` can set. Compose passes it to the voice service and `fdh-hermes` (and the OpenShell controller into the sandbox), so both sides use the same profile. Never set it empty; an unknown name fails with an error that names the missing prompt file. Choose one per run with `FDH_PROMPT_PROFILE=<name> docker compose $E --profile $P up -d --build`. To add one, copy `config/prompts/customer_service/` (including `backend/`) to `config/prompts/<name>/`, edit, and set the variable; `test_fdh_prompt_profiles.py` loads every profile. The prompt paths are part of the delegation and voice settings, so another profile changes the `config hash`.
 
 ## Compose Variables
 
-`docker-compose.yml` sets every FDH variable of the voice service as a literal, so `.env` cannot change them, except `FDH_PROMPT_PROFILE`. Only the eval overlay, `docker/docker-compose.fdh-eval.yaml`, changes `FDH_PROFILE`, `PIPELINE_TLS`, the default of `FDH_PROMPT_PROFILE` on both services, and the gateway's `FDH_GATEWAY_CONFIG`. The following table lists the voice service values:
+`docker-compose.yml` sets every FDH variable of the voice service as a literal, so `.env` cannot change them, except `FDH_PROMPT_PROFILE`. Only the overlays change them. The eval overlay, `docker/docker-compose.fdh-eval.yaml`, changes `FDH_PROFILE`, `PIPELINE_TLS`, the default of `FDH_PROMPT_PROFILE` on both services, and `FDH_GATEWAY_CONFIG` on both services. The LLM overlay sets the values in Backends above. The following table lists the voice service values:
 
 | Variable | Value | Meaning |
 | --- | --- | --- |
@@ -41,7 +71,8 @@ A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (v
 | `FDH_EVENT_LOG` | `logs/fdh_voice_events.pipecat.jsonl` | The voice event log |
 | `FDH_PROMPT_PROFILE` | `${FDH_PROMPT_PROFILE:-generic}` (`${FDH_PROMPT_PROFILE:-customer_service}` with the eval overlay) | The prompt profile, `config/prompts/<profile>/`. The only value `.env` can change |
 | `FRONTEND_LLM_MODEL`, `FRONTEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3.5-lightning`, `https://inference-api.nvidia.com/v1` | The frontend model of Realtime sessions and the default of browser sessions |
-| `FDH_BACKEND_URL` | `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` (`ws://fdh-hermes:8790/v1/backend` with the plain overlay) | The gateway, through the OpenShell gateway's network alias by default |
+| `FDH_BACKEND_URL` | `ws://default--fdh-hermes.openshell.localhost:8080/v1/backend` (`ws://fdh-hermes:8790/v1/backend` with the plain overlay) | The gateway, through the OpenShell gateway's network alias by default. Unused with `llm` |
+| `FDH_GATEWAY_CONFIG` | `gateway.yaml` (`gateway.eval.yaml` with the eval overlay) | The gateway file of the in-process backend (`llm`). Unused with Hermes |
 | `FBA_ASR_SERVER`, `FBA_TTS_SERVER` | Empty | Replace the catalog speech server |
 | `FBA_VOICE_EVENT_LOG`, `FBA_FILLER_LOG` | Empty | Voice-layer logs, off |
 | `FBA_BACKEND_HISTORY` | `false` | Unchanged from the former FDH containers |
@@ -60,7 +91,7 @@ The `fdh-hermes` service reads `docker/fdh/gateway.env` and receives only `NVIDI
 | `FDH_GATEWAY_LOG` | `logs/fdh_gateway_events.pipecat.jsonl` |
 | `FDH_WORKER_LOG_DIR` | `logs/fdh_workers_pipecat` |
 
-`gateway.env` deliberately does not set `FDH_BACKEND_TRACE`, `FDH_WARM_WORKERS`, or `FDH_AGENT_KIND`, because their defaults differ by gateway configuration. The plain overlay also sets `FDH_GATEWAY_HOST=0.0.0.0`. In the sandbox the gateway binds the default, `127.0.0.1`, and OpenShell reaches it there. `docker/fdh/gateway.sh` starts the gateway on port 8790 and prints the configuration and the image's source hash. `tests/unit/frontend_delegation_hermes/test_fdh_compose.py` checks these rules.
+`gateway.env` deliberately does not set `FDH_BACKEND_TRACE`, `FDH_WARM_WORKERS`, or `FDH_BACKEND`, because their defaults differ by gateway configuration. The plain overlay also sets `FDH_GATEWAY_HOST=0.0.0.0`. In the sandbox the gateway binds the default, `127.0.0.1`, and OpenShell reaches it there. `docker/fdh/gateway.sh` starts the gateway on port 8790 and prints the configuration and the image's source hash. `tests/unit/frontend_delegation_hermes/test_fdh_compose.py` checks these rules.
 
 ## OpenShell Runtime
 
@@ -125,8 +156,9 @@ The following table lists the shared knobs:
 | Output hold and stale policy | `output.hold_max_ms`, `output.on_stale` | 4000; keep answers and apologies, drop stale status lines and fillers |
 | Tool or instruction change after the agent exists | `session.update_after_start` | `error` |
 | Tool execution | `tools.executor` | `wire` (client executes, `eval`); `local` (server executes, browser profiles) |
-| Backend model | `gateway.yaml` `hermes.model`, `base_url`, `request_overrides`; env `BACKEND_LLM_MODEL`, `BACKEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3-ultra`, `enable_thinking: true`, budget 1024 |
-| Hermes budgets | `hermes.max_iterations`, `run_budget_seconds`, `run_hard_deadline_s` | 30, 300 (soft), 330 (hard, kills the worker) |
+| Backend model (both backends) | `gateway.yaml` `backend.model`, `base_url`, `request_overrides`; env `BACKEND_LLM_MODEL`, `BACKEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3-ultra`, `enable_thinking: true`, budget 1024 |
+| Backend budgets (both backends) | `backend.max_iterations`, `run_budget_seconds`, `run_hard_deadline_s` | 30, 300 (soft), 330 (hard, gateway watchdog; kills a Hermes worker process) |
+| LLM backend client | `llm.reasoning_effort`, `request_timeout_s`, `max_retries` | `medium`, 180, 3 |
 | Worker processes | `workers.start_timeout_s`, `stop_timeout_s`, `kill_grace_s`, `warm`, `recovery.*` | 15, 12, 3, 0; respawn at most two per session |
 | Speech endpoints | `voice_agent.yaml` `asr.catalog`, `tts.catalog` (the `singlegpu` section of the example's own `services.local.yaml`); env `FBA_ASR_SERVER`, `FBA_TTS_SERVER` | `nemo-speech:50051` |
 
@@ -142,7 +174,7 @@ The following table lists the switches of the evaluation fixes. The Python code 
 | M3 local "invalid ID" wording | `voice/*.yaml` `normalization.tool_arguments.invalid_message_key`, `escalate_invalid_message_key` | `tool_argument_invalid_readback`, `tool_argument_invalid_spell_all` (`voice/realtime_eval.yaml`) |
 | I3 and I4 recovery notes | `voice/*.yaml` `normalization.tool_arguments.result_hints.*`; texts in `config/prompts/<profile>/voice.yaml` | On in `voice/realtime_eval.yaml` (`tools: auto`) |
 | I1 phone numbers | `gateway.yaml` `prompt_features.phone_format` | On |
-| Domain notes | `gateway.yaml` `prompt_features.domain_notes`, `domains.<name>.tools_any`; texts in `prompts/<profile>/backend.yaml` `backend_domain_notes` | On, telecom only (`get_customer_by_phone`) |
+| Domain notes | `gateway.yaml` `prompt_features.domain_notes`, `domains.<name>.tools_any`; texts in `prompts/<profile>/backend/<kind>.yaml` `backend_domain_notes` | On, telecom only (`get_customer_by_phone`) |
 | M2 replay of an unheard answer | `delegation.replay_unheard_answer.{enabled,ttl_s}` (needs `prompt_features.replay_intent`) | Off, 30 s |
 | G1 filler de-duplication | `delegation.filler_dedupe.{enabled,recent}`; lines in `prompts/<profile>/frontend.yaml` `filler_alternatives` | On, 3 |
 | G2 answer cleanup | `output.clean_answers` | On |
@@ -151,7 +183,7 @@ The following table lists the switches of the evaluation fixes. The Python code 
 | Geval backend variants (A2, B1 through C2) | `gateway.yaml` `prompt_features.{format_correction,write_consent_v2,policy_check,request_scope,transfer_check,capability_check}` | On |
 | A1 and A1-lite format retry | `voice/*.yaml` `normalization.tool_arguments.format_retry.*`; texts `format_retry_*` in `config/prompts/<profile>/voice.yaml` | On in `voice/realtime_eval.yaml` (`mode: call`, `fields: phone`) |
 | A3 field provenance | `voice/*.yaml` `normalization.tool_arguments.result_hints.field_provenance` | Off in `voice/realtime_eval.yaml` (the identification ledger replaces it) |
-| Backend decision trace (P0.3) | `gateway.yaml` `hermes.backend_trace`, env `FDH_BACKEND_TRACE` | Off; on in `gateway.eval.yaml` and the configs that extend it |
+| Backend decision trace (P0.3), both backends (`core/backends/trace.py`) | `gateway.yaml` `backend.backend_trace`, env `FDH_BACKEND_TRACE` | Off; on in `gateway.eval.yaml` and the configs that extend it |
 | F2 no-silence guards | `delegation.guards.{liveness_reply,question_never_silent,ping_as_status}`; phrase lists `delegation.guards.lexicon.<language>`; lines in `prompts/<profile>/frontend.yaml` `liveness_lines` | On in `realtime_eval.yaml`; `en` ships |
 | F1 replay triggers | `delegation.replay_unheard_answer.{triggers,whole_if_heard_below}` | `[status_intent]`, 0 in `delegation_agent.yaml`; `[backchannel, ping, repeat]`, 0.2, `ttl_s: 60` in `realtime_eval.yaml` |
 | F4 situational facts | `gateway.yaml` `prompt_features.situational_facts` | On |

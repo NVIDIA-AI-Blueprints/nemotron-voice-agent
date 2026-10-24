@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 from typing import Any, Final
 
-PROTOCOL_VERSION: Final = 1
+#: 2: the worker ``configure`` field ``hermes`` became ``backend`` (llm-backend-plan.md section 2).
+PROTOCOL_VERSION: Final = 2
 
 #: Direction names.
 VOICE_TO_GATEWAY: Final = "voice->gateway"
@@ -48,7 +49,7 @@ SPECS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         "error": ("code", "message", "fatal"),
     },
     GATEWAY_TO_WORKER: {
-        "configure": ("tools", "instructions", "hermes"),
+        "configure": ("tools", "instructions", "backend"),
         "run": ("epoch", "task_id", "user_message", "conversation_history"),
         "steer": ("epoch", "text"),
         "redirect": ("epoch", "text"),

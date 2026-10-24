@@ -7,6 +7,10 @@
 wins), ``${VAR}`` / ``${VAR:-default}`` interpolation per file before YAML parsing,
 deep merge of mappings, strict keys against :data:`DEFAULTS` and the cross-checks
 of section 11.1. The result is a frozen :class:`GatewayConfig`.
+
+``backend:`` holds what every backend shares (``kind``, model, timeouts, prompts); each
+registered backend with settings has its own section named after its kind (``hermes:``,
+``llm:``), parsed by the settings class its spec names (llm-backend-plan.md section 3).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from examples.frontend_delegation_hermes.core.backends import BACKENDS, KINDS, BackendSpec, Placement, get_spec, load
 from examples.frontend_delegation_hermes.core.prompt_features import BACKEND_FEATURES, features
 
 PACKAGE_DIR = Path(__file__).resolve().parents[2]  # the example root
@@ -29,9 +34,14 @@ DEFAULT_GATEWAY_CONFIG = CONFIG_DIR / "gateway.yaml"
 FAKE_GATEWAY_CONFIG = CONFIG_DIR / "gateway.fake.yaml"
 SRC_DIR = PACKAGE_DIR.parents[1]
 
-WORKER_MODES = ("process_per_session", "in_process_fake")
-AGENT_KINDS = ("hermes", "fake")
+WORKER_MODES = ("process_per_session", "in_process")
+#: ``workers.mode`` -> the placement it needs from the backend.
+MODE_PLACEMENT = {"process_per_session": Placement.WORKER_PROCESS, "in_process": Placement.IN_PROCESS}
+AGENT_KINDS = KINDS
 CONSTRUCT_MODES = ("eager", "lazy")
+
+#: Settings class of every backend that has its own section, by kind.
+SETTINGS_CLASSES: dict[str, Any] = {kind: load(spec.settings) for kind, spec in BACKENDS.items() if spec.settings}
 
 DEFAULTS: dict[str, Any] = {
     "extends": None,
@@ -44,7 +54,6 @@ DEFAULTS: dict[str, Any] = {
     "workers": {
         "mode": "process_per_session",
         "python": "~/.cache/fdh/hermes-venv-314/bin/python",
-        "agent_kind": "hermes",
         "hermes_repo": "",
         "start_timeout_s": 15.0,
         "configure_timeout_s": 30.0,
@@ -58,30 +67,30 @@ DEFAULTS: dict[str, Any] = {
         "log_dir": "logs/fdh_workers",
     },
     "recovery": {"respawn": True, "max_respawns_per_session": 2},
-    "hermes": {
+    "backend": {
+        "kind": "hermes",
         "model": "nvidia/nvidia/nemotron-3-ultra",
         "base_url": "https://inference-api.nvidia.com/v1",
         "api_key_env": "NVIDIA_API_KEY",
-        "provider": "custom",
-        "context_length": 131072,
         "agent_construct": "eager",
         "max_iterations": 30,
         "run_budget_seconds": 300.0,
         "run_hard_deadline_s": 330.0,
         "unwind_timeout_s": 10.0,
-        "load_soul_identity": True,
         "tool_result_timeout_s": 120.0,
         "steer_timeout_s": 3.0,
         "status_timeout_s": 2.0,
-        "disable_streaming": False,
         # P0.3 (tau3-geval-failure-fixes-plan.md): each model request and response of a worker, written to
         # <workers.log_dir>/<session_id>.trace.jsonl (logging only; the input of the G2 decision replay).
         "backend_trace": False,
         "request_overrides": {
             "extra_body": {"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 1024}
         },
-        "prompts": {"path": "prompts/generic/backend.yaml"},
+        # ``{kind}`` is replaced by ``backend.kind``: every backend reads its own prompt file.
+        "prompts": {"path": "prompts/generic/backend/{kind}.yaml"},
     },
+    # Each backend's own section (``hermes:``, ``llm:``), from its settings class.
+    **{kind: dict(cls.DEFAULTS) for kind, cls in SETTINGS_CLASSES.items()},
     # Backend prompt variants (tau3-failure-fixes-plan.md section 1): all off = the baseline prompts.
     "prompt_features": dict(BACKEND_FEATURES),
     # Domain detection (tau3-identity-fixes-plan.md section 3.2): name -> {tools_any: [tool, ...]}; the first
@@ -91,10 +100,28 @@ DEFAULTS: dict[str, Any] = {
 }
 
 #: Keys whose mapping value is free-form (no strict key check below them).
-FREE_FORM = {("hermes", "request_overrides"), ("domains",)}
+FREE_FORM = {("backend", "request_overrides"), ("domains",)}
 
 #: Path keys resolved against the declaring file (``in``) or the working directory (``out``).
-IN_PATH_KEYS = {("hermes", "prompts", "path")}
+IN_PATH_KEYS = {("backend", "prompts", "path")}
+
+#: Keys that moved from ``hermes:`` to ``backend:`` (llm-backend-plan.md section 3).
+SHARED_KEYS = (
+    "model",
+    "base_url",
+    "api_key_env",
+    "agent_construct",
+    "max_iterations",
+    "run_budget_seconds",
+    "run_hard_deadline_s",
+    "unwind_timeout_s",
+    "tool_result_timeout_s",
+    "steer_timeout_s",
+    "status_timeout_s",
+    "backend_trace",
+    "request_overrides",
+    "prompts",
+)
 OUT_PATH_KEYS = {
     ("gateway", "log"),
     ("workers", "python"),
@@ -127,7 +154,6 @@ class WorkersSection:
 
     mode: str
     python: str
-    agent_kind: str
     hermes_repo: str
     start_timeout_s: float
     configure_timeout_s: float
@@ -150,43 +176,36 @@ class RecoverySection:
 
 
 @dataclass(frozen=True, slots=True)
-class HermesSection:
-    """Hermes agent settings sent to each worker."""
+class BackendSection:
+    """Settings every backend shares (``backend:``); the backend's own ones are in ``backend_settings``."""
 
+    kind: str
     model: str
     base_url: str
     api_key_env: str
-    provider: str
-    context_length: int
     agent_construct: str
     max_iterations: int
     run_budget_seconds: float
     run_hard_deadline_s: float
     unwind_timeout_s: float
-    load_soul_identity: bool
     tool_result_timeout_s: float
     steer_timeout_s: float
     status_timeout_s: float
-    disable_streaming: bool
     request_overrides: Mapping[str, Any]
     prompts_path: str
     backend_trace: bool = False
 
     def worker_settings(self) -> dict[str, Any]:
-        """The ``hermes`` block of the worker ``configure`` message."""
+        """The shared part of the ``backend`` block of the worker ``configure`` message."""
         return {
             "model": self.model,
             "base_url": self.base_url,
             "api_key_env": self.api_key_env,
-            "provider": self.provider,
-            "context_length": self.context_length,
             "agent_construct": self.agent_construct,
             "max_iterations": self.max_iterations,
             "run_budget_seconds": self.run_budget_seconds,
             "unwind_timeout_s": self.unwind_timeout_s,
-            "load_soul_identity": self.load_soul_identity,
             "tool_result_timeout_s": self.tool_result_timeout_s,
-            "disable_streaming": self.disable_streaming,
             "request_overrides": copy.deepcopy(dict(self.request_overrides)),
         }
 
@@ -198,29 +217,48 @@ class GatewayConfig:
     gateway: GatewaySection
     workers: WorkersSection
     recovery: RecoverySection
-    hermes: HermesSection
+    backend: BackendSection
+    #: The selected backend's own section (``HermesSettings``, ``LLMSettings``); ``None`` without one.
+    backend_settings: Any = None
     files: tuple[str, ...] = field(default=())
     prompt_features: Mapping[str, bool] = field(default_factory=lambda: dict(BACKEND_FEATURES))
     #: ``(domain, tools_any)`` in detection order.
     domains: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
+    @property
+    def spec(self) -> BackendSpec:
+        """The registry entry of ``backend.kind``."""
+        return get_spec(self.backend.kind)
+
+    def worker_settings(self) -> dict[str, Any]:
+        """The ``backend`` block of the worker ``configure`` message: shared plus the backend's own settings."""
+        settings = self.backend.worker_settings()
+        if self.backend_settings is not None:
+            settings.update(self.backend_settings.worker_settings())
+        return settings
+
     def summary(self) -> dict[str, Any]:
-        """Effective settings for the ``session_open`` log record (no secrets live here)."""
+        """Effective settings for the ``session_open`` log record (no secrets live here).
+
+        The key names ``workers.agent_kind`` (= ``backend.kind``) and ``hermes`` (= the shared ``backend:``
+        settings) are kept from before the backend registry, so log readers and the frozen eval pins
+        (``tests/.../pipecat/fixtures/eval_pins.json``) see the same record for Hermes.
+        """
         return {
             "max_sessions": self.gateway.max_sessions,
             "workers": {
                 "mode": self.workers.mode,
-                "agent_kind": self.workers.agent_kind,
+                "agent_kind": self.backend.kind,
                 "warm": self.workers.warm,
                 "start_timeout_s": self.workers.start_timeout_s,
                 "stop_timeout_s": self.workers.stop_timeout_s,
             },
             "hermes": {
-                "model": self.hermes.model,
-                "agent_construct": self.hermes.agent_construct,
-                "run_budget_seconds": self.hermes.run_budget_seconds,
-                "run_hard_deadline_s": self.hermes.run_hard_deadline_s,
-                "backend_trace": self.hermes.backend_trace,
+                "model": self.backend.model,
+                "agent_construct": self.backend.agent_construct,
+                "run_budget_seconds": self.backend.run_budget_seconds,
+                "run_hard_deadline_s": self.backend.run_hard_deadline_s,
+                "backend_trace": self.backend.backend_trace,
             },
             "recovery": {
                 "respawn": self.recovery.respawn,
@@ -316,6 +354,7 @@ def load_gateway_config(
     loaded: dict[str, Any] = {}
     if path is not None:
         loaded, files = _load_chain(Path(path))
+    _check_renamed(loaded, overrides or {})
     merged = deep_merge(DEFAULTS, loaded)
     if overrides:
         merged = deep_merge(merged, overrides)
@@ -327,13 +366,34 @@ def load_gateway_config(
 def default_fake_gateway_config(**overrides: Any) -> GatewayConfig:
     """In-process fake workers, no files: for tests and the voice server's ``--stub-backend``."""
     base = {
-        "workers": {"mode": "in_process_fake", "agent_kind": "fake", "start_timeout_s": 5.0, "stop_timeout_s": 2.0},
-        "hermes": {
+        "workers": {"mode": "in_process", "start_timeout_s": 5.0, "stop_timeout_s": 2.0},
+        "backend": {
+            "kind": "fake",
             "unwind_timeout_s": 1.0,
-            "prompts": {"path": str(CONFIG_DIR / "prompts" / "generic" / "backend.yaml")},
+            "prompts": {"path": str(CONFIG_DIR / "prompts" / "generic" / "backend" / "{kind}.yaml")},
         },
     }
     return load_gateway_config(None, overrides=deep_merge(base, overrides))
+
+
+def _check_renamed(*sources: Mapping[str, Any]) -> None:
+    """Name the new key for every key the backend registry renamed (one release; llm-backend-plan.md section 3)."""
+    for source in sources:
+        workers = source.get("workers") if isinstance(source.get("workers"), Mapping) else {}
+        if "agent_kind" in workers:
+            raise GatewayConfigError(
+                "workers.agent_kind was replaced by backend.kind (environment variable FDH_BACKEND, "
+                "formerly FDH_AGENT_KIND)"
+            )
+        if workers.get("mode") == "in_process_fake":
+            raise GatewayConfigError("workers.mode: in_process_fake was renamed to in_process")
+        hermes = source.get("hermes") if isinstance(source.get("hermes"), Mapping) else {}
+        moved = sorted(key for key in hermes if key in SHARED_KEYS)
+        if moved:
+            raise GatewayConfigError(
+                f"hermes.{moved[0]} moved to backend.{moved[0]} (every backend shares it); "
+                f"move all of {', '.join('hermes.' + key for key in moved)}"
+            )
 
 
 def _out_path(value: str) -> str:
@@ -358,7 +418,7 @@ def _as(kind: type, value: Any, name: str) -> Any:
 
 def build_gateway_config(merged: Mapping[str, Any], files: tuple[Path, ...] = ()) -> GatewayConfig:
     """Typed, cross-checked sections from a merged mapping."""
-    g, w, r, h = merged["gateway"], merged["workers"], merged["recovery"], merged["hermes"]
+    g, w, r, b = merged["gateway"], merged["workers"], merged["recovery"], merged["backend"]
 
     def pick(section: Mapping[str, Any], name: str, key: str, kind: type) -> Any:
         return _as(kind, section[key], f"{name}.{key}")
@@ -369,10 +429,13 @@ def build_gateway_config(merged: Mapping[str, Any], files: tuple[Path, ...] = ()
         max_sessions=pick(g, "gateway", "max_sessions", int),
         log=_out_path(pick(g, "gateway", "log", str)),
     )
+    kind = pick(b, "backend", "kind", str)
+    if kind not in KINDS:
+        raise GatewayConfigError(f"backend.kind must be one of {KINDS}, got {kind!r}")
+    spec = get_spec(kind)
     workers = WorkersSection(
-        mode=pick(w, "workers", "mode", str),
+        mode=_mode_for(spec, pick(w, "workers", "mode", str)),
         python=_out_path(pick(w, "workers", "python", str)),
-        agent_kind=pick(w, "workers", "agent_kind", str),
         hermes_repo=_out_path(pick(w, "workers", "hermes_repo", str)),
         start_timeout_s=pick(w, "workers", "start_timeout_s", float),
         configure_timeout_s=pick(w, "workers", "configure_timeout_s", float),
@@ -389,30 +452,37 @@ def build_gateway_config(merged: Mapping[str, Any], files: tuple[Path, ...] = ()
         respawn=pick(r, "recovery", "respawn", bool),
         max_respawns_per_session=pick(r, "recovery", "max_respawns_per_session", int),
     )
-    prompts = h.get("prompts") or {}
-    prompts_path = str(prompts.get("path") or "")
+    prompts = b.get("prompts") or {}
+    # ``{kind}`` is plain text in the path (resolved per file already), so it is filled in here.
+    prompts_path = str(prompts.get("path") or "").replace("{kind}", spec.prompt_kind or kind)
     if prompts_path and not Path(prompts_path).is_absolute():
         prompts_path = str((CONFIG_DIR / prompts_path).resolve())
-    hermes = HermesSection(
-        model=pick(h, "hermes", "model", str),
-        base_url=pick(h, "hermes", "base_url", str),
-        api_key_env=pick(h, "hermes", "api_key_env", str),
-        provider=pick(h, "hermes", "provider", str),
-        context_length=pick(h, "hermes", "context_length", int),
-        agent_construct=pick(h, "hermes", "agent_construct", str),
-        max_iterations=pick(h, "hermes", "max_iterations", int),
-        run_budget_seconds=pick(h, "hermes", "run_budget_seconds", float),
-        run_hard_deadline_s=pick(h, "hermes", "run_hard_deadline_s", float),
-        unwind_timeout_s=pick(h, "hermes", "unwind_timeout_s", float),
-        load_soul_identity=pick(h, "hermes", "load_soul_identity", bool),
-        tool_result_timeout_s=pick(h, "hermes", "tool_result_timeout_s", float),
-        steer_timeout_s=pick(h, "hermes", "steer_timeout_s", float),
-        status_timeout_s=pick(h, "hermes", "status_timeout_s", float),
-        disable_streaming=pick(h, "hermes", "disable_streaming", bool),
-        request_overrides=copy.deepcopy(dict(h.get("request_overrides") or {})),
+    backend = BackendSection(
+        kind=kind,
+        model=pick(b, "backend", "model", str),
+        base_url=pick(b, "backend", "base_url", str),
+        api_key_env=pick(b, "backend", "api_key_env", str),
+        agent_construct=pick(b, "backend", "agent_construct", str),
+        max_iterations=pick(b, "backend", "max_iterations", int),
+        run_budget_seconds=pick(b, "backend", "run_budget_seconds", float),
+        run_hard_deadline_s=pick(b, "backend", "run_hard_deadline_s", float),
+        unwind_timeout_s=pick(b, "backend", "unwind_timeout_s", float),
+        tool_result_timeout_s=pick(b, "backend", "tool_result_timeout_s", float),
+        steer_timeout_s=pick(b, "backend", "steer_timeout_s", float),
+        status_timeout_s=pick(b, "backend", "status_timeout_s", float),
+        request_overrides=copy.deepcopy(dict(b.get("request_overrides") or {})),
         prompts_path=prompts_path,
-        backend_trace=pick(h, "hermes", "backend_trace", bool),
+        backend_trace=pick(b, "backend", "backend_trace", bool),
     )
+    backend_settings = None
+    if kind in SETTINGS_CLASSES:
+        section = merged[kind]
+        try:
+            backend_settings = SETTINGS_CLASSES[kind].parse(lambda key, typ: pick(section, kind, key, typ))
+        except ValueError as exc:
+            if isinstance(exc, GatewayConfigError):
+                raise
+            raise GatewayConfigError(str(exc)) from exc
     try:
         prompt_features = dict(features(merged.get("prompt_features"), BACKEND_FEATURES))
     except ValueError as exc:
@@ -421,7 +491,8 @@ def build_gateway_config(merged: Mapping[str, Any], files: tuple[Path, ...] = ()
         gateway,
         workers,
         recovery,
-        hermes,
+        backend,
+        backend_settings,
         tuple(str(p) for p in files),
         prompt_features,
         _domains(merged.get("domains")),
@@ -449,28 +520,33 @@ def _domains(raw: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(out)
 
 
+def _mode_for(spec: BackendSpec, mode: str) -> str:
+    """``workers.mode``, switched to ``in_process`` for a backend that runs only in-process (``llm``)."""
+    if mode not in WORKER_MODES:
+        raise GatewayConfigError(f"workers.mode must be one of {WORKER_MODES}, got {mode!r}")
+    if spec.supports(MODE_PLACEMENT[mode]):
+        return mode
+    if spec.supports(Placement.IN_PROCESS):
+        return "in_process"
+    raise GatewayConfigError(f"workers.mode: {mode} is not supported by backend.kind: {spec.kind}")
+
+
 def _cross_check(config: GatewayConfig) -> None:
-    w, h = config.workers, config.hermes
-    if w.mode not in WORKER_MODES:
-        raise GatewayConfigError(f"workers.mode must be one of {WORKER_MODES}, got {w.mode!r}")
-    if w.agent_kind not in AGENT_KINDS:
-        raise GatewayConfigError(f"workers.agent_kind must be one of {AGENT_KINDS}, got {w.agent_kind!r}")
-    if w.mode == "in_process_fake" and w.agent_kind != "fake":
-        raise GatewayConfigError("workers.mode: in_process_fake requires workers.agent_kind: fake")
+    w, h = config.workers, config.backend
     if h.agent_construct not in CONSTRUCT_MODES:
-        raise GatewayConfigError(f"hermes.agent_construct must be one of {CONSTRUCT_MODES}")
+        raise GatewayConfigError(f"backend.agent_construct must be one of {CONSTRUCT_MODES}")
     if config.gateway.max_sessions < 1:
         raise GatewayConfigError("gateway.max_sessions must be at least 1")
     if w.warm < 0:
         raise GatewayConfigError("workers.warm must be >= 0")
     if h.run_hard_deadline_s <= h.run_budget_seconds:
-        raise GatewayConfigError("hermes.run_hard_deadline_s must be greater than hermes.run_budget_seconds")
+        raise GatewayConfigError("backend.run_hard_deadline_s must be greater than backend.run_budget_seconds")
     if w.stop_timeout_s <= h.unwind_timeout_s:
-        raise GatewayConfigError("workers.stop_timeout_s must be greater than hermes.unwind_timeout_s")
+        raise GatewayConfigError("workers.stop_timeout_s must be greater than backend.unwind_timeout_s")
     for name in ("start_timeout_s", "configure_timeout_s", "stop_timeout_s", "kill_grace_s"):
         if getattr(w, name) <= 0:
             raise GatewayConfigError(f"workers.{name} must be positive")
     if config.recovery.max_respawns_per_session < 0:
         raise GatewayConfigError("recovery.max_respawns_per_session must be >= 0")
     if not h.prompts_path:
-        raise GatewayConfigError("hermes.prompts.path is required")
+        raise GatewayConfigError("backend.prompts.path is required")

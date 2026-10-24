@@ -5,35 +5,61 @@
       "id": "nemotron-voice-agent-fdh-deploy-ask-profile",
       "prompt": "Deploy FDH.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
-      "expected_output": "Asks which profile to deploy, default (for the browser UI) or eval (for evaluation runs such as Tau), and starts nothing before the user answers.",
+      "expected_output": "Asks which backend to start (hermes, suggested, or llm) and which profile to deploy, default (for the browser UI) or eval (for evaluation runs such as Tau), and starts nothing before the user answers.",
       "assertions": [
         "Loaded nemotron-voice-agent-fdh-deploy/SKILL.md.",
+        "Asked which backend to start, hermes or llm, with hermes as the suggestion.",
         "Asked which profile to deploy, default or eval.",
-        "Did not run docker compose up before the user chose a profile.",
+        "Did not run docker compose up before the user chose a backend and a profile.",
         "Did not open references/pipecat.md or references/tau.md before the choice."
       ]
     },
     {
       "id": "nemotron-voice-agent-fdh-deploy-browser-ui",
-      "prompt": "Start the FDH demo so I can talk to it in the browser.",
+      "prompt": "Start the FDH demo with the Hermes backend so I can talk to it in the browser.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
       "expected_output": "Goes straight to the default profile: runs the preflight, then `docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build`, checks https://localhost:7860/health and the fdh-hermes gateway health, and gives the https://<host>:7860 URL.",
       "assertions": [
-        "Did not ask which profile.",
+        "Did not ask which profile or which backend.",
         "Used the frontend-delegation-hermes-agent/single-gpu Compose profile without the eval overlay.",
         "Used TLS (https) on port 7860 and told the user to accept the self-signed certificate.",
-        "Did not use the removed fdh-voice service, port 8776, or docker/docker-compose.frontend-delegation-hermes.yaml."
+        "Did not use the removed fdh-voice service, port 8776, or docker/docker-compose.frontend-delegation-hermes.yaml.",
+        "Did not pass docker/docker-compose.fdh-llm.yaml."
       ]
     },
     {
       "id": "nemotron-voice-agent-fdh-deploy-eval",
-      "prompt": "Bring up FDH in eval mode so tau2 can evaluate it.",
+      "prompt": "Bring up FDH with the Hermes backend in eval mode so tau2 can evaluate it.",
       "expected_skill": "nemotron-voice-agent-fdh-deploy",
       "expected_output": "Starts `docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml --profile frontend-delegation-hermes-agent/single-gpu up -d --build`, checks FDH_PROFILE=eval, PIPELINE_TLS=false, and the `FDH gateway: config gateway.eval.yaml` log line, and points the client at ws://localhost:7860/v1/realtime with the model nvidia/nemotron-realtime-frontend-delegation-hermes and the REALTIME_API_KEY Bearer credential.",
       "assertions": [
         "Passed the docker/docker-compose.fdh-eval.yaml overlay after docker-compose.yml.",
         "Verified that the fdh-hermes log names gateway.eval.yaml.",
         "Used port 7860 and the model nvidia/nemotron-realtime-frontend-delegation-hermes, not a pine-* model name or port 8775 or 8776.",
+        "Did not print the value of REALTIME_API_KEY or NVIDIA_API_KEY."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fdh-deploy-ask-backend",
+      "prompt": "Start the FDH demo so I can talk to it in the browser.",
+      "expected_skill": "nemotron-voice-agent-fdh-deploy",
+      "expected_output": "Asks which backend to start, hermes (suggested; Hermes in the fdh-hermes service) or llm (the lightweight backend inside the voice container), does not ask which profile (the browser UI means default), and starts nothing before the user answers.",
+      "assertions": [
+        "Asked which backend to start, hermes or llm, with hermes as the suggestion.",
+        "Did not ask which profile.",
+        "Did not run docker compose up before the user chose a backend."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fdh-deploy-llm-eval",
+      "prompt": "Bring up FDH with the LLM backend in eval mode so tau2 can evaluate it.",
+      "expected_skill": "nemotron-voice-agent-fdh-deploy",
+      "expected_output": "Starts `docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml -f docker/docker-compose.fdh-llm.yaml --profile frontend-delegation-hermes-agent/single-gpu up -d --build`, checks that no fdh-hermes container runs, that the voice service has FDH_BACKEND=llm, FDH_BACKEND_LINK=in_process and FDH_GATEWAY_CONFIG=gateway.eval.yaml, and points the client at ws://localhost:7860/v1/realtime with the model nvidia/nemotron-realtime-frontend-delegation-hermes.",
+      "assertions": [
+        "Did not ask which backend or which profile.",
+        "Passed docker/docker-compose.fdh-eval.yaml before docker/docker-compose.fdh-llm.yaml.",
+        "Did not pass docker/docker-compose.fdh-hermes-plain.yaml.",
+        "Did not check the fdh-hermes gateway health or log.",
         "Did not print the value of REALTIME_API_KEY or NVIDIA_API_KEY."
       ]
     },

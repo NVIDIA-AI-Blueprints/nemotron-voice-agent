@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Backend gateway + Hermes workers (prototype-plan.md sections 4.2 and 11).
-# One Hermes worker process per Realtime session; ${VAR:-default} comes from the environment.
+# Backend gateway and its workers (prototype-plan.md sections 4.2 and 11; llm-backend-plan.md section 3).
+# One worker per Realtime session; ${VAR:-default} comes from the environment.
+# backend.kind (FDH_BACKEND) selects the backend: hermes (default; one Hermes worker process per
+# session, in the fdh-hermes container) or llm (the lightweight OpenAI-SDK backend, which runs
+# in-process in the voice container). Both read every section below except the other's own section.
 
 gateway:
   host: ${FDH_GATEWAY_HOST:-127.0.0.1}
@@ -11,9 +14,8 @@ gateway:
   log: ${FDH_GATEWAY_LOG:-logs/fdh_gateway_events.jsonl}
 
 workers:
-  mode: process_per_session                  # process_per_session | in_process_fake (tests only)
+  mode: process_per_session                  # process_per_session | in_process (llm always runs in_process)
   python: ${FDH_HERMES_PYTHON:-~/.cache/fdh/hermes-venv-314/bin/python}
-  agent_kind: ${FDH_AGENT_KIND:-hermes}      # hermes | fake
   hermes_repo: ${FDH_HERMES_REPO:-}          # only needed when the venv does not install hermes-agent
   start_timeout_s: 15                        # spawn -> ready (P0: ~2-3 s)
   configure_timeout_s: 30                    # tools + eager AIAgent construction (P0: ~0.2-0.7 s)
@@ -29,18 +31,16 @@ recovery:
   respawn: true
   max_respawns_per_session: 2
 
-hermes:
+backend:
+  kind: ${FDH_BACKEND:-hermes}               # hermes | llm | fake
   model: ${BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}
   base_url: ${BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}
   api_key_env: NVIDIA_API_KEY
-  provider: custom
-  context_length: 131072                     # written to each worker's HERMES_HOME/config.yaml (64K floor)
   agent_construct: eager                     # eager | lazy
   max_iterations: 30
-  run_budget_seconds: 300                    # Hermes soft budget
+  run_budget_seconds: 300                    # soft budget of one run
   run_hard_deadline_s: 330                   # gateway watchdog
   unwind_timeout_s: 10
-  load_soul_identity: true                   # required with skip_context_files
   tool_result_timeout_s: 120
   backend_trace: ${FDH_BACKEND_TRACE:-false}  # P0.3: <log_dir>/<session>.trace.jsonl per worker (logging only)
   steer_timeout_s: 3
@@ -50,16 +50,27 @@ hermes:
       chat_template_kwargs: {enable_thinking: true}
       reasoning_budget: 1024
   prompts:
-    path: "prompts/${FDH_PROMPT_PROFILE:-generic}/backend.yaml"   # the prompt profile (FDH_PROMPT_PROFILE)
+    # The prompt profile (FDH_PROMPT_PROFILE); {kind} is backend.kind, so each backend reads its own file.
+    path: "prompts/${FDH_PROMPT_PROFILE:-generic}/backend/{kind}.yaml"
 
-# Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend.yaml; tau3-failure-fixes-plan.md).
+hermes:                                      # read only when backend.kind: hermes
+  provider: custom
+  context_length: 131072                     # written to each worker's HERMES_HOME/config.yaml (64K floor)
+  load_soul_identity: true                   # required with skip_context_files
+
+llm:                                         # read only when backend.kind: llm
+  reasoning_effort: medium                   # sent top level, as Hermes' custom provider does
+  request_timeout_s: 180                     # OpenAI SDK per-read timeout (Hermes' stale-stream base)
+  max_retries: 3                             # attempts per model call
+
+# Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend/<kind>.yaml; tau3-failure-fixes-plan.md).
 # All on by default. Set one to false to render the backend prompt without that variant.
 prompt_features:
   spelling_v2: true                          # M3.4: after a failed lookup, read back and ask to spell
   spoken_output: true                        # G2: at most two sentences, confirmation override
   write_consent: true                        # G4: consent only to a heard question; read back written names
   phone_format: true                         # <phone_numbers>: lookups XXX-XXX-XXXX plus one format retry
-  domain_notes: true                         # the telecom note only (prompts/<profile>/backend.yaml backend_domain_notes)
+  domain_notes: true                         # the telecom note only (prompts/<profile>/backend/<kind>.yaml backend_domain_notes)
   # tau3-geval-failure-fixes-plan.md section 4: on by default.
   format_correction: true                   # A2: a separator or case change is a format correction, not a variant
   write_consent_v2: true                    # B1: the policy's confirmation, to the exact change, before a write
@@ -71,7 +82,7 @@ prompt_features:
   identity_from_identifier: true            # F8: a name inside a spoken identifier, once confirmed
 
 # Domain detection by tool names: the first domain with one of its tools in the session's tool list wins;
-# it picks the <domain_notes> block of prompts/<profile>/backend.yaml and is reported as backend_domain. Only telecom
+# it picks the <domain_notes> block of prompts/<profile>/backend/<kind>.yaml and is reported as backend_domain. Only telecom
 # is detected (analysis/2026-10-11_fdh-telecom-gpt55-deep): every other session has no domain and no note,
 # so its backend prompt is the same as without this rule.
 # Format: <domain>: {tools_any: [<tool>, ...]}

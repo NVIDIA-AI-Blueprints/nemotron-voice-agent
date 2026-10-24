@@ -28,6 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 EVAL_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fdh-eval.yaml"
 PLAIN_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fdh-hermes-plain.yaml"
+LLM_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fdh-llm.yaml"
 CONTROLLER = REPO_ROOT / "docker" / "fdh" / "openshell" / "controller.sh"
 GATEWAY_ENV = REPO_ROOT / "docker" / "fdh" / "gateway.env"
 VOICE = "frontend-delegation-hermes-agent-single-gpu"
@@ -54,6 +55,8 @@ VOICE_SETTINGS = {
     "FRONTEND_LLM_MODEL": "nvidia/nvidia/nemotron-3.5-lightning",
     "FRONTEND_LLM_BASE_URL": "https://inference-api.nvidia.com/v1",
     "FDH_BACKEND_URL": "ws://default--fdh-hermes.openshell.localhost:8080/v1/backend",
+    # Read only when the voice service runs the backend itself (the LLM overlay).
+    "FDH_GATEWAY_CONFIG": "gateway.yaml",
     "UVICORN_WS_PING_INTERVAL": "0",
 }
 #: The one variable the shell or .env may set: the prompt profile, with the default of each mode.
@@ -94,6 +97,7 @@ class ComposeTests(unittest.TestCase):
         cls.services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
         cls.overlay = yaml.safe_load(EVAL_OVERLAY.read_text(encoding="utf-8"))["services"]
         cls.plain = yaml.load(PLAIN_OVERLAY.read_text(encoding="utf-8"), Loader=_ComposeLoader)["services"]
+        cls.llm = yaml.load(LLM_OVERLAY.read_text(encoding="utf-8"), Loader=_ComposeLoader)["services"]
 
     def test_gateway_env_is_exactly_todays_gateway_settings(self) -> None:
         self.assertEqual(_gateway_env(), GATEWAY_SETTINGS)
@@ -174,6 +178,8 @@ class ComposeTests(unittest.TestCase):
         self.assertLessEqual(set(hermes["environment"]), set(GATEWAY_SETTINGS))
         self.assertEqual(hermes["environment"]["FDH_GATEWAY_CONFIG"], "gateway.eval.yaml")
         self.assertEqual(self.overlay[VOICE]["environment"]["FDH_PROFILE"], "eval")
+        # The LLM backend (in the voice service) loads the same gateway file as fdh-hermes.
+        self.assertEqual(self.overlay[VOICE]["environment"]["FDH_GATEWAY_CONFIG"], "gateway.eval.yaml")
         self.assertEqual(set(self.overlay), {VOICE, "fdh-hermes"})
 
     def test_eval_overlay_defaults_both_services_to_the_customer_service_profile(self) -> None:
@@ -187,6 +193,34 @@ class ComposeTests(unittest.TestCase):
                 fdh_keys = {key for key in environment if key.startswith("FDH_")}
                 literal = {key for key in fdh_keys if "${" not in str(environment[key])}
                 self.assertEqual(fdh_keys - literal, {PROMPT_PROFILE})
+
+
+class LLMOverlayTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+        cls.llm = yaml.load(LLM_OVERLAY.read_text(encoding="utf-8"), Loader=_ComposeLoader)["services"]
+
+    def test_the_hermes_services_do_not_start(self) -> None:
+        hermes = OPENSHELL_SERVICES | {"fdh-hermes", "fdh-hermes-image"}
+        self.assertEqual(set(self.llm), hermes | {VOICE})
+        for name in hermes:
+            with self.subTest(service=name):
+                self.assertEqual(self.llm[name], {"profiles": ["fdh-hermes-off"]})
+        self.assertIsNone(self.llm[VOICE]["depends_on"])  # !reset: nothing to wait for
+
+    def test_the_voice_service_runs_the_llm_backend_with_literal_settings(self) -> None:
+        environment = self.llm[VOICE]["environment"]
+        self.assertEqual((environment["FDH_BACKEND"], environment["FDH_BACKEND_LINK"]), ("llm", "in_process"))
+        gateway = _gateway_env()
+        for key in ("BACKEND_LLM_MODEL", "BACKEND_LLM_BASE_URL", "FDH_GATEWAY_LOG", "FDH_WORKER_LOG_DIR"):
+            with self.subTest(key=key):
+                self.assertEqual(environment[key], gateway[key])  # the Hermes runtime's model and log paths
+        for key, value in environment.items():
+            with self.subTest(key=key):
+                self.assertNotIn("${", str(value))
+        # The gateway file comes from docker-compose.yml or the eval overlay, never from this file.
+        self.assertNotIn("FDH_GATEWAY_CONFIG", environment)
 
 
 if __name__ == "__main__":

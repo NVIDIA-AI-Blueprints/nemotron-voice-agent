@@ -79,13 +79,35 @@ class StaticLayeringTests(unittest.TestCase):
                         if _repo_module(name) and not name.startswith(PREFIX):
                             self.assertIn(name, SHARED_ALLOWED | ADAPTER_ALLOWED.get(adapter, set()))
 
-    def test_hermes_is_imported_only_by_the_worker(self) -> None:
+    def test_hermes_is_imported_only_by_the_hermes_host(self) -> None:
         for path in PACKAGE.rglob("*.py"):
-            if "__pycache__" in path.parts or path.parent.name == "worker":
+            if "__pycache__" in path.parts or path == PACKAGE / "core" / "backends" / "hermes" / "host.py":
                 continue
             for name in _imports(path):
                 with self.subTest(file=str(path.relative_to(PACKAGE)), module=name):
                     self.assertNotIn(name.split(".")[0], HERMES_TOP_LEVEL - {"tools"})
+
+    def test_backends_keep_to_their_own_folder(self) -> None:
+        # llm-backend-plan.md section 8: the registry and base are stdlib; no backend imports another;
+        # the gateway, worker and controller reach a backend only through the registry.
+        backends = f"{PREFIX}.core.backends"
+        kinds = sorted(p.name for p in (PACKAGE / "core" / "backends").iterdir() if (p / "__init__.py").is_file())
+        rules: dict[str, tuple[str, ...]] = {
+            "core/backends/__init__.py": ("openai", *(f"{backends}.{kind}." for kind in kinds)),
+            "core/backends/base.py": ("openai", *(f"{backends}.{kind}" for kind in kinds)),
+            "core/backends/trace.py": ("openai", *(f"{backends}.{kind}" for kind in kinds)),
+        }
+        for kind in kinds:
+            others = tuple(f"{backends}.{other}" for other in kinds if other != kind)
+            for path in _files(f"core/backends/{kind}"):
+                rules[str(path.relative_to(PACKAGE))] = (*others, "pipecat", *([] if kind == "llm" else ["openai"]))
+        for sub in ("core/backend", "core/worker", "core/sidecar"):
+            for path in _files(sub):
+                rules[str(path.relative_to(PACKAGE))] = tuple(f"{backends}.{kind}" for kind in kinds)
+        for file, forbidden in rules.items():
+            for name in _imports(PACKAGE / file):
+                with self.subTest(file=file, module=name):
+                    self.assertFalse(name.startswith(forbidden), f"{file} imports {name}")
 
 
 def _loaded_after(module: str) -> list[str]:
@@ -114,6 +136,17 @@ class RuntimeIsolationTests(unittest.TestCase):
                 loaded = _loaded_after(f"{PREFIX}.adapters.{adapter}")
                 others = tuple(f"{PREFIX}.adapters.{other}" for other in ADAPTERS if other != adapter)
                 self.assertEqual([m for m in loaded if others and m.startswith(others)], [])
+
+    def test_the_registry_loads_no_backend_implementation(self) -> None:
+        # Reading the registry and the gateway config imports specs and settings only.
+        loaded = _loaded_after(f"{PREFIX}.core.sidecar.gateway_config")
+        for module in (
+            "openai",
+            "run_agent",
+            f"{PREFIX}.core.backends.hermes.host",
+            f"{PREFIX}.core.backends.llm.host",
+        ):
+            self.assertNotIn(module, loaded)
 
     def test_worker_imports_without_utils_or_catalog(self) -> None:
         loaded = _loaded_after(f"{PREFIX}.core.worker.worker_main")

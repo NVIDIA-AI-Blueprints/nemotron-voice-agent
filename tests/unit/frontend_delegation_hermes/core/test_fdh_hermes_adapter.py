@@ -90,7 +90,7 @@ def hermes_settings() -> dict[str, Any]:
 @unittest.skipUnless(HERMES, "Hermes is not importable in this interpreter")
 class HermesAdapterTest(unittest.TestCase):
     def test_bridge_epoch_soul_surface_usage_and_close(self) -> None:
-        from examples.frontend_delegation_hermes.core.worker.hermes_adapter import HermesAgentHost  # noqa: PLC0415
+        from examples.frontend_delegation_hermes.core.backends.hermes.host import HermesAgentHost  # noqa: PLC0415
         from examples.frontend_delegation_hermes.core.worker.tool_futures import ToolFutures  # noqa: PLC0415
 
         sent: list[dict[str, Any]] = []
@@ -105,7 +105,7 @@ class HermesAdapterTest(unittest.TestCase):
         futures = ToolFutures(session_id="s", emit=emit, poll_s=0.02)
         holder["f"] = futures
         host = HermesAgentHost(futures, lambda event, name, preview: activity.append((event, name)), session_id="s")
-        names = host.configure(tools=[TOOL], instructions="POLICY-TEXT", hermes=hermes_settings())
+        names = host.configure(tools=[TOOL], instructions="POLICY-TEXT", settings=hermes_settings())
         self.assertEqual(names, ["get_order"])
         self.assertTrue(host.built)
         agent = host.agent()
@@ -143,7 +143,7 @@ class HermesAdapterTest(unittest.TestCase):
         """P0.3 (tau3-geval-failure-fixes-plan.md): Hermes' own hooks feed the trace; logging only."""
         import json  # noqa: PLC0415
 
-        from examples.frontend_delegation_hermes.core.worker.hermes_adapter import HermesAgentHost  # noqa: PLC0415
+        from examples.frontend_delegation_hermes.core.backends.hermes.host import HermesAgentHost  # noqa: PLC0415
         from examples.frontend_delegation_hermes.core.worker.tool_futures import ToolFutures  # noqa: PLC0415
 
         holder: dict[str, ToolFutures] = {}
@@ -157,7 +157,9 @@ class HermesAdapterTest(unittest.TestCase):
             holder["f"] = futures
             host = HermesAgentHost(futures, lambda *_: None, session_id="trace-s")
             host.configure(
-                tools=[TOOL], instructions="TRACE-POLICY", hermes={**hermes_settings(), "backend_trace_dir": trace_dir}
+                tools=[TOOL],
+                instructions="TRACE-POLICY",
+                settings={**hermes_settings(), "backend_trace_dir": trace_dir},
             )
             futures.current_epoch = 1
             result = host.agent().run_conversation("What is the status of order 1?", [], "trace-s:1")
@@ -178,7 +180,7 @@ class HermesAdapterTest(unittest.TestCase):
     def test_builtin_collision_is_refused(self) -> None:
         from model_tools import get_tool_definitions  # noqa: PLC0415
 
-        from examples.frontend_delegation_hermes.core.worker.hermes_adapter import (  # noqa: PLC0415
+        from examples.frontend_delegation_hermes.core.backends.hermes.host import (  # noqa: PLC0415
             HermesAgentHost,
             ToolSurfaceError,
         )
@@ -187,7 +189,7 @@ class HermesAdapterTest(unittest.TestCase):
         builtin = get_tool_definitions(quiet_mode=True)[0]["function"]["name"]
         host = HermesAgentHost(ToolFutures(session_id="s", emit=lambda m: None), lambda *a: None, session_id="s")
         with self.assertRaisesRegex(ToolSurfaceError, "collide"):
-            host.configure(tools=[{**TOOL, "name": builtin}], instructions="", hermes=hermes_settings())
+            host.configure(tools=[{**TOOL, "name": builtin}], instructions="", settings=hermes_settings())
 
 
 if __name__ == "__main__":

@@ -310,6 +310,9 @@ services:
       # The Hermes runtime's address (OpenShell: the gateway's routed host name; port 8080 is the
       # OpenShell gateway's). The plain overlay sets ws://fdh-hermes:8790/v1/backend.
       FDH_BACKEND_URL: ws://default--fdh-hermes.openshell.localhost:8080/v1/backend
+      # The gateway file the voice service loads when it runs the backend itself (FDH_BACKEND=llm with
+      # docker/docker-compose.fdh-llm.yaml); the eval overlay sets gateway.eval.yaml. Unused with Hermes.
+      FDH_GATEWAY_CONFIG: gateway.yaml
       # The voice side's other catalog and log variables, at the values FDH ran with before.
       FBA_ASR_SERVER: ""
       FBA_TTS_SERVER: ""

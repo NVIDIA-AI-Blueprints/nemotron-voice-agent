@@ -57,23 +57,23 @@ class HermesMultiSessionTest(unittest.IsolatedAsyncioTestCase):
         self.config = process_config(
             self.root,
             workers={
-                "agent_kind": "hermes",
                 "python": HERMES_PYTHON,
                 "start_timeout_s": 30.0,
                 "configure_timeout_s": 60.0,
                 "stop_timeout_s": 12.0,
                 "kill_grace_s": 2.0,
             },
-            hermes={
+            backend={
+                "kind": "hermes",
                 "model": "fake-model",
                 "base_url": self.server.base_url,
                 "api_key_env": "FDH_FAKE_KEY",
-                "disable_streaming": True,
                 "request_overrides": {},
                 "unwind_timeout_s": 5.0,
                 "run_budget_seconds": 60.0,
                 "run_hard_deadline_s": 90.0,
             },
+            hermes={"disable_streaming": True},
         )
         self.sessions: list[Session] = []
 

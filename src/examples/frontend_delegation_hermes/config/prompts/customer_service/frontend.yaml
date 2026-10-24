@@ -3,7 +3,7 @@
 #
 # Frontend prompt catalog of the delegation prototype (Jinja, StrictUndefined: an unknown
 # variable fails at load time). Backend-side templates (SOUL, backend system prompt, context
-# block labels, apologies) live in prompts.backend.yaml, rendered by the gateway.
+# block labels, apologies) live in backend/<kind>.yaml (hermes.yaml, llm.yaml), rendered by the gateway.
 # Prompt variants: {% if features.<name> %} blocks switched by prompt_features in
 # delegation_agent.yaml (replay_intent; tau3-failure-fixes-plan.md). All off = the baseline prompt.
 

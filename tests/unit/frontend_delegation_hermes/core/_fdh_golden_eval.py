@@ -113,7 +113,7 @@ def render_all() -> dict[str, str]:
     out: dict[str, str] = {}
     features = gc.load_gateway_config(GATEWAY).prompt_features
     backend = BackendTemplates(
-        PACKAGE / "config" / "prompts" / "customer_service" / "backend.yaml", prompt_features=features
+        PACKAGE / "config" / "prompts" / "customer_service" / "backend" / "hermes.yaml", prompt_features=features
     )
     for domain in DOMAINS:
         out[f"frontend_system_{domain}.txt"] = asyncio.run(_frontend_system(domain))

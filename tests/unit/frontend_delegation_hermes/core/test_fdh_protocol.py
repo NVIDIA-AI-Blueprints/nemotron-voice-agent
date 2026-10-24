@@ -36,7 +36,7 @@ SAMPLES = {
         "error": {"code": "capacity", "message": "m", "fatal": True},
     },
     proto.GATEWAY_TO_WORKER: {
-        "configure": {"tools": [], "instructions": "", "hermes": {}},
+        "configure": {"tools": [], "instructions": "", "backend": {}},
         "run": {"epoch": 1, "task_id": "s:1", "user_message": "u", "conversation_history": []},
         "steer": {"epoch": 1, "text": "t"},
         "redirect": {"epoch": 1, "text": "t"},

@@ -6,9 +6,9 @@
 
 extends: gateway.yaml
 workers:
-  agent_kind: fake
   python: ${FDH_TEST_PYTHON:-self}           # self -> the gateway's own interpreter
   start_timeout_s: 10
   home_root: ${FDH_HERMES_HOME_ROOT:-.cache/fdh-hermes-homes-fake}
-hermes:
+backend:
+  kind: fake
   run_hard_deadline_s: 330

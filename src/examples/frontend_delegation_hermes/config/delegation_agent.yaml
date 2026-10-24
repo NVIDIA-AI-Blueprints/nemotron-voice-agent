@@ -71,10 +71,13 @@ delegation:
   filler_dedupe: {enabled: true, recent: 3}
 
 backend:
-  link: websocket                    # websocket (gateway) | in_process_fake (tests, --stub-backend)
+  # websocket: the gateway in its own container (Hermes). in_process: the gateway and the worker in this
+  # process (FDH_BACKEND=llm with docker/docker-compose.fdh-llm.yaml; the fake backend for tests and --stub-backend).
+  link: "${FDH_BACKEND_LINK:-websocket}"
   url: "${FDH_BACKEND_URL:-ws://localhost:8790/v1/backend}"
   open_timeout_s: 45                 # first session.update waits this long for the worker (spawn + AIAgent)
-  gateway_config: "gateway.fake.yaml"   # only for link: in_process_fake
+  # Only for link: in_process. Declared only here: the path resolves against this file's directory.
+  gateway_config: "${FDH_GATEWAY_CONFIG:-gateway.fake.yaml}"
   simulated_delay: {seconds: 0, where: per_delegation}   # V13: only browser_demo sets 5 (per_delegation | per_tool_call)
   steer_mode: auto                   # auto (redirect during a model call, else steer) | steer_only
   status_verbalizer: {mode: llm, timeout_ms: 3000}       # llm | template (template is also the fallback)

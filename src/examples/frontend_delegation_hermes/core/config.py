@@ -131,7 +131,7 @@ _ENUMS: dict[str, tuple[str, ...]] = {
     "frontend.decider": ("llm", "scripted"),
     "frontend.tool_choice": ("named", "required", "auto"),
     "delegation.on_contract_error": ("delegate", "direct_empty"),
-    "backend.link": ("websocket", "in_process_fake"),
+    "backend.link": ("websocket", "in_process"),
     "backend.simulated_delay.where": ("per_delegation", "per_tool_call"),
     "backend.steer_mode": ("auto", "steer_only"),
     "backend.status_verbalizer.mode": ("llm", "template"),
@@ -376,6 +376,8 @@ def load_delegation_config(path: str | Path = DEFAULT_CONFIG_PATH) -> Delegation
 
 def build_delegation_config(merged: dict[str, Any], files: tuple[Path, ...] = ()) -> DelegationConfig:
     """Validate a merged mapping (paths already resolved) and load its voice profile."""
+    if _get(merged, "backend.link") == "in_process_fake":
+        raise DelegationConfigError("backend.link: in_process_fake was renamed to in_process")
     for dotted, allowed in _ENUMS.items():
         value = _get(merged, dotted)
         if value not in allowed:
@@ -477,8 +479,8 @@ def build_delegation_config(merged: dict[str, Any], files: tuple[Path, ...] = ()
         raise DelegationConfigError("tools.executor: local requires the voice profile's tools.source: config")
     if tools.executor == "wire" and voice.tools.source != "client":
         raise DelegationConfigError("tools.executor: wire requires the voice profile's tools.source: client")
-    if backend.link == "in_process_fake" and backend.gateway_config is None:
-        raise DelegationConfigError("backend.link: in_process_fake needs backend.gateway_config")
+    if backend.link == "in_process" and backend.gateway_config is None:
+        raise DelegationConfigError("backend.link: in_process needs backend.gateway_config")
     try:
         prompt_features = dict(features(merged.get("prompt_features"), FRONTEND_FEATURES))
     except ValueError as exc:

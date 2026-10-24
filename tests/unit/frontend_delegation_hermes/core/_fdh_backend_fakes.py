@@ -27,7 +27,7 @@ TOOL = {
 
 def templates() -> BackendTemplates:
     """The shipped backend catalog."""
-    return BackendTemplates(CONFIG_DIR / "prompts" / "customer_service" / "backend.yaml")
+    return BackendTemplates(CONFIG_DIR / "prompts" / "customer_service" / "backend" / "hermes.yaml")
 
 
 class RecordingWorker:

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Hermes surface a worker uses (``AgentLike``) and a scriptable stand-in (``FakeAgent``).
+"""A scriptable stand-in for Hermes (``FakeAgent``, ``backend.kind: fake``).
 
 ``FakeAgent`` imitates the Hermes behaviour the design relies on, verified in the
 P0 spike: a blocking ``run_conversation`` on one thread, ``steer`` delivered after a
@@ -38,55 +38,13 @@ import re
 import threading
 import time
 from collections.abc import Callable, Mapping
-from typing import Any, Protocol
+from typing import Any
 
 ToolCaller = Callable[[str, dict[str, Any], str], str]
 
 _TOOL = re.compile(r"\[tool:([A-Za-z0-9_\-]+)\s*(\{.*?\})?\]")
 _SLOW = re.compile(r"\[slow:([0-9.]+)\]")
 _ORDER = re.compile(r"\border\s*#?\s*(\d{3,})", re.IGNORECASE)
-
-
-class AgentLike(Protocol):
-    """What the worker core needs from an agent (Hermes ``AIAgent`` or ``FakeAgent``)."""
-
-    def run_conversation(
-        self, user_message: str, conversation_history: list[dict[str, Any]], task_id: str
-    ) -> dict[str, Any]:
-        """Run one turn (blocking)."""
-        ...
-
-    def steer(self, text: str) -> bool:
-        """Queue text for delivery after the current tool batch."""
-        ...
-
-    def redirect(self, text: str) -> bool:
-        """Abort the in-flight model request and retry with ``text``; ``False`` outside one."""
-        ...
-
-    def get_activity_summary(self) -> dict[str, Any]:
-        """What the agent is doing now."""
-        ...
-
-    def clear_interrupt(self) -> None:
-        """Drop an interrupt left over from an idle period."""
-        ...
-
-    def hard_interrupt(self, message: str) -> None:
-        """Stop the running turn as soon as possible."""
-        ...
-
-    def model_request_active(self) -> bool:
-        """Whether a model request is in flight."""
-        ...
-
-    def usage_snapshot(self) -> dict[str, int]:
-        """Cumulative token counters."""
-        ...
-
-    def close(self) -> None:
-        """Release resources."""
-        ...
 
 
 class FakeAgent:

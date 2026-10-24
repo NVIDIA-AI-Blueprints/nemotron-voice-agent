@@ -25,7 +25,7 @@ from examples.frontend_delegation_hermes.core.tools.result_hints import ResultHi
 from examples.frontend_delegation_hermes.core.voice_config import load_voice_config
 
 CONFIG = PACKAGE / "config"
-BACKEND_PROMPTS = CONFIG / "prompts" / "customer_service" / "backend.yaml"
+BACKEND_PROMPTS = CONFIG / "prompts" / "customer_service" / "backend" / "hermes.yaml"
 ALL_ON = {"spelling_v2": True, "spoken_output": True, "write_consent": True, "phone_format": True}
 ALL_ON_BUT_PHONE = {**ALL_ON, "phone_format": False}
 NOT_FOUND = "Error: User not found"
@@ -91,7 +91,7 @@ class TelecomNoteTests(unittest.TestCase):
         ablation = gc.load_gateway_config(variant("gateway.eval_no_note.yaml"))
         changed = {k for k, v in on.prompt_features.items() if v != ablation.prompt_features[k]}
         self.assertEqual(changed, {"domain_notes"})
-        self.assertEqual(on.hermes, ablation.hermes)
+        self.assertEqual(on.backend, ablation.backend)
 
     def test_the_note_renders_word_for_word_only_with_its_switch(self) -> None:
         self.assertEqual(BackendTemplates(BACKEND_PROMPTS, prompt_features={"domain_notes": True}).domain_note(

@@ -26,7 +26,7 @@ delegation:
   # Evaluation runs default to the customer_service prompt profile (FDH_PROMPT_PROFILE overrides it).
   prompts: {path: "../prompts/${FDH_PROMPT_PROFILE:-customer_service}/frontend.yaml"}
 backend:
-  link: websocket
+  link: "${FDH_BACKEND_LINK:-websocket}"   # in_process with FDH_BACKEND=llm (docker/docker-compose.fdh-llm.yaml)
   simulated_delay: {seconds: 0, where: per_delegation}
 output:
   proactive_status: {enabled: true, after_s: "${FDH_PROACTIVE_AFTER_S:-15}", max_per_run: 1}

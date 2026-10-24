@@ -23,6 +23,7 @@ from examples.frontend_delegation_hermes.core.config import load_delegation_conf
 from examples.frontend_delegation_hermes.core.frontend.prompts import load_prompts
 from examples.frontend_delegation_hermes.core.prompt_features import render_backend_system
 from examples.frontend_delegation_hermes.core.sidecar import gateway_config as gc
+from examples.frontend_delegation_hermes.core.sidecar.session_runtime import backend_templates
 from examples.frontend_delegation_hermes.core.sidecar.templates import BackendTemplates
 
 PROMPTS = PACKAGE / "config" / "prompts"
@@ -36,18 +37,29 @@ MODES = (
 )
 
 
-def _env(profile: str | None) -> mock._patch:
+def _env(profile: str | None, backend: str | None = None) -> mock._patch:
     env = {key: value for key, value in os.environ.items() if key != "FDH_PROMPT_PROFILE"}
     if profile is not None:
         env["FDH_PROMPT_PROFILE"] = profile
+    env.pop("FDH_BACKEND", None)
+    if backend is not None:
+        env["FDH_BACKEND"] = backend
     return mock.patch.dict(os.environ, env, clear=True)
 
 
-def _paths(delegation: str, gateway: str, profile: str | None) -> tuple[Path, Path, Path]:
-    with _env(profile):
+def _paths(delegation: str, gateway: str, profile: str | None, kind: str | None = None) -> tuple[Path, Path, Path]:
+    with _env(profile, kind):
         config = load_delegation_config(PROFILES / delegation)
         backend = gc.load_gateway_config(gc.CONFIG_DIR / gateway)
-    return config.delegation.prompts_path, config.voice.agent.prompts_path, Path(backend.hermes.prompts_path)
+    return config.delegation.prompts_path, config.voice.agent.prompts_path, Path(backend.backend.prompts_path)
+
+
+def _files(profile: str, kind: str = "hermes") -> tuple[Path, Path, Path]:
+    return (
+        PROMPTS / profile / "frontend.yaml",
+        PROMPTS / profile / "voice.yaml",
+        PROMPTS / profile / "backend" / f"{kind}.yaml",
+    )
 
 
 class PromptProfileTests(unittest.TestCase):
@@ -57,35 +69,40 @@ class PromptProfileTests(unittest.TestCase):
             with self.subTest(profile=name):
                 self.assertEqual(
                     sorted(path.name for path in (PROMPTS / name).iterdir()),
-                    ["backend.yaml", "frontend.yaml", "voice.yaml"],
+                    ["backend", "frontend.yaml", "voice.yaml"],
+                )
+                # One backend prompt file per registered backend that renders prompts (the fake one reuses hermes.yaml).
+                self.assertEqual(
+                    sorted(p.name for p in (PROMPTS / name / "backend").iterdir()), ["hermes.yaml", "llm.yaml"]
                 )
 
     def test_unset_each_mode_uses_its_default_profile(self) -> None:
         for delegation, gateway, profile in MODES:
             with self.subTest(delegation=delegation):
-                expected = tuple(PROMPTS / profile / name for name in ("frontend.yaml", "voice.yaml", "backend.yaml"))
-                self.assertEqual(_paths(delegation, gateway, None), expected)
+                self.assertEqual(_paths(delegation, gateway, None), _files(profile))
+                self.assertEqual(_paths(delegation, gateway, None, "llm"), _files(profile, "llm"))
 
     def test_the_variable_selects_every_profile_in_every_mode(self) -> None:
         for name in PROFILE_NAMES:
             for delegation, gateway, _ in MODES:
                 with self.subTest(profile=name, delegation=delegation):
-                    expected = tuple(PROMPTS / name / file for file in ("frontend.yaml", "voice.yaml", "backend.yaml"))
-                    self.assertEqual(_paths(delegation, gateway, name), expected)
+                    self.assertEqual(_paths(delegation, gateway, name), _files(name))
+                    self.assertEqual(_paths(delegation, gateway, name, "llm"), _files(name, "llm"))
 
     def test_every_profile_renders(self) -> None:
         for name in PROFILE_NAMES:
             with self.subTest(profile=name):
                 frontend = load_prompts(PROMPTS / name / "frontend.yaml")
                 self.assertTrue(frontend.render("frontend_system", capabilities=[], normalization_note=""))
-                with _env(name):
-                    gateway = gc.load_gateway_config(gc.CONFIG_DIR / "gateway.eval.yaml")
-                backend = BackendTemplates(gateway.hermes.prompts_path, prompt_features=gateway.prompt_features)
-                self.assertIn("Be brief.", render_backend_system(backend, "Be brief."))
-                self.assertTrue(backend.render("backend_soul"))
+                for kind in ("hermes", "llm"):
+                    with _env(name, kind):
+                        gateway = gc.load_gateway_config(gc.CONFIG_DIR / "gateway.eval.yaml")
+                    backend = backend_templates(gateway)
+                    self.assertIn("Be brief.", render_backend_system(backend, "Be brief."))
+                    self.assertTrue(backend.render("backend_soul"))
 
     def test_generic_starts_as_customer_service(self) -> None:
-        for file in ("frontend.yaml", "backend.yaml", "voice.yaml"):
+        for file in ("frontend.yaml", "backend/hermes.yaml", "backend/llm.yaml", "voice.yaml"):
             with self.subTest(file=file):
                 self.assertEqual(
                     (PROMPTS / "generic" / file).read_bytes(), (PROMPTS / "customer_service" / file).read_bytes()
@@ -96,7 +113,7 @@ class PromptProfileTests(unittest.TestCase):
         system = frontend.render("frontend_system", capabilities=[], normalization_note="")
         self.assertIn("delegate=true", system)
         self.assertIn('filler_text="One moment."', system)
-        backend = BackendTemplates(PROMPTS / "general_qa" / "backend.yaml")
+        backend = BackendTemplates(PROMPTS / "general_qa" / "backend" / "hermes.yaml")
         text = render_backend_system(backend, "")
         self.assertIn("You have no tools", text)
         self.assertIn('"The answer is X."', text)

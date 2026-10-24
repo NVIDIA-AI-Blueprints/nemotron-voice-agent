@@ -16,6 +16,7 @@ from typing import Any
 
 from examples.frontend_delegation_hermes.core.backend import protocol as proto
 from examples.frontend_delegation_hermes.core.backend.controller import BackendController, ControllerSettings
+from examples.frontend_delegation_hermes.core.backends import load
 from examples.frontend_delegation_hermes.core.sidecar.events import GatewayEventLog
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import GatewayConfig
 from examples.frontend_delegation_hermes.core.sidecar.templates import BackendTemplates
@@ -26,9 +27,29 @@ logger = logging.getLogger(__name__)
 Send = Callable[[dict[str, Any]], None]
 
 
-def controller_settings(config: GatewayConfig) -> ControllerSettings:
-    """The controller's view of the gateway config."""
-    h = config.hermes
+def backend_templates(config: GatewayConfig) -> BackendTemplates:
+    """The backend prompt catalog of ``config``'s backend (``prompts/<profile>/backend/<kind>.yaml``)."""
+    return BackendTemplates(
+        config.backend.prompts_path,
+        prompt_features=config.prompt_features,
+        required_keys=config.spec.required_prompt_keys,
+    )
+
+
+def controller_settings(config: GatewayConfig, templates: BackendTemplates | None = None) -> ControllerSettings:
+    """The controller's view of the gateway config.
+
+    With ``templates``, the backend's ``worker_prompts`` hook (if any) adds its prompt text to the
+    worker settings (the LLM backend's soul and harness templates).
+    """
+    h = config.backend
+    worker_backend = {
+        **config.worker_settings(),
+        "fake_default_tool": config.workers.fake_default_tool,
+        "backend_trace_dir": config.workers.log_dir if h.backend_trace else "",
+    }
+    if templates is not None and config.spec.worker_prompts:
+        worker_backend.update(load(config.spec.worker_prompts)(templates))
     return ControllerSettings(
         run_hard_deadline_s=h.run_hard_deadline_s,
         unwind_timeout_s=h.unwind_timeout_s,
@@ -37,11 +58,8 @@ def controller_settings(config: GatewayConfig) -> ControllerSettings:
         configure_timeout_s=config.workers.configure_timeout_s,
         respawn=config.recovery.respawn,
         max_respawns=config.recovery.max_respawns_per_session,
-        worker_hermes={
-            **h.worker_settings(),
-            "fake_default_tool": config.workers.fake_default_tool,
-            "backend_trace_dir": config.workers.log_dir if h.backend_trace else "",
-        },
+        worker_backend=worker_backend,
+        backend_kind=config.backend.kind,
         domains=config.domains,
     )
 
@@ -61,9 +79,7 @@ class SessionRuntime:
         """``send`` takes a validated gateway→voice message dict (enqueue only)."""
         self._config = config
         self._send = send
-        self._templates = templates or BackendTemplates(
-            config.hermes.prompts_path, prompt_features=config.prompt_features
-        )
+        self._templates = templates or backend_templates(config)
         self._pool = pool or WorkerPool(config, soul=self._templates.render("backend_soul"))
         self._event_log = event_log
         self.controller: BackendController | None = None
@@ -79,7 +95,7 @@ class SessionRuntime:
             self.session_id = str(msg["session_id"])
             self.controller = BackendController(
                 session_id=self.session_id,
-                settings=controller_settings(self._config),
+                settings=controller_settings(self._config, self._templates),
                 templates=self._templates,
                 emit=self._emit,
                 worker_factory=lambda: self._pool.acquire(self.session_id or "session"),

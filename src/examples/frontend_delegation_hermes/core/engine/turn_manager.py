@@ -990,6 +990,8 @@ class DelegationTurnManager:
                 data,
                 "applied",
                 "tools",
+                "backend_kind",
+                "backend_harness_sha256",
                 "backend_features",
                 "backend_catalog_sha256",
                 "backend_soul_sha256",

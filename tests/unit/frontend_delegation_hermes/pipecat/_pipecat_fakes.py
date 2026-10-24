@@ -53,7 +53,7 @@ def stub_config(profile: str = "pipecat_realtime_eval.yaml", **server: Any) -> A
     )
     backend = replace(
         config.backend,
-        link="in_process_fake",
+        link="in_process",
         verbalizer_mode="template",
         gateway_config=PACKAGE / "config" / "gateway.stub_gate.yaml",
     )

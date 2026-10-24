@@ -6,5 +6,5 @@
 
 extends: gateway.fake.yaml
 workers:
-  mode: in_process_fake
+  mode: in_process
   fake_default_tool: true

@@ -94,7 +94,7 @@ tools:
 frontend:
   decider: scripted
 backend:
-  link: in_process_fake
+  link: in_process
   simulated_delay: {seconds: 0, where: per_delegation}
   status_verbalizer: {mode: template}
 """,

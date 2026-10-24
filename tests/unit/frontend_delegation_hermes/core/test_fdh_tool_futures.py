@@ -12,8 +12,8 @@ import time
 import unittest
 from typing import Any
 
+from examples.frontend_delegation_hermes.core.backends.fake.host import FakeAgentHost
 from examples.frontend_delegation_hermes.core.worker import tool_futures as tf
-from examples.frontend_delegation_hermes.core.worker.fake_host import FakeAgentHost
 from examples.frontend_delegation_hermes.core.worker.worker_core import WorkerCore
 
 
@@ -137,7 +137,7 @@ class WorkerCoreTest(unittest.IsolatedAsyncioTestCase):
                 "type": "configure",
                 "tools": [{"name": "get_order", "parameters": {"properties": {"order_id": {}}}}],
                 "instructions": "x",
-                "hermes": {"agent_construct": "eager", "unwind_timeout_s": 1.0},
+                "backend": {"agent_construct": "eager", "unwind_timeout_s": 1.0},
             }
         )
 

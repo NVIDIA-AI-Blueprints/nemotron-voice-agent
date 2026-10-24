@@ -9,7 +9,7 @@ The core owns one agent host, the keyed tool futures and the current epoch. It r
 the loop while a run is in progress. It keeps no conversation state between runs:
 every ``run`` carries the settled history.
 
-Stdlib only; the Hermes import lives in ``hermes_adapter.py``.
+Stdlib only; the agent comes from the backend's host (``core/backends/<kind>/host.py``).
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ import logging
 import os
 import sys
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any
 
-from examples.frontend_delegation_hermes.core.backend.agent_like import AgentLike
+from examples.frontend_delegation_hermes.core.backends.base import AgentHost
 from examples.frontend_delegation_hermes.core.worker.tool_futures import ToolFutures
 
 logger = logging.getLogger(__name__)
@@ -31,35 +31,6 @@ logger = logging.getLogger(__name__)
 #: Emits one worker→gateway message (``{"type": ..., **fields}``); must be thread-safe.
 Emit = Callable[[dict[str, Any]], None]
 ActivityEmit = Callable[[str, str, str], None]
-
-
-class AgentHost(Protocol):
-    """Builds and owns the agent of one worker (Hermes or fake)."""
-
-    def configure(self, *, tools: list[dict[str, Any]], instructions: str, hermes: dict[str, Any]) -> list[str]:
-        """Register the session's tools (and build the agent when eager); returns the tool names."""
-        ...
-
-    def agent(self) -> AgentLike:
-        """The agent, built on first use when construction is lazy."""
-        ...
-
-    @property
-    def built(self) -> bool:
-        """Whether the agent exists."""
-        ...
-
-    def is_interrupted(self) -> bool:
-        """Whether the calling tool thread was interrupted by the agent."""
-        ...
-
-    def version(self) -> str:
-        """Agent implementation version, for ``ready``/``configured``."""
-        ...
-
-    def close(self) -> None:
-        """Release the agent and deregister tools."""
-        ...
 
 
 HostFactory = Callable[[ToolFutures, ActivityEmit], AgentHost]
@@ -121,15 +92,15 @@ class WorkerCore:
     # -- commands ---------------------------------------------------------------------------
 
     async def _configure(self, msg: dict[str, Any]) -> None:
-        hermes = dict(msg.get("hermes") or {})
-        self._unwind_timeout_s = float(hermes.get("unwind_timeout_s", self._unwind_timeout_s))
-        self.futures.timeout_s = float(hermes.get("tool_result_timeout_s", self.futures.timeout_s))
+        settings = dict(msg.get("backend") or {})
+        self._unwind_timeout_s = float(settings.get("unwind_timeout_s", self._unwind_timeout_s))
+        self.futures.timeout_s = float(settings.get("tool_result_timeout_s", self.futures.timeout_s))
         loop = asyncio.get_running_loop()
         try:
             names = await loop.run_in_executor(
                 self._executor,
                 lambda: self.host.configure(
-                    tools=list(msg["tools"]), instructions=str(msg["instructions"]), hermes=hermes
+                    tools=list(msg["tools"]), instructions=str(msg["instructions"]), settings=settings
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - reported to the gateway

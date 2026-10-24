@@ -4,7 +4,7 @@
 """Worker process entry point (plan section 9.2).
 
 ``python -m examples.frontend_delegation_hermes.core.worker.worker_main --socket PATH
---agent-kind hermes|fake --session-id ID``
+--agent-kind <backend.kind> --session-id ID`` (a kind whose spec allows ``Placement.WORKER_PROCESS``)
 
 Connects to the gateway's Unix socket and speaks JSON lines through one
 :class:`QueueWriter`. stdout/stderr are never used for the protocol (Hermes and its
@@ -24,13 +24,10 @@ from typing import Any
 
 from examples.frontend_delegation_hermes.core.backend import protocol as proto
 from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter
+from examples.frontend_delegation_hermes.core.backends import KINDS, get_spec, load
+from examples.frontend_delegation_hermes.core.backends.base import AgentHost
 from examples.frontend_delegation_hermes.core.worker.tool_futures import ToolFutures
-from examples.frontend_delegation_hermes.core.worker.worker_core import (
-    ActivityEmit,
-    AgentHost,
-    WorkerCore,
-    ready_message,
-)
+from examples.frontend_delegation_hermes.core.worker.worker_core import ActivityEmit, WorkerCore, ready_message
 
 logger = logging.getLogger("fdh.worker")
 
@@ -38,20 +35,14 @@ logger = logging.getLogger("fdh.worker")
 STREAM_LIMIT = 64 * 1024 * 1024
 
 
-def make_host_factory(agent_kind: str, session_id: str) -> Any:
-    """Host factory for ``agent_kind``; Hermes is imported only for ``hermes``."""
-    if agent_kind == "hermes":
-        from examples.frontend_delegation_hermes.core.worker.hermes_adapter import HermesAgentHost  # noqa: PLC0415
+def make_host_factory(agent_kind: str, session_id: str, *, in_process: bool = False) -> Any:
+    """Host factory for the backend ``agent_kind`` (registry); the host's module is imported only here."""
+    host_class = load(get_spec(agent_kind).host)
 
-        def factory(futures: ToolFutures, on_activity: ActivityEmit) -> AgentHost:
-            return HermesAgentHost(futures, on_activity, session_id=session_id)
+    def factory(futures: ToolFutures, on_activity: ActivityEmit) -> AgentHost:
+        return host_class(futures, on_activity, session_id=session_id, in_process=in_process)
 
-        return factory
-    if agent_kind == "fake":
-        from examples.frontend_delegation_hermes.core.worker.fake_host import FakeAgentHost  # noqa: PLC0415
-
-        return lambda futures, on_activity: FakeAgentHost(futures, on_activity)
-    raise ValueError(f"unknown agent kind {agent_kind!r}")
+    return factory
 
 
 async def serve(socket_path: str, agent_kind: str, session_id: str) -> None:
@@ -102,7 +93,7 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="fdh Hermes worker")
     parser.add_argument("--socket", required=True)
-    parser.add_argument("--agent-kind", choices=("hermes", "fake"), default="hermes")
+    parser.add_argument("--agent-kind", choices=KINDS, default="hermes")
     parser.add_argument("--session-id", required=True)
     args = parser.parse_args(argv)
     logging.basicConfig(

@@ -466,8 +466,8 @@ SUBMISSION_FILES = (
     PACKAGE / "config" / "gateway.eval.yaml",
     PACKAGE / "config" / "gateway.yaml",
     ROOT / "src" / "examples" / "frontend_delegation_hermes" / "config" / "voice_agent.yaml",
-    # Every prompt profile (config/prompts/<profile>/frontend.yaml, backend.yaml, voice.yaml).
-    *sorted((PACKAGE / "config" / "prompts").glob("*/*.yaml")),
+    # Every prompt profile (config/prompts/<profile>/frontend.yaml, backend/<kind>.yaml, voice.yaml).
+    *sorted((PACKAGE / "config" / "prompts").rglob("*.yaml")),
 )
 TAU2_NAMES = re.compile(
     r"get_user_details|find_user_id|get_customer_by_phone|get_reservation_details|telecom|airline|retail"
@@ -475,13 +475,15 @@ TAU2_NAMES = re.compile(
 BENCHMARK_VALUES = re.compile(r"ROSSI|IFOYYZ|NQNU5R|K1NW8N|mia_kim|mia_fancy|555-123|\\d\{4\}")
 #: The one exception, disclosed word for word with the submission (analysis/2026-10-11_fdh-telecom-gpt55-deep):
 #: the telecom detection rule (gateway.yaml, gateway.eval.yaml) and the key of the telecom note
-#: (prompts/<profile>/backend.yaml of the customer_service and generic profiles). Keyed by the path under
+#: (prompts/<profile>/backend/{hermes,llm}.yaml of the customer_service and generic profiles). Keyed by the path under
 #: config/. Comments may name domains; they are never sent to a model.
 DISCLOSED_DOMAIN_LINES = {
     "gateway.yaml": "telecom: {tools_any: [get_customer_by_phone]}",
     "gateway.eval.yaml": "telecom: {tools_any: [get_customer_by_phone]}",
-    "prompts/customer_service/backend.yaml": "telecom: |-",
-    "prompts/generic/backend.yaml": "telecom: |-",
+    "prompts/customer_service/backend/hermes.yaml": "telecom: |-",
+    "prompts/generic/backend/hermes.yaml": "telecom: |-",
+    "prompts/customer_service/backend/llm.yaml": "telecom: |-",
+    "prompts/generic/backend/llm.yaml": "telecom: |-",
 }
 
 

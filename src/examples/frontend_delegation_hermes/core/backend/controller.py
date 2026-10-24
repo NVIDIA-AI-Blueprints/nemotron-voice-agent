@@ -97,7 +97,10 @@ class ControllerSettings:
     configure_timeout_s: float = 30.0
     respawn: bool = True
     max_respawns: int = 2
-    worker_hermes: dict[str, Any] = field(default_factory=dict)
+    #: The ``backend`` block of the worker ``configure`` message (``GatewayConfig.worker_settings`` and more).
+    worker_backend: dict[str, Any] = field(default_factory=dict)
+    #: ``backend.kind`` of the gateway config, reported in the session fingerprint.
+    backend_kind: str = ""
     #: ``(domain, tools_any)`` in detection order (gateway.yaml ``domains``; tau3-identity-fixes-plan.md 3.2).
     domains: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
@@ -244,13 +247,18 @@ class BackendController:
 
         Optional ``session.configured`` fields: the voice server logs them in ``backend_configured``.
         """
-        return {
+        fingerprint = {
+            "backend_kind": self._settings.backend_kind,
             "backend_features": dict(getattr(self._templates, "features", {}) or {}),
             "backend_catalog_sha256": str(getattr(self._templates, "catalog_sha256", "") or ""),
             "backend_soul_sha256": sha256_text(self._templates.render("backend_soul")),
             "backend_system_sha256": sha256_text(self._system_prompt()),
             "backend_domain": self._domain(),
         }
+        harness = self._settings.worker_backend.get("harness")
+        if isinstance(harness, dict):  # the LLM backend's own prompt text (llm.yaml harness_* keys)
+            fingerprint["backend_harness_sha256"] = sha256_text(json.dumps(harness, sort_keys=True, ensure_ascii=False))
+        return fingerprint
 
     def _domain(self) -> str:
         """The session's domain: the first configured domain with one of its tools in the tool list ("" = none)."""
@@ -617,7 +625,7 @@ class BackendController:
                 answer_id=answer_id,
                 run_id=run.run_id,
                 epoch=run.epoch,
-                kind="hermes",
+                kind="hermes",  # every backend's answer; the voice side cleans "hermes" answers (turn_manager)
                 text=final,
                 usage=usage,
                 turn_ids=run.turn_ids,
@@ -716,7 +724,7 @@ class BackendController:
                     "type": "configure",
                     "tools": tools,
                     "instructions": system,
-                    "hermes": dict(self._settings.worker_hermes),
+                    "backend": dict(self._settings.worker_backend),
                 }
             )
             reply = await self._wait_reply(("configured", "error"), None, self._settings.configure_timeout_s)

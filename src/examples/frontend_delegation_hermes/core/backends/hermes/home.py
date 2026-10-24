@@ -4,8 +4,9 @@
 """One throwaway ``HERMES_HOME`` per worker process (plan section 4.2).
 
 Each home holds a rendered ``SOUL.md`` and a ``config.yaml`` with the settings every
-worker needs (see ``worker/hermes_adapter.py`` for why each is required). Homes are
-runtime state: they live under ``workers.home_root`` and are never committed.
+worker needs (see ``host.py`` for why each is required). Homes are runtime state: they
+live under ``workers.home_root`` and are never committed. :class:`HermesWorkerSetup` is the
+Hermes spec's ``worker_setup``: the gateway calls it around every worker process.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from examples.frontend_delegation_hermes.core.backends.base import WorkerPrep
 
 MARKER = ".fdh-home"
 
@@ -70,3 +73,25 @@ def clear_stale(root: str | Path) -> int:
                 shutil.rmtree(child)
                 removed += 1
     return removed
+
+
+class HermesWorkerSetup:
+    """``HERMES_HOME``, ``HERMES_YOLO_MODE`` and the Hermes checkout on ``PYTHONPATH`` for one worker."""
+
+    def prepare(self, config: Any, name: str, *, soul: str) -> WorkerPrep:
+        """Create the worker's home; Hermes freezes both variables at import time."""
+        w = config.workers
+        home = create_home(w.home_root, name, soul=soul, context_length=config.backend_settings.context_length)
+        return WorkerPrep(
+            home=home,
+            env={"HERMES_HOME": str(home), "HERMES_YOLO_MODE": "1"},
+            pythonpath=(w.hermes_repo,) if w.hermes_repo else (),
+        )
+
+    def remove(self, prep: WorkerPrep) -> None:
+        """Delete the home (only directories carrying the marker)."""
+        remove_home(prep.home)
+
+    def clear_stale(self, config: Any) -> int:
+        """Remove homes left behind by a crashed gateway."""
+        return clear_stale(config.workers.home_root)

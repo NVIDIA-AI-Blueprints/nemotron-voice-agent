@@ -4,9 +4,10 @@
 """Worker processes: spawn, ready, stop, kill, warm spares (plan section 4.2).
 
 :class:`ProcessWorkerHandle` runs one worker per Realtime session in its own process
-group, with its own ``HERMES_HOME``, over a Unix socket (JSON lines, one writer).
-:class:`InProcessWorkerHandle` runs the same :class:`WorkerCore` with a fake agent in
-this process (``workers.mode: in_process_fake``) for tests and ``--stub-backend``.
+group over a Unix socket (JSON lines, one writer); the backend's ``worker_setup`` prepares
+it (Hermes: its own ``HERMES_HOME``). :class:`InProcessWorkerHandle` runs the same
+:class:`WorkerCore` on a thread in this process (``workers.mode: in_process``): the LLM
+backend, and the fake one for tests and ``--stub-backend``.
 
 Both deliver worker→gateway messages to ``on_message`` and report exactly one
 ``on_exit(reason)`` when the worker goes away for any reason.
@@ -29,7 +30,8 @@ from typing import Any, Protocol
 
 from examples.frontend_delegation_hermes.core.backend import protocol as proto
 from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter, WriterClosedError
-from examples.frontend_delegation_hermes.core.sidecar import homes
+from examples.frontend_delegation_hermes.core.backends import load
+from examples.frontend_delegation_hermes.core.backends.base import WorkerPrep
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import SRC_DIR, GatewayConfig
 
 logger = logging.getLogger(__name__)
@@ -125,6 +127,7 @@ class ProcessWorkerHandle:
         self._n = next(self._counter)
         self.pid: int | None = None
         self.home: Path | None = None
+        self._prep = WorkerPrep()
         self._proc: asyncio.subprocess.Process | None = None
         self._server: asyncio.base_events.Server | None = None
         self._socket: Path | None = None
@@ -163,9 +166,10 @@ class ProcessWorkerHandle:
         w = self._config.workers
         started = time.monotonic()
         name = f"{self.session_id}-{self._n}"
-        self.home = homes.create_home(
-            w.home_root, name, soul=self._soul, context_length=self._config.hermes.context_length
-        )
+        setup = self._setup()
+        if setup is not None:
+            self._prep = setup.prepare(self._config, name, soul=self._soul)
+            self.home = self._prep.home
         socket_dir = Path(w.socket_dir)
         socket_dir.mkdir(parents=True, exist_ok=True)
         self._socket = socket_dir / f"{name}.sock"
@@ -184,7 +188,7 @@ class ProcessWorkerHandle:
                 "--socket",
                 str(self._socket),
                 "--agent-kind",
-                w.agent_kind,
+                self._config.backend.kind,
                 "--session-id",
                 self.session_id,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -218,15 +222,16 @@ class ProcessWorkerHandle:
         env = dict(os.environ)
         # Only the ``prototypes`` package: ``src/`` also holds top-level modules (``utils.py``,
         # ``server.py``) that would shadow Hermes' own top-level modules of the same names.
-        paths = [str(examples_only_path(w.socket_dir))]
-        if w.hermes_repo:
-            paths.append(w.hermes_repo)
+        paths = [str(examples_only_path(w.socket_dir)), *self._prep.pythonpath]
         # The gateway's own PYTHONPATH (usually ``src``) is deliberately not inherited.
         env["PYTHONPATH"] = os.pathsep.join(paths)
-        env["HERMES_HOME"] = str(self.home)
-        env["HERMES_YOLO_MODE"] = "1"
+        env.update(self._prep.env)
         env["PYTHONUNBUFFERED"] = "1"
         return env
+
+    def _setup(self) -> Any:
+        target = self._config.spec.worker_setup
+        return load(target)() if target else None
 
     async def _on_connect(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self._writer is not None:  # one worker, one connection
@@ -350,8 +355,9 @@ class ProcessWorkerHandle:
         if self._log_file is not None:
             with contextlib.suppress(Exception):
                 self._log_file.close()
-        if not self._config.workers.keep_homes:
-            homes.remove_home(self.home)
+        setup = self._setup()
+        if setup is not None and not self._config.workers.keep_homes:
+            setup.remove(self._prep)
 
     def rss_mb(self) -> float | None:
         """VmRSS from /proc (Linux)."""
@@ -367,7 +373,7 @@ class ProcessWorkerHandle:
 
 
 class InProcessWorkerHandle:
-    """A :class:`WorkerCore` with a fake agent in this process (tests, ``--stub-backend``)."""
+    """A :class:`WorkerCore` on a thread in this process (``Placement.IN_PROCESS`` backends: llm, fake)."""
 
     def __init__(self, config: GatewayConfig, session_id: str, *, soul: str = "") -> None:
         """Nothing starts until :meth:`start`."""
@@ -398,16 +404,16 @@ class InProcessWorkerHandle:
         """Build the core; ``ready`` immediately."""
         if self._ready is not None:
             return self._ready
-        from examples.frontend_delegation_hermes.core.worker.fake_host import FakeAgentHost  # noqa: PLC0415
         from examples.frontend_delegation_hermes.core.worker.worker_core import (  # noqa: PLC0415
             WorkerCore,
             ready_message,
         )
+        from examples.frontend_delegation_hermes.core.worker.worker_main import make_host_factory  # noqa: PLC0415
 
         self._loop = asyncio.get_running_loop()
         self._core = WorkerCore(
             session_id=self.session_id,
-            host_factory=lambda futures, on_activity: FakeAgentHost(futures, on_activity, allow_crash=False),
+            host_factory=make_host_factory(self._config.backend.kind, self.session_id, in_process=True),
             emit=self._emit,
             on_exit=lambda: None,
         )
@@ -456,7 +462,7 @@ class InProcessWorkerHandle:
         return "closed"
 
     async def kill(self, reason: str) -> None:
-        """Abandon the core (its thread cannot be killed in-process; fake agents honour interrupts)."""
+        """Abandon the core: its thread cannot be killed in-process; in-process agents honour interrupts."""
         if self._core is not None:
             self._core.futures.close_all()
             with contextlib.suppress(Exception):
@@ -498,7 +504,7 @@ class WorkerPool:
 
     def create(self, session_id: str) -> WorkerHandle:
         """A new, not yet started handle."""
-        if self._config.workers.mode == "in_process_fake":
+        if self._config.workers.mode == "in_process":
             return InProcessWorkerHandle(self._config, session_id, soul=self._soul)
         return ProcessWorkerHandle(self._config, session_id, soul=self._soul)
 

@@ -24,6 +24,8 @@ from _fdh_variants import variant  # noqa: E402
 from _fdh_voice_fakes import PACKAGE, DelegationHarness, profile_config, tau2_session_update
 from test_fdh_delegation_config import GEVAL_BACKEND_FIXES
 
+from examples.frontend_delegation_hermes.core.backends.hermes.host import register_trace_hooks
+from examples.frontend_delegation_hermes.core.backends.trace import BackendTrace
 from examples.frontend_delegation_hermes.core.engine.output_scheduler import CallsItem
 from examples.frontend_delegation_hermes.core.errors import VoiceConfigError
 from examples.frontend_delegation_hermes.core.normalization.arguments import (
@@ -55,7 +57,6 @@ from examples.frontend_delegation_hermes.core.tools.format_retry import FormatRe
 from examples.frontend_delegation_hermes.core.tools.relay import FormatRetryMessages, ToolRelay
 from examples.frontend_delegation_hermes.core.tools.result_hints import ResultHints
 from examples.frontend_delegation_hermes.core.voice_config import load_voice_config
-from examples.frontend_delegation_hermes.core.worker.hermes_adapter import BackendTrace, register_trace_hooks
 
 CONFIG = PACKAGE / "config"
 NOT_FOUND = "Error: Account with phone number {} not found"
@@ -105,9 +106,9 @@ INVENTED_TOOLS = [
 class BackendPromptTests(unittest.TestCase):
     def _render(self, **features: bool) -> str:
         on = {"spelling_v2": True, "spoken_output": True, "write_consent": True, "phone_format": True, **features}
-        return BackendTemplates(CONFIG / "prompts" / "customer_service" / "backend.yaml", prompt_features=on).render(
-            "backend_system", instructions="POLICY"
-        )
+        return BackendTemplates(
+            CONFIG / "prompts" / "customer_service" / "backend" / "hermes.yaml", prompt_features=on
+        ).render("backend_system", instructions="POLICY")
 
     def test_each_variant_adds_only_its_own_text_and_off_is_the_control(self) -> None:
         control = self._render()
@@ -154,7 +155,7 @@ class BackendPromptTests(unittest.TestCase):
         control = gc.load_gateway_config(variant("gateway.eval_control.yaml"))
         self.assertTrue(all(default.prompt_features[name] for name in GEVAL_BACKEND_FIXES))
         self.assertFalse(any(control.prompt_features[name] for name in GEVAL_BACKEND_FIXES))
-        self.assertTrue(default.hermes.backend_trace and control.hermes.backend_trace)
+        self.assertTrue(default.backend.backend_trace and control.backend.backend_trace)
 
 
 class CatalogVariantTests(unittest.TestCase):
@@ -688,8 +689,8 @@ class BackendTraceTests(unittest.TestCase):
     def test_gateway_passes_the_log_dir_only_when_on(self) -> None:
         on = gc.load_gateway_config(CONFIG / "gateway.eval.yaml")
         off = gc.load_gateway_config(CONFIG / "gateway.yaml")
-        self.assertEqual(controller_settings(on).worker_hermes["backend_trace_dir"], on.workers.log_dir)
-        self.assertEqual(controller_settings(off).worker_hermes["backend_trace_dir"], "")
+        self.assertEqual(controller_settings(on).worker_backend["backend_trace_dir"], on.workers.log_dir)
+        self.assertEqual(controller_settings(off).worker_backend["backend_trace_dir"], "")
         self.assertTrue(on.summary()["hermes"]["backend_trace"])
 
 

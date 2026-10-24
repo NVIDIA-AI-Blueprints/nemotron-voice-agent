@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""``InProcessBackendLink``: the gateway and a fake worker inside the voice server's process.
+"""``InProcessBackendLink``: the gateway and its worker inside the voice server's process (``link: in_process``).
 
-Used by the voice side's offline tests and by ``--stub-backend``. Messages go through
-the same validation and the same :class:`SessionRuntime` / :class:`BackendController`
-as over the WebSocket; voice→gateway messages are handled strictly in order.
+Runs every backend whose spec allows ``Placement.IN_PROCESS``: the LLM backend (single
+container, no ``fdh-hermes`` service) and the fake one (offline tests, ``--stub-backend``).
+Messages go through the same validation and the same :class:`SessionRuntime` /
+:class:`BackendController` as over the WebSocket; voice→gateway messages are handled
+strictly in order.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from dataclasses import replace
 from typing import Any
 
 from examples.frontend_delegation_hermes.core.backend import protocol as proto
+from examples.frontend_delegation_hermes.core.backends import Placement
 from examples.frontend_delegation_hermes.core.sidecar.events import GatewayEventLog
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import (
     GatewayConfig,
@@ -32,6 +35,18 @@ logger = logging.getLogger(__name__)
 
 OnMessage = Callable[[dict[str, Any]], None]
 
+#: One event log per file, shared by the sessions of this process.
+_EVENT_LOGS: dict[str, GatewayEventLog] = {}
+
+
+def default_event_log(config: GatewayConfig) -> GatewayEventLog:
+    """``gateway.log`` of ``config``, shared per file; in memory for the fake backend (tests, ``--stub-backend``)."""
+    if config.backend.kind == "fake" or not config.gateway.log:
+        return GatewayEventLog(None)
+    if config.gateway.log not in _EVENT_LOGS:
+        _EVENT_LOGS[config.gateway.log] = GatewayEventLog(config.gateway.log)
+    return _EVENT_LOGS[config.gateway.log]
+
 
 class InProcessBackendLink:
     """A ``BackendLink`` whose gateway runs on the caller's loop."""
@@ -39,14 +54,20 @@ class InProcessBackendLink:
     def __init__(self, gateway_config: GatewayConfig | None = None, *, event_log: GatewayEventLog | None = None):
         """Defaults to :func:`default_fake_gateway_config`.
 
-        A config with ``workers.agent_kind: fake`` (for example ``gateway.fake.yaml``) always
-        runs its fake worker in this process: this link never spawns processes for fakes.
+        The worker always runs in this process: a config with ``workers.mode: process_per_session``
+        (``gateway.yaml``, ``gateway.eval.yaml``, ``gateway.fake.yaml``) is switched to ``in_process``.
+        A backend that cannot run in-process (Hermes) is refused.
         """
         config = gateway_config or default_fake_gateway_config()
-        if config.workers.agent_kind == "fake" and config.workers.mode != "in_process_fake":
-            config = replace(config, workers=replace(config.workers, mode="in_process_fake"))
+        if not config.spec.supports(Placement.IN_PROCESS):
+            raise ValueError(
+                f"backend.kind: {config.backend.kind} cannot run in the voice process (link: in_process); "
+                "use link: websocket and the backend's own container"
+            )
+        if config.workers.mode != "in_process":
+            config = replace(config, workers=replace(config.workers, mode="in_process"))
         self._config = config
-        self._event_log = event_log or GatewayEventLog(None)
+        self._event_log = event_log or default_event_log(config)
         self._runtime: SessionRuntime | None = None
         self._queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None

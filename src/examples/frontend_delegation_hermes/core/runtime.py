@@ -229,7 +229,8 @@ class DelegationRuntime:
 
     def _link(self) -> BackendLink:
         backend = self.config.backend
-        if backend.link == "in_process_fake":
+        if backend.link == "in_process":
+            # The gateway and the worker run in this process: the LLM backend, or the fake one.
             from examples.frontend_delegation_hermes.core.sidecar.gateway_config import load_gateway_config
             from examples.frontend_delegation_hermes.core.sidecar.inprocess_link import InProcessBackendLink
 

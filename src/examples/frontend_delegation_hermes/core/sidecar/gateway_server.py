@@ -26,14 +26,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from examples.frontend_delegation_hermes.core.backend import protocol as proto
 from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter, WriterClosedError
-from examples.frontend_delegation_hermes.core.sidecar import homes
+from examples.frontend_delegation_hermes.core.backends import Placement, load
 from examples.frontend_delegation_hermes.core.sidecar.events import GatewayEventLog
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import (
     DEFAULT_GATEWAY_CONFIG,
     GatewayConfig,
     load_gateway_config,
 )
-from examples.frontend_delegation_hermes.core.sidecar.session_runtime import SessionRuntime
+from examples.frontend_delegation_hermes.core.sidecar.session_runtime import SessionRuntime, backend_templates
 from examples.frontend_delegation_hermes.core.sidecar.templates import BackendTemplates
 from examples.frontend_delegation_hermes.core.sidecar.worker_pool import WorkerPool, resolve_python
 
@@ -58,7 +58,7 @@ class GatewayState:
 
 def build_gateway_app(config: GatewayConfig) -> FastAPI:
     """The gateway application."""
-    templates = BackendTemplates(config.hermes.prompts_path, prompt_features=config.prompt_features)
+    templates = backend_templates(config)
     state = GatewayState(
         config=config,
         templates=templates,
@@ -69,7 +69,8 @@ def build_gateway_app(config: GatewayConfig) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if config.workers.mode == "process_per_session":
-            removed = homes.clear_stale(config.workers.home_root)
+            setup = config.spec.worker_setup
+            removed = load(setup)().clear_stale(config) if setup else 0
             socket_dir = Path(config.workers.socket_dir)
             if socket_dir.is_dir():
                 for stale in socket_dir.glob("*.sock"):
@@ -92,7 +93,7 @@ def build_gateway_app(config: GatewayConfig) -> FastAPI:
             "gateway ready: max_sessions=%d workers=%s/%s",
             config.gateway.max_sessions,
             config.workers.mode,
-            config.workers.agent_kind,
+            config.backend.kind,
         )
         yield
         for runtime in list(state.runtimes):
@@ -120,16 +121,17 @@ def build_gateway_app(config: GatewayConfig) -> FastAPI:
             "workers": len(workers),
             "worker_pids": workers,
             "worker_mode": config.workers.mode,
-            "agent_kind": config.workers.agent_kind,
+            "agent_kind": config.backend.kind,
             "backend_features": dict(templates.features),
             "backend_catalog_sha256": templates.catalog_sha256,
             "domains": [name for name, _ in config.domains],  # domain-note detection order (gateway.yaml)
+            # Key kept from before the backend registry: the shared ``backend:`` settings of any backend.
             "hermes": {
-                "model": config.hermes.model,
-                "base_url": config.hermes.base_url,
-                "backend_trace": config.hermes.backend_trace,
+                "model": config.backend.model,
+                "base_url": config.backend.base_url,
+                "backend_trace": config.backend.backend_trace,
                 "reasoning": bool(
-                    ((config.hermes.request_overrides.get("extra_body") or {}).get("chat_template_kwargs") or {}).get(
+                    ((config.backend.request_overrides.get("extra_body") or {}).get("chat_template_kwargs") or {}).get(
                         "enable_thinking", False
                     )
                 ),
@@ -229,7 +231,8 @@ def main(argv: list[str] | None = None) -> None:
             max_sessions=args.max_sessions or gateway.max_sessions,
         )
         config = replace(config, gateway=gateway)
-    if config.workers.agent_kind == "hermes" and not Path(resolve_python(config.workers.python)).exists():
+    worker_process = config.workers.mode == "process_per_session" and config.spec.supports(Placement.WORKER_PROCESS)
+    if worker_process and config.spec.worker_setup and not Path(resolve_python(config.workers.python)).exists():
         raise SystemExit(
             f"workers.python {config.workers.python!r} does not exist; build the Hermes venv first "
             "(see .agents/skills/nemotron-voice-agent-fdh-deploy/references/prerequisites.md)"

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Jinja2 rendering of the backend prompt catalog (``config/prompts/<profile>/backend.yaml``)."""
+"""Jinja2 rendering of the backend prompt catalog (``config/prompts/<profile>/backend/<kind>.yaml``)."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,7 @@ import yaml
 
 from examples.frontend_delegation_hermes.core.prompt_features import BACKEND_FEATURES, features, sha256_text
 
+#: Keys every backend's prompt file has; a backend adds its own (``BackendSpec.required_prompt_keys``).
 REQUIRED_KEYS = (
     "backend_soul",
     "backend_system",
@@ -42,10 +43,17 @@ class TemplateError(ValueError):
 class BackendTemplates:
     """``render(key, **vars)`` over a YAML catalog of Jinja templates (undefined variables fail)."""
 
-    def __init__(self, path: str | Path, *, prompt_features: Mapping[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        prompt_features: Mapping[str, object] | None = None,
+        required_keys: Sequence[str] = (),
+    ) -> None:
         """Load and compile every template; missing required keys fail now.
 
         ``prompt_features`` switches the catalog's ``{% if features.<name> %}`` variants (all off by default).
+        ``required_keys`` are the backend's own keys, required besides :data:`REQUIRED_KEYS`.
         """
         self.path = Path(path)
         raw = self.path.read_text(encoding="utf-8")
@@ -58,12 +66,13 @@ class BackendTemplates:
         data = yaml.safe_load(raw) or {}
         if not isinstance(data, dict):
             raise TemplateError(f"{self.path}: expected a mapping of templates")
-        missing = [key for key in REQUIRED_KEYS if key not in data]
+        missing = [key for key in (*REQUIRED_KEYS, *required_keys) if key not in data]
         if missing:
             raise TemplateError(f"{self.path}: missing template(s) {missing}")
         env = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=False, keep_trailing_newline=False)  # noqa: S701 - plain text prompts
         env.globals["features"] = self.features
         notes = data.pop(DOMAIN_NOTES_KEY, None) or {}
+        self._sources = {key: str(value) for key, value in data.items()}
         if not isinstance(notes, dict):
             raise TemplateError(f"{self.path}: {DOMAIN_NOTES_KEY} must map domain names to templates")
         try:
@@ -86,6 +95,12 @@ class BackendTemplates:
             return template.render().strip()
         except jinja2.TemplateError as exc:
             raise TemplateError(f"{DOMAIN_NOTES_KEY}.{domain}: {exc}") from exc
+
+    def source(self, key: str) -> str:
+        """The raw template text of ``key`` (for a backend that renders it itself, per call)."""
+        if key not in self._sources:
+            raise TemplateError(f"unknown template {key!r}")
+        return self._sources[key]
 
     def render(self, key: str, **variables: Any) -> str:
         """Render ``key``; raises :class:`TemplateError` for unknown keys or undefined variables."""

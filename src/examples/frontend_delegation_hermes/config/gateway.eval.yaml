@@ -25,13 +25,14 @@ prompt_features:
   situational_facts: true
   identity_from_identifier: true
 
-hermes:
+backend:
   # P0.3: the clean controls and the arms record each model request and response for the G2 decision
   # replay (logging only). FDH_BACKEND_TRACE=false turns it off.
   backend_trace: ${FDH_BACKEND_TRACE:-true}
   # Evaluation runs default to the customer_service prompt profile (FDH_PROMPT_PROFILE overrides it).
+  # Both backends use this file; {kind} picks backend/hermes.yaml or backend/llm.yaml.
   prompts:
-    path: "prompts/${FDH_PROMPT_PROFILE:-customer_service}/backend.yaml"
+    path: "prompts/${FDH_PROMPT_PROFILE:-customer_service}/backend/{kind}.yaml"
 
 domains:
   telecom: {tools_any: [get_customer_by_phone]}

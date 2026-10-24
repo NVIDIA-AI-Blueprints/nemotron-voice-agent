@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Process-per-session isolation with REAL worker subprocesses (``agent_kind: fake``, this interpreter).
+"""Process-per-session isolation with REAL worker subprocesses (``backend.kind: fake``, this interpreter).
 
 Real Unix sockets, real process groups, real signals — no Hermes needed. Covers the
 re-review items: schema isolation for overlapping tool names, results never crossing
@@ -42,7 +42,6 @@ from examples.frontend_delegation_hermes.core.sidecar.session_runtime import Ses
 def process_config(root: Path, **overrides: Any) -> GatewayConfig:
     workers = {
         "mode": "process_per_session",
-        "agent_kind": "fake",
         "python": "self",
         "start_timeout_s": 5.0,
         "configure_timeout_s": 5.0,
@@ -53,10 +52,16 @@ def process_config(root: Path, **overrides: Any) -> GatewayConfig:
         "log_dir": str(root / "logs"),
     }
     workers.update(overrides.pop("workers", {}))
-    hermes = {"unwind_timeout_s": 0.5, "run_budget_seconds": 0.5, "run_hard_deadline_s": 1.5, "steer_timeout_s": 1.0}
-    hermes.update(overrides.pop("hermes", {}))
+    backend = {
+        "kind": "fake",
+        "unwind_timeout_s": 0.5,
+        "run_budget_seconds": 0.5,
+        "run_hard_deadline_s": 1.5,
+        "steer_timeout_s": 1.0,
+    }
+    backend.update(overrides.pop("backend", {}))
     return load_gateway_config(
-        None, overrides={"workers": workers, "hermes": hermes, "gateway": {"log": ""}, **overrides}
+        None, overrides={"workers": workers, "backend": backend, "gateway": {"log": ""}, **overrides}
     )
 
 
@@ -238,7 +243,7 @@ class GatewayProcessTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_in_process_link_with_the_fake_gateway_file(self) -> None:
         link = InProcessBackendLink(load_gateway_config(FAKE_GATEWAY_CONFIG))
-        self.assertEqual(link._config.workers.mode, "in_process_fake")  # noqa: SLF001
+        self.assertEqual(link._config.workers.mode, "in_process")  # noqa: SLF001
         got: list[dict[str, Any]] = []
 
         def on(msg: dict[str, Any]) -> None:

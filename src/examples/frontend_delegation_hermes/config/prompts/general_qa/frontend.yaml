@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Frontend prompt catalog of the general_qa prompt profile (FDH_PROMPT_PROFILE=general_qa): a general
-# question-answering assistant. The frontend delegates every request; the backend (backend.yaml) answers
+# question-answering assistant. The frontend delegates every request; the backend (backend/<kind>.yaml) answers
 # it directly, with no tools. Jinja, StrictUndefined. Keys other than frontend_system,
 # delegate_param_delegate, contract_repair and status_verbalize are copied from customer_service.
 
