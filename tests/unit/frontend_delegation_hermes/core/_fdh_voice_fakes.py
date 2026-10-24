@@ -16,13 +16,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from examples.frontend_delegation_hermes.core.backend.protocol import (
+from examples.frontend_delegation_hermes.core.config import DelegationConfig, load_delegation_config
+from examples.frontend_delegation_hermes.core.delegation.protocol import (
     GATEWAY_TO_VOICE,
     VOICE_TO_GATEWAY,
     message,
     validate,
 )
-from examples.frontend_delegation_hermes.core.config import DelegationConfig, load_delegation_config
 from examples.frontend_delegation_hermes.core.engine.filler import FillerLog
 from examples.frontend_delegation_hermes.core.engine.sinks import EventLog, SessionRoutingSink
 from examples.frontend_delegation_hermes.core.engine.turn_manager import DelegationTurnManager

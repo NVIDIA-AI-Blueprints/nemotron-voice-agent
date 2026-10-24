@@ -38,7 +38,8 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_delegation_hermes.core.agent_tools import capability_lines, realtime_tools_to_specs
-from examples.frontend_delegation_hermes.core.backend.protocol import (
+from examples.frontend_delegation_hermes.core.config import DelegationConfig
+from examples.frontend_delegation_hermes.core.delegation.protocol import (
     IDLE,
     NO_SESSION,
     REQUEST_STATUS,
@@ -47,7 +48,6 @@ from examples.frontend_delegation_hermes.core.backend.protocol import (
     WORKING,
     message,
 )
-from examples.frontend_delegation_hermes.core.config import DelegationConfig
 from examples.frontend_delegation_hermes.core.engine.backend_link import BackendLink
 from examples.frontend_delegation_hermes.core.engine.filler import Stamp
 from examples.frontend_delegation_hermes.core.engine.output_scheduler import (

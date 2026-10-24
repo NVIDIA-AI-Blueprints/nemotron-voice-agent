@@ -65,7 +65,7 @@ With Hermes, the recipe builds three images. With the LLM backend, it builds onl
 
 Rebuild with `up -d --build` after a change to any of the following:
 
-- anything under `src/` that the gateway or the Hermes workers run (`core/sidecar`, `core/worker`, `core/backends`, `core/backend/protocol.py`, `config/gateway*.yaml`, `config/prompts/<profile>/`, and so on). The worker protocol is version 2: an image built from older source fails with `protocol version 2 is not supported (expected 1)`;
+- anything under `src/` that the gateway or the Hermes workers run (`core/sidecar`, `core/worker`, `core/backends`, `core/delegation/protocol.py`, `config/gateway*.yaml`, `config/prompts/<profile>/`, and so on). The worker protocol is version 2: an image built from older source fails with `protocol version 2 is not supported (expected 1)`;
 - `docker/fdh/requirements.txt`, `docker/fdh/overrides.txt`, `docker/fdh/gateway.sh`, or `docker/Dockerfile.fdh`;
 - the Hermes checkout or `HERMES_AGENT_DIR`.
 

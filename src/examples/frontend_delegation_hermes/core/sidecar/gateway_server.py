@@ -24,9 +24,9 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
-from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter, WriterClosedError
 from examples.frontend_delegation_hermes.core.backends import Placement, load
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation.writer import QueueWriter, WriterClosedError
 from examples.frontend_delegation_hermes.core.sidecar.events import GatewayEventLog
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import (
     DEFAULT_GATEWAY_CONFIG,

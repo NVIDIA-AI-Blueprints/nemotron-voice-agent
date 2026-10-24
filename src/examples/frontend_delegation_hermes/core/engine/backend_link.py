@@ -3,7 +3,7 @@
 
 """The voice side's link to the backend gateway (plan section 9.1): one WebSocket per session.
 
-Frames are protocol JSON (``backend.protocol``). One :class:`QueueWriter` sends; one
+Frames are protocol JSON (``delegation.protocol``). One :class:`QueueWriter` sends; one
 reader task decodes and hands every gateway message to ``on_message`` on the loop.
 A lost link is reported as a synthetic fatal ``error{code: "link_lost"}`` message, so
 the turn manager handles it like any other gateway error.
@@ -17,7 +17,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from examples.frontend_delegation_hermes.core.backend.protocol import (
+from examples.frontend_delegation_hermes.core.delegation.protocol import (
     GATEWAY_TO_VOICE,
     VOICE_TO_GATEWAY,
     ProtocolError,
@@ -26,7 +26,7 @@ from examples.frontend_delegation_hermes.core.backend.protocol import (
     message,
     validate,
 )
-from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter, WriterClosedError
+from examples.frontend_delegation_hermes.core.delegation.writer import QueueWriter, WriterClosedError
 
 logger = logging.getLogger(__name__)
 

@@ -14,9 +14,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
-from examples.frontend_delegation_hermes.core.backend.controller import BackendController, ControllerSettings
 from examples.frontend_delegation_hermes.core.backends import load
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation.controller import BackendController, ControllerSettings
 from examples.frontend_delegation_hermes.core.sidecar.events import GatewayEventLog
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import GatewayConfig
 from examples.frontend_delegation_hermes.core.sidecar.templates import BackendTemplates

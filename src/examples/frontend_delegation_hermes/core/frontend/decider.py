@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
-from examples.frontend_delegation_hermes.core.backend.protocol import IDLE, REQUEST_STATUS, REQUEST_TASK, WORKING
+from examples.frontend_delegation_hermes.core.delegation.protocol import IDLE, REQUEST_STATUS, REQUEST_TASK, WORKING
 from examples.frontend_delegation_hermes.core.frontend.delegate_tool import (
     TOOL_NAME,
     ContractError,

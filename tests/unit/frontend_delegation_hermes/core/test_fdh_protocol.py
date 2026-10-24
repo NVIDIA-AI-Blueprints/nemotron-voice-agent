@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
 
 SAMPLES = {
     proto.VOICE_TO_GATEWAY: {

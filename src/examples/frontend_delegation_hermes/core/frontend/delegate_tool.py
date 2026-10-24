@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from examples.frontend_delegation_hermes.core.backend.protocol import REQUEST_STATUS, REQUEST_TASK, REQUESTS
+from examples.frontend_delegation_hermes.core.delegation.protocol import REQUEST_STATUS, REQUEST_TASK, REQUESTS
 from examples.frontend_delegation_hermes.core.frontend.prompts import PromptCatalog
 
 TOOL_NAME = "delegate"

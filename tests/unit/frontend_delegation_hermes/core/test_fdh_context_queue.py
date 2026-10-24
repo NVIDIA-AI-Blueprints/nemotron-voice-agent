@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from examples.frontend_delegation_hermes.core.backend.context_queue import (
+from examples.frontend_delegation_hermes.core.delegation.context_queue import (
     COMMITTED,
     IN_FLIGHT,
     QUEUED,

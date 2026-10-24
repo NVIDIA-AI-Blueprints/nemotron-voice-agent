@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from examples.frontend_delegation_hermes.core.backend.controller import BackendController, ControllerSettings
+from examples.frontend_delegation_hermes.core.delegation.controller import BackendController, ControllerSettings
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import CONFIG_DIR
 from examples.frontend_delegation_hermes.core.sidecar.templates import BackendTemplates
 

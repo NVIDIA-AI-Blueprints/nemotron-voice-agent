@@ -11,7 +11,7 @@ import unittest
 
 from _fdh_backend_fakes import Harness, RecordingWorker, history_after
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
 
 
 class ControllerTest(unittest.IsolatedAsyncioTestCase):

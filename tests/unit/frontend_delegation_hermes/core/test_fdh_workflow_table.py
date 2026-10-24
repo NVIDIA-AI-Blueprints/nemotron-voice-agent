@@ -18,7 +18,7 @@ import unittest
 
 from _fdh_backend_fakes import WORKFLOW_CSV, Harness, history_after
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
 
 STATES = {
     "No Agent Session is started": proto.NO_SESSION,

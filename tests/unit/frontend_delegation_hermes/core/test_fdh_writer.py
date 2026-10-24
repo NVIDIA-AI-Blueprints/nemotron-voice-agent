@@ -10,7 +10,7 @@ import asyncio
 import threading
 import unittest
 
-from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter, WriterClosedError
+from examples.frontend_delegation_hermes.core.delegation.writer import QueueWriter, WriterClosedError
 
 
 class WriterTest(unittest.IsolatedAsyncioTestCase):

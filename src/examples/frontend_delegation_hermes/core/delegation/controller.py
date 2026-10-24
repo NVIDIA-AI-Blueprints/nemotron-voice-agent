@@ -26,8 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
-from examples.frontend_delegation_hermes.core.backend.context_queue import ContextEntry, ContextQueue
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation.context_queue import ContextEntry, ContextQueue
 from examples.frontend_delegation_hermes.core.prompt_features import render_backend_system, sha256_text
 
 logger = logging.getLogger(__name__)

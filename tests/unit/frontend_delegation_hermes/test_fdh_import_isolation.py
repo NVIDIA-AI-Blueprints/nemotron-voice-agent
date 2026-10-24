@@ -101,7 +101,7 @@ class StaticLayeringTests(unittest.TestCase):
             others = tuple(f"{backends}.{other}" for other in kinds if other != kind)
             for path in _files(f"core/backends/{kind}"):
                 rules[str(path.relative_to(PACKAGE))] = (*others, "pipecat", *([] if kind == "llm" else ["openai"]))
-        for sub in ("core/backend", "core/worker", "core/sidecar"):
+        for sub in ("core/delegation", "core/worker", "core/sidecar"):
             for path in _files(sub):
                 rules[str(path.relative_to(PACKAGE))] = tuple(f"{backends}.{kind}" for kind in kinds)
         for file, forbidden in rules.items():

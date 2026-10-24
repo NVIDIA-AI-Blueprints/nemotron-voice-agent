@@ -27,7 +27,7 @@ from typing import Any
 from _fdh_backend_fakes import TOOL
 from fastapi.testclient import TestClient
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
 from examples.frontend_delegation_hermes.core.sidecar.events import GatewayEventLog
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import (
     FAKE_GATEWAY_CONFIG,

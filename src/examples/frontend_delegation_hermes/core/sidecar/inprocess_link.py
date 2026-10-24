@@ -19,8 +19,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
 from examples.frontend_delegation_hermes.core.backends import Placement
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
 from examples.frontend_delegation_hermes.core.sidecar.events import GatewayEventLog
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import (
     GatewayConfig,

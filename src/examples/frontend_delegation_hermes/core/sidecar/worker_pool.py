@@ -28,10 +28,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
-from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter, WriterClosedError
 from examples.frontend_delegation_hermes.core.backends import load
 from examples.frontend_delegation_hermes.core.backends.base import WorkerPrep
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation.writer import QueueWriter, WriterClosedError
 from examples.frontend_delegation_hermes.core.sidecar.gateway_config import SRC_DIR, GatewayConfig
 
 logger = logging.getLogger(__name__)

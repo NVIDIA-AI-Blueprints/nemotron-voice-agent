@@ -22,10 +22,10 @@ import os
 import sys
 from typing import Any
 
-from examples.frontend_delegation_hermes.core.backend import protocol as proto
-from examples.frontend_delegation_hermes.core.backend.writer import QueueWriter
 from examples.frontend_delegation_hermes.core.backends import KINDS, get_spec, load
 from examples.frontend_delegation_hermes.core.backends.base import AgentHost
+from examples.frontend_delegation_hermes.core.delegation import protocol as proto
+from examples.frontend_delegation_hermes.core.delegation.writer import QueueWriter
 from examples.frontend_delegation_hermes.core.worker.tool_futures import ToolFutures
 from examples.frontend_delegation_hermes.core.worker.worker_core import ActivityEmit, WorkerCore, ready_message
 
