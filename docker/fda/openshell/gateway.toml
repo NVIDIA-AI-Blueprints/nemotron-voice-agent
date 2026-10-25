@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# OpenShell gateway configuration of the FDA OpenShell runtime (`hermes-openshell-gateway` in
+# docker-compose.yml). A copy of OpenShell's deploy/docker/gateway.toml at the release pinned in
+# docker/fda/openshell/VERSION, changed so that it works from a Compose service:
+#
+# - bind 0.0.0.0:8080 (the shipped file binds 127.0.0.1). The voice service reaches the gateway over the
+#   Compose network, and the sandbox supervisors (host network, the driver's default
+#   `supervisor_network_mode = "host"`) dial http://127.0.0.1:8080 through the port published on host
+#   loopback. The published host port must stay 8080, the same as this bind port. The shipped comment
+#   about an extra bridge listener is out of date: the driver adds none.
+# - the sandbox and supervisor images pinned by tag and digest (the shipped file uses `latest`).
+# - image_pull_policy "if_not_present", so the locally built FDA image is used and never pulled.
+#
+# No TLS and no user authentication, as in the shipped file: the port is published only on the host's
+# loopback (see the deploy guide). Supervisors still authenticate with the JWT keys below.
+
+[openshell]
+version = 2
+
+[openshell.gateway]
+bind_address        = "0.0.0.0:8080"
+health_bind_address = "0.0.0.0:8081"
+log_level           = "info"
+compute_driver      = "docker"
+disable_tls         = true
+
+[openshell.gateway.auth]
+allow_unauthenticated_users = true
+
+# Written by the hermes-openshell-init service.
+[openshell.gateway.gateway_jwt]
+signing_key_path = "/var/lib/openshell/tls/jwt/signing.pem"
+public_key_path  = "/var/lib/openshell/tls/jwt/public.pem"
+kid_path         = "/var/lib/openshell/tls/jwt/kid"
+gateway_id       = "openshell-docker"
+
+[openshell.drivers.docker]
+default_image         = "nvcr.io/nvidia/base/ubuntu:24.04"
+sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox:0.1.5-pre.4@sha256:52d345c567a881fc1fc0d17b960a7be68ce92ba510f721831a917f77870c4435"
+supervisor_image      = "ghcr.io/nvidia/openshell/supervisor:0.1.5-pre.4@sha256:6bf16794603d7338bbad8a3caecaeec99d0e7b460d69bac260b8f55c21220b20"
+image_pull_policy     = "if_not_present"
+sandbox_label         = "openshell"
+app_armor_profile     = "Unconfined"

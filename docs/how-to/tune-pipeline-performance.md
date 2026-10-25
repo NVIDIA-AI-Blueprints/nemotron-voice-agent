@@ -134,7 +134,7 @@ UVICORN_WS_PING_INTERVAL=<seconds>
 UVICORN_WS_PING_TIMEOUT=<seconds>
 ```
 
-The values apply to every WebSocket session in the server process. The [Frontend/Backend Agent](../../src/examples/frontend_backend_agent/README.md) requires the keepalive to match its `eval` profile, which every OpenAI Realtime session uses. That profile sets the interval to `0` and the timeout to `20`, so a server that runs this example must turn the keepalive off for every session. The [Frontend Delegation Hermes Agent](../../src/examples/frontend_delegation_hermes/README.md) has the same rule: its Realtime sessions refuse to start unless `UVICORN_WS_PING_INTERVAL=0`, which its Compose recipe sets.
+The values apply to every WebSocket session in the server process. The [Frontend/Backend Agent](../../src/examples/frontend_backend_agent/README.md) requires the keepalive to match its `eval` profile, which every OpenAI Realtime session uses. That profile sets the interval to `0` and the timeout to `20`, so a server that runs this example must turn the keepalive off for every session. The [Frontend Delegation Agent](../../src/examples/frontend_delegation_agent/README.md) has the same rule: its Realtime sessions refuse to start unless `UVICORN_WS_PING_INTERVAL=0`, which its Compose recipe sets.
 
 ## Transport Selection
 

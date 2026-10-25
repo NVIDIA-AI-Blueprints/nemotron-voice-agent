@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The registry's prompt catalog for the Frontend Delegation Agent example (the browser UI's
+# prompt panel and the Realtime model's prompt selector). The agent does not read it: its
+# prompts are its own catalogs in the selected prompt profile, config/prompts/<profile>/frontend.yaml
+# (frontend), voice.yaml (voice notes) and backend.yaml (Hermes); FDA_PROMPT_PROFILE selects the
+# profile. Edits in the browser UI are not applied.
+
+frontend:
+  description: "Frontend Delegation Agent: the frontend's prompt is config/prompts/<profile>/frontend.yaml (frontend_system)."
+  content: |
+    You are the voice frontend of a delegation agent. You answer simple turns yourself and delegate
+    every task to the Hermes backend agent, which does the work and replies through you.
+
+    This example's prompts are not edited here: the frontend prompt is
+    config/prompts/<profile>/frontend.yaml (frontend_system) and the backend prompt is
+    config/prompts/<profile>/backend.yaml. Edits in this panel
+    are not applied.

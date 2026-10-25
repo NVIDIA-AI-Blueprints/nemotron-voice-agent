@@ -96,7 +96,7 @@ The repository defines these profiles:
 | `nvidia/nemotron-realtime-omni` | Direct Omni pipeline with optional client-owned functions |
 | `nvidia/nemotron-realtime-omni-subagents` | Omni multi-agent pipeline without client-defined functions |
 | `nvidia/nemotron-realtime-frontend-backend` | Frontend/Backend Agent, with a frontend LLM and a reasoning backend LLM, that owns the whole Realtime session and runs client-owned function tools. Refer to the [Frontend/Backend Agent README](../../src/examples/frontend_backend_agent/README.md) and [Deploy the Frontend/Backend Agent](deploy-frontend-backend-agent.md). |
-| `nvidia/nemotron-realtime-frontend-delegation-hermes` | Frontend Delegation Hermes Agent, with a frontend LLM that delegates to a Hermes agent backend, that owns the whole Realtime session and runs client-owned function tools. Refer to the [Frontend Delegation Hermes README](../../src/examples/frontend_delegation_hermes/README.md) and [Deploy the Frontend Delegation Hermes Agent](deploy-frontend-delegation-hermes-agent.md). |
+| `nvidia/nemotron-realtime-frontend-delegation` | Frontend Delegation Agent, with a frontend LLM that delegates to a Hermes agent backend, that owns the whole Realtime session and runs client-owned function tools. Refer to the [Frontend Delegation Agent README](../../src/examples/frontend_delegation_agent/README.md) and [Deploy the Frontend Delegation Agent](deploy-frontend-delegation-agent.md). |
 
 Select a model in the WebSocket URL:
 

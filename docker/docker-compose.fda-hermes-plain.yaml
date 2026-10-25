@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The plain Hermes runtime of the Frontend Delegation Agent: the baseline for A/B checks against
+# the default OpenShell runtime, and for debugging. `fda-hermes` is then the FDA gateway container itself
+# (docker/fda/gateway.sh, same image, same gateway.env), on the Compose network, not published to the
+# host; the OpenShell services do not start. Needs Compose 2.24.4+ (!override, !reset).
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml \
+#     [-f docker/docker-compose.fda-eval.yaml] \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#
+# It overrides only the fields that differ, never a whole service: a whole-service override would also
+# drop the eval overlay's `environment` when that file comes first, and the gateway would load
+# gateway.yaml. Relative paths resolve from the repository root.
+
+services:
+  # Not in the recipe profile, so they never start with this overlay.
+  hermes-openshell-init:
+    profiles: !override ["fda-openshell-off"]
+  hermes-openshell-gateway:
+    profiles: !override ["fda-openshell-off"]
+
+  fda-hermes:
+    image: nemotron-voice-agent-fda:local
+    pull_policy: never
+    build: !reset null                           # the image comes from fda-hermes-image
+    depends_on: !override
+      fda-hermes-image:
+        condition: service_completed_successfully
+    command: !reset null                         # the image's ENTRYPOINT, docker/fda/gateway.sh
+    env_file: !override
+      - docker/fda/gateway.env                   # drops controller.env
+    environment:                                 # merged: NVIDIA_API_KEY and any eval keys stay
+      FDA_GATEWAY_HOST: 0.0.0.0
+    volumes: !override
+      - ./logs:/app/logs                         # no ../src mount: both runtimes run the baked source
+    healthcheck: !override
+      test: ["CMD", "curl", "-fs", "-m", "5", "http://localhost:8790/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    # The gateway closes open sessions one after another (about 15 s each); 4 sessions fit in 75 s.
+    stop_grace_period: 75s
+
+  frontend-delegation-agent-single-gpu:
+    environment:
+      FDA_BACKEND_URL: ws://fda-hermes:8790/v1/backend

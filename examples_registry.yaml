@@ -94,14 +94,14 @@ realtime_models:
       asr_id: registry-default
       tts_id: registry-default
 
-  # The voice Frontend Delegation Hermes agent (src/examples/frontend_delegation_hermes): a fast
+  # The voice Frontend Delegation Agent (src/examples/frontend_delegation_agent): a fast
   # frontend that answers or delegates, and a Hermes backend agent in its own container. The
   # pipeline owns the whole Realtime session, so its turn detection (server_vad, 800 ms silence,
   # server-owned) and its models come from the example's `eval` profile, which every Realtime
   # session uses, not from here.
-  nvidia/nemotron-realtime-frontend-delegation-hermes:
-    label: Nemotron Realtime Frontend Delegation Hermes
-    pipeline_mode: frontend-delegation-hermes-agent
+  nvidia/nemotron-realtime-frontend-delegation:
+    label: Nemotron Realtime Frontend Delegation Agent
+    pipeline_mode: frontend-delegation-agent
     default: true
     selectors:
       prompt_key: frontend
@@ -187,14 +187,14 @@ examples:
       tts: [magpie-multilingual-tts]
     bot: examples.frontend_backend_agent.pipeline:bot
 
-  frontend-delegation-hermes-agent:
-    label: Frontend Delegation Hermes Agent
+  frontend-delegation-agent:
+    label: Frontend Delegation Agent
     # The UI's LLM menu selects the frontend model; the Hermes backend model is the gateway's
-    # (src/examples/frontend_delegation_hermes/config/gateway.yaml). `frontend` is the public prompt.
+    # (src/examples/frontend_delegation_agent/config/gateway.yaml). `frontend` is the public prompt.
     slots: [llm, asr, tts]
     defaults:
       prompt: [frontend]
       llm: [nemotron-3.5-lightning]
       asr: [nemotron-asr-streaming-english]
       tts: [magpie-multilingual-tts]
-    bot: examples.frontend_delegation_hermes.pipeline:bot
+    bot: examples.frontend_delegation_agent.pipeline:bot

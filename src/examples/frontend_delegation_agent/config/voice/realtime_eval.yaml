@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Voice profile of profiles/realtime_eval.yaml: an OpenAI-Realtime client that executes the tools,
+# with every tool-dependent behaviour derived from the session's tool schemas, never from tool or
+# domain names (tau3-voice-domain-specific-changes-genericization.md sections 4 and 5).
+
+extends: base.yaml
+
+protocol:
+  greeting: {enabled: false, text: ""}
+  # The client greets in text; its greeting is seeded into both agents' history (protocol adapter).
+  seed_history_with_client_greeting: "Hi! How can I help you today?"
+
+tools:
+  source: client
+
+# Evaluation runs default to the customer_service prompt profile (FDA_PROMPT_PROFILE overrides it).
+agent:
+  overrides:
+    prompts: {path: "../prompts/${FDA_PROMPT_PROFILE:-customer_service}/voice.yaml"}   # [in-path]
+
+normalization:
+  transcript:
+    spelled_runs: {enabled: true, min_tokens: 3, case: keep}
+  tool_arguments:
+    enabled: true
+    # Per session, for read tools only: each id / *_id string argument whose description quotes an
+    # example gets a rule from that example (normalization/schema_rules.py). Write tools are never rewritten.
+    rules: auto
+    invalid_message_key: tool_argument_invalid_readback
+    escalate_invalid_message_key: tool_argument_invalid_spell_all
+    retry_guard:
+      enabled: true
+      scope: all
+      permanent_failure_pattern: '(?i)\b(not found|no such|does not exist)\b'
+    result_hints:
+      enabled: true
+      tools: auto                     # every read tool; selection is by the result text below
+      # A person entity before the failure phrase, or an empty query result over a person table.
+      failure_pattern: "(?i)\\b(users?|customers?|members?|clients?|profiles?)\\b[^.]*\\b(not found|no such|does not exist)\\b|\\bno (records|results|matches) found\\b[^.]*\\b(users?|customers?|members?|clients?|profiles?)\\b"
+      count_local_invalid: true       # only a local "invalid" answer for a person argument (user_id, ...)
+      max_hints: 6
+      message_key: lookup_not_found_hint_format  # A2 variant (tau3-geval-failure-fixes-plan.md)
+      escalate_message_key: lookup_not_found_hint_words
+      # fix-plan-f1-f2-f4-f8.md F8: the identification ledger (on here). It replaces A3's line and allows
+      # up to 6 notes.
+      ledger: true
+      identification_tools: auto      # derived from the session's tool schemas (logged in session_rules)
+      field_provenance: false         # A3 (spelled / heard / unknown)
+    # A1 / A1-lite: a not-found phone lookup tried once in the other format (by the relay on declared
+    # read-only tools, else a hint).
+    format_retry: {enabled: true, mode: call, fields: phone}

@@ -40,8 +40,8 @@ deployment profiles when changing shared behavior.
   audio settings.
 - Load `.agents/skills/nemotron-voice-agent-upgrade-pipecat/SKILL.md` before changing Pipecat server or
   client dependency versions or migrating Pipecat APIs.
-- Load `.agents/skills/nemotron-voice-agent-fdh-deploy/SKILL.md` to build, deploy, or evaluate the
-  Frontend Delegation Hermes example.
+- Load `.agents/skills/nemotron-voice-agent-fda-deploy/SKILL.md` to build, deploy, or evaluate the
+  Frontend Delegation Agent example.
 - Preserve unrelated configuration keys, comments, examples, and deployment
   profiles. Do not infer hardware, credentials, or private-service access.
 

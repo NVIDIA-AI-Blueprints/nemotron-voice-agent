@@ -69,14 +69,14 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fba-eval.yaml \
 docker compose -f docker-compose.yml -f docker/docker-compose.fba-local-llm.yaml \
   --profile frontend-backend-agent/single-gpu up -d
 
-# Frontend Delegation Hermes Agent (Inference Hub LLMs; Hermes in its own container; rebuild after source changes)
-docker compose --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+# Frontend Delegation Agent (Inference Hub LLMs; Hermes in its own container; rebuild after source changes)
+docker compose --profile frontend-delegation-agent/single-gpu up -d --build
 # Eval profile (evaluation runs, Realtime only): pass the overlay in every command
-docker compose -f docker-compose.yml -f docker/docker-compose.fdh-eval.yaml \
-  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
 # LLM backend in the voice container instead of Hermes: the LLM overlay after the eval overlay, if any
-docker compose -f docker-compose.yml [-f docker/docker-compose.fdh-eval.yaml] -f docker/docker-compose.fdh-llm.yaml \
-  --profile frontend-delegation-hermes-agent/single-gpu up -d --build
+docker compose -f docker-compose.yml [-f docker/docker-compose.fda-eval.yaml] -f docker/docker-compose.fda-llm.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
 
 # Resource-heavy single-GPU path (workstation or DGX Spark)
 docker compose --profile omni-assistant-subagents/single-gpu up -d
