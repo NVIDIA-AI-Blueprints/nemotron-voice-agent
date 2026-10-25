@@ -3,7 +3,7 @@
 
 """One streamed chat-completions call with retries and an abort that works from another thread.
 
-The request body is what Hermes sends to an OpenAI-compatible endpoint (llm-backend-plan.md 6.7):
+The request body sent to the OpenAI-compatible endpoint (llm-backend-plan.md 6.7):
 ``model``, ``messages``, ``tools``, ``stream`` with usage, top-level ``reasoning_effort``, and the
 ``request_overrides`` merged into the body. No ``temperature``, ``max_tokens`` or ``tool_choice``.
 """
@@ -24,7 +24,7 @@ import openai
 #: Backoff of a retried call: base * 2^(attempt-1), capped, plus up to 50% jitter.
 BACKOFF_BASE_S = 2.0
 BACKOFF_MAX_S = 60.0
-#: A server's Retry-After is honoured up to this (voice cannot wait Hermes' 600 s).
+#: A server's Retry-After is honoured up to this (a voice turn cannot wait longer).
 RETRY_AFTER_MAX_S = 30.0
 
 _RETRYABLE = (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError)
@@ -60,7 +60,7 @@ class ChatClient:
         reasoning_effort: str,
         request_overrides: Mapping[str, Any],
     ) -> None:
-        """``timeout_s`` is per read, so a stalled stream fails after it (Hermes' stale-stream base)."""
+        """``timeout_s`` is per read, so a stalled stream fails after it."""
         self._new_client = lambda: openai.OpenAI(base_url=base_url, api_key=api_key, timeout=timeout_s, max_retries=0)
         self._client: openai.OpenAI | None = None
         self.model = model

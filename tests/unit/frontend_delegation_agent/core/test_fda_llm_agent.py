@@ -218,7 +218,7 @@ class ControlTest(AgentTestCase):
         self.assertIn('The user just added: "cancel it"', steer)
         self.assertNotIn("pending_steer", out)
 
-    def test_steer_goes_after_an_older_turns_tool_row_like_hermes(self) -> None:
+    def test_steer_goes_after_an_older_turns_tool_row(self) -> None:
         history = [
             {"role": "user", "content": "order 1"},
             {

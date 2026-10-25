@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A scriptable stand-in for Hermes (``EmulatorAgent``, ``backend.kind: emulator``).
+"""A scriptable test backend agent (``EmulatorAgent``, ``backend.kind: emulator``).
 
-``EmulatorAgent`` imitates the Hermes behaviour the design relies on, verified in the
-P0 spike: a blocking ``run_conversation`` on one thread, ``steer`` delivered after a
-tool batch (else returned as ``pending_steer``), ``redirect`` accepted only during a
-"model request", ``hard_interrupt`` ending the run with ``interrupted=True``, and
-cumulative usage counters.
+``EmulatorAgent`` implements the agent control the design relies on (``AgentLike``): a
+blocking ``run_conversation`` on one thread, ``steer`` delivered after a tool batch (else
+returned as ``pending_steer``), ``redirect`` accepted only during a "model request",
+``hard_interrupt`` ending the run with ``interrupted=True``, and cumulative usage counters.
 
 Directives in the last line of the user message (the user's own words) script it
 (tests and offline smoke runs):
@@ -48,7 +47,7 @@ _ORDER = re.compile(r"\border\s*#?\s*(\d{3,})", re.IGNORECASE)
 
 
 class EmulatorAgent:
-    """A deterministic, scriptable agent with Hermes-like control semantics."""
+    """A deterministic, scriptable agent with the ``AgentLike`` control semantics."""
 
     def __init__(
         self,
@@ -155,7 +154,7 @@ class EmulatorAgent:
         return result
 
     def steer(self, text: str) -> bool:
-        """Queue ``text`` (Hermes returns ``True`` for any non-empty text)."""
+        """Queue ``text`` (``True`` for any non-empty text)."""
         if not text.strip():
             return False
         with self._lock:
@@ -171,7 +170,7 @@ class EmulatorAgent:
         return True
 
     def get_activity_summary(self) -> dict[str, Any]:
-        """A Hermes-shaped summary."""
+        """The ``get_activity_summary`` shape the controller reads."""
         return {
             "current_tool": self._current_tool,
             "api_call_count": self._api_calls,

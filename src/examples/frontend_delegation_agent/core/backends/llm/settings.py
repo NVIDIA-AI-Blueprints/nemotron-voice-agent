@@ -22,9 +22,9 @@ class LLMSettings:
         "max_retries": 3,
     }
 
-    #: Sent top level on every request: Hermes' ``custom`` provider adds it itself (not a request override).
+    #: Sent top level on every request (not a request override).
     reasoning_effort: str
-    #: OpenAI SDK per-read timeout, the base of Hermes' stale-stream detector.
+    #: OpenAI SDK per-read timeout: a stalled stream fails after it.
     request_timeout_s: float
     #: Attempts per model call (connection, timeout, rate-limit and 5xx errors).
     max_retries: int

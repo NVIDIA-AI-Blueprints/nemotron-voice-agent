@@ -3,15 +3,13 @@
 
 """Tool schemas, tool-name repair, argument checks and failure warnings of the LLM backend.
 
-Each function gives the result Hermes gives on FDA's tools (llm-backend-plan.md section 6.4),
-checked against real Hermes traces in the tests; the code is FDA's own:
+The rules are in llm-backend-plan.md section 6.4, and the tests check them against recorded backend traces:
 
-* :func:`model_tools` sends what Hermes sends: name, description (the name when empty) and the
-  parameters with every object node completed (``properties`` and a ``required`` list naming only
-  existing properties). On the tau tools this reproduces Hermes' schema hashes exactly.
-* :func:`repair_name` maps a near-miss tool name to a session tool. The fuzzy step keeps Hermes'
-  0.7 cutoff, which decides whether an invented name runs a real (possibly writing) tool.
-* :class:`FailureWarnings` appends Hermes' two loop warnings to failing tool results.
+* :func:`model_tools` sends the name, the description (the name when empty) and the parameters with
+  every object node completed (``properties`` and a ``required`` list naming only existing properties).
+* :func:`repair_name` maps a near-miss tool name to a session tool. The fuzzy step uses a 0.7 cutoff,
+  which decides whether an invented name runs a real (possibly writing) tool.
+* :class:`FailureWarnings` appends one of two loop warnings to failing tool results.
 
 Stdlib only.
 """
@@ -26,7 +24,7 @@ import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
-#: Hermes' fuzzy-match cutoff: 0.6 or lower maps invented telecom names onto write tools.
+#: The fuzzy-match cutoff: 0.6 or lower maps invented telecom names onto write tools.
 NAME_CUTOFF = 0.7
 EXACT_FAILURE_WARN_AFTER = 2
 SAME_TOOL_FAILURE_WARN_AFTER = 3
@@ -145,18 +143,18 @@ def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str]:
 
 
 def canonical_arguments(args: Any) -> str:
-    """Arguments as Hermes replays them: sorted keys, no spaces, ASCII escapes."""
+    """Arguments as they are replayed in the history: sorted keys, no spaces, ASCII escapes."""
     return json.dumps(args, sort_keys=True, separators=(",", ":"))
 
 
 def is_failure(result: str) -> bool:
-    """Hermes' failure test for a tool result: starts with ``Error`` or names an ``"error"``/``"failed"`` key."""
+    """The failure test for a tool result: starts with ``Error`` or names an ``"error"``/``"failed"`` key."""
     head = result[:500].lower()
     return result.startswith("Error") or '"error"' in head or '"failed"' in head
 
 
 class FailureWarnings:
-    """Per-run counters of failing calls; appends Hermes' loop warning to the result that crosses a threshold.
+    """Per-run counters of failing calls; appends a loop warning to the result that crosses a threshold.
 
     ``render(key, **vars)`` renders the warning texts (``harness_tool_loop_warning`` and the two
     loop messages of ``llm.yaml``). A successful call clears its counters.

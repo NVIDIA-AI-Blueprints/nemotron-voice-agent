@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""The LLM backend sends what Hermes sends (llm-backend-plan.md sections 5 and 6).
+"""What the LLM backend sends to the model (llm-backend-plan.md sections 5 and 6).
 
-Checked against real Hermes traces: the system message bytes, the tool schemas the model saw
+Checked against recorded sessions and backend traces: the system message bytes, the tool schemas the model saw
 (per tau domain), the tool-name repairs and the wire shape of the history.
 """
 
@@ -27,8 +27,8 @@ from examples.frontend_delegation_agent.core.sidecar.templates import BackendTem
 HERE = Path(__file__).resolve().parent
 TAU = HERE.parent / "voice" / "fixtures" / "tau2_session_update"
 PROMPTS = HERE.parents[3] / "src" / "examples" / "frontend_delegation_agent" / "config" / "prompts"
-#: tools_canonical_sha256 of the tools in Hermes' backend traces (OpenShell tau3 runs, 2026-10-16).
-HERMES_TOOL_HASHES = {"airline": "2fdd5b549d9d15b4", "retail": "300feeeb65e4de4c", "telecom": "e6dc47d93703b063"}
+#: tools_canonical_sha256 of the tools in the recorded backend traces (tau3 runs, 2026-10-16).
+RECORDED_TOOL_HASHES = {"airline": "2fdd5b549d9d15b4", "retail": "300feeeb65e4de4c", "telecom": "e6dc47d93703b063"}
 
 
 def _session_tools(domain: str) -> list[dict]:
@@ -45,8 +45,8 @@ def _templates(profile: str = "customer_service") -> BackendTemplates:
 
 
 class SystemMessageTest(unittest.TestCase):
-    def test_matches_a_real_hermes_system_message(self) -> None:
-        recorded = json.loads((HERE / "fixtures" / "hermes_system_prompt.json").read_text())
+    def test_matches_the_recorded_system_message(self) -> None:
+        recorded = json.loads((HERE / "fixtures" / "llm_system_prompt.json").read_text())
         harness = _templates().source("harness_system")
         import jinja2
 
@@ -64,7 +64,7 @@ class SystemMessageTest(unittest.TestCase):
                 hermes = BackendTemplates(PROMPTS / profile / "backend" / "hermes.yaml")
                 self.assertEqual(templates.render("backend_soul"), hermes.render("backend_soul"))
 
-    def test_start_date_is_written_like_hermes(self) -> None:
+    def test_start_date_format(self) -> None:
         moment = datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
         with mock.patch.dict("os.environ", {"TZ": "UTC"}):
             self.assertEqual(conversation_started(moment), "Sunday, October 04, 2026 (UTC, UTC+00:00)")
@@ -77,18 +77,18 @@ class SystemMessageTest(unittest.TestCase):
 
 
 class RequestTest(unittest.TestCase):
-    def test_tool_schemas_match_what_hermes_sent(self) -> None:
-        for domain, expected in HERMES_TOOL_HASHES.items():
+    def test_tool_schemas_match_the_recorded_traces(self) -> None:
+        for domain, expected in RECORDED_TOOL_HASHES.items():
             with self.subTest(domain=domain):
                 self.assertEqual(tools_canonical_sha256(rules.model_tools(_session_tools(domain))), expected)
 
     def test_empty_description_becomes_the_name(self) -> None:
         (tool,) = rules.model_tools([{"name": "ping", "description": "", "parameters": {}}])
         self.assertEqual(tool["function"]["description"], "ping")
-        # No parameters: an empty object schema, as Hermes registers and sanitises it.
+        # No parameters: an empty object schema.
         self.assertEqual(tool["function"]["parameters"], {"type": "object", "properties": {}, "required": []})
 
-    def test_body_matches_hermes(self) -> None:
+    def test_request_body(self) -> None:
         client = ChatClient(
             base_url="http://x/v1",
             api_key="k",
@@ -141,7 +141,7 @@ class ToolRulesTest(unittest.TestCase):
         self.assertIsNone(rules.parse_arguments("[1]")[0])
         self.assertEqual(rules.canonical_arguments({"b": 1, "a": "é"}), '{"a":"\\u00e9","b":1}')
 
-    def test_failure_warnings_follow_hermes_thresholds(self) -> None:
+    def test_failure_warning_thresholds(self) -> None:
         templates = _templates()
         warnings = rules.FailureWarnings(templates.render)
         error = '{"error": "not found"}'

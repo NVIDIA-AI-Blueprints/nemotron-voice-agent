@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""``LLMAgent``: the ``AgentLike`` of the LLM backend, a tool loop with Hermes' voice-relevant behaviour.
+"""``LLMAgent``: the ``AgentLike`` of the LLM backend, a tool loop with the control a voice session needs.
 
-It does what FDA needs from Hermes and nothing else (llm-backend-plan.md section 6): one blocking
-``run_conversation`` per run on the worker thread, steer / redirect / hard interrupt from the loop
-thread, cumulative usage. The Hermes behaviours it reproduces are the ones seen in real sessions:
+It does what FDA needs from a backend agent and nothing else (llm-backend-plan.md section 6): one
+blocking ``run_conversation`` per run on the worker thread, steer / redirect / hard interrupt from the
+loop thread, cumulative usage. Its behaviour:
 
 * **Redirect** (35-54 % of sessions): abort the request at once, retry with an assistant placeholder
   and the correction; a reply that finished just before the redirect is discarded; never partial text.
 * **Steer**: a wrapped user message after the newest tool result (even one of an earlier turn, as
-  Hermes does), else returned as ``pending_steer``.
-* **Tool calls**: name repair, Hermes' unknown-tool and bad-argument results, three rounds of only
+  the marker in ``harness_system`` says), else returned as ``pending_steer``.
+* **Tool calls**: name repair, unknown-tool and bad-argument results, three rounds of only
   unknown names end the run, two loop warnings on repeated failures.
 * **Replies**: reasoning-only replies become the answer; a reply that ends on an announced action is
   re-prompted with "Continue now" (twice at most); one retry for an empty reply; after
@@ -45,7 +45,7 @@ MAX_REDIRECT_RESTARTS = 3
 MAX_CONTINUE_NUDGES = 2
 #: Rounds in a row with only unknown tool names before the run ends.
 MAX_INVALID_NAME_ROUNDS = 3
-#: Joins two redirects that arrive before the first is applied (Hermes' text).
+#: Joins two redirects that arrive before the first is applied (``[Additional user correction]``).
 REDIRECT_JOIN = "\n\n[Additional user correction]\n"
 
 # A short reply whose tail announces the next action ("I'll now check ...").
@@ -300,7 +300,7 @@ class LLMAgent:
         )
 
     def _deliver_steer(self, messages: list[dict[str, Any]]) -> None:
-        """Insert pending steers after the newest tool result anywhere in ``messages`` (Hermes' placement)."""
+        """Insert pending steers after the newest tool result anywhere in ``messages`` (the steer placement)."""
         newest = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "tool"), None)
         if newest is None:
             return
@@ -403,7 +403,7 @@ class LLMAgent:
         partial: bool = False,
         error: str | None = None,
     ) -> dict[str, Any]:
-        """The ``run_conversation`` result; a history ending in a tool result is closed (Hermes' rule)."""
+        """The ``run_conversation`` result; a history ending in a tool result is closed with ``harness_interrupted``."""
         if messages and messages[-1].get("role") == "tool":
             messages.append(
                 {"role": "assistant", "content": (final or "").strip() or self._render("harness_interrupted")}

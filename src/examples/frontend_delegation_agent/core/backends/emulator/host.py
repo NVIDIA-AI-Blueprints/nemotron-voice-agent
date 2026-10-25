@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""``EmulatorAgent`` host (``backend.kind: emulator``): real processes and sockets, or in-process, no Hermes.
+"""``EmulatorAgent`` host (``backend.kind: emulator``): real processes and sockets, or in-process, no model.
 
-Tool schemas are kept per host instance, like Hermes' process-global registry is kept
-per worker process, so tests can prove schema isolation between sessions.
+Tool schemas are kept per host instance, as a worker process keeps one session's tools,
+so tests can prove schema isolation between sessions.
 """
 
 from __future__ import annotations

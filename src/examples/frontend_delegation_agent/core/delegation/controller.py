@@ -4,8 +4,8 @@
 """Per-session backend controller, run by the gateway (plan section 5).
 
 The controller owns the conversation state of one Realtime session: the backend
-state (NO_SESSION / IDLE / WORKING), run epochs, Hermes' settled history, the
-context queue and the tool-call routing table. The Hermes worker is a disposable
+state (NO_SESSION / IDLE / WORKING), run epochs, the backend's settled history, the
+context queue and the tool-call routing table. The backend worker is a disposable
 agent host behind :class:`WorkerPort`; when it dies it is replaced from this state.
 
 Every command starts with ``async with self._lock: self._settle_locked()``, so a
@@ -866,7 +866,7 @@ class BackendController:
 
 
 def _delivered(text: str, messages: Any) -> bool:
-    """Whether a steer's text reached Hermes' history (Hermes returns undelivered ones as ``pending_steer``)."""
+    """Whether a steer's text reached the backend's history (undelivered ones come back as ``pending_steer``)."""
     if not isinstance(messages, list):
         return False
     needle = text.strip()[:200]

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Real worker processes and sockets without Hermes: EmulatorAgent under any Python.
+# Real worker processes and sockets with the scripted EmulatorAgent (no model), under any Python.
 # For CI-style checks and a GPU/credential-free gateway smoke run.
 
 extends: gateway.yaml

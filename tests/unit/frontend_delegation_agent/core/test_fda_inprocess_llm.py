@@ -132,7 +132,7 @@ class InProcessSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((answer["kind"], answer["text"]), ("hermes", "Order 77 shipped."))
         system = self.server.requests[0]["messages"][0]["content"]
         self.assertIn("## Mid-turn user steering", system)
-        self.assertNotIn("Hermes runtime environment", system)
+        self.assertNotIn("Hermes", system)
         self.assertIn("Be brief.", system)
         trace = (self.logs / "workers" / "llm1.trace.jsonl").read_text().splitlines()
         self.assertEqual(

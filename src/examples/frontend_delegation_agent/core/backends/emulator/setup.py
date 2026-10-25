@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A scratch home per emulator worker process, with the same lifecycle as a Hermes home (stdlib only).
+"""A scratch home per emulator worker process, with the same lifecycle as a backend worker home (stdlib only).
 
-Emulator process workers stand in for Hermes in the gateway's process tests, so they get a
+Emulator process workers run in the gateway's process tests, so they get a
 throwaway directory under ``workers.home_root`` that the gateway creates and removes the
-same way. It carries the Hermes home marker, so either backend's stale-home cleanup removes it.
+same way. It carries the worker-home marker, so either backend's stale-home cleanup removes it.
 """
 
 from __future__ import annotations

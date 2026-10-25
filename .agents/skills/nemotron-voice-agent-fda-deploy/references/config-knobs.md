@@ -10,7 +10,7 @@ Profiles and gateway configurations are in `src/examples/frontend_delegation_age
 | --- | --- | --- | --- |
 | `hermes` (default) | One Hermes worker process per session in `fda-hermes` (OpenShell sandbox or plain) | No backend overlay | `prompts/<profile>/backend/hermes.yaml` |
 | `llm` | One OpenAI SDK tool loop per session in the voice process | `docker/docker-compose.fda-llm.yaml` (after the eval overlay; never with the plain overlay) | `prompts/<profile>/backend/llm.yaml` |
-| `emulator` | In-process scripted agent that emulates Hermes | Tests only (`gateway.emulator.yaml`) | None |
+| `emulator` | In-process scripted agent without a model | Tests only (`gateway.emulator.yaml`) | None |
 
 The LLM overlay sets the following on the voice service and removes `depends_on` and the four Hermes and OpenShell services (`hermes-openshell-init`, `hermes-openshell-gateway`, `fda-hermes`, `fda-hermes-image`) from the recipe profile:
 
@@ -46,7 +46,7 @@ Realtime sessions always use the `eval` delegation profile and Pipecat settings.
 
 ## Prompt Profiles
 
-A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (voice side, `frontend_system` and the frontend lines), `backend/hermes.yaml` (Hermes backend; the former `backend.yaml`, byte-identical), `backend/llm.yaml` (LLM backend: an independent full copy of the backend prompts plus the `harness_*` keys, the text Hermes adds itself; Hermes' machine-description lines are omitted on purpose), and `voice.yaml` (voice-layer messages). The two backend files are independent: edit both when a change applies to both backends. `FDA_PROMPT_PROFILE` selects it. The following table lists the shipped profiles:
+A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (voice side, `frontend_system` and the frontend lines), `backend/hermes.yaml` (Hermes backend; the former `backend.yaml`, byte-identical), `backend/llm.yaml` (LLM backend: an independent full copy of the backend prompts plus the `harness_*` keys, the text the LLM backend adds to the conversation itself), and `voice.yaml` (voice-layer messages). The two backend files are independent: edit both when a change applies to both backends. `FDA_PROMPT_PROFILE` selects it. The following table lists the shipped profiles:
 
 | Profile | Default for | Content |
 | --- | --- | --- |

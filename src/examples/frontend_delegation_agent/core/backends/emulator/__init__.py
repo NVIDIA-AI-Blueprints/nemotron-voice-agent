@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The emulator backend: a scripted ``EmulatorAgent`` that emulates Hermes for tests (no model, no credentials)."""
+"""The emulator backend: a scripted ``EmulatorAgent`` that stands in for a backend agent in tests (no model)."""
 
 from __future__ import annotations
 

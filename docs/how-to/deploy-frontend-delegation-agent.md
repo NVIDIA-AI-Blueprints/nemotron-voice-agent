@@ -72,9 +72,9 @@ Choose the backend before you start. Every later step, from the prerequisites to
 | Use it for | The reference Hermes behavior, evaluation runs that must match earlier Hermes runs, and sandboxed deployments | Quick starts, hosts that cannot build Hermes or run OpenShell, and comparisons with Hermes |
 | Compose files | `docker-compose.yml` | `docker-compose.yml` and `docker/docker-compose.fda-llm.yaml` |
 
-The LLM backend reproduces the backend prompt text and the Hermes behaviors that matter for voice, such as steer, redirect, interrupt, and tool-name repair. It is not Hermes, so its results can differ from Hermes runs. Both backends use the same backend model, `BACKEND_LLM_MODEL` on `BACKEND_LLM_BASE_URL` (`nvidia/nvidia/nemotron-3-ultra` on `https://inference-api.nvidia.com/v1`), with `NVIDIA_API_KEY`.
+The LLM backend uses the same backend prompts and handles the session control that voice needs, such as steer, redirect, interrupt, and tool-name repair. It is a different agent, so its results can differ from Hermes runs. Both backends use the same backend model, `BACKEND_LLM_MODEL` on `BACKEND_LLM_BASE_URL` (`nvidia/nvidia/nemotron-3-ultra` on `https://inference-api.nvidia.com/v1`), with `NVIDIA_API_KEY`.
 
-The `FDA_BACKEND` variable selects the backend. It sets `backend.kind` in the gateway configuration and accepts `hermes`, which is the default, and `llm`. The value `emulator` selects a scripted test backend that emulates Hermes without a model and exists for tests only. The LLM backend overlay, `docker/docker-compose.fda-llm.yaml`, sets the following values on the voice service:
+The `FDA_BACKEND` variable selects the backend. It sets `backend.kind` in the gateway configuration and accepts `hermes`, which is the default, and `llm`. The value `emulator` selects a scripted test backend without a model and exists for tests only. The LLM backend overlay, `docker/docker-compose.fda-llm.yaml`, sets the following values on the voice service:
 
 - `FDA_BACKEND=llm`.
 - `FDA_BACKEND_LINK=in_process`: the gateway and the backend worker run in the voice process, in place of a WebSocket link to `fda-hermes`.
@@ -149,7 +149,7 @@ A prompt profile is a named set of the agent's prompts. Each profile is a folder
 
 - `frontend.yaml`: the frontend prompt catalog of the voice side, including `frontend_system`, which makes the delegation decisions.
 - `backend/hermes.yaml`: the backend prompt catalog of the Hermes backend.
-- `backend/llm.yaml`: the backend prompt catalog of the LLM backend. It is a full copy of the backend prompts, plus the `harness_*` keys. These keys hold the text that Hermes adds to the conversation itself, such as its steer and interrupt messages. The Hermes lines that describe the machine are left out on purpose.
+- `backend/llm.yaml`: the backend prompt catalog of the LLM backend. It is a full copy of the backend prompts, plus the `harness_*` keys. These keys hold the text that the LLM backend adds to the conversation itself, such as its steer and interrupt messages.
 - `voice.yaml`: the voice-side messages about tool calls and formats.
 
 The gateway reads `prompts/<profile>/backend/{kind}.yaml`, where `{kind}` is the backend, so each backend reads its own file. The two backend files are independent. To change the backend prompts of both backends, edit both files.
@@ -619,7 +619,7 @@ The Tau evaluation harness is not part of this repository. Use the following ste
 3. Keep the session count within the cap of 4 Realtime sessions.
 4. Record the backend with the results. For Hermes, also record the runtime, and the gateway configuration and the source hash from the Hermes logs. For the LLM backend, record `FDA_BACKEND`, `FDA_BACKEND_LINK`, and `FDA_GATEWAY_CONFIG` from the voice container, and the commit of your checkout. For both, record the profile and `config hash` from the app log.
 
-Do not compare LLM backend runs with Hermes runs as if they were the same agent. The LLM backend reproduces the Hermes prompts and voice behaviors, but its own model calls can differ.
+Do not compare LLM backend runs with Hermes runs as if they were the same agent. The two backends use the same backend prompts, but their model calls can differ.
 
 The `config hash` includes the backend link, the gateway configuration file, and the backend URL. The URL is `ws://default--fda-hermes.openshell.localhost:8080/v1/backend` in the OpenShell runtime and `ws://fda-hermes:8790/v1/backend` in the plain runtime. The hash therefore differs between the two backends, between the two Hermes runtimes, and from runs on the former FDA containers. To compare runs, use the prompt hashes and `session_tools_sha256`. Refer to [Deployed Fingerprint](../../src/examples/frontend_delegation_agent/README.md#deployed-fingerprint).
 

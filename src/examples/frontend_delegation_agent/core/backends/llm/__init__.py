@@ -3,8 +3,8 @@
 
 """The LLM backend: a lightweight OpenAI-SDK tool loop that runs in the voice process (llm-backend-plan.md).
 
-It reproduces what Hermes sends to the model and the Hermes behaviours seen in real sessions,
-and nothing else (section 6.6 of the plan lists what it leaves out). This module and
+It builds the backend prompt, runs the tool calls and handles steer, redirect and interrupt for
+one voice session, and nothing else (section 6.6 of the plan lists what it leaves out). This module and
 ``settings.py`` are stdlib only; ``host.py`` imports the OpenAI SDK.
 """
 
@@ -14,7 +14,7 @@ from examples.frontend_delegation_agent.core.backends.base import BackendSpec, P
 
 _PACKAGE = "examples.frontend_delegation_agent.core.backends.llm"
 
-#: Hermes' text the LLM backend renders itself, from ``prompts/<profile>/backend/llm.yaml``.
+#: The harness text the LLM backend adds to the conversation, from ``prompts/<profile>/backend/llm.yaml``.
 HARNESS_KEYS: tuple[str, ...] = (
     "harness_system",
     "harness_steer_wrap",

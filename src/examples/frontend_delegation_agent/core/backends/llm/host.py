@@ -5,8 +5,8 @@
 
 ``settings`` carries the shared ``backend:`` values, the ``llm:`` section and, from the spec's
 ``worker_prompts`` hook, the rendered soul and the ``harness_*`` templates of
-``prompts/<profile>/backend/llm.yaml``. The system message is built once per session the way
-Hermes builds it: each part stripped, joined with a blank line, the instructions last.
+``prompts/<profile>/backend/llm.yaml``. The system message is built once per session: each
+part stripped, joined with a blank line, the instructions last.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from examples.frontend_delegation_agent.core.worker.worker_core import ActivityE
 
 
 def conversation_started(now: datetime | None = None) -> str:
-    """The session's start date as Hermes writes it: ``Wednesday, October 14, 2026 (UTC, UTC+00:00)``."""
+    """The session's start date as ``harness_system`` shows it: ``Wednesday, October 14, 2026 (UTC, UTC+00:00)``."""
     now = now if now is not None and now.tzinfo is not None else (now or datetime.now()).astimezone()
     zone = os.environ.get("TZ", "")
     abbreviation = now.tzname() or ""
@@ -44,7 +44,7 @@ def conversation_started(now: datetime | None = None) -> str:
 
 
 def system_message(soul: str, harness_system: str, instructions: str) -> str:
-    """Hermes' assembly: the stripped parts joined with a blank line, the instructions appended last."""
+    """The system message: the stripped parts joined with a blank line, the instructions appended last."""
     cached = "\n\n".join(part.strip() for part in (soul, harness_system) if part.strip())
     return f"{cached}\n\n{instructions}".strip() if instructions.strip() else cached
 

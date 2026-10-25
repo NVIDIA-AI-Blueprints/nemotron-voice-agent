@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stored conversation rows -> the request's ``messages``, in the shape Hermes sends (llm-backend-plan.md 6).
+"""Stored conversation rows -> the request's ``messages``, in their wire shape (llm-backend-plan.md 6).
 
 ``LLMAgent`` stores rows already in wire form (canonical tool arguments, stripped content, no
 reasoning), so this only prepends the system message, keeps the request keys, sends an empty

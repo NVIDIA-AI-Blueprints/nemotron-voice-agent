@@ -4,8 +4,8 @@
 # The LLM backend of the Frontend Delegation Agent (FDA_BACKEND=llm): a lightweight OpenAI-SDK
 # tool loop that runs inside the voice container, instead of Hermes in the `fda-hermes` service. One
 # container besides speech: the Hermes and OpenShell services do not start, and nothing waits for them.
-# The gateway's settings and prompts are the Hermes ones (config/gateway.yaml, or gateway.eval.yaml with
-# the eval overlay), except that each backend reads its own prompt file, config/prompts/<profile>/backend/llm.yaml.
+# Both backends use the same gateway settings (config/gateway.yaml, or gateway.eval.yaml with the eval
+# overlay), and each backend reads its own prompt file, config/prompts/<profile>/backend/llm.yaml.
 # Needs Compose 2.24.4+ (!override, !reset).
 #
 #   docker compose -f docker-compose.yml -f docker/docker-compose.fda-llm.yaml \

@@ -59,8 +59,8 @@ hermes:                                      # read only when backend.kind: herm
   load_soul_identity: true                   # required with skip_context_files
 
 llm:                                         # read only when backend.kind: llm
-  reasoning_effort: medium                   # sent top level, as Hermes' custom provider does
-  request_timeout_s: 180                     # OpenAI SDK per-read timeout (Hermes' stale-stream base)
+  reasoning_effort: medium                   # sent top level on every request
+  request_timeout_s: 180                     # OpenAI SDK per-read timeout
   max_retries: 3                             # attempts per model call
 
 # Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend/<kind>.yaml; tau3-failure-fixes-plan.md).

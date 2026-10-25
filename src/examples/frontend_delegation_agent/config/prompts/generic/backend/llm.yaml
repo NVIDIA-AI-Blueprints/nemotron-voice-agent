@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Backend-side prompt catalog of the LLM backend (backend.kind: llm; Jinja2, StrictUndefined), rendered by the gateway.
-# Starts as a copy of hermes.yaml beside it (keep the two in step by hand where both should change);
+# The backend keys are an independent full copy of the backend prompts (edit each backend's file to change both);
 # the harness_* keys at the end are the LLM backend's own.
 # The frontend keys live in prompts.yaml (voice server). See prototype-plan.md sections 7.3 and 7.4.
 # Prompt variants: {% if features.<name> %} blocks switched by prompt_features in gateway.yaml
@@ -13,7 +13,7 @@
 # sections 3 and 4.4; domain_notes: the telecom note at the end of this file,
 # analysis/2026-10-11_fdh-telecom-gpt55-deep). All off = the baseline prompts. Examples are invented.
 
-# The identity part of the system message (Hermes loads it as SOUL.md).
+# The identity part of the system message (the first part of the system message).
 backend_soul: |
   You are the backend agent of a voice customer-service assistant. A separate voice
   frontend talks to the user and hands you their requests. Everything you write in your
@@ -21,7 +21,7 @@ backend_soul: |
   sentences: no markdown, no lists, no emojis, no URLs. Use your tools to look things up
   or change anything; never claim to have done something you did not do with a tool.
 
-# Ephemeral system prompt (never persisted by Hermes). ``instructions`` is session.update.instructions.
+# Ephemeral system prompt (never stored in the history). ``instructions`` is session.update.instructions.
 backend_system: |
   You serve one live voice call. Messages from the user arrive through a voice frontend,
   which may already have acknowledged them briefly ("let me check"); do not repeat such
@@ -207,18 +207,15 @@ backend_steer: |-
 backend_error_spoken: "Sorry, I ran into a problem while working on that. Could you say it again?"
 backend_unavailable: "Sorry, I can't reach the system that handles requests right now. Please try again in a moment."
 
-# ---- LLM backend only: the text Hermes adds itself (llm-backend-plan.md section 5) -------------------
-# Hermes writes these strings in its own code; the LLM backend renders them from here (core/backends/llm),
-# word for word, so the model sees what it sees under Hermes. Hermes' machine-description lines (Python
-# toolchain, profile directories, runtime environment block) are left out on purpose.
+# ---- LLM backend only: the harness text (llm-backend-plan.md section 5) -----------------------------
+# The text the LLM backend adds to the conversation itself (core/backends/llm renders it from here):
+# the system-message block, the steer and redirect wrappers and the tool-error and loop messages.
 
 # System message: backend_soul, then this, then backend_system (the rendered instructions), each stripped
 # and joined with a blank line. Rendered once per session.
 harness_system: |-
-  You run on Hermes Agent (by Nous Research). When the user needs help with Hermes itself — configuring, setting up, using, extending, or troubleshooting it — or when you need to understand your own features, tools, or capabilities, the documentation at https://hermes-agent.nousresearch.com/docs is the authoritative reference and always holds the latest, most up-to-date information. Point the user there (or read it yourself if you have a way to fetch web content).
-
   ## Mid-turn user steering
-  Mid-turn, the user can steer you: Hermes delivers their message as a standalone user message right after the latest tool results, wrapped exactly as:
+  Mid-turn, the user can steer you: the system delivers their message as a standalone user message right after the latest tool results, wrapped exactly as:
   [OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]
   <their message>
   [/OUT-OF-BAND USER MESSAGE]
