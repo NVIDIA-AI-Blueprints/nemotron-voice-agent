@@ -33,6 +33,8 @@ export interface ServiceSettingSpec {
   max?: number;
   options?: string[];
   requires?: string;
+  below?: string;
+  reserve?: number;
 }
 
 export type ServiceSettingsSchema = Record<string, ServiceSettingSpec>;

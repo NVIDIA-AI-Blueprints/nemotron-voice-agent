@@ -107,12 +107,19 @@ _HTTP_TIMEOUT = httpx.Timeout(connect=3.0, read=4.0, write=3.0, pool=2.0)
 async def handle_convert_currency(params: FunctionCallParams) -> None:
     """Convert an amount between two currencies using live ECB rates with a static fallback."""
     args = params.arguments or {}
+    if args.get("amount") is None:
+        await params.result_callback({"error": "amount is required"})
+        return
     try:
-        amount = float(args.get("amount", 0) or 0)
+        amount = float(args["amount"])
     except (TypeError, ValueError):
-        amount = 0.0
-    from_currency = str(args.get("from_currency", "USD") or "USD").upper()
-    to_currency = str(args.get("to_currency", "USD") or "USD").upper()
+        await params.result_callback({"error": "amount must be numeric"})
+        return
+    from_currency = str(args.get("from_currency") or "").strip().upper()
+    to_currency = str(args.get("to_currency") or "").strip().upper()
+    if not from_currency or not to_currency:
+        await params.result_callback({"error": "from_currency and to_currency are required"})
+        return
 
     # Try live rates from frankfurter.app (ECB data, no API key required).
     try:
@@ -141,8 +148,12 @@ async def handle_convert_currency(params: FunctionCallParams) -> None:
         logger.debug(f"convert_currency live lookup failed: {exc}")
 
     # Static fallback.
-    from_rate = _STATIC_RATES.get(from_currency, 1.0)
-    to_rate = _STATIC_RATES.get(to_currency, 1.0)
+    unknown = [code for code in (from_currency, to_currency) if code not in _STATIC_RATES]
+    if unknown:
+        await params.result_callback({"error": f"Unsupported currency code: {', '.join(unknown)}"})
+        return
+    from_rate = _STATIC_RATES[from_currency]
+    to_rate = _STATIC_RATES[to_currency]
     converted = round((amount / from_rate) * to_rate, 2)
     await params.result_callback(
         {
@@ -151,6 +162,7 @@ async def handle_convert_currency(params: FunctionCallParams) -> None:
             "to_currency": to_currency,
             "exchange_rate": round(to_rate / from_rate, 6),
             "source": "static_fallback",
+            "note": "Live rates unavailable - returning static mock rates",
         }
     )
 
@@ -163,15 +175,18 @@ async def handle_convert_currency(params: FunctionCallParams) -> None:
 async def handle_calculate_bmi(params: FunctionCallParams) -> None:
     """Calculate BMI given weight in kg and height in meters."""
     args = params.arguments or {}
+    if args.get("weight_kg") is None or args.get("height_m") is None:
+        await params.result_callback({"error": "weight_kg and height_m are required"})
+        return
     try:
-        weight = float(args.get("weight_kg", 0) or 0)
-        height = float(args.get("height_m", 1) or 1)
+        weight = float(args["weight_kg"])
+        height = float(args["height_m"])
     except (TypeError, ValueError):
         await params.result_callback({"error": "weight_kg and height_m must be numeric"})
         return
 
-    if weight < 0:
-        await params.result_callback({"error": "weight_kg must be non-negative"})
+    if weight <= 0:
+        await params.result_callback({"error": "weight_kg must be greater than zero"})
         return
     if height <= 0:
         await params.result_callback({"error": "height_m must be greater than zero"})

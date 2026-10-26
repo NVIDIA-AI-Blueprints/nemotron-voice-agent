@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.** The `nemotron-35-bolt-single-gpu` profile serves it with vLLM on GPU `0` of a Blackwell workstation or DGX Spark, with LiLiCorr speculative decoding, the language model only, and Streaming Input. Scale Lightning to zero with `--scale nvidia-llm-vllm-lightning=0`.
+- **Nemotron 3.5 Bolt E4B across cloud, server, and single-GPU profiles.** The `nemotron-bolt-4b` catalog entry is available from NVIDIA Cloud (`nvidia/nemotron-3.5-bolt-e4b`), on `*/server` recipes with the `nemotron-35-bolt-e4b` NIM sidecar profile, and on `*/single-gpu` recipes with the `nemotron-35-bolt-e4b-single-gpu` vLLM sidecar profile (with DFlash speculative decoding on Blackwell GPUs and Streaming Input). Its Services card adds a **Conversational Mode** toggle, on by default.
+
+### Changed
+
+- **Reasoning Budget stays under Max Tokens.** When **Max Tokens** is set, an LLM's **Reasoning Budget** stays 64 tokens under it. Under 192 **Max Tokens**, the backend turns **Reasoning** off for the session.
 
 ## [2.3.0] - 2026-10-19
 

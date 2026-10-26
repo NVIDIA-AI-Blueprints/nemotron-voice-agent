@@ -37,6 +37,16 @@ server:
       supported_languages: [en, de, es, fr, it, ja, zh]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-super
+    nemotron-bolt-4b:
+      name: "Nemotron 3.5 Bolt E4B"
+      model_id: "nvidia/nemotron-3.5-bolt-e4b"
+      base_url: "http://nemotron-35-bolt-e4b:8000/v1"
+      health_path: "/v1/health/ready"
+      supported_languages: [en, de, es, fr, it, ja]
+      extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
+      settings: nemotron-bolt-4b
+      nvcf:
+        settings: nemotron-bolt-4b-nvcf
     nemotron-omni-nvfp4:
       name: "Nemotron 3 Nano Omni 30B A3B Reasoning"
       model_id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
@@ -124,6 +134,15 @@ single-gpu:
       supported_languages: [en, de, es, fr, it, ja]
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-super
+    nemotron-bolt-4b:
+      name: "Nemotron 3.5 Bolt E4B"
+      model_id: "nvidia/nemotron-3.5-bolt-e4b"
+      base_url: "http://nemotron-35-bolt-e4b-vllm:8000/v1"
+      health_path: "/health"
+      streaming_url: "ws://nemotron-35-bolt-e4b-vllm:8000/v1/streaming-session"
+      supported_languages: [en, de, es, fr, it, ja]
+      extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
+      settings: nemotron-bolt-4b
     nemotron-omni-nvfp4:
       name: "Nemotron 3 Nano Omni 30B A3B Reasoning"
       model_id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"

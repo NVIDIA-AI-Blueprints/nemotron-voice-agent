@@ -12,12 +12,14 @@
 # Default precedence: the example's `settings` in `examples_registry.yaml`,
 # then a value already at `path` in the entry, then `default`.
 # A setting with `requires` is sent only while that setting is true.
+# A setting with `below` stays at least `reserve` under that setting when it is
+# set. When that leaves less than its `min`, its `requires` setting is turned off.
 #
 # Types: bool, int, float, enum (with `options`). Keys starting with `x-` are
 # shared YAML anchors, not profiles.
 
-x-sampling: &sampling
-  temperature:
+x-llm: &llm
+  temperature: &temperature
     label: "Temperature"
     type: float
     min: 0.0
@@ -36,88 +38,64 @@ x-sampling: &sampling
     label: "Seed"
     type: int
     min: 0
-
-nemotron-nim:
-  <<: *sampling
   enable_thinking:
     label: "Reasoning"
     type: bool
     default: false
     path: extra_body.chat_template_kwargs.enable_thinking
+
+x-reasoning-budget: &reasoning-budget
+  label: "Reasoning Budget"
+  type: int
+  default: 16384
+  min: 128
+  max: 32768
+  requires: enable_thinking
+  below: max_tokens
+  reserve: 64
+
+x-conversational-mode: &conversational-mode
+  label: "Conversational Mode"
+  type: bool
+  default: true
+  path: extra_body.chat_template_kwargs.conversational_mode
+
+# Each serving engine names the budget differently: `nemotron-nim` sends
+# `reasoning_budget`, `nemotron-vllm` sends `thinking_token_budget`.
+nemotron-nim: &nim
+  <<: *llm
   reasoning_budget:
-    label: "Reasoning Budget"
-    type: int
-    default: 16384
-    min: 128
-    max: 32768
+    <<: *reasoning-budget
     path: extra_body.reasoning_budget
-    requires: enable_thinking
 
-nemotron-vllm:
-  <<: *sampling
-  enable_thinking:
-    label: "Reasoning"
-    type: bool
-    default: false
-    path: extra_body.chat_template_kwargs.enable_thinking
+nemotron-vllm: &vllm
+  <<: *llm
   reasoning_budget:
-    label: "Reasoning Budget"
-    type: int
-    default: 16384
-    min: 128
-    max: 32768
+    <<: *reasoning-budget
     path: extra_body.thinking_token_budget
-    requires: enable_thinking
 
 nemotron-omni-nim:
-  <<: *sampling
+  <<: *nim
   temperature:
-    label: "Temperature"
-    type: float
-    min: 0.0
+    <<: *temperature
     max: 2.0
-  enable_thinking:
-    label: "Reasoning"
-    type: bool
-    default: false
-    path: extra_body.chat_template_kwargs.enable_thinking
-  reasoning_budget:
-    label: "Reasoning Budget"
-    type: int
-    default: 16384
-    min: 128
-    max: 32768
-    path: extra_body.reasoning_budget
-    requires: enable_thinking
 
 nemotron-omni-vllm:
-  <<: *sampling
+  <<: *vllm
   temperature:
-    label: "Temperature"
-    type: float
-    min: 0.0
+    <<: *temperature
     max: 2.0
-  enable_thinking:
-    label: "Reasoning"
-    type: bool
-    default: false
-    path: extra_body.chat_template_kwargs.enable_thinking
-  reasoning_budget:
-    label: "Reasoning Budget"
-    type: int
-    default: 16384
-    min: 128
-    max: 32768
-    path: extra_body.thinking_token_budget
-    requires: enable_thinking
+
+nemotron-bolt-4b:
+  <<: *vllm
+  conversational_mode: *conversational-mode
+
+nemotron-bolt-4b-nvcf:
+  <<: *nim
+  conversational_mode: *conversational-mode
 
 nemotron-super:
-  <<: *sampling
-  enable_thinking:
-    label: "Reasoning"
-    type: bool
-    default: false
-    path: extra_body.chat_template_kwargs.enable_thinking
+  <<: *llm
 
 magpie-tts:
   synthesis_mode:

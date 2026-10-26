@@ -45,8 +45,24 @@ function clamp(value: number, spec: ServiceSettingSpec): number {
 export function ServiceSettingsControls({ schema, values, disabled, onChange, children }: Props) {
   const resolve = (name: string) => values[name] ?? schema[name]?.default;
 
+  const bounded = (spec: ServiceSettingSpec): { spec: ServiceSettingSpec; belowMin: boolean } => {
+    const limit = spec.below ? resolve(spec.below) : undefined;
+    if (typeof limit !== "number") return { spec, belowMin: false };
+    const cap = limit - (spec.reserve ?? 0);
+    if (cap < (spec.min ?? 0)) return { spec, belowMin: true };
+    return { spec: { ...spec, max: Math.min(spec.max ?? cap, cap) }, belowMin: false };
+  };
+
+  const bounds = Object.fromEntries(Object.entries(schema).map(([name, spec]) => [name, bounded(spec)]));
+  const forcedOff = new Set(
+    Object.entries(schema).flatMap(([name, spec]) => (spec.requires && bounds[name].belowMin ? [spec.requires] : [])),
+  );
+
+  const current = (name: string) => (forcedOff.has(name) ? false : resolve(name));
+
   const renderControl = (name: string, spec: ServiceSettingSpec, rowDisabled: boolean) => {
-    const value = resolve(name);
+    const raw = current(name);
+    const value = typeof raw === "number" && spec.max !== undefined ? Math.min(raw, spec.max) : raw;
     if (spec.type === "bool") {
       return (
         <Toggle
@@ -98,8 +114,8 @@ export function ServiceSettingsControls({ schema, values, disabled, onChange, ch
           aria-label={spec.label ?? name}
           onChange={(e) => onChange(name, parseNumber(e.target.value, spec.type === "int"))}
           onBlur={() => {
-            const bounded = numeric === undefined ? undefined : clamp(numeric, spec);
-            if (bounded !== numeric) onChange(name, bounded);
+            const typed = values[name];
+            if (typeof typed === "number" && clamp(typed, spec) !== typed) onChange(name, clamp(typed, spec));
           }}
         />
       </>
@@ -109,8 +125,9 @@ export function ServiceSettingsControls({ schema, values, disabled, onChange, ch
   return (
     <div className="param-grid">
       {children}
-      {orderSettings(schema).map(([name, spec]) => {
-        const inactive = Boolean(spec.requires) && !resolve(spec.requires ?? "");
+      {orderSettings(schema).map(([name]) => {
+        const { spec, belowMin } = bounds[name];
+        const inactive = (Boolean(spec.requires) && !current(spec.requires ?? "")) || belowMin || forcedOff.has(name);
         return (
           <SettingRow key={name} label={spec.label ?? name} inactive={inactive}>
             {renderControl(name, spec, disabled || inactive)}

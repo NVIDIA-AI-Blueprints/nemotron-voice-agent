@@ -1,7 +1,7 @@
 ---
 name: nemotron-voice-agent-upgrade-pipecat
 description: Upgrade the Nemotron Voice Agent to a new Pipecat (pipecat-ai) version. Reads release notes for every release in range, diffs old vs new, discovers every example pipeline and Pipecat call site, implements changes, then runs multi-agent gap analysis until clean. Generic across Pipecat versions.
-version: "2.3.0"
+version: "2.3.1"
 license: CC-BY-4.0 AND Apache-2.0
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
