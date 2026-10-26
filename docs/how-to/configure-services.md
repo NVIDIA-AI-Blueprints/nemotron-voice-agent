@@ -81,35 +81,40 @@ The Services tab lists the active recipe's entries for the example. Click an ent
 
 ## Editable settings
 
-An entry with `settings: <profile>` shows the controls of that `settings.yaml` profile inside the service's card in the Services tab. Click the card to expand them. Values are kept per example, per slot, and per service, so they survive switching between Self-hosted and NVIDIA Cloud. Numbers with `min` and `max` render as a slider with a value box, other numbers as a value box, enums as a dropdown, and booleans as a toggle. The backend validates each value against its `type`, `min`/`max`, or `options`, falls back to the default for invalid or missing values, and writes it at `path`: inside `extra_params` for an LLM entry, or into the ASR or TTS entry field of that name, such as `synthesis_mode`. `path` defaults to the setting name, so only nested fields set it. A setting with `requires` is sent only while that setting is true.
+An entry with `settings: <profile>` shows the controls of that `settings.yaml` profile inside the service's card in the Services tab. Click the card to expand them. Values are kept per example, per slot, and per service, so they survive switching between Self-hosted and NVIDIA Cloud. Numbers with `min` and `max` render as a slider with a value box, other numbers as a value box, enums as a dropdown, and booleans as a toggle. The backend validates each value against its `type` or `options` and falls back to the default for invalid or missing values. It clamps a number outside `min`/`max` to the nearest bound. It then writes the value at `path`: inside `extra_params` for an LLM entry, or into the ASR or TTS entry field of that name, such as `synthesis_mode`. `path` defaults to the setting name, so only nested fields set it. A setting with `requires` is sent only while that setting is true. A setting with `below` stays at least `reserve` under the named setting while that setting is set. When that leaves less than its `min`, the backend turns its `requires` setting off, and the Services tab shows that setting as off.
 
 ```yaml
-x-sampling: &sampling
-  temperature: {label: "Temperature", type: float, min: 0.0, max: 1.0}
+x-llm: &llm
+  temperature: &temperature {label: "Temperature", type: float, min: 0.0, max: 1.0}
   top_p: {label: "Top P", type: float, min: 0.01, max: 1.0}
   max_tokens: {label: "Max Tokens", type: int, min: 1, max: 16384}
   seed: {label: "Seed", type: int, min: 0}
-
-nemotron-nim:
-  <<: *sampling
   enable_thinking:
     label: "Reasoning"
     type: bool
     default: false
     path: extra_body.chat_template_kwargs.enable_thinking
+
+x-reasoning-budget: &reasoning-budget
+  label: "Reasoning Budget"
+  type: int
+  default: 16384
+  min: 128
+  max: 32768
+  requires: enable_thinking
+  below: max_tokens
+  reserve: 64
+
+nemotron-nim: &nim
+  <<: *llm
   reasoning_budget:
-    label: "Reasoning Budget"
-    type: int
-    default: 16384
-    min: 128
-    max: 32768
+    <<: *reasoning-budget
     path: extra_body.reasoning_budget
-    requires: enable_thinking
 ```
 
 A setting's default comes from, in order: the example's `settings` for that slot and service in `examples_registry.yaml`, a value already at `path` in the entry's `extra_params`, then the profile's `default`. A setting without any default, such as `temperature`, shows `Auto` and is sent only when the user sets it, so the model or pipeline default applies otherwise. Defaults apply even when the client sends no settings, so direct API clients get the same request as the UI.
 
-NIM and vLLM name the budget differently (`reasoning_budget` and `thinking_token_budget`), so each serving engine has its own profile. Keys that start with `x-` are shared YAML anchors, not profiles. Supported types are `bool`, `int`, `float`, and `enum`.
+NIM and vLLM name the budget differently (`reasoning_budget` and `thinking_token_budget`), so each serving engine has its own profile. When NVIDIA Cloud needs a different profile than the self-hosted endpoint, set `settings` inside the entry's `nvcf` block. For example, the Bolt E4B entry uses `nemotron-bolt-4b` for its NIM and vLLM endpoints, which read `thinking_token_budget`, and `nvcf: {settings: nemotron-bolt-4b-nvcf}` for NVIDIA Cloud, which reads `reasoning_budget`. Keys that start with `x-` are shared YAML anchors, not profiles. Supported types are `bool`, `int`, `float`, and `enum`.
 
 The Frontend/Backend thinker reads the same `llm` entries as the talker through `categories`, and the registry sets its defaults:
 
