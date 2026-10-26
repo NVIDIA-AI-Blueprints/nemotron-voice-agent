@@ -251,7 +251,7 @@ class LLMAgent:
             self._model_active.set()
         self._last_activity = time.time()
         try:
-            result = self._client.complete(wire, tools)
+            result = self._client.complete(wire, tools, should_abort=self._abort_pending)
         finally:
             with self._lock:
                 self._model_active.clear()
@@ -278,6 +278,11 @@ class LLMAgent:
                 api_duration=round(time.monotonic() - started, 3),
             )
         return result
+
+    def _abort_pending(self) -> bool:
+        """An interrupt or a redirect that arrived before the model request started."""
+        with self._lock:
+            return self._interrupted.is_set() or bool(self._redirects)
 
     def _after_abort(self, restarts: int) -> int:
         restarts += 1

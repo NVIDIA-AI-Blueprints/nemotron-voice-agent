@@ -19,7 +19,7 @@ from typing import Any
 
 #: Frontend (``prompts/<profile>/frontend.yaml``) variants and their defaults.
 FRONTEND_FEATURES: dict[str, bool] = {"replay_intent": False}
-#: Backend (``prompts/<profile>/backend.yaml``) variants and their defaults.
+#: Backend (``prompts/<profile>/backend/<kind>.yaml``) variants and their defaults.
 BACKEND_FEATURES: dict[str, bool] = {
     "spelling_v2": False,
     "spoken_output": False,

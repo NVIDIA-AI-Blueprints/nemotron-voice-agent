@@ -291,6 +291,20 @@ class ControlTest(AgentTestCase):
         self.assertEqual(result["final_response"], "Kept it.")
         self.assertIn("do not cancel", result["messages"][2]["content"])
 
+    def test_hard_interrupt_just_before_the_request_is_not_cleared(self) -> None:
+        self.server.queue(Reply(content="should not be sent"))
+        agent = self.agent()
+        original = agent._client.complete  # noqa: SLF001
+
+        def interrupt_then_complete(*args: Any, **kwargs: Any) -> Any:
+            agent.hard_interrupt("stop")  # lands after the loop's check, before complete() clears the abort
+            return original(*args, **kwargs)
+
+        agent._client.complete = interrupt_then_complete  # noqa: SLF001
+        result = agent.run_conversation("q", [], "s1:1")
+        self.assertTrue(result["interrupted"])
+        self.assertEqual(self.server.requests, [])
+
     def test_redirect_during_a_tool_is_a_steer_and_idle_is_refused(self) -> None:
         agent = self.agent(Bridge(delay_s=0.3))
         self.assertFalse(agent.redirect("idle"))

@@ -96,9 +96,16 @@ class ChatClient:
         tools: list[dict[str, Any]] | None,
         *,
         on_attempt: Callable[[int], None] | None = None,
+        should_abort: Callable[[], bool] | None = None,
     ) -> ChatResult:
-        """Stream one reply; retries connection, timeout, 429, 5xx and mid-stream cuts; raises :class:`Aborted`."""
+        """Stream one reply; retries connection, timeout, 429, 5xx and mid-stream cuts; raises :class:`Aborted`.
+
+        A stale abort is cleared first; ``should_abort`` is checked after that, so an abort that raced
+        the start is kept.
+        """
         self._abort.clear()
+        if should_abort is not None and should_abort():
+            raise Aborted
         attempt = 0
         while True:
             attempt += 1

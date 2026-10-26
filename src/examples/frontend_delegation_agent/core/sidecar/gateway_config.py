@@ -96,7 +96,7 @@ DEFAULTS: dict[str, Any] = {
     "prompt_features": dict(BACKEND_FEATURES),
     # Domain detection (tau3-identity-fixes-plan.md section 3.2): name -> {tools_any: [tool, ...]}; the first
     # domain with one of its tools in the session's tool list wins. It selects the domain note of
-    # prompts/<profile>/backend.yaml; no domains (or no match) = no note.
+    # prompts/<profile>/backend/<kind>.yaml; no domains (or no match) = no note.
     "domains": {},
 }
 

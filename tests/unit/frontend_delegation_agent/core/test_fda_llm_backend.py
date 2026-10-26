@@ -18,7 +18,7 @@ from unittest import mock
 
 from examples.frontend_delegation_agent.core.backends.llm import HARNESS_KEYS
 from examples.frontend_delegation_agent.core.backends.llm import tools as rules
-from examples.frontend_delegation_agent.core.backends.llm.client import ChatClient
+from examples.frontend_delegation_agent.core.backends.llm.client import Aborted, ChatClient
 from examples.frontend_delegation_agent.core.backends.llm.host import conversation_started, system_message
 from examples.frontend_delegation_agent.core.backends.llm.wire import build, strip_think
 from examples.frontend_delegation_agent.core.prompt_features import tools_canonical_sha256
@@ -109,6 +109,21 @@ class RequestTest(unittest.TestCase):
         for absent in ("temperature", "max_tokens", "tool_choice", "parallel_tool_calls"):
             self.assertNotIn(absent, body)
         self.assertNotIn("tools", client.body([], None))
+
+    def test_a_pending_abort_survives_the_clear(self) -> None:
+        client = ChatClient(
+            base_url="http://x/v1",
+            api_key="k",
+            model="m",
+            timeout_s=5,
+            max_retries=3,
+            reasoning_effort="",
+            request_overrides={},
+        )
+        attempts: list[int] = []
+        with self.assertRaises(Aborted):
+            client.complete([], None, on_attempt=attempts.append, should_abort=lambda: True)
+        self.assertEqual(attempts, [])  # no request was started
 
 
 class ToolRulesTest(unittest.TestCase):

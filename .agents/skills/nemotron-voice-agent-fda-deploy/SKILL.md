@@ -1,7 +1,7 @@
 ---
 name: nemotron-voice-agent-fda-deploy
 description: Build, deploy, and evaluate the Frontend Delegation Agent (FDA) example on the frontend-delegation-agent/single-gpu recipe, with the browser UI (default profile) or OpenAI Realtime evaluation runs such as τ² (eval overlay). Use when starting, smoke testing, or troubleshooting the FDA voice service or its backend: Hermes (fda-hermes, by default in an NVIDIA OpenShell sandbox, or the plain baseline overlay) or the lightweight LLM backend inside the voice container (docker/docker-compose.fda-llm.yaml).
-version: "2.5.0"
+version: "2.3.0"
 license: CC-BY-4.0 AND Apache-2.0
 metadata:
   author: NVIDIA Voice Agent Team <nemotron-voice-agent@nvidia.com>
