@@ -319,7 +319,7 @@ services:
       FBA_VOICE_EVENT_LOG: ""
       FBA_FILLER_LOG: ""
       FBA_BACKEND_HISTORY: "false"
-      # τ² sends no pings and pauses for seconds: the server must not ping (Realtime sessions check it).
+      # A benchmark client sends no pings and pauses for seconds: the server must not ping (Realtime sessions check it).
       UVICORN_WS_PING_INTERVAL: "0"
       UVICORN_WS_PING_TIMEOUT: "20"
     depends_on:

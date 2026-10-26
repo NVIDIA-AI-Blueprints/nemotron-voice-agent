@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""tau3-failure-fixes-plan.md: M1 proactive status, M3 spelling hold and wording, M2 replay, G1, G2, fingerprints."""
+"""Failure-fixes plan: M1 proactive status, M3 spelling hold and wording, M2 replay, G1, G2, fingerprints."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from _fda_backend_fakes import Harness as ControllerHarness
 from _fda_variants import variant  # noqa: E402
-from _fda_voice_fakes import DelegationHarness, profile_config, tau2_session_update, tau3_config
+from _fda_voice_fakes import DelegationHarness, bench_config, benchmark_session_update, profile_config
 
 from examples.frontend_delegation_agent.core.config import (
     DelegationConfigError,
@@ -37,19 +37,19 @@ AIRLINE_CODE = ("^[A-Za-z0-9]{6}$",)
 
 
 def with_proactive(after_s: float = 0.3, max_per_run: int = 1):
-    config = tau3_config()
+    config = bench_config()
     output = replace(config.output, proactive_status=ProactiveStatusSettings(True, after_s, max_per_run))
     return replace(config, output=output)
 
 
 def with_hold(hold_ms: int = 400):
-    config = profile_config(variant("profiles/tau3_arm_m3_spelling.yaml"))
+    config = profile_config(variant("profiles/bench_arm_m3_spelling.yaml"))
     delegation = replace(config.delegation, spelling_hold=SpellingHoldSettings(True, hold_ms, AIRLINE_CODE))
     return replace(config, delegation=delegation)
 
 
 def with_replay(ttl_s: float = 30.0):
-    config = tau3_config()
+    config = bench_config()
     delegation = replace(config.delegation, replay=ReplaySettings(True, ttl_s))
     return replace(config, delegation=delegation, prompt_features={**config.prompt_features, "replay_intent": True})
 
@@ -72,7 +72,7 @@ ANSWER = "Your flight QV101 is confirmed for May third. Would you like to add a 
 
 class ProactiveStatusTests(unittest.IsolatedAsyncioTestCase):
     async def _working(self, harness: DelegationHarness) -> None:
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -134,7 +134,7 @@ class ProactiveStatusTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_off_by_default(self) -> None:
         harness = DelegationHarness()
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         self.assertIsNone(harness.manager._proactive_task)  # type: ignore[union-attr]
         await harness.close()
 
@@ -186,7 +186,7 @@ class SpellingHoldTurnTests(unittest.IsolatedAsyncioTestCase):
         harness = DelegationHarness(
             with_hold(1500), transcripts=["A, A, L, T, O, underscore, A, H", "underscore one two three four"]
         )
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         await harness.speak()
         delegate = await harness.wait_sent("delegate")
@@ -200,7 +200,7 @@ class SpellingHoldTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_hold_without_speech_decides_after_hold_ms(self) -> None:
         harness = DelegationHarness(with_hold(200), transcripts=["Q U I N N"])
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         delegate = await harness.wait_sent("delegate")
         self.assertEqual(delegate["run_input"][0]["text"], "QUINN")  # spelled run joined, ASR case kept
@@ -209,7 +209,7 @@ class SpellingHoldTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_off_never_holds_and_keeps_the_letters(self) -> None:
         harness = DelegationHarness(transcripts=["Q U I N N"])
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         delegate = await harness.wait_sent("delegate")
         self.assertEqual(delegate["run_input"][0]["text"], "Q U I N N")
@@ -220,9 +220,9 @@ class SpellingHoldTurnTests(unittest.IsolatedAsyncioTestCase):
 class InvalidWordingTests(unittest.IsolatedAsyncioTestCase):
     async def test_first_invalid_reads_back_then_asks_to_spell_all_and_never_sends(self) -> None:
         harness = DelegationHarness(
-            profile_config(variant("profiles/tau3_arm_m3_spelling.yaml")), transcripts=["my user id"]
+            profile_config(variant("profiles/bench_arm_m3_spelling.yaml")), transcripts=["my user id"]
         )
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -247,7 +247,7 @@ class InvalidWordingTests(unittest.IsolatedAsyncioTestCase):
 class ReplayTests(unittest.IsolatedAsyncioTestCase):
     async def _answered(self, harness: DelegationHarness, *, finish: bool = True) -> None:
         """Turn 1 delegated, run_1 answers; the answer is marked not heard after its release."""
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -382,7 +382,7 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
     def test_replay_needs_the_frontend_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "p.yaml"
-            base = variant("profiles/tau3_eval.yaml")
+            base = variant("profiles/bench_eval.yaml")
             path.write_text(f"extends: {base}\ndelegation: {{replay_unheard_answer: {{enabled: true}}}}\n")
             with self.assertRaisesRegex(DelegationConfigError, "replay_intent"):
                 load_delegation_config(path)
@@ -393,10 +393,10 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
 
 class FillerDedupeTests(unittest.IsolatedAsyncioTestCase):
     async def test_repeat_dropped_while_working_and_replaced_otherwise(self) -> None:
-        config = tau3_config()
+        config = bench_config()
         config = replace(config, delegation=replace(config.delegation, filler_dedupe=FillerDedupeSettings(True, 3)))
         harness = DelegationHarness(config, transcripts=["check my flight", "and my bags", "and my seat"])
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         await harness.wait_sent("delegate")
         await harness.wait_for("response.done")
@@ -472,10 +472,10 @@ class SpokenTextTests(unittest.TestCase):
 
 class CleanAnswersTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_cleaned_text_is_spoken_and_recorded(self) -> None:
-        config = tau3_config()
+        config = bench_config()
         config = replace(config, output=replace(config.output, clean_answers=True))
         harness = DelegationHarness(config, transcripts=["options please"])
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         await harness.wait_sent("delegate")
         await harness.idle(1500)
@@ -494,8 +494,8 @@ class CleanAnswersTurnTests(unittest.IsolatedAsyncioTestCase):
 
 class FingerprintTests(unittest.IsolatedAsyncioTestCase):
     async def test_voice_server_logs_features_and_the_frontend_prompt_hash(self) -> None:
-        harness = DelegationHarness(profile_config(variant("profiles/tau3_arm_m3_spelling.yaml")))
-        await harness.start(tau2_session_update("airline"))
+        harness = DelegationHarness(profile_config(variant("profiles/bench_arm_m3_spelling.yaml")))
+        await harness.start(benchmark_session_update("airline"))
         start = harness.logged("fda_session_start")[0]
         self.assertTrue(start["features"]["spelling_hold"])
         self.assertTrue(start["features"]["spelled_runs"])

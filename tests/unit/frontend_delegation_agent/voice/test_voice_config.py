@@ -52,7 +52,7 @@ class ShippedConfigTests(unittest.TestCase):
                             self.assertTrue(Path(value).is_absolute(), key)
                             self.assertTrue(Path(value).exists(), key)
 
-    def test_base_defaults_are_tau3_safe(self) -> None:
+    def test_base_defaults_are_bench_safe(self) -> None:
         config = load_voice_config(BASE_CONFIG)
         self.assertEqual(config.filler.mode, "log_only")
         self.assertEqual(config.tools.source, "client")
@@ -71,7 +71,7 @@ class ShippedConfigTests(unittest.TestCase):
         self.assertTrue(browser.audio.pace_output)
         self.assertEqual([t.name for t in browser.tools.config_tool_specs], ["get_order", "cancel_order"])
         for name, path in (
-            ("tau3.yaml", variant("voice/tau3.yaml")),
+            ("bench.yaml", variant("voice/bench.yaml")),
             ("realtime_eval.yaml", VOICE_PROFILES / "realtime_eval.yaml"),
         ):
             with self.subTest(profile=name):

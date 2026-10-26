@@ -236,7 +236,7 @@ class EmulatorAgent:
                     return [(name, {"order_id": order.group(1)})]
         if self._default_tool:
             for name in self._tools:
-                if name != "transfer_to_human_agents":  # tau2 ends the simulation on that one
+                if name != "transfer_to_human_agents":  # the benchmark ends the simulation on that one
                     return [(name, {})]
         return calls
 

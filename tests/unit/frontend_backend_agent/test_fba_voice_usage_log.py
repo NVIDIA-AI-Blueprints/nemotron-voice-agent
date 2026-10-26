@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from _fba_core_fakes import FakeChatClient, delegate_response, tau2_session_update, text_response, tool_response
+from _fba_core_fakes import FakeChatClient, benchmark_session_update, delegate_response, text_response, tool_response
 from _fba_pipecat_fakes import PipecatHarness, PipecatTestCase
 
 from examples.frontend_backend_agent.core.engine.event_log import EventLog
@@ -37,7 +37,7 @@ class UsageLogTests(PipecatTestCase):
             harness = PipecatHarness(
                 clients=AgentClients(backend=backend, frontend=frontend), event_log=EventLog(str(path))
             )
-            await harness.start(tau2_session_update())
+            await harness.start(benchmark_session_update())
             await harness.speak()
             await harness.wait_for("response.done")
             await harness.send(
@@ -71,7 +71,7 @@ class UsageLogTests(PipecatTestCase):
                 agent_factory=lambda _session_id: ScriptedAgentPort([{"say": "Hello there."}]),
                 event_log=EventLog(str(path)),
             )
-            await harness.start(tau2_session_update())
+            await harness.start(benchmark_session_update())
             await harness.speak()
             await harness.wait_for("response.done")
             await harness.close()

@@ -6,7 +6,7 @@
 :meth:`PipecatSpeechOutput.speak` pushes one ``TTSSpeakFrame`` per sentence (the shared
 sentence splitter) between a :class:`SpeechStartFrame` and an :class:`EndOfSpeechFrame`.
 The :class:`OutputTagger`, placed after the TTS service, keeps the contract every head
-gives the shared turn manager (as the τ³ head's ``OutputPath`` does):
+gives the shared turn manager (as the former standalone Realtime head's ``OutputPath`` did):
 
 * each sentence's transcript delta goes out right before that sentence's first audio;
 * ``ResponseProgress`` gets ``begin_item``, ``begin_sentence``/``end_sentence`` and
@@ -178,7 +178,7 @@ class OutputTagger(FrameProcessor):
         if job.cancelled or job is not self.job:
             job.resolve("cancelled" if job.cancelled else "interrupted")
             return
-        # Sentences that produced no audio still get their transcript (as the τ³ head does).
+        # Sentences that produced no audio still get their transcript (as the former server did).
         if job.sentence_open:
             job.progress.end_sentence()
             job.sentence_open = False

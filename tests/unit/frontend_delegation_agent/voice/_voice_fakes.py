@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Offline doubles for the voice-layer tests: the base config, an in-memory transport, τ²-shaped payloads.
+"""Offline doubles for the voice-layer tests: the base config, an in-memory transport, benchmark-shaped payloads.
 
 Named ``_voice_fakes`` because pytest imports test helpers by basename.
 """
@@ -45,11 +45,11 @@ class MemoryTransport:
         self.changed.set()
 
 
-# -- tau2-shaped payloads ---------------------------------------------------------------
+# -- benchmark-shaped payloads----------------------------------------------------------
 
 
-def tau2_session_update(domain: str = "mock") -> dict[str, Any]:
-    return json.loads((FIXTURES / "tau2_session_update" / f"{domain}.json").read_text(encoding="utf-8"))
+def benchmark_session_update(domain: str = "mock") -> dict[str, Any]:
+    return json.loads((FIXTURES / "benchmark_session_update" / f"{domain}.json").read_text(encoding="utf-8"))
 
 
 def pcmu_speech(ms: int, frequency: float = 300.0) -> bytes:

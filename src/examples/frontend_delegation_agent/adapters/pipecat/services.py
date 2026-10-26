@@ -9,7 +9,7 @@ shared Nemotron speech text filter, in ``per_sentence`` mode. NVCF endpoints get
 API key and the function id; local ``nemo-speech`` endpoints get none of them.
 
 The stubs at the bottom replace both services and the VAD for the no-GPU tests: an energy
-VAD (the τ² replay tools send tones, which Silero does not treat as speech), a stub ASR
+VAD (the benchmark replay tools send tones, which Silero does not treat as speech), a stub ASR
 that emits one finalized transcript per turn, and a tone TTS built on Pipecat's own
 ``TTSService`` so the real serialization queue, stop frames and end markers are exercised.
 """

@@ -140,7 +140,7 @@ class HermesAdapterTest(unittest.TestCase):
         self.assertNotIn("get_order", registry.get_all_tool_names())
 
     def test_trace_records_each_request_and_response(self) -> None:
-        """P0.3 (tau3-geval-failure-fixes-plan.md): Hermes' own hooks feed the trace; logging only."""
+        """P0.3 (geval failure-fixes plan): Hermes' own hooks feed the trace; logging only."""
         import json  # noqa: PLC0415
 
         from examples.frontend_delegation_agent.core.backends.hermes.host import HermesAgentHost  # noqa: PLC0415

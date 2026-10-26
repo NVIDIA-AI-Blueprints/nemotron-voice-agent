@@ -10,7 +10,7 @@ here was recorded from the code before the UI work started; none of them may cha
 
 * the Realtime pipeline's processors, their order and the arguments they are built with;
 * the Pipecat settings summary logged in ``session_start``;
-* the ASR/TTS endpoints of the Tau profile, with and without ``FBA_ASR_SERVER``;
+* the ASR/TTS endpoints of the eval profile, with and without ``FBA_ASR_SERVER``;
 * what ``src/server.py`` hands the Realtime route for the FBA model (sanitized session config and
   server-side tools).
 """
@@ -82,7 +82,7 @@ SETTINGS_SUMMARY = {
 FRONTEND_PROMPT_SHA256 = "1e58d7e99a01c5227286108221b69bb3d6d5ac47d2e11f63436d7527a613196c"
 
 
-def _tau_config() -> Any:
+def _eval_config() -> Any:
     return load_voice_config(profile_path(REALTIME_PROFILE))
 
 
@@ -114,7 +114,7 @@ class RealtimePipelineBaselineTests(unittest.IsolatedAsyncioTestCase):
             "PipelineParams",
         )
         with pinned_environment():
-            config = _tau_config()
+            config = _eval_config()
             patches = [_record(name, calls) for name in names]
             for patch in patches:
                 patch.start()
@@ -183,7 +183,7 @@ class RealtimePipelineBaselineTests(unittest.IsolatedAsyncioTestCase):
 class RealtimeSpeechEndpointBaselineTests(unittest.TestCase):
     def _endpoints(self, **env: str) -> list[tuple[Any, ...]]:
         with pinned_environment(), mock.patch.dict(os.environ, env):
-            config = _tau_config()
+            config = _eval_config()
         return [
             (e.kind, e.server, e.model, e.function_id, e.language_code, e.voice_id, e.use_ssl)
             for e in (config.asr.endpoint, config.tts.endpoint)

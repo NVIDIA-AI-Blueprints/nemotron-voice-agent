@@ -47,10 +47,11 @@ delegation:
 #: name -> (base, voice_profile or None, settings). A base or voice profile is a shipped config path
 #: relative to ``config/`` or another variant's name.
 VARIANTS: dict[str, tuple[str, str | None, str]] = {
-    # The τ³ voice profile and the stub profiles, once shipped (removed with the τ³ adapter, shared-stack-plan.md
-    # step 1): tau3-bench voice settings (client tools, no greeting, the tau2 greeting seeded, one tool-argument
+    # The benchmark voice profile and the stub profiles, once shipped (removed with the former standalone Realtime
+    # head, shared-stack-plan.md step 1): benchmark voice settings (client tools, no greeting, the benchmark client's
+    # greeting seeded, one tool-argument
     # rule selected by tool name), and the no-GPU, no-LLM stub runs (rule-based frontend, in-process emulator gateway).
-    "voice/tau3.yaml": (
+    "voice/bench.yaml": (
         "voice/base.yaml",
         None,
         """\
@@ -83,7 +84,7 @@ normalization:
     ),
     "profiles/stub.yaml": (
         "delegation_agent.yaml",
-        "voice/tau3.yaml",
+        "voice/bench.yaml",
         """\
 delegation:
   speak_when_delegating: true
@@ -123,9 +124,9 @@ backend:
         _OFF_9 + "  spelling_v2: false\n  spoken_output: false\n  write_consent: false\n  phone_format: false\n",
     ),
     "gateway.identity_control.yaml": ("gateway.yaml", None, _OFF_9 + "  phone_format: false\n"),
-    # Voice: normalization over the shipped tau3 and realtime_eval voice profiles.
-    "voice/tau3_spelling.yaml": (
-        "voice/tau3.yaml",
+    # Voice: normalization over the shipped benchmark and realtime_eval voice profiles.
+    "voice/bench_spelling.yaml": (
+        "voice/bench.yaml",
         None,
         """\
 normalization:
@@ -136,8 +137,8 @@ normalization:
     escalate_invalid_message_key: tool_argument_invalid_spell_all
 """,
     ),
-    "voice/tau3_recovery_hint.yaml": (
-        "voice/tau3_spelling.yaml",
+    "voice/bench_recovery_hint.yaml": (
+        "voice/bench_spelling.yaml",
         None,
         """\
 normalization:
@@ -152,8 +153,8 @@ normalization:
       escalate_message_key: ""
 """,
     ),
-    "voice/tau3_fixes.yaml": (
-        "voice/tau3_recovery_hint.yaml",
+    "voice/bench_fixes.yaml": (
+        "voice/bench_recovery_hint.yaml",
         None,
         "normalization: {tool_arguments: {result_hints: {escalate_message_key: lookup_not_found_hint_words}}}\n",
     ),
@@ -195,10 +196,10 @@ normalization:
         None,
         "normalization: {tool_arguments: {result_hints: {field_provenance: true}}}\n",
     ),
-    # Profiles: the tau3 control and its single-fix variants.
-    "profiles/tau3_eval.yaml": (
+    # Profiles: the benchmark control and its single-fix variants.
+    "profiles/bench_eval.yaml": (
         "delegation_agent.yaml",
-        "voice/tau3_fixes.yaml",
+        "voice/bench_fixes.yaml",
         """\
 delegation:
   speak_when_delegating: true
@@ -211,9 +212,9 @@ tools:
   executor: wire
 """,
     ),
-    "profiles/tau3_eval_baseline.yaml": (
-        "profiles/tau3_eval.yaml",
-        "voice/tau3.yaml",
+    "profiles/bench_eval_baseline.yaml": (
+        "profiles/bench_eval.yaml",
+        "voice/bench.yaml",
         """\
 delegation:
   spelling_hold: {enabled: false, complete_patterns: []}
@@ -226,15 +227,15 @@ prompt_features:
   replay_intent: false
 """,
     ),
-    "profiles/tau3_identity_control.yaml": ("profiles/tau3_eval.yaml", "voice/tau3_spelling.yaml", ""),
-    "profiles/tau3_arm_i3_recovery_hint.yaml": (
-        "profiles/tau3_identity_control.yaml",
-        "voice/tau3_recovery_hint.yaml",
+    "profiles/bench_identity_control.yaml": ("profiles/bench_eval.yaml", "voice/bench_spelling.yaml", ""),
+    "profiles/bench_arm_i3_recovery_hint.yaml": (
+        "profiles/bench_identity_control.yaml",
+        "voice/bench_recovery_hint.yaml",
         "",
     ),
-    "profiles/tau3_arm_m3_spelling.yaml": (
-        "profiles/tau3_eval_baseline.yaml",
-        "voice/tau3_spelling.yaml",
+    "profiles/bench_arm_m3_spelling.yaml": (
+        "profiles/bench_eval_baseline.yaml",
+        "voice/bench_spelling.yaml",
         """\
 delegation:
   spelling_hold:

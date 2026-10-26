@@ -15,7 +15,7 @@ from pathlib import Path
 
 from _fda_golden_eval import GATEWAY, load_golden, render_all
 from _fda_variants import variant  # noqa: E402
-from _fda_voice_fakes import PACKAGE, PROFILES, DelegationHarness, profile_config, tau2_session_update
+from _fda_voice_fakes import PACKAGE, PROFILES, DelegationHarness, benchmark_session_update, profile_config
 
 from examples.frontend_delegation_agent.core.config import (
     DelegationConfigError,
@@ -199,7 +199,7 @@ class LivenessConfigTests(unittest.TestCase):
         self.assertTrue(all(on.features[name] for name in names))
         self.assertEqual(on.features["replay_triggers"], ["backchannel", "ping", "repeat"])
         self.assertEqual((on.delegation.replay.ttl_s, on.delegation.replay.whole_if_heard_below), (60.0, 0.2))
-        for control in ("realtime_eval_124acf7.yaml", "realtime_eval_control.yaml", "tau3_eval.yaml"):
+        for control in ("realtime_eval_124acf7.yaml", "realtime_eval_control.yaml", "bench_eval.yaml"):
             with self.subTest(control=control):
                 features = load_delegation_config(variant(f"profiles/{control}")).features
                 self.assertFalse(any(features[name] for name in names))
@@ -238,7 +238,7 @@ def liveness_config(*, triggers=("backchannel", "ping", "repeat"), whole: float 
 
 class LivenessTurnTests(unittest.IsolatedAsyncioTestCase):
     async def _answered(self, harness: DelegationHarness, *, outcome: str = NOT_HEARD, heard: str = "") -> None:
-        await harness.start(tau2_session_update("retail"))
+        await harness.start(benchmark_session_update("retail"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -349,7 +349,7 @@ class LivenessTurnTests(unittest.IsolatedAsyncioTestCase):
             decider=RuleDecider([TASK_SCRIPT, TASK_SCRIPT]),
             transcripts=["where is it", "Are you still there?"],
         )
-        await harness.start(tau2_session_update("retail"))
+        await harness.start(benchmark_session_update("retail"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -365,7 +365,7 @@ class LivenessTurnTests(unittest.IsolatedAsyncioTestCase):
         asr = replace(voice.asr, endpoint=replace(voice.asr.endpoint, language_code="de-DE"))
         config = replace(config, voice=replace(voice, asr=asr))
         harness = DelegationHarness(config, decider=RuleDecider([SILENT_SCRIPT]), transcripts=["Are you still there?"])
-        await harness.start(tau2_session_update("retail"))
+        await harness.start(benchmark_session_update("retail"))
         await harness.speak()
         await harness.idle(500)
         self.assertEqual(harness.link.of_type("delegate"), [])
@@ -380,7 +380,7 @@ class SituationalFactsTests(unittest.TestCase):
     def _render(self, **features: bool) -> str:
         base = dict(gc.load_gateway_config(GATEWAY).prompt_features)
         templates = BackendTemplates(BACKEND_PROMPTS, prompt_features={**base, **features})
-        return render_backend_system(templates, tau2_session_update("telecom")["session"]["instructions"])
+        return render_backend_system(templates, benchmark_session_update("telecom")["session"]["instructions"])
 
     def test_off_is_the_deployed_prompt_and_on_adds_only_the_block_right_after_the_policy(self) -> None:
         off, on = self._render(), self._render(situational_facts=True)
@@ -400,7 +400,7 @@ class SituationalFactsTests(unittest.TestCase):
             with self.subTest(gateway=name):
                 features = gc.load_gateway_config(variant(name)).prompt_features
                 templates = BackendTemplates(BACKEND_PROMPTS, prompt_features=features)
-                text = render_backend_system(templates, tau2_session_update("telecom")["session"]["instructions"])
+                text = render_backend_system(templates, benchmark_session_update("telecom")["session"]["instructions"])
                 self.assertNotIn("<situational_facts>", text)
         on = gc.load_gateway_config(PACKAGE / "config" / "gateway.yaml").prompt_features
         self.assertTrue(on["situational_facts"])
@@ -409,7 +409,7 @@ class SituationalFactsTests(unittest.TestCase):
         for domain in ("airline", "retail", "telecom"):
             base = dict(gc.load_gateway_config(GATEWAY).prompt_features)
             templates = BackendTemplates(BACKEND_PROMPTS, prompt_features={**base, "situational_facts": True})
-            text = render_backend_system(templates, tau2_session_update(domain)["session"]["instructions"])
+            text = render_backend_system(templates, benchmark_session_update(domain)["session"]["instructions"])
             block = text[text.index("<situational_facts>") :]
             for word in ("roaming", "abroad", "apn", "airline", "flight", "telecom", "retail", "order"):
                 with self.subTest(domain=domain, word=word):
@@ -458,7 +458,7 @@ class IdentificationToolTests(unittest.TestCase):
             ("find_member_id_by_email", "find_member_id_by_name_postal", "get_member_details"),
         )
 
-    def test_tau2_fixtures(self) -> None:
+    def test_benchmark_fixtures(self) -> None:
         expected = {
             "airline": {"get_user_details"},
             "retail": {"find_user_id_by_email", "find_user_id_by_name_zip", "get_user_details"},
@@ -466,7 +466,7 @@ class IdentificationToolTests(unittest.TestCase):
         }
         for domain, names in expected.items():
             with self.subTest(domain=domain):
-                tools = tau2_session_update(domain)["session"]["tools"]
+                tools = benchmark_session_update(domain)["session"]["tools"]
                 self.assertEqual(set(identification_tools(tools)), names)
 
 
@@ -690,7 +690,7 @@ class JoinTests(unittest.TestCase):
     def test_canonical_tools_hash_is_the_same_for_both_wire_shapes(self) -> None:
         from examples.frontend_delegation_agent.core.prompt_features import tools_canonical_sha256  # noqa: PLC0415
 
-        flat = tau2_session_update("telecom")["session"]["tools"]
+        flat = benchmark_session_update("telecom")["session"]["tools"]
         wrapped = [
             {"type": "function", "function": {k: v for k, v in tool.items() if k != "type"}} for tool in reversed(flat)
         ]
@@ -703,7 +703,7 @@ class IdentityVoiceTests(unittest.IsolatedAsyncioTestCase):
         harness = DelegationHarness(
             profile_config(variant("profiles/realtime_eval_identity.yaml")), transcripts=["my email please"]
         )
-        await harness.start(tau2_session_update("retail"))
+        await harness.start(benchmark_session_update("retail"))
         rules = harness.logged("session_rules")[-1]
         self.assertEqual(
             set(rules["identification_tools"]),

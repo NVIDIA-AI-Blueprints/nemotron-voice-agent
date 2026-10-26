@@ -224,7 +224,7 @@ A prompt profile is one prompt catalog, `core/config/prompts/<profile>.yaml`, wi
 
 | Prompt profile | File | Default for | Purpose and change rule |
 | --- | --- | --- | --- |
-| `customer_service` | `core/config/prompts/customer_service.yaml` (formerly `tau.yaml`) | The `eval` profile, so eval-mode deployments | Customer-service prompts for multi-turn tool use, such as Tau. Pinned by SHA-256 (`TAU_CATALOG_SHA256`) in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. A change requires a new pin and an attached Tau A/B evaluation run. |
+| `customer_service` | `core/config/prompts/customer_service.yaml` (formerly `tau.yaml`) | The `eval` profile, so eval-mode deployments | Customer-service prompts for multi-turn tool use, such as Tau. Pinned by SHA-256 (`CUSTOMER_SERVICE_CATALOG_SHA256`) in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. A change requires a new pin and an attached Tau A/B evaluation run. |
 | `generic` | `core/config/prompts/generic.yaml` | The `default` profile, so browser UI sessions | Free to tune. It has the keys and structure of `customer_service.yaml`, without that profile's later customer-service rules, and is planned to become more generic. |
 | `general_qa` | `core/config/prompts/general_qa.yaml` | None | A general question-answering assistant for single-turn evaluations. The frontend sends every request to the backend word for word through `call_backend`. The backend answers from the LLM with no tools: the answer first, "The answer is X." for multiple choice, formatting instructions followed literally, and a refusal that starts with "I'm sorry, but I can't help with that." for harmful requests. |
 

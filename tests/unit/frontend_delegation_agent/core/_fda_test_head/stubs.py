@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic speech stand-ins for the tau3 gates, smoke runs and tests.
+"""Deterministic speech stand-ins for the benchmark gates, smoke runs and tests.
 
 ``StubRecognizer`` returns ``"utterance N"`` per utterance; ``ToneSynthesizer``
 makes a tone whose length is proportional to the text. With the energy VAD they

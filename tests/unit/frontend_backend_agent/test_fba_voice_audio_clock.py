@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from _fba_core_fakes import append_event, pcmu_silence, pcmu_speech, tau2_session_update
+from _fba_core_fakes import append_event, benchmark_session_update, pcmu_silence, pcmu_speech
 from _fba_pipecat_fakes import PipecatHarness, PipecatTestCase
 
 from examples.frontend_backend_agent.core.audio.pcm import tone
@@ -25,17 +25,17 @@ from examples.frontend_backend_agent.core.engine.scripted import ScriptedAgentPo
 
 class InputClockTests(PipecatTestCase):
     async def test_wall_clock_gaps_do_not_matter(self) -> None:
-        """Tau pauses its input between ticks; turns are measured in input audio only (Tau settings)."""
+        """The benchmark pauses its input between ticks; turns are measured in input audio only (eval settings)."""
         audio = pcmu_silence(1000) + pcmu_speech(700) + pcmu_silence(900) + pcmu_speech(500) + pcmu_silence(900)
 
         async def run(gap_every: int, gap_s: float) -> list[tuple[str, int]]:
             harness = PipecatHarness(agent_factory=lambda _: ScriptedAgentPort([{"say": "ok."}, {"say": "ok."}]))
-            await harness.start(tau2_session_update())
+            await harness.start(benchmark_session_update())
             for index, offset in enumerate(range(0, len(audio), 160)):
                 harness.websocket.put_text(append_event(audio[offset : offset + 160]))
                 await harness._drain_frame()
                 if gap_every and index % gap_every == 0:
-                    await asyncio.sleep(gap_s)  # tau2's user simulator blocks its tick loop
+                    await asyncio.sleep(gap_s)  # the benchmark's user simulator blocks its tick loop
             await harness.settle()
             marks = [
                 (e["type"], e.get("audio_start_ms", e.get("audio_end_ms")))

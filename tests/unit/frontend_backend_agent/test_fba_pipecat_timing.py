@@ -6,7 +6,7 @@
 """The Pipecat adapter's input-audio clock (``adapters/pipecat/timing.py``, S1, B1, B4).
 
 Ported from v1's ``test_fba_voice_audio_clock`` segmenter cases: the clock counts input audio
-only, so wall-clock gaps between appends (Tau pauses its input between ticks) change nothing.
+only, so wall-clock gaps between appends (the benchmark client pauses its input between ticks) change nothing.
 """
 
 from __future__ import annotations

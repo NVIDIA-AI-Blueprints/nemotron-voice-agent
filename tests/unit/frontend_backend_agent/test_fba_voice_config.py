@@ -64,7 +64,7 @@ class ShippedConfigTests(unittest.TestCase):
                             self.assertTrue(Path(value).is_absolute(), key)
                             self.assertTrue(Path(value).exists(), key)
 
-    def test_base_defaults_are_tau3_safe(self) -> None:
+    def test_base_defaults_are_eval_safe(self) -> None:
         config = load_voice_config(BASE_CONFIG)
         self.assertEqual(config.agent.mode, "frontend_backend")
         self.assertEqual(config.filler.mode, "log_only")

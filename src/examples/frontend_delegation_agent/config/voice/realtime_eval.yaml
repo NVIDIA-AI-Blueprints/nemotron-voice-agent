@@ -3,7 +3,7 @@
 #
 # Voice profile of profiles/realtime_eval.yaml: an OpenAI-Realtime client that executes the tools,
 # with every tool-dependent behaviour derived from the session's tool schemas, never from tool or
-# domain names (tau3-voice-domain-specific-changes-genericization.md sections 4 and 5).
+# domain names.
 
 extends: base.yaml
 
@@ -41,7 +41,7 @@ normalization:
       failure_pattern: "(?i)\\b(users?|customers?|members?|clients?|profiles?)\\b[^.]*\\b(not found|no such|does not exist)\\b|\\bno (records|results|matches) found\\b[^.]*\\b(users?|customers?|members?|clients?|profiles?)\\b"
       count_local_invalid: true       # only a local "invalid" answer for a person argument (user_id, ...)
       max_hints: 6
-      message_key: lookup_not_found_hint_format  # A2 variant (tau3-geval-failure-fixes-plan.md)
+      message_key: lookup_not_found_hint_format  # A2 variant
       escalate_message_key: lookup_not_found_hint_words
       # fix-plan-f1-f2-f4-f8.md F8: the identification ledger (on here). It replaces A3's line and allows
       # up to 6 notes.

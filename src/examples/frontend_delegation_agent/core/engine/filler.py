@@ -14,7 +14,7 @@ Every delegation produces exactly one :class:`FillerTimingRecord`, from the
 session's first turn on and in both filler modes. Each record is anchored to the
 session start and to the user's turn start and end, on the wall clock (ISO-8601
 UTC, for lining up with other logs) and on the input-audio clock (the clock
-tau2 uses). Durations come from the monotonic clock.
+a benchmark client uses). Durations come from the monotonic clock.
 """
 
 from __future__ import annotations

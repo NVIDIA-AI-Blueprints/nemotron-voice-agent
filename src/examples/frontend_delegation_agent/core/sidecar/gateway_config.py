@@ -81,7 +81,7 @@ DEFAULTS: dict[str, Any] = {
         "tool_result_timeout_s": 120.0,
         "steer_timeout_s": 3.0,
         "status_timeout_s": 2.0,
-        # P0.3 (tau3-geval-failure-fixes-plan.md): each model request and response of a worker, written to
+        # P0.3: each model request and response of a worker, written to
         # <workers.log_dir>/<session_id>.trace.jsonl (logging only; the input of the G2 decision replay).
         "backend_trace": False,
         "request_overrides": {
@@ -92,9 +92,9 @@ DEFAULTS: dict[str, Any] = {
     },
     # Each backend's own section (``hermes:``, ``llm:``), from its settings class.
     **{kind: dict(cls.DEFAULTS) for kind, cls in SETTINGS_CLASSES.items()},
-    # Backend prompt variants (tau3-failure-fixes-plan.md section 1): all off = the baseline prompts.
+    # Backend prompt variants: all off = the baseline prompts.
     "prompt_features": dict(BACKEND_FEATURES),
-    # Domain detection (tau3-identity-fixes-plan.md section 3.2): name -> {tools_any: [tool, ...]}; the first
+    # Domain detection: name -> {tools_any: [tool, ...]}; the first
     # domain with one of its tools in the session's tool list wins. It selects the domain note of
     # prompts/<profile>/backend/<kind>.yaml; no domains (or no match) = no note.
     "domains": {},

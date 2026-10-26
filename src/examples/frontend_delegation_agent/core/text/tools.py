@@ -5,7 +5,7 @@
 
 Tools are always the *backend's*: the frontend only ever sees the delegation
 tool. A tool spec carries a callable only when this process executes it
-(``execution: internal``); under ``execution: external`` the caller — tau2's
+(``execution: internal``); under ``execution: external`` the caller — a benchmark's
 environment, for instance — runs it and hands results back.
 """
 

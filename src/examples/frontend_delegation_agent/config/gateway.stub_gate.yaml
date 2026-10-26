@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# In-process emulator backend for the no-GPU tau3 gates: every run without a directive calls the
-# session's first tool once, so tau2's Gate A sees a function-call round trip.
+# In-process emulator backend for the no-GPU eval gates: every run without a directive calls the
+# session's first tool once, so the benchmark's Gate A sees a function-call round trip.
 
 extends: gateway.emulator.yaml
 workers:

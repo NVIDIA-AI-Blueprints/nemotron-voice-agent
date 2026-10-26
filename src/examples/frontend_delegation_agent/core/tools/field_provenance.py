@@ -3,7 +3,7 @@
 
 """A3: which values of a failed lookup the user spelled, and which were only heard as a word.
 
-``tau3-geval-failure-fixes-plan.md`` section 4 (A3). Information only: the line states facts
+A3. Information only: the line states facts
 and never says which field is wrong. One instance per session; the turn manager records each
 decided user turn (:meth:`FieldProvenance.add_turn`) and the relay asks for the line on the
 second and later miss of a person lookup (:meth:`FieldProvenance.describe`).

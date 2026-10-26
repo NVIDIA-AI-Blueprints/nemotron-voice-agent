@@ -7,15 +7,15 @@
   (right after the VAD, so a VAD event arrives after exactly the audio it analyzed).
 * **onset / offset**: the cursor when Pipecat's VAD confirms a start or stop, minus the
   VAD's ``start_secs`` / ``stop_secs`` (the confirmation delay), so ``audio_start_ms`` points
-  at the speech itself, as the τ³ harness expects. A turn Pipecat starts from a transcript
+  at the speech itself, as the benchmark client expects. A turn Pipecat starts from a transcript
   (no VAD onset) uses the cursor at turn start.
 * **heard**: Pipecat's WebSocket output writes audio at twice real time, so the written
   amount is not what the client played. :class:`PlayoutEstimator` advances the playout
   cursor at real-time speed from the first written chunk, never past what was written,
   and stops at the written amount on an interruption.
 
-This is an estimate on wall-clock time. A client that pauses its playback (τ²'s tick
-loop) hears less than estimated; the README documents the limitation.
+This is an estimate on wall-clock time. A client that pauses its playback (a benchmark
+client's tick loop) hears less than estimated; the README documents the limitation.
 """
 
 from __future__ import annotations

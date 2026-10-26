@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 # ``?x_nvidia_filler=1`` on the WebSocket URL: send unspoken filler as ``x_nvidia.filler``
-# events. Off unless asked for, so a tau2 session sees the standard event stream only.
+# events. Off unless asked for, so a benchmark session sees the standard event stream only.
 SHOW_FILLER_PARAM = "x_nvidia_filler"
 
 

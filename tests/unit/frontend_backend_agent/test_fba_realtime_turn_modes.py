@@ -20,7 +20,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from _fba_core_fakes import pcmu_silence, pcmu_speech, tau2_session_update
+from _fba_core_fakes import benchmark_session_update, pcmu_silence, pcmu_speech
 from _fba_golden import pinned_environment
 from _fba_pipecat_fakes import PipecatHarness, PipecatTestCase
 from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
@@ -73,7 +73,7 @@ class TurnModeSessionTests(PipecatTestCase):
             with self.subTest(env=env):
                 harness = self._harness(env)
                 self.assertIsNone(harness.session.pipeline.turn_modes)
-                await harness.start(tau2_session_update())
+                await harness.start(benchmark_session_update())
                 await harness.send({"type": "input_audio_buffer.commit"})
                 self.assertEqual(harness.of_type("error")[-1]["error"]["code"], "unsupported_event")
                 await harness.close()
@@ -83,7 +83,7 @@ class TurnModeSessionTests(PipecatTestCase):
         modes = harness.session.pipeline.turn_modes
         self.assertIsNotNone(modes)
         self.assertEqual(modes.allowed, {"server_vad", "manual"})
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.send(_update(None))
         self.assertEqual(modes.mode, turn_modes.MANUAL)
         controller = harness.session.pipeline.user_turns._user_turn_controller
@@ -116,7 +116,7 @@ class TurnModeSessionTests(PipecatTestCase):
         modes = harness.session.pipeline.turn_modes
         self.assertEqual(modes.allowed, {"server_vad", "semantic_vad"})
         self.assertIsInstance(modes._strategies["semantic_vad"][0], _StubSmartTurn)
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         self.assertEqual(modes.mode, turn_modes.SERVER_VAD)
         self.assertEqual(harness.session.pipeline._vad_params.stop_secs, 0.8)
         updated = harness.of_type("session.updated")[-1]["session"]["audio"]["input"]["turn_detection"]

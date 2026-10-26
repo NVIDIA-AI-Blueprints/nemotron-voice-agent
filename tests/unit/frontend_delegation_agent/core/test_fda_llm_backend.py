@@ -5,7 +5,7 @@
 """What the LLM backend sends to the model (llm-backend-plan.md sections 5 and 6).
 
 Checked against recorded sessions and backend traces: the system message bytes, the tool schemas the model saw
-(per tau domain), the tool-name repairs and the wire shape of the history.
+(per benchmark domain), the tool-name repairs and the wire shape of the history.
 """
 
 from __future__ import annotations
@@ -25,14 +25,14 @@ from examples.frontend_delegation_agent.core.prompt_features import tools_canoni
 from examples.frontend_delegation_agent.core.sidecar.templates import BackendTemplates
 
 HERE = Path(__file__).resolve().parent
-TAU = HERE.parent / "voice" / "fixtures" / "tau2_session_update"
+SESSION_UPDATES = HERE.parent / "voice" / "fixtures" / "benchmark_session_update"
 PROMPTS = HERE.parents[3] / "src" / "examples" / "frontend_delegation_agent" / "config" / "prompts"
-#: tools_canonical_sha256 of the tools in the recorded backend traces (tau3 runs, 2026-10-16).
+#: tools_canonical_sha256 of the tools in the recorded backend traces (benchmark runs, 2026-10-16).
 RECORDED_TOOL_HASHES = {"airline": "2fdd5b549d9d15b4", "retail": "300feeeb65e4de4c", "telecom": "e6dc47d93703b063"}
 
 
 def _session_tools(domain: str) -> list[dict]:
-    tools = json.loads((TAU / f"{domain}.json").read_text())["session"]["tools"]
+    tools = json.loads((SESSION_UPDATES / f"{domain}.json").read_text())["session"]["tools"]
     # What the controller sends in ``configure``.
     return [
         {"name": t["name"], "description": t.get("description") or "", "parameters": t.get("parameters") or {}}

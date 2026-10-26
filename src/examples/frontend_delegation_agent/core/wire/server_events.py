@@ -404,7 +404,7 @@ def function_call_arguments_delta(
 def function_call_arguments_done(
     response_id: str, item_id: str, output_index: int, *, call_id: str, name: str, arguments: str
 ) -> dict[str, Any]:
-    """``response.function_call_arguments.done`` with top-level ``call_id``/``name`` (where tau2 reads them)."""
+    """``response.function_call_arguments.done`` with top-level ``call_id``/``name`` (where the client reads them)."""
     return event(
         FUNCTION_CALL_ARGUMENTS_DONE,
         response_id=response_id,

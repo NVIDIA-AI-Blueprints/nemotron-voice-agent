@@ -6,15 +6,15 @@
 """Golden prompt renders of the baseline (every feature off), captured at agent commit 3a7e04a.
 
 Regenerated once with only the example values changed to invented ones (prompts.yaml
-normalization_note; tau3-voice-domain-specific-changes-genericization.md item 2).
+normalization_note; domain-genericization plan, item 2).
 
-``render_all()`` renders every prompt the agents see with the shipped catalogs and the tau2 airline
+``render_all()`` renders every prompt the agents see with the shipped catalogs and the benchmark airline
 ``session.update``: the frontend system prompt and state block, the backend SOUL, system prompt and
 context lines, the status prompts and the local tool-result messages. ``test_fda_golden_prompts``
 asserts byte equality with ``fixtures/golden_prompts.json`` (JSON, so the whitespace pre-commit hooks
-cannot alter the renders: the tau2 policy has trailing spaces).
+cannot alter the renders: the benchmark policy has trailing spaces).
 
-Regenerate only for an intended baseline change (tau3-failure-fixes-plan.md section 1, rule 2)::
+Regenerate only for an intended baseline change (failure-fixes plan, section 1, rule 2)::
 
     PYTHONPATH=src uv run python tests/unit/frontend_delegation_agent/core/_fda_golden.py --write
 """
@@ -32,7 +32,7 @@ GOLDEN_FILE = HERE / "fixtures" / "golden_prompts.json"
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from _fda_voice_fakes import PACKAGE, DelegationHarness, tau2_session_update  # noqa: E402
+from _fda_voice_fakes import PACKAGE, DelegationHarness, benchmark_session_update  # noqa: E402
 
 from examples.frontend_delegation_agent.core.frontend.decider import DecisionContext, LLMDecider  # noqa: E402
 from examples.frontend_delegation_agent.core.frontend.delegate_tool import delegate_tool  # noqa: E402
@@ -57,7 +57,7 @@ _STATES = {
 
 async def _frontend_system() -> tuple[str, str]:
     harness = DelegationHarness()
-    await harness.start(tau2_session_update("airline"))
+    await harness.start(benchmark_session_update("airline"))
     assert harness.manager is not None
     prompt = harness.manager._system_prompt  # noqa: SLF001 - the exact prompt the frontend model gets
     runtime = harness.runtime
@@ -82,7 +82,7 @@ def render_all() -> dict[str, str]:
         "status_template", current_tool="get_reservation_details", current_tool_phrase="looking it up", done_count=2
     )
     backend = BackendTemplates(PACKAGE / "config" / "prompts" / "customer_service" / "backend" / "hermes.yaml")
-    airline = tau2_session_update("airline")["session"]["instructions"]
+    airline = benchmark_session_update("airline")["session"]["instructions"]
     out["backend_soul.txt"] = backend.render("backend_soul")
     out["backend_system_airline.txt"] = backend.render("backend_system", instructions=airline)
     out["backend_system_empty.txt"] = backend.render("backend_system", instructions="")

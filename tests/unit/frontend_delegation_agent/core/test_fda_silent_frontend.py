@@ -13,7 +13,7 @@ import unittest
 from dataclasses import replace
 from unittest import mock
 
-from _fda_voice_fakes import PROFILES, DelegationHarness, tau2_session_update, tau3_config
+from _fda_voice_fakes import PROFILES, DelegationHarness, bench_config, benchmark_session_update
 
 from examples.frontend_delegation_agent.core.config import ProactiveStatusSettings, load_delegation_config
 from examples.frontend_delegation_agent.core.frontend.decider import (
@@ -35,7 +35,7 @@ ANSWER = "Your order 1 shipped on May third."
 
 
 def silent(config=None, *, proactive_after_s: float = 0.0):
-    config = config or tau3_config()
+    config = config or bench_config()
     config = replace(config, delegation=replace(config.delegation, silent_frontend=True))
     if proactive_after_s:
         output = replace(config.output, proactive_status=ProactiveStatusSettings(True, proactive_after_s, 1))
@@ -132,7 +132,7 @@ class SilentTurnGuardTests(unittest.TestCase):
 class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_off_speaks_the_delegated_filler(self) -> None:
         harness = DelegationHarness(decider=RuleDecider([TASK]), transcripts=["check order 1"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         await harness.wait_for("response.done")
@@ -142,7 +142,7 @@ class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_on_the_first_response_is_the_backend_answer(self) -> None:
         harness = DelegationHarness(silent(), decider=RuleDecider([TASK]), transcripts=["check order 1"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -160,7 +160,7 @@ class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_on_a_direct_answer_is_still_spoken(self) -> None:
         harness = DelegationHarness(silent(), decider=RuleDecider([DIRECT]), transcripts=["capital of france"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_for("response.done")
         self.assertEqual(harness.transcripts(), ["Paris is the capital of France."])
@@ -170,7 +170,7 @@ class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_on_a_silent_request_is_delegated_and_the_backend_answer_is_first(self) -> None:
         harness = DelegationHarness(silent(), decider=RuleDecider([SILENT]), transcripts=[REQUEST])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -188,7 +188,7 @@ class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_off_a_silent_request_stays_silent(self) -> None:
         harness = DelegationHarness(decider=RuleDecider([SILENT]), transcripts=[REQUEST])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.idle(300)
         self.assertEqual(harness.link.of_type("delegate"), [])
@@ -199,7 +199,7 @@ class SilentFrontendTurnTests(unittest.IsolatedAsyncioTestCase):
         harness = DelegationHarness(
             silent(proactive_after_s=0.3), decider=RuleDecider([TASK]), transcripts=["check order 1"]
         )
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")

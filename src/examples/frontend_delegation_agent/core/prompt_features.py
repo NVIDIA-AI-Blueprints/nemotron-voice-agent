@@ -6,7 +6,7 @@
 Each catalog gets a ``features`` mapping from config (``prompt_features`` in
 ``delegation_agent.yaml`` for the frontend catalog, in ``gateway.yaml`` for the backend
 one). A feature that is off, or not set, renders nothing, so with every feature off the
-prompts are byte-identical to the baseline (tau3-failure-fixes-plan.md section 1).
+prompts are byte-identical to the baseline.
 Stdlib only: the gateway imports it too.
 """
 
@@ -26,7 +26,7 @@ BACKEND_FEATURES: dict[str, bool] = {
     "write_consent": False,
     "domain_notes": False,  # <domain_notes>: the telecom note (on in gateway.yaml)
     "phone_format": False,
-    # tau3-geval-failure-fixes-plan.md section 4 (each off by default; the shipped gateway configs turn them on).
+    # The A/B fixes (each off by default; the shipped gateway configs turn them on).
     "format_correction": False,  # A2: a separator or case change is a format correction, not a variant
     "write_consent_v2": False,  # B1: the policy's confirmation, to the exact change, before a write
     "policy_check": False,  # B2: <before_change> policy check before every write

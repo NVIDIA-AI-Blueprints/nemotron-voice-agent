@@ -21,7 +21,7 @@ audio:
   pace_output: true
 
 normalization:
-  # M3.1 (tau3-failure-fixes-plan.md): spelled letters and digits are joined in the text the agents see.
+  # M3.1: spelled letters and digits are joined in the text the agents see.
   transcript:
     spelled_runs: {enabled: true, min_tokens: 3, case: keep}
   # Tool-argument normalization screens calls handed to a client; it requires tools.source: client.

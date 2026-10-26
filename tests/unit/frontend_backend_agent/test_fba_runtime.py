@@ -44,11 +44,11 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(rt.profile_name({}), "default")
 
     def test_unshipped_profiles_are_refused(self) -> None:
-        for name in ("backend_only", "live_demo", "browser_demo", "cloud_speech", "voice_agent", "tau3_eval"):
+        for name in ("backend_only", "live_demo", "browser_demo", "cloud_speech", "voice_agent", "old_eval"):
             with self.subTest(name=name), self.assertRaises(rt.ProfileError):
                 rt.profile_name({rt.PROFILE_ENV: name})
 
-    def test_eval_profile_has_the_tau3_turn_taking(self) -> None:
+    def test_eval_profile_has_the_benchmark_turn_taking(self) -> None:
         config = load_voice_config(rt.profile_path(rt.REALTIME_PROFILE))
         self.assertEqual(config.turn_detection.silence_duration_ms, 800)
         self.assertFalse(config.turn_detection.honor_client_values)

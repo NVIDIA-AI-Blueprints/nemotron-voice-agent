@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Voice Frontend/Backend Agent prototype: the single configuration entry point.
-# Defaults are tau3-eval-safe: paired mode, filler silenced (log only), client
+# Defaults are eval-safe: paired mode, filler silenced (log only), client
 # tools executed by the client, no greeting, nemo-speech single-GPU speech.
 #
 # ${VAR} and ${VAR:-default} are resolved from the environment, per file.
@@ -14,7 +14,7 @@ server:
   host: "0.0.0.0"
   port: ${FBA_VOICE_PORT:-8765}
   path: "/v1/realtime"
-  require_bearer: false            # tau2 sends "Bearer $PINE_API_KEY"; set true + a token to enforce
+  require_bearer: false            # a benchmark client sends "Bearer $PINE_API_KEY"; set true + a token to enforce
   bearer_token: "${FBA_VOICE_TOKEN:-}"
   max_sessions: 8
   session_update_timeout_s: 30     # wall clock, before the first session.update
@@ -34,8 +34,8 @@ agent:
     logging: {event_sink: none}     # the voice layer installs its own routing sink
 
 protocol:
-  greeting: {enabled: false, text: ""}        # tau3: never greet
-  seed_history_with_client_greeting: "Hi! How can I help you today?"   # tau2 says this text-only; "" disables
+  greeting: {enabled: false, text: ""}        # eval: never greet
+  seed_history_with_client_greeting: "Hi! How can I help you today?"   # the client says it in text; "" disables
   auto_response: true               # respond on VAD turn end (server_vad create_response semantics)
   resume_on: response_create        # response_create | last_function_output
   emit_input_transcription: true    # conversation.item.input_audio_transcription.completed
@@ -46,7 +46,7 @@ audio:
   default_input_format:  {type: "audio/pcm", rate: 24000}   # used when the client does not specify
   default_output_format: {type: "audio/pcm", rate: 24000}
   output_chunk_ms: 100              # size of each response.output_audio.delta
-  pace_output: false                # false: send as synthesized (tau2 buffers); true: real-time pacing
+  pace_output: false                # false: send as synthesized (a benchmark client buffers); true: real-time pacing
   pace_lead_ms: 300                 # with pace_output: how far audio may run ahead of real time
 
 turn_detection:                     # defaults; session.update server_vad fields override per session
@@ -96,7 +96,7 @@ tts:
   sentence_split: true              # one TTS request + transcript delta per sentence
 
 filler:
-  mode: log_only                    # log_only (default, tau3) | speak
+  mode: log_only                    # log_only (default, eval) | speak
   speak_after_ms: 300               # speak only if the backend is still busy after this delay
   log_path: "${FBA_FILLER_LOG:-}"   # [out-path] JSONL; timing is always recorded (loguru + event_log) even when ""
 
@@ -120,7 +120,7 @@ logging:
   redact_content: false                     # true: omit transcripts/tool payloads from the event log
 
 # Identifier normalization between speech and the agent (all off in this base config). See
-# misc/prototypes/voice/normalization-plan.md. The tau3 and realtime_eval voice profiles turn it on.
+# misc/prototypes/voice/normalization-plan.md. config/voice/base.yaml turns it on for every voice profile.
 normalization:
   transcript:                       # ASR hook: spoken identifiers -> written form, for the agent only
     enabled: false                  # the wire keeps the raw transcript

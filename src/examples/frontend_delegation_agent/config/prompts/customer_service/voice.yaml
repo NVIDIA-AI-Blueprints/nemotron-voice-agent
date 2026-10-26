@@ -407,7 +407,7 @@ tool_call_already_failed:
     retry it unchanged. Read it back character by character ({spelled}) and ask the user only about
     the part that may be wrong.
 
-# --- Format retry (A1 / A1-lite, tau3-geval-failure-fixes-plan.md section 4) ------------------------
+# --- Format retry (A1 / A1-lite) ------------------------------------------------------------------------
 # Appended to a not-found result of a lookup by a phone field; {value} is the same digits in the other
 # common format (XXX-XXX-XXXX or digits only). Example values are invented.
 
@@ -444,7 +444,7 @@ lookup_not_found_hint:
 
 lookup_not_found_hint_format:
   description: >-
-    Variant of lookup_not_found_hint (A2, tau3-geval-failure-fixes-plan.md section 4): a value that may
+    Variant of lookup_not_found_hint (A2): a value that may
     only be in the wrong format is looked up once in the other format before the user is asked.
   content: |
     [Not found. At least one value you sent is wrong, possibly one the user spelled: speech

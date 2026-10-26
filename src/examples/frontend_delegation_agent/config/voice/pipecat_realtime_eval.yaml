@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Pipecat adapter, evaluation by an OpenAI Realtime client such as τ²: realtime_eval.yaml (client
+# Pipecat adapter, evaluation by an OpenAI Realtime client such as a benchmark: realtime_eval.yaml (client
 # tools, external policy, no greeting, schema-derived normalization) with Pipecat's turn taking
 # (config/adapters/pipecat.eval.yaml). Barge-in is a plain interruption.
 

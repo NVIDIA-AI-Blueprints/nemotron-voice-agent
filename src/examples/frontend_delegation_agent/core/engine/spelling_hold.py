@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evidence-gated spelling hold (tau3-failure-fixes-plan.md section 3.2).
+"""Evidence-gated spelling hold.
 
 A turn is held for ``delegation.spelling_hold.hold_ms`` before the frontend decides it
 only if all three conditions hold:

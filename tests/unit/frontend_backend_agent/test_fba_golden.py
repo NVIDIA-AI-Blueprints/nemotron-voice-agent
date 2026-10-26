@@ -6,10 +6,10 @@
 """The FBA package keeps the recorded v1 baseline (``fbv-v1-baseline``, ``fe7622d``) where it must be exact.
 
 Plan: ``misc/frontend-backend-verdict/shared-stack-plan.md`` §9.1 and §10.1. The merged profile configs,
-the ``agent.configure`` arguments and rendered prompts on the five Tau fixtures (N4, now through the
+the ``agent.configure`` arguments and rendered prompts on the five benchmark fixtures (N4, now through the
 Pipecat adapter) and the decoded input PCM (B6) must equal v1's.
 
-The ``eval`` profile is v1's default Tau arm (``tau3_eval_frontend_verdict_speak_history``) with its
+The ``eval`` profile is v1's default eval arm (``v1_eval_frontend_verdict_speak_history``) with its
 ``extends`` chain flattened into one file (``misc/frontend-backend-verdict/ui-transport-plan.md``,
 section 4.1), so it is compared with that arm's fixture entry, ignoring ``source_files`` (the list
 of files the chain was read from). The other v1 arms were deleted with their fixture entries.
@@ -48,8 +48,8 @@ from examples.frontend_backend_agent.core.config.profiles import REALTIME_PROFIL
 from examples.frontend_backend_agent.core.config.voice import load_voice_config
 
 CAPTURE = os.environ.get("FBA_GOLDEN_CAPTURE") == "1"
-#: v1's default Tau arm: the ``eval`` profile's name in the v1 fixtures.
-V1_DEFAULT_ARM = "tau3_eval_frontend_verdict_speak_history"
+#: v1's default eval arm: the ``eval`` profile's name in the v1 fixtures.
+V1_DEFAULT_ARM = "v1_eval_frontend_verdict_speak_history"
 #: Settings only v1's own host read (its standalone server, segmenter, output pacing and Riva
 #: stream pools); they were removed from the config with that host. The merged configs must
 #: equal v1's apart from these keys.

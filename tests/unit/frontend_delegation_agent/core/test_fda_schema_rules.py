@@ -3,9 +3,9 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Schema-derived rules (tau3-voice-domain-specific-changes-genericization.md sections 4.5-4.9, 5).
+"""Schema-derived rules (domain-genericization plan, sections 4.5-4.9, 5).
 
-Invented schemas prove the rules are not keyed on benchmark names; the snapshot over the five tau2
+Invented schemas prove the rules are not keyed on benchmark names; the snapshot over the five benchmark
 domains' schemas is the reviewed list of where each behaviour fires. Regenerate the snapshot only
 after reviewing the change::
 
@@ -30,8 +30,8 @@ from _fda_voice_fakes import (  # noqa: E402
     PACKAGE,
     ROOT,
     DelegationHarness,
+    benchmark_session_update,
     profile_config,
-    tau2_session_update,
 )
 
 from examples.frontend_delegation_agent.core.config import load_delegation_config  # noqa: E402
@@ -51,7 +51,7 @@ from examples.frontend_delegation_agent.core.text.messages import ToolCall  # no
 from examples.frontend_delegation_agent.core.tools.result_hints import ResultHints  # noqa: E402
 
 SNAPSHOT = HERE / "fixtures" / "schema_rules_snapshot.json"
-TAU2_DOMAINS = ("airline", "retail", "telecom", "banking_knowledge", "mock")
+BENCHMARK_DOMAINS = ("airline", "retail", "telecom", "banking_knowledge", "mock")
 EVAL = load_delegation_config(variant("profiles/realtime_eval_control.yaml"))  # without the geval fixes
 EVAL_ARGS = EVAL.voice.normalization.tool_arguments
 
@@ -70,7 +70,7 @@ def _tool(name: str, description: str = "", **arguments: tuple[str, str]) -> dic
     }
 
 
-#: An invented product: nothing here appears in tau2.
+#: An invented product: nothing here appears in the benchmark.
 INVENTED = [
     _tool("fetch_member", "Look up a member by their member number.",
           member_id=("string", "The member ID, such as 'ab_cd_12'.")),
@@ -104,8 +104,8 @@ def _normalizer(tools: list[dict[str, Any]]) -> ArgumentNormalizer:
 
 def snapshot() -> dict[str, Any]:
     out = {}
-    for domain in TAU2_DOMAINS:
-        tools = tau2_session_update(domain)["session"]["tools"]
+    for domain in BENCHMARK_DOMAINS:
+        tools = benchmark_session_update(domain)["session"]["tools"]
         out[domain] = build_schema_rules(tools).snapshot()
     return out
 
@@ -212,10 +212,10 @@ class InventedSchemaTests(unittest.TestCase):
         self.assertRegex(tools_sha256(INVENTED), r"^[0-9a-f]{16}$")
 
 
-# -- the five tau2 domains -----------------------------------------------------------------------
+# -- the five benchmark domains ------------------------------------------------------------------
 
 
-class Tau2SnapshotTests(unittest.TestCase):
+class BenchmarkSnapshotTests(unittest.TestCase):
     def test_snapshot_matches_the_reviewed_file(self) -> None:
         self.assertEqual(snapshot(), json.loads(SNAPSHOT.read_text(encoding="utf-8")))
 
@@ -263,8 +263,8 @@ class Tau2SnapshotTests(unittest.TestCase):
     def test_no_rule_on_any_write_tool(self) -> None:  # G6
         writes = re.compile(r"^(book_|cancel_|modify_|update_|exchange_|return_|send_|log_|change_|create_|"
                             r"suspend_|resume_|enable_|disable_|refuel_|transfer_|give_|unlock_|call_)")  # fmt: skip
-        for domain in TAU2_DOMAINS:
-            tools = tau2_session_update(domain)["session"]["tools"]
+        for domain in BENCHMARK_DOMAINS:
+            tools = benchmark_session_update(domain)["session"]["tools"]
             schema = build_schema_rules(tools)
             with self.subTest(domain=domain):
                 self.assertTrue(all(is_read_tool(r.tool, "") or r.tool in schema.read_tools for r in schema.rules))
@@ -273,7 +273,8 @@ class Tau2SnapshotTests(unittest.TestCase):
 
     def test_values_returned_by_tools_pass_unchanged(self) -> None:  # G6 idempotence
         normalizer = _normalizer(
-            tau2_session_update("retail")["session"]["tools"] + tau2_session_update("airline")["session"]["tools"]
+            benchmark_session_update("retail")["session"]["tools"]
+            + benchmark_session_update("airline")["session"]["tools"]
         )
         rules = _by_tool(normalizer.settings.rules)
         returned = (
@@ -295,7 +296,7 @@ class Tau2SnapshotTests(unittest.TestCase):
         self.assertEqual(snap["banking_knowledge"]["phone_arguments"], [])  # log_verification is a write tool
 
 
-# -- result hints and the retry guard over tau2's not-found texts ---------------------------------
+# -- result hints and the retry guard over the benchmark's not-found texts ------------------------
 
 #: Every "not found" / "no records found" text of the five domains (tools.py, banking db_query.py).
 HINT = {
@@ -371,7 +372,7 @@ class ResultTextTests(unittest.TestCase):
 
 class SchemaHoldTests(unittest.TestCase):
     def _predicate(self, domain: str) -> SpellingHoldPredicate:
-        patterns = build_schema_rules(tau2_session_update(domain)["session"]["tools"]).complete_patterns
+        patterns = build_schema_rules(benchmark_session_update(domain)["session"]["tools"]).complete_patterns
         return SpellingHoldPredicate(TranscriptSettings(enabled=True), schema_patterns=patterns)
 
     def test_a_complete_code_is_not_held_and_a_spelled_name_is(self) -> None:
@@ -402,7 +403,7 @@ class SessionWiringTests(unittest.IsolatedAsyncioTestCase):
         harness = DelegationHarness(
             profile_config(variant("profiles/realtime_eval_control.yaml")), transcripts=["I need help"]
         )
-        await harness.start(tau2_session_update(domain))
+        await harness.start(benchmark_session_update(domain))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -431,7 +432,7 @@ class SessionWiringTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_retail_rules_apply_to_reads_only_and_are_logged_with_the_tools_hash(self) -> None:
         harness = await self._session("retail")
-        tools = tau2_session_update("retail")["session"]["tools"]
+        tools = benchmark_session_update("retail")["session"]["tools"]
         sent, _ = await self._call(harness, 1, "get_order_details", {"order_id": "w 1234567"}, "Error: Order not found")
         self.assertEqual(sent, {"order_id": "#W1234567"})
         write = {"order_id": "w 7654321", "reason": "ordered by mistake"}
@@ -456,7 +457,7 @@ class SessionWiringTests(unittest.IsolatedAsyncioTestCase):
         await harness.close()
 
 
-# -- section 5.2: the submission configuration names no tau2 tool or domain ------------------------
+# -- section 5.2: the submission configuration names no benchmark tool or domain -------------------
 
 SUBMISSION_FILES = (
     PACKAGE / "config" / "profiles" / "realtime_eval.yaml",
@@ -469,7 +470,7 @@ SUBMISSION_FILES = (
     # Every prompt profile (config/prompts/<profile>/frontend.yaml, backend/<kind>.yaml, voice.yaml).
     *sorted((PACKAGE / "config" / "prompts").rglob("*.yaml")),
 )
-TAU2_NAMES = re.compile(
+BENCHMARK_NAMES = re.compile(
     r"get_user_details|find_user_id|get_customer_by_phone|get_reservation_details|telecom|airline|retail"
 )
 BENCHMARK_VALUES = re.compile(r"ROSSI|IFOYYZ|NQNU5R|K1NW8N|mia_kim|mia_fancy|555-123|\\d\{4\}")
@@ -497,20 +498,22 @@ def _code_lines(text: str) -> list[str]:
     return lines
 
 
-def _tau2_hits(path: Path) -> list[str]:
-    """Lines naming a tau2 tool or domain, except the disclosed telecom lines."""
+def _domain_hits(path: Path) -> list[str]:
+    """Lines naming a benchmark tool or domain, except the disclosed telecom lines."""
     allowed = DISCLOSED_DOMAIN_LINES.get(path.relative_to(PACKAGE / "config").as_posix())
     return [
-        line for line in _code_lines(path.read_text(encoding="utf-8")) if TAU2_NAMES.search(line) and line != allowed
+        line
+        for line in _code_lines(path.read_text(encoding="utf-8"))
+        if BENCHMARK_NAMES.search(line) and line != allowed
     ]
 
 
 class SubmissionConfigTests(unittest.TestCase):
-    def test_no_tau2_tool_or_domain_name_and_no_benchmark_value(self) -> None:
+    def test_no_benchmark_tool_or_domain_name_and_no_benchmark_value(self) -> None:
         for path in SUBMISSION_FILES:
             text = path.read_text(encoding="utf-8")
             with self.subTest(path=path.relative_to(PACKAGE / "config").as_posix()):
-                self.assertEqual(_tau2_hits(path), [])
+                self.assertEqual(_domain_hits(path), [])
                 self.assertEqual(BENCHMARK_VALUES.findall(text), [])
 
     def test_the_disclosed_telecom_lines_are_present_once(self) -> None:
@@ -518,10 +521,10 @@ class SubmissionConfigTests(unittest.TestCase):
             with self.subTest(file=name):
                 self.assertEqual(_code_lines((PACKAGE / "config" / name).read_text(encoding="utf-8")).count(line), 1)
 
-    def test_other_hits_are_historical_tau3_files(self) -> None:
+    def test_other_hits_are_historical_bench_files(self) -> None:
         config = PACKAGE / "config"
-        hits = {path.relative_to(config).as_posix() for path in config.rglob("*.yaml") if _tau2_hits(path)}
-        self.assertTrue(all(Path(hit).name.startswith("tau3") for hit in hits), hits)
+        hits = {path.relative_to(config).as_posix() for path in config.rglob("*.yaml") if _domain_hits(path)}
+        self.assertTrue(all(Path(hit).name.startswith("bench") for hit in hits), hits)
 
 
 def main() -> None:

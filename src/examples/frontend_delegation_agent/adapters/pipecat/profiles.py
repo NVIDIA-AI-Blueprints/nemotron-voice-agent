@@ -80,7 +80,7 @@ def profile_name(environ: Mapping[str, str] | None = None) -> str:
 def keepalive_mismatch(ws_ping_interval_s: float, environ: Mapping[str, str] | None = None) -> str:
     """A message when the server pings WebSocket clients but the profile turns pings off, else ``""``.
 
-    FDA's profiles set ``server.ws_ping_interval_s: 0``: a τ² client sends no pings and pauses for
+    FDA's profiles set ``server.ws_ping_interval_s: 0``: a benchmark client sends no pings and pauses for
     seconds, so the server must not ping it. ``src/server.py`` passes ``UVICORN_WS_PING_INTERVAL`` to
     uvicorn; unset, uvicorn pings every 20 s.
     """

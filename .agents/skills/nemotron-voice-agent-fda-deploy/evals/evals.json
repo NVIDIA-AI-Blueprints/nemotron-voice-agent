@@ -5,13 +5,13 @@
       "id": "nemotron-voice-agent-fda-deploy-ask-profile",
       "prompt": "Deploy FDA.",
       "expected_skill": "nemotron-voice-agent-fda-deploy",
-      "expected_output": "Asks which backend to start (hermes, suggested, or llm) and which profile to deploy, default (for the browser UI) or eval (for evaluation runs such as Tau), and starts nothing before the user answers.",
+      "expected_output": "Asks which backend to start (hermes, suggested, or llm) and which profile to deploy, default (for the browser UI) or eval (for benchmark runs), and starts nothing before the user answers.",
       "assertions": [
         "Loaded nemotron-voice-agent-fda-deploy/SKILL.md.",
         "Asked which backend to start, hermes or llm, with hermes as the suggestion.",
         "Asked which profile to deploy, default or eval.",
         "Did not run docker compose up before the user chose a backend and a profile.",
-        "Did not open references/pipecat.md or references/tau.md before the choice."
+        "Did not open references/pipecat.md or references/benchmarking.md before the choice."
       ]
     },
     {
@@ -29,7 +29,7 @@
     },
     {
       "id": "nemotron-voice-agent-fda-deploy-eval",
-      "prompt": "Bring up FDA with the Hermes backend in eval mode so tau2 can evaluate it.",
+      "prompt": "Bring up FDA with the Hermes backend in eval mode for a benchmark run.",
       "expected_skill": "nemotron-voice-agent-fda-deploy",
       "expected_output": "Starts `docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml --profile frontend-delegation-agent/single-gpu up -d --build`, checks FDA_PROFILE=eval, PIPELINE_TLS=false, and the `FDA gateway: config gateway.eval.yaml` log line, and points the client at ws://localhost:7860/v1/realtime with the model nvidia/nemotron-realtime-frontend-delegation and the REALTIME_API_KEY Bearer credential.",
       "assertions": [
@@ -52,7 +52,7 @@
     },
     {
       "id": "nemotron-voice-agent-fda-deploy-llm-eval",
-      "prompt": "Bring up FDA with the LLM backend in eval mode so tau2 can evaluate it.",
+      "prompt": "Bring up FDA with the LLM backend in eval mode for a benchmark run.",
       "expected_skill": "nemotron-voice-agent-fda-deploy",
       "expected_output": "Starts `docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml --profile frontend-delegation-agent/single-gpu up -d --build`, checks that no fda-hermes container runs, that the voice service has FDA_BACKEND=llm, FDA_BACKEND_LINK=in_process and FDA_GATEWAY_CONFIG=gateway.eval.yaml, and points the client at ws://localhost:7860/v1/realtime with the model nvidia/nemotron-realtime-frontend-delegation.",
       "assertions": [
@@ -65,7 +65,7 @@
     },
     {
       "id": "nemotron-voice-agent-fda-deploy-benchmark-needs-overlay",
-      "prompt": "FDA is already running for the browser UI. Can I just point tau2 at it for a benchmark run?",
+      "prompt": "FDA is already running for the browser UI. Can I just point a benchmark client at it?",
       "expected_skill": "nemotron-voice-agent-fda-deploy",
       "expected_output": "Explains that Realtime sessions on a default deployment use gateway.yaml, so a benchmark run must redeploy with the eval overlay, which switches fda-hermes to gateway.eval.yaml.",
       "assertions": [

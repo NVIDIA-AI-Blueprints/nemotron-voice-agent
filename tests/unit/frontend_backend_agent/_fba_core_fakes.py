@@ -6,7 +6,7 @@
 """Offline doubles for the FBA tests that need only ``core/`` (permanent).
 
 Split from ``_fba_voice_fakes.py`` (plan ``shared-stack-plan.md`` §8.4): config paths, the fake LLM
-client, the fake clock, tau2-shaped payloads and trace normalization. The session harness for the
+client, the fake clock, benchmark-shaped payloads and trace normalization. The session harness for the
 Pipecat adapter is ``_fba_pipecat_fakes.py``.
 """
 
@@ -151,11 +151,11 @@ class FakeClock:
         self.mono += seconds
 
 
-# -- tau2-shaped payloads ---------------------------------------------------------------
+# -- benchmark-shaped payloads ----------------------------------------------------------
 
 
-def tau2_session_update(domain: str = "mock") -> dict[str, Any]:
-    return json.loads((FIXTURES / "tau2_session_update" / f"{domain}.json").read_text(encoding="utf-8"))
+def benchmark_session_update(domain: str = "mock") -> dict[str, Any]:
+    return json.loads((FIXTURES / "benchmark_session_update" / f"{domain}.json").read_text(encoding="utf-8"))
 
 
 def pcmu_speech(ms: int, frequency: float = 300.0) -> bytes:
@@ -170,8 +170,8 @@ def append_event(chunk: bytes) -> str:
     return json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(chunk).decode("ascii")})
 
 
-def tau2_update_with(tools: list[dict[str, Any]] | None = None, instructions: str = "policy") -> dict[str, Any]:
-    update = copy.deepcopy(tau2_session_update("mock"))
+def benchmark_update_with(tools: list[dict[str, Any]] | None = None, instructions: str = "policy") -> dict[str, Any]:
+    update = copy.deepcopy(benchmark_session_update("mock"))
     if tools is not None:
         update["session"]["tools"] = tools
     update["session"]["instructions"] = instructions

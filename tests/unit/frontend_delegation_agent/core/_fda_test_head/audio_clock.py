@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The τ³ head's audio clock.
+"""The former standalone Realtime head's audio clock.
 
 Turn taking runs on the **audio clock**: input samples received since the
-session started. A client such as tau2 can pause its input stream for seconds
+session started. A client such as the benchmark client can pause its input stream for seconds
 of wall-clock time while its user simulator thinks, so a wall-clock endpointer
 would close turns at the wrong moments.
 """

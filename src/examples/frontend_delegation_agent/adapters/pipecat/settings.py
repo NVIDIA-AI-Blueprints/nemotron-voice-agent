@@ -4,7 +4,7 @@
 """Pipecat-head settings (``config/adapters/pipecat*.yaml``), kept out of the shared delegation config.
 
 The shared :class:`DelegationConfig` (and its ``config_hash``) never sees these keys,
-so the τ³ head's fingerprint is unaffected by anything set here. Every key that is
+so the former server's fingerprint is unaffected by anything set here. Every key that is
 ``null`` in the file keeps Pipecat's own default.
 
 Selection: ``--pipecat-settings`` or ``FDA_PIPECAT_SETTINGS`` (a path, or a name
@@ -31,7 +31,7 @@ class VadSettings:
 
     ``audio_idle_timeout`` is wall-clock: when no input audio arrives for that long while the
     user is speaking, Pipecat forces speech-stopped. ``0`` disables it, which a client that
-    pauses its input between ticks (τ²) needs, so the end of a turn is measured in audio only.
+    pauses its input between turns needs, so the end of a turn is measured in audio only.
     """
 
     confidence: float | None = None

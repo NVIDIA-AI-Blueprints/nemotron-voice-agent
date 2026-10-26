@@ -119,7 +119,7 @@ class ResultHintSettings:
 
 @dataclass(frozen=True, slots=True)
 class FormatRetrySettings:
-    """``normalization.tool_arguments.format_retry`` (A1 / A1-lite, tau3-geval-failure-fixes-plan.md 4).
+    """``normalization.tool_arguments.format_retry`` (A1 / A1-lite).
 
     After a permanent failure of a read tool on a genuine phone field (by argument name or schema
     description, never by value shape) with a ten-digit value and no argument rule, the same digits in

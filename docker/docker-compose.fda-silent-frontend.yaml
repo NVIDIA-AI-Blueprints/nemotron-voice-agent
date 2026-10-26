@@ -11,7 +11,7 @@
 # A single-turn evaluation ends each case on the first response.done and scores its transcript only.
 # Each FDA filler and proactive status line is its own response, so both are logged and never spoken.
 # Direct answers are still spoken, and a turn the frontend leaves silent that holds a request is
-# delegated. Use it for single-turn evaluations only, never for multi-turn ones such as Tau.
+# delegated. Use it for single-turn evaluations only, never for multi-turn ones.
 # Pick the prompt profile with FDA_PROMPT_PROFILE (for example general_qa).
 
 services:

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One τ³-head Realtime session: wire + input audio + ASR + the delegation turn manager.
+"""One former-standalone-Realtime-head session: wire + input audio + ASR + the delegation turn manager.
 
 The reader handles client events strictly in arrival order (the shared
 :class:`~examples.frontend_delegation_agent.core.wire.session_protocol.RealtimeProtocol`).

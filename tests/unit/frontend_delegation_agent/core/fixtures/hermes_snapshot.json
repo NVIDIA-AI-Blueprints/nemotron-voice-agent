@@ -1,6 +1,6 @@
 {
   "gateway.eval.yaml|-": {
-    "backend_catalog_sha256": "55639a8b238b7eec",
+    "backend_catalog_sha256": "a93bc790046db344",
     "backend_soul_sha256": "d83c4a8d4c4dbcc2",
     "backend_system": {
       "plain": {
@@ -128,7 +128,7 @@
     }
   },
   "gateway.yaml|-": {
-    "backend_catalog_sha256": "55639a8b238b7eec",
+    "backend_catalog_sha256": "a93bc790046db344",
     "backend_soul_sha256": "d83c4a8d4c4dbcc2",
     "backend_system": {
       "plain": {

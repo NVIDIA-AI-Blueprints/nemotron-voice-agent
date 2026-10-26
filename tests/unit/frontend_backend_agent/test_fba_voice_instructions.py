@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Rule 13: exact prompts per tau2 domain, tool-derived capabilities, placements, the voice catalog.
+"""Rule 13: exact prompts per benchmark domain, tool-derived capabilities, placements, the voice catalog.
 
 Snapshots live in ``fixtures/prompt_snapshots``; regenerate them after a reviewed prompt change with
 ``UPDATE_PROMPT_SNAPSHOTS=1 uv run pytest tests/unit/frontend_backend_agent/test_fba_voice_instructions.py``.
@@ -24,8 +24,8 @@ from _fba_core_fakes import (
     FIXTURES,
     FakeChatClient,
     base_config,
+    benchmark_session_update,
     delegate_response,
-    tau2_session_update,
     text_response,
 )
 
@@ -61,7 +61,7 @@ def _runner(apply_to: tuple[str, ...] = ("backend",), placement: str = "policy_s
 
 
 def _session(domain: str) -> dict:
-    return tau2_session_update(domain)["session"]
+    return benchmark_session_update(domain)["session"]
 
 
 class ExactPromptTests(unittest.TestCase):
@@ -75,7 +75,7 @@ class ExactPromptTests(unittest.TestCase):
                 runner = _runner(apply_to)
                 runner.configure(tools=session["tools"], instructions=session["instructions"])
                 for role, prompt in runner.rendered_prompts().items():
-                    # JSON keeps the prompt byte-exact: tau2 policies carry trailing spaces,
+                    # JSON keeps the prompt byte-exact: benchmark policies carry trailing spaces,
                     # which the repository's whitespace hooks would strip from a text file.
                     name = f"{domain}__{'+'.join(apply_to)}__{role}.json"
                     with self.subTest(snapshot=name):

@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""Rules 1, 6, 7, 8, 15, 21: the tau2 client contract, driven through a real session."""
+"""Rules 1, 6, 7, 8, 15, 21: the benchmark client contract, driven through a real session."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ import json
 
 from _fba_core_fakes import (
     FakeChatClient,
+    benchmark_session_update,
     delegate_response,
     pcmu_silence,
-    tau2_session_update,
     text_response,
     tool_response,
     voice_config,
@@ -34,11 +34,11 @@ def output_event(call_id: str, output: str) -> dict:
 
 
 class HandshakeTests(PipecatTestCase):
-    async def test_handshake_with_tau2_payload(self) -> None:
+    async def test_handshake_with_benchmark_payload(self) -> None:
         for domain in ("mock", "airline", "retail", "telecom"):
             with self.subTest(domain=domain):
                 harness = PipecatHarness(clients=AgentClients(backend=FakeChatClient(), frontend=FakeChatClient()))
-                await harness.start(tau2_session_update(domain))
+                await harness.start(benchmark_session_update(domain))
                 self.assertEqual(harness.events[0]["type"], "session.created")
                 self.assertTrue(harness.events[0]["session"]["id"].startswith("sess_"))
                 self.assertEqual(harness.events[1]["type"], "session.updated")
@@ -47,7 +47,7 @@ class HandshakeTests(PipecatTestCase):
 
     async def test_no_greeting(self) -> None:
         harness = PipecatHarness(agent_factory=lambda _: ScriptedAgentPort([{"say": "Hello there."}]))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.idle(1500)
         self.assertEqual(harness.of_type("response.created"), [])
         await harness.speak()
@@ -62,7 +62,7 @@ class FunctionCallTests(PipecatTestCase):
         self.frontend = FakeChatClient()
         self.backend = FakeChatClient()
         self.harness = PipecatHarness(clients=AgentClients(backend=self.backend, frontend=self.frontend))
-        await self.harness.start(tau2_session_update("mock"))
+        await self.harness.start(benchmark_session_update("mock"))
 
     async def asyncTearDown(self) -> None:
         await self.harness.close()
@@ -137,17 +137,17 @@ class _CallsThenAnswer(ScriptedAgentPort):
         return AgentReply(text="Done now.")
 
 
-class Tau2TimingTests(PipecatTestCase):
+class BenchmarkTimingTests(PipecatTestCase):
     async def test_early_response_create_is_queued_not_rejected(self) -> None:
         agent = _CallsThenAnswer([])
         harness = PipecatHarness(agent_factory=lambda _: agent)
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         turns = harness.session.turns
         original = turns._deliver
 
         def deliver_then_answer_immediately(turn, reply):
             original(turn, reply)
-            # tau2 answers on its next tick, which can overtake our response.done.
+            # the benchmark client answers on its next tick, which can overtake our response.done.
             turns.on_function_output("call_early", "ok")
             turns.on_response_create()
 
@@ -164,7 +164,7 @@ class Tau2TimingTests(PipecatTestCase):
 
     async def test_truncate_is_clamped_not_rejected(self) -> None:
         harness = PipecatHarness(agent_factory=lambda _: ScriptedAgentPort([{"say": "A short answer."}]))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         item_id = harness.of_type("response.output_audio.delta")[0]["item_id"]
@@ -179,7 +179,7 @@ class Tau2TimingTests(PipecatTestCase):
 
     async def test_pcmu_out_and_fresh_item_ids(self) -> None:
         harness = PipecatHarness(agent_factory=lambda _: ScriptedAgentPort([{"say": "One. Two."}, {"say": "Three."}]))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.feed(pcmu_silence(3000))
@@ -196,7 +196,7 @@ class Tau2TimingTests(PipecatTestCase):
         config = voice_config(protocol_resume_on="last_function_output")
         agent = _CallsThenAnswer([])
         harness = PipecatHarness(config=config, agent_factory=lambda _: agent)
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.send(output_event("call_early", json.dumps({"ok": True})))

@@ -400,7 +400,7 @@ class TurnManager:
             self._log("response_create", wait_id=mark.wait_id, rule="consumed_after_inbox_resume")
             return
         if self._wait is not None:
-            # tau2 may send this before our tool-call response.done went out: queue, never reject.
+            # A benchmark client may send this before our tool-call response.done went out: queue, never reject.
             self._log("response_create", wait_id=self._wait.wait_id, rule="resume_wait")
             self._wait.resume_requested = True
             self._maybe_resume()
@@ -990,7 +990,7 @@ class TurnManager:
         self._show_filler(turn)
 
     def _show_filler(self, turn: UserTurn) -> None:
-        """Tell an opted-in client about filler it will not hear (never sent to tau2)."""
+        """Tell an opted-in client about filler it will not hear (never sent to a benchmark client)."""
         record = turn.filler
         if (
             not self._show_silent_filler

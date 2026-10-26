@@ -5,7 +5,7 @@
 # variable fails at load time). Backend-side templates (SOUL, backend system prompt, context
 # block labels, apologies) live in backend/<kind>.yaml (hermes.yaml, llm.yaml), rendered by the gateway.
 # Prompt variants: {% if features.<name> %} blocks switched by prompt_features in
-# delegation_agent.yaml (replay_intent; tau3-failure-fixes-plan.md). All off = the baseline prompt.
+# delegation_agent.yaml (replay_intent). All off = the baseline prompt.
 
 frontend_system: |
   You are the voice frontend of a customer-service assistant. You speak with the user in real time.

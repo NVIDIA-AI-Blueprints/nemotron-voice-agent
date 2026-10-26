@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Voice server of the frontend-delegation prototype: the single entry point for the voice side.
-# Defaults are tau3-eval-safe. The gateway and its Hermes workers are configured in gateway.yaml.
+# Defaults are eval-safe. The gateway and its Hermes workers are configured in gateway.yaml.
 # ${VAR} and ${VAR:-default} are resolved from the environment; relative paths (voice_profile,
 # delegation.prompts.path, backend.gateway_config) resolve against the file that declares them.
 # See misc/prototypes/frontend-delegation-hermes/prototype-plan.md, section 11.
@@ -53,7 +53,7 @@ delegation:
     ping_as_status: false          # R3: a ping while WORKING is a status request (never steers the running call)
   # The prompt profile (prompts/<profile>/): FDA_PROMPT_PROFILE, default generic. Never set it empty.
   prompts: {path: "prompts/${FDA_PROMPT_PROFILE:-generic}/frontend.yaml"}
-  # tau3-failure-fixes-plan.md: every delegation-side fix is on here except M2 (experimental).
+  # Every delegation-side fix is on here except M2 (experimental).
   # The voice-side fixes (M3.1 spelled-run joining, M3.3 "invalid ID" wording, I3/I4 recovery notes)
   # are set by each voice profile; profiles/realtime_eval.yaml sets its own.
   # M3.2: wait hold_ms before deciding a turn that ends mid-spelling with strong evidence and an
@@ -89,17 +89,17 @@ output:
   hold_max_ms: 4000                  # marks queued audio stale; audio is never released over the user
   on_stale: {backend_answer: keep, status: drop, filler: drop, apology: keep}
   # M1: one short line (frontend.yaml status_proactive_lines) after after_s of silence while WORKING,
-  # at most max_per_run per backend run. Calibrate after_s per host (tau3-failure-fixes-plan.md 2).
+  # at most max_per_run per backend run. Calibrate after_s per host.
   proactive_status: {enabled: true, after_s: "${FDA_PROACTIVE_AFTER_S:-15}", max_per_run: 1}
   clean_answers: true                # G2: strip markdown, one sentence per list item, before TTS
 
 tools:
-  executor: wire                     # wire (Realtime function_call; tau3) | local (in-process callables; browser)
+  executor: wire                     # wire (Realtime function_call; eval) | local (in-process callables; browser)
   result_timeout_s: 120
   batch_window_ms: 30                # tool calls arriving within this window share one Realtime response
 
 instructions:
-  apply_to: [backend]                # session.update.instructions (the tau3 policy) -> backend | frontend
+  apply_to: [backend]                # session.update.instructions (the client's policy) -> backend | frontend
 
 # Frontend prompt variants ({% if features.<name> %} in prompts/<profile>/frontend.yaml); all off = the baseline prompt.
 # replay_intent stays off: M2 is experimental.

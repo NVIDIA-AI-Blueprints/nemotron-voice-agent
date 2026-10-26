@@ -13,7 +13,7 @@ from __future__ import annotations
 import unittest
 
 from _fda_golden import load_golden, render_all
-from _fda_voice_fakes import PACKAGE, tau2_session_update
+from _fda_voice_fakes import PACKAGE, benchmark_session_update
 
 from examples.frontend_delegation_agent.core.frontend.prompts import load_prompts
 from examples.frontend_delegation_agent.core.sidecar.templates import BackendTemplates, TemplateError
@@ -29,7 +29,7 @@ class GoldenPromptTests(unittest.TestCase):
 
     def test_each_backend_variant_changes_only_its_own_block(self) -> None:
         path = PACKAGE / "config" / "prompts" / "customer_service" / "backend" / "hermes.yaml"
-        airline = tau2_session_update("airline")["session"]["instructions"]
+        airline = benchmark_session_update("airline")["session"]["instructions"]
         base = BackendTemplates(path).render("backend_system", instructions=airline)
         spelling = BackendTemplates(path, prompt_features={"spelling_v2": True}).render(
             "backend_system", instructions=airline

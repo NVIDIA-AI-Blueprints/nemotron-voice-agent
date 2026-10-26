@@ -1,6 +1,6 @@
 ---
 name: nemotron-voice-agent-fda-deploy
-description: Build, deploy, and evaluate the Frontend Delegation Agent (FDA) example on the frontend-delegation-agent/single-gpu recipe, with the browser UI (default profile) or OpenAI Realtime evaluation runs such as τ² (eval overlay). Use when starting, smoke testing, or troubleshooting the FDA voice service or its backend: Hermes (fda-hermes, by default in an NVIDIA OpenShell sandbox, or the plain baseline overlay) or the lightweight LLM backend inside the voice container (docker/docker-compose.fda-llm.yaml).
+description: Build, deploy, and evaluate the Frontend Delegation Agent (FDA) example on the frontend-delegation-agent/single-gpu recipe, with the browser UI (default profile) or OpenAI Realtime benchmark runs (eval overlay). Use when starting, smoke testing, or troubleshooting the FDA voice service or its backend: Hermes (fda-hermes, by default in an NVIDIA OpenShell sandbox, or the plain baseline overlay) or the lightweight LLM backend inside the voice container (docker/docker-compose.fda-llm.yaml).
 version: "2.3.0"
 license: CC-BY-4.0 AND Apache-2.0
 metadata:
@@ -25,8 +25,8 @@ Do not use this skill for the other registered examples (use `nemotron-voice-age
 - Every benchmark run uses the eval overlay, with either backend. Only the overlay switches the gateway to `gateway.eval.yaml` (on `fda-hermes` for Hermes, on the voice service for `llm`). Realtime sessions on a `default` deployment pair the eval frontend with the wrong gateway.
 - The LLM backend uses `docker/docker-compose.fda-llm.yaml`, always after the eval overlay and before the silent-frontend overlay. Never combine it with the plain runtime overlay. It sets `FDA_BACKEND=llm` and `FDA_BACKEND_LINK=in_process` on the voice service and keeps the four Hermes and OpenShell services from starting. Do not write `FDA_BACKEND` or `FDA_BACKEND_LINK` to `.env`.
 - The Hermes backend runs in an NVIDIA OpenShell sandbox by default. Use the plain runtime overlay, `docker/docker-compose.fda-hermes-plain.yaml`, only when the user asks for it (A/B checks, debugging) or the host cannot run OpenShell. Always pass files in this order: `docker-compose.yml`, then the plain overlay, then the eval overlay. For the plain runtime, set `E="-f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml"` (plain `default`) or `E="-f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml -f docker/docker-compose.fda-eval.yaml"` (plain `eval`), and pass `$E` in every command.
-- If, and only if, the user says the run is a VoiceBench evaluation, ask two questions and wait for both answers: "Keep the frontend silent? The filler is then logged only, and the backend's answer is the first response. Default: no." and "Which prompt profile? Suggested: `general_qa`." If the first answer is yes, append `-f docker/docker-compose.fda-silent-frontend.yaml` to `$E` last (after the eval overlay, and after the LLM overlay for `llm`). VoiceBench still needs the backend question. Prefix every Compose command that recreates containers with the chosen profile, for example `FDA_PROMPT_PROFILE=general_qa docker compose $E --profile $P up -d --build`. VoiceBench runs use `eval`. Refer to `references/tau.md`.
-- Every other run (Tau, the browser UI, and so on) uses the mode's default prompt profile without asking: `generic` for `default`, `customer_service` for `eval`. Do not ask the two questions, never add the silent-frontend overlay, and do not set `FDA_PROMPT_PROFILE`. If `.env` sets `FDA_PROMPT_PROFILE`, show the value and ask the user to confirm or remove it.
+- If, and only if, the user says the run is a VoiceBench evaluation, ask two questions and wait for both answers: "Keep the frontend silent? The filler is then logged only, and the backend's answer is the first response. Default: no." and "Which prompt profile? Suggested: `general_qa`." If the first answer is yes, append `-f docker/docker-compose.fda-silent-frontend.yaml` to `$E` last (after the eval overlay, and after the LLM overlay for `llm`). VoiceBench still needs the backend question. Prefix every Compose command that recreates containers with the chosen profile, for example `FDA_PROMPT_PROFILE=general_qa docker compose $E --profile $P up -d --build`. VoiceBench runs use `eval`. Refer to `references/benchmarking.md`.
+- Every other run (other benchmarks, the browser UI, and so on) uses the mode's default prompt profile without asking: `generic` for `default`, `customer_service` for `eval`. Do not ask the two questions, never add the silent-frontend overlay, and do not set `FDA_PROMPT_PROFILE`. If `.env` sets `FDA_PROMPT_PROFILE`, show the value and ask the user to confirm or remove it.
 - OpenShell has not yet been validated on a live host (the go/no-go spike and the eval gates are pending). If it fails on a host, report the failure and offer the plain runtime. Do not edit `docker/fda/openshell/` files to work around it without the user's approval.
 - `docker-compose.yml` sets every FDA variable of the voice service as a literal. `FDA_*` keys in `.env` have no effect, with one exception: `FDA_PROMPT_PROFILE` (the prompt profile, `config/prompts/<profile>/`), which Compose passes to both the voice service and `fda-hermes`. Do not write any other `FDA_*` key to `.env`. Never set `FDA_PROMPT_PROFILE` to an empty value. An unknown name fails with an error that names the missing prompt file.
 - Hermes only: the Hermes checkout in `HERMES_AGENT_DIR` must be clean and at the commit in the header of `docker/fda/requirements.txt`. The LLM backend needs no checkout and no OpenShell host checks.
@@ -72,17 +72,17 @@ Follow this tree. Ask only when the request leaves a choice open. Ask both open 
    └─ llm    → docker/docker-compose.fda-llm.yaml after the eval overlay; never the plain overlay
                preflight: references/prerequisites.md sections 1 (shared host needs), 2, and 6 only
 2. Request names a profile?
-   ├─ no      → ASK: "Which profile: `default` (for the browser UI) or `eval` (for evaluation runs such as Tau)?"
+   ├─ no      → ASK: "Which profile: `default` (for the browser UI) or `eval` (for benchmark runs)?"
    ├─ default → docker compose $E --profile $P up -d --build      (E from the table above)
    │            browser UI at https://<host>:7860 (pipecat_demo.yaml + adapters/pipecat.yaml + gateway.yaml)
    │            → references/pipecat.md
    └─ eval    → docker compose $E --profile $P up -d --build      (E includes the eval overlay)
                 ws://<host>:7860/v1/realtime?model=nvidia/nemotron-realtime-frontend-delegation
                 (pipecat_realtime_eval.yaml + adapters/pipecat.eval.yaml + gateway.eval.yaml), browser sessions refused
-                → references/tau.md
+                → references/benchmarking.md
 ```
 
-"Start the FDA demo" or "talk to FDA in the browser" means `default`, but names no backend: ask. "Benchmark", "τ²", "Tau", or "VoiceBench" means `eval`, but names no backend: ask.
+"Start the FDA demo" or "talk to FDA in the browser" means `default`, but names no backend: ask. "Benchmark", "evaluation", or "VoiceBench" means `eval`, but names no backend: ask.
 
 ## Deploy
 
@@ -164,7 +164,7 @@ Open only what the chosen profile needs:
 
 - Preflight, image rebuild triggers, and speech models: `references/prerequisites.md`
 - Browser UI (`default`): `references/pipecat.md`
-- Eval mode, Realtime smoke test, benchmark runs, and logs (including OpenShell logs and traces): `references/tau.md`
+- Eval mode, Realtime smoke test, benchmark runs, and logs (including OpenShell logs and traces): `references/benchmarking.md`
 - Configuration knobs, variables, backends, and prompt profiles: `references/config-knobs.md`
 - Symptoms and fixes: `references/troubleshooting.md`
 

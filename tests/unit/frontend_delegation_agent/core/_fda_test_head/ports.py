@@ -4,7 +4,7 @@
 """Ports for the speech components: VAD, streaming ASR, TTS, text normalization.
 
 The engine depends only on these protocols. Riva/Silero adapters implement them
-for production; deterministic stand-ins implement them for tests and the tau3
+for production; deterministic stand-ins implement them for tests and the benchmark
 gates, so the whole engine runs offline.
 """
 

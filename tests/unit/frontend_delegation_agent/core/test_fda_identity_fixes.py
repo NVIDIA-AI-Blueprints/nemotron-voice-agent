@@ -14,7 +14,7 @@ from pathlib import Path
 
 from _fda_backend_fakes import Harness as ControllerHarness
 from _fda_variants import variant  # noqa: E402
-from _fda_voice_fakes import PACKAGE, DelegationHarness, profile_config, tau2_session_update
+from _fda_voice_fakes import PACKAGE, DelegationHarness, benchmark_session_update, profile_config
 
 from examples.frontend_delegation_agent.core.errors import VoiceConfigError
 from examples.frontend_delegation_agent.core.normalization.arguments import ResultHintSettings
@@ -45,7 +45,7 @@ NOTE_FORBIDDEN = re.compile(r"roaming|apn|refuel|telecom|airline|retail|user_abr
 
 
 def _instructions(domain: str) -> str:
-    return tau2_session_update(domain)["session"]["instructions"]
+    return benchmark_session_update(domain)["session"]["instructions"]
 
 
 def _phone_block(text: str) -> str:
@@ -169,7 +169,9 @@ class ControllerDomainTests(unittest.IsolatedAsyncioTestCase):
             for features in (ALL_ON, ALL_ON_BUT_PHONE):
                 with self.subTest(domain=domain, features=features):
                     instructions = _instructions(domain)
-                    h = await self._configure(tau2_session_update(domain)["session"]["tools"], instructions, features)
+                    h = await self._configure(
+                        benchmark_session_update(domain)["session"]["tools"], instructions, features
+                    )
                     system = h.worker.of_type("configure")[0]["instructions"]
                     self.assertNotIn("<domain_notes>", system)
                     self.assertEqual(features["phone_format"], "<phone_numbers>" in system)
@@ -185,7 +187,7 @@ class ControllerDomainTests(unittest.IsolatedAsyncioTestCase):
         eval_features = dict(gc.load_gateway_config(CONFIG / "gateway.eval.yaml").prompt_features)
         for domain in DOMAINS:
             with self.subTest(domain=domain):
-                tools, instructions = tau2_session_update(domain)["session"]["tools"], _instructions(domain)
+                tools, instructions = benchmark_session_update(domain)["session"]["tools"], _instructions(domain)
                 # Read each harness before building the next one (the emulator worker belongs to the latest harness).
                 on = await self._configure(tools, instructions, eval_features)
                 with_note = on.worker.of_type("configure")[0]["instructions"]
@@ -300,7 +302,7 @@ class ResultHintsTests(unittest.TestCase):
 class RelayHintTests(unittest.IsolatedAsyncioTestCase):
     async def _session(self, profile: str | Path, domain: str) -> DelegationHarness:
         harness = DelegationHarness(profile_config(profile), transcripts=["I need help with my order"])
-        await harness.start(tau2_session_update(domain))
+        await harness.start(benchmark_session_update(domain))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -321,7 +323,7 @@ class RelayHintTests(unittest.IsolatedAsyncioTestCase):
         return (await harness.wait_sent("tool.result", count=results + 1))["output"]
 
     async def test_default_profile_annotates_retail_misses_and_leaves_successes(self) -> None:
-        harness = await self._session(variant("profiles/tau3_eval.yaml"), "retail")
+        harness = await self._session(variant("profiles/bench_eval.yaml"), "retail")
         args = '{"first_name": "Maren", "last_name": "Oakhurst", "zip": "40917"}'
         first = await self._round_trip(harness, 1, "find_user_id_by_name_zip", args, NOT_FOUND)
         second = await self._round_trip(harness, 2, "find_user_id_by_name_zip", args, NOT_FOUND)
@@ -340,9 +342,9 @@ class RelayHintTests(unittest.IsolatedAsyncioTestCase):
     async def test_control_and_telecom_outputs_are_byte_identical(self) -> None:
         email = '{"email": "a@b.com"}'
         for profile, domain, name, args, output in (
-            (variant("profiles/tau3_eval_baseline.yaml"), "retail", "find_user_id_by_email", email, NOT_FOUND),
-            (variant("profiles/tau3_identity_control.yaml"), "retail", "find_user_id_by_email", email, NOT_FOUND),
-            (variant("profiles/tau3_eval.yaml"), "telecom", "get_customer_by_phone", '{"phone_number": "3034971268"}',
+            (variant("profiles/bench_eval_baseline.yaml"), "retail", "find_user_id_by_email", email, NOT_FOUND),
+            (variant("profiles/bench_identity_control.yaml"), "retail", "find_user_id_by_email", email, NOT_FOUND),
+            (variant("profiles/bench_eval.yaml"), "telecom", "get_customer_by_phone", '{"phone_number": "3034971268"}',
              "Error: Customer with phone number 3034971268 not found"),
         ):  # fmt: skip
             with self.subTest(profile=profile.name, domain=domain):
@@ -352,7 +354,7 @@ class RelayHintTests(unittest.IsolatedAsyncioTestCase):
                 await harness.close()
 
     async def test_airline_local_invalid_then_external_miss_gets_i4(self) -> None:
-        harness = await self._session(variant("profiles/tau3_eval.yaml"), "airline")
+        harness = await self._session(variant("profiles/bench_eval.yaml"), "airline")
         harness.link.deliver(
             "tool.call",
             call_id="c0",
@@ -371,7 +373,7 @@ class RelayHintTests(unittest.IsolatedAsyncioTestCase):
         await harness.close()
 
     async def test_i3_arm_repeats_the_first_note(self) -> None:
-        harness = await self._session(variant("profiles/tau3_arm_i3_recovery_hint.yaml"), "retail")
+        harness = await self._session(variant("profiles/bench_arm_i3_recovery_hint.yaml"), "retail")
         outputs = [
             await self._round_trip(harness, i, "find_user_id_by_email", '{"email": "a@b.com"}', NOT_FOUND)
             for i in (1, 2)
@@ -384,7 +386,7 @@ class ResultHintConfigTests(unittest.TestCase):
     def _load(self, text: str):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "voice.yaml"
-            path.write_text(f"extends: {variant('voice/tau3.yaml')}\n{text}")
+            path.write_text(f"extends: {variant('voice/bench.yaml')}\n{text}")
             return load_voice_config(path)
 
     def test_defaults_are_off(self) -> None:

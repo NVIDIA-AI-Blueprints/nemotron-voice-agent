@@ -103,7 +103,7 @@ class SessionState:
 
     @classmethod
     def from_message_history(cls, messages: Sequence[Message], *, backend_only: bool) -> SessionState:
-        """Replay a *foreign* transcript (for example tau2's) into session state.
+        """Replay a *foreign* transcript (for example a benchmark client's) into session state.
 
         This is deliberately separate from :meth:`from_dict`: a transcript
         records only what crossed the agent boundary, which is strictly less

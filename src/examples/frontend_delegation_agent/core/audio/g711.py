@@ -24,7 +24,7 @@ _ULAW_CLIP = 8159
 _SEG_UEND = (0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF)
 _SEG_AEND = (0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF)
 
-#: μ-law code for digital silence, as streamed continuously by tau2.
+#: μ-law code for digital silence, as streamed continuously by a benchmark client.
 ULAW_SILENCE = 0xFF
 #: A-law code for digital silence.
 ALAW_SILENCE = 0xD5

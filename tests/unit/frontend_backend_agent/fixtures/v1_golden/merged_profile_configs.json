@@ -291,7 +291,7 @@
    "tools": {}
   }
  },
- "tau3_eval_frontend_verdict_speak_history": {
+ "v1_eval_frontend_verdict_speak_history": {
   "agent": {
    "accounting": {
     "pricing": {},

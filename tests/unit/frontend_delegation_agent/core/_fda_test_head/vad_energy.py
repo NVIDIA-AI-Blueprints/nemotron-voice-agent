@@ -5,7 +5,7 @@
 
 The frame level in dBFS is mapped linearly onto [0, 1] between ``floor_dbfs``
 and ``ceiling_dbfs``, so the session's ``threshold`` keeps its meaning (0.5 ~
--40 dBFS with the defaults). Digital silence, including tau2's continuous
+-40 dBFS with the defaults). Digital silence, including the benchmark client's continuous
 μ-law silence, is always 0.
 """
 

@@ -31,9 +31,9 @@ CATALOGS = [
     REPO_ROOT / "src" / "examples" / "frontend_backend_agent" / "core" / "config" / "prompts" / "customer_service.yaml",
     REPO_ROOT / "src" / "examples" / "frontend_backend_agent" / "core" / "config" / "prompts" / "general_qa.yaml",
 ]
-#: A tau2-bench checkout, from ``TAU2_BENCH_ROOT``; the policy test skips when it is unset.
-_TAU2_ROOT = os.environ.get("TAU2_BENCH_ROOT", "").strip()
-TAU2_DOMAINS = Path(_TAU2_ROOT) / "data" / "tau2" / "domains" if _TAU2_ROOT else None
+#: A benchmark checkout, from ``BENCHMARK_ROOT``; the policy test skips when it is unset.
+_BENCHMARK_ROOT = os.environ.get("BENCHMARK_ROOT", "").strip()
+BENCHMARK_DOMAINS = Path(_BENCHMARK_ROOT) / "data" / "tau2" / "domains" if _BENCHMARK_ROOT else None
 JINJA = re.compile(r"\{[{%#]")
 #: Catalog entries that are only ever included by another template (they need its context).
 INCLUDED_ONLY = {"frontend_task_in_progress"}
@@ -102,10 +102,12 @@ class TemplateTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(render(literal(text), config), substitute(text, config).strip())
 
-    def test_literal_on_tau2_policies(self) -> None:
-        policies = sorted(TAU2_DOMAINS.glob("*/**/*.md")) if TAU2_DOMAINS and TAU2_DOMAINS.is_dir() else []
+    def test_literal_on_benchmark_policies(self) -> None:
+        policies = (
+            sorted(BENCHMARK_DOMAINS.glob("*/**/*.md")) if BENCHMARK_DOMAINS and BENCHMARK_DOMAINS.is_dir() else []
+        )
         if not policies:
-            self.skipTest("set TAU2_BENCH_ROOT to a tau2-bench checkout to run this test")
+            self.skipTest("set BENCHMARK_ROOT to the benchmark checkout to run this test")
         config = make_config()
         with_markers = [path for path in policies if JINJA.search(path.read_text(encoding="utf-8"))]
         self.assertTrue(with_markers)  # the reason literal() exists

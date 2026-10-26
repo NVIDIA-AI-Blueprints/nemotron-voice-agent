@@ -31,7 +31,7 @@ def _env() -> Any:
 
 
 with _env():
-    PROFILE = load_voice_config(variant("voice/tau3.yaml"))
+    PROFILE = load_voice_config(variant("voice/bench.yaml"))
 
 
 class ConfigTests(unittest.TestCase):
@@ -86,9 +86,9 @@ class ConfigTests(unittest.TestCase):
         config = self.load(body)
         self.assertTrue(any("ruleset 'en'" in warning for warning in config.warnings))
 
-    def test_normalization_on_in_the_tau3_voice_profiles_and_off_in_the_base(self) -> None:
+    def test_normalization_on_in_the_bench_voice_profiles_and_off_in_the_base(self) -> None:
         for name, path in (
-            ("tau3.yaml", variant("voice/tau3.yaml")),
+            ("bench.yaml", variant("voice/bench.yaml")),
             ("realtime_eval.yaml", VOICE_PROFILES / "realtime_eval.yaml"),
         ):
             with self.subTest(profile=name):

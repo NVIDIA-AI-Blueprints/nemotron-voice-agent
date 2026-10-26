@@ -1,6 +1,6 @@
 {
  "demo_gateway": {
-  "backend_catalog_sha256": "55639a8b238b7eec",
+  "backend_catalog_sha256": "a93bc790046db344",
   "backend_features": {
    "capability_check": true,
    "domain_notes": true,
@@ -72,7 +72,7 @@
   "voice_settings_sha": "173c84f85f0f998a"
  },
  "eval_gateway": {
-  "backend_catalog_sha256": "55639a8b238b7eec",
+  "backend_catalog_sha256": "a93bc790046db344",
   "backend_features": {
    "capability_check": true,
    "domain_notes": true,

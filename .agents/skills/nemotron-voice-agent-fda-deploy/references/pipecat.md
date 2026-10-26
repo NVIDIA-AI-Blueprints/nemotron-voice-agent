@@ -1,6 +1,6 @@
 # Browser UI (`default` Profile)
 
-A `default` deployment serves browser UI sessions over WebRTC or the UI's WebSocket transport, with RTVI, from the shared app (`src/server.py`). It also serves OpenAI Realtime sessions, which always use the `eval` settings but pair them with `gateway.yaml`. Do not use a `default` deployment for benchmark runs: use `tau.md`.
+A `default` deployment serves browser UI sessions over WebRTC or the UI's WebSocket transport, with RTVI, from the shared app (`src/server.py`). It also serves OpenAI Realtime sessions, which always use the `eval` settings but pair them with `gateway.yaml`. Do not use a `default` deployment for benchmark runs: use `benchmarking.md`.
 
 Complete `prerequisites.md` first, then set `P=frontend-delegation-agent/single-gpu`.
 

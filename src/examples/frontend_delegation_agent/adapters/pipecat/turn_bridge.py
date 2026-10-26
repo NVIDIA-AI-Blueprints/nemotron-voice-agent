@@ -15,7 +15,7 @@ Turn disabled) and when to interrupt. The bridge only follows those decisions:
   ``on_speech_started`` once, before the turn's ``on_user_input``, never after it.
 * final ``TranscriptionFrame``\\ s are collected; ``UserStoppedSpeakingFrame`` emits
   ``speech_stopped``, commits the user item, emits the transcription and calls
-  ``on_user_input`` exactly as the τ³ head does after its ASR final.
+  ``on_user_input`` exactly as the former server did after its ASR final.
 
 The bridge never starts an interruption of its own for user speech and never holds a
 turn open (FDA's spelling hold is off in the Pipecat profiles).

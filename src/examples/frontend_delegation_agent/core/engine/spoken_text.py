@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Answer cleanup before TTS (``output.clean_answers``, tau3-failure-fixes-plan.md section 6).
+"""Answer cleanup before TTS (``output.clean_answers``).
 
 Markdown is read aloud badly ("asterisk asterisk"), and a list read as one run-on line
 merges items. :func:`clean_for_speech`:

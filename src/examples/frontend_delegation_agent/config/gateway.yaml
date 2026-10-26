@@ -63,7 +63,7 @@ llm:                                         # read only when backend.kind: llm
   request_timeout_s: 180                     # OpenAI SDK per-read timeout
   max_retries: 3                             # attempts per model call
 
-# Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend/<kind>.yaml; tau3-failure-fixes-plan.md).
+# Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend/<kind>.yaml).
 # All on by default. Set one to false to render the backend prompt without that variant.
 prompt_features:
   spelling_v2: true                          # M3.4: after a failed lookup, read back and ask to spell
@@ -71,7 +71,7 @@ prompt_features:
   write_consent: true                        # G4: consent only to a heard question; read back written names
   phone_format: true                         # <phone_numbers>: lookups XXX-XXX-XXXX plus one format retry
   domain_notes: true                         # the telecom note only (prompts/<profile>/backend/<kind>.yaml backend_domain_notes)
-  # tau3-geval-failure-fixes-plan.md section 4: on by default.
+  # The A/B fixes: on by default.
   format_correction: true                   # A2: a separator or case change is a format correction, not a variant
   write_consent_v2: true                    # B1: the policy's confirmation, to the exact change, before a write
   policy_check: true                        # B2: <before_change> policy check; allow within limits

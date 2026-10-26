@@ -180,7 +180,7 @@ def _note_default_change(environ: Mapping[str, str] | None) -> None:
     _NOTED_DEFAULT_CHANGE = True
     logger.info(
         f"{PROFILE_ENV}={DEFAULT_PROFILE} selects the browser UI profile; OpenAI Realtime sessions use the "
-        f"{REALTIME_PROFILE!r} profile (the Tau prompt catalog)"
+        f"{REALTIME_PROFILE!r} profile (the customer_service prompt catalog)"
     )
 
 

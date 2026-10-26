@@ -11,7 +11,7 @@ values are in ``pins/eval_pins.json``:
 * per platform (cloud, ``server``, ``singlegpu``): the session body the route hands FBA and the
   resulting eval ``VoiceConfig``, for a ``REALTIME_API_KEY`` bearer connection and for ``ek_`` keys
   minted from several templates (including unknown LLM ids, which are refused);
-* the ``session.created``/``session.updated`` echo and the agent's tools for each Tau fixture;
+* the ``session.created``/``session.updated`` echo and the agent's tools for each benchmark fixture;
 * today's answers to ``input_audio_buffer.commit``, ``semantic_vad``, ``turn_detection: null`` and
   an ``mcp`` tool.
 

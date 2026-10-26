@@ -9,7 +9,7 @@
 #   - vad.stop_secs: not set here; the VAD stop comes from the profile's
 #     turn_detection.silence_duration_ms (200 ms in profiles/default.yaml), which hands the turn
 #     to Smart Turn.
-#   - vad.audio_idle_timeout: not set (Pipecat's default). Only the Tau settings disable it.
+#   - vad.audio_idle_timeout: not set (Pipecat's default). Only the eval settings disable it.
 #   - turn.stt_ttfs_p99 3.0 and turn.wait_for_transcript false: as in eval.yaml, so a late ASR
 #     final does not start a second user turn and a noise-only turn ends with an empty transcript.
 #   - audio: the browser transport (WebRTC or the UI WebSocket) comes from the repository's

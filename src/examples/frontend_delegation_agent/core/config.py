@@ -96,7 +96,7 @@ DEFAULTS: dict[str, Any] = {
             "lexicon": {"en": {key: value for key, value in ENGLISH.items() if key != "backchannel"}},
         },
         "prompts": {"path": "prompts/generic/frontend.yaml"},
-        # tau3-failure-fixes-plan.md: every behaviour below is off by default (the baseline).
+        # Every behaviour below is off by default (the baseline).
         "spelling_hold": {"enabled": False, "hold_ms": 1500, "complete_patterns": []},
         "replay_unheard_answer": {
             "enabled": False,

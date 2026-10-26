@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The backend decision trace: one ``<session_id>.trace.jsonl`` per worker (P0.3 of tau3-geval-failure-fixes-plan.md).
+"""The backend decision trace: one ``<session_id>.trace.jsonl`` per worker (P0.3).
 
 Every backend writes the same records, so traces of different backends can be compared
 request by request: a ``session`` record (tool schemas as the model sees them, model,

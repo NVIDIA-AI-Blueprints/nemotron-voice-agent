@@ -23,7 +23,7 @@ from examples.frontend_delegation_agent.core.sidecar import gateway_config as gc
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SHIPPED = sorted(PROFILES.glob("*.yaml"))
-#: Backend variants of tau3-geval-failure-fixes-plan.md: on by default, off in gateway.eval_control.yaml.
+#: Backend variants of the geval failure-fixes plan: on by default, off in gateway.eval_control.yaml.
 GEVAL_BACKEND_FIXES = (
     "format_correction",
     "write_consent_v2",
@@ -57,13 +57,13 @@ class ShippedProfileTests(unittest.TestCase):
                 expected_delay = 5.0 if path.name in ("browser_demo.yaml", "pipecat_demo.yaml") else 0.0
                 self.assertEqual(config.backend.delay_seconds, expected_delay)
 
-    def test_tau3_and_browser_specifics(self) -> None:
-        tau3 = load_delegation_config(variant("profiles/tau3_eval.yaml"))
+    def test_bench_and_browser_specifics(self) -> None:
+        bench = load_delegation_config(variant("profiles/bench_eval.yaml"))
         self.assertEqual(
-            (tau3.voice.server.port, tau3.tools.executor, tau3.voice.tools.source), (8775, "wire", "client")
+            (bench.voice.server.port, bench.tools.executor, bench.voice.tools.source), (8775, "wire", "client")
         )
-        self.assertTrue(tau3.voice.normalization.tool_arguments.enabled)
-        self.assertFalse(tau3.voice.protocol.greeting_enabled)
+        self.assertTrue(bench.voice.normalization.tool_arguments.enabled)
+        self.assertFalse(bench.voice.protocol.greeting_enabled)
         browser = load_delegation_config(PROFILES / "browser_demo.yaml")
         self.assertEqual((browser.voice.server.port, browser.tools.executor), (8776, "local"))
         self.assertFalse(browser.voice.normalization.tool_arguments.enabled)
@@ -72,20 +72,20 @@ class ShippedProfileTests(unittest.TestCase):
 
     def test_defaults_turn_on_every_fix_except_m2(self) -> None:
         expected = {"proactive_status", "clean_answers", "spelling_hold", "filler_dedupe", "spelled_runs"}
-        # result_hints (I3/I4) needs client tools: on for tau3, not applicable to the browser demo.
-        tau3_eval, browser = variant("profiles/tau3_eval.yaml"), PROFILES / "browser_demo.yaml"
-        for path, extra in ((tau3_eval, {"result_hints"}), (browser, set())):
+        # result_hints (I3/I4) needs client tools: on for the benchmark profile, not applicable to the browser demo.
+        bench_eval, browser = variant("profiles/bench_eval.yaml"), PROFILES / "browser_demo.yaml"
+        for path, extra in ((bench_eval, {"result_hints"}), (browser, set())):
             with self.subTest(profile=path.name):
                 features = load_delegation_config(path).features
                 self.assertEqual({k for k, v in features.items() if v is True}, expected | extra)
                 self.assertFalse(any(features["prompt_features"].values()))  # replay_intent (M2) stays off
-        tau3 = load_delegation_config(variant("profiles/tau3_eval.yaml"))
-        self.assertEqual(tau3.delegation.spelling_hold.complete_patterns, ("^[A-Za-z0-9]{6}$",))
-        self.assertEqual(tau3.voice.normalization.tool_arguments.invalid_message_key, "tool_argument_invalid_readback")
+        bench = load_delegation_config(variant("profiles/bench_eval.yaml"))
+        self.assertEqual(bench.delegation.spelling_hold.complete_patterns, ("^[A-Za-z0-9]{6}$",))
+        self.assertEqual(bench.voice.normalization.tool_arguments.invalid_message_key, "tool_argument_invalid_readback")
         self.assertEqual(
-            tau3.voice.normalization.tool_arguments.escalate_invalid_message_key, "tool_argument_invalid_spell_all"
+            bench.voice.normalization.tool_arguments.escalate_invalid_message_key, "tool_argument_invalid_spell_all"
         )
-        hints = tau3.voice.normalization.tool_arguments.result_hints
+        hints = bench.voice.normalization.tool_arguments.result_hints
         self.assertEqual(hints.tools, ("find_user_id_by_name_zip", "find_user_id_by_email", "get_user_details"))
         self.assertEqual(
             (hints.message_key, hints.escalate_message_key),
@@ -109,8 +109,8 @@ class ShippedProfileTests(unittest.TestCase):
 
     def test_secrets_are_redacted_and_hash_is_stable(self) -> None:
         with mock.patch.dict(os.environ, {"NVIDIA_API_KEY": "sk-secret"}):
-            config = load_delegation_config(variant("profiles/tau3_eval.yaml"))
-            again = load_delegation_config(variant("profiles/tau3_eval.yaml"))
+            config = load_delegation_config(variant("profiles/bench_eval.yaml"))
+            again = load_delegation_config(variant("profiles/bench_eval.yaml"))
         self.assertEqual(config.effective["frontend"]["llm"]["api_key"], "***")
         self.assertNotIn("sk-secret", str(config.effective))
         self.assertEqual(config.config_hash, again.config_hash)
@@ -120,7 +120,7 @@ class ValidationTests(unittest.TestCase):
     def load(self, text: str):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "p.yaml"
-            path.write_text(f"extends: {variant('profiles/tau3_eval.yaml')}\n{text}")
+            path.write_text(f"extends: {variant('profiles/bench_eval.yaml')}\n{text}")
             return load_delegation_config(path)
 
     def test_unknown_key_enum_and_cross_checks(self) -> None:

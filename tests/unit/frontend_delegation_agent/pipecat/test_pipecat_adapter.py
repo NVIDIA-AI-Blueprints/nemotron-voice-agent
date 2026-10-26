@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""C7, C12, C14: the τ² contract on the Pipecat adapter (stub speech, emulator backend, real Pipecat pipeline)."""
+"""C7, C12, C14: benchmark contract on the Pipecat adapter (stub speech, emulator backend, real Pipecat pipeline)."""
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ import unittest
 
 from _pipecat_fakes import (
     Client,
+    benchmark_session_update,
     failing_tts_app,
     pcmu_silence,
     pcmu_speech,
     stub_app,
     stub_runtime,
-    tau2_session_update,
 )
 from fastapi.testclient import TestClient
 
@@ -39,7 +39,7 @@ class PipecatContractTests(unittest.TestCase):
                 created = session.wait_for("session.created")
                 self.assertEqual(session.events[0]["type"], "session.created")
                 self.assertTrue(created["session"]["id"].startswith("sess_"))
-                session.send(tau2_session_update("mock"))
+                session.send(benchmark_session_update("mock"))
                 updated = session.wait_for("session.updated")
                 self.assertEqual(updated["session"]["audio"]["output"]["format"]["type"], "audio/pcmu")
                 self.assertEqual(session.of_type("error"), [])
@@ -60,7 +60,7 @@ class PipecatContractTests(unittest.TestCase):
         with TestClient(stub_app()) as client, client.websocket_connect("/v1/realtime?model=pine-pipecat") as ws:
             session = Client(ws)
             session.wait_for("session.created")
-            session.send(tau2_session_update("mock"))
+            session.send(benchmark_session_update("mock"))
             session.wait_for("session.updated")
             session.audio(pcmu_silence(300) + pcmu_speech(600) + pcmu_silence(1200))
             started = session.wait_for("input_audio_buffer.speech_started")
@@ -71,7 +71,7 @@ class PipecatContractTests(unittest.TestCase):
             transcript = session.wait_for("conversation.item.input_audio_transcription.completed")
             self.assertEqual(transcript["transcript"], "utterance 1")
             call = session.wait_for("response.function_call_arguments.done")
-            tools = [tool["name"] for tool in tau2_session_update("mock")["session"]["tools"]]
+            tools = [tool["name"] for tool in benchmark_session_update("mock")["session"]["tools"]]
             self.assertEqual(call["name"], tools[0])
             session.send(_output(call["call_id"], json.dumps({"ok": True})))
             session.send({"type": "response.create"})
@@ -100,7 +100,7 @@ class PipecatContractTests(unittest.TestCase):
         with TestClient(stub_app()) as client, client.websocket_connect("/v1/realtime") as ws:
             session = Client(ws)
             session.wait_for("session.created")
-            session.send(tau2_session_update("mock"))
+            session.send(benchmark_session_update("mock"))
             session.wait_for("session.updated")
             session.send(_output("call_unknown", "x"))
             error = session.wait_for("error")
@@ -113,7 +113,7 @@ class PipecatContractTests(unittest.TestCase):
         with TestClient(stub_app()) as client, client.websocket_connect("/v1/realtime") as ws:
             session = Client(ws)
             session.wait_for("session.created")
-            session.send(tau2_session_update("mock"))
+            session.send(benchmark_session_update("mock"))
             session.wait_for("session.updated")
             session.audio(pcmu_silence(300) + pcmu_speech(600) + pcmu_silence(1000))
             session.wait_for("response.output_audio.delta")
@@ -131,7 +131,7 @@ class PipecatContractTests(unittest.TestCase):
         with TestClient(failing_tts_app()) as client, client.websocket_connect("/v1/realtime") as ws:
             session = Client(ws)
             session.wait_for("session.created")
-            session.send(tau2_session_update("mock"))
+            session.send(benchmark_session_update("mock"))
             session.wait_for("session.updated")
             session.audio(pcmu_silence(300) + pcmu_speech(600) + pcmu_silence(1000))
             session.wait_for("response.output_audio_transcript.delta", timeout=20.0)

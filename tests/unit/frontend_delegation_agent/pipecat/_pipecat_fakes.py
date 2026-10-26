@@ -3,7 +3,7 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""A τ²-shaped client for the Pipecat adapter: real FastAPI WebSocket, stub speech, fake backend.
+"""A benchmark-shaped client for the Pipecat adapter: real FastAPI WebSocket, stub speech, fake backend.
 
 :func:`realtime_app` hands each socket to ``serve_realtime`` as the shared ``/v1/realtime`` route does
 for a session-owned pipeline (accept with the ``realtime`` subprotocol, then the bot owns the session).
@@ -35,11 +35,11 @@ from examples.frontend_delegation_agent.core.config import load_delegation_confi
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PACKAGE = REPO_ROOT / "src" / "examples" / "frontend_delegation_agent"
-FIXTURES = REPO_ROOT / "tests" / "unit" / "frontend_delegation_agent" / "voice" / "fixtures" / "tau2_session_update"
+FIXTURES = Path(__file__).resolve().parents[1] / "voice" / "fixtures" / "benchmark_session_update"
 PCMU = AudioFormat("audio/pcmu", 8000)
 
 
-def tau2_session_update(domain: str = "mock") -> dict[str, Any]:
+def benchmark_session_update(domain: str = "mock") -> dict[str, Any]:
     return json.loads((FIXTURES / f"{domain}.json").read_text())
 
 
@@ -125,7 +125,7 @@ def pcmu_silence(ms: int) -> bytes:
 
 
 class Client:
-    """Sends τ²-paced audio and collects every server event on a reader thread."""
+    """Sends benchmark-paced audio and collects every server event on a reader thread."""
 
     def __init__(self, ws: Any) -> None:
         self.ws = ws

@@ -21,7 +21,7 @@ Facts verified live in the P0 spike (2026-09-29, Hermes ``af26acab73``):
   ``agent._model_request_active`` is set; ``hard_interrupt`` unwinds in ~4 s during a
   blocking tool; ``session_*_tokens`` counters are cumulative.
 
-With ``backend_trace_dir`` set (``backend.backend_trace``, P0.3 of tau3-geval-failure-fixes-plan.md),
+With ``backend_trace_dir`` set (``backend.backend_trace``, P0.3),
 ``BackendTrace`` (``core/backends/trace.py``) appends each model request and response to
 ``<dir>/<session_id>.trace.jsonl`` through Hermes' ``pre_api_request`` / ``post_api_request``
 lifecycle hooks. Logging only: nothing it does reaches the model or the call.
@@ -282,7 +282,7 @@ class HermesAgentHost:
 
 
 def check_tool_surface(expected: set[str], agent: Any) -> None:
-    """Raise unless the agent shows the model exactly ``expected`` (tau2-hermes pattern)."""
+    """Raise unless the agent shows the model exactly ``expected``."""
     actual = {
         t["function"]["name"]
         for t in (getattr(agent, "tools", None) or [])

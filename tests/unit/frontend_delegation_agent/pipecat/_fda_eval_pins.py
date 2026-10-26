@@ -9,7 +9,7 @@ Captured before FDA moved onto the shared stack, from the shipped eval pair
 ``profiles/pipecat_realtime_eval.yaml`` + ``gateway.eval.yaml`` and ``adapters/pipecat.eval.yaml``.
 Every later step must keep them equal (``test_fda_eval_pins.py``):
 
-* the prompts and tools every eval session runs with, per τ² domain (airline, retail, telecom):
+* the prompts and tools every eval session runs with, per benchmark domain (airline, retail, telecom):
   ``frontend_prompt_sha256``, ``session_tools_sha256`` and the backend fingerprint the gateway reports
   (``backend_system_sha256``, ``backend_soul_sha256``, ``backend_catalog_sha256``, features, domain);
 * the delegation, voice and gateway settings (hashed; repository paths made relative, the backend URL
@@ -45,7 +45,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from _pipecat_fakes import REPO_ROOT, Client, realtime_app, stub_speech, tau2_session_update  # noqa: E402
+from _pipecat_fakes import REPO_ROOT, Client, benchmark_session_update, realtime_app, stub_speech  # noqa: E402
 
 PACKAGE = REPO_ROOT / "src" / "examples" / "frontend_delegation_agent"
 CONFIG = PACKAGE / "config"
@@ -149,7 +149,7 @@ def gateway_pins(path: Path) -> dict[str, Any]:
         "per_domain": {},
     }
     for domain in DOMAINS:
-        session = tau2_session_update(domain)["session"]
+        session = benchmark_session_update(domain)["session"]
         names = {str(tool.get("name")) for tool in session["tools"]}
         found = next((name for name, tools_any in config.domains if names.intersection(tools_any)), "")
         system = render_backend_system(templates, session["instructions"], templates.domain_note(found))
@@ -223,7 +223,7 @@ def session_pins(domain: str) -> dict[str, Any]:
         with TestClient(app) as client, client.websocket_connect("/v1/realtime?model=pine-pin") as ws:
             session = Client(ws)
             created = session.wait_for("session.created")
-            session.send(tau2_session_update(domain))
+            session.send(benchmark_session_update(domain))
             updated = session.wait_for("session.updated")
             session.send(
                 {

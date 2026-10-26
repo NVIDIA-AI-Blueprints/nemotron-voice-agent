@@ -3,9 +3,9 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
-"""G0 of tau3-geval-failure-fixes-plan.md: A1 / A1-lite, A2, A3, B1-B3, C1, C2 and the P0.3 trace.
+"""G0 of the geval failure-fixes plan: A1 / A1-lite, A2, A3, B1-B3, C1, C2 and the P0.3 trace.
 
-Invented tool schemas and values only (no tau-bench names in triggers); the tau2 fixtures are used
+Invented tool schemas and values only (no benchmark names in triggers); the benchmark fixtures are used
 only to show where a switch fires and that the control stays byte-identical.
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from _fda_variants import variant  # noqa: E402
-from _fda_voice_fakes import PACKAGE, DelegationHarness, profile_config, tau2_session_update
+from _fda_voice_fakes import PACKAGE, DelegationHarness, benchmark_session_update, profile_config
 from test_fda_delegation_config import GEVAL_BACKEND_FIXES
 
 from examples.frontend_delegation_agent.core.backends.hermes.host import register_trace_hooks
@@ -68,7 +68,7 @@ MESSAGES = FormatRetryMessages(
     not_found="[Also not found as {value}.]",
 )
 #: Words of the benchmark domains that must not appear in the new prompt text (plan section 8).
-TAU_WORDS = ("refuel", "basic economy", "apn", "roaming", "airline", "retail", "telecom", "reservation")
+DOMAIN_WORDS = ("refuel", "basic economy", "apn", "roaming", "airline", "retail", "telecom", "reservation")
 
 
 def _tool(name: str, description: str, properties: dict[str, Any], *, read_only: bool | None = None) -> dict:
@@ -147,7 +147,7 @@ class BackendPromptTests(unittest.TestCase):
         control = self._render()
         new_lines = [line for line in added.splitlines() if line not in control.splitlines()]
         self.assertTrue(new_lines)
-        for word in TAU_WORDS:
+        for word in DOMAIN_WORDS:
             self.assertFalse(any(word in line.lower() for line in new_lines), word)
 
     def test_the_eval_gateway_turns_on_every_variant_and_the_control_none(self) -> None:
@@ -511,7 +511,7 @@ class RelayProvenanceTests(unittest.IsolatedAsyncioTestCase):
 class VoiceArmTests(unittest.IsolatedAsyncioTestCase):
     async def _round_trip(self, profile: str | Path, domain: str, name: str, args: str, output: str, transcript: str):
         harness = DelegationHarness(profile_config(profile), transcripts=[transcript])
-        await harness.start(tau2_session_update(domain))
+        await harness.start(benchmark_session_update(domain))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -527,7 +527,7 @@ class VoiceArmTests(unittest.IsolatedAsyncioTestCase):
         result = (await harness.wait_sent("tool.result"))["output"]
         return harness, result
 
-    async def test_a1_on_a_tau2_phone_lookup_is_the_hint_and_the_control_is_unchanged(self) -> None:
+    async def test_a1_on_a_benchmark_phone_lookup_is_the_hint_and_the_control_is_unchanged(self) -> None:
         miss = "Error: Customer with phone number 5551232002 not found"
         args = '{"phone_number": "5551232002"}'
         control, out = await self._round_trip(
@@ -555,7 +555,7 @@ class VoiceArmTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("\n\n[Not found.", out)  # the I3 note still follows
         logged = arm.logged("format_retry")
-        self.assertEqual((logged[0]["mode"], logged[0]["outcome"]), ("hint", "hint"))  # no declaration in tau2
+        self.assertEqual((logged[0]["mode"], logged[0]["outcome"]), ("hint", "hint"))  # no declaration in the fixtures
         rules = arm.logged("session_rules")[-1]
         self.assertEqual(rules["format_retry_arguments"], ["get_customer_by_phone.phone_number"])
         self.assertEqual(rules["read_only_tools"], [])
@@ -567,7 +567,7 @@ class VoiceArmTests(unittest.IsolatedAsyncioTestCase):
             profile_config(variant("profiles/realtime_eval_arm_a3_field_provenance.yaml")),
             transcripts=["My first name is spelled S, O, F, I, A"],
         )
-        await harness.start(tau2_session_update("retail"))
+        await harness.start(benchmark_session_update("retail"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")

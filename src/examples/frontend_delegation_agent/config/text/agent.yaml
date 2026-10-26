@@ -66,7 +66,7 @@ backend:
         enable_thinking: true
       reasoning_budget: 1024
   tools:
-    execution: internal         # internal | external (external = caller executes; tau2 mode)
+    execution: internal         # internal | external (external = caller executes; benchmark mode)
     max_tool_iterations: 8
     max_result_chars: 0         # 0 = no truncation
     parallel_execution: false   # sequential by default; injected tools may mutate shared state

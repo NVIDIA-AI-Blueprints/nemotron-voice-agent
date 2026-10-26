@@ -3,7 +3,7 @@
 
 """Client audio in: decode -> audio clock -> resample -> VAD frames -> segmenter.
 
-Synchronous and cheap per append (a 20 ms tau2 append is one or two VAD frames),
+Synchronous and cheap per append (a 20 ms benchmark-client append is one or two VAD frames),
 so it runs inline in the session's reader. In manual mode (``turn_detection:
 null``) there is no VAD: audio accumulates until ``input_audio_buffer.commit``.
 """

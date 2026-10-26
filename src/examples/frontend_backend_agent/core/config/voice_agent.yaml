@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Frontend/Backend Agent: the single configuration entry point.
-# Defaults are tau3-eval-safe: paired mode, filler silenced (log only), client
+# Defaults are eval-safe: paired mode, filler silenced (log only), client
 # tools executed by the client, no greeting, nemo-speech single-GPU speech.
 #
 # ${VAR} and ${VAR:-default} are resolved from the environment, per file.
 # [in-path] keys resolve against THIS file's directory; [out-path] keys resolve
 # against the working directory (the repository root, or /app in the container).
-# The two profiles in profiles/ extend this file: eval.yaml (OpenAI Realtime sessions, Tau) and
+# The two profiles in profiles/ extend this file: eval.yaml (OpenAI Realtime sessions, evaluation) and
 # default.yaml (browser UI sessions), which extends eval.yaml.
 
 server:                            # the Realtime gateway serves the socket and checks the client key
@@ -32,8 +32,8 @@ agent:
     logging: {event_sink: none}     # the voice layer installs its own routing sink
 
 protocol:
-  greeting: {enabled: false, text: ""}        # tau3: never greet
-  seed_history_with_client_greeting: "Hi! How can I help you today?"   # tau2 says this text-only; "" disables
+  greeting: {enabled: false, text: ""}        # eval: never greet
+  seed_history_with_client_greeting: "Hi! How can I help you today?"   # the client says it in text; "" disables
   auto_response: true               # respond on VAD turn end (server_vad create_response semantics)
   resume_on: response_create        # response_create | last_function_output
   emit_input_transcription: true    # conversation.item.input_audio_transcription.completed
@@ -87,7 +87,7 @@ tts:
   sentence_split: true              # one TTS request + transcript delta per sentence
 
 filler:
-  mode: log_only                    # log_only (default, tau3) | speak
+  mode: log_only                    # log_only (default, eval) | speak
   speak_after_ms: 300               # speak only if the backend is still busy after this delay
   log_path: "${FBA_FILLER_LOG:-}"   # [out-path] JSONL; timing is always recorded (loguru + event_log) even when ""
 

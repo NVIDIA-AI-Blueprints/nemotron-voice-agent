@@ -32,7 +32,7 @@ REQUIRED_KEYS = (
     "backend_unavailable",
 )
 
-#: The one mapping-valued key: domain name -> note template (tau3-identity-fixes-plan.md section 3.2).
+#: The one mapping-valued key: domain name -> note template.
 DOMAIN_NOTES_KEY = "backend_domain_notes"
 
 
@@ -61,7 +61,7 @@ class BackendTemplates:
             self.features = features(prompt_features, BACKEND_FEATURES)
         except ValueError as exc:
             raise TemplateError(str(exc)) from exc
-        #: Fingerprint of the catalog file (tau3-failure-fixes-plan.md section 1, rule 5).
+        #: Fingerprint of the catalog file.
         self.catalog_sha256 = sha256_text(raw)
         data = yaml.safe_load(raw) or {}
         if not isinstance(data, dict):

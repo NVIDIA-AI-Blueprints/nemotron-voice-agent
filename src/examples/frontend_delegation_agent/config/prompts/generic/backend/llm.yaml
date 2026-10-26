@@ -6,9 +6,9 @@
 # the harness_* keys at the end are the LLM backend's own.
 # The frontend keys live in prompts.yaml (voice server). See prototype-plan.md sections 7.3 and 7.4.
 # Prompt variants: {% if features.<name> %} blocks switched by prompt_features in gateway.yaml
-# (spelling_v2, spoken_output, write_consent: tau3-failure-fixes-plan.md; phone_format; domain_notes;
+# (spelling_v2, spoken_output, write_consent; phone_format; domain_notes;
 # format_correction, write_consent_v2, policy_check, request_scope, transfer_check, capability_check:
-# tau3-geval-failure-fixes-plan.md section 4; situational_facts (F4, reworded to ask where the user is:
+# the A/B fixes; situational_facts (F4, reworded to ask where the user is:
 # analysis/2026-10-10_fdh-roaming-gpt55) and identity_from_identifier (F8): fix-plan-f1-f2-f4-f8.md
 # sections 3 and 4.4; domain_notes: the telecom note at the end of this file,
 # analysis/2026-10-11_fdh-telecom-gpt55-deep). All off = the baseline prompts. Examples are invented.

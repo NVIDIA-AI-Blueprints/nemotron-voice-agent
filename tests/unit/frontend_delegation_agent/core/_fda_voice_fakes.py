@@ -47,15 +47,15 @@ from _fda_variants import variant  # noqa: E402
 
 PACKAGE = ROOT / "src" / "examples" / "frontend_delegation_agent"
 PROFILES = PACKAGE / "config" / "profiles"
-FIXTURES = ROOT / "tests" / "unit" / "frontend_delegation_agent" / "voice" / "fixtures" / "tau2_session_update"
+FIXTURES = ROOT / "tests" / "unit" / "frontend_delegation_agent" / "voice" / "fixtures" / "benchmark_session_update"
 
 
-def tau3_config(**backend: Any) -> DelegationConfig:
-    """The tau3 control profile (every tau3-failure-fixes-plan.md switch off), scripted, no warm-up.
+def bench_config(**backend: Any) -> DelegationConfig:
+    """The benchmark control profile (every failure-fixes-plan switch off), scripted, no warm-up.
 
     Tests of one fix load its arm with :func:`profile_config`.
     """
-    config = load_delegation_config(variant("profiles/tau3_eval_baseline.yaml"))
+    config = load_delegation_config(variant("profiles/bench_eval_baseline.yaml"))
     voice = replace(config.voice, server=replace(config.voice.server, warmup=False))
     config = replace(config, voice=voice, frontend=replace(config.frontend, decider="scripted"))
     if backend:
@@ -64,7 +64,7 @@ def tau3_config(**backend: Any) -> DelegationConfig:
 
 
 def profile_config(name: str | Path) -> DelegationConfig:
-    """A shipped profile (or a variant path) with the scripted frontend and no warm-up (like :func:`tau3_config`)."""
+    """A shipped profile (or a variant path) with the scripted frontend and no warm-up (like :func:`bench_config`)."""
     config = load_delegation_config(PROFILES / name)
     voice = replace(config.voice, server=replace(config.voice.server, warmup=False))
     return replace(config, voice=voice, frontend=replace(config.frontend, decider="scripted"))
@@ -76,7 +76,7 @@ def browser_config() -> DelegationConfig:
     return replace(config, voice=voice, frontend=replace(config.frontend, decider="scripted"))
 
 
-def tau2_session_update(domain: str = "mock") -> dict[str, Any]:
+def benchmark_session_update(domain: str = "mock") -> dict[str, Any]:
     return json.loads((FIXTURES / f"{domain}.json").read_text())
 
 
@@ -164,7 +164,7 @@ class DelegationHarness:
         transcripts: Sequence[str] = (),
         ms_per_char: float = 10.0,
     ) -> None:
-        self.config = config or tau3_config()
+        self.config = config or bench_config()
         self.link = link or FakeLink()
         self.decider = decider or RuleDecider()
         self.recognizer = StubRecognizer(list(transcripts))

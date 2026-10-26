@@ -20,8 +20,8 @@ turn:
 audio:
   in_sample_rate: 16000          # pipeline input rate (client audio is resampled to it)
   out_sample_rate: 24000         # pipeline output rate (resampled to the client's format on the wire)
-  out_10ms_chunks: 10            # 100 ms output chunks, the τ³ head's delta size
-  write_timeout_s: 120.0         # τ² can stop reading the socket for a long time
+  out_10ms_chunks: 10            # 100 ms output chunks, the former server's delta size
+  write_timeout_s: 120.0         # a benchmark client can stop reading the socket for a long time
 
 tts:
   synthesis_mode: per_sentence   # one request per sentence; overrides the catalog's `stitched`

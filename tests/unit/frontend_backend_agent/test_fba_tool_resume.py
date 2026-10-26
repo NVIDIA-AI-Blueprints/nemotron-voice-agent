@@ -26,11 +26,11 @@ from typing import Any
 
 from _fba_core_fakes import (
     FakeChatClient,
+    benchmark_session_update,
     delegate_response,
     normalize_trace,
     pcmu_silence,
     pcmu_speech,
-    tau2_session_update,
     text_response,
     tool_response,
     voice_config,
@@ -93,7 +93,7 @@ class ToolResumeTestCase(PipecatTestCase):
 
     async def tool_wait(self, harness: PipecatHarness, *, update: dict[str, Any] | None = None) -> None:
         """Utterance 1 delegates and the backend's tool call goes out; the turn now waits on tools."""
-        await harness.start(update or tau2_session_update())
+        await harness.start(update or benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         self.assertEqual(harness.session.turns.state, "AWAITING_TOOLS")

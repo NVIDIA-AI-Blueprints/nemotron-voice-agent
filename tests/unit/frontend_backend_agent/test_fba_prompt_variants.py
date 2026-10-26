@@ -6,9 +6,9 @@
 """Prompt profiles: the customer-service catalog is pinned, the generic one is free to tune (plan §7.3).
 
 ``FBA_PROMPT_PROFILE`` names a prompt profile, ``core/config/prompts/<profile>.yaml``. Unset, the
-``eval`` profile (OpenAI Realtime sessions, Tau) uses ``customer_service.yaml``: v1's
-``voice/config/prompts.voice.yaml`` plus later customer-service rules and domain notes. **Tau tuning rule:** changing
-``customer_service.yaml`` needs a new :data:`TAU_CATALOG_SHA256` and an attached Tau A/B run. The
+``eval`` profile (OpenAI Realtime sessions, evaluation runs) uses ``customer_service.yaml``: v1's
+``voice/config/prompts.voice.yaml`` plus later customer-service rules and domain notes. **Eval tuning rule:** changing
+``customer_service.yaml`` needs a new :data:`CUSTOMER_SERVICE_CATALOG_SHA256` and an attached eval A/B run. The
 ``default`` profile (browser UI sessions) uses ``generic.yaml``, which any change may tune; the root
 ``prompts.yaml`` (registry and UI) mirrors it. ``general_qa.yaml`` answers any request directly, with
 no tools.
@@ -41,10 +41,10 @@ from examples.frontend_backend_agent.core.config.profiles import (
 from examples.frontend_backend_agent.core.config.voice import load_voice_config
 from examples.frontend_backend_agent.core.errors import VoiceConfigError
 
-#: SHA-256 of ``customer_service.yaml``. See the Tau tuning rule. Re-pinned on 2026-10-21 for the
+#: SHA-256 of ``customer_service.yaml``. See the eval tuning rule. Re-pinned on 2026-10-21 for the
 #: customer-service rules and domain notes; the previous pin, ``a29ee978…``, was v1's
-#: ``voice/config/prompts.voice.yaml`` at ``fbv-v1-baseline``. The Tau A/B run for this pin is pending.
-TAU_CATALOG_SHA256 = "ad0481c985601b55f0eca37a6dc52f28fcd5c38d9892d93eb26529d8e94fd38c"
+#: ``voice/config/prompts.voice.yaml`` at ``fbv-v1-baseline``. The eval A/B run for this pin is pending.
+CUSTOMER_SERVICE_CATALOG_SHA256 = "ad0481c985601b55f0eca37a6dc52f28fcd5c38d9892d93eb26529d8e94fd38c"
 PROMPTS_DIR = PACKAGE_ROOT / "core" / "config" / "prompts"
 _PLACEHOLDER = re.compile(r"(?<!\{)\{([a-z_]+)\}(?!\})")
 
@@ -62,17 +62,19 @@ def _placeholders(catalog: dict[str, Any]) -> dict[str, set[str]]:
 
 
 class CatalogTests(unittest.TestCase):
-    def test_tau_catalog_is_pinned(self) -> None:
+    def test_customer_service_catalog_is_pinned(self) -> None:
         digest = hashlib.sha256((PROMPTS_DIR / "customer_service.yaml").read_bytes()).hexdigest()
         self.assertEqual(
-            digest, TAU_CATALOG_SHA256, "customer_service.yaml changed: update the pin and attach a Tau A/B run"
+            digest,
+            CUSTOMER_SERVICE_CATALOG_SHA256,
+            "customer_service.yaml changed: update the pin and attach an eval A/B run",
         )
 
     def test_generic_catalog_keeps_the_keys_and_placeholders(self) -> None:
-        tau = _catalog(PROMPTS_DIR / "customer_service.yaml")
+        customer_service = _catalog(PROMPTS_DIR / "customer_service.yaml")
         generic = _catalog(PROMPTS_DIR / "generic.yaml")
-        self.assertEqual(set(generic), set(tau))
-        self.assertEqual(_placeholders(generic), _placeholders(tau))
+        self.assertEqual(set(generic), set(customer_service))
+        self.assertEqual(_placeholders(generic), _placeholders(customer_service))
 
     def test_every_profile_has_the_customer_service_keys(self) -> None:
         keys = set(_catalog(PROMPTS_DIR / "customer_service.yaml"))
@@ -118,7 +120,7 @@ class ProfileCatalogTests(unittest.TestCase):
         self.assertEqual(profile_name({"FBA_PROFILE": "default"}), DEFAULT_PROFILE)
 
     def test_old_profile_names_are_refused(self) -> None:
-        for name in ("tau3_eval_frontend_verdict_speak_history", "tau3_eval", "generic", "ui"):
+        for name in ("old_eval_frontend_verdict_speak_history", "old_eval", "generic", "ui"):
             with self.subTest(name=name), self.assertRaises(ProfileError) as caught:
                 profile_name({"FBA_PROFILE": name})
             self.assertIn("'default'", str(caught.exception))

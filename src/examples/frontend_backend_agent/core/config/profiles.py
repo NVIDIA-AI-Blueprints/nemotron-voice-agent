@@ -4,7 +4,7 @@
 """Served profiles, the route's LLM endpoints, and the WebSocket keepalive check.
 
 Two profiles sit in ``profiles/`` next to this module: ``default`` (browser UI sessions, used when
-``FBA_PROFILE`` is unset) and ``eval`` (OpenAI Realtime sessions and Tau evaluation runs). Every
+``FBA_PROFILE`` is unset) and ``eval`` (OpenAI Realtime sessions and evaluation runs). Every
 Realtime session runs with ``eval``; ``FBA_PROFILE`` decides whether browser sessions are served
 (``default``) or refused (``eval``). Each profile's Pipecat settings file is chosen here
 (:data:`PIPECAT_SETTINGS`). Two values come from this repository instead of the profile YAML:
@@ -31,7 +31,7 @@ PROFILES_DIR = CONFIG_DIR / "profiles"
 PROFILE_ENV = "FBA_PROFILE"
 #: Browser UI sessions (WebRTC, the UI's WebSocket); used when FBA_PROFILE is unset.
 DEFAULT_PROFILE = "default"
-#: OpenAI Realtime sessions and Tau evaluation runs. Every Realtime session uses it, whichever
+#: OpenAI Realtime sessions and evaluation runs. Every Realtime session uses it, whichever
 #: profile the container serves; ``FBA_PROFILE=eval`` also refuses browser UI sessions.
 REALTIME_PROFILE = "eval"
 #: Every profile FBA_PROFILE may select.

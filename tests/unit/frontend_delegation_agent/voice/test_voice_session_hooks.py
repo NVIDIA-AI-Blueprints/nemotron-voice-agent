@@ -15,7 +15,7 @@ from _fda_test_head.ports import IdentityNormalizer, SpeechServices
 from _fda_test_head.session import RealtimeSession
 from _fda_test_head.stubs import StubRecognizer, ToneSynthesizer
 from _fda_test_head.vad_energy import EnergyVad
-from _voice_fakes import MemoryTransport, base_config, tau2_session_update
+from _voice_fakes import MemoryTransport, base_config, benchmark_session_update
 
 from examples.frontend_delegation_agent.core.engine.filler import FillerLog
 from examples.frontend_delegation_agent.core.engine.sinks import EventLog, SessionRoutingSink
@@ -80,7 +80,7 @@ class PreviewTests(unittest.TestCase):
             ),
         )
         before = view.public()
-        preview = view.preview(tau2_session_update("mock")["session"])
+        preview = view.preview(benchmark_session_update("mock")["session"])
         self.assertEqual(view.public(), before)
         self.assertTrue(preview.result.tools_changed)
         preview.commit()
@@ -112,10 +112,10 @@ class TurnManagerFactoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_transactional_updates(self) -> None:
         session, transport, built = self.session(reject=True)
-        await session.handle_message(json.dumps(tau2_session_update("mock")))
+        await session.handle_message(json.dumps(benchmark_session_update("mock")))
         self.assertEqual(built[0].updates[0].first, True)
         public = session.view.public()
-        changed = tau2_session_update("mock")
+        changed = benchmark_session_update("mock")
         changed["session"]["instructions"] = "something else"
         await session.handle_message(json.dumps(changed))
         self.assertEqual(session.view.public(), public)  # rejected -> nothing committed

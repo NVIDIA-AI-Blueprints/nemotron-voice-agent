@@ -3,7 +3,7 @@
 
 """A1 / A1-lite: a not-found phone lookup, tried once more with the same digits in the other format.
 
-``tau3-geval-failure-fixes-plan.md`` section 4. :meth:`FormatRetry.candidate` decides, for one call
+:meth:`FormatRetry.candidate` decides, for one call
 whose output was a permanent failure, whether a retry applies. All of these must hold:
 
 1. the tool is a read tool with a **genuine phone field** (argument name or schema description,

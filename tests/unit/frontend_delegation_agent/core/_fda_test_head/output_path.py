@@ -9,7 +9,7 @@ an item starts synthesizing as soon as the item is *prepared*, so an answer
 queued behind a filler is already synthesizing while the filler is sent.
 
 For every sentence the transcript delta is written just before the sentence's
-first audio delta, so a client scoring transcript against played audio (tau2)
+first audio delta, so a client scoring transcript against played audio (the benchmark client)
 never sees text ahead of the audio by more than one sentence.
 """
 

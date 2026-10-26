@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from _fda_voice_fakes import DelegationHarness, FakeLink, tau2_session_update, tau3_config
+from _fda_voice_fakes import DelegationHarness, FakeLink, bench_config, benchmark_session_update
 
 from examples.frontend_delegation_agent.core.frontend.decider import RuleDecider
 
@@ -18,7 +18,7 @@ from examples.frontend_delegation_agent.core.frontend.decider import RuleDecider
 class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_update_opens_and_configures_the_backend(self) -> None:
         harness = DelegationHarness()
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         opened = harness.link.of_type("session.open")[0]
         self.assertEqual(opened["settings"]["simulated_delay"], {"seconds": 0.0, "where": "per_delegation"})
         configure = harness.link.of_type("session.configure")[0]
@@ -30,7 +30,7 @@ class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_task_is_delegated_and_the_filler_is_spoken(self) -> None:
         harness = DelegationHarness(transcripts=["what is the status of order 1234"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         delegate = await harness.wait_sent("delegate")
         self.assertEqual(delegate["request"], "task")
@@ -44,20 +44,20 @@ class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_acknowledgement_is_not_delegated_and_creates_no_response(self) -> None:
         harness = DelegationHarness(transcripts=["okay sure"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.idle(500)
         self.assertEqual(harness.link.of_type("delegate"), [])
         self.assertEqual(harness.of_type("response.created"), [])
         await harness.wait_sent("history.append", count=2)
         kinds = [(e["kind"], e["text"]) for m in harness.link.of_type("history.append") for e in m["entries"]]
-        self.assertEqual(kinds[0], ("frontend_speech", "Hi! How can I help you today?"))  # tau2's greeting, seq 0
+        self.assertEqual(kinds[0], ("frontend_speech", "Hi! How can I help you today?"))  # benchmark greeting, seq 0
         self.assertIn(("user", "okay sure"), kinds)
         await harness.close()
 
     async def test_tool_call_round_trip_and_response_create_is_an_ack(self) -> None:
         harness = DelegationHarness(transcripts=["check order 1234"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -87,7 +87,7 @@ class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_answer_is_spoken_heard_and_a_cut_answer_gets_a_delivery_note(self) -> None:
         harness = DelegationHarness(transcripts=["check order 1234", "wait"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         await harness.idle(1500)  # the filler is played and heard
@@ -117,7 +117,7 @@ class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_request_while_working_asks_for_status_and_speaks_it(self) -> None:
         harness = DelegationHarness(transcripts=["check order 1234", "what's the update so far"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -134,7 +134,7 @@ class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_status_is_dropped_when_the_run_already_finished(self) -> None:
         harness = DelegationHarness(transcripts=["check order 1234", "what's the update so far"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         harness.link.deliver("state", state="WORKING", epoch=1, run_id="run_1")
@@ -151,7 +151,7 @@ class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_backend_answer_is_held_while_the_user_speaks(self) -> None:
         harness = DelegationHarness(transcripts=["check order 1234", "and order 1235 as well"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         await harness.idle(1500)
@@ -175,7 +175,7 @@ class DelegatedTurnTests(unittest.IsolatedAsyncioTestCase):
 class ResponseCreateOrderTests(unittest.IsolatedAsyncioTestCase):
     async def test_manual_mode_text_input_starts_on_response_create(self) -> None:
         harness = DelegationHarness()
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.send(
             {
                 "type": "conversation.item.create",
@@ -194,7 +194,7 @@ class ResponseCreateOrderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_manual_turn_without_speech_still_gets_a_response(self) -> None:
         harness = DelegationHarness()
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         item = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "thanks"}]}
         await harness.send({"type": "conversation.item.create", "item": item})
         await harness.send({"type": "response.create"})
@@ -211,7 +211,7 @@ class ResponseCreateOrderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_response_create_without_input_is_an_error(self) -> None:
         harness = DelegationHarness()
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.send({"type": "response.create"})
         self.assertEqual(harness.of_type("error")[-1]["error"]["code"], "invalid_value")
         await harness.close()
@@ -220,7 +220,7 @@ class ResponseCreateOrderTests(unittest.IsolatedAsyncioTestCase):
 class SessionUpdateTransactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_rejected_tool_change_leaves_the_session_unchanged(self) -> None:
         harness = DelegationHarness(link=FakeLink(configure_error="tools_locked"))
-        update = tau2_session_update("mock")
+        update = benchmark_session_update("mock")
         await harness.start(update)
         before = harness.session.view.public()
         changed = json.loads(json.dumps(update))
@@ -235,7 +235,7 @@ class SessionUpdateTransactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_unreachable_gateway_fails_the_session_update(self) -> None:
         harness = DelegationHarness(link=FakeLink(fail_open=True))
         await harness.start()
-        await harness.send(tau2_session_update("mock"))
+        await harness.send(benchmark_session_update("mock"))
         self.assertEqual(harness.of_type("error")[-1]["error"]["code"], "backend_unavailable")
         self.assertEqual(harness.of_type("session.updated"), [])
         await harness.close()
@@ -244,7 +244,7 @@ class SessionUpdateTransactionTests(unittest.IsolatedAsyncioTestCase):
 class GatewayFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_fatal_gateway_error_then_delegation_speaks_an_apology(self) -> None:
         harness = DelegationHarness(transcripts=["check order 1"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         harness.link.deliver("error", code="link_lost", message="gone", fatal=True)
         await harness.settle()
         self.assertEqual(harness.of_type("error")[-1]["error"]["code"], "backend_unavailable")
@@ -259,10 +259,10 @@ class SilentAckTests(unittest.IsolatedAsyncioTestCase):
     async def test_speak_when_delegating_false_keeps_the_filler_silent(self) -> None:
         from dataclasses import replace
 
-        config = tau3_config()
+        config = bench_config()
         config = replace(config, delegation=replace(config.delegation, speak_when_delegating=False))
         harness = DelegationHarness(config, decider=RuleDecider(), transcripts=["check order 1"])
-        await harness.start(tau2_session_update("mock"))
+        await harness.start(benchmark_session_update("mock"))
         await harness.speak()
         await harness.wait_sent("delegate")
         await harness.idle(300)

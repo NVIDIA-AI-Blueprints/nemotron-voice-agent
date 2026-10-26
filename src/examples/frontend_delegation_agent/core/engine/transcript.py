@@ -103,7 +103,7 @@ class SharedTranscript:
     # -- writers ---------------------------------------------------------------------------
 
     def seed_greeting(self, text: str) -> Entry:
-        """The client's own greeting (tau2 greets in text): heard, seq 0, context route."""
+        """The client's own greeting (a benchmark client greets in text): heard, seq 0, context route."""
         return self._append(Entry(seq=0, kind="frontend_speech", origin="frontend", text=text, route=CONTEXT))
 
     def add_user(self, text: str, *, turn_id: int, delegated: bool) -> Entry:

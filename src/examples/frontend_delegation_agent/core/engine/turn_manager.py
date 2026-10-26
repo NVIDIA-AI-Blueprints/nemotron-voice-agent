@@ -13,7 +13,7 @@
   never released while the user speaks, and every spoken item gets a playback outcome
   (heard / partial / not heard) that the shared transcript records (plan 7.4).
 
-tau3-failure-fixes-plan.md adds, each behind its own switch (all off by default):
+The failure fixes add, each behind its own switch (all off by default):
 M1 one proactive status line per run while the backend works in silence
 (``output.proactive_status``); M3.2 a spelling hold before deciding a turn that ends
 mid-spelling (``delegation.spelling_hold``); M2 replaying an unheard answer on an
@@ -173,7 +173,7 @@ class _Backend:
     unavailable: str = ""
     ready: asyncio.Future[dict[str, Any]] | None = None
     configured: asyncio.Future[dict[str, Any]] | None = None
-    # M2 state (tau3-failure-fixes-plan.md section 4).
+    # M2 state.
     last_finished_run_id: str = ""  # set on backend_run_done
     last_finished_epoch: int = 0
     last_finished_request: str = ""  # the text of the run's first turn
@@ -727,7 +727,7 @@ class DelegationTurnManager:
         )
         return normalized.text, spelled
 
-    # -- M2: replay an unheard answer (RC2, tau3-failure-fixes-plan.md section 4) --------------
+    # -- M2: replay an unheard answer (RC2) ------------------------------------------------------
 
     def _last_answer_unheard(self) -> bool:
         """The newest backend answer was not heard or only partly (shown only with ``replay_intent``)."""

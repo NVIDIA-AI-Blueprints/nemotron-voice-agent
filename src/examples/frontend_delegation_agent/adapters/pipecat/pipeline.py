@@ -15,7 +15,7 @@
       -> OutputTagger            transcript before audio, ResponseProgress, item markers
       -> transport.output()      Realtime events out, paced by Pipecat
 
-RTVI is off, there is no idle timeout and no automatic output silence: τ² sends no pings,
+RTVI is off, there is no idle timeout and no automatic output silence: a benchmark client sends no pings,
 pauses for seconds, and counts every agent audio byte as speech.
 
 That is the OpenAI Realtime pipeline (always the ``eval`` profile). Browser UI sessions run the

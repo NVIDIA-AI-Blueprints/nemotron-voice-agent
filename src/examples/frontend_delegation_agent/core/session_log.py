@@ -3,7 +3,7 @@
 
 """Session-level event-log records shared by every head.
 
-The τ³ report tooling joins a run to the server's event log by ``session_start.model``
+The benchmark report tooling joins a run to the server's event log by ``session_start.model``
 (the ``pine-`` tag) and reads ``speech_stopped``/``session_end``, so every head writes
 these records the same way. Each record carries the head's current audio time.
 """
@@ -32,7 +32,7 @@ class SessionLog:
         self._event_log.write(kind, self._session_id, {"audio_ms": int(self._audio_now()), **data})
 
     def session_start(self, *, model: str, config: VoiceConfig, **extra: Any) -> None:
-        """The record the τ³ report joins on (``model`` is the client's ``?model=`` tag)."""
+        """The record the benchmark report joins on (``model`` is the client's ``?model=`` tag)."""
         history = config.agent.backend.conversation_history
         self.write(
             "session_start",

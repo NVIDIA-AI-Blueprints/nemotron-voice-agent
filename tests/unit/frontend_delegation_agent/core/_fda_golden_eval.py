@@ -35,7 +35,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from _fda_variants import variant  # noqa: E402
-from _fda_voice_fakes import PACKAGE, DelegationHarness, profile_config, tau2_session_update  # noqa: E402
+from _fda_voice_fakes import PACKAGE, DelegationHarness, benchmark_session_update, profile_config  # noqa: E402
 
 from examples.frontend_delegation_agent.core.frontend.decider import DecisionContext, apply_guards  # noqa: E402
 from examples.frontend_delegation_agent.core.frontend.delegate_tool import Decision  # noqa: E402
@@ -73,7 +73,7 @@ DECISIONS = {
 
 async def _frontend_system(domain: str) -> str:
     harness = DelegationHarness(profile_config(PROFILE))
-    await harness.start(tau2_session_update(domain))
+    await harness.start(benchmark_session_update(domain))
     assert harness.manager is not None
     prompt = harness.manager._system_prompt  # noqa: SLF001 - the exact prompt the frontend model gets
     await harness.close()
@@ -117,7 +117,7 @@ def render_all() -> dict[str, str]:
     )
     for domain in DOMAINS:
         out[f"frontend_system_{domain}.txt"] = asyncio.run(_frontend_system(domain))
-        instructions = tau2_session_update(domain)["session"]["instructions"]
+        instructions = benchmark_session_update(domain)["session"]["instructions"]
         out[f"backend_system_{domain}.txt"] = backend.render("backend_system", instructions=instructions)
     out["backend_system_empty.txt"] = backend.render("backend_system", instructions="")
     out["voice_notes.txt"] = _notes()

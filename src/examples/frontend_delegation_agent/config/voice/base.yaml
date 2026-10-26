@@ -11,11 +11,11 @@ extends: ../voice_agent.yaml
 server:
   port: ${FDA_VOICE_PORT:-8775}
   max_sessions: ${FDA_MAX_SESSIONS:-8}
-  # tau2 stops reading the socket for up to ~90 s at a time; a keepalive ping would close a healthy session.
+  # Some clients stop reading the socket for up to ~90 s at a time; a keepalive ping would close a healthy session.
   ws_ping_interval_s: 0
 
 turn_detection:
-  # V11: 800 ms end-of-turn silence for every client (tau2 sends 500, the browser page hard-codes 500).
+  # V11: 800 ms end-of-turn silence for every client (the benchmark client sends 500, the browser page hard-codes 500).
   silence_duration_ms: 800
   honor_client_values: false
 

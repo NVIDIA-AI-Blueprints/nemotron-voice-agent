@@ -4,7 +4,7 @@
 # Domain-agnostic evaluation profile (OpenAI Realtime server on 8775): one frozen profile for every
 # domain. Tool-argument rules, result-hint targets and spelling-hold patterns are derived per session
 # from the client's tool schemas; nothing is selected by a tool or domain name. Pair with
-# gateway.eval.yaml. See tau3-voice-domain-specific-changes-genericization.md section 5.
+# gateway.eval.yaml.
 
 extends: ../delegation_agent.yaml
 

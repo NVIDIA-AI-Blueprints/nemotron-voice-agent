@@ -5,7 +5,7 @@
 
 Ported from FDH ``adapters/pipecat/timing.py`` (``a0ef50c``), ``InputCursor`` only (plan §5,
 B4). FDH's wall-clock ``PlayoutEstimator`` is not used: as in v1, the turn manager's playout
-cursor advances on the **input** audio clock (S1), so a client that pauses its input (Tau)
+cursor advances on the **input** audio clock (S1), so a client that pauses its input
 pauses what counts as heard.
 
 * **audio now**: input audio received, counted in pipeline order right after the VAD, so a

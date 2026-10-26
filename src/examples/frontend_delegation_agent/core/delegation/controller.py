@@ -101,7 +101,7 @@ class ControllerSettings:
     worker_backend: dict[str, Any] = field(default_factory=dict)
     #: ``backend.kind`` of the gateway config, reported in the session fingerprint.
     backend_kind: str = ""
-    #: ``(domain, tools_any)`` in detection order (gateway.yaml ``domains``; tau3-identity-fixes-plan.md 3.2).
+    #: ``(domain, tools_any)`` in detection order (gateway.yaml ``domains``).
     domains: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
@@ -243,7 +243,7 @@ class BackendController:
             )
 
     def _fingerprint(self) -> dict[str, Any]:
-        """What this session's Hermes actually runs (tau3-failure-fixes-plan.md section 1, rule 5).
+        """What this session's Hermes actually runs.
 
         Optional ``session.configured`` fields: the voice server logs them in ``backend_configured``.
         """

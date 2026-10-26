@@ -9,8 +9,8 @@
 * ``ResultHints`` (when configured) appends a recovery note to a failed user or customer
   lookup's output before it goes to the gateway (I3, I4); with ``FieldProvenance`` the 2nd and
   later note also says which values the user spelled or only said (A3).
-* ``FormatRetry`` (when configured) handles a not-found lookup by a phone field (A1 / A1-lite,
-  tau3-geval-failure-fixes-plan.md section 4): on a tool that declares read-only semantics the
+* ``FormatRetry`` (when configured) handles a not-found lookup by a phone field (A1 / A1-lite):
+  on a tool that declares read-only semantics the
   relay looks up the same digits in the other format itself (a synthetic call ``<id>.fmt`` in its
   own batch, emitted after the original batch's acknowledgement; the original result is withheld
   until it settles); on any other read tool it appends a hint.
