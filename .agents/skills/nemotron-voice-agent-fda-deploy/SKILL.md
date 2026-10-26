@@ -99,7 +99,8 @@ mkdir -p logs
 E="-f docker-compose.yml"                                                          # default (browser UI)
 E="-f docker-compose.yml -f docker/docker-compose.fda-eval.yaml"                    # eval (OpenAI Realtime only)
 # Hermes, plain runtime (baseline): the plain overlay before the eval overlay
-E="-f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml [-f docker/docker-compose.fda-eval.yaml]"
+E="-f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml"                                        # default
+E="-f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml -f docker/docker-compose.fda-eval.yaml" # eval
 # LLM backend: the LLM overlay after the eval overlay
 E="-f docker-compose.yml -f docker/docker-compose.fda-llm.yaml"                     # default
 E="-f docker-compose.yml -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml"   # eval
@@ -111,6 +112,8 @@ docker compose $E --profile $P up -d --build
 Hermes: Compose builds `fda-hermes-image` and the controller image, starts the OpenShell gateway, waits until `fda-hermes` is healthy (the FDA gateway in the sandbox answers `GET /health` through the OpenShell gateway, 180 s start period), and then starts the voice service. The first controller build compiles the OpenShell CLI from Rust source at the pinned commit and takes several minutes.
 
 LLM backend: Compose builds only the shared app image and starts the voice service and `nemo-speech`. The voice service does not wait for a backend service and does not check a gateway at startup.
+
+Switching backends: run `down` with the old `$E` first (section 4), then `up` with the new one. The LLM overlay moves the Hermes services to an inactive profile, so an `up` or `down` with it neither stops nor starts them.
 
 ### 3. Verify the Deployment
 
@@ -157,6 +160,8 @@ docker compose $E --profile $P down
 ```
 
 `down` keeps `/var/lib/openshell` (the OpenShell gateway's keys and database).
+
+`down` with the LLM `$E` does not stop Hermes services started by an earlier Hermes `up`. Stop those with the Hermes `$E`.
 
 ## References
 

@@ -7,20 +7,30 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import os
 import unittest
+from dataclasses import replace
+from unittest import mock
 
 from _pipecat_fakes import (
+    PACKAGE,
     Client,
     benchmark_session_update,
     failing_tts_app,
     pcmu_silence,
     pcmu_speech,
     stub_app,
+    stub_config,
     stub_runtime,
+    stub_speech,
 )
 from fastapi.testclient import TestClient
+
+from examples.frontend_delegation_agent.adapters.pipecat.runtime import FdaRuntime
+from examples.frontend_delegation_agent.adapters.pipecat.settings import load_pipecat_settings
 
 
 def _output(call_id: str, output: str) -> dict:
@@ -148,6 +158,20 @@ class PipecatContractTests(unittest.TestCase):
             with client.websocket_connect("/v1/realtime") as second:
                 refused = json.loads(second.receive_text())
                 self.assertEqual(refused["error"]["code"], "server_busy")
+
+
+class PipecatStartupTests(unittest.TestCase):
+    def test_hermes_on_the_in_process_link_fails_startup(self) -> None:
+        config = stub_config()
+        config = replace(config, backend=replace(config.backend, gateway_config=PACKAGE / "config" / "gateway.yaml"))
+        runtime = FdaRuntime(
+            config, load_pipecat_settings("adapters/pipecat.yaml"), profile="eval", speech_factory=stub_speech
+        )
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("FDA_", "BACKEND_LLM_"))}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertFalse(asyncio.run(runtime.ensure_ready()))
+        self.assertIn("cannot run in the voice process", runtime.startup_error)
+        self.assertFalse(runtime.ready)
 
 
 if __name__ == "__main__":

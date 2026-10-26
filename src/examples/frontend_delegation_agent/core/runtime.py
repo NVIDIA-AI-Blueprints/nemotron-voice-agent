@@ -17,7 +17,7 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -53,6 +53,9 @@ from examples.frontend_delegation_agent.core.tools.identity_ledger import (
 from examples.frontend_delegation_agent.core.tools.relay import FormatRetryMessages
 from examples.frontend_delegation_agent.core.tools.result_hints import ResultHints
 
+if TYPE_CHECKING:
+    from examples.frontend_delegation_agent.core.sidecar.gateway_config import GatewayConfig
+
 
 class DelegationRuntime:
     """Resources shared by every session of one server (clients, prompts, normalizer templates)."""
@@ -68,6 +71,8 @@ class DelegationRuntime:
             chat_model if chat_model is not None else (OpenAIChatModel(config.frontend.llm) if needs_llm else None)
         )
         voice = config.voice
+        #: ``link: in_process``: the gateway config, loaded and checked once (``_in_process_gateway``).
+        self._gateway_config: GatewayConfig | None = None
         self._script = _load_script(config.frontend.script)
         self._argument_templates = ("", "", "")
         self._hint_templates = ("", "")  # result_hints: (message_key, escalate_message_key) texts
@@ -231,17 +236,33 @@ class DelegationRuntime:
         backend = self.config.backend
         if backend.link == "in_process":
             # The gateway and the worker run in this process: the LLM backend, or the emulator.
-            from examples.frontend_delegation_agent.core.sidecar.gateway_config import load_gateway_config
             from examples.frontend_delegation_agent.core.sidecar.inprocess_link import InProcessBackendLink
 
-            assert backend.gateway_config is not None  # noqa: S101 - validated in config
-            return InProcessBackendLink(load_gateway_config(backend.gateway_config))
+            return InProcessBackendLink(self._in_process_gateway())
         return WebSocketBackendLink(backend.url, open_timeout_s=min(10.0, backend.open_timeout_s))
 
+    def _in_process_gateway(self) -> GatewayConfig:
+        """The gateway config of ``link: in_process``, loaded and checked once; Hermes fails here."""
+        if self._gateway_config is None:
+            from examples.frontend_delegation_agent.core.sidecar.gateway_config import load_gateway_config
+            from examples.frontend_delegation_agent.core.sidecar.inprocess_link import check_in_process
+
+            path = self.config.backend.gateway_config
+            assert path is not None  # noqa: S101 - validated in config
+            config = load_gateway_config(path)
+            check_in_process(config)
+            self._gateway_config = config
+        return self._gateway_config
+
     async def startup(self) -> None:
-        """Warm the frontend connection; check the gateway (reachable, enough capacity)."""
-        await self._warmup()
+        """Check the in-process gateway config; warm the frontend; check the gateway (reachable, enough capacity).
+
+        A config the voice process cannot run fails before the warm-up, so a refused session does not pay for it.
+        """
         backend = self.config.backend
+        if backend.link == "in_process":
+            self._in_process_gateway()
+        await self._warmup()
         if backend.link != "websocket":
             return
         url = _health_url(backend.url)

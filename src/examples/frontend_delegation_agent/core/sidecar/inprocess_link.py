@@ -29,7 +29,7 @@ from examples.frontend_delegation_agent.core.sidecar.gateway_config import (
 )
 from examples.frontend_delegation_agent.core.sidecar.session_runtime import SessionRuntime
 
-__all__ = ["InProcessBackendLink", "default_emulator_gateway_config", "load_gateway_config"]
+__all__ = ["InProcessBackendLink", "check_in_process", "default_emulator_gateway_config", "load_gateway_config"]
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,15 @@ def default_event_log(config: GatewayConfig) -> GatewayEventLog:
     return _EVENT_LOGS[config.gateway.log]
 
 
+def check_in_process(config: GatewayConfig) -> None:
+    """Raise ``ValueError`` unless ``config``'s backend can run in the voice process (Hermes cannot)."""
+    if not config.spec.supports(Placement.IN_PROCESS):
+        raise ValueError(
+            f"backend.kind: {config.backend.kind} cannot run in the voice process (link: in_process); "
+            "use link: websocket and the backend's own container"
+        )
+
+
 class InProcessBackendLink:
     """A ``BackendLink`` whose gateway runs on the caller's loop."""
 
@@ -59,11 +68,7 @@ class InProcessBackendLink:
         A backend that cannot run in-process (Hermes) is refused.
         """
         config = gateway_config or default_emulator_gateway_config()
-        if not config.spec.supports(Placement.IN_PROCESS):
-            raise ValueError(
-                f"backend.kind: {config.backend.kind} cannot run in the voice process (link: in_process); "
-                "use link: websocket and the backend's own container"
-            )
+        check_in_process(config)
         if config.workers.mode != "in_process":
             config = replace(config, workers=replace(config.workers, mode="in_process"))
         self._config = config

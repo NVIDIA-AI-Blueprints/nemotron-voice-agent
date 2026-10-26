@@ -74,8 +74,11 @@ docker compose --profile frontend-delegation-agent/single-gpu up -d --build
 # Eval profile (evaluation runs, Realtime only): pass the overlay in every command
 docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
   --profile frontend-delegation-agent/single-gpu up -d --build
-# LLM backend in the voice container instead of Hermes: the LLM overlay after the eval overlay, if any
-docker compose -f docker-compose.yml [-f docker/docker-compose.fda-eval.yaml] -f docker/docker-compose.fda-llm.yaml \
+# LLM backend in the voice container instead of Hermes (default profile)
+docker compose -f docker-compose.yml -f docker/docker-compose.fda-llm.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
+# LLM backend, eval profile: the LLM overlay after the eval overlay
+docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml \
   --profile frontend-delegation-agent/single-gpu up -d --build
 
 # Resource-heavy single-GPU path (workstation or DGX Spark)

@@ -22,11 +22,11 @@ FBA = ROOT / "src" / "examples" / "frontend_backend_agent"
 #: SHA-256 of each frozen file, recorded at commit 84affa7. Re-recorded for the rename from
 #: Frontend/Backend Verdict (``frontend_backend_verdict``) to Frontend/Backend Agent, name-only
 #: (approved by the user, 2026-10-16). Re-recorded on 2026-10-21 for the customer-service prompt
-#: rules and domain notes (``domain.name``, ``instructions.domain_from_tools``); the user's written
-#: approval in the PR description is pending. Re-recorded on 2026-10-26 for the name-only removal of
-#: benchmark names from the test helpers and fixtures (comments, helper names, the fixture directory
-#: and a v1 golden label) and from the comments, docstrings and one log message of the FBA sources;
-#: the user's written approval in the PR description is pending.
+#: rules and domain notes (``domain.name``, ``instructions.domain_from_tools``), approved by the user
+#: in the description of PR #171. Re-recorded on 2026-10-26 for the name-only removal of benchmark
+#: names from the test helpers and fixtures (comments, helper names, the fixture directory and a v1
+#: golden label) and from the comments, docstrings and one log message of the FBA sources, approved
+#: by the user in the description of PR #171.
 FROZEN = {
     "src/examples/frontend_backend_agent/adapters/pipecat/client_events.py": "0874deaafc994960858d3950e1b202326be2fddf74ad89cbe1bc954c734e831a",
     "src/examples/frontend_backend_agent/adapters/pipecat/frames.py": "78b3459f24396918ed9529743681ceb7a697f5fb277dd9d79e68a987754dbaf0",

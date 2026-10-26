@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -26,6 +27,7 @@ from unittest import mock
 from _fda_llm_server import Reply, ScriptedOpenAI, tool
 
 from examples.frontend_delegation_agent.core.config import load_delegation_config
+from examples.frontend_delegation_agent.core.runtime import DelegationRuntime
 from examples.frontend_delegation_agent.core.sidecar import gateway_config as gc
 from examples.frontend_delegation_agent.core.sidecar.inprocess_link import InProcessBackendLink
 
@@ -77,6 +79,48 @@ class ConfigTest(unittest.TestCase):
     def test_hermes_cannot_run_in_the_voice_process(self) -> None:
         with _env(), self.assertRaisesRegex(ValueError, "cannot run in the voice process"):
             InProcessBackendLink(gc.load_gateway_config(gc.CONFIG_DIR / "gateway.yaml"))
+
+
+class WarmupModel:
+    """A frontend chat model that only counts warm-up requests."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, messages: list[dict[str, Any]], **_: Any) -> str:
+        self.calls += 1
+        return "OK"
+
+
+def _in_process_runtime(gateway: str) -> tuple[DelegationRuntime, WarmupModel]:
+    """The eval profile on the in-process link with ``gateway``, an LLM frontend and its warm-up on."""
+    config = load_delegation_config(PROFILES / "pipecat_realtime_eval.yaml")
+    config = replace(
+        config,
+        backend=replace(config.backend, link="in_process", gateway_config=gc.CONFIG_DIR / gateway),
+        frontend=replace(config.frontend, decider="llm", warmup=True),
+    )
+    model = WarmupModel()
+    return DelegationRuntime(config, chat_model=model), model
+
+
+class RuntimeStartupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_refuses_hermes_before_the_warm_up(self) -> None:
+        with _env():
+            runtime, model = _in_process_runtime("gateway.yaml")
+            with self.assertRaisesRegex(ValueError, "cannot run in the voice process"):
+                await runtime.startup()
+        self.assertEqual(model.calls, 0)
+
+    async def test_the_in_process_gateway_is_loaded_once(self) -> None:
+        with _env(), mock.patch.object(gc, "load_gateway_config", wraps=gc.load_gateway_config) as load:
+            runtime, model = _in_process_runtime("gateway.emulator.yaml")
+            await runtime.startup()
+            first, second = runtime._link(), runtime._link()  # noqa: SLF001
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(model.calls, 1)
+        self.assertIsInstance(first, InProcessBackendLink)
+        self.assertIsNot(first, second)
 
 
 class InProcessSessionTest(unittest.IsolatedAsyncioTestCase):

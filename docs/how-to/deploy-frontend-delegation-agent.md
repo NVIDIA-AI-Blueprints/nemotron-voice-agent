@@ -88,6 +88,14 @@ The following rules apply to the Compose files:
 - Never combine the LLM backend overlay with the plain runtime overlay, `docker/docker-compose.fda-hermes-plain.yaml`. The plain overlay runs Hermes.
 - Pass the same files in every Compose command of the deployment, such as `ps`, `logs`, `exec`, and `down`. An `up` command without the LLM backend overlay recreates the deployment with Hermes.
 
+To switch backends, first stop the running deployment with the Compose files that started it, and then start the new backend. The LLM backend overlay moves the Hermes services to an inactive profile, so an `up` or `down` command with it neither starts nor stops them. Without the `down` command, a running Hermes deployment keeps `fda-hermes` and the OpenShell gateway on `127.0.0.1:8080`. The following commands switch from Hermes to the LLM backend in the `default` profile:
+
+```bash
+docker compose --profile frontend-delegation-agent/single-gpu down
+docker compose -f docker-compose.yml -f docker/docker-compose.fda-llm.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
+```
+
 The `config hash` covers the backend link and the gateway configuration file, so it differs between the two backends.
 
 ## Prerequisites
@@ -737,6 +745,8 @@ In the plain runtime, the gateway closes open sessions one after another, so the
 
 With the LLM backend, `down` stops the voice service and `nemo-speech`. The backend stops with the voice service, so no backend container or sandbox remains.
 
+A `down` command with the LLM backend overlay does not stop Hermes services that an earlier Hermes `up` command started. Stop those with the Hermes Compose files before you switch backends, as [Choose a Backend](#choose-a-backend) describes.
+
 The command keeps `.env`, the built images, the logs in `logs/`, the speech model weights in `models/nemo-speech`, and, for the OpenShell runtime, the OpenShell gateway's keys and database in `/var/lib/openshell`.
 
 ## Troubleshooting
@@ -755,7 +765,7 @@ The following table lists common failures for this recipe. For general startup i
 | `up` fails with an unknown `!override` or `!reset` tag. | Docker Compose is older than 2.24.4. | Update Docker Compose to 2.24.4 or newer. |
 | `fda-hermes` never turns healthy in the OpenShell runtime. | The sandbox did not start, or the FDA gateway in it failed. | Read the `fda-hermes` log and the sandbox workload container log, as [Read the Logs](#read-the-logs) describes. Then rerun the `up` command. |
 | The FDA gateway or a worker fails on a call to a host other than `inference-api.nvidia.com`. | The sandbox policy blocks the host. | Read the denied calls with `openshell logs fda-hermes`, as [Read the Logs](#read-the-logs) shows. Add the host under `network_policies` in `docker/fda/openshell/policy.yaml`, or compare with the plain runtime. |
-| A browser UI session ends at once or never starts, and the app log shows `runs with FDA_PROFILE=eval`. | The deployment runs the `eval` profile, which refuses browser UI sessions. | Start the recipe without the eval overlay. |
+| A browser UI session ends at once or never starts, and the app log shows `runs with FDA_PROFILE=eval`. | The deployment runs the `eval` profile, which refuses browser UI sessions. | Start the recipe without the eval overlay. With the LLM backend, keep the LLM backend overlay. |
 | A browser UI session ends at once, and the app log shows `browser session refused`. | Either 4 browser UI sessions are already open, or the warm-up failed. | Close idle browser sessions. For a warm-up failure, read the `startup failed` line in the app log, and then start a new session. |
 | A Realtime client receives an `error` event with code `server_busy`, and the socket closes with code 1013. | The message `server at capacity (server.max_sessions)` means that 4 Realtime sessions are open. The message `server is starting` means that the warm-up failed. | Close idle sessions, or wait and reconnect. For a warm-up failure, read the `startup failed` line in the app log. The next session retries the warm-up. |
 | The app log shows `server.max_sessions (N) exceeds the gateway's max_sessions`. | The voice side allows more sessions than the gateway. | Use the Compose values, which set 4 sessions per session kind and 8 gateway sessions. |
@@ -765,7 +775,7 @@ The following table lists common failures for this recipe. For general startup i
 | `session.update` fails with `worker_start_timeout` or `backend_unavailable`. | A backend worker did not start. | Hermes backend: read the worker logs, `logs/fda_workers_pipecat/` in the plain runtime, or a copy of the sandbox's `/app/logs` in the OpenShell runtime. Rerun the `up` command with `--build` if the Hermes checkout changed. LLM backend: read the app log. |
 | The Hermes gateway or the voice side reports `protocol version 2 is not supported (expected 1)`, or the reverse. | The Hermes image was built from older source than the voice side runs. | Rerun the `up` command with `--build`. |
 | `fda-hermes` or the OpenShell services start although you chose the LLM backend, or `printenv FDA_BACKEND` prints nothing. | The `up` command ran without `docker/docker-compose.fda-llm.yaml`. | Rerun the `up` command with the LLM backend overlay, and pass it in every Compose command. |
-| A session fails with `backend.kind: hermes cannot run in the voice process (link: in_process)`. | The voice service runs with `FDA_BACKEND_LINK=in_process` but without `FDA_BACKEND=llm`, for example in a modified Compose file. | Use `docker/docker-compose.fda-llm.yaml` unchanged. It sets both values. |
+| Every session is refused. A Realtime client receives an `error` event with code `server_busy` and the message `server is starting`, and the socket closes with code 1013. A browser UI session ends at once, and the app log shows `browser session refused`. The app log also shows `frontend-delegation-agent: startup failed: backend.kind: hermes cannot run in the voice process (link: in_process)`. | The voice service runs with `FDA_BACKEND_LINK=in_process` but without `FDA_BACKEND=llm`, for example because `.env` sets only `FDA_BACKEND_LINK`, or a Compose file was modified. The voice service checks this at startup, before the warm-up, so it refuses every session until you fix it. | Remove `FDA_BACKEND` and `FDA_BACKEND_LINK` from `.env`, or undo the Compose change. Then redeploy the backend that you want. For Hermes, run the Hermes command from [Start the Deployment](#start-the-deployment). For the LLM backend, use `docker/docker-compose.fda-llm.yaml` unchanged. It sets both values. |
 | The gateway fails with `workers.agent_kind was replaced by backend.kind`, `workers.mode: in_process_fake was renamed to in_process`, or `hermes.<key> moved to backend.<key>`. | A modified gateway configuration still uses the former key names. | Rename the keys as the error says. `FDH_AGENT_KIND` is now `FDA_BACKEND`, and the shared backend settings, such as `model`, `prompts`, and `backend_trace`, are in the `backend:` section. Refer to [Backends](../../src/examples/frontend_delegation_agent/README.md#backends). |
 | A session fails with an error about `unknown backend kind`. | `FDA_BACKEND` or `backend.kind` holds a value other than `hermes`, `llm`, or `emulator`. | Use the Compose files unchanged. Choose the backend with the overlay. |
 | A code change works on the voice side but not in Hermes, or the source hash in the `FDA gateway` line differs from your checkout. | The Hermes image runs the source that was built into it. | Rerun the `up` command with `--build`. |

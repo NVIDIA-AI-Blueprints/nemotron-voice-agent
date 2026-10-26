@@ -10,10 +10,17 @@
 #
 #   docker compose -f docker-compose.yml -f docker/docker-compose.fda-llm.yaml \
 #     --profile frontend-delegation-agent/single-gpu up -d --build
-#   # eval mode: the eval overlay first, this file last
+#   # eval mode: the eval overlay first, then this file
 #   docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
-#     -f docker/docker-compose.fda-llm.yaml [-f docker/docker-compose.fda-silent-frontend.yaml] \
+#     -f docker/docker-compose.fda-llm.yaml \
 #     --profile frontend-delegation-agent/single-gpu up -d --build
+#   # eval mode for VoiceBench: add the silent-frontend overlay last
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+#     -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-silent-frontend.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#
+# To switch from Hermes, first run `down` with the Compose files that started Hermes: this overlay moves the
+# Hermes services to an inactive profile, so an `up` or `down` with it neither stops nor starts them.
 #
 # Do not combine it with docker/docker-compose.fda-hermes-plain.yaml (that file runs Hermes). It sets no
 # FDA_GATEWAY_CONFIG: the voice service has gateway.yaml from docker-compose.yml and gateway.eval.yaml from

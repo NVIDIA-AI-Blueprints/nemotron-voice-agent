@@ -7,7 +7,14 @@
 # host; the OpenShell services do not start. Needs Compose 2.24.4+ (!override, !reset).
 #
 #   docker compose -f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml \
-#     [-f docker/docker-compose.fda-eval.yaml] \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#   # eval mode: this file first, then the eval overlay
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml \
+#     -f docker/docker-compose.fda-eval.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#   # eval mode for VoiceBench: add the silent-frontend overlay last
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml \
+#     -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-silent-frontend.yaml \
 #     --profile frontend-delegation-agent/single-gpu up -d --build
 #
 # It overrides only the fields that differ, never a whole service: a whole-service override would also
