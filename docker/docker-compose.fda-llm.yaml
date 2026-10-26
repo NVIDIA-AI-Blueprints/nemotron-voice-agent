@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The LLM backend of the Frontend Delegation Agent (FDA_BACKEND=llm): a lightweight OpenAI-SDK
+# tool loop that runs inside the voice container, instead of Hermes in the `fda-hermes` service. One
+# container besides speech: the Hermes and OpenShell services do not start, and nothing waits for them.
+# Both backends use the same gateway settings (config/gateway.yaml, or gateway.eval.yaml with the eval
+# overlay), and each backend reads its own prompt file, config/prompts/<profile>/backend/llm.yaml.
+# Needs Compose 2.24.4+ (!override, !reset).
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-llm.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#   # eval mode: the eval overlay first, then this file
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+#     -f docker/docker-compose.fda-llm.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#   # eval mode for VoiceBench: add the silent-frontend overlay last
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+#     -f docker/docker-compose.fda-llm.yaml -f docker/docker-compose.fda-silent-frontend.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#
+# To switch from Hermes, first run `down` with the Compose files that started Hermes: this overlay moves the
+# Hermes services to an inactive profile, so an `up` or `down` with it neither stops nor starts them.
+#
+# Do not combine it with docker/docker-compose.fda-hermes-plain.yaml (that file runs Hermes). It sets no
+# FDA_GATEWAY_CONFIG: the voice service has gateway.yaml from docker-compose.yml and gateway.eval.yaml from
+# the eval overlay, so the file order cannot swap them. Every value is a literal, as in docker-compose.yml.
+
+services:
+  # Not in the recipe profile, so they never start with this overlay.
+  hermes-openshell-init:
+    profiles: !override ["fda-hermes-off"]
+  hermes-openshell-gateway:
+    profiles: !override ["fda-hermes-off"]
+  fda-hermes:
+    profiles: !override ["fda-hermes-off"]
+  fda-hermes-image:
+    profiles: !override ["fda-hermes-off"]
+
+  frontend-delegation-agent-single-gpu:
+    depends_on: !reset {}
+    environment:
+      FDA_BACKEND: llm                           # backend.kind of config/gateway*.yaml
+      FDA_BACKEND_LINK: in_process               # the gateway and the LLM worker run in this process
+      # The backend model, as docker/fda/gateway.env sets it for Hermes.
+      BACKEND_LLM_MODEL: nvidia/nvidia/nemotron-3-ultra
+      BACKEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
+      # The gateway event log and the backend traces, at the paths the Hermes runtime uses (under logs/).
+      FDA_GATEWAY_LOG: logs/fda_gateway_events.pipecat.jsonl
+      FDA_WORKER_LOG_DIR: logs/fda_workers_pipecat

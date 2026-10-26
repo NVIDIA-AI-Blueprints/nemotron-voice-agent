@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pipecat head, eval mode (a benchmark client against the Pipecat head). Only for evaluation; the demo
+# keeps Pipecat's defaults (pipecat.yaml). A benchmark client can pause its input between turns,
+# sometimes for seconds, so the end of a turn is measured in input audio only, like the former
+# server's 800 ms:
+#   - vad.stop_secs 0.8: Silero counts the silence in audio chunks.
+#   - vad.audio_idle_timeout 0: disables the VADProcessor's wall-clock forced speech stop, which
+#     cut users off mid-utterance whenever the client's input stalled for more than about 1.6 s.
+#   - turn.user_speech_timeout 0: no wall-clock wait after the VAD stop.
+# The `eval` profile (adapters/pipecat/profiles.py): every OpenAI Realtime session uses it.
+
+vad:
+  confidence: null
+  start_secs: null
+  stop_secs: 0.8
+  min_volume: null
+  audio_idle_timeout: 0.0
+
+turn:
+  user_speech_timeout: 0.0
+  user_turn_stop_timeout: null
+
+audio:
+  in_sample_rate: 16000
+  out_sample_rate: 24000
+  out_10ms_chunks: 10
+  write_timeout_s: 120.0
+
+tts:
+  synthesis_mode: per_sentence

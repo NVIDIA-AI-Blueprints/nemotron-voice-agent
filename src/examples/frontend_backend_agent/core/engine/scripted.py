@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A scripted ``AgentPort`` for the tau3 gates and offline smoke runs.
+"""A scripted ``AgentPort`` for the eval gates and offline smoke runs.
 
 It never calls an LLM. By default (plan section 18.0, Gate B) turn 1 calls one
 client tool and then answers, turn 2 answers, and turn 3 transfers the call by

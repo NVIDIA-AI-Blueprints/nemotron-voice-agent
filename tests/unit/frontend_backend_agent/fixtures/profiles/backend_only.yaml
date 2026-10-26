@@ -8,7 +8,7 @@
 extends: ../../../../../src/examples/frontend_backend_agent/core/config/voice_agent.yaml
 
 server:
-  # tau2 freezes its tick loop for up to ~90 s at a time (synchronous user-simulator
+  # The benchmark client freezes its tick loop for up to ~90 s at a time (synchronous user-simulator
   # LLM and TTS calls) and stops reading the socket; the agent's streamed audio then
   # fills the client's receive queue, so its pongs stop and a keepalive ping would
   # close a healthy session mid-task. The eval client is local; keepalive is off.
@@ -22,7 +22,7 @@ agent:
     backend:
       conversation_history: {enabled: false}
 
-# Identifier normalization, the same as tau3_eval.yaml (default since 2026-09-29). Without a
+# Identifier normalization, the same as the eval profile (default since 2026-09-29). Without a
 # frontend the frontend note is skipped; the transcript and tool-argument hooks still apply.
 normalization:
   transcript:
@@ -45,5 +45,5 @@ normalization:
     retry_guard:
       enabled: true
       scope: rules
-      # tau2's lookup error ("Error: User jordan_lee_82 not found"); transient errors never match.
+      # the benchmark client's lookup error ("Error: User jordan_lee_82 not found"); transient errors never match.
       permanent_failure_pattern: '^Error: .*\bnot found\b'

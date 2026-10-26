@@ -16,10 +16,10 @@ from unittest import mock
 
 from _fba_core_fakes import (
     FakeChatClient,
+    benchmark_session_update,
     delegate_response,
     normalize_trace,
     pcmu_silence,
-    tau2_session_update,
     text_response,
     tool_response,
     voice_config,
@@ -52,7 +52,7 @@ async def _delegated_turn(
         filler_log=log or FillerLog(),
         show_silent_filler=show_silent_filler,
     )
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     return harness
 
@@ -114,7 +114,7 @@ class LogOnlyTests(PipecatTestCase):
             harness = PipecatHarness(
                 config=config, clients=AgentClients(backend=backend, frontend=frontend), filler_log=log
             )
-            await harness.start(tau2_session_update())
+            await harness.start(benchmark_session_update())
             await harness.feed(pcmu_silence(1000))
             await harness.speak()
             await harness.wait_for("response.done")
@@ -212,7 +212,7 @@ class FillerModeEnvTests(PipecatTestCase):
             clients=AgentClients(backend=backend, frontend=frontend),
             filler_log=FillerLog(),
         )
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.idle(1500)  # the eval profile ends the turn after 0.8 s of silence
         for _ in range(200):

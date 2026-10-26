@@ -8,7 +8,7 @@
 # it: they always run with profiles/eval.yaml, so serving the browser does not change them.
 #
 # Tune this file and core/config/prompts/generic.yaml freely; eval.yaml and
-# prompts/customer_service.yaml change only with a Tau A/B run.
+# prompts/customer_service.yaml change only with an eval A/B run.
 
 extends: eval.yaml
 

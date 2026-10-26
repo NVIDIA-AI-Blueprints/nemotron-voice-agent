@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Real worker processes and sockets with the scripted EmulatorAgent (no model), under any Python.
+# For CI-style checks and a GPU/credential-free gateway smoke run.
+
+extends: gateway.yaml
+workers:
+  python: ${FDA_TEST_PYTHON:-self}           # self -> the gateway's own interpreter
+  start_timeout_s: 10
+  home_root: ${FDA_HERMES_HOME_ROOT:-.cache/fda-hermes-homes-emulator}
+backend:
+  kind: emulator
+  run_hard_deadline_s: 330

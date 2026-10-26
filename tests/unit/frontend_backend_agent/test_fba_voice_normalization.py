@@ -23,8 +23,8 @@ from _fba_core_fakes import (
     CONFIG_DIR,
     FakeChatClient,
     base_config,
+    benchmark_update_with,
     delegate_response,
-    tau2_update_with,
     text_response,
     tool_response,
 )
@@ -97,7 +97,7 @@ class _Base(PipecatTestCase):
             recognizer=StubRecognizer(transcripts),
             event_log=event_log,
         )
-        await self.harness.start(tau2_update_with(TOOLS, "Policy text."))
+        await self.harness.start(benchmark_update_with(TOOLS, "Policy text."))
         return self.harness
 
     async def asyncTearDown(self) -> None:

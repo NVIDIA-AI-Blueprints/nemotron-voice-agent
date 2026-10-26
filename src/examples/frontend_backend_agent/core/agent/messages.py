@@ -222,7 +222,7 @@ class AgentTurn:
     """The single outward payload of one step.
 
     Carries user-visible text *or* backend tool calls for the caller to execute,
-    never both and never neither — the same rule tau2-bench enforces in
+    never both and never neither — the same rule the benchmark enforces in
     ``check_communication_error()``. There is deliberately no ``events`` field:
     diagnostics (including frontend filler text) go to the event sink only.
     """

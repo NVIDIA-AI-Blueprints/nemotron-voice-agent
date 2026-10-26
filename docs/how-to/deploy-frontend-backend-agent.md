@@ -132,7 +132,7 @@ The unit tests load every profile in `core/config/prompts/`, so a broken profile
 
 The backend prompt also includes per-domain notes, the catalog key `backend_domain_notes`, selected by the session's service domain (`domain.name`). Only `customer_service.yaml` has notes: with it, a session that declares the `get_customer_by_phone` tool gets the `telecom` notes, through the `instructions.domain_from_tools` rule in `core/config/profiles/eval.yaml`. In the other profiles, the key is empty. A new profile can leave the key empty or omit it. If its `backend_domain_notes` has content, it needs a branch for every configured or detected domain, or the configuration fails to load with an error that names the domain and `backend_domain_notes`. For the keys, refer to [Domain Notes](../../src/examples/frontend_backend_agent/README.md#domain-notes).
 
-The `customer_service` catalog is pinned by SHA-256 (`TAU_CATALOG_SHA256`) in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. Do not edit `customer_service.yaml` to tune prompts. A change to it requires a new pin and an attached Tau A/B evaluation run. Tune `generic.yaml` instead, or add a profile.
+The `customer_service` catalog is pinned by SHA-256 (`CUSTOMER_SERVICE_CATALOG_SHA256`) in `tests/unit/frontend_backend_agent/test_fba_prompt_variants.py`. Do not edit `customer_service.yaml` to tune prompts. A change to it requires a new pin and an attached Tau A/B evaluation run. Tune `generic.yaml` instead, or add a profile.
 
 ## Configure the Environment
 

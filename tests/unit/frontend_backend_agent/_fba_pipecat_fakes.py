@@ -346,7 +346,7 @@ class PipecatHarness:
         await self.settle()
 
     async def feed(self, audio: bytes, *, chunk: int = 160) -> None:
-        """Append ``audio`` as tau2 does: 160-byte mu-law frames, each run through before the next (G2)."""
+        """Append ``audio`` as the benchmark does: 160-byte mu-law frames, each run through before the next (G2)."""
         for offset in range(0, len(audio), chunk):
             piece = audio[offset : offset + chunk]
             self.websocket.put_text(append_event(piece + pcmu_silence(20)[len(piece) :]))

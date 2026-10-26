@@ -27,9 +27,9 @@ from _fba_core_fakes import (
     PACKAGE_ROOT,
     FakeChatClient,
     base_config,
+    benchmark_session_update,
+    benchmark_update_with,
     delegate_response,
-    tau2_session_update,
-    tau2_update_with,
     tool_response,
 )
 from _fba_golden import _clients, pinned_environment
@@ -95,7 +95,7 @@ def _runner(config: Any) -> TextAgentRunner:
 
 
 def _backend_prompt(config: Any, domain: str) -> tuple[str, TextAgentRunner]:
-    session = tau2_session_update(domain)["session"]
+    session = benchmark_session_update(domain)["session"]
     runner = _runner(config)
     runner.configure(tools=session["tools"], instructions=session["instructions"])
     return runner.rendered_prompts()["backend"], runner
@@ -121,7 +121,7 @@ class EvalProfileTests(unittest.TestCase):
 
     def test_the_notes_follow_the_policy_after_a_blank_line(self) -> None:
         prompt, _ = _backend_prompt(EVAL, "telecom")
-        policy = tau2_session_update("telecom")["session"]["instructions"].strip()
+        policy = benchmark_session_update("telecom")["session"]["instructions"].strip()
         self.assertIn(f"{policy}\n\n{NOTES_HEADING}", prompt)
 
 
@@ -258,7 +258,7 @@ class SessionTests(PipecatTestCase):
             recognizer=StubRecognizer(None),
             event_log=EventLog(str(self.log_path), redact_content=False),
         )
-        await self.harness.start(tau2_update_with(PHONE_TOOLS, "Policy text."))
+        await self.harness.start(benchmark_update_with(PHONE_TOOLS, "Policy text."))
         return self.harness
 
     async def asyncTearDown(self) -> None:

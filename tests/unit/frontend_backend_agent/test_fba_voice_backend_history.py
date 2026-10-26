@@ -22,11 +22,11 @@ from _fba_core_fakes import (
     CONFIG_DIR,
     FakeChatClient,
     base_config,
+    benchmark_session_update,
+    benchmark_update_with,
     delegate_response,
     pcmu_silence,
     pcmu_speech,
-    tau2_session_update,
-    tau2_update_with,
     text_response,
     voice_config,
 )
@@ -110,7 +110,7 @@ class PairedHistorySessionTests(PipecatTestCase):
         frontend = FakeChatClient([delegate_response("First request."), delegate_response("Second request.")])
         backend = FakeChatClient([text_response("First answer."), text_response("Second answer.")])
         harness = PipecatHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.feed(pcmu_silence(2000))
@@ -132,7 +132,7 @@ class PairedHistorySessionTests(PipecatTestCase):
         frontend = FakeChatClient([delegate_response("Confirm the booking.")])
         backend = FakeChatClient([text_response(ANSWER)])
         harness = PipecatHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.feed(pcmu_silence(300))
@@ -150,7 +150,7 @@ class PairedHistorySessionTests(PipecatTestCase):
         backend = FakeChatClient([text_response("Merged answer.")])
         backend.gates[0] = asyncio.Event()  # the first backend call hangs and is cancelled
         harness = PipecatHarness(config=_history_config(), clients=AgentClients(backend=backend, frontend=frontend))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await asyncio.sleep(0.05)
         self.assertEqual(harness.session.turns.state, "THINKING")
@@ -172,7 +172,7 @@ class PairedHistorySessionTests(PipecatTestCase):
                 clients=AgentClients(backend=backend, frontend=frontend),
                 event_log=EventLog(str(path)),
             )
-            await harness.start(tau2_session_update())
+            await harness.start(benchmark_session_update())
             await harness.speak()
             await harness.wait_for("response.done")
             await harness.close()
@@ -187,7 +187,7 @@ class PairedHistorySessionTests(PipecatTestCase):
         harness = PipecatHarness(
             config=_history_config(), clients=AgentClients(backend=backend, frontend=FakeChatClient())
         )
-        await harness.start(tau2_update_with([], "Policy text."))
+        await harness.start(benchmark_update_with([], "Policy text."))
         prompt = harness.runners[0].rendered_prompts()["backend"]
         cascade = prompt.index("Voice cascade notes.")
         note = prompt.index("Conversation so far. This is an ongoing conversation")

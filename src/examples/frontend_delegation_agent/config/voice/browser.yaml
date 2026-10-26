@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Browser sessions: greeting, the text prototype's demo tools executed in the voice server (a
+# browser cannot run tools), real-time output pacing. server.port is unused on the shared server.
+
+extends: base.yaml
+
+server:
+  port: ${FDA_VOICE_PORT:-8776}
+
+protocol:
+  greeting: {enabled: true, text: "Hi! How can I help you today?"}
+  seed_history_with_client_greeting: ""
+
+tools:
+  source: config
+  config_tools: "examples.frontend_delegation_agent.core.text.demo_tools:TOOLS"
+
+audio:
+  pace_output: true
+
+normalization:
+  # M3.1: spelled letters and digits are joined in the text the agents see.
+  transcript:
+    spelled_runs: {enabled: true, min_tokens: 3, case: keep}
+  # Tool-argument normalization screens calls handed to a client; it requires tools.source: client.
+  tool_arguments: {enabled: false}

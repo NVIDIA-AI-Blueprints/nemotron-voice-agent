@@ -19,7 +19,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from _fba_core_fakes import FakeChatClient, delegate_response, tau2_session_update, text_response, tool_response
+from _fba_core_fakes import FakeChatClient, benchmark_session_update, delegate_response, text_response, tool_response
 from _fba_pipecat_fakes import PipecatHarness, PipecatTestCase
 from mcp.types import CallToolResult, TextContent, Tool
 
@@ -74,8 +74,8 @@ def _client_function(name: str = "get_users") -> dict[str, Any]:
 
 
 def _update(*tools: dict[str, Any]) -> dict[str, Any]:
-    """The Tau fixture's ``session.update`` (mu-law audio, server VAD) with ``tools`` instead of its own."""
-    update = tau2_session_update("mock")
+    """The benchmark fixture's ``session.update`` (mu-law audio, server VAD) with ``tools`` instead of its own."""
+    update = benchmark_session_update("mock")
     update["session"]["tools"] = list(tools)
     return update
 

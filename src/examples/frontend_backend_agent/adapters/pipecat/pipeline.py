@@ -7,7 +7,7 @@ Ported from FDH ``adapters/pipecat/pipeline.py`` (``a0ef50c``) plus v1's ``pipel
 admission (plan §2, §3.1)::
 
     FastAPIWebsocketTransport.input()    client messages (router), input audio decoded as v1 decodes it
-      -> VADProcessor(Silero)            shared Pipecat VAD, Tau settings (§7.2)
+      -> VADProcessor(Silero)            shared Pipecat VAD, eval settings (§7.2)
       -> InputCursor                     input-audio clock; onset and offset; playout cursor (S1)
       -> AsrErrorTap                     the STT's upstream errors -> the bridge (S5)
       -> NvidiaForceEouSTTService        shared STT
@@ -252,7 +252,7 @@ class SessionPipeline:
         """End turns on the session's effective silence, as v1's segmenter does (B1).
 
         ``stop_secs`` follows ``silence_duration_ms`` of the session's turn detection (the
-        profile's value when ``honor_client_values`` is off, 800 ms for every Tau profile); the
+        profile's value when ``honor_client_values`` is off, 800 ms for every eval profile); the
         other ``VADParams`` come from the settings file. Pipecat's ``set_params`` resets the VAD
         state and needs the sample rate (known once the pipeline started), so params are applied
         only when they change, and params set before the start wait for :meth:`apply_pending_vad`.

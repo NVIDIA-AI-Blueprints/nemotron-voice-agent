@@ -88,7 +88,7 @@ def session_agent_config(
     inline = dict(base.prompts.inline)
     policy = base.domain.policy
     # The client's text is spliced into prompt templates: escape it so that braces in it (some
-    # tau2 policies contain Jinja-like "{{ ... }}") render verbatim. {domain_policy} needs no
+    # benchmark policies contain Jinja-like "{{ ... }}") render verbatim. {domain_policy} needs no
     # escaping: placeholders are substituted after the template is rendered.
     text = literal(resolved.text)
     if "backend" in cfg.apply_to and received:

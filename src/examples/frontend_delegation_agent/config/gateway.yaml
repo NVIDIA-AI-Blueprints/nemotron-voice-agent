@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Backend gateway and its workers (prototype-plan.md sections 4.2 and 11; llm-backend-plan.md section 3).
+# One worker per Realtime session; ${VAR:-default} comes from the environment.
+# backend.kind (FDA_BACKEND) selects the backend: hermes (default; one Hermes worker process per
+# session, in the fda-hermes container) or llm (the lightweight OpenAI-SDK backend, which runs
+# in-process in the voice container). Both read every section below except the other's own section.
+
+gateway:
+  host: ${FDA_GATEWAY_HOST:-127.0.0.1}
+  port: ${FDA_GATEWAY_PORT:-8790}
+  max_sessions: ${FDA_MAX_SESSIONS:-8}       # must be >= the sum of server.max_sessions of the voice servers it serves
+  log: ${FDA_GATEWAY_LOG:-logs/fda_gateway_events.jsonl}
+
+workers:
+  mode: process_per_session                  # process_per_session | in_process (llm always runs in_process)
+  python: ${FDA_HERMES_PYTHON:-~/.cache/fda/hermes-venv-314/bin/python}
+  hermes_repo: ${FDA_HERMES_REPO:-}          # only needed when the venv does not install hermes-agent
+  start_timeout_s: 15                        # spawn -> ready (P0: ~2-3 s)
+  configure_timeout_s: 30                    # tools + eager AIAgent construction (P0: ~0.2-0.7 s)
+  stop_timeout_s: 12                         # close -> exit; then SIGTERM, kill_grace_s, SIGKILL
+  kill_grace_s: 3
+  warm: ${FDA_WARM_WORKERS:-0}               # pre-started spare workers
+  home_root: ${FDA_HERMES_HOME_ROOT:-.cache/fda-hermes-homes}   # one HERMES_HOME per worker; runtime state
+  keep_homes: false
+  socket_dir: ${FDA_SOCKET_DIR:-/tmp/fda-workers}
+  log_dir: ${FDA_WORKER_LOG_DIR:-logs/fda_workers}
+
+recovery:
+  respawn: true
+  max_respawns_per_session: 2
+
+backend:
+  kind: ${FDA_BACKEND:-hermes}               # hermes | llm | emulator
+  model: ${BACKEND_LLM_MODEL:-nvidia/nvidia/nemotron-3-ultra}
+  base_url: ${BACKEND_LLM_BASE_URL:-https://inference-api.nvidia.com/v1}
+  api_key_env: NVIDIA_API_KEY
+  agent_construct: eager                     # eager | lazy
+  max_iterations: 30
+  run_budget_seconds: 300                    # soft budget of one run
+  run_hard_deadline_s: 330                   # gateway watchdog
+  unwind_timeout_s: 10
+  tool_result_timeout_s: 120
+  backend_trace: ${FDA_BACKEND_TRACE:-false}  # P0.3: <log_dir>/<session>.trace.jsonl per worker (logging only)
+  steer_timeout_s: 3
+  status_timeout_s: 2
+  request_overrides:
+    extra_body:
+      chat_template_kwargs: {enable_thinking: true}
+      reasoning_budget: 1024
+  prompts:
+    # The prompt profile (FDA_PROMPT_PROFILE); {kind} is backend.kind, so each backend reads its own file.
+    path: "prompts/${FDA_PROMPT_PROFILE:-generic}/backend/{kind}.yaml"
+
+hermes:                                      # read only when backend.kind: hermes
+  provider: custom
+  context_length: 131072                     # written to each worker's HERMES_HOME/config.yaml (64K floor)
+  load_soul_identity: true                   # required with skip_context_files
+
+llm:                                         # read only when backend.kind: llm
+  reasoning_effort: medium                   # sent top level on every request
+  request_timeout_s: 180                     # OpenAI SDK per-read timeout
+  max_retries: 3                             # attempts per model call
+
+# Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend/<kind>.yaml).
+# All on by default. Set one to false to render the backend prompt without that variant.
+prompt_features:
+  spelling_v2: true                          # M3.4: after a failed lookup, read back and ask to spell
+  spoken_output: true                        # G2: at most two sentences, confirmation override
+  write_consent: true                        # G4: consent only to a heard question; read back written names
+  phone_format: true                         # <phone_numbers>: lookups XXX-XXX-XXXX plus one format retry
+  domain_notes: true                         # the telecom note only (prompts/<profile>/backend/<kind>.yaml backend_domain_notes)
+  # The A/B fixes: on by default.
+  format_correction: true                   # A2: a separator or case change is a format correction, not a variant
+  write_consent_v2: true                    # B1: the policy's confirmation, to the exact change, before a write
+  policy_check: true                        # B2: <before_change> policy check; allow within limits
+  request_scope: true                       # B3: <before_change> every record and option the request covers
+  transfer_check: true                      # C1: <before_transfer> required transfers at once, else steps first
+  capability_check: true                    # C2: <before_transfer> check the tools before saying "I can't"
+  situational_facts: true                   # F4: <situational_facts> ask early where the user is, if the policy depends on it
+  identity_from_identifier: true            # F8: a name inside a spoken identifier, once confirmed
+
+# Domain detection by tool names: the first domain with one of its tools in the session's tool list wins;
+# it picks the <domain_notes> block of prompts/<profile>/backend/<kind>.yaml and is reported as backend_domain. Only telecom
+# is detected (analysis/2026-10-11_fdh-telecom-gpt55-deep): every other session has no domain and no note,
+# so its backend prompt is the same as without this rule.
+# Format: <domain>: {tools_any: [<tool>, ...]}
+domains:
+  telecom: {tools_any: [get_customer_by_phone]}

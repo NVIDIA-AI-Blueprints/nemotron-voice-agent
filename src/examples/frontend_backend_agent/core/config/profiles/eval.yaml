@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# The `eval` profile: the agent settings for OpenAI Realtime sessions and for Tau (tau3-bench)
-# voice evaluation runs. Every Realtime session uses it, whichever profile the container serves
+# The `eval` profile: the agent settings for OpenAI Realtime sessions and for voice
+# evaluation runs. Every Realtime session uses it, whichever profile the container serves
 # (FBA_PROFILE only decides whether browser UI sessions are served too). It pins every
 # eval-relevant key explicitly, so a later edit to voice_agent.yaml cannot silently change eval
-# behaviour. Run tau2 with --max-concurrency 1 until max_sessions is measured.
+# behaviour. Run the benchmark with --max-concurrency 1 until max_sessions is measured.
 #
-# This is the former default Tau arm, tau3_eval_frontend_verdict_speak_history, with its extends
-# chain (tau3_eval -> _frontend_verdict -> _speak -> _speak_history) flattened into one file; its
+# This is the former default eval arm, with its extends
+# chain (eval -> _frontend_verdict -> _speak -> _speak_history) flattened into one file; its
 # merged config is unchanged (tests/unit/frontend_backend_agent/test_fba_golden.py). The prompt
 # catalog is the pinned customer_service profile (core/config/prompts/customer_service.yaml), unless
 # FBA_PROMPT_PROFILE names another one.
@@ -16,7 +16,7 @@
 extends: ../voice_agent.yaml
 
 server:
-  # tau2 freezes its tick loop for up to ~90 s at a time (synchronous user-simulator
+  # A benchmark client can freeze its tick loop for up to ~90 s at a time (synchronous user-simulator
   # LLM and TTS calls) and stops reading the socket; the agent's streamed audio then
   # fills the client's receive queue, so its pongs stop and a keepalive ping would
   # close a healthy session mid-task. The eval client is local; keepalive is off.
@@ -30,8 +30,8 @@ agent:
       conversation_history: {enabled: true, include: full}
 
 turn_detection:
-  # tau2 sends silence_duration_ms 500, which splits spelled-out IDs into several
-  # turns; the agent's own values win. threshold and prefix equal tau2's (0.5, 300 ms).
+  # The benchmark client sends silence_duration_ms 500, which splits spelled-out IDs into several
+  # turns; the agent's own values win. threshold and prefix equal the client's (0.5, 300 ms).
   silence_duration_ms: 800
   honor_client_values: false
 
@@ -41,7 +41,7 @@ protocol:
   auto_response: true
   resume_on: response_create
 
-# The frontend's filler is spoken, so the tau2 user hears it and can answer it.
+# The frontend's filler is spoken, so the simulated user hears it and can answer it.
 # FBA_FILLER_MODE=log_only (docker/docker-compose.fba-silent-frontend.yaml only) logs it instead, so a
 # single-turn evaluation scores the answer alone. Never set it to an empty value.
 filler:
@@ -54,7 +54,7 @@ instructions:
   apply_to: [backend]
   placement: policy_slot
   frontend_capabilities: from_tools
-  # One Realtime endpoint serves every tau2 domain, so the telecom domain notes
+  # One Realtime endpoint serves every benchmark domain, so the telecom domain notes
   # (prompt key backend_domain_notes) are selected from the session's tools.
   domain_from_tools:
     telecom: {tools_any: [get_customer_by_phone]}
@@ -69,7 +69,7 @@ barge_in:
 # Identifier normalization. The transcript hook writes spoken user IDs in lower-case written form
 # for the agent (the wire keeps the raw ASR text); the tool-argument hook canonicalizes
 # get_user_details.user_id and answers a malformed or already-failed ID locally instead of sending
-# it to tau2.
+# it to the client.
 normalization:
   transcript:
     enabled: true
@@ -91,5 +91,5 @@ normalization:
     retry_guard:
       enabled: true
       scope: rules
-      # tau2's lookup error ("Error: User jordan_lee_82 not found"); transient errors never match.
+      # The benchmark's lookup error ("Error: User jordan_lee_82 not found"); transient errors never match.
       permanent_failure_pattern: '^Error: .*\bnot found\b'

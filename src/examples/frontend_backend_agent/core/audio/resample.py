@@ -8,7 +8,7 @@ directly instead of ``realtime.audio.AudioResampler``, for two reasons that
 matter here:
 
 * Pipecat's ``SOXRStreamAudioResampler`` clears its state after 0.2 s of
-  *wall-clock* inactivity. tau2 pauses its input stream for seconds of wall time,
+  *wall-clock* inactivity. A benchmark client pauses its input stream for seconds of wall time,
   and turn timing in this package must depend on the audio alone.
 * Output synthesis needs a ``flush`` at the end of each sentence, so the filter
   tail is delivered with the sentence and does not leak into the next item.

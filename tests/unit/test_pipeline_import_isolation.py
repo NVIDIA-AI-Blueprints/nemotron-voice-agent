@@ -27,7 +27,7 @@ class PipelineImportIsolationTests(unittest.TestCase):
             ("examples.generic.pipeline", True),
             ("examples.multilingual.pipeline", True),
             ("examples.frontend_backend_agent.pipeline", True),
-            ("examples.frontend_delegation_hermes.pipeline", True),
+            ("examples.frontend_delegation_agent.pipeline", True),
             ("examples.omni_assistant.pipeline", False),
             ("examples.omni_assistant_subagents.pipeline", False),
         )

@@ -4,7 +4,7 @@
 """What the client has received, and what it has heard (plan section 8.3).
 
 Three quantities are tracked separately on one output timeline (a client such
-as tau2 plays every agent item back to back from a single buffer):
+as a benchmark client plays every agent item back to back from a single buffer):
 
 * ``generating``: the active response is still producing or sending audio;
 * ``sent_ms`` plus per-sentence spans: audio delivered to the client so far;

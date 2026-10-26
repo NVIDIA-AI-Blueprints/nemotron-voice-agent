@@ -14,7 +14,7 @@ name: nemotron-voice-agent
 #   omni-assistant-subagents     Cascaded Omni LLM + TTS Pipeline (Omni Assistant Subagents)
 #   frontend-backend-agent       Cascaded Frontend/Backend agent with the frontend barge-in
 #                                        verdict (browser UI and OpenAI Realtime; Inference Hub LLMs)
-#   frontend-delegation-hermes-agent     Cascaded frontend that delegates to a Hermes backend agent in
+#   frontend-delegation-agent     Cascaded frontend that delegates to a Hermes backend agent in
 #                                        its own container (browser UI and OpenAI Realtime; single-gpu)
 #
 # Hardware targets:
@@ -42,7 +42,7 @@ name: nemotron-voice-agent
 #   docker compose --profile omni-assistant-subagents/single-gpu up
 #   docker compose --profile frontend-backend-agent/server up
 #   docker compose --profile frontend-backend-agent/single-gpu up
-#   docker compose --profile frontend-delegation-hermes-agent/single-gpu up --build
+#   docker compose --profile frontend-delegation-agent/single-gpu up --build
 #
 # Observability profiles compose orthogonally with any recipe:
 #   docker compose --profile <recipe> --profile tracing up   # Phoenix OTel
@@ -274,74 +274,77 @@ services:
       UVICORN_WS_PING_INTERVAL: ${UVICORN_WS_PING_INTERVAL:-0}
       UVICORN_WS_PING_TIMEOUT: ${UVICORN_WS_PING_TIMEOUT:-20}
 
-  # Frontend Delegation Hermes agent (src/examples/frontend_delegation_hermes), single-gpu only:
-  # the voice side in the shared app container, and the Hermes runtime (the FDH gateway and its Hermes
-  # workers, Python 3.14) behind the `fdh-hermes` service: by default an OpenShell sandbox (see the
-  # OpenShell block below), or a plain container with docker/docker-compose.fdh-hermes-plain.yaml
+  # Frontend Delegation Agent (src/examples/frontend_delegation_agent), single-gpu only:
+  # the voice side in the shared app container, and the Hermes runtime (the FDA gateway and its Hermes
+  # workers, Python 3.14) behind the `fda-hermes` service: by default an OpenShell sandbox (see the
+  # OpenShell block below), or a plain container with docker/docker-compose.fda-hermes-plain.yaml
   # (the baseline for A/B checks and debugging). The voice side reaches Hermes only through
-  # FDH_BACKEND_URL and depends only on `fdh-hermes` being healthy. FDH_PROFILE has two values:
-  # `default` (browser UI) and `eval` (OpenAI Realtime only; set with FDH_GATEWAY_CONFIG by
-  # docker/docker-compose.fdh-eval.yaml). OpenAI Realtime sessions always use the `eval` settings.
-  # Every FDH setting below is a literal: Compose fills ${...} from .env, so a stale .env value
+  # FDA_BACKEND_URL and depends only on `fda-hermes` being healthy. FDA_PROFILE has two values:
+  # `default` (browser UI) and `eval` (OpenAI Realtime only; set with FDA_GATEWAY_CONFIG by
+  # docker/docker-compose.fda-eval.yaml). OpenAI Realtime sessions always use the `eval` settings.
+  # Every FDA setting below is a literal: Compose fills ${...} from .env, so a stale .env value
   # could otherwise change an evaluation run. Only the overlays change them. The one exception is
-  # FDH_PROMPT_PROFILE (the prompt profile, config/prompts/<profile>/), which the shell or .env may
-  # set; it is passed to both the voice service and `fdh-hermes`, never empty.
-  frontend-delegation-hermes-agent-single-gpu:
+  # FDA_PROMPT_PROFILE (the prompt profile, config/prompts/<profile>/), which the shell or .env may
+  # set; it is passed to both the voice service and `fda-hermes`, never empty.
+  frontend-delegation-agent-single-gpu:
     <<: *app-base
     profiles:
-      - frontend-delegation-hermes-agent/single-gpu
+      - frontend-delegation-agent/single-gpu
     volumes:
       - ./src:/app/src:ro
       - ./examples_registry.yaml:/app/examples_registry.yaml:ro
       - ./logs:/app/logs
     environment:
       <<: *app-env
-      EXAMPLE_SELECTION: frontend-delegation-hermes-agent
+      EXAMPLE_SELECTION: frontend-delegation-agent
       REALTIME_SERVICE_PLATFORM: singlegpu
-      FDH_PROFILE: default
-      FDH_MAX_SESSIONS: "4"
-      FDH_BACKEND_DELAY_S: "5"
-      FDH_PROACTIVE_AFTER_S: "15"
-      FDH_EVENT_LOG: logs/fdh_voice_events.pipecat.jsonl
-      FDH_PROMPT_PROFILE: ${FDH_PROMPT_PROFILE:-generic}
-      FDH_SILENT_FRONTEND: "false"
+      FDA_PROFILE: default
+      FDA_MAX_SESSIONS: "4"
+      FDA_BACKEND_DELAY_S: "5"
+      FDA_PROACTIVE_AFTER_S: "15"
+      FDA_EVENT_LOG: logs/fda_voice_events.pipecat.jsonl
+      FDA_PROMPT_PROFILE: ${FDA_PROMPT_PROFILE:-generic}
+      FDA_SILENT_FRONTEND: "false"
       FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
       FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
       # The Hermes runtime's address (OpenShell: the gateway's routed host name; port 8080 is the
-      # OpenShell gateway's). The plain overlay sets ws://fdh-hermes:8790/v1/backend.
-      FDH_BACKEND_URL: ws://default--fdh-hermes.openshell.localhost:8080/v1/backend
-      # The voice side's other catalog and log variables, at the values FDH ran with before.
+      # OpenShell gateway's). The plain overlay sets ws://fda-hermes:8790/v1/backend.
+      FDA_BACKEND_URL: ws://default--fda-hermes.openshell.localhost:8080/v1/backend
+      # The gateway file the voice service loads when it runs the backend itself (FDA_BACKEND=llm with
+      # docker/docker-compose.fda-llm.yaml); the eval overlay sets gateway.eval.yaml. Unused with Hermes.
+      FDA_GATEWAY_CONFIG: gateway.yaml
+      # The voice side's other catalog and log variables, at the values FDA ran with before.
       FBA_ASR_SERVER: ""
       FBA_TTS_SERVER: ""
       FBA_VOICE_EVENT_LOG: ""
       FBA_FILLER_LOG: ""
       FBA_BACKEND_HISTORY: "false"
-      # τ² sends no pings and pauses for seconds: the server must not ping (Realtime sessions check it).
+      # A benchmark client sends no pings and pauses for seconds: the server must not ping (Realtime sessions check it).
       UVICORN_WS_PING_INTERVAL: "0"
       UVICORN_WS_PING_TIMEOUT: "20"
     depends_on:
-      fdh-hermes:
+      fda-hermes:
         condition: service_healthy
 
-  # Builds the Hermes image (docker/Dockerfile.fdh), then exits. HERMES_AGENT_DIR: a clean checkout
-  # of https://github.com/nousresearch/hermes-agent at the commit in docker/fdh/requirements.txt.
-  fdh-hermes-image:
-    image: nemotron-voice-agent-fdh:local
+  # Builds the Hermes image (docker/Dockerfile.fda), then exits. HERMES_AGENT_DIR: a clean checkout
+  # of https://github.com/nousresearch/hermes-agent at the commit in docker/fda/requirements.txt.
+  fda-hermes-image:
+    image: nemotron-voice-agent-fda:local
     build:
       context: .
-      dockerfile: docker/Dockerfile.fdh
+      dockerfile: docker/Dockerfile.fda
       additional_contexts:
         hermes: ${HERMES_AGENT_DIR:-../hermes-agent}
     profiles:
-      - frontend-delegation-hermes-agent/single-gpu
+      - frontend-delegation-agent/single-gpu
     entrypoint: ["true"]
     restart: "no"
 
-  # ---- FDH Hermes runtime: OpenShell (the default). Every OpenShell service is in this block, and its
-  # files are in docker/fdh/openshell/ (one pinned release: docker/fdh/openshell/VERSION). The FDH gateway
-  # and its Hermes workers run in the OpenShell sandbox "fdh-hermes" (FDH image, UID 1500, egress only to
+  # ---- FDA Hermes runtime: OpenShell (the default). Every OpenShell service is in this block, and its
+  # files are in docker/fda/openshell/ (one pinned release: docker/fda/openshell/VERSION). The FDA gateway
+  # and its Hermes workers run in the OpenShell sandbox "fda-hermes" (FDA image, UID 1500, egress only to
   # the backend LLM host, a placeholder instead of the API key). The plain runtime (the baseline for A/B
-  # checks and debugging) is the overlay docker/docker-compose.fdh-hermes-plain.yaml.
+  # checks and debugging) is the overlay docker/docker-compose.fda-hermes-plain.yaml.
   # Host needs: Linux 6.2+ with Landlock, Docker Engine 28+, Compose 2.24.4+, host port 127.0.0.1:8080
   # free, and no other OpenShell gateway on the host (/var/lib/openshell is host-wide).
 
@@ -349,7 +352,7 @@ services:
   hermes-openshell-init:
     image: ghcr.io/nvidia/openshell/gateway:0.1.5-pre.4@sha256:c7cf028241fbeeb9ee273efb2724776eb86107d00d06ed5ca437e6378078e389
     profiles:
-      - frontend-delegation-hermes-agent/single-gpu
+      - frontend-delegation-agent/single-gpu
     user: "0"
     command: ["generate-certs", "--output-dir", "/var/lib/openshell/tls"]
     environment:
@@ -364,12 +367,12 @@ services:
     restart: "no"
 
   # The OpenShell gateway: creates the sandbox through the host's Docker socket and routes
-  # Host "default--fdh-hermes.openshell.localhost" to the sandbox's port 8790. The alias lets the voice
-  # service reach it with FDH_BACKEND_URL, unchanged code. It runs no Hermes logic.
+  # Host "default--fda-hermes.openshell.localhost" to the sandbox's port 8790. The alias lets the voice
+  # service reach it with FDA_BACKEND_URL, unchanged code. It runs no Hermes logic.
   hermes-openshell-gateway:
     image: ghcr.io/nvidia/openshell/gateway:0.1.5-pre.4@sha256:c7cf028241fbeeb9ee273efb2724776eb86107d00d06ed5ca437e6378078e389
     profiles:
-      - frontend-delegation-hermes-agent/single-gpu
+      - frontend-delegation-agent/single-gpu
     # Clear the image's CMD (--bind-address ...), so gateway.toml owns every setting.
     command: []
     user: "0"
@@ -383,7 +386,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path on the host and in the container: Docker mounts the supervisor binary from it.
       - *openshell-data
-      - ./docker/fdh/openshell/gateway.toml:/etc/openshell/gateway.toml:ro
+      - ./docker/fda/openshell/gateway.toml:/etc/openshell/gateway.toml:ro
     environment:
       OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
       OPENSHELL_DB_URL: "sqlite:/var/lib/openshell/gateway.db?mode=rwc"
@@ -392,44 +395,44 @@ services:
     networks:
       default:
         aliases:
-          - default--fdh-hermes.openshell.localhost
+          - default--fda-hermes.openshell.localhost
     restart: unless-stopped
 
-  # The Hermes runtime contract service (healthy = the FDH gateway answers /health). Here: the controller
-  # (docker/fdh/openshell/controller.sh, OpenShell CLI) that creates the sandbox, reports its health, and
+  # The Hermes runtime contract service (healthy = the FDA gateway answers /health). Here: the controller
+  # (docker/fda/openshell/controller.sh, OpenShell CLI) that creates the sandbox, reports its health, and
   # on stop saves the sandbox's logs to logs/openshell/<time>/ and deletes it. Gateway settings come only
-  # from docker/fdh/gateway.env and the eval overlay; .env supplies only NVIDIA_API_KEY, which goes to the
-  # OpenShell provider, never into the sandbox, and FDH_PROMPT_PROFILE (the same value as the voice service).
-  fdh-hermes:
-    image: nemotron-voice-agent-fdh-openshell-cli:local
+  # from docker/fda/gateway.env and the eval overlay; .env supplies only NVIDIA_API_KEY, which goes to the
+  # OpenShell provider, never into the sandbox, and FDA_PROMPT_PROFILE (the same value as the voice service).
+  fda-hermes:
+    image: nemotron-voice-agent-fda-openshell-cli:local
     build:
       context: .
-      dockerfile: docker/fdh/openshell/Dockerfile.cli
+      dockerfile: docker/fda/openshell/Dockerfile.cli
       args:
         OPENSHELL_VERSION: v0.1.5-pre.4
         OPENSHELL_COMMIT: a4c848adbddd0b4732fd70ddcf8a563a5b1e9317
     profiles:
-      - frontend-delegation-hermes-agent/single-gpu
+      - frontend-delegation-agent/single-gpu
     depends_on:
       hermes-openshell-gateway:
         condition: service_started
-      fdh-hermes-image:
+      fda-hermes-image:
         condition: service_completed_successfully
     init: true
     env_file:
-      - docker/fdh/gateway.env
-      - docker/fdh/openshell/controller.env
+      - docker/fda/gateway.env
+      - docker/fda/openshell/controller.env
     environment:
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
-      FDH_PROMPT_PROFILE: ${FDH_PROMPT_PROFILE:-generic}
+      FDA_PROMPT_PROFILE: ${FDA_PROMPT_PROFILE:-generic}
     volumes:
-      - ./docker/fdh/openshell:/cfg:ro
-      - ./docker/fdh/gateway.env:/cfg-env/gateway.env:ro
+      - ./docker/fda/openshell:/cfg:ro
+      - ./docker/fda/gateway.env:/cfg-env/gateway.env:ro
       - ./logs/openshell:/out
     # /cfg is read-only; do not rely on the exec bit.
     command: ["bash", "/cfg/controller.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-fs", "-m", "5", "-H", "Host: default--fdh-hermes.openshell.localhost",
+      test: ["CMD", "curl", "-fs", "-m", "5", "-H", "Host: default--fda-hermes.openshell.localhost",
              "http://hermes-openshell-gateway:8080/health"]
       interval: 10s
       timeout: 5s

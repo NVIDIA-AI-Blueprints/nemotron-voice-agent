@@ -4,7 +4,7 @@
 """Pipecat VAD, user-turn, transport-audio and TTS settings of the adapter.
 
 Ported from FDH ``adapters/pipecat/settings.py`` (``a0ef50c``). Each profile names its settings
-file in ``core/config/profiles.py`` (``eval`` -> ``settings/eval.yaml``, the Tau evaluation
+file in ``core/config/profiles.py`` (``eval`` -> ``settings/eval.yaml``, the evaluation
 settings; ``default`` -> ``settings/default.yaml``, the browser settings), and the runtime passes it
 here explicitly. No environment variable selects it, so nothing outside the profile can change the
 evaluation timing. With no argument the loader returns ``settings/eval.yaml``.
@@ -28,7 +28,7 @@ class VadSettings:
 
     ``audio_idle_timeout`` is wall-clock: when no input audio arrives for that long while the
     user is speaking, Pipecat forces speech-stopped. ``0`` disables it, which a client that
-    pauses its input between ticks (Tau) needs, so the end of a turn is measured in audio only.
+    pauses its input between turns needs, so the end of a turn is measured in audio only.
     """
 
     confidence: float | None = None

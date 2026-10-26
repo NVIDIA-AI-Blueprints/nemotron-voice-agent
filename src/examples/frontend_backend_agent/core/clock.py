@@ -4,7 +4,7 @@
 """The two clocks a session runs on.
 
 Turn taking runs on the **audio clock**: input samples received since the
-session started. A client such as tau2 can pause its input stream for seconds
+session started. A benchmark client can pause its input stream for seconds
 of wall-clock time while its user simulator thinks, so a wall-clock endpointer
 would close turns at the wrong moments. Wall time is only *recorded* (latency
 logs) and used for the two non-turn timeouts.

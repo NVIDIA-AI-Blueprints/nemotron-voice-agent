@@ -24,7 +24,7 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | Configure and use the OpenAI Realtime-compatible WebSocket endpoint |
 | [Deploy the Frontend/Backend Agent](how-to/deploy-frontend-backend-agent.md) | Deploy the Frontend/Backend Agent, choose its `default` or `eval` profile, add the optional local frontend LLM, and verify it |
-| [Deploy the Frontend Delegation Hermes Agent](how-to/deploy-frontend-delegation-hermes-agent.md) | Get Hermes, choose the `default` or `eval` profile, deploy the `frontend-delegation-hermes-agent/single-gpu` recipe with its Hermes backend in an NVIDIA OpenShell sandbox or a plain container, and verify and evaluate it |
+| [Deploy the Frontend Delegation Agent](how-to/deploy-frontend-delegation-agent.md) | Choose the backend, get Hermes if needed, choose the `default` or `eval` profile, deploy the `frontend-delegation-agent/single-gpu` recipe with its Hermes backend in an NVIDIA OpenShell sandbox or a plain container, or with the LLM backend in the voice container, and verify and evaluate it |
 
 ## Welcome Message
 

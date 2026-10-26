@@ -11,7 +11,7 @@ The backend sequence is::
       -> assistant final text [Final] OR another batch [NeedsTools]
 
 Provider-generated tool-call ids are preserved; rewriting them would silently
-break correlation for any caller that tracks its own calls (tau2 does).
+break correlation for any caller that tracks its own calls (a benchmark client does).
 """
 
 from __future__ import annotations

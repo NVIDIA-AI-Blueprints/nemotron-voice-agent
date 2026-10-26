@@ -3,7 +3,7 @@
 #
 # The agent's base configuration (LLMs, prompts, backend tools, accounting). voice_agent.yaml
 # loads it as agent.config and deep-merges its agent.overrides on top; every profile sets the
-# prompt catalog there (prompts/tau.yaml or prompts/generic.yaml).
+# prompt catalog there (prompts/customer_service.yaml or prompts/generic.yaml).
 # ${VAR} and ${VAR:-default} are resolved from the environment, so no credential
 # is ever written into this file.
 #
@@ -68,7 +68,7 @@ backend:
         enable_thinking: true
       reasoning_budget: 1024
   tools:
-    execution: internal         # internal | external (external = caller executes; tau2 mode)
+    execution: internal         # internal | external (external = caller executes; benchmark mode)
     max_tool_iterations: 8
     max_result_chars: 0         # 0 = no truncation
     parallel_execution: false   # sequential by default; injected tools may mutate shared state

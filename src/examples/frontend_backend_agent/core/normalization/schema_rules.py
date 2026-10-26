@@ -26,8 +26,7 @@ Nothing here knows a tool or a domain by name. From those schemas:
 * **phone arguments**: string arguments of read tools whose name contains ``phone``
   (reported only; no code acts on them).
 
-Pure: no I/O. See ``tau3-voice-domain-specific-changes-genericization.md`` sections 4.5,
-4.7, 4.9 and 5.6.
+Pure: no I/O.
 """
 
 from __future__ import annotations

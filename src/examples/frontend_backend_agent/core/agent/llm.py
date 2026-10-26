@@ -3,8 +3,8 @@
 
 """Chat-client protocol and the OpenAI-compatible implementation.
 
-``ChatClient`` is the seam the future tau2-bench adapter replaces with a
-``tau2.utils.llm_utils.generate()``-backed client, so nothing else in the
+``ChatClient`` is the seam a future benchmark adapter replaces with a
+benchmark-provided client, so nothing else in the
 package needs to know which provider is in play.
 """
 

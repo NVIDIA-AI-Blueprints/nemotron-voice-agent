@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The one OpenShell release the FDA OpenShell runtime uses (shared-stack-plan.md, step 7 item 1).
+# v0.1.5-pre.4 is the first tag with the supervisor networking change #4016 (b2069a267).
+# Every OpenShell part is pinned to it, in 5 places: the gateway image twice in docker-compose.yml
+# (hermes-openshell-init, hermes-openshell-gateway), the sandbox and supervisor images in gateway.toml,
+# and the CLI build args of fda-hermes (Dockerfile.cli builds the CLI from OPENSHELL_COMMIT).
+# tests/unit/frontend_delegation_agent/test_fda_openshell_pins.py fails if any place differs.
+# Image digests: the multi-arch index digest on ghcr.io for tag OPENSHELL_IMAGE_TAG.
+OPENSHELL_VERSION=v0.1.5-pre.4
+OPENSHELL_COMMIT=a4c848adbddd0b4732fd70ddcf8a563a5b1e9317
+OPENSHELL_IMAGE_TAG=0.1.5-pre.4
+OPENSHELL_GATEWAY_DIGEST=sha256:c7cf028241fbeeb9ee273efb2724776eb86107d00d06ed5ca437e6378078e389
+OPENSHELL_SUPERVISOR_DIGEST=sha256:6bf16794603d7338bbad8a3caecaeec99d0e7b460d69bac260b8f55c21220b20
+OPENSHELL_SANDBOX_DIGEST=sha256:52d345c567a881fc1fc0d17b960a7be68ce92ba510f721831a917f77870c4435

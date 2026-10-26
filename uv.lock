@@ -1760,7 +1760,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-fdh = [
+fda = [
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "loguru" },
@@ -1789,7 +1789,7 @@ benchmark = [
     { name = "websockets" },
 ]
 dev = [
-    { name = "nemotron-voice-agent", extra = ["fdh"] },
+    { name = "nemotron-voice-agent", extra = ["fda"] },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -1800,33 +1800,33 @@ eval = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", marker = "extra == 'fdh'", specifier = ">=0.141.1" },
+    { name = "fastapi", marker = "extra == 'fda'", specifier = ">=0.141.1" },
     { name = "imageio-ffmpeg", specifier = ">=0.5.1" },
-    { name = "jinja2", marker = "extra == 'fdh'", specifier = ">=3.1" },
+    { name = "jinja2", marker = "extra == 'fda'", specifier = ">=3.1" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "langchain-nvidia-ai-endpoints", specifier = ">=1.2.1" },
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "loguru", marker = "extra == 'fdh'", specifier = ">=0.7.3" },
+    { name = "loguru", marker = "extra == 'fda'", specifier = ">=0.7.3" },
     { name = "numpy", specifier = ">=2.0.0" },
-    { name = "numpy", marker = "extra == 'fdh'", specifier = ">=2.0.0" },
-    { name = "nvidia-riva-client", marker = "extra == 'fdh'", specifier = ">=2.27.0,<3" },
-    { name = "openai", marker = "extra == 'fdh'", specifier = ">=1.109.1" },
+    { name = "numpy", marker = "extra == 'fda'", specifier = ">=2.0.0" },
+    { name = "nvidia-riva-client", marker = "extra == 'fda'", specifier = ">=2.27.0,<3" },
+    { name = "openai", marker = "extra == 'fda'", specifier = ">=1.109.1" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.40.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.40.0" },
     { name = "pipecat-ai", extras = ["nvidia", "silero", "runner", "webrtc", "websocket", "openai", "mcp"], specifier = "==1.11.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "python-dotenv", marker = "extra == 'fdh'", specifier = ">=1.2.2" },
+    { name = "python-dotenv", marker = "extra == 'fda'", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "pyyaml", marker = "extra == 'fdh'", specifier = ">=6.0.3" },
+    { name = "pyyaml", marker = "extra == 'fda'", specifier = ">=6.0.3" },
     { name = "referencing", specifier = ">=0.37.0" },
     { name = "regex", specifier = ">=2026.7.19" },
-    { name = "rich", marker = "extra == 'fdh'", specifier = ">=13.9.4" },
+    { name = "rich", marker = "extra == 'fda'", specifier = ">=13.9.4" },
     { name = "soxr", specifier = ">=1.0.0" },
-    { name = "soxr", marker = "extra == 'fdh'", specifier = ">=1.0.0" },
-    { name = "uvicorn", marker = "extra == 'fdh'", specifier = ">=0.52.0" },
-    { name = "websockets", marker = "extra == 'fdh'", specifier = ">=14.0" },
+    { name = "soxr", marker = "extra == 'fda'", specifier = ">=1.0.0" },
+    { name = "uvicorn", marker = "extra == 'fda'", specifier = ">=0.52.0" },
+    { name = "websockets", marker = "extra == 'fda'", specifier = ">=14.0" },
 ]
-provides-extras = ["fdh"]
+provides-extras = ["fda"]
 
 [package.metadata.requires-dev]
 benchmark = [
@@ -1842,7 +1842,7 @@ benchmark = [
     { name = "websockets", specifier = ">=14.0" },
 ]
 dev = [
-    { name = "nemotron-voice-agent", extras = ["fdh"] },
+    { name = "nemotron-voice-agent", extras = ["fda"] },
     { name = "pre-commit", specifier = ">=4.0.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.15.6" },

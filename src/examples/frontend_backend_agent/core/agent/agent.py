@@ -417,7 +417,7 @@ def assemble_agent(
 ) -> FrontendBackendAgent:
     """Assemble an agent from an already-loaded config and injected clients.
 
-    This is the seam tests and the future tau2-bench adapter use: swap the chat
+    This is the seam tests and a future benchmark adapter use: swap the chat
     clients, keep every rule in the scaffold identical. ``prompt_context`` holds
     the Jinja variables of the prompt templates (the voice agent passes its
     configuration); the frontend template also always gets ``in_progress``.

@@ -38,7 +38,7 @@ def to_outgoing(calls: Sequence[ToolCall]) -> tuple[OutgoingCall, ...]:
 
 
 def to_results(outputs: Mapping[str, str]) -> tuple[ToolResult, ...]:
-    """``function_call_output`` items -> ``ToolResult``; outputs are passed verbatim (tau2 errors included)."""
+    """``function_call_output`` items -> ``ToolResult``; outputs are passed verbatim (benchmark errors included)."""
     return tuple(ToolResult(tool_call_id=call_id, content=output) for call_id, output in outputs.items())
 
 

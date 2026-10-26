@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Eval mode for the Frontend Delegation Agent: the `eval` profile. Apply on top of the
+# frontend-delegation-agent/single-gpu recipe for evaluation runs:
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d --build
+#
+# It names only the voice service and `fda-hermes`, and on `fda-hermes` it sets only `environment`
+# keys (each one also listed in docker/fda/gateway.env), so it works the same way with any Hermes
+# runtime and in any file order. With the LLM backend, put docker/docker-compose.fda-llm.yaml after it.
+# Relative paths resolve from the repository root.
+
+services:
+  frontend-delegation-agent-single-gpu:
+    environment:
+      # OpenAI Realtime sessions only: browser UI sessions are refused, so they cannot take
+      # resources from an evaluation run. Realtime sessions use the `eval` settings in every profile.
+      FDA_PROFILE: eval
+      # Plain HTTP and ws://, so the evaluation client connects without TLS.
+      PIPELINE_TLS: "false"
+      # Evaluation runs default to the customer_service prompt profile; FDA_PROMPT_PROFILE overrides it.
+      FDA_PROMPT_PROFILE: ${FDA_PROMPT_PROFILE:-customer_service}
+      # The evaluation backend settings when the voice service runs the backend itself (FDA_BACKEND=llm,
+      # docker/docker-compose.fda-llm.yaml): the same file as fda-hermes below. Unused with Hermes.
+      FDA_GATEWAY_CONFIG: gateway.eval.yaml
+
+  fda-hermes:
+    environment:
+      # The evaluation backend settings (it extends gateway.yaml; backend traces on).
+      FDA_GATEWAY_CONFIG: gateway.eval.yaml
+      FDA_PROMPT_PROFILE: ${FDA_PROMPT_PROFILE:-customer_service}   # the same profile as the voice service

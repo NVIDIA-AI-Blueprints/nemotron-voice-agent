@@ -32,7 +32,7 @@ ROOT = HERE.parents[2]
 PINS_FILE = HERE / "pins" / "eval_pins.json"
 MODEL = "nvidia/nemotron-realtime-frontend-backend"
 EXAMPLE = "frontend-backend-agent"
-TAU_DOMAINS = ("airline", "retail", "telecom", "banking_knowledge", "mock")
+BENCHMARK_DOMAINS = ("airline", "retail", "telecom", "banking_knowledge", "mock")
 PLATFORMS = ("cloud", "server", "singlegpu")
 #: The Realtime master key used only inside these captures.
 TEST_REALTIME_KEY = "fba-pin-test-key"
@@ -221,8 +221,8 @@ async def capture_route(platform: str, environ: Mapping[str, str]) -> dict[str, 
 
 
 async def capture_session(environ: Mapping[str, str]) -> dict[str, Any]:
-    """Tau ``session.update`` echoes, the tools handed to the agent, and today's commit/turn answers."""
-    from _fba_core_fakes import tau2_session_update  # noqa: PLC0415
+    """Benchmark ``session.update`` echoes, the tools handed to the agent, and today's commit/turn answers."""
+    from _fba_core_fakes import benchmark_session_update  # noqa: PLC0415
     from _fba_pipecat_fakes import PipecatHarness  # noqa: PLC0415
 
     from examples.frontend_backend_agent.core.config.profiles import REALTIME_PROFILE, profile_path  # noqa: PLC0415
@@ -230,8 +230,8 @@ async def capture_session(environ: Mapping[str, str]) -> dict[str, Any]:
 
     with mock.patch.dict(os.environ, dict(environ)):
         config = load_voice_config(profile_path(REALTIME_PROFILE))
-        out: dict[str, Any] = {"tau": {}}
-        for domain in TAU_DOMAINS:
+        out: dict[str, Any] = {"benchmark": {}}
+        for domain in BENCHMARK_DOMAINS:
             harness = PipecatHarness(config=config)
             configured: list[Any] = []
             original = harness.session.agent.configure
@@ -242,8 +242,8 @@ async def capture_session(environ: Mapping[str, str]) -> dict[str, Any]:
 
             harness.session.agent.configure = record  # type: ignore[method-assign]
             try:
-                await harness.start(tau2_session_update(domain))
-                out["tau"][domain] = {
+                await harness.start(benchmark_session_update(domain))
+                out["benchmark"][domain] = {
                     "created": jsonable(harness.of_type("session.created")[0]),
                     "updated": jsonable(harness.of_type("session.updated")[0]),
                     "agent_tools": configured,
@@ -276,7 +276,7 @@ async def capture_session(environ: Mapping[str, str]) -> dict[str, Any]:
         }
         out["probes"] = {}
         try:
-            await harness.start(tau2_session_update("mock"))
+            await harness.start(benchmark_session_update("mock"))
             for name, event in probes.items():
                 before = len(harness.events)
                 await harness.send(event)

@@ -5,7 +5,7 @@
 
 """R4: the write gate holds consequential calls until the caller confirms the exact call.
 
-The tools are tau2's airline tools (fixtures), but nothing in the gate is airline-specific:
+The tools are the benchmark's airline tools (fixtures), but nothing in the gate is airline-specific:
 which tools are held comes from the generic read/write classifier and configuration.
 """
 
@@ -21,11 +21,11 @@ from typing import Any
 
 from _fba_core_fakes import (
     FakeChatClient,
+    benchmark_session_update,
     delegate_response,
     normalize_trace,
     pcmu_silence,
     pcmu_speech,
-    tau2_session_update,
     text_response,
     tool_response,
     voice_config,
@@ -53,7 +53,7 @@ from examples.frontend_backend_agent.core.normalization.arguments import Argumen
 from examples.frontend_backend_agent.core.tools.realtime_tools import realtime_tools_to_specs
 from examples.frontend_backend_agent.core.tools.tools import ToolSpec
 
-AIRLINE_TOOLS = tau2_session_update("airline")["session"]["tools"]
+AIRLINE_TOOLS = benchmark_session_update("airline")["session"]["tools"]
 SPECS = {spec.name: spec for spec in realtime_tools_to_specs(AIRLINE_TOOLS)}
 WRITES = {
     "book_reservation",
@@ -484,7 +484,7 @@ class PlaybackBindingTests(_LogCase, PipecatTestCase):
         harness, frontend, backend = self.make()
         frontend.queue(delegate_response("Add bags to reservation ZFA04Y."))
         backend.queue(bags_call("C1"), text_response("Here is the change."))
-        await harness.start(tau2_session_update("airline"))
+        await harness.start(benchmark_session_update("airline"))
         await harness.speak()
         await harness.wait_for("response.done")
         self.assertFalse(harness.of_type("response.function_call_arguments.done"))
@@ -526,7 +526,7 @@ class PlaybackBindingTests(_LogCase, PipecatTestCase):
         harness, frontend, backend = self.make()
         frontend.queue(delegate_response("Look up the user."))
         backend.queue(tool_response(("get_users", {}), ids=["call_a"]), text_response("Found them."))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.send(

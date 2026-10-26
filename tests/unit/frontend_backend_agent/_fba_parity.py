@@ -129,7 +129,7 @@ class _Renumber:
 def decisions(capture: dict[str, Any], *, rate: int = 8000, width: int = 1) -> Decisions:
     """Split a normalized capture (``events``, ``records``) into its comparable parts.
 
-    ``rate`` and ``width`` describe the output audio format (Tau: 8 kHz mu-law, one byte).
+    ``rate`` and ``width`` describe the output audio format (benchmark client: 8 kHz mu-law, one byte).
     """
     out = Decisions()
     renumber = _Renumber()

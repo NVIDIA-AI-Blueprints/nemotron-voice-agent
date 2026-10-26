@@ -33,11 +33,11 @@ from _fba_core_fakes import (
     REPO_ROOT,
     FakeChatClient,
     FakeClock,
+    benchmark_session_update,
     delegate_response,
     normalize_trace,
     pcmu_silence,
     pcmu_speech,
-    tau2_session_update,
     text_response,
     tool_response,
     voice_config,
@@ -52,7 +52,7 @@ from examples.frontend_backend_agent.core.engine.scripted import ScriptedAgentPo
 from examples.frontend_backend_agent.core.engine.write_gate import WriteGateSettings
 
 GOLDEN_DIR = Path(__file__).resolve().parent / "fixtures" / "v1_golden"
-TAU_DOMAINS = ("airline", "banking_knowledge", "mock", "retail", "telecom")
+BENCHMARK_DOMAINS = ("airline", "banking_knowledge", "mock", "retail", "telecom")
 
 # -- pinned environment ---------------------------------------------------------------
 
@@ -232,7 +232,7 @@ def _clients() -> tuple[FakeChatClient, FakeChatClient, AgentClients]:
 
 async def voice_turn(run: _Run) -> None:
     harness = run.harness_for(agent_factory=lambda _: ScriptedAgentPort([{"say": "Hello there. How can I help?"}]))
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.done")
     await harness.idle(500)
@@ -243,7 +243,7 @@ async def tool_round(run: _Run) -> None:
     frontend.queue(delegate_response("Look up user 7."))
     backend.queue(tool_response(("get_users", {}), ids=["call_provider_42"]), text_response("User seven is Ann."))
     harness = run.harness_for(clients=clients)
-    await harness.start(tau2_session_update("mock"))
+    await harness.start(benchmark_session_update("mock"))
     await harness.speak()
     await harness.wait_for("response.done")
     await harness.send(_output("call_provider_42", "Error: user not found"))
@@ -260,7 +260,7 @@ async def parallel_tools(run: _Run) -> None:
         text_response("Both done."),
     )
     harness = run.harness_for(clients=clients)
-    await harness.start(tau2_session_update("mock"))
+    await harness.start(benchmark_session_update("mock"))
     await harness.speak()
     await harness.wait_for("response.done")
     await harness.send(_output("call_b", "B"))
@@ -277,7 +277,7 @@ async def filler_then_answer(run: _Run) -> None:
     backend.queue(text_response("It is all set."))
     backend.gates[0] = gate
     harness = run.harness_for(config=voice_config(filler_mode="speak", filler_speak_after_ms=0), clients=clients)
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.output_audio.delta")
     gate.set()
@@ -292,7 +292,7 @@ def _verdict_config(**sections: Any) -> VoiceConfig:
 async def _running_turn(run: _Run, frontend: FakeChatClient, backend: FakeChatClient, clients: AgentClients) -> Any:
     gate = backend.gates.setdefault(0, asyncio.Event())
     harness = run.harness_for(config=_verdict_config(), clients=clients)
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await _until(lambda: len(backend.calls) == 1)
     return harness, gate
@@ -334,7 +334,7 @@ async def barge_in_after_answer(run: _Run) -> None:
     harness = run.harness_for(
         agent_factory=lambda _: ScriptedAgentPort([{"say": LONG_ANSWER}, {"say": "Sure, go ahead."}])
     )
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.output_audio.delta")
     await harness.feed(pcmu_silence(300))
@@ -348,7 +348,7 @@ async def barge_in_during_answer(run: _Run) -> None:
         agent_factory=lambda _: ScriptedAgentPort([{"say": LONG_ANSWER}, {"say": "Sure, go ahead."}]),
         synthesizer=_holding(),
     )
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.output_audio.delta")
     await harness.speak()
@@ -364,7 +364,7 @@ async def barge_in_filler(run: _Run) -> None:
     backend.queue(text_response("It is all set."), text_response("The other thing is fine."))
     backend.gates[0] = gate
     harness = run.harness_for(config=voice_config(filler_mode="speak", filler_speak_after_ms=0), clients=clients)
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.output_audio.delta")
     await harness.feed(pcmu_silence(200))
@@ -376,7 +376,7 @@ async def barge_in_filler(run: _Run) -> None:
 
 async def response_cancel(run: _Run) -> None:
     harness = run.harness_for(agent_factory=lambda _: ScriptedAgentPort([{"say": LONG_ANSWER}]), synthesizer=_holding())
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.output_audio.delta")
     await harness.send({"type": "response.cancel"})
@@ -386,7 +386,7 @@ async def response_cancel(run: _Run) -> None:
 
 async def truncate_known_and_unknown(run: _Run) -> None:
     harness = run.harness_for(agent_factory=lambda _: ScriptedAgentPort([{"say": "A short answer."}]))
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.done")
     item_id = harness.of_type("response.output_audio.delta")[0]["item_id"]
@@ -406,7 +406,7 @@ async def agent_failure(run: _Run) -> None:
     frontend.failures[0] = RuntimeError("frontend unavailable")
     frontend.queue(delegate_response("unused"))
     harness = run.harness_for(clients=clients)
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("error")
     await harness.idle(500)
@@ -417,7 +417,7 @@ async def tts_failure(run: _Run) -> None:
         agent_factory=lambda _: ScriptedAgentPort([{"say": "This answer cannot be spoken."}]),
         synthesizer=ToneSynthesizer(sample_rate=16000, ms_per_char=10.0, fail="TTS endpoint unavailable"),
     )
-    await harness.start(tau2_session_update())
+    await harness.start(benchmark_session_update())
     await harness.speak()
     await harness.wait_for("response.done")
     await harness.idle(500)
@@ -441,7 +441,7 @@ async def _write_gate_presented(run: _Run) -> tuple[Any, FakeChatClient, FakeCha
     backend.queue(_bags_call("C1"), text_response("Here is the change."))
     config = replace(voice_config(), write_gate=WriteGateSettings(enabled=True, exempt=("transfer_to_human_agents",)))
     harness = run.harness_for(config=config, clients=clients)
-    await harness.start(tau2_session_update("airline"))
+    await harness.start(benchmark_session_update("airline"))
     await harness.speak()
     await harness.wait_for("response.done")
     return harness, frontend, backend
@@ -508,12 +508,12 @@ def merged_profile_configs(profiles: Mapping[str, Path]) -> dict[str, Any]:
 
 
 async def configure_captures(make: MakeHarness, config: VoiceConfig) -> dict[str, Any]:
-    """Per Tau fixture: the tool specs and resolved instructions given to the agent, and the rendered prompts."""
+    """Per benchmark fixture: the tool specs and resolved instructions given to the agent, and the rendered prompts."""
     out: dict[str, Any] = {}
-    for domain in TAU_DOMAINS:
+    for domain in BENCHMARK_DOMAINS:
         _, _, clients = _clients()
         harness = make(config=config, clients=clients, clock=FakeClock())
-        await harness.start(tau2_session_update(domain))
+        await harness.start(benchmark_session_update(domain))
         runner = harness.runners[0]
         out[domain] = {
             "tool_specs": to_plain(runner.tool_specs),

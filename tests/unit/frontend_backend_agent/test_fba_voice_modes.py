@@ -12,11 +12,11 @@ import asyncio
 from _fba_core_fakes import (
     BACKEND_ONLY_PROFILE,
     FakeChatClient,
+    benchmark_session_update,
+    benchmark_update_with,
     delegate_response,
     pcmu_silence,
     pcmu_speech,
-    tau2_session_update,
-    tau2_update_with,
     text_response,
     tool_response,
 )
@@ -34,7 +34,7 @@ class BackendOnlyTests(PipecatTestCase):
             [tool_response(("get_users", {}), ids=["call_1"]), text_response("You are Ann."), text_response("Bye now.")]
         )
         harness = PipecatHarness(config=BACKEND_ONLY, clients=AgentClients(backend=backend, frontend=None))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.send(
@@ -62,7 +62,7 @@ class BackendOnlyTests(PipecatTestCase):
         answer = "First part is here. Second part is much longer and nobody will hear it."
         backend = FakeChatClient([text_response(answer)])
         harness = PipecatHarness(config=BACKEND_ONLY, clients=AgentClients(backend=backend))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.feed(pcmu_silence(220))
@@ -88,7 +88,7 @@ class IsolationTests(PipecatTestCase):
             frontend = FakeChatClient([delegate_response(f"Request for {answer}")])
             backend = FakeChatClient([text_response(answer)])
             harness = PipecatHarness(clients=AgentClients(backend=backend, frontend=frontend))
-            await harness.start(tau2_update_with(tools, policy))
+            await harness.start(benchmark_update_with(tools, policy))
             sessions.append((harness, frontend, backend, tools, policy, answer))
         await asyncio.gather(*(harness.speak() for harness, *_ in sessions))
         for harness, frontend, backend, tools, policy, answer in sessions:

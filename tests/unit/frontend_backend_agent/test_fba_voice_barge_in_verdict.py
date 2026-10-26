@@ -24,10 +24,10 @@ from _fba_core_fakes import (
     BASE_CONFIG,
     CONFIG_DIR,
     FakeChatClient,
+    benchmark_session_update,
     delegate_response,
     pcmu_silence,
     pcmu_speech,
-    tau2_session_update,
     text_response,
     tool_response,
     voice_config,
@@ -105,7 +105,7 @@ class VerdictTestCase(PipecatTestCase):
     ) -> asyncio.Event:
         """Utterance 1 delegates; the backend call hangs until the returned gate is set."""
         gate = backend.gates.setdefault(0, asyncio.Event())
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await until(lambda: len(backend.calls) == 1)
         self.assertIsNotNone(harness.runners[0].in_flight)
@@ -464,7 +464,7 @@ class ReviewClosingTests(VerdictTestCase):
         backend.queue(text_response("Merged answer."))
         await self.start_running_turn(harness, frontend, backend)
         await harness.feed(pcmu_speech(600))
-        update = tau2_session_update()
+        update = benchmark_session_update()
         update["session"]["audio"]["input"]["turn_detection"]["create_response"] = False
         await harness.send(update)
         await harness.feed(pcmu_silence(700))
@@ -508,7 +508,7 @@ class ReviewClosingTests(VerdictTestCase):
         (Backend LLM errors are turned into a final text by the text agent; this is a failure that escapes.)
         """
         gate = asyncio.Event()
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         agent = harness.runners[0]._agent
         original = agent.continue_turn
         calls = []
@@ -566,7 +566,7 @@ class ReviewOpeningTests(VerdictTestCase):
         frontend.queue(delegate_response("Merged request."))
         backend.queue(text_response("Merged answer."))
         frontend.gates[0] = asyncio.Event()  # still in the initial frontend call
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await until(lambda: len(frontend.calls) == 1)
         await harness.speak()

@@ -1,0 +1,110 @@
+{
+  "skill_name": "nemotron-voice-agent-fda-deploy",
+  "cases": [
+    {
+      "id": "nemotron-voice-agent-fda-deploy-ask-profile",
+      "prompt": "Deploy FDA.",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Asks which backend to start (hermes, suggested, or llm) and which profile to deploy, default (for the browser UI) or eval (for benchmark runs), and starts nothing before the user answers.",
+      "assertions": [
+        "Loaded nemotron-voice-agent-fda-deploy/SKILL.md.",
+        "Asked which backend to start, hermes or llm, with hermes as the suggestion.",
+        "Asked which profile to deploy, default or eval.",
+        "Did not run docker compose up before the user chose a backend and a profile.",
+        "Did not open references/pipecat.md or references/benchmarking.md before the choice."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-browser-ui",
+      "prompt": "Start the FDA demo with the Hermes backend so I can talk to it in the browser.",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Goes straight to the default profile: runs the preflight, then `docker compose --profile frontend-delegation-agent/single-gpu up -d --build`, checks https://localhost:7860/health and the fda-hermes gateway health, and gives the https://<host>:7860 URL.",
+      "assertions": [
+        "Did not ask which profile or which backend.",
+        "Used the frontend-delegation-agent/single-gpu Compose profile without the eval overlay.",
+        "Used TLS (https) on port 7860 and told the user to accept the self-signed certificate.",
+        "Did not use the removed fdh-voice service, port 8776, or docker/docker-compose.frontend-delegation-hermes.yaml.",
+        "Did not pass docker/docker-compose.fda-llm.yaml."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-eval",
+      "prompt": "Bring up FDA with the Hermes backend in eval mode for a benchmark run.",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Starts `docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml --profile frontend-delegation-agent/single-gpu up -d --build`, checks FDA_PROFILE=eval, PIPELINE_TLS=false, and the `FDA gateway: config gateway.eval.yaml` log line, and points the client at ws://localhost:7860/v1/realtime with the model nvidia/nemotron-realtime-frontend-delegation and the REALTIME_API_KEY Bearer credential.",
+      "assertions": [
+        "Passed the docker/docker-compose.fda-eval.yaml overlay after docker-compose.yml.",
+        "Verified that the fda-hermes log names gateway.eval.yaml.",
+        "Used port 7860 and the model nvidia/nemotron-realtime-frontend-delegation, not a pine-* model name or port 8775 or 8776.",
+        "Did not print the value of REALTIME_API_KEY or NVIDIA_API_KEY."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-ask-backend",
+      "prompt": "Start the FDA demo so I can talk to it in the browser.",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Asks which backend to start, hermes (suggested; Hermes in the fda-hermes service) or llm (the lightweight backend inside the voice container), does not ask which profile (the browser UI means default), and starts nothing before the user answers.",
+      "assertions": [
+        "Asked which backend to start, hermes or llm, with hermes as the suggestion.",
+        "Did not ask which profile.",
+        "Did not run docker compose up before the user chose a backend."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-llm-eval",
+      "prompt": "Bring up FDA with the LLM backend in eval mode for a benchmark run.",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Starts `docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml -f docker/docker-compose.fda-llm.yaml --profile frontend-delegation-agent/single-gpu up -d --build`, checks that no fda-hermes container runs, that the voice service has FDA_BACKEND=llm, FDA_BACKEND_LINK=in_process and FDA_GATEWAY_CONFIG=gateway.eval.yaml, and points the client at ws://localhost:7860/v1/realtime with the model nvidia/nemotron-realtime-frontend-delegation.",
+      "assertions": [
+        "Did not ask which backend or which profile.",
+        "Passed docker/docker-compose.fda-eval.yaml before docker/docker-compose.fda-llm.yaml.",
+        "Did not pass docker/docker-compose.fda-hermes-plain.yaml.",
+        "Did not check the fda-hermes gateway health or log.",
+        "Did not print the value of REALTIME_API_KEY or NVIDIA_API_KEY."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-benchmark-needs-overlay",
+      "prompt": "FDA is already running for the browser UI. Can I just point a benchmark client at it?",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Explains that Realtime sessions on a default deployment use gateway.yaml, so a benchmark run must redeploy with the eval overlay, which switches fda-hermes to gateway.eval.yaml.",
+      "assertions": [
+        "Said that benchmark runs must use docker/docker-compose.fda-eval.yaml.",
+        "Named gateway.eval.yaml as the gateway configuration that the overlay sets.",
+        "Did not suggest writing FDA_PROFILE or other FDA_* keys to .env."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-stale-hermes-source",
+      "prompt": "I changed the FDA backend prompt but the Hermes backend still behaves the old way.",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Explains that fda-hermes runs the source built into its image, compares the `FDA gateway: ... source <hash>` log line with the checkout's hash, and rebuilds with `up -d --build`.",
+      "assertions": [
+        "Opened references/troubleshooting.md or references/prerequisites.md.",
+        "Compared the source hash in the fda-hermes log with the checkout.",
+        "Rebuilt with --build instead of only restarting the container."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-missing-key",
+      "prompt": "The fda-hermes container exits right after start and the voice service never comes up. What is wrong?",
+      "expected_skill": "nemotron-voice-agent-fda-deploy",
+      "expected_output": "Reads `docker compose --profile frontend-delegation-agent/single-gpu logs fda-hermes`, recognizes `NVIDIA_API_KEY is not set` or a gateway configuration error, checks that NVIDIA_API_KEY is present in .env without printing it, and reruns `up -d`.",
+      "assertions": [
+        "Opened references/troubleshooting.md.",
+        "Inspected the fda-hermes container log.",
+        "Checked the presence of NVIDIA_API_KEY without printing its value."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-fda-deploy-negative-registered-example",
+      "prompt": "Deploy the generic assistant on my workstation GPU.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "The FDA deploy skill does not activate, because the request is for the generic assistant.",
+      "assertions": [
+        "Did not load or apply nemotron-voice-agent-fda-deploy.",
+        "Routed the request to nemotron-voice-agent-deploy."
+      ]
+    }
+  ]
+}

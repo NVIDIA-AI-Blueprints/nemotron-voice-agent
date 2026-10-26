@@ -11,10 +11,10 @@ import asyncio
 
 from _fba_core_fakes import (
     FakeChatClient,
+    benchmark_session_update,
     delegate_response,
     pcmu_silence,
     pcmu_speech,
-    tau2_session_update,
     text_response,
     tool_response,
 )
@@ -42,7 +42,7 @@ class BargeInWhileSpeakingTests(PipecatTestCase):
         harness, frontend, backend = paired()
         frontend.queue(delegate_response("Confirm the booking."))
         backend.queue(text_response(ANSWER))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         progress = harness.session.turns.progress
@@ -68,7 +68,7 @@ class BargeInWhileSpeakingTests(PipecatTestCase):
         harness, frontend, backend = paired({"synthesizer": synth})
         frontend.queue(delegate_response("Confirm the booking."))
         backend.queue(text_response(ANSWER))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.output_audio.delta")
         await harness.feed(pcmu_silence(1000))  # sentences 1-2 fully heard; sentence 3 still synthesizing
@@ -99,7 +99,7 @@ class BargeInWhileSpeakingTests(PipecatTestCase):
         harness, frontend, backend = paired({"synthesizer": synth})
         frontend.queue(delegate_response("Confirm."))
         backend.queue(text_response(ANSWER))
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.output_item.added")
         self.assertEqual(harness.session.turns.progress.sent_ms, 0)
@@ -118,7 +118,7 @@ class WhileThinkingTests(PipecatTestCase):
         frontend.queue(delegate_response("First request."), delegate_response("Merged request."))
         backend.queue(text_response("Merged answer."))
         backend.gates[0] = asyncio.Event()  # the first backend call hangs and is cancelled before it returns
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await asyncio.sleep(0.05)
         self.assertEqual(harness.session.turns.state, "THINKING")
@@ -142,7 +142,7 @@ class WhileThinkingTests(PipecatTestCase):
             text_response("Found them."),
         )
         resumed = backend.gates.setdefault(1, asyncio.Event())
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         self.assertEqual(harness.session.turns.state, "AWAITING_TOOLS")
@@ -175,7 +175,7 @@ class WhileThinkingTests(PipecatTestCase):
             ),
             recognizer=StubRecognizer(),
         )
-        await harness.start(tau2_session_update())
+        await harness.start(benchmark_session_update())
         await harness.speak()
         await harness.wait_for("response.done")
         await harness.feed(pcmu_speech(60) + pcmu_silence(600))  # a click

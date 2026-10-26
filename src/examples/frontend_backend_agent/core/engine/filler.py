@@ -14,7 +14,7 @@ Every delegation produces exactly one :class:`FillerTimingRecord`, from the
 session's first turn on and in both filler modes. Each record is anchored to the
 session start and to the user's turn start and end, on the wall clock (ISO-8601
 UTC, for lining up with other logs) and on the input-audio clock (the clock
-tau2 uses). Durations come from the monotonic clock.
+a benchmark client uses). Durations come from the monotonic clock.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from examples.frontend_backend_agent.core.clock import WallClock, iso_utc
 from examples.frontend_backend_agent.core.engine.event_log import EventLog
 
 # ``?x_nvidia_filler=1`` on the WebSocket URL: send unspoken filler as ``x_nvidia.filler``
-# events. Off unless asked for, so a tau2 session sees the standard event stream only.
+# events. Off unless asked for, so a benchmark session sees the standard event stream only.
 SHOW_FILLER_PARAM = "x_nvidia_filler"
 
 

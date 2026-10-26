@@ -5,7 +5,7 @@
 
 """The registry's ``bot`` serves a real WebSocket with v1's decisions, and admits sessions as v1 did.
 
-A tau2-shaped client script runs through FastAPI's test client against ``pipeline.bot`` (the
+A benchmark-shaped client script runs through FastAPI's test client against ``pipeline.bot`` (the
 Pipecat adapter, with Pipecat stub speech and the scripted agent). The same script ran
 against v1's hosts at ``fbv-v1-baseline``; that stream is ``fixtures/v1_golden/pipecat_host.json``.
 The streams are compared as G2 compares them (plan §10.1): events per delivery class in order,
@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from _fba_core_fakes import FIXTURES, base_config, pcmu_silence, pcmu_speech, tau2_session_update
+from _fba_core_fakes import FIXTURES, base_config, benchmark_session_update, pcmu_silence, pcmu_speech
 from _fba_parity import INTERIM_DELTA, TIMING_KEYS, event_class
 from _fba_pipecat_fakes import EnergyVADAnalyzer, StubSTT, ToneSynthesizer, ToneTTS
 from fastapi import FastAPI, WebSocket
@@ -103,7 +103,7 @@ def _conversation(app: FastAPI) -> list[dict]:
         client.websocket_connect("/v1/realtime?model=pine-e2e", headers={"Authorization": "Bearer x"}) as ws,
     ):
         seen.append(json.loads(ws.receive_text()))
-        ws.send_text(json.dumps(tau2_session_update("mock")))
+        ws.send_text(json.dumps(benchmark_session_update("mock")))
         _until(ws, "session.updated", seen)
         turn = pcmu_speech(600) + pcmu_silence(800)
         _send_audio(ws, turn)
@@ -135,7 +135,7 @@ def _barge_in_conversation(app: FastAPI) -> list[dict]:
         client.websocket_connect("/v1/realtime?model=pine-e2e", headers={"Authorization": "Bearer x"}) as ws,
     ):
         seen.append(json.loads(ws.receive_text()))
-        ws.send_text(json.dumps(tau2_session_update("mock")))
+        ws.send_text(json.dumps(benchmark_session_update("mock")))
         _until(ws, "session.updated", seen)
         turn = pcmu_speech(600) + pcmu_silence(800)
         _send_audio(ws, turn)  # turn 1: the scripted agent calls a tool
@@ -271,7 +271,7 @@ class BotAdmissionTests(unittest.IsolatedAsyncioTestCase):
             serve_ui.assert_awaited_once_with(args)
 
     async def test_an_unknown_profile_refuses_browser_sessions(self) -> None:
-        with mock.patch.dict("os.environ", {"FBA_PROFILE": "tau3_eval"}), self.assertRaises(ProfileError):
+        with mock.patch.dict("os.environ", {"FBA_PROFILE": "old_eval"}), self.assertRaises(ProfileError):
             await pipeline.bot(SimpleNamespace(websocket=None, body={"protocol": "rtvi"}))
 
     async def test_profile_error_is_reported_and_closes_1011(self) -> None:

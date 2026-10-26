@@ -13,7 +13,7 @@ import random
 import unittest
 
 import numpy as np
-from _fba_core_fakes import tau2_session_update
+from _fba_core_fakes import benchmark_session_update
 
 from examples.frontend_backend_agent.adapters.pipecat import client_events as ce
 from examples.frontend_backend_agent.core.audio import g711
@@ -56,8 +56,8 @@ class G711Tests(unittest.TestCase):
 
 
 class ClientEventTests(unittest.TestCase):
-    def test_parses_every_tau2_event(self) -> None:
-        self.assertIsInstance(ce.parse_client_event(tau2_session_update()), ce.SessionUpdate)
+    def test_parses_every_benchmark_event(self) -> None:
+        self.assertIsInstance(ce.parse_client_event(benchmark_session_update()), ce.SessionUpdate)
         append = ce.parse_client_event(
             {"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\xff" * 160).decode()}
         )
@@ -105,9 +105,9 @@ def _view() -> RealtimeSessionView:
 
 
 class SessionViewTests(unittest.TestCase):
-    def test_tau2_payload_is_accepted_verbatim(self) -> None:
+    def test_benchmark_payload_is_accepted_verbatim(self) -> None:
         view = _view()
-        update = tau2_session_update("airline")["session"]
+        update = benchmark_session_update("airline")["session"]
         result = view.apply(update)
         settings = result.settings
         self.assertEqual(settings.input_format, AudioFormat("audio/pcmu", 8000))
