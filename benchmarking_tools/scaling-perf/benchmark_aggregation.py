@@ -28,6 +28,7 @@ SUITE_HEADERS = (
     "Max Latency",
     "LLM TTFT",
     "TTS TTFB",
+    "LLM TTFAT",
     "ASR TTFB",
     "Server E2E",
     "VAD+Smart Turn",
@@ -72,7 +73,7 @@ def _is_hard_deadline(client: dict) -> bool:
 
 def _has_core_server_metric(client: dict) -> bool:
     counts = (client.get("server_metrics") or {}).get("sample_counts") or {}
-    for key in ("asr_ttfb", "llm_ttft", "tts_ttfb"):
+    for key in ("asr_ttfb", "llm_ttft", "tts_ttfb", "llm_ttfat"):
         try:
             if int(counts.get(key, 0) or 0) > 0:
                 return True

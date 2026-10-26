@@ -8,7 +8,8 @@ Building production-grade voice agents requires careful consideration of multipl
 
 The following metrics are key to the success of a voice agent.
 
-- **Latency**: Time from user speech end to bot response start (target: 600-1500ms).
+- **Latency**: Time from user speech end to bot response start (target: 600-1,500 ms).
+- **Time to first answer token (TTFAT)**: Time from a large language model (LLM) request to the first answer token, or to the start of a tool call. TTFAT equals LLM time to first byte (TTFB) plus thinking time, so the gap shows how long a reasoning model thinks before it answers. Refer to [What it measures](../benchmarking_tools/scaling-perf/README.md#what-it-measures) in the scaling benchmark.
 - **Accuracy**: ASR word error rate (WER), factual correctness, LLM generation quality, task completion and so on.
 - **Scalability**: Concurrent streams supported without audio glitches or performance degradation, all models scale independently.
 - **Availability**: System uptime and fault tolerance (target: 99.9%+).

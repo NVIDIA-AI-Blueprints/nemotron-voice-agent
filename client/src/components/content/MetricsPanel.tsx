@@ -13,7 +13,7 @@ interface TokenMetrics {
   total_tokens: number;
 }
 
-interface TTFBMetric {
+interface ProcessorMetricPoint {
   id: string;
   processor: string;
   value: number;
@@ -104,9 +104,9 @@ function groupColor(groupId?: string) {
   return TURN_COLORS[index];
 }
 
-function keepLastPerProcessor(entries: TTFBMetric[], limit: number) {
+function keepLastPerProcessor(entries: ProcessorMetricPoint[], limit: number) {
   const counts = new Map<string, number>();
-  const kept: TTFBMetric[] = [];
+  const kept: ProcessorMetricPoint[] = [];
 
   for (const entry of [...entries].reverse()) {
     const count = counts.get(entry.processor) ?? 0;
@@ -117,6 +117,28 @@ function keepLastPerProcessor(entries: TTFBMetric[], limit: number) {
   }
 
   return kept.reverse();
+}
+
+function groupByProcessor(points: ProcessorMetricPoint[]) {
+  const grouped = new Map<string, ProcessorMetricPoint[]>();
+  for (const point of points) {
+    grouped.set(point.processor, [...(grouped.get(point.processor) ?? []), point]);
+  }
+  return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+// Converts seconds to ms and skips entries without a finite value instead of plotting 0.
+function processorMetricPoints(
+  kind: string,
+  entries: { processor: string; [field: string]: unknown }[] | undefined,
+  field: string,
+  timestamp: string,
+): ProcessorMetricPoint[] {
+  return (entries ?? []).flatMap((entry) => {
+    const value = entry[field];
+    if (typeof value !== "number" || !Number.isFinite(value)) return [];
+    return [{ id: nextMetricPointId(kind), processor: entry.processor, value: value * 1000, timestamp }];
+  });
 }
 
 function flattenNumericFields(value: unknown, prefix = ""): Array<[string, number]> {
@@ -336,19 +358,15 @@ export function MetricsPanel() {
   const [hiddenBoardColumns, setHiddenBoardColumns] = useState<string[]>([]);
   const [showDetailRows, setShowDetailRows] = useState(false);
   const [tokens, setTokens] = useState<TokenMetrics>({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
-  const [ttfbHistory, setTtfbHistory] = useState<TTFBMetric[]>([]);
+  const [ttfbHistory, setTtfbHistory] = useState<ProcessorMetricPoint[]>([]);
+  const [ttfatHistory, setTtfatHistory] = useState<ProcessorMetricPoint[]>([]);
   const [latencyHistory, setLatencyHistory] = useState<LatencyPoint[]>([]);
   const [metricRows, setMetricRows] = useState<MetricBoardRow[]>([]);
   const [metricGroups, setMetricGroups] = useState<MetricGroup[]>([]);
   const nextMetricGroupOrdinal = useRef(1);
   const metricGroupOrdinals = useRef(new Map<string, number>());
-  const ttfbByProcessor = useMemo(() => {
-    const grouped = new Map<string, TTFBMetric[]>();
-    for (const entry of ttfbHistory) {
-      grouped.set(entry.processor, [...(grouped.get(entry.processor) ?? []), entry]);
-    }
-    return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [ttfbHistory]);
+  const ttfbByProcessor = useMemo(() => groupByProcessor(ttfbHistory), [ttfbHistory]);
+  const ttfatByProcessor = useMemo(() => groupByProcessor(ttfatHistory), [ttfatHistory]);
   const filteredMetricRows = useMemo(
     () => metricRows.filter((row) => metricMatchesFilter(row, boardFilter)),
     [boardFilter, metricRows],
@@ -426,14 +444,14 @@ export function MetricsPanel() {
         });
       }
 
-      if (metrics.ttfb && metrics.ttfb.length > 0) {
-        const newEntries = metrics.ttfb.map((ttfb: { processor: string; value?: number }) => ({
-          id: nextMetricPointId("ttfb"),
-          processor: ttfb.processor,
-          value: (ttfb.value ?? 0) * 1000,
-          timestamp,
-        }));
-        setTtfbHistory((prev) => keepLastPerProcessor([...prev, ...newEntries], 10));
+      const ttfbPoints = processorMetricPoints("ttfb", metrics.ttfb, "value", timestamp);
+      if (ttfbPoints.length > 0) {
+        setTtfbHistory((prev) => keepLastPerProcessor([...prev, ...ttfbPoints], 10));
+      }
+
+      const ttfatPoints = processorMetricPoints("ttfat", metrics.ttfat, "ttfat", timestamp);
+      if (ttfatPoints.length > 0) {
+        setTtfatHistory((prev) => keepLastPerProcessor([...prev, ...ttfatPoints], 10));
       }
 
       const boardRows = metricRowsFromMetricsPayload(metrics, timestamp);
@@ -529,6 +547,29 @@ export function MetricsPanel() {
               ))
             ) : (
               <p className="text-secondary">No TTFB data yet. Start a conversation.</p>
+            )}
+          </div>
+
+          {/* TTFAT Metrics */}
+          <div className="metrics-section">
+            <h3 className="metrics-title">TTFAT Metrics</h3>
+            {ttfatByProcessor.length > 0 ? (
+              ttfatByProcessor.map(([processor, points]) => {
+                const latest = points[points.length - 1];
+                return (
+                  <div key={processor}>
+                    <div className="metrics-grid">
+                      <div className="metric-card">
+                        <span className="metric-label">{processor}</span>
+                        <span className="metric-value">{latest.value.toFixed(0)} ms</span>
+                      </div>
+                    </div>
+                    <TTFBChart data={points} title={processor} label="TTFAT" />
+                  </div>
+                );
+              })
+            ) : (
+              <p className="text-secondary">No TTFAT data yet. Start a conversation.</p>
             )}
           </div>
         </>
