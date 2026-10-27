@@ -12,9 +12,11 @@ It is a React and TypeScript single-page app built with [Vite](https://vite.dev/
 - **Prompt management**: pick a built-in persona or write a custom system prompt.
 - **Voice selection**: browse and preview TTS voices with language filtering.
 - **Audio visualizers**: real-time input and output waveform display.
-- **Metrics dashboard**: time-to-first-byte latency charts, token usage, and connection status.
+- **Metrics dashboard**: latency charts for time to first byte (TTFB) and time to first answer token (TTFAT), token usage, and connection status.
 - **Conversation transcript**: live ASR and bot-response display.
 - **Webcam vision panel**: live webcam input for the multimodal Omni Subagents example.
+
+The **TTFAT Metrics** section of the **METRICS** tab shows the latest TTFAT value and a chart of the last 10 values for each large language model (LLM) processor. TTFAT runs from the LLM request to the first answer token, or to the start of a tool call. It equals the LLM TTFB plus the time the model thinks before it answers. With reasoning off, TTFAT is almost the same as TTFB. A turn that calls a tool makes two LLM requests, so it reports two TTFAT values. TTFAT does not include speech synthesis time.
 
 ## Getting started
 

@@ -59,7 +59,7 @@ root `benchmark` dependency group (shared by every tool under
    - **Trim all trailing silence from the end** (for example in Audacity). This is critical for the client-side latency measurement. The benchmark times from the end of the WAV to when the bot's response arrives, so the end of the file must coincide with the end of the spoken query. The scripts insert silence *between* files automatically, so do not pad the files yourself.
    - **Save as 16 kHz, mono, linear PCM (`int16`) WAV.** This matches the pipeline's input format.
 
-   If you do not trim the trailing silence, the client-side end-to-end latency is lower because the client keeps waiting through that silence before it starts measuring. The client-side E2E numbers are then wrong, but the **RTVI-based, server-reported metrics stay reliable** (`server_e2e`, `asr_ttfb`, `tts_ttfb`, and `llm_processing_time`) because they are measured at the server from the actual end-of-speech and turn events rather than from the end of the file. See [What it measures](#what-it-measures).
+   If you do not trim the trailing silence, the client-side end-to-end latency is lower because the client keeps waiting through that silence before it starts measuring. The client-side E2E numbers are then wrong, but the **RTVI-based, server-reported metrics stay reliable** (`server_e2e`, `asr_ttfb`, `tts_ttfb`, `llm_ttfat`, and `llm_processing_time`) because they use server-side pipeline events rather than the end of the file. Refer to [What it measures](#what-it-measures).
 
 `simulate_concurrency.sh` auto-dispatches `benchmark.py` through `uv run`
 when the root `pyproject.toml` is detected, so the commands below work
@@ -294,18 +294,27 @@ Per-client (the core target of this tool):
 - **audio glitch** detection — flagged when the output buffer underruns
   (i.e. the player would have to insert silence to keep up).
 
-Pulled from the server over RTVI (each value is reported per turn,
-weighted-averaged across all turns/clients in a run):
+Pulled from the server over RTVI (each metric is weighted-averaged by sample
+count across all clients in a run):
 
 | Metric | Meaning |
 |--------|---------|
-| `llm_ttft` | Time-to-first-token from the LLM |
+| `llm_ttft` | Time from the LLM request to the first LLM output, including reasoning output |
+| `llm_ttfat` | Time from the LLM request to the first answer token, or to the start of a tool call (`llm_ttft` plus thinking time) |
 | `tts_ttfb` | Time-to-first-byte from the TTS |
 | `asr_ttfb` | Time-to-first-byte from the ASR |
 | `server_e2e` | Server-side end-to-end (user-stop → first bot speech) |
 | `vad_smart_turn` | VAD + smart-turn analyzer time |
 | `llm_processing_time` | LLM end-to-end (request → final token) |
 | `llm_tokens_per_sec` | Completion tokens / `llm_processing_time` |
+
+The LLM metrics (`llm_ttft`, `llm_ttfat`, `llm_processing_time`, and
+`llm_tokens_per_sec`) have one sample per LLM request, not one per user turn.
+A turn that calls a tool makes two LLM requests, so it adds two samples to each
+LLM metric: one for the tool call and one for the follow-up answer. Because
+`llm_ttft` and `llm_ttfat` are both counted per LLM request, `llm_ttfat` minus
+`llm_ttft` approximates the average thinking time. To measure latency per user
+turn, use `server_e2e`. Speech-to-speech LLM services do not report `llm_ttfat`.
 
 The Nemotron Realtime gateway maps Pipecat token accounting to the standard
 `response.done.response.usage` object. It also places response-scoped server

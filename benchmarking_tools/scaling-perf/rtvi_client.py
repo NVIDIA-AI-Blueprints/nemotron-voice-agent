@@ -133,6 +133,16 @@ class RTVIClient(ProtocolClient):
             if isinstance(value, (int, float)) and not isinstance(value, bool) and category:
                 key = {"asr": "asr_ttfb", "llm": "llm_ttft", "tts": "tts_ttfb"}[category]
                 self.server_metric_samples[key].append(float(value))
+        for item in metrics.get("ttfat", []):
+            if not isinstance(item, dict):
+                continue
+            value = item.get("ttfat")
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and categorize_processor(str(item.get("processor", ""))) == "llm"
+            ):
+                self.server_metric_samples["llm_ttfat"].append(float(value))
         for item in metrics.get("tokens", []):
             if not isinstance(item, dict):
                 continue
