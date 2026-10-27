@@ -32,6 +32,7 @@ from examples.generic.offline.native_response import (
     NativeResponseSession,
     get_native_provider_error_diagnostic,
 )
+from examples.shared.nvidia_tts_explicit_eof import explicit_eof_tts_options
 
 
 class ScriptedLLM(CapturingNativeNvidiaLLMService):
@@ -181,6 +182,41 @@ class DelayedFirstAudioTTS(ScriptedTTS):
         with self._retain_native_rpc_state(state):
             self.generated.set()
             await self.release.wait()
+
+
+class DelayedContextAcknowledgementTTS(ScriptedTTS):
+    """Hold the native completion hook after its final serialized frame."""
+
+    def __init__(self, capture):
+        """Keep normal synthesis while controlling only the drain acknowledgement."""
+        super().__init__(capture)
+        self.completion_entered = asyncio.Event()
+        self.completion_release = asyncio.Event()
+
+    async def on_audio_context_completed(self, context_id):
+        """Expose the gap between serialized EOF and completion acknowledgement."""
+        self.completion_entered.set()
+        await self.completion_release.wait()
+        await super().on_audio_context_completed(context_id)
+
+
+class EmptyEOFTTS(ScriptedTTS):
+    """Create a native audio context that genuinely finishes without any PCM."""
+
+    def __init__(self, capture):
+        """Use the explicit EOF compatibility policy without changing generation."""
+        super().__init__(capture)
+        self._stop_frame_timeout_s = explicit_eof_tts_options("stitched")["stop_frame_timeout_s"]
+
+    async def run_tts(self, text, context_id):
+        """Yield a started frame, then return an actual empty synthesis result."""
+        if not self.audio_context_available(context_id):
+            await self.create_audio_context(context_id)
+            self.contexts.append(context_id)
+            yield TTSStartedFrame(context_id=context_id)
+        self.generated.set()
+        await self.release.wait()
+        await self.remove_audio_context(context_id)
 
 
 class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
@@ -844,6 +880,69 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
         worker_drained.set()
         await asyncio.wait_for(actor.result(), 1)
         self.assertTrue(actor.drain().done)
+
+    async def delayed_acknowledgement_actor(self):
+        """Drive synthesis to its real native audio-completion callback."""
+
+        def tts_factory(capture):
+            self.tts = DelayedContextAcknowledgementTTS(capture)
+            return self.tts
+
+        await self.restart_session(tts_factory)
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+        self.llm.release.set()
+        self.tts.release.set()
+        await self.wait_event(self.tts.completion_entered)
+        # Native serialization can hold LLMFullResponseEndFrame outside the
+        # context. Exercise the bridge's EOF signal independently of that
+        # policy so an early EOF cannot bypass the actual context drain hook.
+        self.session._generations["first"].serialized_end.set()
+        return actor
+
+    async def test_serialized_end_waits_for_native_audio_context_acknowledgement(self):
+        """Provider worker EOF alone cannot complete an undrained context."""
+        actor = await self.delayed_acknowledgement_actor()
+        self.assertFalse(actor.drain().done)
+        self.tts.completion_release.set()
+        result = await asyncio.wait_for(actor.result(), 1)
+        self.assertTrue(result.metrics["tts_rpc_eof_drained"])
+        self.assertTrue(result.metrics["tts_audio_contexts_drained"])
+
+    async def test_late_provider_error_fails_while_audio_drain_is_pending(self):
+        """A real error after serialized EOF must not become silent success."""
+        actor = await self.delayed_acknowledgement_actor()
+        failure = RuntimeError("late provider failure")
+        frame = ErrorFrame(error="late provider failure", exception=failure, processor=self.tts)
+        frame.metadata["nva_offline_response_generation"] = "first"
+        await self.session._from_tts(frame, FrameDirection.UPSTREAM)
+        with self.assertRaises(RuntimeError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        self.assertIs(caught.exception, failure)
+        self.assertFalse(self.tts.completion_release.is_set())
+
+    async def test_interruption_releases_pending_drain_without_claiming_audio_eof(self):
+        """Cancellation while waiting for native completion remains interrupted."""
+        actor = await self.delayed_acknowledgement_actor()
+        await self.session.interrupt("first", 1)
+        result = await asyncio.wait_for(actor.result(), 1)
+        self.assertTrue(result.interrupted)
+        self.assertFalse(result.metrics["tts_rpc_eof_drained"])
+        self.assertFalse(result.metrics["tts_audio_contexts_drained"])
+
+    async def test_explicit_eof_preserves_genuine_empty_context_failure(self):
+        """An actual native zero-audio outcome still fails the response actor."""
+
+        def tts_factory(capture):
+            self.tts = EmptyEOFTTS(capture)
+            return self.tts
+
+        await self.restart_session(tts_factory)
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+        await self.wait_event(self.tts.generated)
+        self.llm.release.set()
+        self.tts.release.set()
+        with self.assertRaisesRegex(RuntimeError, "completed with no audio"):
+            await asyncio.wait_for(actor.result(), 1)
 
     async def test_actor_close_cancels_native_work_without_closing_session(self):
         """An actor owns cancellable work, while the session owns its services."""

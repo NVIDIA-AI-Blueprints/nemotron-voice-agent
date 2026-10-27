@@ -15,6 +15,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from examples.generic.offline.factory import GenericOfflineRuntime, build_runtime
 from examples.generic.offline.models import AudioSource, SessionResult
 from examples.generic.offline.native_response import NativeResponseSession
+from examples.shared.nvidia_tts_explicit_eof import EXPLICIT_EOF_COMPLETION_POLICY
 
 
 class FactoryTests(unittest.TestCase):
@@ -147,6 +148,9 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(type(tts["text_filters"][0]).__name__, "NemotronSpeechTextFilter")
         self.assertNotIn("enable_direct_mode", llm)
         self.assertNotIn("enable_direct_mode", tts)
+        self.assertIn("stop_frame_timeout_s", tts)
+        self.assertIsNone(tts["stop_frame_timeout_s"])
+        self.assertEqual(runtime.configuration["tts_context_completion_policy"], EXPLICIT_EOF_COMPLETION_POLICY)
         self.assertEqual(
             runtime.configuration["provider_execution"], "overlapping_continuous_ASR_and_persistent_native_LLM_TTS"
         )

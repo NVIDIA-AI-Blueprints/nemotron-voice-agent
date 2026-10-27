@@ -201,6 +201,8 @@ class CapturingNativeNvidiaTTSService(NvidiaTTSService):
         self._native_capture = capture
         self._native_context_generations: dict[str, str] = {}
         self._native_workers: dict[str, asyncio.Event] = {}
+        self._native_audio_context_drained: dict[str, asyncio.Event] = {}
+        self._native_audio_context_interrupted: set[str] = set()
         self._native_rpc_states: dict[str, list[_NativeRpcStateRegistration]] = {}
 
     async def process_frame(self, frame, direction):
@@ -217,6 +219,27 @@ class CapturingNativeNvidiaTTSService(NvidiaTTSService):
         if generation is not None:
             self._native_context_generations[context_id] = generation
         await super().on_turn_context_created(context_id)
+
+    async def create_audio_context(self, context_id):
+        """Register a drain acknowledgement before native serialization can run."""
+        self._native_audio_context_drained[context_id] = asyncio.Event()
+        self._native_audio_context_interrupted.discard(context_id)
+        await super().create_audio_context(context_id)
+
+    async def on_audio_context_completed(self, context_id):
+        """Acknowledge only after native PCM serialization and outcome reporting."""
+        await super().on_audio_context_completed(context_id)
+        self._native_audio_context_drained[context_id].set()
+
+    async def on_audio_context_interrupted(self, context_id):
+        """Release drain waiters after native cancellation without claiming EOF."""
+        try:
+            await super().on_audio_context_interrupted(context_id)
+        finally:
+            self._native_audio_context_interrupted.add(context_id)
+            event = self._native_audio_context_drained.get(context_id)
+            if event is not None:
+                event.set()
 
     async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
         """Fence old context callbacks even when a newer response is active."""
@@ -305,6 +328,17 @@ class CapturingNativeNvidiaTTSService(NvidiaTTSService):
             if owner == generation and context_id in self._native_workers:
                 await self._native_workers[context_id].wait()
 
+    async def wait_for_generation_audio_contexts(self, generation):
+        """Wait for actual audio queues, including their native outcome callback."""
+        contexts = tuple(
+            context_id
+            for context_id, owner in self._native_context_generations.items()
+            if owner == generation and context_id in self._native_audio_context_drained
+        )
+        for context_id in contexts:
+            await self._native_audio_context_drained[context_id].wait()
+        return not any(context_id in self._native_audio_context_interrupted for context_id in contexts)
+
 
 @dataclass(frozen=True)
 class NativeProviderFrame:
@@ -333,6 +367,7 @@ class _GenerationState:
     actor: EventActor
     messages: list[dict[str, Any]]
     serialized_end: asyncio.Event = field(default_factory=asyncio.Event)
+    terminal_control: asyncio.Event = field(default_factory=asyncio.Event)
     text: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     closed: bool = False
@@ -482,6 +517,7 @@ class NativeResponseSession:
             state = self._active
         if state is not None and not state.closed:
             state.error = state.error or error
+            state.terminal_control.set()
             state.serialized_end.set()
         elif self._ready is not None and not self._ready.done():
             self._ready.set_exception(error)
@@ -584,12 +620,17 @@ class NativeResponseSession:
                 if state.error is not None:
                     raise state.error
                 if not state.interrupted:
-                    await self._tts.wait_for_generation_workers(state.identity)
+                    await self._wait_for_generation_drain(state)
+                if state.interrupted:
+                    await state.terminal_control.wait()
+                if state.error is not None:
+                    raise state.error
             elapsed = max(0, self._clock() - state.wall_start_ns)
             state.metrics.update(
                 response_observed_wall_ns=elapsed,
                 llm_first_text_censored=state.interrupted and "llm_first_text_ns" not in state.metrics,
                 tts_rpc_eof_drained=not state.interrupted,
+                tts_audio_contexts_drained=not state.interrupted,
                 timing_basis="native_incremental_provider_elapsed_including_queueing",
             )
             state.closed = True
@@ -601,6 +642,31 @@ class NativeResponseSession:
         except BaseException as error:
             state.closed = True
             state.actor.finish(error=error)
+
+    async def _wait_for_generation_drain(self, state):
+        """Race native drain acknowledgements against real failure or interruption."""
+
+        async def drain():
+            await self._tts.wait_for_generation_workers(state.identity)
+            if state.error is not None or state.interrupted:
+                return
+            completed = await self._tts.wait_for_generation_audio_contexts(state.identity)
+            if not completed and not state.interrupted:
+                raise RuntimeError("Native TTS audio context interrupted without generation interruption")
+
+        drained = asyncio.create_task(drain())
+        controlled = asyncio.create_task(state.terminal_control.wait())
+        try:
+            await asyncio.wait((drained, controlled), return_when=asyncio.FIRST_COMPLETED)
+            if state.error is not None:
+                raise state.error
+            if not state.interrupted:
+                await drained
+        finally:
+            for waiter in (drained, controlled):
+                if not waiter.done():
+                    waiter.cancel()
+            await asyncio.gather(drained, controlled, return_exceptions=True)
 
     def _schedule_interrupt(self, identity, logical_ns):
         task = asyncio.create_task(self.interrupt(identity, logical_ns))
@@ -627,6 +693,7 @@ class NativeResponseSession:
                 await ack.wait()
         finally:
             self._interrupt_acks.pop(frame.id, None)
+            state.terminal_control.set()
             state.serialized_end.set()
 
     async def feedback(self, frame):

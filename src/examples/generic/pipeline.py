@@ -34,7 +34,8 @@ from pipecat.processors.frameworks.rtvi.observer import RTVIObserverParams
 from pipecat.runner.types import RunnerArguments
 from pipecat.services.nvidia.llm import NvidiaLLMService, NvidiaLLMSettings
 from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
-from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings
+from pipecat.services.nvidia.tts import NvidiaTTSService, NvidiaTTSSettings, NvidiaTTSSynthesisMode
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport
 from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy
 from pipecat.workers.runner import WorkerRunner
 
@@ -50,6 +51,7 @@ from examples.shared.evaluation_trace import (
 )
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
+from examples.shared.nvidia_tts_explicit_eof import EXPLICIT_EOF_COMPLETION_POLICY, explicit_eof_tts_options
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
     build_context_messages,
@@ -269,8 +271,16 @@ async def bot(runner_args: RunnerArguments) -> None:
         }
     if tts_zero_shot_audio_prompt_file:
         tts_kwargs["zero_shot_audio_prompt_file"] = tts_zero_shot_audio_prompt_file
+    tts_context_completion_policy = "native_idle"
+    if isinstance(transport, FastAPIWebsocketTransport) and tts_synthesis_mode == NvidiaTTSSynthesisMode.STITCHED:
+        # Match finite WebSocket processing: a live RPC completes through its
+        # response EOF and drained audio queue, rather than an audio idle gap.
+        tts_kwargs.update(explicit_eof_tts_options(tts_synthesis_mode))
+        tts_context_completion_policy = EXPLICIT_EOF_COMPLETION_POLICY
     tts_service = EvaluationNvidiaTTSService if evaluation_trace else NvidiaTTSService
     tts = tts_service(**tts_kwargs, **evaluation_kwargs)
+    if evaluation_trace:
+        evaluation_trace.record("tts_context_completion_policy", policy=tts_context_completion_policy)
 
     logger.info(
         f"TTS: server={tts_server}, ssl={tts_ssl}, voice={tts_voice}, "
@@ -278,7 +288,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"synthesis_mode={tts_synthesis_mode or '(pipecat default)'}, "
         f"language={tts_language_code or '(pipecat default)'}, "
         f"zero_shot_audio_prompt_file={tts_zero_shot_audio_prompt_file or '(none)'}, "
-        f"text_filters=[NemotronSpeechTextFilter]"
+        f"text_filters=[NemotronSpeechTextFilter], "
+        f"context_completion_policy={tts_context_completion_policy}"
     )
 
     messages = build_context_messages(base_system_content, system_prompt)
