@@ -562,6 +562,70 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(socket.sent[-1]["code"], "session_failed")
                 self.assertNotIn("secret-private", failure + json.dumps(socket.sent) + "".join(logs.output))
 
+    async def test_native_provider_diagnostics_are_public_without_provider_bodies(self):
+        from pipecat.utils.errors import ErrorCategory
+
+        from examples.generic.offline.native_response import (
+            _ERROR_DIAGNOSTIC_KEY,
+            NativeProviderErrorDiagnostic,
+        )
+
+        for source in ("tts", None):
+            with self.subTest(source=source):
+                socket = self.prepared_socket()
+                error = RuntimeError("secret-private-provider-body")
+                setattr(
+                    error, _ERROR_DIAGNOSTIC_KEY, NativeProviderErrorDiagnostic(source, "tts", ErrorCategory.UNKNOWN)
+                )
+
+                class FailingRuntime:
+                    async def run(self, source, error=error):
+                        raise error
+
+                expected = {"observed_callback_boundary": "tts", "provider_error_category": "UNKNOWN"}
+                if source is not None:
+                    expected["provider_source"] = source
+                with tempfile.TemporaryDirectory() as root:
+                    with self.assertLogs("examples.generic.offline.websocket", level="ERROR") as logs:
+                        await serve_offline_session(socket, lambda start: FailingRuntime(), root)
+                    failure = (next(Path(root).iterdir()) / "failure.json").read_text()
+                self.assertEqual(json.loads(failure), {"status": "error", "code": "session_failed", **expected})
+                for name, value in expected.items():
+                    self.assertEqual(socket.sent[-1][name], value)
+                    self.assertIn(f" {name}={value}", logs.output[0])
+                if source is None:
+                    self.assertNotIn("provider_source", socket.sent[-1])
+                self.assertNotIn("secret-private", failure + json.dumps(socket.sent) + "".join(logs.output))
+
+    async def test_optional_diagnostic_failure_preserves_original_rpc_status(self):
+        socket = self.prepared_socket()
+
+        class PrivateRpcError(RpcError):
+            def code(self):
+                return StatusCode.UNAVAILABLE
+
+        error = PrivateRpcError("secret-private-provider-body")
+
+        class FailingRuntime:
+            async def run(self, source):
+                raise error
+
+        with tempfile.TemporaryDirectory() as root:
+            with (
+                patch(
+                    "examples.generic.offline.native_response.get_native_provider_error_diagnostic",
+                    side_effect=RuntimeError("secret-private-diagnostic-failure"),
+                ),
+                self.assertLogs("examples.generic.offline.websocket", level="ERROR") as logs,
+            ):
+                await serve_offline_session(socket, lambda start: FailingRuntime(), root)
+            failure = (next(Path(root).iterdir()) / "failure.json").read_text()
+        self.assertEqual(
+            json.loads(failure), {"status": "error", "code": "session_failed", "grpc_status": "UNAVAILABLE"}
+        )
+        self.assertEqual(socket.sent[-1]["grpc_status"], "UNAVAILABLE")
+        self.assertNotIn("secret-private", failure + json.dumps(socket.sent) + "".join(logs.output))
+
     async def test_async_factory_observes_validated_recording_before_runtime_start(self):
         socket = self.prepared_socket()
         with tempfile.TemporaryDirectory() as root:

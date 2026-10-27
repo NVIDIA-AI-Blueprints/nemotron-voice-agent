@@ -201,8 +201,15 @@ audio and events, and sends `offline.session.complete`. Disconnect is not EOF.
 Input after EOF is rejected. Failures send `offline.session.error`.
 For an actual gRPC failure, this record and `failure.json` can include optional
 `grpc_status`, a recognized `grpc.StatusCode` name such as `UNAVAILABLE`.
-The field is omitted when no recognized status is available. Public error
-records exclude provider details, exception strings, metadata, and headers.
+The field is omitted when no recognized status is available.
+
+For native response failures, `provider_source` identifies an owned `llm` or
+`tts` processor only when the error frame supplies that identity.
+`observed_callback_boundary` records where the error was received (`llm` or
+`tts`); it does not identify the originating provider. `provider_error_category`
+contains a recognized `ErrorCategory` name. Fields without a recognized value
+are omitted. Public error records exclude provider details, exception strings,
+metadata, and headers.
 
 `OFFLINE_AUDIO_DUMP_PATH` selects the server-owned recording directory; its
 default is `audio_dumps/offline`. A UUID session directory contains these files.

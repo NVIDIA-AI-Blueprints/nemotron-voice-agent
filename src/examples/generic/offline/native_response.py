@@ -18,7 +18,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
@@ -39,6 +39,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSet
 from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.services.nvidia.tts import NvidiaTTSService
 from pipecat.utils.asyncio.task_manager import TaskManager
+from pipecat.utils.errors import ErrorCategory
 
 from .actors import ActorEvent, EventActor
 from .models import RATE
@@ -46,6 +47,35 @@ from .models import RATE
 Capture = Callable[[Frame, FrameDirection], Awaitable[None]]
 _GENERATION_KEY = "nva_offline_response_generation"
 _GENERATION: ContextVar[str | None] = ContextVar("nva_native_response_generation", default=None)
+_ERROR_DIAGNOSTIC_KEY = "_nva_native_provider_error_diagnostic"
+
+
+@dataclass(frozen=True, slots=True)
+class NativeProviderErrorDiagnostic:
+    """Keep owned processor identity separate from an observed callback edge."""
+
+    provider_source: Literal["llm", "tts"] | None
+    observed_callback_boundary: Literal["llm", "tts"]
+    provider_error_category: ErrorCategory | None
+
+
+def get_native_provider_error_diagnostic(error: BaseException) -> dict[str, str]:
+    """Read allowlisted sidecar fields without exposing or stringifying an error."""
+    try:
+        diagnostic = getattr(error, _ERROR_DIAGNOSTIC_KEY, None)
+    except Exception:
+        return {}
+    if type(diagnostic) is not NativeProviderErrorDiagnostic:
+        return {}
+    public = {}
+    for field_name in ("provider_source", "observed_callback_boundary"):
+        value = getattr(diagnostic, field_name)
+        if isinstance(value, str) and value in {"llm", "tts"}:
+            public[field_name] = value
+    category = diagnostic.provider_error_category
+    if isinstance(category, ErrorCategory):
+        public["provider_error_category"] = category.name
+    return public
 
 
 class CapturingNativeNvidiaLLMService(NvidiaLLMService):
@@ -239,8 +269,23 @@ class NativeResponseSession:
             )
         )
 
-    def _provider_error(self, state, frame):
+    def _provider_error(self, state, frame, *, observed_callback_boundary):
         error = frame.exception if getattr(frame, "exception", None) is not None else RuntimeError(frame.error)
+        source = None
+        if self._llm is not None and frame.processor is self._llm:
+            source = "llm"
+        elif self._tts is not None and frame.processor is self._tts:
+            source = "tts"
+        category = frame.category if isinstance(frame.category, ErrorCategory) else None
+        diagnostic = NativeProviderErrorDiagnostic(source, observed_callback_boundary, category)
+        # Keep the original exception, including typed gRPC information. Some
+        # exception implementations forbid extra attributes; diagnostics must
+        # never replace their failure or change the actor's completion path.
+        try:
+            if type(getattr(error, _ERROR_DIAGNOSTIC_KEY, None)) is not NativeProviderErrorDiagnostic:
+                setattr(error, _ERROR_DIAGNOSTIC_KEY, diagnostic)
+        except Exception:
+            pass
         if state is None:
             # A native background task may report a session-level failure
             # outside a synthesis context. Never turn that failure into an
@@ -264,7 +309,7 @@ class NativeResponseSession:
             return
         state = self._state_for(frame)
         if isinstance(frame, ErrorFrame):
-            self._provider_error(state, frame)
+            self._provider_error(state, frame, observed_callback_boundary="llm")
             return
         if state is None or state.closed:
             return
@@ -290,7 +335,7 @@ class NativeResponseSession:
             return
         state = self._state_for(frame)
         if isinstance(frame, ErrorFrame):
-            self._provider_error(state, frame)
+            self._provider_error(state, frame, observed_callback_boundary="tts")
             return
         if state is None or state.closed:
             return
