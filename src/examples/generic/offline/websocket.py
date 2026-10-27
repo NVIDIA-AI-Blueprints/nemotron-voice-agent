@@ -20,6 +20,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from grpc import RpcError, StatusCode
+
 from .models import RATE, AudioSource, SessionResult
 from .protocol import (
     CAPABILITIES,
@@ -205,10 +207,24 @@ async def _send_result(
     )
 
 
-def _failure_record(directory: Path | None, code: str) -> None:
+def _grpc_status_name(error: Exception) -> str | None:
+    """Return only a typed gRPC status enum, excluding provider diagnostics."""
+    if not isinstance(error, RpcError):
+        return None
+    try:
+        status = error.code()
+    except Exception:
+        return None
+    return status.name if isinstance(status, StatusCode) else None
+
+
+def _failure_record(directory: Path | None, code: str, *, grpc_status: str | None = None) -> None:
     """Preserve public failure information without provider exceptions or secrets."""
     if directory is not None:
-        (directory / "failure.json").write_text(json.dumps({"status": "error", "code": code}) + "\n", encoding="utf-8")
+        record = {"status": "error", "code": code}
+        if grpc_status is not None:
+            record["grpc_status"] = grpc_status
+        (directory / "failure.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
 
 
 async def serve_offline_session(
@@ -332,10 +348,13 @@ async def serve_offline_session(
         _failure_record(directory, "server_cancelled")
         raise
     except Exception as error:
+        grpc_status = _grpc_status_name(error)
+        status_suffix = f" grpc_status={grpc_status}" if grpc_status is not None else ""
         logging.getLogger(__name__).error(
-            "Offline session %s failed: %s\n%s",
+            "Offline session %s failed: %s%s\n%s",
             directory.name if directory else "upload",
             type(error).__name__,
+            status_suffix,
             "".join(traceback.format_tb(error.__traceback__)),
         )
         if isinstance(error, OfflineProtocolError):
@@ -344,9 +363,12 @@ async def serve_offline_session(
             code, message = "watchdog_timeout", "Session exceeded an execution watchdog"
         else:
             code, message = "session_failed", "Offline session failed; check server diagnostics"
-        _failure_record(directory, code)
+        _failure_record(directory, code, grpc_status=grpc_status)
+        record = {"type": "offline.session.error", "code": code, "message": message}
+        if grpc_status is not None:
+            record["grpc_status"] = grpc_status
         with contextlib.suppress(Exception):
-            await websocket.send_json({"type": "offline.session.error", "code": code, "message": message})
+            await websocket.send_json(record)
         with contextlib.suppress(Exception):
             await websocket.close(code=1008 if isinstance(error, OfflineProtocolError) else 1011)
         return
