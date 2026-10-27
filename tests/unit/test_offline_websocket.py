@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
+from grpc import RpcError, StatusCode
 
 from examples.generic.offline.models import RATE, AudioSpan, SessionResult
 from examples.generic.offline.protocol import (
@@ -497,7 +498,69 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((directory / "source.wav").exists())
             self.assertNotIn("secret-private-key", (directory / "failure.json").read_text())
         self.assertEqual(socket.sent[-1]["code"], "session_failed")
+        self.assertNotIn("grpc_status", socket.sent[-1])
         self.assertNotIn("secret-private-key", json.dumps(socket.sent))
+
+    async def test_rpc_failure_exposes_only_the_typed_grpc_status(self):
+        socket = self.prepared_socket()
+
+        class PrivateRpcError(RpcError):
+            def code(self):
+                return StatusCode.UNAUTHENTICATED
+
+            def details(self):
+                raise AssertionError("Provider details must never be accessed")
+
+        error = PrivateRpcError("Authorization: secret-private-provider-body")
+
+        class FailingRuntime:
+            async def run(self, source):
+                raise error
+
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertLogs("examples.generic.offline.websocket", level="ERROR") as logs:
+                await serve_offline_session(socket, lambda start: FailingRuntime(), root)
+            failure = (next(Path(root).iterdir()) / "failure.json").read_text()
+        self.assertEqual(
+            json.loads(failure),
+            {
+                "status": "error",
+                "code": "session_failed",
+                "grpc_status": "UNAUTHENTICATED",
+            },
+        )
+        self.assertEqual(socket.sent[-1]["grpc_status"], "UNAUTHENTICATED")
+        self.assertIn("failed: PrivateRpcError grpc_status=UNAUTHENTICATED", logs.output[0])
+        self.assertNotIn("secret-private-provider-body", failure + json.dumps(socket.sent) + "".join(logs.output))
+
+    async def test_rpc_status_extraction_failure_or_untyped_status_stays_private(self):
+        for mode in ("raises", "untyped"):
+            with self.subTest(mode=mode):
+                socket = self.prepared_socket()
+
+                class PrivateRpcError(RpcError):
+                    def code(self, mode=mode):
+                        if mode == "raises":
+                            raise RuntimeError("secret-private-status-failure")
+                        return "UNAUTHENTICATED secret-private-status-failure"
+
+                    def details(self):
+                        raise AssertionError("Provider details must never be accessed")
+
+                error = PrivateRpcError("secret-private-provider-body")
+
+                class FailingRuntime:
+                    async def run(self, source, error=error):
+                        raise error
+
+                with tempfile.TemporaryDirectory() as root:
+                    with self.assertLogs("examples.generic.offline.websocket", level="ERROR") as logs:
+                        await serve_offline_session(socket, lambda start: FailingRuntime(), root)
+                    failure = (next(Path(root).iterdir()) / "failure.json").read_text()
+                self.assertNotIn("grpc_status", json.loads(failure))
+                self.assertNotIn("grpc_status", socket.sent[-1])
+                self.assertEqual(socket.sent[-1]["code"], "session_failed")
+                self.assertNotIn("secret-private", failure + json.dumps(socket.sent) + "".join(logs.output))
 
     async def test_async_factory_observes_validated_recording_before_runtime_start(self):
         socket = self.prepared_socket()

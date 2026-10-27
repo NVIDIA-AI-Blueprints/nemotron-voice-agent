@@ -195,6 +195,10 @@ and ordered. Output can omit silence but must be ordered and nonoverlapping.
 The server validates and seals the source, processes it, publishes committed
 audio and events, and sends `offline.session.complete`. Disconnect is not EOF.
 Input after EOF is rejected. Failures send `offline.session.error`.
+For an actual gRPC failure, this record and `failure.json` can include optional
+`grpc_status`, a recognized `grpc.StatusCode` name such as `UNAVAILABLE`.
+The field is omitted when no recognized status is available. Public error
+records exclude provider details, exception strings, metadata, and headers.
 
 `OFFLINE_AUDIO_DUMP_PATH` selects the server-owned recording directory; its
 default is `audio_dumps/offline`. A UUID session directory contains these files.
