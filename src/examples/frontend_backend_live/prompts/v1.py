@@ -1,12 +1,25 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prompt set v1: the default routing, commentary and answer instructions.
+"""Prompt set v1: the original routing, commentary and answer instructions.
 
-Selected with ``prompt_version: v1`` in ``config.yaml``. ``v2`` lives in ``v2.py``.
+Selected with ``prompt_version: v1`` in ``config.yaml``. Every other text of the set is the shared one in
+``promptset.py``.
 """
 
-# Routing has no silent outcome (see ``never_silent``): the talker either speaks or delegates. The examples
+from .promptset import (
+    ANSWER_READY_LABEL,
+    CALL_HINTS,
+    NO_WORK_IN_PROGRESS,
+    NORMALIZER_PROMPT,
+    TYPED_REQUEST_LABEL,
+    UPDATE_LABEL,
+    WORK_IN_PROGRESS,
+    WRITER_NOTES,
+    PromptSet,
+)
+
+# Routing has no silent outcome (the talker's floor): the talker either speaks or delegates. The examples
 # are drawn from businesses unrelated to any demo domain, so they teach the pattern rather than the wording.
 ROUTING_INSTRUCTIONS = """
 Implement the supplied voice frontend instructions and delegation policy.
@@ -90,5 +103,19 @@ so speak it. Keep the spoken version short: the outcome and the details they nee
 """
 
 
-# v1 gives the thinker no voice-channel note; its instructions pass through unchanged.
-BACKEND_VOICE_NOTES = ""
+PROMPT_SET = PromptSet(
+    name="v1",
+    actions=("speak", "delegate"),
+    routing=ROUTING_INSTRUCTIONS,
+    commentary=COMMENTARY_INSTRUCTIONS,
+    answer=ANSWER_INSTRUCTIONS,
+    work_in_progress=WORK_IN_PROGRESS,
+    no_work_in_progress=NO_WORK_IN_PROGRESS,
+    answer_ready_label=ANSWER_READY_LABEL,
+    typed_request_label=TYPED_REQUEST_LABEL,
+    update_label=UPDATE_LABEL,
+    commentary_label=UPDATE_LABEL,
+    writer_notes=WRITER_NOTES,
+    call_hints=CALL_HINTS,
+    normalizer_prompt=NORMALIZER_PROMPT,
+)

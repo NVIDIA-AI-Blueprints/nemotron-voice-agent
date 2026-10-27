@@ -280,6 +280,9 @@ body[data-session="on"] #btnStart { display: none; }
 .dcard { position: relative; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; background: var(--panel2); overflow: hidden; }
 .dcard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--thinker); }
 .dcard.done::before { background: var(--ok); }
+.dcard.waiting::before { background: var(--client); }
+.dcard.ended::before { background: var(--faint); }
+.dcard.failed::before { background: var(--danger); }
 .dcard.interrupted::before { background: var(--danger); }
 .dcard > header { padding: 8px 12px 7px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .dcard .did { font-family: var(--mono); font-size: 11px; color: var(--thinker); overflow: hidden; text-overflow: ellipsis; }
@@ -328,6 +331,7 @@ body.history-collapsed .grid { grid-template-rows: minmax(0, 1fr) auto; }
 .hist-col.thinker .hmsg.assistant::before { background: var(--thinker); }
 .hmsg.system::before, .hmsg.developer::before { background: var(--config); }
 .hmsg.context::before { background: var(--client); }
+.hmsg.result::before { background: var(--thinker); }
 .hmsg.call, .hmsg.output { background: rgba(179, 136, 255, .05); font-family: var(--mono); font-size: 11px; }
 .hmsg.call::before, .hmsg.output::before { background: var(--client); }
 .hmsg.reasoning .htext { color: #b5dcf0; font-style: italic; }

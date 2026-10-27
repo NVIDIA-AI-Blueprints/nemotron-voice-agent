@@ -84,6 +84,8 @@ The `*/single-gpu` vLLM services select the model checkpoint and precision from 
 | Bolt E4B on DGX Spark or Jetson Thor | BF16 with NVFP4 DFlash | Free unified memory minus headroom, capped at `0.75`. Requires at least 24 GiB usable. On Thor, FlashInfer compiles one kernel at a time (`MAX_JOBS=1`). | Bolt E4B + ASR + TTS -> `0`, Lightning scaled to zero |
 | Bolt E4B on Hopper, Ada, or Ampere (SM80+) | BF16 | Free VRAM minus headroom, capped at `0.90`. Requires at least 24 GiB usable. | Bolt E4B + ASR + TTS -> `0`, Lightning scaled to zero |
 
+The `frontend-backend-agent/single-gpu` and `frontend-backend-live/single-gpu` recipes run Lightning in their own service, `nvidia-llm-vllm-lightning-frontend-backend`, on vLLM's Model Runner V1 (`VLLM_USE_V2_MODEL_RUNNER: "0"`). On a Blackwell workstation or DGX Spark, they serve NVFP4 without DFlash or DSpark.
+
 These values are startup checks used by the planner, not guarantees that every workload will fit. Model weights, KV cache, speech services, context length, and concurrency must all fit within the selected budget.
 
 Server recipes use model-specific NIM profiles and scaling controls instead of the single-GPU VRAM planner. Standard `*/server` services leave `NIM_MODEL_PROFILE` unset so NIM automatically chooses a compatible profile for the visible GPU. The dedicated `generic-assistant/server-perf` benchmark instead pins an NVFP4 TP2 profile for two Blackwell LLM GPUs.

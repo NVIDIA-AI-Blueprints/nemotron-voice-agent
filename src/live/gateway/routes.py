@@ -6,10 +6,10 @@
   POST      /v1/live/sessions                 - WebRTC session creation (JSON SDP offer and answer, 201)
   WebSocket /v1/live/sessions                 - Primary WebSocket (``session.start`` first, base64 audio events)
   WebSocket /v1/live/sessions/{id}/attach     - Sideband observer and trusted control channel
-  GET       /v1/live/sessions/{id}/history    - What the engine's models hold now (engines with ``history()``)
+  GET       /v1/live/sessions/{id}/history    - What the session's models hold now
 
-An example supplies an engine factory that builds the voice pipeline for each session. Nothing here knows about
-models or prompts.
+A composition root supplies the factory that builds each session's frontend adapter and the hook that builds the one
+delegation core client (``live.ports``). Nothing here knows about models or prompts.
 """
 
 from __future__ import annotations
@@ -19,18 +19,24 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from live.events import error_event
-from live.gateway.gateway import EngineFactory, LiveGateway
+from live.gateway import webrtc, websocket
+from live.gateway.gateway import IceServers, LiveGateway
 from live.gateway.settings import LiveSettings
-from live.protocol import ProtocolError, SessionConfig
+from live.ports import AdapterFactory, CoreHook
+from live.protocol import ProtocolError, SessionConfig, validation_error
 
 STATUS_BY_CODE = {"session_not_found": 404, "rate_limit_exceeded": 429, "permission_denied": 403, "server_error": 503}
 
 
 def create_live_router(
-    engine_factory: EngineFactory, settings: LiveSettings | None = None
+    factory: AdapterFactory,
+    settings: LiveSettings | None = None,
+    *,
+    core: CoreHook | None = None,
+    ice_servers: IceServers | None = None,
 ) -> tuple[APIRouter, LiveGateway]:
     """Build the live-session router and its gateway (use the gateway's ``close_all`` on shutdown)."""
-    gateway = LiveGateway(engine_factory, settings)
+    gateway = LiveGateway(factory, settings, core=core, ice_servers=ice_servers)
     router = APIRouter()
 
     @router.post("/v1/live/sessions")
@@ -41,19 +47,19 @@ def create_live_router(
             raise HTTPException(400, "HTTP session creation requires WebRTC")
         try:
             config = SessionConfig.model_validate(data.get("session"))
-            return await gateway.create_webrtc(config, transport.get("sdp"))
+            return await webrtc.create_webrtc_session(gateway, config, transport.get("sdp"), request)
         except ProtocolError as exc:
             return JSONResponse(error_event(exc), status_code=STATUS_BY_CODE.get(exc.code, 400))
         except ValidationError as exc:
-            return JSONResponse(error_event(ProtocolError(str(exc)[:1000])), status_code=400)
+            return JSONResponse(error_event(validation_error(exc, "session")), status_code=400)
 
     @router.websocket("/v1/live/sessions")
     async def primary(ws: WebSocket):
-        await gateway.run_primary_websocket(ws)
+        await websocket.run_primary_websocket(gateway, ws)
 
     @router.websocket("/v1/live/sessions/{session_id}/attach")
     async def attach(ws: WebSocket, session_id: str):
-        await gateway.run_sideband(ws, session_id)
+        await websocket.run_sideband(gateway, ws, session_id)
 
     @router.get("/v1/live/sessions/{session_id}/history")
     async def history(request: Request, session_id: str) -> dict:
@@ -61,9 +67,6 @@ def create_live_router(
         session = gateway.sessions.get(session_id)
         if session is None:
             raise HTTPException(404, "Unknown session")
-        describe = getattr(session.engine, "history", None)
-        if describe is None:
-            raise HTTPException(404, "This engine does not expose its conversation history")
-        return describe()
+        return await session.history()
 
     return router, gateway

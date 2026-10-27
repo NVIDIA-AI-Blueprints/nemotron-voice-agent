@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The delegation core with the backend LLM agent: core.yaml, with what differs. Select it with CORE_CONFIG_PATH.
+#
+# The agent's conductor is a model: for each request it calls one of the control tools (texts.control_tools) to start
+# work (one task, or several independent tasks that run in parallel), steer open work or one task of it, cancel it, or
+# answer a status question from the work records; the IM carries each decision out. When the conductor's call fails,
+# times out or leaves a request unplaced, the backend LLM's steer rule places it: it joins the newest open Work, or
+# starts one when none is open. The workers are the backend LLM's runs, up to backend.llm-agent.max_running tasks at
+# once. Every key of backend.llm-agent has its default in delegation_core/backend/agent/settings.py; core.yaml lists
+# the ones this example sets.
+#
+# texts.conductor_prompt is core.yaml's. core.harness.yaml extends this file, so both model conductors read one prompt.
+
+extends: core.yaml
+
+delegation:
+  result_format: speak_display         # the envelope, in every worker's instructions: a show item, then the answer
+
+backend:
+  adapter: llm-agent

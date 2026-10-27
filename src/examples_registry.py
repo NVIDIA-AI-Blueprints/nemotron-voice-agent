@@ -32,6 +32,14 @@ class ActivityCheckConfig(TypedDict, total=False):
     warning_completion_timeout_s: float
 
 
+class LiveHooks(TypedDict):
+    """The hooks of an example that serves the Live API (``live:``), each a lazily imported ``module.path:callable``."""
+
+    factory: str  # builds one live session's parts (``live.ports.AdapterFactory``)
+    describe: str  # the example's half of ``GET /v1/live/info``
+    core: str  # the client of the process's one delegation core
+
+
 class ExampleEntry(TypedDict):
     """Raw registry entry for one example."""
 
@@ -45,6 +53,7 @@ class ExampleEntry(TypedDict):
     defaults: dict[str, list[str] | str]
     welcome_message: bool
     bot: str
+    live: LiveHooks | None
 
 
 class EnrichedExample(ExampleEntry):
@@ -67,34 +76,42 @@ class PromptDefault(TypedDict, total=False):
 
 _SRC_ROOT = Path(__file__).resolve().parent
 _REGISTRY_PATH = _SRC_ROOT.parent / "examples_registry.yaml"
+# The hooks of an example's ``live:`` block, in order.
+LIVE_HOOKS: tuple[str, ...] = ("factory", "describe", "core")
 
 
-def _split_bot_spec(spec: str) -> tuple[str, str]:
+def _split_spec(spec: str, what: str = "Example bot") -> tuple[str, str]:
     module_path, separator, attr = spec.partition(":")
     if not (separator and module_path and attr):
-        raise RuntimeError(f"Example bot must be 'module.path:attr' (got {spec!r})")
+        raise RuntimeError(f"{what} must be 'module.path:attr' (got {spec!r})")
     return module_path, attr
 
 
 @cache
-def _resolve_bot(spec: str) -> Callable[..., Any]:
-    """Resolve a ``module.path:callable`` string only when the bot is used."""
-    module_path, attr = _split_bot_spec(spec)
+def resolve_hook(spec: str, what: str = "Example bot") -> Callable[..., Any]:
+    """Resolve a ``module.path:callable`` string only when it is used: an example's bot, or one of its Live hooks.
+
+    ``what`` names the setting in the errors.
+
+    Raises:
+        RuntimeError: ``spec`` is not ``module.path:attr``, or names something that cannot be called.
+    """
+    module_path, attr = _split_spec(spec, what)
     module = importlib.import_module(module_path)
-    bot = getattr(module, attr, None)
-    if not callable(bot):
-        raise RuntimeError(f"Example bot target is not callable: {spec!r}")
-    return bot
+    target = getattr(module, attr, None)
+    if not callable(target):
+        raise RuntimeError(f"{what} target is not callable: {spec!r}")
+    return target
 
 
 def resolve_bot(example: EnrichedExample) -> Callable[..., Any]:
     """Return the lazily imported bot callable for an example."""
-    return _resolve_bot(example["bot"])
+    return resolve_hook(example["bot"])
 
 
 def example_module_file(example: EnrichedExample) -> Path:
     """Return the module file path for an example's bot spec without importing it."""
-    module_path, _ = _split_bot_spec(example["bot"])
+    module_path, _ = _split_spec(example["bot"])
     module_parts = Path(*module_path.split("."))
     module_file = (_SRC_ROOT / module_parts).with_suffix(".py")
     if module_file.is_file():
@@ -263,6 +280,21 @@ def _parse_defaults(example_id: str, entry: dict) -> dict[str, list[str] | str]:
     return parsed
 
 
+def _parse_live(example_id: str, entry: dict) -> LiveHooks | None:
+    """The example's ``live:`` block: each of :data:`LIVE_HOOKS` as ``module.path:callable``; ``None`` without one."""
+    live = entry.get("live")
+    if live is None:
+        return None
+    if not isinstance(live, dict) or set(live) != set(LIVE_HOOKS):
+        raise RuntimeError(
+            f"Example {example_id!r} live must name {', '.join(LIVE_HOOKS)}, each 'module.path:callable'"
+        )
+    hooks: LiveHooks = {name: str(live[name] or "").strip() for name in LIVE_HOOKS}
+    for name, spec in hooks.items():
+        _split_spec(spec, f"Example {example_id!r} live.{name}")
+    return hooks
+
+
 def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
     if not isinstance(entry, dict):
         raise RuntimeError(f"Example {example_id!r} must be a mapping")
@@ -285,6 +317,7 @@ def _parse_example(example_id: str, entry: Any) -> ExampleEntry:
         "defaults": _parse_defaults(example_id, entry),
         "welcome_message": welcome_message,
         "bot": bot_spec,
+        "live": _parse_live(example_id, entry),
     }
 
 
@@ -396,6 +429,18 @@ def find(value: str = "", *, ignore_lock: bool = False) -> EnrichedExample:
     if cleaned and cleaned in allowed_keys:
         return _lookup_by_key(cleaned)
     return _lookup_by_key(_SELECTION.default_key)
+
+
+def live_example() -> EnrichedExample | None:
+    """Return the example that serves the Live API, or ``None`` when no example has a ``live`` block.
+
+    It is the selected example when that one has a ``live`` block, else the first registered example that has one: a
+    deployment locked to an example without the block still finds the one that has it.
+    """
+    selected = find()
+    if selected["live"] is not None:
+        return selected
+    return next((_lookup_by_key(key) for key, example in EXAMPLES.items() if example["live"] is not None), None)
 
 
 def metadata(example: EnrichedExample) -> dict:

@@ -1,80 +1,65 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble the talker, commentary writer and thinker from ``config.yaml`` and resolved model endpoints."""
+"""Assemble the talker, the writer and the normalizer from ``config.yaml`` and the frontend's model endpoint.
+
+The backend model belongs to the call's delegation core, not to this agent.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from examples.frontend_backend_live.cascade.commentary.writer import CommentaryWriter
 from examples.frontend_backend_live.cascade.normalizer import TurnNormalizer
 from examples.frontend_backend_live.cascade.talker.talker import Talker
+from examples.frontend_backend_live.cascade.writer.writer import CommentaryWriter
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint
-from examples.frontend_backend_live.delegation.thinker import Thinker
-from examples.frontend_backend_live.models import BACKENDS, FRONTENDS, Backend, Frontend
+from examples.frontend_backend_live.models import FRONTENDS, Frontend
 from examples.frontend_backend_live.prompts import PromptSet, get_prompt_set
+from examples.frontend_backend_live.prompts.catalog import catalog_line
+from examples.frontend_backend_live.tables import pick
 
 
 @dataclass
 class LiveAgent:
-    """The model-facing parts of one call."""
+    """The frontend's model-facing parts of one call."""
 
     frontend: Frontend
-    backend: Backend
     prompts: PromptSet
     talker: Talker
     writer: CommentaryWriter
-    thinker: Thinker
     normalizer: TurnNormalizer | None = None
 
+    @classmethod
+    def from_config(cls, config: LiveConfig, frontend_endpoint: ModelEndpoint, *, frontend_client=None) -> LiveAgent:
+        """Build the agent for ``config``: the provider named by ``provider``, the set by ``prompt_version``.
+
+        Args:
+            config: The validated ``frontend.cascade`` block of ``config.yaml``.
+            frontend_endpoint: The talker's model endpoint.
+            frontend_client: Optional injected client for the frontend (tests, probes); None builds the provider's own.
+
+        Returns:
+            The wired agent.
+
+        Raises:
+            ValueError: No provider or no prompt set has the configured name; the message lists the known ones.
+        """
+        provider = pick(FRONTENDS, config.provider, "frontend provider")
+        frontend = provider(frontend_endpoint, config.reliability, frontend_client)
+        prompts = get_prompt_set(config.prompt_version)
+        return cls(
+            frontend,
+            prompts,
+            Talker(frontend, prompts, holding=catalog_line("holding")),
+            CommentaryWriter(frontend, prompts),
+            TurnNormalizer(frontend, prompts, config.normalizer) if config.normalizer.enabled else None,
+        )
+
     async def close(self) -> None:
-        """Release both models' connections."""
+        """Release the frontend model's connections."""
         await self.frontend.close()
-        await self.backend.close()
 
 
-def build_agent(
-    config: LiveConfig,
-    frontend_endpoint: ModelEndpoint,
-    backend_endpoint: ModelEndpoint,
-    *,
-    frontend_client=None,
-    backend_client=None,
-) -> LiveAgent:
-    """Build the agent for ``config``: each role's implementation is looked up by its configured name.
-
-    Args:
-        config: The validated ``config.yaml``.
-        frontend_endpoint: The talker's model endpoint.
-        backend_endpoint: The thinker's model endpoint.
-        frontend_client: Optional injected client for the frontend (tests, probes).
-        backend_client: Optional injected client for the backend.
-
-    Returns:
-        The wired agent.
-
-    Raises:
-        ValueError: A configured provider is not registered.
-    """
-    frontend_cls, backend_cls = FRONTENDS.get(config.frontend.provider), BACKENDS.get(config.backend.provider)
-    frontend = (
-        frontend_cls(frontend_endpoint, config.reliability, frontend_client)
-        if frontend_client is not None
-        else frontend_cls(frontend_endpoint, config.reliability)
-    )
-    backend = (
-        backend_cls(backend_endpoint, config.reliability, backend_client)
-        if backend_client is not None
-        else backend_cls(backend_endpoint, config.reliability)
-    )
-    prompts = get_prompt_set(config.prompt_version)
-    return LiveAgent(
-        frontend,
-        backend,
-        prompts,
-        Talker(frontend, prompts),
-        CommentaryWriter(frontend, prompts),
-        Thinker(backend, prompts),
-        TurnNormalizer(frontend, config.normalizer) if config.normalizer.enabled else None,
-    )
+# The name the hosts (the live adapter, the UI bot) and the tests build the agent by.
+build_agent = LiveAgent.from_config

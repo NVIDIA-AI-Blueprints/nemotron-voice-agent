@@ -6,7 +6,7 @@
 import re
 from difflib import SequenceMatcher
 
-from examples.frontend_backend_live.common.history import BACKEND_RESULT_PREFIX
+from examples.frontend_backend_live.cascade.memory import BACKEND_RESULT_PREFIX
 
 
 def normalized(text):

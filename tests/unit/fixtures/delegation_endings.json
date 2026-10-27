@@ -1,0 +1,335 @@
+{
+  "about": "The endings of a delegation on the wire (alignment plan L0.5, \u00a72.0(f)): each scenario's official events in the order the IM writes them, as tests/unit/contracts/endings.py normalizes them (type, status, phase, item type, terminal; ids as labels; [key] names the texts line a message carries). The IM lane makes the IM write each one; the reader lane replays each one and checks the reader's outcome.",
+  "scenarios": {
+    "answered": {
+      "about": "One request, one task, one answer.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1}, "endings": {"D1": "answered"}}
+    },
+    "answered_with_progress_and_tool_items": {
+      "about": "Commentary beside a backend-run tool (an mcp_call item, server label of its tool source), then the answer.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "message commentary"],
+        ["R1", "mcp_call.in_progress"],
+        ["R1", "mcp_call.completed"],
+        ["R1", "mcp_call cafe/get_menu completed"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1}, "progress": {"D1": 1}, "steps": {"D1": 1}, "endings": {"D1": "answered"}}
+    },
+    "waits_for_the_app_then_answers": {
+      "about": "A round with the app's function call ends the response; the app's outputs and response.create continue it.",
+      "responses": {"R1": "D1", "R2": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "message commentary"],
+        ["R1", "function_call"],
+        ["R1", "completed"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R2", "message final_answer"],
+        ["R2", "completed"]
+      ],
+      "reader": {"results": {"D1": 1}, "waits": ["D1"], "endings": {"D1": "answered"}}
+    },
+    "queued_then_running": {
+      "about": "With one task slot (start_each), the second request is queued until the first Work ends.",
+      "responses": {"R1": "D1", "R2": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"],
+        ["R2", "in_progress"],
+        ["R2", "message final_answer"],
+        ["R2", "completed"]
+      ],
+      "reader": {"results": {"D1": 1, "D2": 1}, "endings": {"D1": "answered", "D2": "answered"}}
+    },
+    "handed_over_with_the_taker_named": {
+      "about": "A newer request steers into the running Work. When it lands, the taker goes in_progress naming the older response, then the older one gets the handover line and completed (order, not text, tells a handover).",
+      "responses": {"R1": "D1", "R2": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress previous=R1"],
+        ["R1", "message commentary [handover_line]"],
+        ["R1", "completed"],
+        ["R2", "message final_answer"],
+        ["R2", "completed"]
+      ],
+      "reader": {"results": {"D2": 1}, "endings": {"D1": "handed_over", "D2": "answered"}, "takers": {"D1": "D2"}}
+    },
+    "a_chain_of_handovers": {
+      "about": "D1 is taken over by D2, and D2 by D3; only the newest request answers.",
+      "responses": {"R1": "D1", "R2": "D2", "R3": "D3"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress previous=R1"],
+        ["R1", "message commentary [handover_line]"],
+        ["R1", "completed"],
+        ["R3", "created queued"],
+        ["R3", "queued"],
+        ["R3", "in_progress previous=R2"],
+        ["R2", "message commentary [handover_line]"],
+        ["R2", "completed"],
+        ["R3", "message final_answer"],
+        ["R3", "completed"]
+      ],
+      "reader": {"results": {"D3": 1}, "endings": {"D1": "handed_over", "D2": "handed_over", "D3": "answered"}, "takers": {"D1": "D2", "D2": "D3"}}
+    },
+    "answered_by_the_conductor": {
+      "about": "A conductor answers a status question from the records (Answer); the Work it asked about runs on.",
+      "responses": {"R1": "D1", "R2": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R2", "message final_answer"],
+        ["R2", "completed"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1, "D2": 1}, "endings": {"D1": "answered", "D2": "answered"}}
+    },
+    "cancelled_for_a_newer_request_stopped": {
+      "about": "A conductor cancels the Work a newer request no longer wants and answers that request. Once the stop is confirmed, the older delegation's answer is the cancelled line, then completed (DEL:478): a cancel has no handover's shape, so the reader needs no rule to tell them apart and says the line like any result.",
+      "responses": {"R1": "D1", "R2": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R2", "message final_answer"],
+        ["R2", "completed"],
+        ["R1", "message final_answer [cancelled_line]"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1, "D2": 1}, "endings": {"D1": "answered", "D2": "answered"}}
+    },
+    "cancelled_for_a_newer_request_unconfirmed": {
+      "about": "The same, when the stop could not be confirmed: the older delegation's answer is the unconfirmed line, which says so (DEL:478).",
+      "responses": {"R1": "D1", "R2": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R2", "message final_answer"],
+        ["R2", "completed"],
+        ["R1", "message final_answer [unconfirmed_line]"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1, "D2": 1}, "endings": {"D1": "answered", "D2": "answered"}}
+    },
+    "failed_with_an_error": {
+      "about": "A Work that fails ends response.failed with an official error code; the core writes no apology.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "failed server_error"]
+      ],
+      "reader": {"endings": {"D1": "failed"}}
+    },
+    "late_continuation": {
+      "about": "The app's outputs come after the client-tool deadline ended the Work (nothing was written then): the late continuation opens, goes in_progress like every response but one cancelled at close, and ends with an empty completed (C4).",
+      "responses": {"R1": "D1", "R2": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "function_call"],
+        ["R1", "completed"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R2", "completed"]
+      ],
+      "reader": {"waits": ["D1"], "endings": {"D1": "late"}}
+    },
+    "deadline_while_waiting": {
+      "about": "The client-tool deadline passes while the Work waits for the app: no response is open, so nothing is written; the frontend's own app-wait clock decides what the caller hears.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "function_call"],
+        ["R1", "completed"]
+      ],
+      "reader": {"waits": ["D1"]}
+    },
+    "cancelled_at_close": {
+      "about": "At close, a running Work past its grace and a queued one each end once: incomplete, status cancelled, incomplete_details null (no reason is invented).",
+      "responses": {"R1": "D1", "R2": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R1", "incomplete cancelled"],
+        ["R2", "incomplete cancelled"]
+      ],
+      "reader": {"endings": {"D1": "cancelled", "D2": "cancelled"}}
+    },
+    "a_typed_run": {
+      "about": "The app's own typed request runs as a delegation the frontend did not start.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1}, "typed": ["D1"], "endings": {"D1": "answered"}}
+    },
+    "stateless": {
+      "about": "A one-shot request (no conversation, not background): it opens in progress and ends with its round's items.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created in_progress"],
+        ["R1", "in_progress"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1}, "endings": {"D1": "answered"}}
+    },
+    "show_then_the_answer": {
+      "about": "The envelope (form A): the show work tool's mcp_call carries the display, then the answer to speak.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "mcp_call.in_progress"],
+        ["R1", "mcp_call.completed"],
+        ["R1", "mcp_call voiceclaw/show completed"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1}, "shown": {"D1": 1}, "endings": {"D1": "answered"}}
+    },
+    "two_works_answering_at_once": {
+      "about": "Two Works run at once (max_running above 1); their events interleave across the two responses.",
+      "responses": {"R1": "D1", "R2": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R2", "message final_answer"],
+        ["R1", "message final_answer"],
+        ["R2", "completed"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 1, "D2": 1}, "endings": {"D1": "answered", "D2": "answered"}}
+    },
+    "one_work_two_tasks": {
+      "about": "A conductor splits one request into two tasks: each task's answer is its own final_answer item, never merged; the response ends when the last task ends.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "message final_answer"],
+        ["R1", "message final_answer"],
+        ["R1", "completed"]
+      ],
+      "reader": {"results": {"D1": 2}, "endings": {"D1": "answered"}}
+    },
+    "a_task_waits_while_another_runs": {
+      "about": "One task calls the app, so the response ends with its calls; the other task keeps running, and the IM holds its answer until the continuation opens the next response.",
+      "responses": {"R1": "D1", "R2": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "function_call"],
+        ["R1", "completed"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R2", "message final_answer"],
+        ["R2", "message final_answer"],
+        ["R2", "completed"]
+      ],
+      "reader": {"results": {"D1": 2}, "waits": ["D1"], "endings": {"D1": "answered"}}
+    },
+    "cut_by_max_output_tokens": {
+      "about": "A round cut by the output limit ends response.incomplete with that official reason.",
+      "responses": {"R1": "D1"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R1", "incomplete max_output_tokens"]
+      ],
+      "reader": {"endings": {"D1": "failed"}}
+    },
+    "two_works_waiting_for_the_app": {
+      "about": "Two Works wait for the app at once; one continuation per response whose outputs are all in, oldest first.",
+      "responses": {"R1": "D1", "R2": "D2", "R3": "D1", "R4": "D2"},
+      "timeline": [
+        ["R1", "created queued"],
+        ["R1", "queued"],
+        ["R1", "in_progress"],
+        ["R2", "created queued"],
+        ["R2", "queued"],
+        ["R2", "in_progress"],
+        ["R1", "function_call"],
+        ["R1", "completed"],
+        ["R2", "function_call"],
+        ["R2", "completed"],
+        ["R3", "created queued"],
+        ["R3", "queued"],
+        ["R3", "in_progress"],
+        ["R3", "message final_answer"],
+        ["R3", "completed"],
+        ["R4", "created queued"],
+        ["R4", "queued"],
+        ["R4", "in_progress"],
+        ["R4", "message final_answer"],
+        ["R4", "completed"]
+      ],
+      "reader": {"results": {"D1": 1, "D2": 1}, "waits": ["D1", "D2"], "endings": {"D1": "answered", "D2": "answered"}}
+    }
+  }
+}

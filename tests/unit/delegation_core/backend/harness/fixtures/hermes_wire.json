@@ -1,0 +1,4694 @@
+{
+ "pong": [
+  {
+   "prompt": 3,
+   "session": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+   "text": "Reply with exactly the word: pong"
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "size": 1048576,
+     "used": 0,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": " user wants me to reply with",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": " exactly the word \"pong",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": "\". This is a simple instruction",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": ",",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": " so I should follow",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": " it precisely",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": " and",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": " only",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": " output \"pong\".",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "content": {
+      "text": "pong",
+      "type": "text"
+     },
+     "messageId": "c69caf4b-2f0b-46f0-9718-3da0e1b39a9d",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+    "update": {
+     "size": 1048576,
+     "used": 666,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 3,
+   "session": "34d616df-52bc-4ff9-8e40-5bbfcc2cb5cc",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 675,
+     "outputTokens": 37,
+     "thoughtTokens": 34,
+     "totalTokens": 712
+    }
+   },
+   "error": null
+  }
+ ],
+ "redirect_and_steer": [
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "size": 1048576,
+     "used": 0,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "prompt": 3,
+   "session": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+   "text": "Write the numbers from 1 to 400, one per line, and nothing else."
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " user wants the",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " numbers from 1 to ",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "400, one per",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " line, and",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " nothing else. I should",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " output exactly ",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "4",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "00 lines, each with",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " a single",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " number, no filler",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": ", no introduction",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": ", no explanation.",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "1",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "prompt": 4,
+   "session": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+   "text": "Change of plan: stop counting and reply with exactly the word: redirected"
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "Redirected the active turn with your correction.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "end": 4,
+   "session": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+   "result": {
+    "stopReason": "end_turn"
+   },
+   "error": null
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " user wants me to reply",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " with exactly the word \"red",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "irected\"",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": " and nothing else.",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "\n\nred",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "content": {
+      "text": "irected",
+      "type": "text"
+     },
+     "messageId": "b4815536-899f-497b-b3e8-7ad6f828264e",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "size": 1048576,
+     "used": 747,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 3,
+   "session": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 743,
+     "outputTokens": 22,
+     "thoughtTokens": 20,
+     "totalTokens": 765
+    }
+   },
+   "error": null
+  },
+  {
+   "update": {
+    "sessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+        "currentHermesSessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+        "rootHermesSessionId": "2e2c67c1-b47c-40d1-b059-1206a5c45dee",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Write the numbers from 1 to 400, one per line… #2",
+     "updatedAt": "2026-10-26T10:35:22.695256+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "prompt": 6,
+   "session": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+   "text": "Look up the record for query 'ABC123' with slow_lookup, then tell me what it says in one sentence."
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "size": 1048576,
+     "used": 68,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+        "currentHermesSessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+        "rootHermesSessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Look up the record for query 'ABC123' with… #2",
+     "updatedAt": "2026-10-26T10:35:27.100117+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " user wants me to look up",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " a record for",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " query 'ABC123",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "' using slow_lookup, then",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " tell them what it says in",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " one sentence. Let",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " me call the",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " slow_lookup tool.",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "\n",
+      "type": "text"
+     },
+     "messageId": "2d31a799-104f-4621-9fb6-260fd88b6912",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "{\n  \"query\": \"ABC123\"\n}",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "locations": [],
+     "rawInput": {
+      "query": "ABC123"
+     },
+     "title": "mcp__client__slow_lookup: ABC123",
+     "toolCallId": "tc-81b0226b4a83",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "prompt": 7,
+   "session": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+   "text": "Also tell me the time on my device; use get_time."
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "Redirected the active turn with your correction.",
+      "type": "text"
+     },
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "end": 7,
+   "session": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+   "result": {
+    "stopReason": "end_turn"
+   },
+   "error": null
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "mcp__client__slow_lookup result\n- **result:** record ABC123: flight on time, gate B7",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "status": "completed",
+     "toolCallId": "tc-81b0226b4a83",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " user wants",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " me to tell",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " them what",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " the slow",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "_lookup record says in one sentence",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ", and also to",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " get the time on their device",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ".",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " Let me call get_time.",
+      "type": "text"
+     },
+     "messageId": "0ef22499-9d85-4aa8-8e67-9b1856565dbf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "kind": "other",
+     "locations": [],
+     "title": "mcp__client__get_time",
+     "toolCallId": "tc-433239312691",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "mcp__client__get_time result\n- **result:** 14:07 local time (lookup token T-4721)",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "status": "completed",
+     "toolCallId": "tc-433239312691",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " user asked two things:\n1",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ". Look up record '",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "ABC123' with",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " slow_lookup —",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " done, result",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ": \"record ABC12",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "3: flight on time,",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " gate B7\"\n2.",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " Tell me",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " the",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " time on my device — done",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ", get",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "_time result",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ": \"14:0",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "7 local time (lookup token",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " T-4721",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ")\"\n\nThe user wants the",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " lookup",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " result in one sentence, plus",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " the time.\n\n",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " record says",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ": flight on time, gate",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " B7.\nThe time is",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": ": 14:0",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "7 local time.\n\nI should",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " respond",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " concisely. The",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " user",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " said \"tell me what",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " it says in one sentence\"",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " for the record.",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " And",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " also",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " tell the",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " time.",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "\n\nRecord ABC123 says",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " the flight is on time at",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " gate B7,",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " and the time on your device",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": " is 14:0",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "content": {
+      "text": "7 local time.",
+      "type": "text"
+     },
+     "messageId": "47b48397-9fac-440d-84f6-17eb8586dcdf",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+    "update": {
+     "size": 1048576,
+     "used": 1747,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 6,
+   "session": "27c2c0b8-853b-4eb1-b7b0-5b95b5b11838",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 4058,
+     "outputTokens": 304,
+     "thoughtTokens": 220,
+     "totalTokens": 4362
+    }
+   },
+   "error": null
+  }
+ ],
+ "tool_then_cancel_in_tool": [
+  {
+   "prompt": 3,
+   "session": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+   "text": "What time is it on my device? Use the tool, then answer in one short sentence."
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "size": 1048576,
+     "used": 68,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+        "currentHermesSessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+        "rootHermesSessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "What time is it on my device? Use the tool…",
+     "updatedAt": "2026-10-26T10:24:50.862095+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " user is asking what",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " time it is on their device",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": ", and they",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " want me to use the tool",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " and",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " then answer in one short sentence",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": ". Let me call the get",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": "_time tool.",
+      "type": "text"
+     },
+     "messageId": "83ce421b-1230-4894-af24-9bab07cb1f2f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "kind": "other",
+     "locations": [],
+     "title": "mcp__client__get_time",
+     "toolCallId": "tc-60a48a037dfc",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "mcp__client__get_time result\n- **result:** 14:07 local time (lookup token T-4721)",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "status": "completed",
+     "toolCallId": "tc-60a48a037dfc",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+        "currentHermesSessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+        "rootHermesSessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Check device time",
+     "updatedAt": "2026-10-26T10:24:53.497820+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " user asked for the time on",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " their device, and I used",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " the tool. The result is",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " \"14:07",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " local time (lookup token T",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": "-4721)\".",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " I need to answer in one",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " short sentence.",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": "\n\nIt's",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " 14:07",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "content": {
+      "text": " local time on your device.",
+      "type": "text"
+     },
+     "messageId": "2493541f-ea01-4392-b51a-1f17eeb3eb90",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+    "update": {
+     "size": 1048576,
+     "used": 1254,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 3,
+   "session": "163227fa-0cfe-43d6-b587-ec48ae0c16f7",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 2450,
+     "outputTokens": 118,
+     "thoughtTokens": 88,
+     "totalTokens": 2568
+    }
+   },
+   "error": null
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "size": 1048576,
+     "used": 68,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "prompt": 5,
+   "session": "036d262a-e785-41ae-ae83-6a9181711455",
+   "text": "Look up the record for query 'ABC123' with slow_lookup, then tell me what it says."
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+        "currentHermesSessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+        "rootHermesSessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Look up the record for query 'ABC123' with…",
+     "updatedAt": "2026-10-26T10:25:01.654035+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": " user wants me to look up",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": " a record with query 'ABC",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": "123' using slow",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": "_lookup, then tell them",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": " what it says. Let",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": " me call the tool",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": {
+      "text": ".",
+      "type": "text"
+     },
+     "messageId": "5745cf20-1947-427c-80b5-b3e6e7acd31a",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "{\n  \"query\": \"ABC123\"\n}",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "locations": [],
+     "rawInput": {
+      "query": "ABC123"
+     },
+     "title": "mcp__client__slow_lookup: ABC123",
+     "toolCallId": "tc-489b6ee3c5ae",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "cancel": true,
+   "session": "036d262a-e785-41ae-ae83-6a9181711455"
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "mcp__client__slow_lookup failed: MCP call interrupted: user sent a new message",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "status": "failed",
+     "toolCallId": "tc-489b6ee3c5ae",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "036d262a-e785-41ae-ae83-6a9181711455",
+    "update": {
+     "size": 1048576,
+     "used": 1203,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 5,
+   "session": "036d262a-e785-41ae-ae83-6a9181711455",
+   "result": {
+    "stopReason": "cancelled",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 1164,
+     "outputTokens": 67,
+     "thoughtTokens": 39,
+     "totalTokens": 1231
+    }
+   },
+   "error": null
+  }
+ ],
+ "conductor_and_worker": [
+  {
+   "prompt": 3,
+   "session": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+   "text": "Caller: Can you check record ABC123 for me?\n\nWork records: none."
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "size": 1048576,
+     "used": 158,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+        "currentHermesSessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+        "rootHermesSessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Caller: Can you check record ABC123 for me?",
+     "updatedAt": "2026-10-26T10:36:14.188408+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " user is asking me to check",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " record ABC123.",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " According to my",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " role as the conductor of",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " a voice assistant's backend,",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " I should never do",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " the work myself and never",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " answer the caller's question myself",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": ". Instead",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": ", for",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " a new request, I should",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " call start_work with the full",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " task.\n\nLet me call start",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "_work with the task of",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " checking record ABC123",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": ".",
+      "type": "text"
+     },
+     "messageId": "e824ddf4-d4d9-4e26-9fc3-842795cccc8f",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "{\n  \"task\": \"Caller asked to check record ABC123.\"\n}",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "locations": [],
+     "rawInput": {
+      "task": "Caller asked to check record ABC123."
+     },
+     "title": "mcp__control__start_work",
+     "toolCallId": "tc-a2bd9e85ed7f",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "size": 1048576,
+     "used": 68,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "prompt": 5,
+   "session": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+   "text": "Caller asked to check record ABC123."
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "mcp__control__start_work result\n- **result:** started w1",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "status": "completed",
+     "toolCallId": "tc-a2bd9e85ed7f",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+        "currentHermesSessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+        "rootHermesSessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Caller asked to check record ABC123.",
+     "updatedAt": "2026-10-26T10:36:16.875313+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+        "currentHermesSessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+        "rootHermesSessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Check record ABC123",
+     "updatedAt": "2026-10-26T10:36:17.259092+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " user is",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " asking me to check record ABC",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "123. I've",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " started work",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " with",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " user wants",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " me to look",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " up record ABC123",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": ". I have",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " task \"Caller",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " a slow",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " asked to check record ABC1",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "_lookup tool available",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "23.\" Now",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": ". Let me use",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " I need to reply with the",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " it.",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " single word \"done\" as",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " per the AG",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "ENTS.md instructions.",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "\n\ndone",
+      "type": "text"
+     },
+     "messageId": "6e661f87-3e2a-4b5f-9bf4-edc9ea184e74",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "\n",
+      "type": "text"
+     },
+     "messageId": "75ea27cc-8ef5-4707-ad4f-e99bc3c2c2f0",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "{\n  \"query\": \"ABC123\"\n}",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "locations": [],
+     "rawInput": {
+      "query": "ABC123"
+     },
+     "title": "mcp__client__slow_lookup: ABC123",
+     "toolCallId": "tc-a670dacab733",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "size": 1048576,
+     "used": 1485,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 3,
+   "session": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 3048,
+     "outputTokens": 167,
+     "thoughtTokens": 131,
+     "totalTokens": 3215
+    }
+   },
+   "error": null
+  },
+  {
+   "prompt": 6,
+   "session": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+   "text": "Caller: How is it going?\n\nWork records:\n- w1: state running; task 'Caller asked to check record ABC123.'; steps so far: ['slow_lookup(ABC123) running']"
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " user is asking about",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " the progress",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " of the",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " work. I",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " should call answer",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "_status with a one-sent",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "ence answer from",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " the work records.",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "\n",
+      "type": "text"
+     },
+     "messageId": "1460b4a6-802e-4cbe-bd37-214caf1da963",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "{\n  \"answer\": \"The lookup for record ABC123 is still running.\"\n}",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "locations": [],
+     "rawInput": {
+      "answer": "The lookup for record ABC123 is still running."
+     },
+     "title": "mcp__control__answer_status",
+     "toolCallId": "tc-e763346df8e4",
+     "sessionUpdate": "tool_call"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "mcp__control__answer_status result\n- **result:** ok",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "status": "completed",
+     "toolCallId": "tc-e763346df8e4",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " user asked",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " \"How is it going?\"",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " which",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " is a status question about the",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " running work. I called",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " answer_status with a",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " one-sentence answer from",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " the work records. The tool",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " returned ok",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": ". Now I need to reply",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " with the single word:",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": " done.",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "content": {
+      "text": "\n\ndone",
+      "type": "text"
+     },
+     "messageId": "a9cbd374-ff4c-4423-8277-b5b85fe30b53",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+    "update": {
+     "size": 1048576,
+     "used": 1841,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 6,
+   "session": "aa1e3250-fa1f-4322-9280-06bb3f9c40aa",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 6337,
+     "outputTokens": 290,
+     "thoughtTokens": 216,
+     "totalTokens": 6627
+    }
+   },
+   "error": null
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": [
+      {
+       "content": {
+        "text": "mcp__client__slow_lookup result\n- **result:** record ABC123: flight on time, gate B7",
+        "type": "text"
+       },
+       "type": "content"
+      }
+     ],
+     "kind": "other",
+     "status": "completed",
+     "toolCallId": "tc-a670dacab733",
+     "sessionUpdate": "tool_call_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+        "currentHermesSessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+        "rootHermesSessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Check record ABC123 #2",
+     "updatedAt": "2026-10-26T10:36:22.656858+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " user asked",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " to check record ABC12",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "3. I performed",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " the lookup and got the",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " result: \"",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "record ABC123:",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " flight on time, gate B",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "7\".\n\nNow I need to",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " format",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " my",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " final",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " answer as one",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " JSON object with",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " \"",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "speak\" and \"display",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "\" fields, per",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " the AGENTS.md output",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " format instructions",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": ".\n\nspe",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "ak: one or two short",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " sentences for the voice, plain",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " words, no symbols or lists",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": ".\ndisplay: the full answer",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " for the screen.\n\nLet",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " me write",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " this.",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "\n\n{\n",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "  \"speak\": \"",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "Record ABC123 is",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " a flight that",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " is",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " on time at",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " gate B7.\",\n  \"",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "display\": \"Record ABC1",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": "23: Flight",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": " on time, gate B7",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "content": {
+      "text": ".\"\n}",
+      "type": "text"
+     },
+     "messageId": "c4319357-5fac-424d-9b4e-fc2c70f925f8",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+    "update": {
+     "size": 1048576,
+     "used": 1446,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 5,
+   "session": "53256ce9-7aa2-4f57-8f5a-5153c95f2c5d",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 2663,
+     "outputTokens": 206,
+     "thoughtTokens": 131,
+     "totalTokens": 2869
+    }
+   },
+   "error": null
+  }
+ ],
+ "provider_error": [
+  {
+   "prompt": 3,
+   "session": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+   "text": "Reply with exactly the word: pong"
+  },
+  {
+   "update": {
+    "sessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+    "update": {
+     "size": 256000,
+     "used": 0,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+        "currentHermesSessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+        "rootHermesSessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Reply with exactly the word: pong #2",
+     "updatedAt": "2026-10-26T10:51:00.194369+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+    "update": {
+     "content": {
+      "text": "NVIDIA NIM rejected your API key, so the model can't be reached. Update it in Settings → Providers, or run `hermes setup` in a terminal.\n\nProvider said: HTTP 403: The requested model 'nvidia/nvidia/no-such-model-xyz' is not available for this API key, or the model name is invalid. Check the models available to you and try again.",
+      "type": "text"
+     },
+     "messageId": "3c0f46d4-a6b0-4848-83f7-489dc6a4011c",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+    "update": {
+     "size": 256000,
+     "used": 634,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 3,
+   "session": "4a70b947-c016-44e5-84e5-22c75cc311ca",
+   "result": {
+    "stopReason": "end_turn"
+   },
+   "error": null
+  }
+ ],
+ "idle_cancel_poison": [
+  {
+   "cancel": true,
+   "session": "fffc55ce-110d-4f25-a084-a89bfb70080d"
+  },
+  {
+   "update": {
+    "sessionId": "fffc55ce-110d-4f25-a084-a89bfb70080d",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "fffc55ce-110d-4f25-a084-a89bfb70080d",
+    "update": {
+     "size": 1048576,
+     "used": 0,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "prompt": 3,
+   "session": "fffc55ce-110d-4f25-a084-a89bfb70080d",
+   "text": "Reply with exactly the word: pong"
+  },
+  {
+   "update": {
+    "sessionId": "fffc55ce-110d-4f25-a084-a89bfb70080d",
+    "update": {
+     "content": {
+      "text": "Stopped waiting for another Hermes process on this session. Your message was not processed.",
+      "type": "text"
+     },
+     "messageId": "68e24aed-c215-4e67-9798-77a495195243",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "fffc55ce-110d-4f25-a084-a89bfb70080d",
+    "update": {
+     "size": 1048576,
+     "used": 0,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 3,
+   "session": "fffc55ce-110d-4f25-a084-a89bfb70080d",
+   "result": {
+    "stopReason": "end_turn"
+   },
+   "error": null
+  }
+ ],
+ "cancel_then_prompt": [
+  {
+   "prompt": 3,
+   "session": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+   "text": "Write the numbers from 1 to 400, one per line, and nothing else."
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "availableCommands": [
+      {
+       "description": "List available commands",
+       "name": "help"
+      },
+      {
+       "description": "Show current model and provider, or switch models",
+       "input": {
+        "hint": "model name to switch to"
+       },
+       "name": "model"
+      },
+      {
+       "description": "List available tools with descriptions",
+       "name": "tools"
+      },
+      {
+       "description": "Show conversation message counts by role",
+       "name": "context"
+      },
+      {
+       "description": "Clear conversation history",
+       "name": "reset"
+      },
+      {
+       "description": "Compress conversation context",
+       "name": "compress"
+      },
+      {
+       "description": "Inject guidance into the currently running agent turn",
+       "input": {
+        "hint": "guidance for the active turn"
+       },
+       "name": "steer"
+      },
+      {
+       "description": "Queue a prompt to run after the current turn finishes",
+       "input": {
+        "hint": "prompt to run next"
+       },
+       "name": "queue"
+      },
+      {
+       "description": "Show Hermes version",
+       "name": "version"
+      }
+     ],
+     "sessionUpdate": "available_commands_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "size": 1048576,
+     "used": 0,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "_meta": {
+      "hermes": {
+       "sessionProvenance": {
+        "acpSessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+        "currentHermesSessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+        "rootHermesSessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+        "parentHermesSessionId": null,
+        "sessionKind": "root",
+        "compressionDepth": 0
+       }
+      }
+     },
+     "title": "Write the numbers from 1 to 400, one per line…",
+     "updatedAt": "2026-10-26T10:23:49.139336+00:00",
+     "sessionUpdate": "session_info_update"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "a3639805-ec45-4cfa-bf8e-13a6b7f35ba8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "cancel": true,
+   "session": "21ab2c28-3555-459d-b87b-789bb5aead3c"
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": " user wants numbers",
+      "type": "text"
+     },
+     "messageId": "a3639805-ec45-4cfa-bf8e-13a6b7f35ba8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": " from 1 to 4",
+      "type": "text"
+     },
+     "messageId": "a3639805-ec45-4cfa-bf8e-13a6b7f35ba8",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "size": 1048576,
+     "used": 646,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 3,
+   "session": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+   "result": {
+    "stopReason": "cancelled",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 0,
+     "outputTokens": 0,
+     "thoughtTokens": 0,
+     "totalTokens": 0
+    }
+   },
+   "error": null
+  },
+  {
+   "prompt": 4,
+   "session": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+   "text": "Stop that. Reply with exactly the word: ok"
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": "The",
+      "type": "text"
+     },
+     "messageId": "d7a2a8f2-efa5-46ec-beaa-8731bb08be8b",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": " user wants me to reply with",
+      "type": "text"
+     },
+     "messageId": "d7a2a8f2-efa5-46ec-beaa-8731bb08be8b",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": " exactly the word \"ok\".",
+      "type": "text"
+     },
+     "messageId": "d7a2a8f2-efa5-46ec-beaa-8731bb08be8b",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": " Nothing",
+      "type": "text"
+     },
+     "messageId": "d7a2a8f2-efa5-46ec-beaa-8731bb08be8b",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": " else.",
+      "type": "text"
+     },
+     "messageId": "d7a2a8f2-efa5-46ec-beaa-8731bb08be8b",
+     "sessionUpdate": "agent_thought_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "content": {
+      "text": "ok",
+      "type": "text"
+     },
+     "messageId": "d7a2a8f2-efa5-46ec-beaa-8731bb08be8b",
+     "sessionUpdate": "agent_message_chunk"
+    }
+   }
+  },
+  {
+   "update": {
+    "sessionId": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+    "update": {
+     "size": 1048576,
+     "used": 743,
+     "sessionUpdate": "usage_update"
+    }
+   }
+  },
+  {
+   "end": 4,
+   "session": "21ab2c28-3555-459d-b87b-789bb5aead3c",
+   "result": {
+    "stopReason": "end_turn",
+    "usage": {
+     "cachedReadTokens": 0,
+     "inputTokens": 757,
+     "outputTokens": 19,
+     "thoughtTokens": 19,
+     "totalTokens": 776
+    }
+   },
+   "error": null
+  }
+ ]
+}

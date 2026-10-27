@@ -1,198 +1,209 @@
 # Frontend/Backend Live Cascaded Example
 
-Cascaded voice agent that puts a routing talker in front of a tool-using backend. On every turn, the talker either speaks a reply or delegates to the backend, and a commentary step phrases the backend result for speech. The reference domain is the Bluebird Cafe ordering assistant: the backend looks up the menu, edits a cart, and places an order.
+This example is a cascaded voice agent that puts a routing talker in front of backend work. On every caller turn, the talker, a fast large language model (LLM) call, speaks a reply, delegates the turn to the backend, or waits. The delegation core runs the delegated work on a backend adapter, and a writer words every ready result into one line, which the voice says when the caller is idle. The reference domain is the Bluebird Cafe ordering assistant: the backend looks up the menu, edits a cart, and places an order.
 
-## Quick Start
+The example has two ways in:
 
-Prerequisites: [`uv`](https://docs.astral.sh/uv/), Node.js 20 or newer, and an `NVIDIA_API_KEY` for the hosted models (the other recipes in the [Getting Started guide](../../../docs/01-getting-started.md) run local services instead).
+- **Live session clients**, such as the **Live Console** (`/live.html`), Pipecat apps, and benchmark clients, connect through `POST /v1/live/sessions` or `WS /v1/live/sessions` and supply the prompts. For details, refer to [Live Sessions](#live-sessions).
+- **The repository UI** (`/`) runs a bot whose backend runs the cafe tools on the server and shows each delegation as a task card. The Realtime gateway (`WS /v1/realtime`) drives the same bot.
 
-```bash
-uv sync                                                           # Python dependencies
-cd client && npm ci && npm run build && cd ..                     # build the UIs once
-export NVIDIA_API_KEY=...
-EXAMPLE_SELECTION=frontend-backend-live uv run python src/server.py --host 0.0.0.0 --port 7860
-```
+Four parts serve a live session:
 
-Open `https://localhost:7860/live.html` (the **Live Console**), press **Start conversation**, allow the microphone, and ask what teas the cafe has. The console shows the frontend and backend models, every protocol event, each delegation with its tool calls, and controls to change the session, steer the frontend, and update the backend while the call runs. Set `PIPELINE_TLS=false` for plain `http://localhost:7860`. Browsers only allow the microphone on `localhost` or HTTPS.
+- The **Live gateway** ([`src/live/`](../../live/)) serves the live session protocol.
+- The **frontend adapter** is this example. It turns each live session into a Pipecat cascade of automatic speech recognition (ASR), the talker, the writer, and text-to-speech (TTS).
+- The **delegation core** ([`src/delegation_core/`](../../delegation_core/)) takes each delegation through the OpenAI Responses API. Its interaction manager (IM) owns the delegated work from then on.
+- The **backend adapter** runs the work: the backend LLM, directly connected (the default); the backend LLM agent, a model conductor with LLM workers; or the harness, an external agent that you deploy, such as Hermes.
 
-The example has two ways in, both sharing one cascade:
+For what each part owns and how the parts meet, refer to the [Frontend/Backend Live Architecture](../../../docs/design/architecture.md) page.
 
-- **The Live Console** (`/live.html`) and **live session clients** (`POST /v1/live/sessions` and `WS /v1/live/sessions`, served by [`src/live/`](../../live/)). The client supplies the prompts and the tools, and it executes the backend's tools itself.
-- **The repository UI** (`/`). The backend runs the cafe tools on the server.
+Compared to the [Frontend/Backend Agent](../frontend_backend_agent/README.md), the talker returns a structured decision on every turn instead of calling a `call_backend` tool, and the writer words the backend's results for speech. Each part is a class that you select by name in the configuration, so adding one does not change the pipeline.
 
-This example differs from the [Frontend/Backend Agent](../frontend_backend_agent/README.md) in three ways:
+## Default Models
 
-- The talker returns a structured decision (`speak` or `delegate`) on every turn instead of calling a `call_backend` tool.
-- The backend answer passes through a commentary step that phrases it for speech, with guards that keep unverified claims out of the lead-in.
-- The frontend and backend models are classes that you select by name in `config.yaml`. Adding a provider does not change the pipeline.
+The `services` lists in [`examples_registry.yaml`](../../../examples_registry.yaml) resolve to the following default models for each profile. Service entries live in the root [`services.yaml`](../../../services.yaml):
 
-## How a Turn Works
+| Profile | ASR | Talker LLM | Backend LLM | TTS |
+| --- | --- | --- | --- | --- |
+| Cloud | Nemotron ASR Streaming English | Nemotron 3.5 Lightning 30B A3B | Nemotron 3.5 Lightning 30B A3B with reasoning enabled | Magpie TTS Multilingual |
+| Server | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Nemotron 3.5 Lightning 30B A3B NIM with reasoning enabled | Magpie TTS Multilingual NIM |
+| Single GPU | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM | Nemotron 3.5 Lightning 30B A3B through vLLM with reasoning enabled | Magpie TTS Multilingual through NeMo-Speech.cpp |
 
-```text
- Live Console / live session client                                Repository UI (/)
-   POST or WS /v1/live/sessions, WS .../attach, GET .../history       pipeline.py bot, cafe tools on the server
-                 |                                                                  |
- src/live: gateway -> LiveProtocolSession                                           |
-   events, appends, session.update, tool results                                    |
-                 |  LiveEngine                                                      |
- CascadeLiveEngine  (provider "realtime": RealtimeLiveEngine, a remote talker)      |
-                 |                                                                  |
-                 +-----------------------------+------------------------------------+
-                                               |
- transport -> (live: input gate) -> STT -> user aggregator -> LiveTalkerProcessor -> TTS -> transport -> assistant aggregator
-                                                             |
-                                                       CascadeSession
-          +--------------------------------------------------+-----------------------------------------+
-          |                                                  |                                         |
-        Talker: speak | delegate                     ApplicationInput                          Coordinator
-        (turn router, repeat guard)                  instructions / thinking /                 ledger of open work, merge,
-          |                                          commentary appends                        fold, status, progress speech
-          +-- speak ------------> spoken reply                                                           |
-          +-- delegate (+ lead-in) ---------------------------------------------------------------------->+
-                                                                                                         |
-                                            responses mode: DelegationWorker, one task at a time         |
-                                              Thinker (backend model) -> function calls -> tools ->      |
-                                              next round. Live: the client runs them (response.event     |
-                                              out, response.item.create back). UI: the cafe tools.       |
-                                            client mode: session.delegation.created, the client runs it  |
-                                                                                                         |
-        CommentaryWriter (+ guards) <------------------------------------------------ answer -----------+
-          |
-          +--> spoken answer, after the caller finishes their sentence
-```
-
-`LiveTalkerProcessor` sits where the LLM service normally sits. It receives the context frame for each user turn and pushes the same response frames an LLM service pushes, so TTS and the assistant aggregator need no changes.
-
-1. The **talker** returns one JSON decision: `speak` with a reply, or `delegate` with an optional short lead-in. A turn always gets one of the two.
-2. A **delegation** goes to a queue that runs one task at a time. The backend calls tools, the worker adds the results to the history, and the next round starts until the model answers. The talker sees the work still in progress.
-3. The **commentary writer** phrases the answer for speech and does not repeat the lead-in. If phrasing fails, the verified text is spoken as written.
-4. Every delegation's **answer** is spoken after the caller finishes their sentence. An answer that a newer request changes is spoken as being updated.
-
-## Configuration
-
-| File | Decides |
-| --- | --- |
-| [`examples_registry.yaml`](../../../examples_registry.yaml) | The `services.yaml` entries each slot offers (`llm` for the talker, `thinker-llm` for the backend), and their default sampling and reasoning settings. |
-| [`config.yaml`](config.yaml) | The registered implementation for each role, the prompt set, retries and timeouts, and the guards. Unknown keys are errors. |
-
-```yaml
-frontend:
-  provider: chat-completions
-  slot: llm
-  prompt: talker
-backend:
-  provider: chat-completions
-  slot: thinker-llm
-  prompt: thinker
-prompt_version: v1
-```
-
-To put a remote realtime model in front of the same backend instead of the cascade, set the frontend's `provider` to `realtime`. See [Using Your Own Realtime Frontend](#using-your-own-realtime-frontend). The cascade's routing guards do not apply to it; its prompt and the `delegate` tool do the routing.
-
-`slot` picks the model, and `prompt` names the [`prompts.yaml`](prompts.yaml) entry a role uses when a live session sets no instructions of its own. A session's `instructions` and `delegation.responses.instructions` take precedence.
-
-| Provider | Serves |
-| --- | --- |
-| `chat-completions` | Any OpenAI-compatible chat endpoint: NVIDIA NIM, vLLM, or a hosted API. |
-| `openai-responses` | The OpenAI Responses API. |
-
-`prompt_version` selects the routing, commentary, and answer text added to the prompts in [`prompts.yaml`](prompts.yaml). The guards (repeat guard, turn router, and failure recovery) are set under `guards` and `reliability`. A backend round that failed after emitting a function call is never retried.
-
-The `delegation` section controls several requests in one call. A request that arrives while another waits joins it (`merge_pending`). A request that arrives before the running one has emitted a function call restarts it once with both requests (`fold_before_acting`). That cannot repeat an action or leave one half done, and a task is restarted at most once. A short "any update?" turn is answered from the work in progress (`status_from_ledger`), and work that runs silently for `progress_after_seconds` gets a short status line, at most `progress_max_per_delegation` per delegation (`progress_speech`). `LIVE_CONFIG_PATH` points the server at another config file.
-
-## Using Your Own Realtime Frontend
-
-Any server that speaks the OpenAI Realtime protocol and supports client function tools can be the frontend. The bridge connects to it, gives it a `delegate` function, and runs the backend when the model calls it. Three edits point the example at your server:
-
-1. [`services.yaml`](../../../services.yaml), under `server.llm`, the server's entry:
-
-   ```yaml
-   my-realtime:
-     name: "My realtime server"
-     model_id: "my-realtime-model"
-     base_url: "wss://realtime.example.com/v1/realtime"
-     api_key_env: MY_REALTIME_API_KEY
-     health_path: ""
-   ```
-
-2. [`examples_registry.yaml`](../../../examples_registry.yaml), in this example's block, offer it through its own slot: add `realtime-frontend: [my-realtime]` under `services` and `realtime-frontend: llm` under `categories`.
-3. [`config.yaml`](config.yaml): `frontend: {provider: realtime, slot: realtime-frontend}`.
-
-Export `MY_REALTIME_API_KEY` and start with `SERVICE_RECIPE=server`. A custom entry is only offered by the `server` recipe; the `cloud` recipe drops entries without an `nvcf` key. If the slot does not resolve to a `ws://` or `wss://` URL, sessions fail with the reason in the server log and `GET /v1/live/info` lists it under `warnings`.
-
-For a server whose session settings differ, add `extra_params` to the entry as JSON: `headers` (extra request headers), `session` (merged into the `session.update` the bridge sends), and `transcription_model`. The bridge sends 24 kHz PCM16 audio and the current Realtime event names, and it accepts the older audio and transcript event names too. This is tested against a scripted server and OpenAI's hosted Realtime API.
-
-## Adding a Frontend or Backend
-
-Subclass `Frontend` or `Backend` from [`models/base.py`](models/base.py) and register it by name. Prompts, retries, and guards live outside the classes, so a new provider gets them unchanged.
-
-```python
-from examples.frontend_backend_live.models import FRONTENDS, Frontend
-from examples.frontend_backend_live.models.decision import TalkerDecision
-
-
-@FRONTENDS.register("acme")
-class AcmeFrontend(Frontend):
-    """Talker on the Acme API."""
-
-    async def complete_once(self, instructions, history, actions, max_output_tokens):
-        """Return one decision; raise on failure so transient errors are retried."""
-        return TalkerDecision("speak", "Hello.")
-```
-
-Import the module in [`models/__init__.py`](models/__init__.py), then set `provider: acme` in `config.yaml`. A `Backend` implements `stream(payload)`, which yields Responses-style events.
-
-## Live Sessions
-
-A live session client sends its `instructions` (the talker prompt) and `delegation.responses` (backend model, instructions, and function tools). In `responses` mode the backend's function calls stream to the client as `response.event`. The client returns each result with `response.item.create`, and `response.create` continues the round ([`client_tools.py`](tool_calling/client_tools.py)). In `client` mode, the server announces each delegation, and `session.commentary.append` brings the result back for phrasing. `session.instructions.append` interrupts speech and decides again, and `session.thinking.append` adds silent context.
-
-`GET /v1/live/info` returns the voices, models, default prompts, guards, and sample tools that the Live Console shows, plus a `warnings` list for configuration problems. Models, ASR, TTS, voice activity detection, and interruptions come from the same services as the other examples. Stored recordings and session forks are not available.
-
-- **When the routes are served.** They are open to anyone who can reach the server, so they are added only when the deployment is pinned to this example (`EXAMPLE_SELECTION=frontend-backend-live`, as the Compose profiles do), when `LIVE_API_TOKEN` is set, or when `LIVE_ENABLED=true`. `LIVE_ENABLED=false` turns them off. Without a token the server logs a warning at startup.
-- **Authentication.** Set `LIVE_API_TOKEN` to require a bearer token. The Live Console asks for it when it opens, or takes it from the page link as `live.html#token=<token>`. Browsers cannot send a header on a WebSocket, so use WebRTC from a browser when a token is set.
-- **Client delegation.** `POST /v1/live/delegate` runs one backend round for a client that owns its delegation: it sends the conversation (`input`) and its function tools, runs the function calls in the reply, and sends the next round. The Live Console's `client` mode uses it, then sends the result back as `session.commentary.append`. It is served and authenticated like the session routes.
-- **Conversation history.** `GET /v1/live/sessions/{id}/history` returns what each model holds now, for a running session: the talker's messages, the backend's history and what its next delegation will carry, and each role's system prompt as parts named by source. The talker's prompt is the session's `instructions` (or the `prompts.yaml` talker prompt when the session sets none), then each `session.instructions.append`, then the server's routing rules and reply format. The backend's prompt is `delegation.responses.instructions` (or the `prompts.yaml` thinker prompt), then the prompt set's voice notes. The Live Console shows it in its history panel. It is served and authenticated like the session routes.
-- **Voices.** Any voice name in the protocol is accepted, but the cascade speaks with the voice of its text-to-speech service. Send `{"id": "<voice id>"}` to choose one of that service's voices. A remote realtime frontend receives the name.
-- **Backend settings.** `delegation.responses.reasoning`, `text`, `service_tier`, and `parallel_tool_calls` reach a backend on the `openai-responses` provider. A `chat-completions` backend has no equivalent and ignores them; it applies `model`, `instructions`, `tools`, `tool_choice`, and `max_output_tokens`.
-- **Long calls.** The talker keeps the prompt and its latest `chat_history_recent_turns` messages, and the backend drops its oldest requests, whole, when its history outgrows `backend_context_tokens`.
-- **Reply audio pre-roll.** Text-to-speech runs faster than playback but delivers audio in uneven chunks, so the cascade holds the start of each reply until `tts_preroll_ms` of audio is ready (300 ms by default), then plays it on. A short reply plays as soon as it is complete, and an interruption drops what is held. Set it to `0` to send audio as it arrives.
+The talker and the backend use the same model with different `settings` in `examples_registry.yaml`. The talker runs at temperature 0, with reasoning off and at most 512 output tokens. The backend runs at temperature 0.7, with reasoning on and at most 4,096 output tokens, and its reasoning budget on Nemotron 3.5 Lightning is 256 tokens. Both slots also list Nemotron 3 Super.
 
 ## Running the Example
 
-This example runs with the **Cloud**, **Server**, and **Single GPU** profiles. Refer to the [Getting Started guide](../../../docs/01-getting-started.md) for prerequisites. Run every command from the repository root.
+This example runs with the **Cloud**, **Server**, and **Single GPU** profiles. Server is workstation-only (not DGX Spark or Jetson Thor), and Single GPU covers workstations, DGX Spark, and Jetson Thor. For prerequisites and hardware detail, refer to the [Getting Started guide](../../../docs/01-getting-started.md). Run every command from the repository root.
+
+1. Preserve any existing `.env` file. Otherwise, copy the template, and then set `NVIDIA_API_KEY` in `.env` for the Cloud or Server profile. For the Single GPU profile, set `HF_TOKEN` instead, which the profile uses to download model weights from Hugging Face:
+
+   ```bash
+   test -f .env || cp .env.example .env
+   ```
+
+2. Log in to the NVIDIA NGC container registry (Server only):
+
+   ```bash
+   set -a; . ./.env; set +a
+   printf '%s' "$NVIDIA_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+   ```
+
+3. Deploy the profile that matches your hardware:
+
+   ```bash
+   docker compose --profile frontend-backend-live up -d              # Cloud ASR, LLM, TTS
+   docker compose --profile frontend-backend-live/server up -d       # Local NIM ASR, TTS, LLM
+
+   # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
+   bash scripts/download-nemo-speech-models.sh
+   docker compose --profile frontend-backend-live/single-gpu up -d   # Lightning + NeMo-Speech.cpp
+   ```
+
+   Each profile starts the following app service and sidecars:
+
+   | Recipe profile | App service | Sidecars |
+   | --- | --- | --- |
+   | `frontend-backend-live` | `frontend-backend-live` | none (cloud NVCF) |
+   | `frontend-backend-live/server` | `frontend-backend-live-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
+   | `frontend-backend-live/single-gpu` | `frontend-backend-live-single-gpu` | `nvidia-llm-vllm-lightning-frontend-backend`, `nemo-speech` |
+
+4. Open the **Live Console** at `https://localhost:7860/live.html`, press **Start conversation**, allow the microphone, and ask what teas the cafe has. The repository UI is at `https://localhost:7860/`. Keep TLS enabled for browser testing, because browsers allow the microphone only on `localhost` or over HTTPS. `PIPELINE_TLS=false` serves plain HTTP. For plain-HTTP browser testing, refer to [browser access](../../../docs/06-troubleshooting.md#browser-access).
+
+5. Clean up when you are done by tearing down with the same profile that you started, for example `docker compose --profile frontend-backend-live down`.
+
+To run the server on the host instead, you need [`uv`](https://docs.astral.sh/uv/), Node.js 20 or newer, and `NVIDIA_API_KEY` for the Cloud models. Build the client once, then start the server with this example selected:
 
 ```bash
-docker compose --profile frontend-backend-live up -d              # Cloud ASR, LLM, TTS
-docker compose --profile frontend-backend-live/server up -d       # Local NIM ASR, TTS, LLM
-docker compose --profile frontend-backend-live/single-gpu up -d   # Lightning + NeMo-Speech.cpp
-```
-
-To run on the host:
-
-```bash
+uv sync
+cd client && npm ci && npm run build && cd ..
 EXAMPLE_SELECTION=frontend-backend-live uv run python src/server.py --host 0.0.0.0 --port 7860
 ```
 
-## Source Layout
+The Live Console shows every protocol event and each delegation, and it can steer the session while the call runs. Its **Delegation** setting starts each session in Responses mode or in client mode, which [Live Sessions](#live-sessions) describes.
 
-The talker, commentary, delegation, and model packages do not import Pipecat, so you can reuse them in another host.
+## Configuration
 
-| Package | Owns |
+The following files configure the example. The server reads `config.yaml` and `core.yaml` once, on first use, so an edit takes effect at the next restart. Unknown keys are errors, and a key in the wrong file stops the load with a message that names where it belongs.
+
+| File | What it sets |
 | --- | --- |
-| [`engine/`](engine/) | What every live engine shares: session settings and updates, the pipeline host, and the factory the live server calls. |
-| [`cascade/`](cascade/) | The core cascaded pipeline: the per-call session, the Pipecat processor, speech services, the `talker/` and `commentary/` packages, and `application_input.py` for commentary, thinking and instructions from the application. |
-| [`realtime/`](realtime/) | A remote realtime model as the frontend: the WebSocket client processor and its engine. |
-| [`delegation/`](delegation/) | The delegation coordinator and its ledger of open work, the serialized backend worker, the thinker wrapper, and the events relayed to the client. |
-| [`tool_calling/`](tool_calling/) | The client's tool gateway, the executor interface, and the reference cafe tools in [`cafe/`](tool_calling/cafe/). |
-| [`models/`](models/) | The `Frontend` and `Backend` base classes, the registry, endpoint resolution, and the implementations. |
-| [`prompts/`](prompts/) | Prompt sets `v1` and `v2`, the static prompts, and the realtime frontend's text. |
-| [`config_manager/`](config_manager/) | Loading and validating `config.yaml`. |
-| [`common/`](common/) | Ids, history conventions, word helpers, and retries with backoff. |
+| [`examples_registry.yaml`](../../../examples_registry.yaml) | The `services.yaml` entries that each slot offers (`llm` for the talker and the writer, `thinker-llm` for the backend), and their sampling and reasoning settings. |
+| [`config.yaml`](config.yaml) | The frontend: the frontend adapter (`frontend.adapter`) and its block (`frontend.cascade`). `LIVE_CONFIG_PATH` selects another file. |
+| [`core.yaml`](core.yaml) | The delegation core: the IM's settings (`delegation`), every line the core writes (`texts`), and the backend adapter with its blocks (`backend`). `CORE_CONFIG_PATH` selects another file. |
+| [`prompts.yaml`](prompts.yaml) | The `talker` and `thinker` prompts, used when a session or a request sets none, and the lines that the voice says word for word (`lines`). |
 
-## Tests
+A profile is a file that names the file it builds on (`extends: core.yaml`) and sets only what differs. The example ships the following profiles:
 
-```bash
-uv run pytest tests/unit/test_frontend_backend_live*.py tests/unit/test_live_*.py -v
+| Profile | Use |
+| --- | --- |
+| [`core.agent.yaml`](core.agent.yaml) | The backend LLM agent (`backend.adapter: llm-agent`). |
+| [`core.harness.yaml`](core.harness.yaml) | The harness (`backend.adapter: harness`), connected to an agent that you deploy. |
+| [`core.ui-bot.yaml`](core.ui-bot.yaml) | The repository UI bot: the cafe tools on the server and a display part for the task cards. `ui_bot.core_config` in `config.yaml` names it. |
+| [`config.bench.yaml`](config.bench.yaml), [`core.bench.yaml`](core.bench.yaml) | A benchmark client: no app-wait or progress lines, no client-tool deadline, and plain results. |
+
+In `config.yaml`, `frontend.cascade` sets the talker's and the writer's model and prompt, and the cascade's behavior. The following excerpt shows the keys that you are most likely to change:
+
+```yaml
+frontend:
+  adapter: cascade
+  cascade:
+    provider: chat-completions     # chat-completions (any OpenAI-compatible chat endpoint) | openai-responses
+    slot: llm                      # the examples_registry.yaml services slot of the model
+    prompt: talker                 # the prompts.yaml entry used when a session sets no instructions
+    prompt_version: v2             # the prompt set: v1 | v2 | v3
+    delegation:
+      result_wording: writer       # writer | as_written
+      progress_after_seconds: 8    # a progress line after this long of silent work; null: none
+    memory:
+      context_tokens: 16000        # the talker's memory budget
+    tts_preroll_ms: 300            # reply audio held before playback starts; 0: off
 ```
 
-The tests run offline with scripted models. One test pins the SHA-256 digest of every prompt text.
+The same block also holds the guards (`guards`), the retries and timeouts (`reliability`), the optional normalizer of spelled details (`normalizer`), and the speech settings (`speech`), each with a comment in the file. A model endpoint uses `NVIDIA_API_KEY` unless its `services.yaml` entry sets `api_key_env` to another variable.
+
+In `core.yaml`, `backend.adapter` selects the backend adapter, and `delegation` sets the IM's limits. The following excerpt shows the keys that you are most likely to change:
+
+```yaml
+delegation:
+  client_tool_timeout_seconds: 60   # how long a task waits for the app's function outputs; null: no deadline
+  result_format: plain              # plain | speak_display (a show item for the screen, then the answer to speak)
+  context_tokens: 24000             # the backend history's budget
+backend:
+  adapter: llm                      # llm (the default) | llm-agent | harness
+  slot: thinker-llm                 # the services slot of the backend's default model
+  prompt: thinker                   # the prompts.yaml entry used when a request sets no instructions
+  llm:
+    provider: chat-completions      # chat-completions | openai-responses
+    conductor: steer                # steer: a new request joins the newest open work | start_each: a queue
+```
+
+The three backend adapters differ in how they place each request and run the work:
+
+| Adapter | Placing requests | Running the work |
+| --- | --- | --- |
+| `llm` (the default) | A rule with no model call (`backend.llm.conductor`) | One run of the backend LLM |
+| `llm-agent` | A model conductor that starts, steers, or cancels work, or answers a status question | Up to `backend.llm-agent.max_running` (3) runs of the backend LLM at once |
+| `harness` | A conductor session in the agent that you deploy, with the same choices | Up to `backend.harness.max_running` (3) agent sessions at once |
+
+To switch adapters, set `CORE_CONFIG_PATH` to its profile in `.env` (for Compose) or in your shell (on the host), for example `CORE_CONFIG_PATH=src/examples/frontend_backend_live/core.agent.yaml`, and restart the app service. The harness reaches an Agent Client Protocol (ACP) agent, with Hermes as the first agent class, through the `backend.harness` block of `core.yaml`. To deploy Hermes and connect it over stdio or WebSocket, refer to [Connect Your Own Harness](../../../docs/design/architecture.md#connect-your-own-harness).
+
+## Live Sessions
+
+A live session client sends its `instructions`, which are the talker's prompt, and a `delegation` block that selects the delegation mode for the whole session:
+
+- **Responses mode** (`delegation.type: responses`). The server runs the backend work with the settings in `delegation.responses`: the backend `model`, which is required, and optional `instructions` and function `tools`. The backend's function calls stream to the client as `response.event`. The client returns each result as a `function_call_output` item with `response.item.create`, and then sends `response.create` to continue. The results must arrive within `delegation.client_tool_timeout_seconds` in `core.yaml`, or the core stops the work.
+- **Client mode** (`delegation.type: client`, or no `delegation` block). The server runs no backend. It announces each delegation with `session.delegation.created`, and the client app does the work and sends the result back as a `session.commentary.append`.
+
+During the call, the client can steer the cascade with three appends. Each one carries `delegation_id`, which is `null` in Responses mode and can name an announced delegation in client mode:
+
+- `session.instructions.append` cuts the line in progress, joins the talker's instructions, and has the talker decide again.
+- `session.thinking.append` adds silent context, which the talker sees and the next delegation carries.
+- `session.commentary.append` adds a fact that the writer words and the voice says when the caller is idle.
+
+For the events of each delegation and the ways it ends, refer to [Endings](../../../docs/design/architecture.md#endings) on the architecture page. For how the server passes requests and function results to the delegation core, refer to [Server Delegation](../../live/README.md#server-delegation) in the Live gateway's README.
+
+A Pipecat app connects with `OpenAILiveLLMService`. `ResponsesDelegation` selects Responses mode and sends the tools in the pipeline's `LLMContext` as the backend's function tools, and `ClientDelegation` selects client mode with a backend of the app's own. The following example selects Responses mode on a server started with `PIPELINE_TLS=false`:
+
+```python
+from pipecat.services.openai.live.llm import OpenAILiveLLMService
+from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
+
+llm = OpenAILiveLLMService(
+    api_key="<LIVE_API_TOKEN>",  # any value when the server sets no token
+    base_url="ws://localhost:7860/v1/live/sessions",
+    delegation=OpenAILiveLLMService.ResponsesDelegation(
+        settings=OpenAIResponsesLLMService.Settings(model="<backend model>"),
+    ),
+)
+```
+
+### Routes and Settings
+
+The server serves the Live routes when `LIVE_ENABLED` is `true`, when `LIVE_API_TOKEN` is set, or when the deployment runs this example alone (`EXAMPLE_SELECTION=frontend-backend-live`). `LIVE_ENABLED=false` turns them off, and this example's Compose profiles default it to `true`. A server with more than one worker (`UVICORN_WORKERS`) serves no Live route, because a session lives in one process. The following list describes the routes and the settings that apply to every live session:
+
+- **Authentication.** Set `LIVE_API_TOKEN` to require a bearer token on every Live route. Without one, anyone who can reach the server can use the routes. The Live Console asks for the token, or takes it from the page link as `live.html#token=<token>`. Browsers cannot send a header on a WebSocket, so use WebRTC from a browser when a token is set.
+- **Server information.** `GET /v1/live/info` returns the voices, the backend's default model (`backend.model`) and the models it serves (`backend_models`), the default prompts, and a `warnings` list for configuration problems.
+- **Client-mode rounds.** `POST /v1/live/delegate` runs one stateless backend round for a client app that does its own delegated work, such as the Live Console in client mode. At most `LIVE_MAX_CONSOLE_ROUNDS` (2) rounds run at once. With no token, the route answers only a `Host` that is an IP address, `localhost`, or a name in `LIVE_ALLOWED_HOSTS`.
+- **Conversation history.** `GET /v1/live/sessions/{id}/history` returns what the talker and the backend hold now, with each system prompt split into parts named by source. In client mode, `backend` is `null`.
+- **Voices.** The cascade speaks with the voice of its TTS service. Send `{"id": "<voice id>"}` to choose one of that service's voices.
+- **Backend settings.** `delegation.responses.reasoning`, `text`, `service_tier`, and `parallel_tool_calls` reach a backend on the `openai-responses` provider as they are. A setting that the backend cannot honor, such as a hosted tool on a `chat-completions` backend, reaches the client as a nonfatal `responses_validation_failed` error.
+- **Long calls.** The talker's memory drops its oldest whole turn groups past `compact_at` of `memory.context_tokens`, and the backend's history drops its oldest requests past `delegation.context_tokens`.
+
+Stored recordings and session forks are not available. For the session limits and the other variables, refer to [Environment Variables](../../../docs/design/architecture.md#environment-variables) on the architecture page.
+
+## Customization
+
+The following list describes the common changes and where each one is documented:
+
+- **Prompts.** Edit the `talker` and `thinker` entries in [`prompts.yaml`](prompts.yaml), or send your own in each session's `instructions` and `delegation.responses.instructions`.
+- **Server tools.** A tool source runs tools on the server for the backend, as the cafe tools do in [`core.ui-bot.yaml`](core.ui-bot.yaml). Refer to [Add a Tool Source](../../../docs/design/architecture.md#add-a-tool-source).
+- **Frontend or backend model provider.** Refer to [Add a Model Provider](../../../docs/design/architecture.md#add-a-model-provider).
+- **Prompt set.** Refer to [Add a Prompt Set](../../../docs/design/architecture.md#add-a-prompt-set).
+- **Frontend adapter, backend adapter, or harness agent.** Refer to [Extension Recipes](../../../docs/design/architecture.md#extension-recipes).
+
+A Realtime frontend, which puts a remote model that speaks the OpenAI Realtime protocol in place of the cascade, is parked in [`parked/realtime/`](parked/realtime/). No setting selects it. For models, services, and prompts in general, refer to [Configure LLM](../../../docs/how-to/configure-llm.md), [Configure Services](../../../docs/how-to/configure-services.md), and [Configure Prompts](../../../docs/how-to/configure-prompts.md).
+
+The Live tests run offline with scripted models. For their commands, refer to [Tests](../../../docs/design/architecture.md#tests) on the architecture page.
+
+## Troubleshooting
+
+For a Live route that answers 404, a refused session, `responses_validation_failed`, or a harness that does not connect, refer to [Frontend/Backend Live](../../../docs/06-troubleshooting.md#frontendbackend-live) in the Troubleshooting guide. For deployment and general failure modes, refer to the [Troubleshooting guide](../../../docs/06-troubleshooting.md).

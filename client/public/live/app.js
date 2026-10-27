@@ -10,8 +10,30 @@
 //   frontend = the model the caller talks to. Hears the mic, speaks, decides when to delegate.
 //   backend  = the delegate. In `responses` delegation the server runs it; in `client` delegation this page does.
 //   client   = this file + cafe.js. Executes function tools and returns results.
+//
+// This file is the page: its DOM, the WebRTC session and the wiring. Its logic lives in the sibling modules, which
+// have no DOM and are tested in client/test/live/. A value from the server, a model or a tool reaches the page only
+// through html.js or as textContent.
 
-import { MENU, SIZES, MODIFIERS, state, cartSnapshot, executeTool, CLIENT_TOOL_NAMES } from "./cafe.js";
+import { CafeTools, CLIENT_TOOL_NAMES, MENU, MODIFIERS, SIZES } from "./cafe.js";
+import { ClientQueue, Transcript, roundPoster, runClientDelegation } from "./client-mode.js";
+import {
+  ICE_GATHER_MS,
+  REASONING_EFFORTS,
+  SESSION_START_MS,
+  TOOL_CHOICES,
+  buildConfig as buildSessionConfig,
+  hasTurn,
+  iceServerList,
+  parseTools,
+  sessionMode,
+  tokenFromHash,
+  waitForIceGathering,
+} from "./config.js";
+import { DelegationBook } from "./delegations.js";
+import { HISTORY_POLL_MS, historyView, shouldPoll, snapshotKey } from "./history.js";
+import { cartHtml, escapeHtml, menuHtml, optionsHtml } from "./html.js";
+import { EventLog, payloadText, searchText } from "./log.js";
 
 // ---------------------------------------------------------------------------------
 // DOM
@@ -47,60 +69,59 @@ const els = {
   tokenModal: $("tokenModal"), tokenForm: $("tokenForm"), tokenInput: $("tokenInput"), tokenError: $("tokenError"),
 };
 
-const REASONING_EFFORTS = ["default", "minimal", "low", "medium", "high"];
-const TOOL_CHOICES = ["auto", "none", "required"];
-
 // ---------------------------------------------------------------------------------
-// Runtime state
+// Runtime state: the page's, and the call's, which each Start makes anew
 // ---------------------------------------------------------------------------------
 const app = {
   info: null,            // GET /v1/live/info
-  sentConfig: null,      // the session config the server accepted
-  pc: null, dc: null, mic: null,
-  sessionId: null, sessionSnapshot: null,
-  ready: false, finalized: false, muted: false,
-  closeTimer: null,
   eventSeq: 0,
-  logEntries: [],
+  log: new EventLog(),   // the newest LOG_LIMIT events
   autoscroll: true,
   filters: new Set(["lifecycle", "transcript", "delegation", "backend", "tool", "context", "app", "error"]),
-  delegations: new Map(),       // delegation_id -> record
-  byResponseId: new Map(),      // backend response id -> delegation record
-  toolCallCount: 0,
-  lastOutputAt: 0,
-  lastBargeAt: 0,
-  speechTarget: null,           // delegation currently being spoken by the frontend
-  speechTimer: null,
-  captionBubbles: { user: null, assistant: null },
-  // --- client delegation only ---------------------------------------------------
-  mode: "responses",
-  transcript: [],               // rolling [{role, text, at}] we must keep ourselves
-  clientHistory: [],            // the conversation we send to the backend, round after round
-  historyTimer: null,           // polls GET /v1/live/sessions/{id}/history while connected
-  historyShown: "",             // the last snapshot rendered, so an unchanged one is not redrawn
+  call: null,            // the current call (newCall); the last one stays readable after it ends
 };
 
-/**
- * Keep our own conversation record. In client delegation this is mandatory: the delegation event carries
- * metadata only, never the task text, so this buffer plus application state is the ONLY way to work out what
- * the user actually wants.
- */
-function recordTranscript(role, text) {
-  const last = app.transcript[app.transcript.length - 1];
-  if (last && last.role === role && nowMs() - last.at < 1500) {
-    last.text += text;
-    last.at = nowMs();
-  } else {
-    app.transcript.push({ role, text, at: nowMs() });
-  }
-  if (app.transcript.length > 40) app.transcript.shift();
+// The application's own state: one cafe cart, which outlives a call, as a kiosk's cart would.
+const cafe = new CafeTools();
+
+/** Run one function call in this browser's cafe: its output is the JSON text the server's tools.py would give. */
+async function runCafe(fc) {
+  const started = performance.now();
+  const output = await cafe.execute(fc.call_id, fc.name, fc.arguments);
+  return { args: safeParse(fc.arguments), result: safeParse(output), output, latencyMs: Math.round(performance.now() - started) };
 }
 
-function transcriptContext(turns = 8) {
-  return app.transcript.slice(-turns)
-    .map((t) => `${t.role}: ${t.text.trim()}`)
-    .filter((l) => l.length > 7)
-    .join("\n");
+/**
+ * One call's state, made anew at each Start. Work still running for an earlier call holds that call's object, never
+ * the new one, and stops on its `scope` signal, which End, a new Start and every cleanup fire.
+ */
+function newCall() {
+  return {
+    sentConfig: null,             // the session config the server started with (session.started)
+    pc: null, dc: null, mic: null,
+    sessionId: null, sessionSnapshot: null,
+    ready: false, finalized: false, muted: false,
+    ended: false,                 // cleanup ran: the page let go of the connection itself
+    closeTimer: null,
+    startTimer: null,             // session.started must come within SESSION_START_MS of the answer
+    scope: new AbortController(), // the call's stop signal: End, a new Start, cleanup
+    book: new DelegationBook(cardView, CLIENT_TOOL_NAMES), // every delegation's card, read from its events
+    typedRuns: new Set(),         // event ids of the response.create of typed requests, to label their cards
+    toolCallCount: 0,
+    lastOutputAt: 0,
+    lastBargeAt: 0,
+    speechTarget: null,           // delegation currently being spoken by the frontend
+    speechTimer: null,
+    captionBubbles: { user: null, assistant: null },
+    // --- client delegation only -------------------------------------------------
+    mode: "responses",
+    tools: [],                    // the backend tools the setup form held at Start
+    transcript: new Transcript(), // our own record of the call: the announcement carries no task text
+    clientQueue: new ClientQueue(), // client delegations, one at a time, in order
+    clientView: null,             // the newest client delegation's own history, for the history panel
+    historyTimer: null,           // polls GET /v1/live/sessions/{id}/history while connected
+    historyShown: "",             // the last snapshot rendered, so an unchanged one is not redrawn
+  };
 }
 
 const nextEventId = (prefix) => `${prefix}_${String(++app.eventSeq).padStart(3, "0")}`;
@@ -117,14 +138,13 @@ const backendModel = () => els.optBackend.value.trim() || app.info?.backend?.mod
 const ACTOR_LABEL = { talker: "frontend", thinker: "backend", client: "client" };
 
 function logEvent({ cat, dir, type, text, payload, actor, delta = false }) {
-  const entry = { at: clock(), cat, dir, type, text, payload, actor };
-  app.logEntries.push(entry);
+  const entry = { at: clock(), cat, dir, type, text, payload, actor, delta };
+  for (const dropped of app.log.add(entry)) dropped.row?.remove();  // the newest LOG_LIMIT rows stay
 
   const row = document.createElement("div");
   row.className = `ev ${dir} cat-${cat}`;
-  row.dataset.cat = cat;
-  row.dataset.delta = delta ? "1" : "";
-  row.dataset.search = `${type} ${text || ""} ${JSON.stringify(payload || "")}`.toLowerCase();
+  entry.row = row;
+  rowEntries.set(row, entry);
 
   const tag = actor ? `<span class="who-tag ${actor}">${ACTOR_LABEL[actor]}</span>` : "";
   row.innerHTML =
@@ -134,11 +154,17 @@ function logEvent({ cat, dir, type, text, payload, actor, delta = false }) {
     `<span class="txt">${text ? escapeHtml(text) : ""}</span></span>`;
 
   if (payload !== undefined) {
-    const pre = document.createElement("pre");
-    pre.textContent = JSON.stringify(payload, null, 2);
-    pre.hidden = true;
-    row.querySelector(".body").appendChild(pre);
-    row.querySelector(".ty").addEventListener("click", () => { pre.hidden = !pre.hidden; });
+    // The payload's text is made when the row is first opened, not for every event that arrives.
+    row.querySelector(".ty").addEventListener("click", () => {
+      let pre = row.querySelector("pre");
+      if (!pre) {
+        pre = document.createElement("pre");
+        pre.hidden = true;
+        pre.textContent = payloadText(payload);
+        row.querySelector(".body").appendChild(pre);
+      }
+      pre.hidden = !pre.hidden;
+    });
   }
 
   applyFilter(row);
@@ -146,15 +172,15 @@ function logEvent({ cat, dir, type, text, payload, actor, delta = false }) {
   if (app.autoscroll) els.log.scrollTop = els.log.scrollHeight;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-}
+/** Each row's log entry. */
+const rowEntries = new WeakMap();
 
 function applyFilter(row) {
+  const entry = rowEntries.get(row);
   const q = els.search.value.trim().toLowerCase();
-  const visible = app.filters.has(row.dataset.cat)
-    && (!q || row.dataset.search.includes(q))
-    && !(els.hideDeltas.checked && row.dataset.delta === "1");
+  const visible = app.filters.has(entry.cat)
+    && (!q || searchText(entry).includes(q))
+    && !(els.hideDeltas.checked && entry.delta);
   row.style.display = visible ? "" : "none";
 }
 const refilter = () => els.log.querySelectorAll(".ev").forEach(applyFilter);
@@ -162,28 +188,32 @@ const refilter = () => els.log.querySelectorAll(".ev").forEach(applyFilter);
 // ---------------------------------------------------------------------------------
 // Sending client events
 // ---------------------------------------------------------------------------------
-function send(event, { cat = "app", text = "", actor = "client" } = {}) {
-  if (!app.dc || app.dc.readyState !== "open") {
+/** Send on `call`'s own data channel; false (and an error row) when it is not open, so nothing reaches a later call. */
+function sendOn(call, event, { cat = "app", text = "", actor = "client" } = {}) {
+  if (!call.dc || call.dc.readyState !== "open") {
     logEvent({ cat: "error", dir: "out", type: event.type, text: "data channel not open — not sent", payload: event });
     return false;
   }
-  app.dc.send(JSON.stringify(event));
+  call.dc.send(JSON.stringify(event));
   logEvent({ cat, dir: "out", type: event.type, text, payload: event, actor });
   return true;
 }
+
+/** Send on the current call's data channel. */
+const send = (event, options) => sendOn(app.call, event, options);
 
 // ---------------------------------------------------------------------------------
 // Captions
 // ---------------------------------------------------------------------------------
 function caption(role, delta, startMs, endMs) {
   const who = role === "user" ? "user (mic)" : `frontend · ${frontendModel()}`;
-  let bubble = app.captionBubbles[role];
+  let bubble = app.call.captionBubbles[role];
   if (!bubble || bubble.dataset.closed === "1") {
     bubble = document.createElement("div");
     bubble.className = `bubble ${role}`;
-    bubble.innerHTML = `<span class="meta">${escapeHtml(who)} · ${startMs}ms</span><span class="body"></span>`;
+    bubble.innerHTML = `<span class="meta">${escapeHtml(who)} · ${escapeHtml(startMs)}ms</span><span class="body"></span>`;
     els.captions.appendChild(bubble);
-    app.captionBubbles[role] = bubble;
+    app.call.captionBubbles[role] = bubble;
   }
   bubble.querySelector(".body").textContent += delta;
   bubble.querySelector(".meta").textContent = `${who} · ${bubble.dataset.start || startMs}–${endMs}ms`;
@@ -200,68 +230,75 @@ function captionNote(text) {
   el.textContent = text;
   els.captions.appendChild(el);
   els.captions.scrollTop = els.captions.scrollHeight;
-  app.captionBubbles.user = null;
-  app.captionBubbles.assistant = null;
+  app.call.captionBubbles.user = null;
+  app.call.captionBubbles.assistant = null;
 }
 
 // ---------------------------------------------------------------------------------
-// Delegation cards
+// Delegation cards: delegations.js reads each delegation's events by structure; cardView draws what it reads
 // ---------------------------------------------------------------------------------
-function createDelegationCard(ev) {
-  const d = {
-    id: ev.delegation.id,
-    target: ev.delegation.target,
-    responseId: ev.delegation.response_id || null,
-    offsetMs: ev.offset_ms,
-    startedAt: nowMs(),
-    status: "running",
-    pendingCalls: [],
-    reasoning: "",
-    answer: "",
-    el: null,
-    stages: {},
-  };
-  app.delegations.set(d.id, d);
-  if (d.responseId) app.byResponseId.set(d.responseId, d);
+const TONES = ["running", "waiting", "done", "ended", "failed"];
 
-  const toClient = d.target === "client";
-  const card = document.createElement("div");
-  card.className = "dcard";
-  card.innerHTML = `
+/** What delegations.js draws through: a card, its stages, its status and its response id. */
+const cardView = {
+  created(d) {
+    const toClient = d.target === "client";
+    const card = document.createElement("div");
+    card.className = "dcard";
+    const [title, text] = d.typed
+      ? [`1 · this page → ${toClient ? "our backend" : "backend"} (typed)`,
+        `You typed this request. ${toClient
+          ? "This page runs it with its own backend rounds."
+          : "The server runs it as a request of the app's own; its events come back here like a delegation's."}`]
+      : toClient
+        ? ["1 · frontend → client", `The frontend decided it needs help and handed it to US.
+This event carries metadata ONLY — no task text, no transcript, no arguments.
+The server calls no backend here; nothing happens until we act.`]
+        : ["1 · frontend → backend", `The frontend decided this needs the backend and delegated it.
+The server calls the backend model and supplies the conversation context itself.
+The exact request payload (instructions + input) is never sent to the client.`];
+    card.innerHTML = `
     <header>
       <span class="did">${escapeHtml(d.id)}</span>
-      <span class="dstat">target: ${d.target} · +${d.offsetMs}ms</span>
+      <span class="dstat">target: ${escapeHtml(d.target)} · +${escapeHtml(d.offsetMs)}ms</span>
     </header>
     <div class="stage">
-      <span class="slabel">1 · frontend → ${toClient ? "client" : "backend"}</span>
-      <div class="stext">${toClient
-        ? `The frontend decided it needs help and handed it to US.
-This event carries metadata ONLY — no task text, no transcript, no arguments.
-The server calls no backend here; nothing happens until we act.`
-        : `The frontend decided this needs the backend and delegated it.
-The server calls the backend model and supplies the conversation context itself.
-The exact request payload (instructions + input) is never sent to the client.`}</div>
+      <span class="slabel">${escapeHtml(title)}</span>
+      <div class="stext">${escapeHtml(text)}</div>
       <div class="flow"><span>${escapeHtml(frontendModel())}</span><span>→</span><span>${
-        toClient ? "this browser" : escapeHtml(app.sentConfig?.delegation?.responses?.model || "backend")
-      }</span><span>${toClient ? "no response_id" : `response_id: ${d.responseId || "pending"}`}</span></div>
+        toClient ? "this browser" : escapeHtml(app.call.sentConfig?.delegation?.responses?.model || "backend")
+      }</span><span>${toClient ? "no response_id" : `response_id: ${escapeHtml(d.responseId || "pending")}`}</span></div>
     </div>`;
-  d.el = card;
-  const empty = els.delegations.querySelector(".empty");
-  if (empty) empty.remove();
-  els.delegations.prepend(card);
-  els.mDelegations.textContent = app.delegations.size;
-  return d;
-}
+    d.el = card;
+    d.stages = {};
+    const empty = els.delegations.querySelector(".empty");
+    if (empty) empty.remove();
+    els.delegations.prepend(card);
+    els.mDelegations.textContent = app.call.book.cards.size;
+  },
+  stage: (d, key, spec) => stage(d, key, spec),
+  status: (d, text, tone) => setStatus(d, text, tone),
+  flow(d, responseId) {
+    d.el.querySelector(".flow").lastElementChild.textContent = `response_id: ${responseId}`;
+  },
+};
 
-function stage(d, key, { cls = "", label, text = "", payload }) {
+/** Draw a card's stage `key` (drawn again: replaced); `spec` null removes it. */
+function stage(d, key, spec) {
   let node = d.stages[key];
+  if (spec === null) {
+    node?.remove();
+    delete d.stages[key];
+    return null;
+  }
+  const { cls = "", label, text = "", payload } = spec;
   if (!node) {
     node = document.createElement("div");
-    node.className = `stage ${cls}`;
     node.innerHTML = `<span class="slabel"></span><div class="stext"></div>`;
     d.el.appendChild(node);
     d.stages[key] = node;
   }
+  node.className = `stage ${cls}`;
   if (label) node.querySelector(".slabel").textContent = label;
   node.querySelector(".stext").textContent = text;
   if (payload !== undefined) {
@@ -272,32 +309,19 @@ function stage(d, key, { cls = "", label, text = "", payload }) {
   return node;
 }
 
-function setStatus(d, status) {
-  d.status = status;
-  d.el.classList.toggle("done", status === "complete");
-  d.el.classList.toggle("interrupted", status === "interrupted");
-  d.el.querySelector(".dstat").textContent =
-    `target: ${d.target} · +${d.offsetMs}ms · ${status}`;
+/** A card's status line and its edge's tone (running, waiting, done, ended or failed); a barge-in mark goes. */
+function setStatus(d, text, tone = "running") {
+  d.status = text;
+  for (const name of TONES) d.el.classList.toggle(name, name === tone);
+  d.el.classList.remove("interrupted");
+  d.el.querySelector(".dstat").textContent = `target: ${d.target} · +${d.offsetMs}ms · ${text}`;
 }
 
 // ---------------------------------------------------------------------------------
 // Backend (nested Responses) events
 // ---------------------------------------------------------------------------------
-function resolveDelegation(envelope) {
-  if (envelope.delegation_id && app.delegations.has(envelope.delegation_id)) {
-    return app.delegations.get(envelope.delegation_id);
-  }
-  const rid = envelope.event?.response?.id || envelope.event?.item_id;
-  if (rid && app.byResponseId.has(rid)) return app.byResponseId.get(rid);
-  // Fall back to the most recent running delegation.
-  return [...app.delegations.values()].reverse().find((d) => d.status === "running") || null;
-}
-
 function onBackendEvent(envelope) {
   const e = envelope.event || {};
-  const d = resolveDelegation(envelope);
-  const backend = backendModel();
-
   logEvent({
     cat: "backend", dir: "in", actor: "thinker",
     type: `response.event ▸ ${e.type || "?"}`,
@@ -305,127 +329,36 @@ function onBackendEvent(envelope) {
     payload: envelope,
     delta: /\.delta$|in_progress$/.test(e.type || ""),
   });
-  if (!d) return;
-
-  switch (e.type) {
-    case "response.created":
-      if (e.response?.id) {
-        d.responseId = e.response.id;
-        app.byResponseId.set(e.response.id, d);
-        d.el.querySelector(".flow").lastElementChild.textContent = `response_id: ${e.response.id}`;
-      }
-      break;
-
-    case "response.reasoning_summary_text.delta":
-      d.reasoning += e.delta || "";
-      stage(d, "reason", { cls: "reason", label: `2 · ${backend} reasoning (summary)`, text: d.reasoning });
-      break;
-
-    case "response.reasoning_summary_part.done":
-      d.reasoning += "\n";
-      break;
-
-    case "response.output_text.delta":
-      d.answer += e.delta || "";
-      stage(d, "answer", { cls: "answer", label: `${backend} result text → returned to the frontend`, text: d.answer });
-      break;
-
-    case "response.output_item.added":
-      if (e.item?.type === "function_call") {
-        stage(d, `call_pending_${e.output_index}`, {
-          cls: "tool", label: `backend is composing a call to ${e.item.name}`, text: "streaming arguments…",
-        });
-      }
-      break;
-
-    case "response.function_call_arguments.delta": {
-      const node = d.stages[`call_pending_${e.output_index}`];
-      if (node) node.querySelector(".stext").textContent = (node.querySelector(".stext").textContent.replace("streaming arguments…", "")) + (e.delta || "");
-      break;
-    }
-
-    case "response.output_item.done":
-      onOutputItemDone(d, e, backend);
-      break;
-
-    case "response.completed":
-    case "response.incomplete":
-    case "response.failed":
-      onResponseFinished(d, e, backend);
-      break;
+  if (e.type === "response.output_item.done" && e.item?.type === "function_call") {
+    logEvent({ cat: "tool", dir: "in", actor: "thinker", type: `function_call → ${e.item.name}`, text: `call_id ${e.item.call_id}`, payload: e.item });
+  }
+  const next = app.call.book.read(envelope);
+  const d = app.call.book.cards.get(envelope.delegation_id);
+  if (next?.run) runToolCalls(d, next.run);
+  if (next?.answered) {
+    app.call.speechTarget = d;
+    clearTimeout(app.call.speechTimer);
+    app.call.speechTimer = setTimeout(() => { app.call.speechTarget = null; }, 12000);
   }
 }
 
-function onOutputItemDone(d, e, backend) {
-  const item = e.item || {};
-
-  if (item.type === "function_call" && CLIENT_TOOL_NAMES.includes(item.name)) {
-    d.pendingCalls.push(item);
-    delete d.stages[`call_pending_${e.output_index}`];
-    stage(d, `call_${item.call_id}`, {
-      cls: "tool",
-      label: `3 · ${backend} → client · function_call ${item.name}`,
-      text: `call_id: ${item.call_id}\nThe backend asked the client to run this. It reaches the browser inside a response.event envelope.`,
-      payload: { call_id: item.call_id, name: item.name, arguments: safeParse(item.arguments) },
-    });
-    logEvent({
-      cat: "tool", dir: "in", actor: "thinker",
-      type: `function_call → ${item.name}`,
-      text: `call_id ${item.call_id}`,
-      payload: item,
-    });
-  } else if (item.type === "function_call") {
-    stage(d, `call_${item.call_id || e.output_index}`, {
-      cls: "warn", label: `unknown function ${item.name}`,
-      text: "No client implementation registered for this name.", payload: item,
-    });
-    d.pendingCalls.push(item);
-  } else if (item.type === "message") {
-    const text = messageText(item);
-    if (text) {
-      d.answer = text;
-      stage(d, "answer", { cls: "answer", label: `${backend} result text → returned to the frontend`, text });
-    }
-  }
-}
-
-async function onResponseFinished(d, e, backend) {
-  if (d.pendingCalls.length) {
-    const calls = d.pendingCalls.splice(0);
-    stage(d, "exec", {
-      cls: "tool",
-      label: "4 · client executes the function calls",
-      text: calls.map((c) => `${c.name}(${c.arguments})`).join("\n"),
-    });
-    await runToolCalls(d, calls, backend);
-    return;
-  }
-
-  if (e.type === "response.completed") {
-    setStatus(d, "complete");
-    stage(d, "handoff", {
-      cls: "spoken",
-      label: "5 · what the frontend sees",
-      text:
-        `The backend's result is handed back to the frontend as the delegation's answer.\n` +
-        `It phrases it in its own voice — the exact wording is not guaranteed.\n` +
-        `Backend tokens: ${JSON.stringify(e.response?.usage || {})}`,
-    });
-    app.speechTarget = d;
-    clearTimeout(app.speechTimer);
-    app.speechTimer = setTimeout(() => { app.speechTarget = null; }, 12000);
-  } else {
-    setStatus(d, e.type.replace("response.", ""));
-    stage(d, "handoff", { cls: "warn", label: "backend did not complete", text: e.type, payload: e.response || e });
-  }
-}
-
-async function runToolCalls(d, calls, backend) {
+/**
+ * Run the function calls a response ended with, then send their outputs and one `response.create`, together: no other
+ * event goes out between them, so each `response.create` continues exactly the response whose outputs it follows.
+ */
+async function runToolCalls(d, calls) {
+  const call = app.call;
+  const backend = backendModel();
+  stage(d, "exec", {
+    cls: "tool",
+    label: "client executes the function calls",
+    text: calls.map((fc) => `${fc.name}(${fc.arguments})`).join("\n"),
+  });
   // Optional spoken progress while a slow tool runs. This is a client-authored update to the frontend,
   // independent of the backend response.
-  const slow = calls.find((c) => c.name === "place_order" && safeParse(c.arguments)?.confirmed);
+  const slow = calls.find((fc) => fc.name === "place_order" && safeParse(fc.arguments)?.confirmed === true);
   if (slow && els.optAutoCommentary.checked) {
-    send({
+    sendOn(call, {
       type: "session.commentary.append",
       event_id: nextEventId("commentary"),
       delegation_id: null, // responses delegation rejects non-null IDs
@@ -433,47 +366,51 @@ async function runToolCalls(d, calls, backend) {
     }, { cat: "context", text: "auto progress update while place_order runs", actor: "client" });
   }
 
-  await Promise.all(calls.map(async (call) => {
-    const t0 = nowMs();
-    const { args, result, latencyMs } = await executeTool(call.name, call.arguments);
-    app.toolCallCount += 1;
-    els.mTools.textContent = app.toolCallCount;
-    renderCart();
-
-    stage(d, `result_${call.call_id}`, {
+  const t0 = nowMs();
+  const results = await Promise.all(calls.map(async (fc) => {
+    const { args, result, output, latencyMs } = await runCafe(fc);
+    countTool(call);
+    stage(d, `result_${fc.call_id}`, {
       cls: "tool",
       label: `client → ${backend} · function_call_output (${latencyMs}ms)`,
       text: `The client sends this back on the data channel as response.item.create.`,
-      payload: { call_id: call.call_id, name: call.name, args, output: result },
+      payload: { call_id: fc.call_id, name: fc.name, args, output: result },
     });
+    return { fc, output };
+  }));
+  if (call.scope.signal.aborted) {  // End or a new Start came while the tools ran: their outputs are not sent
+    stage(d, "continue", { cls: "warn", label: "not sent: the session ended", text: "The tools ran; their outputs were not sent." });
+    return;
+  }
 
-    send({
+  for (const { fc, output } of results) {
+    sendOn(call, {
       type: "response.item.create",
       event_id: nextEventId("tool_result"),
-      item: {
-        type: "function_call_output",
-        call_id: call.call_id,
-        output: JSON.stringify(result),
-      },
-    }, { cat: "tool", text: `${call.name} result (${Math.round(nowMs() - t0)}ms)`, actor: "client" });
-  }));
-
-  // One continuation for the whole batch, after every pending result is queued.
-  send({ type: "response.create", event_id: nextEventId("continue") },
+      item: { type: "function_call_output", call_id: fc.call_id, output },
+    }, { cat: "tool", text: `${fc.name} result (${Math.round(nowMs() - t0)}ms)`, actor: "client" });
+  }
+  // One continuation for the whole batch, right after its outputs.
+  sendOn(call, { type: "response.create", event_id: nextEventId("continue") },
     { cat: "tool", text: "continue the delegated response with the tool results", actor: "client" });
   stage(d, "continue", {
     cls: "tool",
     label: "client → backend · response.create",
-    text: "Explicitly resumes the delegated response now that every function result is in.",
+    text: "Resumes the delegated response now that every function result is in.",
   });
 }
 
+/** One more tool run on `call`'s meter (the cart view shows what it changed). */
+function countTool(call) {
+  call.toolCallCount += 1;
+  if (call === app.call) els.mTools.textContent = call.toolCallCount;
+  renderCart();
+}
+
 const safeParse = (s) => { try { return JSON.parse(s); } catch { return s; } };
-const messageText = (item) =>
-  (typeof item.content === "string" ? item.content : (item.content || []).map((c) => c.text || "").join(""));
 
 // ---------------------------------------------------------------------------------
-// CLIENT DELEGATION
+// CLIENT DELEGATION (the loop is client-mode.js)
 //
 // The contrast with responses delegation is the whole point:
 //   - The server tells us *that* the frontend wants help, never *what with*. No task text.
@@ -482,268 +419,120 @@ const messageText = (item) =>
 //     through POST /v1/live/delegate). The frontend never sees a single one of those tool calls.
 //   - The only thing that goes back to the frontend is plain text in a commentary append, which it speaks.
 // ---------------------------------------------------------------------------------
-async function runClientDelegation(d) {
+/** Queue client delegation `d`; `delegationId` is what its appends name: its id, or null for a typed request. */
+function startClientDelegation(d, delegationId) {
+  const call = app.call;
   const model = backendModel();
-  // A non-null delegation_id is legal only for a delegation the server actually created.
-  // Our locally-triggered ones must use null or the append is rejected.
-  const delegationId = d.synthetic ? null : d.id;
-
-  // 1. Quiet progress, tied to THIS delegation. A non-null delegation_id is legal here — and only here.
-  send({
-    type: "session.thinking.append",
-    event_id: nextEventId("progress"),
-    delegation_id: delegationId,
-    content: "Working on that now. Nothing has been ordered yet.",
-  }, { cat: "context", text: `quiet progress for ${d.id}`, actor: "client" });
-
-  // 2. Rebuild the request. This is the work responses delegation does for you.
-  const reconstructed =
-    `Recent voice transcript (may contain errors or corrections):\n${transcriptContext() || "(nothing transcribed yet)"}\n\n` +
-    `Current cart state: ${JSON.stringify(cartSnapshot())}\n\n` +
-    `The voice assistant delegated the user's latest request to you. Handle it and return ` +
-    `a short result suitable for reading aloud.`;
-
-  stage(d, "reconstruct", {
-    cls: "warn",
-    label: "2 · client reconstructs the request",
-    text:
-      "session.delegation.created carried NO task text — only an id, target and offset.\n" +
-      "We rebuild intent from our own transcript buffer plus application state.",
-    payload: reconstructed,
-  });
-
-  app.clientHistory.push({ type: "message", role: "user", content: [{ type: "input_text", text: reconstructed }] });
-  const tools = (() => { try { return JSON.parse(els.optTools.value || "[]"); } catch { return []; } })();
-  let finalText = "";
-
-  for (let round = 1; round <= 6; round += 1) {
-    let data;
-    try {
-      const res = await fetch("/v1/live/delegate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          input: app.clientHistory,
-          model,
-          instructions: els.optBackendInstructions.value.trim() || undefined,
-          tools,
-        }),
-      });
-      data = await res.json();
-      if (!res.ok) throw new Error(JSON.stringify(data).slice(0, 400));
-    } catch (error) {
-      stage(d, "bkerr", { cls: "warn", label: "our backend failed", text: String(error) });
-      setStatus(d, "failed");
-      return;
-    }
-
-    const output = data.response.output || [];
-    app.clientHistory.push(...output);
-    logEvent({
-      cat: "delegation", dir: "out", actor: "client",
-      type: `POST /v1/live/delegate (round ${round})`,
-      text: `our own backend call → ${model} · the frontend sees none of this`,
-      payload: { sent_request: data.sent_request, response_id: data.response.id },
+  const transcript = call.transcript.context();  // what was said up to the announcement
+  const history = [];
+  if (call.clientQueue.busy) setStatus(d, "queued: waits for the delegation before it", "waiting");
+  const view = {
+    stage: (key, spec) => stage(d, key, spec),
+    status: (text, tone) => {
+      d.open = tone === "running" || tone === "waiting";
+      setStatus(d, text, tone);
+    },
+    log: logEvent,
+  };
+  call.clientQueue.run(async () => {
+    call.clientView = { model, delegationId: d.id, history };
+    const outcome = await runClientDelegation({
+      delegationId, transcript, history, model, view,
+      cart: () => cafe.snapshot(),
+      round: roundPoster({
+        fetch: (...args) => fetch(...args),
+        headers: authHeaders,
+        model,
+        instructions: els.optBackendInstructions.value.trim(),
+        tools: call.tools,
+      }),
+      runTool: (fc) => runClientTool(call, fc),
+      send: (event) => sendOn(call, event, {
+        cat: "context",
+        actor: "client",
+        text: event.type === "session.thinking.append" ? `quiet progress for ${d.id}` : `result → frontend for ${d.id}`,
+      }),
+      nextEventId,
+      signal: call.scope.signal,
     });
-
-    if (round === 1) {
-      stage(d, "ourcall", {
-        cls: "tool",
-        label: `3 · client → our backend · POST /v1/live/delegate (${model})`,
-        text:
-          "We chose this model, prompt and toolset. None of it was declared to the session.\n" +
-          "We keep the conversation and send it whole each round.",
-        payload: { model: data.sent_request.model, tools: data.sent_request.tools },
-      });
+    if (outcome.status !== "stopped" && outcome.status !== "unsent" && call === app.call) {
+      call.speechTarget = d;
+      clearTimeout(call.speechTimer);
+      call.speechTimer = setTimeout(() => { call.speechTarget = null; }, 12000);
     }
-
-    const calls = output.filter((o) => o.type === "function_call");
-    if (!calls.length) {
-      finalText = output.filter((o) => o.type === "message").map(messageText).join("");
-      break;
-    }
-
-    // 3. OUR tool loop: we run these ourselves, in-process. The session is not involved at any point.
-    stage(d, `ocall_${round}`, {
-      cls: "tool",
-      label: `4 · our backend asks for tools (round ${round})`,
-      text: calls.map((c) => `${c.name}(${c.arguments})`).join("\n") +
-        "\n\nThese never reach the session. There is no response.item.create here.",
-    });
-
-    const outputs = await Promise.all(calls.map(async (call) => {
-      const { args, result, latencyMs } = await executeTool(call.name, call.arguments);
-      app.toolCallCount += 1;
-      els.mTools.textContent = app.toolCallCount;
-      renderCart();
-      logEvent({
-        cat: "tool", dir: "out", actor: "client",
-        type: `client tool ${call.name} (client delegation)`,
-        text: `${latencyMs}ms — result goes to OUR backend, not to the session`,
-        payload: { args, result },
-      });
-      return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
-    }));
-
-    stage(d, `oresult_${round}`, {
-      cls: "tool",
-      label: `5 · client → our backend · function_call_output (round ${round})`,
-      text: "Added to our conversation and sent with the next round.",
-      payload: outputs.map((o) => ({ call_id: o.call_id, output: safeParse(o.output) })),
-    });
-    app.clientHistory.push(...outputs);
-  }
-
-  if (!finalText) finalText = "I could not complete that. Let me try again.";
-
-  stage(d, "answer", {
-    cls: "answer",
-    label: `our backend's verified result (${model})`,
-    text: finalText,
+  }).catch((error) => {  // a fault of this page's own code: shown, and the next delegation still runs
+    logEvent({ cat: "error", dir: "in", type: "client delegation", text: String(error?.message || error), payload: String(error?.stack || error) });
+    setStatus(d, "failed: the console's own error (see the event log)", "failed");
   });
+}
 
-  // 4. The one and only thing the frontend receives. We could validate, redact, or drop it first — that review
-  //    step is the reason to choose client delegation.
-  send({
-    type: "session.commentary.append",
-    event_id: nextEventId("result"),
-    delegation_id: delegationId,
-    content: finalText.slice(0, 1200),
-  }, { cat: "context", text: `result → frontend for ${d.id}`, actor: "client" });
-
-  stage(d, "handoff", {
-    cls: "spoken",
-    label: "6 · client → frontend · session.commentary.append",
-    text:
-      `delegation_id: ${delegationId ?? "null (locally triggered, not a server delegation)"}\n` +
-      "Commentary is spoken aloud; the frontend phrases it in its own voice.\n" +
-      "session.thinking.append would deliver the same facts silently instead.",
+/** Run one function call of a client delegation in this browser; its output goes to our backend, not the session. */
+async function runClientTool(call, fc) {
+  const { args, result, output, latencyMs } = await runCafe(fc);
+  countTool(call);
+  logEvent({
+    cat: "tool", dir: "out", actor: "client",
+    type: `client tool ${fc.name} (client delegation)`,
+    text: `${latencyMs}ms — result goes to OUR backend, not to the session`,
+    payload: { args, result },
   });
-
-  setStatus(d, "complete");
-  app.speechTarget = d;
-  clearTimeout(app.speechTimer);
-  app.speechTimer = setTimeout(() => { app.speechTarget = null; }, 12000);
+  return { type: "function_call_output", call_id: fc.call_id, output };
 }
 
 // ---------------------------------------------------------------------------------
-// Live conversation history: what the talker and the backend hold now
+// Live conversation history: what the talker and the backend hold (read by history.js)
 // ---------------------------------------------------------------------------------
-const HISTORY_POLL_MS = 1000;
-const CONTEXT_PREFIX = "Application context (reference data): ";
+/** Whether the history panel is open and the page visible: only then does the poll fetch. */
+const historyWanted = () => shouldPoll(!els.panelHistory.classList.contains("collapsed"), document.visibilityState);
 
-function startHistory() {
-  stopHistory();
-  app.historyShown = "";
-  refreshHistory();
-  app.historyTimer = setInterval(refreshHistory, HISTORY_POLL_MS);
+function startHistory(call = app.call) {
+  stopHistory(call);
+  call.historyShown = "";
+  call.historyTimer = setInterval(() => { if (historyWanted()) refreshHistory(call); }, HISTORY_POLL_MS);
+  if (historyWanted()) refreshHistory(call);
 }
 
-function stopHistory() {
-  clearInterval(app.historyTimer);
-  app.historyTimer = null;
+function stopHistory(call = app.call) {
+  clearInterval(call.historyTimer);
+  call.historyTimer = null;
 }
 
-async function refreshHistory() {
-  if (!app.sessionId) return;
-  let snapshot;
+async function refreshHistory(call = app.call) {
+  if (!call.sessionId || call.historyTimer === null) return;  // no session, or its poll stopped
+  let text;
   try {
-    const response = await fetch(`/v1/live/sessions/${encodeURIComponent(app.sessionId)}/history`, { headers: authHeaders() });
+    const response = await fetch(`/v1/live/sessions/${encodeURIComponent(call.sessionId)}/history`, { headers: authHeaders() });
     if (!response.ok) {
       // The session is gone (closed) or its engine does not report history: keep what is shown.
-      if (response.status === 404) stopHistory();
+      if (response.status === 404) stopHistory(call);
       return;
     }
-    snapshot = await response.json();
+    text = await response.text();
   } catch {
     return;
   }
+  if (call !== app.call) return;  // an earlier call's answer: the panel shows the new call
   // In client delegation the server runs no backend; this page's own backend conversation is the history.
-  if (!snapshot.backend && app.mode === "client") {
-    snapshot.backend = { model: `${backendModel()} (ours)`, items: app.clientHistory, local: true };
+  const local = call.mode === "client" ? call.clientView : null;  // the newest client delegation's own history
+  const key = snapshotKey(text, local);
+  if (key === call.historyShown) return;
+  let snapshot;
+  try { snapshot = JSON.parse(text); } catch { return; }
+  call.historyShown = key;
+  if (!snapshot.backend && local) {
+    snapshot.backend = { model: `${local.model} (ours) · ${local.delegationId}`, items: local.history, local: true };
   }
-  const key = JSON.stringify(snapshot);
-  if (key === app.historyShown) return;
-  app.historyShown = key;
   renderHistory(snapshot);
 }
 
-function renderHistory({ frontend, backend }) {
-  const talker = frontend?.messages || [];
-  els.histFrontendModel.textContent = frontend?.model || "";
-  els.histFrontendCount.textContent = `${talker.length} messages`;
-  fillHistory(els.histFrontend, [...promptEntries(frontend?.prompt), ...talker.filter((m, i) => !(i === 0 && m.role === "system")).map(talkerEntry)], "The talker holds no messages yet.");
-
-  els.histBackendModel.textContent = backend?.model || "";
-  if (!backend) {
-    els.histBackendCount.textContent = "";
-    fillHistory(els.histBackend, [], "No server backend in this session.");
-    return;
-  }
-  const items = backend.items || [];
-  const pending = [
-    ...(backend.pending?.context || []).map((text) => ({ cls: "context pending", role: "next delegation · application context", text })),
-    ...(backend.pending?.voice || []).map((m) => ({ cls: `${m.role} pending`, role: `next delegation · ${m.role}`, text: m.content })),
-  ];
-  els.histBackendCount.textContent =
-    `${items.length} items${backend.busy ? " · working" : ""}${pending.length ? ` · ${pending.length} waiting` : ""}`;
-  fillHistory(
-    els.histBackend,
-    [...promptEntries(backend.prompt), ...items.map(backendEntry), ...pending],
-    "The backend has not been delegated anything yet.",
-  );
-}
-
-/** Where a prompt part comes from: the client over the session, the server's config, or the server's code. */
-function promptOrigin(source) {
-  if (source.startsWith("session.") || source.startsWith("delegation.")) return "client";
-  if (source.startsWith("prompts.yaml")) return "config";
-  return "server";
-}
-
-/** The system prompt of the role's next call, one collapsed entry per part. */
-function promptEntries(parts) {
-  return (parts || []).map((part) => {
-    const origin = promptOrigin(part.source);
-    return {
-      cls: `prompt ${origin}`,
-      role: `system prompt · ${origin} · ${part.source}`,
-      text: part.text,
-      collapsed: `${part.text.split("\n")[0].slice(0, 90)} … (${part.text.length} characters)`,
-    };
-  });
-}
-
-function talkerEntry(message) {
-  const text = contentText(message.content);
-  if (message.role === "system" || message.role === "developer") {
-    return { cls: "system", role: `${message.role} message`, text, collapsed: `${text.length} characters` };
-  }
-  if (message.role === "user" && text.startsWith(CONTEXT_PREFIX)) {
-    return { cls: "context", role: "application context", text: text.slice(CONTEXT_PREFIX.length) };
-  }
-  return { cls: message.role, role: message.role, text };
-}
-
-function backendEntry(item) {
-  switch (item.type) {
-    case "function_call":
-      return { cls: "call", role: `function_call · ${item.call_id || ""}`, text: `${item.name}(${item.arguments || ""})` };
-    case "function_call_output":
-      return { cls: "output", role: `function_call_output · ${item.call_id || ""}`, text: String(item.output ?? "") };
-    case "reasoning":
-      return { cls: "reasoning", role: "reasoning", text: (item.summary || []).map((s) => s.text || "").join("\n") || "(hidden)" };
-    case "message":
-    case undefined:
-      return { cls: item.role || "message", role: item.role || "message", text: contentText(item.content) };
-    default:
-      return { cls: "message", role: item.type, text: JSON.stringify(item) };
-  }
-}
-
-function contentText(content) {
-  if (typeof content === "string") return content;
-  return (content || []).map((part) => (typeof part === "string" ? part : part.text ?? JSON.stringify(part))).join("\n");
+function renderHistory(snapshot) {
+  const { frontend, backend } = historyView(snapshot);
+  els.histFrontendModel.textContent = frontend.model;
+  els.histFrontendCount.textContent = frontend.count;
+  fillHistory(els.histFrontend, frontend.entries, frontend.empty);
+  els.histBackendModel.textContent = backend.model;
+  els.histBackendCount.textContent = backend.count;
+  fillHistory(els.histBackend, backend.entries, backend.empty);
 }
 
 function fillHistory(container, entries, emptyText) {
@@ -789,13 +578,18 @@ function fillHistory(container, entries, emptyText) {
 function onServerEvent(ev) {
   switch (ev.type) {
     case "session.started": {
-      app.ready = true;
-      app.sessionId = ev.session?.id;
-      app.sessionSnapshot = ev.session;
-      els.mSession.textContent = app.sessionId || "—";
+      app.call.ready = true;
+      clearTimeout(app.call.startTimer);
+      app.call.sessionId = ev.session?.id;
+      app.call.sessionSnapshot = ev.session;
+      // The session runs with the resolved settings session.started shows, not the form's.
+      app.call.sentConfig = ev.session;
+      app.call.mode = sessionMode(ev.session);
+      updateBackendBadge();
+      els.mSession.textContent = app.call.sessionId || "—";
       setConnState("live", "Connected");
-      els.mSession.title = app.sessionId || "";
-      logEvent({ cat: "lifecycle", dir: "in", actor: "talker", type: ev.type, text: `session ${app.sessionId} active`, payload: ev });
+      els.mSession.title = app.call.sessionId || "";
+      logEvent({ cat: "lifecycle", dir: "in", actor: "talker", type: ev.type, text: `session ${app.call.sessionId} active`, payload: ev });
       enableControls(true);
       startHistory();
       break;
@@ -803,26 +597,26 @@ function onServerEvent(ev) {
 
     case "session.updated":
       logEvent({ cat: "lifecycle", dir: "in", actor: "talker", type: ev.type, text: "backend settings applied", payload: ev });
-      if (ev.session?.delegation?.responses?.model) {
-        els.badgeBackend.textContent = ev.session.delegation.responses.model;
-        if (app.sentConfig?.delegation?.responses) app.sentConfig.delegation.responses.model = ev.session.delegation.responses.model;
+      if (ev.session) {  // the whole resolved session
+        app.call.sentConfig = ev.session;
+        updateBackendBadge();
       }
       break;
 
     case "session.input_transcript.delta":
       detectBargeIn(ev);
-      recordTranscript("user", ev.delta);
+      app.call.transcript.record("user", ev.delta);
       caption("user", ev.delta, ev.start_ms, ev.end_ms);
       logEvent({ cat: "transcript", dir: "in", type: ev.type, text: ev.delta, payload: ev });
       break;
 
     case "session.output_transcript.delta":
-      app.lastOutputAt = nowMs();
-      recordTranscript("assistant", ev.delta);
+      app.call.lastOutputAt = nowMs();
+      app.call.transcript.record("assistant", ev.delta);
       caption("assistant", ev.delta, ev.start_ms, ev.end_ms);
       logEvent({ cat: "transcript", dir: "in", actor: "talker", type: ev.type, text: ev.delta, payload: ev });
-      if (app.speechTarget) {
-        const d = app.speechTarget;
+      if (app.call.speechTarget) {
+        const d = app.call.speechTarget;
         d.spoken = (d.spoken || "") + ev.delta;
         stage(d, "spoken", {
           cls: "spoken", label: "6 · what the frontend actually said", text: d.spoken,
@@ -831,12 +625,12 @@ function onServerEvent(ev) {
       break;
 
     case "session.delegation.created": {
-      const d = createDelegationCard(ev);
+      const d = app.call.book.announce(ev, { typed: app.call.typedRuns.has(ev.client_event_id) });
       logEvent({
         cat: "delegation", dir: "in", actor: "talker", type: ev.type,
         text: `${ev.delegation.id} → ${ev.delegation.target}`, payload: ev,
       });
-      if (ev.delegation.target === "client") runClientDelegation(d);
+      if (ev.delegation.target === "client") startClientDelegation(d, d.id);
       break;
     }
 
@@ -856,8 +650,8 @@ function onServerEvent(ev) {
 
     case "session.input_audio.muted":
     case "session.input_audio.unmuted":
-      app.muted = ev.type.endsWith("muted") && !ev.type.endsWith("unmuted");
-      els.btnMute.textContent = app.muted ? "Unmute mic" : "Mute mic";
+      app.call.muted = ev.type.endsWith("muted") && !ev.type.endsWith("unmuted");
+      els.btnMute.textContent = app.call.muted ? "Unmute mic" : "Mute mic";
       logEvent({ cat: "lifecycle", dir: "in", type: ev.type, text: "mic input state changed (model output is unaffected)", payload: ev });
       break;
 
@@ -869,7 +663,7 @@ function onServerEvent(ev) {
       break;
 
     case "session.closed":
-      app.finalized = true;
+      app.call.finalized = true;
       logEvent({ cat: "lifecycle", dir: "in", type: ev.type, text: `reason: ${ev.reason} · final usage ${ev.usage?.seconds}s`, payload: ev });
       els.mUsage.textContent = ev.usage?.seconds ?? els.mUsage.textContent;
       setConnState("idle", `Closed (${ev.reason})`);
@@ -886,10 +680,10 @@ function onServerEvent(ev) {
 }
 
 function detectBargeIn(ev) {
-  const sinceOutput = nowMs() - app.lastOutputAt;
-  if (app.lastOutputAt === 0 || sinceOutput > 1500) return;
-  if (nowMs() - app.lastBargeAt < 3000) return;
-  app.lastBargeAt = nowMs();
+  const sinceOutput = nowMs() - app.call.lastOutputAt;
+  if (app.call.lastOutputAt === 0 || sinceOutput > 1500) return;
+  if (nowMs() - app.call.lastBargeAt < 3000) return;
+  app.call.lastBargeAt = nowMs();
 
   captionNote("⟂ barge-in — the user started speaking while the frontend was still speaking (full duplex).");
   logEvent({
@@ -898,8 +692,8 @@ function detectBargeIn(ev) {
     payload: { user_start_ms: ev.start_ms, ms_since_assistant_delta: Math.round(sinceOutput), delta: ev.delta },
   });
 
-  for (const d of app.delegations.values()) {
-    if (d.status !== "running") continue;
+  for (const d of app.call.book.cards.values()) {
+    if (!d.open) continue;
     stage(d, "interrupt", {
       cls: "warn",
       label: "interruption during backend work",
@@ -913,47 +707,31 @@ function detectBargeIn(ev) {
 }
 
 // ---------------------------------------------------------------------------------
-// Configuration
+// Configuration (built by config.js)
 // ---------------------------------------------------------------------------------
-function parseHistory(text) {
-  return text.split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
-    const at = line.indexOf(":");
-    const role = at < 0 ? "" : line.slice(0, at).trim();
-    if (!["developer", "user", "assistant"].includes(role)) {
-      throw new Error(`Earlier messages: "${line}" must start with developer:, user: or assistant:`);
-    }
-    return {
-      type: "message", role,
-      content: [{ type: role === "assistant" ? "output_text" : "input_text", text: line.slice(at + 1).trim() }],
-    };
-  });
+/** The setup form's values, as config.js reads them. */
+function formValues() {
+  return {
+    mode: els.optMode.value,
+    frontendModel: frontendModel(),
+    voice: els.optVoice.value,
+    instructions: els.optInstructions.value,
+    history: els.optHistory.value,
+    tools: els.optTools.value,
+    backendModel: backendModel(),
+    backendInstructions: els.optBackendInstructions.value,
+    toolChoice: els.optToolChoice.value,
+    effort: els.optEffort.value,
+  };
 }
 
 /** The `session` object of the session start: everything on the setup form. Throws a readable Error. */
 function buildConfig() {
-  const config = { model: frontendModel(), audio: { output: { voice: els.optVoice.value } } };
-  const instructions = els.optInstructions.value.trim();
-  if (instructions) config.instructions = instructions;
-  const input = parseHistory(els.optHistory.value);
-  if (input.length) config.input = input;
-
-  if (els.optMode.value === "client") {
-    config.delegation = { type: "client" };
-    return config;
-  }
-  let tools;
-  try { tools = JSON.parse(els.optTools.value || "[]"); } catch (e) { throw new Error(`Backend tools are not valid JSON: ${e.message}`); }
-  const responses = { model: backendModel() };
-  const backendInstructions = els.optBackendInstructions.value.trim();
-  if (backendInstructions) responses.instructions = backendInstructions;
-  if (tools.length) { responses.tools = tools; responses.tool_choice = els.optToolChoice.value; }
-  if (els.optEffort.value !== "default") responses.reasoning = { effort: els.optEffort.value };
-  config.delegation = { type: "responses", responses };
-  return config;
+  return buildSessionConfig(formValues());
 }
 
 function fillSelect(el, values, selected) {
-  el.innerHTML = values.map((v) => `<option value="${v}"${v === selected ? " selected" : ""}>${v}</option>`).join("");
+  el.innerHTML = optionsHtml(values, selected);
 }
 
 /** Fill the form from GET /v1/live/info. */
@@ -964,7 +742,7 @@ function applyInfo() {
   fillSelect(els.ctlUpdEffort, REASONING_EFFORTS, "default");
   fillSelect(els.optToolChoice, TOOL_CHOICES, "auto");
   fillSelect(els.ctlUpdToolChoice, ["unchanged", ...TOOL_CHOICES], "unchanged");
-  els.backendModels.innerHTML = (info.backend_models || []).map((m) => `<option value="${m}"></option>`).join("");
+  els.backendModels.innerHTML = optionsHtml(info.backend_models || [], null, []);
   els.optBackend.value = info.backend?.model || "";
   els.ctlUpdModel.value = info.backend?.model || "";
   els.optInstructions.value = info.instructions?.frontend || "";
@@ -978,9 +756,12 @@ function applyInfo() {
   }
 }
 
+/** The BACKEND badge: the running session's resolved settings while it runs, the form's otherwise. */
 function updateBackendBadge() {
-  const client = els.optMode.value === "client";
-  els.badgeBackend.textContent = client ? `${backendModel()} (ours)` : backendModel();
+  const live = Boolean(app.call?.ready);
+  const client = live ? app.call.mode === "client" : els.optMode.value === "client";
+  const model = live ? app.call.sentConfig?.delegation?.responses?.model : null;
+  els.badgeBackend.textContent = client ? `${backendModel()} (ours)` : model || backendModel();
   els.noteBackend.textContent = client
     ? "run by this browser · client delegation"
     : `${app.info?.backend?.provider || "backend"} · responses delegation`;
@@ -1011,17 +792,76 @@ function enableControls(on) {
   els.btnRaw.disabled = !on;
 }
 
+/** The page's view of a call, emptied for a new one: cards, captions, meters, history and the mute button. */
+function resetCallView() {
+  const note = document.createElement("p");
+  note.className = "empty";
+  note.textContent = "No delegation yet. Ask about the menu once connected.";
+  els.delegations.replaceChildren(note);
+  els.captions.replaceChildren();
+  els.mSession.textContent = "—";
+  els.mSession.title = "";
+  els.mUsage.textContent = "0";
+  els.mCtx.textContent = "0%";
+  els.mDelegations.textContent = "0";
+  els.mTools.textContent = "0";
+  els.btnMute.textContent = "Mute mic";
+  for (const label of [els.histFrontendModel, els.histFrontendCount, els.histBackendModel, els.histBackendCount]) {
+    label.textContent = "";
+  }
+  fillHistory(els.histFrontend, [], "Start a conversation to see the talker's context.");
+  fillHistory(els.histBackend, [], "Start a conversation to see the backend's history.");
+}
+
+/** The page's ICE servers from GET /api/ice-servers (host candidates only without them); credentials are not logged. */
+async function loadIceServers() {
+  try {
+    const response = await fetch("/api/ice-servers");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const servers = iceServerList(await response.json());
+    logEvent({
+      cat: "lifecycle", dir: "in", type: "GET /api/ice-servers",
+      text: servers.length
+        ? `${servers.length} ICE server(s)${hasTurn(servers) ? ", TURN included" : ""}`
+        : "none: host candidates only (enough on this machine or a LAN)",
+      payload: { urls: servers.map((server) => server.urls) },
+    });
+    return servers;
+  } catch (error) {
+    logEvent({ cat: "lifecycle", dir: "in", type: "GET /api/ice-servers", text: `not available (${error.message}): host candidates only` });
+    return [];
+  }
+}
+
+/** What a failed connection most likely needs, for its message. */
+function turnHint(iceServers) {
+  return hasTurn(iceServers)
+    ? "The TURN server was offered; check that it is reachable."
+    : "No TURN server was offered: a server on another network needs TURN_USERNAME and TURN_PASSWORD (and TURN_URL).";
+}
+
+/** End `call` with a clear message instead of a hang: the microphone stops and the page can start again. */
+function failCall(call, message) {
+  logEvent({ cat: "error", dir: "in", type: "connect.failed", text: message });
+  setConnState("err", message);
+  cleanup(call);
+}
+
 async function connect() {
   els.btnStart.disabled = true;
-  app.finalized = false;
+  const previous = app.call;
+  const call = app.call = newCall();
+  cleanup(previous);  // an earlier call still holding a connection lets it go
+  resetCallView();
   setConnState("", "Connecting…");
 
   try {
-    const config = buildConfig();
-    app.mode = els.optMode.value;
-    app.clientHistory = [];
-    const pc = new RTCPeerConnection();
-    app.pc = pc;
+    const config = buildConfig();  // refuses bad backend tools JSON in both modes
+    call.mode = els.optMode.value;
+    call.tools = parseTools(els.optTools.value);  // client mode sends these with each of its rounds
+    const iceServers = await loadIceServers();
+    const pc = new RTCPeerConnection({ iceServers });
+    call.pc = pc;
 
     pc.addEventListener("track", (event) => {
       els.player.srcObject = new MediaStream([event.track]);
@@ -1033,31 +873,41 @@ async function connect() {
     });
     pc.addEventListener("connectionstatechange", () => {
       logEvent({ cat: "lifecycle", dir: "in", type: "webrtc.connectionstate", text: pc.connectionState });
+      if (pc.connectionState === "failed" && call === app.call && !call.finalized) {
+        failCall(call, `WebRTC could not connect (ICE failed). ${turnHint(iceServers)}`);
+      }
     });
 
-    app.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-    for (const track of app.mic.getAudioTracks()) pc.addTrack(track, app.mic);
+    call.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    for (const track of call.mic.getAudioTracks()) pc.addTrack(track, call.mic);
     logEvent({ cat: "lifecycle", dir: "out", type: "webrtc.microphone", text: "mic track added — audio goes to the server over WebRTC" });
 
     // Register handlers before creating the offer.
     const dc = pc.createDataChannel("oai-events");
-    app.dc = dc;
+    call.dc = dc;
     dc.addEventListener("message", ({ data }) => {
+      if (call !== app.call) return;  // a late event of an earlier call
       let ev;
       try { ev = JSON.parse(data); } catch { return; }
       onServerEvent(ev);
     });
     dc.addEventListener("close", () => {
-      if (!app.finalized) {
+      if (call === app.call && !call.finalized && !call.ended) {  // not the page's own close in cleanup
         logEvent({ cat: "error", dir: "in", type: "datachannel.close", text: "closed before session.closed — final usage unconfirmed" });
         setConnState("err", "Disconnected without final usage.");
-        cleanup();
+        cleanup(call);
       }
     });
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    await waitForIce(pc);
+    if (!(await waitForIceGathering(pc))) {
+      logEvent({
+        cat: "lifecycle", dir: "out", type: "webrtc.ice",
+        text: `ICE gathering did not finish in ${ICE_GATHER_MS / 1000} s (a TURN server this browser cannot reach?): ` +
+          "the offer carries the candidates gathered so far",
+      });
+    }
 
     logEvent({
       cat: "lifecycle", dir: "out", type: "POST /v1/live/sessions",
@@ -1071,65 +921,59 @@ async function connect() {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error?.message || result.detail || `HTTP ${response.status}`);
 
-    app.sentConfig = result.sent_session_config;
     updateBackendBadge();
     logEvent({
       cat: "lifecycle", dir: "in", type: "POST /v1/live/sessions → 201",
-      text: `session ${result.session?.id} created with the config below`,
-      payload: { session: result.session, sent_session_config: app.sentConfig },
+      text: `session ${result.session?.id} created; its configuration comes with session.started`,
+      payload: { session: result.session },
     });
 
     await pc.setRemoteDescription({ type: "answer", sdp: result.transport.sdp });
     // The HTTP request started the session; do not send session.start here.
     setConnState("", "Negotiated — waiting for session.started…");
+    call.startTimer = setTimeout(() => {
+      if (call === app.call && !call.ready) {
+        failCall(call, `No session.started within ${SESSION_START_MS / 1000} s: the connection did not come up. ${turnHint(iceServers)}`);
+      }
+    }, SESSION_START_MS);
   } catch (error) {
     logEvent({ cat: "error", dir: "in", type: "connect.failed", text: String(error.message || error).slice(0, 400), payload: String(error) });
     setConnState("err", "Connection failed — see console");
-    cleanup();
+    cleanup(call);
   }
 }
 
-function waitForIce(pc) {
-  if (pc.iceGatheringState === "complete") return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pc.removeEventListener("icegatheringstatechange", check);
-      reject(new Error("Timed out gathering ICE candidates"));
-    }, 10000);
-    function check() {
-      if (pc.iceGatheringState !== "complete") return;
-      clearTimeout(timer);
-      pc.removeEventListener("icegatheringstatechange", check);
-      resolve();
-    }
-    pc.addEventListener("icegatheringstatechange", check);
-    check();
-  });
-}
-
 function gracefulClose() {
-  if (!app.ready || !app.dc || app.dc.readyState !== "open") return;
+  if (!app.call.ready || !app.call.dc || app.call.dc.readyState !== "open") return;
   els.btnStop.disabled = true;
   setConnState("", "Closing — draining pending events…");
+  const call = app.call;
+  call.scope.abort();  // stops this page's own work for the call: client rounds, tool outputs
   // The session.closed handler is already registered; keep everything alive until it arrives.
   send({ type: "session.close", event_id: nextEventId("close") },
     { cat: "lifecycle", text: "queued backend work is cancelled; an active reply may finish" });
-  app.closeTimer = setTimeout(() => {
+  call.closeTimer = setTimeout(() => {
     logEvent({ cat: "error", dir: "in", type: "close.timeout", text: "no session.closed within 15s — finalization unconfirmed" });
-    cleanup();
+    cleanup(call);
   }, 15000);
 }
 
-function cleanup() {
-  clearTimeout(app.closeTimer);
-  stopHistory();
-  app.mic?.getTracks().forEach((t) => t.stop());
-  try { app.dc?.close(); } catch {}
-  try { app.pc?.close(); } catch {}
+/** Let go of `call`'s connection, microphone and timers; the page's controls follow only the current call. */
+function cleanup(call = app.call) {
+  call.ended = true;
+  call.scope.abort();
+  clearTimeout(call.closeTimer);
+  clearTimeout(call.startTimer);
+  clearTimeout(call.speechTimer);
+  stopHistory(call);
+  call.mic?.getTracks().forEach((t) => t.stop());
+  try { call.dc?.close(); } catch {}
+  try { call.pc?.close(); } catch {}
+  call.ready = false;
+  call.dc = null;
+  if (call !== app.call) return;
   els.player.srcObject = null;
   els.player.classList.remove("needs-play");
-  app.ready = false;
-  app.dc = null;
   els.btnStart.disabled = false;
   enableControls(false);
 }
@@ -1138,27 +982,11 @@ function cleanup() {
 // Client state rendering
 // ---------------------------------------------------------------------------------
 function renderCart() {
-  const cart = cartSnapshot();
-  const lines = cart.lines.map((l) =>
-    `<div class="line"><span>${l.quantity}× ${l.size ? l.size + " " : ""}${l.name}` +
-    `${l.modifiers.length ? " (" + l.modifiers.join(", ") + ")" : ""} <span style="color:var(--faint)">${l.line_id}</span></span>` +
-    `<span>$${l.line_total.toFixed(2)}</span></div>`).join("");
-  els.cartView.innerHTML =
-    (lines || `<div class="line" style="color:var(--faint)">cart is empty</div>`) +
-    `<div class="line tot"><span>subtotal</span><span>$${cart.subtotal.toFixed(2)}</span></div>` +
-    `<div class="line"><span>tax</span><span>$${cart.tax.toFixed(2)}</span></div>` +
-    `<div class="line"><span><b>total</b></span><span><b>$${cart.total.toFixed(2)}</b></span></div>` +
-    (state.lastOrder
-      ? `<div class="order">order ${state.lastOrder.order_id} for ${state.lastOrder.customer_name} · ready in ${state.lastOrder.ready_in_minutes} min</div>`
-      : "");
+  els.cartView.innerHTML = cartHtml(cafe.snapshot(), cafe.lastOrder);
 }
 
 function renderMenu() {
-  els.menuView.innerHTML = MENU.map((m) =>
-    `<div class="mitem"><span>${m.id} · ${m.name} <span style="color:var(--faint)">${m.category}</span></span><span>$${m.price.toFixed(2)}</span></div>`
-  ).join("") +
-    `<div class="mitem" style="margin-top:6px"><span>sizes</span><span>${Object.entries(SIZES).map(([k, v]) => `${k} +$${v.toFixed(2)}`).join(" · ")}</span></div>` +
-    `<div class="mitem"><span>modifiers</span><span>${Object.entries(MODIFIERS).map(([k, v]) => `${k} +$${v.price.toFixed(2)}`).join(" · ")}</span></div>`;
+  els.menuView.innerHTML = menuHtml(MENU, SIZES, MODIFIERS);
 }
 
 // ---------------------------------------------------------------------------------
@@ -1185,7 +1013,7 @@ const PRESETS = {
 
 function refreshPresets() {
   const list = PRESETS[els.ctlKind.value] || [];
-  els.ctlPreset.innerHTML = list.map((p, i) => `<option value="${i}">${p[0]}</option>`).join("");
+  els.ctlPreset.innerHTML = optionsHtml(list.map((_, i) => String(i)), "0", list.map((p) => p[0]));
   els.ctlContent.value = list[0]?.[1] || "";
 }
 
@@ -1214,7 +1042,7 @@ async function loadInfo() {
 
 /** Take a bearer token from `live.html#token=…` (the fragment never reaches the server), then drop it from the URL. */
 function tokenFromUrl() {
-  const token = new URLSearchParams(location.hash.slice(1)).get("token");
+  const token = tokenFromHash(location.hash);  // keeps a "+"
   if (!token) return;
   els.optToken.value = token;
   history.replaceState(null, "", location.pathname + location.search);
@@ -1251,6 +1079,7 @@ async function loadInfoWithToken() {
 }
 
 async function boot() {
+  app.call = newCall();
   tokenFromUrl();
   refreshPresets();
   renderMenu();
@@ -1271,8 +1100,8 @@ async function boot() {
   els.optToken.addEventListener("change", () => loadInfo().then(() => setConnState("", "Idle")).catch((e) => setConnState("err", e.message)));
 
   els.btnMute.addEventListener("click", () => {
-    send({ type: app.muted ? "session.input_audio.unmute" : "session.input_audio.mute", event_id: nextEventId("mic") },
-      { cat: "lifecycle", text: app.muted ? "resume mic input" : "mute mic input (does not stop the frontend speaking)" });
+    send({ type: app.call.muted ? "session.input_audio.unmute" : "session.input_audio.mute", event_id: nextEventId("mic") },
+      { cat: "lifecycle", text: app.call.muted ? "resume mic input" : "mute mic input (does not stop the frontend speaking)" });
   });
 
   els.btnAppend.addEventListener("click", () => {
@@ -1287,7 +1116,7 @@ async function boot() {
   });
 
   els.btnUpdate.addEventListener("click", () => {
-    if (app.mode === "client") {
+    if (app.call.mode === "client") {
       // There is nothing for the session to update: it holds no backend configuration at all.
       // Swapping our own model is a purely local change and emits no session event.
       logEvent({
@@ -1323,10 +1152,10 @@ async function boot() {
   els.btnTyped.addEventListener("click", () => {
     const text = els.typedInput.value.trim();
     if (!text) return;
-    if (app.mode === "client") {
+    if (app.call.mode === "client") {
       // response.item.create / response.create require responses delegation. In client mode typed text goes
       // straight to our own backend instead.
-      recordTranscript("user", text);
+      app.call.transcript.record("user", text);
       logEvent({
         cat: "delegation", dir: "out", actor: "client",
         type: "typed input (client delegation)",
@@ -1334,9 +1163,8 @@ async function boot() {
         payload: { text },
       });
       const ev = { delegation: { id: `local_${Date.now()}`, target: "client" }, offset_ms: 0 };
-      const d = createDelegationCard(ev);
-      d.synthetic = true;  // not a real session delegation -> appends must use null
-      runClientDelegation(d);
+      const d = app.call.book.announce(ev, { typed: true });
+      startClientDelegation(d, null);  // not a delegation the session announced: its appends name none
       els.typedInput.value = "";
       return;
     }
@@ -1345,7 +1173,9 @@ async function boot() {
       event_id: nextEventId("typed"),
       item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
     }, { cat: "delegation", text: "queue exact typed text for the backend", actor: "client" });
-    send({ type: "response.create", event_id: nextEventId("typed_run") },
+    const run = nextEventId("typed_run");
+    app.call.typedRuns.add(run);  // its delegation's announcement names this event: its card says "typed"
+    send({ type: "response.create", event_id: run },
       { cat: "delegation", text: "run the backend on the queued item", actor: "client" });
     els.typedInput.value = "";
   });
@@ -1381,12 +1211,12 @@ async function boot() {
     app.autoscroll = !app.autoscroll;
     els.btnAutoscroll.classList.toggle("on", app.autoscroll);
   });
-  els.btnClear.addEventListener("click", () => { els.log.innerHTML = ""; app.logEntries = []; });
+  els.btnClear.addEventListener("click", () => { els.log.innerHTML = ""; app.log.clear(); });
   els.btnExport.addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(app.logEntries, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(app.log.exported(), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `live-session-${app.sessionId || "log"}.json`;
+    a.download = `live-session-${app.call.sessionId || "log"}.json`;
     a.click();
   });
 
@@ -1406,14 +1236,16 @@ async function boot() {
     els.btnHistoryToggle.textContent = open ? "hide" : "show";
     els.btnHistoryToggle.setAttribute("aria-expanded", String(open));
     try { localStorage.setItem("live.historyOpen", open ? "1" : "0"); } catch {}
+    if (historyWanted()) refreshHistory(app.call);  // opened: show it now, not at the next tick
   };
+  document.addEventListener("visibilitychange", () => { if (historyWanted()) refreshHistory(app.call); });
   let historyOpen = true;
   try { historyOpen = localStorage.getItem("live.historyOpen") !== "0"; } catch {}
   setHistoryOpen(historyOpen);
   els.btnHistoryToggle.addEventListener("click", () => setHistoryOpen(els.panelHistory.classList.contains("collapsed")));
   els.btnShowConfig.addEventListener("click", () => {
-    let config = app.sentConfig;
-    let title = "Session config (as sent)";
+    let config = app.call.sentConfig;
+    let title = "Session config (as the server started it)";
     if (!config) {
       title = "Session config (preview — start a conversation to send it)";
       try { config = buildConfig(); } catch (error) { config = { error: error.message }; }

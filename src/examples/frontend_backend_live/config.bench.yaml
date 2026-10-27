@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The frontend for the benchmark (tau2's Live client): config.yaml, with what differs. Select it with
+# LIVE_CONFIG_PATH; core.bench.yaml is the delegation core's half.
+
+extends: config.yaml
+
+frontend:
+  cascade:
+    delegation:
+      app_wait_seconds: null         # no app-wait line: the app answers in its own time
+      progress_after_seconds: null   # no spoken progress lines
