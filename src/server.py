@@ -72,6 +72,7 @@ from examples.shared.prewarm import build_session_languages, peek_cached_tts_con
 from examples.shared.subagents import load_subagent_registry
 from utils import (
     LOCAL_SPEECH_PORTS,
+    NVCF_LLM_BASE_URL,
     PROJECT_ROOT,
     SELF_HOSTED_SOURCE,
     build_services_api_response,
@@ -98,6 +99,15 @@ _CONNECT_HEALTH_TIMEOUT_SECS = 5
 _NIM_READY_PATH = "/v1/health/ready"
 _LOCAL_SERVICE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 _TURN_LISTEN_PORT = 3478
+# Each LLM slot an example may use: the session field that holds its base URL (filled from the UI's choice of entry,
+# as utils' catalog hydration writes it) and its name in readiness messages.
+_LLM_SLOTS = {"llm": ("base_url", "LLM"), "thinker-llm": ("thinker_base_url", "Thinker LLM")}
+# The setting that names another factory of a live session's parts (module:function), and its deprecated name.
+_LIVE_FACTORY_SETTING = "LIVE_ADAPTER_FACTORY"
+_OLD_LIVE_FACTORY_SETTING = "LIVE_ENGINE_FACTORY"
+# A Frontend/Backend Live factory module the server refuses, and the factory to name instead.
+_REMOVED_ENGINE_MODULE = "examples.frontend_backend_live.engine"
+_ENGINE_SUCCESSOR = "examples.frontend_backend_live.factory:create_frontend_adapter"
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
@@ -285,8 +295,9 @@ def _get_default_asr_catalog() -> tuple[str, str, str]:
     )
 
 
-def _get_default_llm_base_url() -> str:
-    return load_service_entry("llm", "").get("base_url", "https://integrate.api.nvidia.com/v1")
+def _get_default_llm_base_url(slot: str = "llm") -> str:
+    """Return the base URL of the default catalog entry of an LLM slot (``llm``, ``thinker-llm``)."""
+    return load_service_entry(slot, "").get("base_url", NVCF_LLM_BASE_URL)
 
 
 def _store_session_config(config: dict) -> str:
@@ -409,13 +420,18 @@ def _local_speech_ready_url(label: str, server: str) -> str:
 
 
 def _llm_health_url(base_url: str) -> str:
-    """Return the readiness URL of the self-hosted LLM at ``base_url`` from its catalog ``health_path``, or ``""``."""
+    """Return the readiness URL of the self-hosted LLM at ``base_url`` from its catalog ``health_path``, or ``""``.
+
+    Every LLM slot's entries are read (a bound example's catalog is keyed by slot, such as ``thinker-llm``); only an
+    LLM's entry has a ``base_url``.
+    """
     health_path = next(
         (
             str(entry["health_path"])
             for source, catalog in service_catalog_sources()
             if source == SELF_HOSTED_SOURCE
-            for entry in catalog.get("llm", {}).values()
+            for section in catalog.values()
+            for entry in section.values()
             if entry.get("base_url") == base_url and entry.get("health_path")
         ),
         "",
@@ -470,16 +486,14 @@ async def _run_http_readiness_check(
 
 
 async def _ensure_llm_ready_for_connection(config: dict, example: dict) -> None:
-    """Run a local LLM readiness check before starting the session."""
-    if "llm" not in example["services"]:
-        return
-
-    base_url = config.get("base_url", "") or _get_default_llm_base_url()
-    health_url = _llm_health_url(base_url)
-    if not health_url:
-        return
-
-    await _run_http_readiness_check("LLM", base_url, health_url)
+    """Run a local readiness check of every LLM slot the example uses, at the base URL the session will use."""
+    for slot, (base_url_field, label) in _LLM_SLOTS.items():
+        if slot not in example["services"]:
+            continue
+        base_url = config.get(base_url_field, "") or _get_default_llm_base_url(slot)
+        health_url = _llm_health_url(base_url)
+        if health_url:
+            await _run_http_readiness_check(label, base_url, health_url)
 
 
 async def _ensure_asr_ready_for_connection(config: dict, example: dict) -> None:
@@ -565,6 +579,87 @@ async def _ensure_services_ready_for_connection(config: dict, example: dict) -> 
     await _ensure_tts_ready_for_connection(config, example)
 
 
+def _live_served(example: dict) -> bool:
+    """Return whether to serve the Live API (``/v1/live``) of ``example``, the example that serves it.
+
+    Its routes are open to anyone who can reach the server unless ``LIVE_API_TOKEN`` is set, so they are not added to
+    a deployment of another example. ``LIVE_ENABLED`` decides when it is set (``1``, ``true``, ``yes`` or ``on`` serve
+    them); otherwise they are served when a token is set or when the deployment is pinned to that example.
+    """
+    explicit = os.getenv("LIVE_ENABLED", "").strip().lower()
+    if explicit:
+        return explicit in {"1", "true", "yes", "on"}
+    if os.getenv("LIVE_API_TOKEN", "").strip():
+        return True
+    return examples_registry.visible_example_keys() == (example["key"],)
+
+
+def _live_factory_spec(example: dict) -> str:
+    """Return the factory of a live session's parts: ``LIVE_ADAPTER_FACTORY``, else the example's ``live.factory``.
+
+    ``LIVE_ENGINE_FACTORY``, the deprecated name, is read when ``LIVE_ADAPTER_FACTORY`` is unset, with a warning.
+
+    Raises:
+        RuntimeError: The setting names the ``examples.frontend_backend_live.engine`` module, which does not exist.
+    """
+    old = os.getenv(_OLD_LIVE_FACTORY_SETTING, "").strip()
+    if old:
+        logger.warning(f"{_OLD_LIVE_FACTORY_SETTING} is deprecated: set {_LIVE_FACTORY_SETTING} instead.")
+    choices = (
+        (_LIVE_FACTORY_SETTING, os.getenv(_LIVE_FACTORY_SETTING, "").strip()),
+        (_OLD_LIVE_FACTORY_SETTING, old),
+        ("live.factory", example["live"]["factory"]),
+    )
+    name, spec = next((name, value) for name, value in choices if value)  # the first one set, in this order
+    module = spec.partition(":")[0]
+    if module == _REMOVED_ENGINE_MODULE or module.startswith(f"{_REMOVED_ENGINE_MODULE}."):
+        raise RuntimeError(
+            f"{name}={spec!r} names {_REMOVED_ENGINE_MODULE}, which was removed: set {_LIVE_FACTORY_SETTING} to "
+            f"{_ENGINE_SUCCESSOR}, or leave it unset for the example's own factory."
+        )
+    return spec
+
+
+def _live_hook(example: dict, spec: str, what: str):
+    """Return the Live hook ``spec`` names, imported on its first call and called with ``example``'s services bound.
+
+    The hook reads the catalog of the example that serves Live, whatever example the UI is locked to.
+    """
+
+    async def hook(*args):
+        set_service_context(example)
+        return await examples_registry.resolve_hook(spec, what)(*args)
+
+    return hook
+
+
+def _mount_live(app: FastAPI) -> None:
+    """Mount the Live API's routes for the example whose ``live:`` block names its hooks, when they are served.
+
+    The hooks are imported on first use, so the server starts without loading the example. When the routes are not
+    served, the mount adds only its last route under ``/v1/live``, which answers 404.
+
+    Raises:
+        RuntimeError: The factory setting names a module that does not exist.
+    """
+    from live.gateway import LiveSettings
+    from live.mount import mount_live
+
+    example = examples_registry.live_example()
+    if example is None or not _live_served(example):
+        mount_live(app)
+        return
+    hooks = example["live"]
+    mount_live(
+        app,
+        factory=_live_hook(example, _live_factory_spec(example), "live.factory"),
+        core=_live_hook(example, hooks["core"], "live.core"),
+        describe=_live_hook(example, hooks["describe"], "live.describe"),
+        settings=LiveSettings.from_env(),
+        ice_servers=_build_ice_servers,
+    )
+
+
 def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     """Build and return the FastAPI application with all routes."""
     if prompt_file:
@@ -598,9 +693,7 @@ def create_app(host: str = "localhost", prompt_file: str = "") -> FastAPI:
     )
 
     # Live session protocol (``/v1/live/...``): separate from ``/v1/realtime`` below.
-    from live.mount import mount_live
-
-    mount_live(app)
+    _mount_live(app)
 
     def _resolve_example(config: dict) -> dict:
         """Return the active registry entry. ``examples_registry.find()`` honors any selection lock."""

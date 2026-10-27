@@ -261,6 +261,8 @@ services:
       <<: *app-env
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
       SERVICE_RECIPE: cloud
+      # The Live routes (/v1/live) stay on with any EXAMPLE_SELECTION; LIVE_ENABLED=false turns them off.
+      LIVE_ENABLED: ${LIVE_ENABLED:-true}
 
   frontend-backend-live-server:
     <<: *app-base
@@ -270,6 +272,7 @@ services:
       <<: *app-env
       SERVICE_RECIPE: server
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
+      LIVE_ENABLED: ${LIVE_ENABLED:-true}
 
   frontend-backend-live-single-gpu:
     <<: *app-base
@@ -279,3 +282,4 @@ services:
       <<: *app-env
       SERVICE_RECIPE: single-gpu
       EXAMPLE_SELECTION: ${EXAMPLE_SELECTION:-frontend-backend-live}
+      LIVE_ENABLED: ${LIVE_ENABLED:-true}

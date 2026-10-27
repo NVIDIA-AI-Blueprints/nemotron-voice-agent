@@ -58,6 +58,7 @@ We use context summarization logic for our examples to always **pin the initial 
 
 - **Generic** and **Multilingual** assistants **summarize** older history: once the conversation grows past the recent window, the older turns are condensed into a single pinned summary message (an additional LLM call after the turn), and the most recent `CHAT_HISTORY_RECENT_TURNS` turns are kept verbatim.
 - **Frontend/Backend Agent** uses a plain **sliding window**: older non-prompt messages are dropped, keeping only the most recent `CHAT_HISTORY_RECENT_TURNS` messages.
+- **Frontend/Backend Live** does not read `CHAT_HISTORY_RECENT_TURNS`. Its talker keeps a token budget, `frontend.cascade.memory.context_tokens` in the example's `config.yaml`, and drops the oldest turns, never the prompt, after the history passes the `compact_at` share of that budget. The backend's history budget is `delegation.context_tokens` in the example's `core.yaml`. For details, refer to [Routes and Settings](../../src/examples/frontend_backend_live/README.md#routes-and-settings).
 
 ### Configuration
 
@@ -66,7 +67,7 @@ We use context summarization logic for our examples to always **pin the initial 
 | `CHAT_HISTORY_RECENT_TURNS` | `10` (Generic / Multilingual), `20` (Frontend/Backend Agent) | Most recent non-prompt turns kept before older history is summarized (Generic/Multilingual) or dropped (Frontend/Backend Agent) |
 
 ```bash
-# Override the per-example default (applies to whichever example is running)
+# Override the per-example default (applies to whichever example is running, except Frontend/Backend Live)
 CHAT_HISTORY_RECENT_TURNS=10
 ```
 

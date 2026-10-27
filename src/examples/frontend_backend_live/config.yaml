@@ -1,68 +1,74 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Frontend/Backend Live configuration. Unknown keys are errors.
+# Frontend/Backend Live configuration: the frontend's settings. Unknown keys are errors. The server reads this file once
+# (LIVE_CONFIG_PATH points it at another), so an edit takes effect at the next restart.
 #
-# `frontend` is the talker: one fast call per caller turn that either speaks a reply or delegates. `backend` is
-# the thinker: the tool-using model that does the delegated work. Each role names
-#   provider  a registered implementation (models/registry.py):
-#               chat-completions   any OpenAI-compatible chat endpoint (NVIDIA NIM, vLLM, hosted)
-#               openai-responses   the OpenAI Responses API
-#             For the frontend only, `realtime` uses a remote realtime model as the caller-facing voice, with no
-#             cascade of our own: its slot's entry sets `base_url` (a ws:// or wss:// realtime endpoint), `model_id`
-#             and `api_key_env`; `extra_params` may carry `headers`, `session` (merged into session.update) and
-#             `transcription_model`. The model delegates to the backend through a `delegate` function.
-#   slot      the `examples_registry.yaml` services slot whose selected `services.yaml` entry is the model
-#             (endpoint, model id, sampling and reasoning settings are set there, not here)
-#   prompt    the `prompts.yaml` entry used as the role's static instructions when a live session supplies none
-#             (default: `talker` for the frontend, `thinker` for the backend)
-# Adding a provider is adding a subclass of `Frontend` or `Backend` and registering it by name.
+# The delegation core that does the delegated work has its own file, core.yaml (CORE_CONFIG_PATH points the server at
+# another): the backend model and adapter, the core's limits, and every line it writes. A key that belongs there stops
+# loading with a message that names its place.
+
 frontend:
-  provider: chat-completions
-  slot: llm
-  prompt: talker
+  # The frontend adapter that serves each live session, by name (FRONTEND_ADAPTERS). Its own settings are the block
+  # of the same name below.
+  adapter: cascade
 
-backend:
-  provider: chat-completions
-  slot: thinker-llm
-  prompt: thinker
+  # The cascade: speech in, the talker (one fast call per caller turn that speaks a reply, delegates, or waits), the
+  # writer that words ready results, and speech out.
+  cascade:
+    # The talker's and the writer's model:
+    #   provider  a registered implementation (models/): chat-completions (any OpenAI-compatible chat endpoint) or
+    #             openai-responses (the OpenAI Responses API)
+    #   slot      the examples_registry.yaml services slot whose selected services.yaml entry is the model (endpoint,
+    #             model id, sampling and reasoning settings are set there, not here)
+    #   prompt    the prompts.yaml entry used as the talker's instructions when a live session supplies none
+    provider: chat-completions
+    slot: llm
+    prompt: talker
 
-# Prompt set added on top of the example's prompts: `v1` is the original routing text; `v2` makes the supplied
-# instructions outrank the examples and delegates detail-bearing turns.
-prompt_version: v1
+    # The prompt set added on top of the example's prompts: v1 is the original routing text; v2 frames the supplied
+    # instructions for the talker (its role first, the instructions word for word, every step they describe as the
+    # backend's work), makes them outrank the examples, and delegates detail-bearing turns, answers and confirmations,
+    # as GPT-Live does. Left out: the prompt sets' default.
+    prompt_version: v2
 
-reliability:
-  provider_retries: 2                  # transient provider failures (timeout, 429, 5xx), with backoff
-  talker_attempt_timeout_seconds: 10   # one routing or phrasing attempt
-  api_timeout_seconds: 45              # one backend round
-  tool_timeout_seconds: 60             # one tool call
-  max_tool_rounds: 8
-  max_pending_delegations: 16
-  recover_failures: true               # a failed call is recovered (delegate, speak as written, apologize)
+    reliability:
+      provider_retries: 2                  # transient provider failures (timeout, 429, 5xx), with backoff
+      talker_attempt_timeout_seconds: 10   # one routing or phrasing attempt
+      client_timeout_seconds: 45           # the frontend model's client, per request
 
-guards:
-  repeat_guard: true         # a spoken reply that nearly repeats an earlier one becomes a delegation
-  turn_router: false         # drop acknowledgment-only turns ("okay", "mm-hmm") before the talker
-  turn_router_shadow: false  # only trace what the router would drop
-  continuers: [uh-huh, uh huh, mm-hmm, mm hmm, mhm, hmm, mm, mmm, ah, oh, i see, got it]
+    guards:
+      repeat_guard: false        # a spoken reply that nearly repeats an earlier one becomes a delegation
+      turn_router: false         # drop acknowledgment-only turns ("okay", "mm-hmm") before the talker
+      turn_router_shadow: false  # only trace what the router would drop
+      continuers: [uh-huh, uh huh, mm-hmm, mm hmm, mhm, hmm, mm, mmm, ah, oh, i see, got it]
 
-# Several delegations in one call: each gets its own answer, spoken as it arrives.
-delegation:
-  merge_pending: true          # a delegation that arrives while another waits joins it (one backend run)
-  fold_before_acting: true     # a request that arrives before the running one calls a tool restarts it once, with both
-  status_from_ledger: true     # "any update?" is answered from the work in progress, not a new delegation
-  progress_speech: true        # say a short status line when work has run silently for a while
-  progress_after_seconds: 8
-  progress_interval_seconds: 12
-  progress_max_per_delegation: 1
+    # What the voice does around its delegations.
+    delegation:
+      app_wait_seconds: 62             # the app-wait line, when the app has not answered a call by then; null: none
+      result_wording: writer           # writer: ready results are worded by a model call; as_written: said as written
+      progress_after_seconds: 8        # a short progress line after this long of silent work; null: none
+      progress_max_per_delegation: 1
 
-# Rewrite the caller's turn into written form before the talker sees it: spelled IDs joined, numbers as digits,
-# a spelling that corrects a word applied. Uses the talker's model and the same conversation.
-normalizer:
-  enabled: false
-  every_turn: false        # false: only turns with digits, number words, spelled letters or spoken symbols
-  timeout_seconds: 4       # a slower normalization keeps the turn as heard
+    # Rewrite the caller's turn into written form before the talker sees it: spelled IDs joined, numbers as digits,
+    # a spelling that corrects a word applied. Uses the talker's model and the same conversation.
+    normalizer:
+      enabled: false
+      every_turn: false        # false: only turns with digits, number words, spelled letters or spoken symbols
+      timeout_seconds: 4       # a slower normalization keeps the turn as heard
 
-backend_context_tokens: 100000   # budget for the history the backend is resent each round
-chat_history_recent_turns: 20    # conversation turns kept in the talker's context
-tts_preroll_ms: 300              # reply audio held before playback starts, absorbing uneven TTS chunks (0: off)
+    memory:
+      context_tokens: 16000    # the talker's memory budget
+      compact_at: 0.8          # whole turn groups are dropped once memory passes this share of the budget
+
+    speech:
+      tts_mode: per_sentence   # per_sentence | stitched
+      start_timeout_seconds: 3 # a line whose audio has not started by then is retried or written off
+      resume_after_noise: true # a line cut by a noise that was not speech resumes
+      retry_silent_lines: true # a line that produced no audio is said once more
+
+    tts_preroll_ms: 300        # reply audio held before playback starts, absorbing uneven TTS chunks (0: off)
+
+# The repository UI bot (the Bluebird Cafe demo): the delegation core profile it builds its own core from.
+ui_bot:
+  core_config: core.ui-bot.yaml

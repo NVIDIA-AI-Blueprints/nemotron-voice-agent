@@ -78,6 +78,9 @@ the supported configuration on Thor.
 
     # Frontend/Backend Agent: NeMo-Speech.cpp + Lightning vLLM + booking-server
     docker compose --profile frontend-backend-agent/single-gpu up -d
+
+    # Frontend/Backend Live: NeMo-Speech.cpp + Lightning vLLM, with the Live session API at /v1/live
+    docker compose --profile frontend-backend-live/single-gpu up -d
     ```
 
     > **Note:** First-run deployment can take 30–60 minutes. On local recipes, the **first voice interaction** may also lag while GPU sidecars warm up. Later turns are much faster.
@@ -88,7 +91,7 @@ the supported configuration on Thor.
 
     > **Tip:** For the best experience, we recommend using a headset (preferably wired) instead of your laptop's built-in microphone.
 
-7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, `omni-assistant`, or `frontend-backend-agent`).
+7. **Manage and tear down.** Use the same profile you started with (`<example>` = `generic-assistant`, `multilingual-assistant`, `omni-assistant`, `frontend-backend-agent`, or `frontend-backend-live`).
 
     ```bash
     # View logs for the whole profile

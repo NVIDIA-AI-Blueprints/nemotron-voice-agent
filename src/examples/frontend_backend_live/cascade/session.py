@@ -1,376 +1,205 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One call's orchestration: decide each turn, delegate, phrase the answer and deliver it.
+"""One call's cascade: its Pipecat-free parts, assembled, and the entry points its host calls.
 
-This class knows nothing about Pipecat frames or the wire protocol. It reads and writes a :class:`Conversation`
-and speaks through an injected ``say`` coroutine, so the same logic runs in tests and in the voice pipeline.
-
-Behavior:
-
-* Every turn gets a reply or a delegation (``never_silent``); a failed talker call delegates.
-* A delegation's lead-in never asserts an outcome or asks a question (``safe_lead_in``), and a ``speak``
-  that nearly repeats an earlier reply becomes a delegation (repeat guard).
-* A backend result enters the history in time order. The phrasing request for that answer carries what the
-  caller was already told, and only that request does.
-* Every delegation's answer is spoken, even after the caller said "okay" in the meantime. Phrasing that fails or
-  stays silent still speaks the verified text. An answer that a newer request in progress changes is spoken as
-  being updated, not as final.
-* The talker sees the work still in progress. A turn that only asks for an update is answered from it, and a
-  turn that corrects work in flight replaces it (see the worker). Work that runs silently for a while gets a
-  short status line.
-* The delegate receives only the voice turns since its previous delegation, never backend results.
-* An optional normalizer rewrites a caller turn that carries details (spelled IDs, numbers) into written form
-  before the talker reads it; the rewrite replaces the transcript, so the backend sees it too.
-* An optional turn router drops acknowledgment-only turns (or, in shadow mode, only traces them).
-
-Two delegation modes exist. In ``responses`` mode a server-owned backend does the work. In ``client`` mode the
-client owns the work: the session only announces each delegation, and the client reports back with commentary.
+The host hands it a turn buffer (Pipecat's context), a ``say`` coroutine and the call's delegation part, so the same
+parts run in tests, in the live adapter and in the UI bot. A delegation part that reports events (the server
+delegation) hands back each delegation's official events by plain calls that only record or queue, so delegated work
+never waits for the voice. One that does not (Live client mode) only announces each delegation to the client app,
+which answers with commentary.
 """
 
 from __future__ import annotations
 
-import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from examples.frontend_backend_live.cascade.agent import LiveAgent
-from examples.frontend_backend_live.cascade.application_input import ApplicationInput
-from examples.frontend_backend_live.cascade.commentary.guards import plain_speech, safe_lead_in
-from examples.frontend_backend_live.cascade.conversation import (
-    Conversation,
-    last_assistant_text,
-    last_caller_text,
-    split_messages,
-)
-from examples.frontend_backend_live.cascade.talker.repeat_guard import repeated_speech
-from examples.frontend_backend_live.cascade.talker.router import TurnRouter
-from examples.frontend_backend_live.common.history import BACKEND_RESULT_PREFIX
+from examples.frontend_backend_live.cascade.appends import ApplicationInput
+from examples.frontend_backend_live.cascade.delegations import DelegationReader
+from examples.frontend_backend_live.cascade.display import NullDisplay
+from examples.frontend_backend_live.cascade.floor import Floor
+from examples.frontend_backend_live.cascade.heard_log import HeardLog
+from examples.frontend_backend_live.cascade.lines import FixedLines, catalog_lines
+from examples.frontend_backend_live.cascade.memory import TalkerMemory, TurnBuffer
+from examples.frontend_backend_live.cascade.ports import DisplaySink
+from examples.frontend_backend_live.cascade.presenter import Presenter
+from examples.frontend_backend_live.cascade.settings import CascadeSettings
+from examples.frontend_backend_live.cascade.turns import Acknowledgements, CallerTurns
+from examples.frontend_backend_live.cascade.utterances import Playout, Say, Utterances
+from examples.frontend_backend_live.cascade.worknote import WorkNote
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
-from examples.frontend_backend_live.delegation.coordinator import DelegationCoordinator, Observe, log_observation
-from examples.frontend_backend_live.delegation.ledger import STATUS_LINES, asks_for_status
-from examples.frontend_backend_live.delegation.tasks import CLIENT, RESPONSES, BackendTask, DelegatedTask
-from examples.frontend_backend_live.models.decision import TalkerDecision
 
-Say = Callable[[str], Awaitable[None]]
-ANSWER_HOLD_SECONDS = 10.0
+if TYPE_CHECKING:
+    from live.ports import DelegationPort
 
-__all__ = ["ANSWER_HOLD_SECONDS", "CLIENT", "RESPONSES", "CascadeSession", "log_observation"]
+__all__ = ["CascadeSession", "log_observation"]
+
+Observe = Callable[..., None]
+
+
+def log_observation(kind: str, **fields) -> None:
+    """Default observation hook: one debug log line per event."""
+    logger.debug(f"live.{kind} {fields}")
 
 
 class CascadeSession:
-    """Runs the cascade frontend for one call: the talker, the commentary writer and the guards.
-
-    Delegated work belongs to the :class:`DelegationCoordinator`; this class decides when to delegate and phrases
-    what comes back.
-    """
+    """Runs the cascade frontend for one call: its parts, assembled, and the entry points its host calls."""
 
     def __init__(
         self,
         agent: LiveAgent,
         config: LiveConfig,
-        conversation: Conversation,
+        conversation: TurnBuffer,
         *,
-        backend_task: BackendTask | None,
-        tools,
+        delegation: DelegationPort,
         say: Say,
-        mode: str = RESPONSES,
-        on_event: Callable[[DelegatedTask, dict], Awaitable[None]] | None = None,
-        on_client_delegation: Callable[[str], Awaitable[None]] | None = None,
         interrupt: Callable[[], Awaitable[None]] | None = None,
         observe: Observe = log_observation,
+        display: DisplaySink | None = None,
+        settings: CascadeSettings | None = None,
+        lines: FixedLines | None = None,
+        reports_playout: bool = False,
+        reports_sentences: bool = False,
+        clock: Callable[[], float] = time.monotonic,
     ):
-        """Wire the agent, conversation and speech output.
+        """Assemble the parts of one call.
 
         Args:
-            agent: The talker, commentary writer and thinker.
+            agent: The talker and the commentary writer.
             config: The validated example configuration.
-            conversation: The shared message list.
-            backend_task: The model, instructions and tool schemas every backend round uses (``None`` in
-                ``client`` mode).
-            tools: A ``ToolExecutor`` for the thinker's function calls (unused in ``client`` mode).
+            conversation: The host's turn buffer: the seed the talker's memory starts from, then each committed caller
+                turn. The cascade only reads it.
+            delegation: The call's delegation part.
             say: Awaited with the text to speak.
-            mode: ``responses`` (server-owned backend) or ``client`` (the client owns delegated work).
-            on_event: Optional awaited hook with ``(task, raw_event)`` for every backend event.
-            on_client_delegation: Awaited with the id of each delegation announced in ``client`` mode.
-            interrupt: Awaited to cut off current speech (instruction appends).
+            interrupt: Awaited to cut off the line in progress (an instruction append).
             observe: Optional ``observe(kind, **fields)`` hook for traces.
+            display: Where the display part of each delegation goes; nothing is shown by default.
+            settings: The cascade's settings; by default read from ``config``.
+            lines: The voice's fixed lines; by default the example's ``prompts.yaml`` lines.
+            reports_playout: Whether the host reports each line's playout to :attr:`playout`.
+            reports_sentences: Whether that playout reports each sentence's words (per-sentence speech).
+            clock: The call's one clock.
         """
-        self.agent, self.config, self.conversation = agent, config, conversation
-        self.say_text, self.observe, self.mode, self.interrupt = say, observe, mode, interrupt
-        self.router = (
-            TurnRouter(config.guards.continuers)
-            if config.guards.turn_router or config.guards.turn_router_shadow
-            else None
+        self.agent, self.config, self.observe, self.delegation = agent, config, observe, delegation
+        self.settings = settings or CascadeSettings.from_live_config(config)
+        self.lines = lines or catalog_lines()
+        self.display = display or NullDisplay()
+        self.buffer = conversation
+        settings = self.settings
+        self.memory = TalkerMemory.seeded(
+            conversation.messages(), context_tokens=settings.context_tokens, compact_at=settings.compact_at
         )
-        self.coordinator = DelegationCoordinator(
-            agent.thinker,
+        self.conversation = self.memory  # what the adapter reads for /history and the context meter
+        self.floor = Floor(clock)
+        self.heard_log = HeardLog()
+        self.utterances = Utterances(
+            say,
+            self.heard_log,
+            self.memory,
+            self.floor,
+            observe=observe,
+            reports_playout=reports_playout,
+            reports_sentences=reports_sentences,
+            start_timeout_seconds=settings.start_timeout_seconds,
+            retry_silent_lines=settings.retry_silent_lines,
+        )
+        self.worknote = WorkNote(agent.prompts, tracks=delegation.reports_events, clock=clock, observe=observe)
+        self.acknowledgements = Acknowledgements(self.utterances, self.lines, observe=observe)
+        self.presenter = Presenter.from_settings(
+            settings,
+            agent=agent,
+            memory=self.memory,
+            utterances=self.utterances,
+            worknote=self.worknote,
+            display=self.display,
+            lines=self.lines,
+            observe=observe,
+        )
+        self.delegations = DelegationReader(
+            self.worknote,
+            self.presenter,
+            self.display,
+            self.lines,
+            display_label=settings.display_label,
+            app_wait_seconds=settings.app_wait_seconds,
+            observe=observe,
+            outcome_arrived=self.acknowledgements.drop,
+        )
+        self.turns = CallerTurns(
+            agent,
             config,
-            backend_task=backend_task,
-            tools=tools,
-            sink=self,
-            mode=mode,
-            on_event=on_event,
-            on_client_delegation=on_client_delegation,
+            self.memory,
+            conversation,
+            heard_log=self.heard_log,
+            utterances=self.utterances,
+            worknote=self.worknote,
+            delegation=delegation,
+            acknowledgements=self.acknowledgements,
+            lines=self.lines,
+            display=self.display,
+            resume_after_noise=settings.resume_after_noise,
             observe=observe,
         )
         self.application = ApplicationInput(
-            conversation,
-            self.coordinator,
-            phrase=self._phrase,
-            wait_for_caller=self._wait_for_caller,
-            say=self._say,
-            act=self._act,
+            self.memory,
+            self.heard_log,
+            self.presenter,
+            self.turns,
+            self.acknowledgements,
+            self.utterances,
             interrupt=interrupt,
         )
-        self.user_speaking = False
-        self._user_idle = asyncio.Event()
-        self._user_idle.set()
-        self.last_spoke = self.last_progress = 0.0
-        self._status_count = 0
-        self._progress: asyncio.Task | None = None
+        delegation.listen(self.delegations)
 
     @property
-    def worker(self):
-        """The backend worker (``responses`` mode), else ``None``."""
-        return self.coordinator.worker
-
-    @property
-    def client_delegations(self) -> set[str]:
-        """Delegation ids issued in ``client`` mode."""
-        return self.coordinator.client_delegations
-
-    @property
-    def backend_busy(self) -> bool:
-        """Whether a backend task is running or queued."""
-        return self.coordinator.backend_busy
+    def playout(self) -> Playout:
+        """What the host's playout tracker reports each line's facts to, in playout order."""
+        return self.utterances
 
     def start(self) -> None:
-        """Start the delegation worker (``responses`` mode) and the progress announcer."""
-        self.coordinator.start()
-        if self.coordinator.worker and self.config.delegation.progress_speech:
-            self._progress = asyncio.create_task(self._announce_progress(), name="delegation-progress")
+        """Start the presenter's tasks (delivery and the quiet spell). The host that built the cascade starts it."""
+        self.presenter.start()
 
     async def close(self) -> None:
-        """Stop the worker and release the models."""
-        if self._progress:
-            self._progress.cancel()
-            await asyncio.gather(self._progress, return_exceptions=True)
-        await self.coordinator.close()
+        """Ignore later delegation events, drop what waits to be said, stop every timer, release the talker's model.
+
+        The host that started the cascade closes it, once.
+        """
+        self.delegations.close()
+        self.acknowledgements.drop_all()
+        await self.presenter.close()
+        self.utterances.close()
         await self.agent.close()
 
-    def set_user_speaking(self, speaking: bool) -> None:
-        """Record whether the caller is speaking; answers wait for them to finish."""
-        self.user_speaking = speaking
-        if speaking:
-            self._user_idle.clear()
-        else:
-            self._user_idle.set()
+    def caller_started(self) -> None:
+        """The caller started speaking: the voice says nothing on its own meanwhile, and pending acknowledgements go."""
+        self.floor.set_caller_speaking(True)
+        self.acknowledgements.drop_all()
 
-    # ------------------------------------------------------------------ the caller's turn
+    def caller_stopped(self) -> None:
+        """The caller stopped speaking: their committed turns are heard now, and wait for a decision."""
+        self.turns.hear()
+        self.floor.set_caller_speaking(False)
+
+    def interrupted(self) -> None:
+        """An interruption passed the binding: the lines handed before it are the ones its cut may settle."""
+        self.utterances.interrupted()
+
     async def on_turn(self) -> None:
-        """Decide the newest caller turn: speak, or delegate to the backend."""
-        self.conversation.trim(self.config.chat_history_recent_turns)
-        messages = self.conversation.messages()
-        text = last_caller_text(messages)
-        if not text.strip():
-            return
-        if self.router and await self._dropped_by_router(text, messages):
-            return
-        if self._asks_for_status(text):
-            self._remember_voice("user", text)
-            self.observe("status.answered", open=len(self.coordinator.ledger.open()))
-            await self._say(self._status_line())
-            return
-        await self._act(await self._normalize(text))
-
-    async def _normalize(self, text: str) -> str:
-        """Return the caller's turn in written form, replacing the transcript in the conversation."""
-        normalizer = self.agent.normalizer
-        if normalizer is None or not normalizer.wanted(text):
-            return text
-        _, history = split_messages(self.conversation.messages())
-        normalized, diagnostics = await normalizer.normalize(history, text)
-        self.observe("normalizer.completed", heard=text, normalized=normalized, **diagnostics)
-        if normalized != text:
-            self.conversation.replace_caller_turn(text, normalized)
-        return normalized
-
-    def _asks_for_status(self, text: str) -> bool:
-        return (
-            self.config.delegation.status_from_ledger and bool(self.coordinator.ledger.open()) and asks_for_status(text)
-        )
-
-    def _status_line(self) -> str:
-        line = STATUS_LINES[self._status_count % len(STATUS_LINES)]
-        self._status_count += 1
-        return line
-
-    async def _announce_progress(self) -> None:
-        """Say a short status line when work has run for a while without the assistant saying anything."""
-        settings = self.config.delegation
-        tick = max(0.05, min(1.0, settings.progress_after_seconds / 4))
-        while True:
-            await asyncio.sleep(tick)
-            oldest = self.coordinator.ledger.oldest_open()
-            if oldest is None or self.user_speaking:
-                continue
-            since = oldest.created_at
-            if oldest.progress_lines >= settings.progress_max_per_delegation:
-                continue
-            now = time.monotonic()
-            if now - max(self.last_spoke, since) < settings.progress_after_seconds:
-                continue
-            if now - self.last_progress < settings.progress_interval_seconds:
-                continue
-            self.last_progress = now
-            oldest.progress_lines += 1
-            self.observe("progress.spoken", open=len(self.coordinator.ledger.open()))
-            await self._say(self._status_line())
-
-    async def _act(self, text: str, *, instruction: bool = False) -> None:
-        """Run the routing decision for ``text`` and carry it out."""
-        instructions, history = split_messages(self.conversation.messages())
-        work = self.coordinator.ledger.describe()
-        decision = await self._decide(instructions, history, work)
-        if not work:
-            decision = self._apply_repeat_guard(decision, text, history)
-        self.observe("talker.completed", action=decision.action, **decision.diagnostics)
-        if decision.action == "delegate":
-            await self._delegate(decision, text, instruction=instruction)
-        else:
-            if not instruction:
-                self._remember_voice("user", text)
-            await self._say(decision.speech)
-
-    async def _dropped_by_router(self, text: str, messages: list[dict]) -> bool:
-        verdict = self.router.verdict(text, last_assistant_text(messages))
-        if verdict.keep:
-            return False
-        if self.config.guards.turn_router:
-            self.observe("router.dropped", text=text, reason=verdict.reason)
-            self._remember_voice("user", text)
-            return True
-        self.observe("router.would_drop", text=text, reason=verdict.reason)
-        return False
-
-    async def _decide(self, instructions: str, history: list[dict], work_in_progress: str) -> TalkerDecision:
-        try:
-            return await self.agent.talker.decide(instructions, history, work_in_progress)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if not self.config.reliability.recover_failures:
-                raise
-            # A failed routing call delegates the turn: no tool has run, so nothing can repeat.
-            logger.warning(f"Talker failed ({type(exc).__name__}: {exc}); delegating the turn")
-            self.observe("talker.recovered", error_type=type(exc).__name__)
-            return TalkerDecision("delegate", "", {"recovery": "talker_failed"})
-
-    def _apply_repeat_guard(self, decision: TalkerDecision, text: str, history: list[dict]) -> TalkerDecision:
-        if not self.config.guards.repeat_guard or decision.action != "speak":
-            return decision
-        similarity = repeated_speech(decision.speech, text, history)
-        if not similarity:
-            return decision
-        self.observe("talker.repeat_replaced", similarity=similarity)
-        return TalkerDecision("delegate", "", {**decision.diagnostics, "recovery": "repeat_guard"})
-
-    # ---------------------------------------------------------------------- delegation
-    async def _delegate(self, decision: TalkerDecision, text: str, *, instruction: bool = False) -> None:
-        delegation_id = await self.coordinator.delegate(text, instruction=instruction)
-        speech = safe_lead_in(decision.speech) if decision.speech else ""
-        if speech != decision.speech:
-            self.observe("talker.lead_in_replaced", original=decision.speech)
-        if speech:
-            # Recorded at submit time: the answer can arrive and be phrased before this lead-in finishes
-            # playing, so waiting for playback could miss the "already told" note.
-            earlier = self.coordinator.told.get(delegation_id)  # a request that joined a waiting delegation
-            self.coordinator.told[delegation_id] = f"{earlier} {speech}" if earlier else speech
-            await self._say(speech)
-
-    async def submit_items(self, items: list[dict]) -> str:
-        """Start a backend task from typed input items (``response.create`` with queued messages)."""
-        return await self.coordinator.submit_items(items)
-
-    # --------------------------------------------------------------------- the answer
-    async def on_result(self, text: str, task: DelegatedTask, told: str | None, *, newer_requests: list[str]) -> None:
-        """Record a backend result, then phrase and speak it (as being updated if a newer request may change it)."""
-        self.conversation.add({"role": "user", "content": BACKEND_RESULT_PREFIX + text})
-        speech = await self._phrase(BACKEND_RESULT_PREFIX, text, told, answer=True, newer_requests=newer_requests)
-        await self._wait_for_caller()
-        await self._say(speech)
-
-    async def _phrase(
-        self,
-        prefix: str,
-        text: str,
-        already_said: str | None,
-        *,
-        answer: bool,
-        must_speak: bool = False,
-        newer_requests: list[str] | None = None,
-    ) -> str:
-        """Return the words to speak for an update.
-
-        A verified answer is spoken even if phrasing fails or stays silent. So is an update the application asked
-        to have said aloud (``must_speak``): the writer may choose its wording, but not to drop it.
-        """
-        note = (
-            f'\n(you already told the caller: "{already_said}" -- do not repeat that, report only the result)'
-            if already_said
-            else ""
-        )
-        if must_speak and not answer:
-            note += "\n(the application asked for this to be said to the caller, so speak it)"
-        if newer_requests:
-            asked = "; ".join(f'"{request}"' for request in newer_requests)
-            note += (
-                f"\n(the caller has since asked something else, still in progress: {asked}. If it changes this result, "
-                "say what was found, briefly, and that you are updating it; otherwise report this result normally)"
-            )
-        instructions, history = split_messages(self.conversation.messages())
-        # The phrasing request carries the update once, as the commentary update; leave its history copy out.
-        positions = [i for i, m in enumerate(history) if m["content"] == prefix + text]
-        if positions:
-            history = history[: positions[-1]] + history[positions[-1] + 1 :]
-        try:
-            decision = await self.agent.writer.render(instructions, history, text, answer=answer, note=note)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if not self.config.reliability.recover_failures:
-                raise
-            logger.warning(f"Commentary failed ({type(exc).__name__}: {exc}); speaking the update as written")
-            self.observe("commentary.recovered", error_type=type(exc).__name__)
-            return plain_speech(text) if answer or must_speak else ""
-        if decision.action == "speak" and decision.speech:
-            return decision.speech
-        if answer or must_speak:
-            # The caller is waiting on this answer, or the application asked for it to be said: it must be heard,
-            # even only as written.
-            self.observe("commentary.answer_forced" if answer else "commentary.forced", talker_action=decision.action)
-            return plain_speech(text)
-        return ""
-
-    async def _wait_for_caller(self) -> None:
-        """Hold an answer while the caller is mid-sentence, then speak it (bounded)."""
-        if not self.user_speaking:
-            return
-        self.observe("commentary.held_for_caller")
-        try:
-            await asyncio.wait_for(self._user_idle.wait(), ANSWER_HOLD_SECONDS)
-        except TimeoutError:
-            self.observe("commentary.hold_expired")
+        """Hear the caller's new turns and decide the ones not decided yet (see :class:`CallerTurns`)."""
+        await self.turns.on_turn()
 
     # ----------------------------------------------------------- client commands (appends)
-    async def on_commentary(self, text: str, delegation_id: str | None) -> None:
-        """Say a client-supplied fact to the caller (see :class:`ApplicationInput`)."""
-        await self.application.commentary(text, delegation_id)
+    async def on_commentary(self, text: str, delegation_id: str | None = None) -> None:
+        """Queue a client-supplied fact to be said (see :class:`ApplicationInput`)."""
+        self.application.commentary(text, delegation_id)
 
-    def on_thinking(self, text: str) -> None:
+    def on_thinking(self, text: str, delegation_id: str | None = None) -> None:
         """Retain silent context (see :class:`ApplicationInput`)."""
         self.application.thinking(text)
 
@@ -378,13 +207,11 @@ class CascadeSession:
         """Steer behavior (see :class:`ApplicationInput`)."""
         await self.application.instruction(text)
 
-    # ------------------------------------------------------------------------- speech
-    def _remember_voice(self, role: str, text: str) -> None:
-        self.coordinator.remember_voice(role, text)
+    def on_typed(self, text: str) -> None:
+        """The application typed a question itself: the talker's memory holds it; the heard log does not."""
+        self.memory.typed(text)
 
-    async def _say(self, text: str) -> None:
-        if not text.strip():
-            return
-        self._remember_voice("assistant", text)
-        await self.say_text(text)
-        self.last_spoke = time.monotonic()
+    def greet(self, text: str) -> None:
+        """Greet the caller before they speak: ``text`` is pinned as an instruction and worded and said, at idle."""
+        self.memory.instruction(text)
+        self.presenter.commentary(text)

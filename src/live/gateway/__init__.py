@@ -3,8 +3,8 @@
 
 """The live session endpoints: settings, security, the session registry, and the WebRTC and WebSocket routes."""
 
-from live.gateway.gateway import EngineFactory, LiveGateway
+from live.gateway.gateway import LiveGateway
 from live.gateway.routes import create_live_router
 from live.gateway.settings import LiveSettings
 
-__all__ = ["EngineFactory", "LiveGateway", "LiveSettings", "create_live_router"]
+__all__ = ["LiveGateway", "LiveSettings", "create_live_router"]

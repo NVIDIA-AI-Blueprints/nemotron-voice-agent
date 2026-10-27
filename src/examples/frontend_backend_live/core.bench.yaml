@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The delegation core for the benchmark (tau2's Live client): core.yaml, with what differs.
+# Select it with CORE_CONFIG_PATH; config.bench.yaml is the frontend's half.
+
+extends: core.yaml
+
+delegation:
+  client_tool_timeout_seconds: null    # the app's outputs are waited for until the session closes
+  progress_note_seconds: 0             # no progress notes
+  result_format: plain                 # the answer only, as tau2 reads it
+
+backend:
+  llm:
+    conductor: steer                   # each request joins the open Work at its next step
+    unlisted_models: fallback          # the benchmark's model is not in services.yaml: run it on the slot's endpoint

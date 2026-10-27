@@ -8,20 +8,23 @@ label; the server's own services decide which models run.
 """
 
 from live.protocol.config import (
+    DELEGATION_CONFIGS,
     Audio,
     AudioFormat,
     AudioOutput,
     BackendConfig,
     Client,
-    Delegation,
+    ClientDelegationConfig,
     Permissions,
+    ResponsesDelegationConfig,
     SessionConfig,
     StrictModel,
 )
-from live.protocol.errors import ProtocolError, approx_tokens, uid
+from live.protocol.errors import ProtocolError, approx_tokens, uid, validation_error
 from live.protocol.voices import LIVE_VOICES, TTS_VOICES
 
 __all__ = [
+    "DELEGATION_CONFIGS",
     "LIVE_VOICES",
     "TTS_VOICES",
     "Audio",
@@ -29,11 +32,13 @@ __all__ = [
     "AudioOutput",
     "BackendConfig",
     "Client",
-    "Delegation",
+    "ClientDelegationConfig",
     "Permissions",
     "ProtocolError",
+    "ResponsesDelegationConfig",
     "SessionConfig",
     "StrictModel",
     "approx_tokens",
     "uid",
+    "validation_error",
 ]

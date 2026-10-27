@@ -5,6 +5,8 @@
 
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 
 def uid(prefix: str) -> str:
     """Return a unique id such as ``event_3f9a...``."""
@@ -23,3 +25,16 @@ class ProtocolError(Exception):
         """Create the error with its protocol ``code`` and the offending ``param``."""
         super().__init__(message)
         self.code, self.param = code, param
+
+
+def validation_error(refused: ValidationError, prefix: str) -> ProtocolError:
+    """The first problem of a schema check as the protocol's error, its ``param`` the dotted path under ``prefix``.
+
+    An unknown key is ``unknown_parameter``; any other problem is ``invalid_value`` with the schema's own
+    words.
+    """
+    problem = refused.errors(include_url=False)[0]
+    param = ".".join([prefix, *(str(part) for part in problem["loc"])])
+    if problem["type"] == "extra_forbidden":
+        return ProtocolError(f"Unknown parameter: '{param}'.", "unknown_parameter", param)
+    return ProtocolError(f"Invalid value for '{param}': {problem['msg'].removeprefix('Value error, ')}", param=param)

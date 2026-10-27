@@ -1,72 +1,117 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# ruff: noqa: D101, D102, D107
+# ruff: noqa: D101, D102, D103, D107
 
-"""Shared doubles for the live session protocol tests."""
+"""Shared doubles of the gateway's tests. They load no Pipecat module and nothing of the example.
+
+The frontend adapter's doubles are in ``tests/unit/cascade_helpers.py``, so an import error in one box does not stop
+the gateway's tests.
+"""
 
 import asyncio
+import json
 
-from live.protocol import ProtocolError, SessionConfig
+from live.ports import SessionParts
+from live.protocol import SessionConfig
 
 
-class FakeEngine:
-    """A LiveEngine that records what the protocol layer asks of it."""
+class FakeAdapter:
+    """A frontend adapter and a delegation core in one, which record what the protocol layer asks of them.
+
+    As the core, it is the scripted ``ResponsesClient`` the session builds its server delegation on: it
+    opens one conversation, refuses the models in ``models_rejected`` (also when it checks settings), and answers each
+    request with a stream that has no event, noting the request's input items.
+    """
+
+    CONVERSATION = "conv_fake"
 
     def __init__(self, fail_start=False):
         self.fail_start = fail_start
-        self.session = None
+        self.session = self.delegation = None
         self.started = self.closed = False
         self.muted = False
         self.audio: list[bytes] = []
         self.appended: list[tuple] = []
-        self.items: list[dict] = []
-        self.creates = 0
-        self.updates: list[SessionConfig] = []
-        self.delegations = {"item_known"}
+        self.items: list[dict] = []  # the input items of the requests the server delegation sent
+        self.creates = 0  # how many requests it sent
         self.models_rejected = {"bad-model"}
-        self.item_error: ProtocolError | None = None
+        self.checked: list[dict] = []  # the settings it was asked to check (input_tokens)
 
-    async def start(self, session):
+    def parts(self):
+        """The parts of a session: this fake is its frontend adapter."""
+        return SessionParts(frontend=self)
+
+    def core(self):
+        """The gateway's core hook: this fake is also the one delegation core."""
+        return self
+
+    async def start(self, session, delegation):
         if self.fail_start:
             raise RuntimeError("pipeline failed")
-        self.session, self.started = session, True
+        self.session, self.delegation, self.started = session, delegation, True
 
     async def close(self):
         self.closed = True
 
-    def validate_backend_model(self, model):
+    # The delegation core's official endpoints (live.server_delegation.ResponsesClient).
+    async def create_conversation(self, metadata):
+        return {"id": self.CONVERSATION, "object": "conversation", "created_at": 0, "metadata": dict(metadata)}
+
+    async def delete_conversation(self, conversation_id):
+        return {"id": conversation_id, "object": "conversation.deleted", "deleted": True}
+
+    async def retrieve_model(self, model):
         if model in self.models_rejected:
             raise ValueError("model not served")
+        return {"id": model, "object": "model", "created": 0, "owned_by": "test"}
 
-    def update_backend(self, config):
-        self.updates.append(config)
+    async def create_response(self, params):
+        self.items.extend(params["input"])
+        self.creates += 1
+        return NoEvents()
 
-    def knows_delegation(self, delegation_id):
-        return delegation_id in self.delegations
+    async def list_conversation_items(self, conversation_id):
+        return {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False}
+
+    async def input_tokens(self, params):
+        """Check a request's settings: a model in ``models_rejected`` is refused with its ``param``, as by the core."""
+        self.checked.append(params)
+        if params.get("model") in self.models_rejected:
+            refused = ValueError(f"The model {params['model']!r} is not served")
+            refused.param = "model"
+            raise refused
+        return {"object": "response.input_tokens", "input_tokens": 1}
+
+    async def aclose(self):
+        """The client's own close, which the gateway runs at server shutdown: it holds nothing to release."""
 
     async def set_muted(self, muted):
         self.muted = muted
 
-    async def feed_audio(self, pcm24k):
-        self.audio.append(pcm24k)
+    async def feed_audio(self, pcm, sample_rate):
+        self.audio.append(pcm)
 
-    async def append_instructions(self, text):
+    async def append_instructions(self, text, client_event_id=None, delegation_id=None):
         self.appended.append(("instructions", text))
 
-    async def append_thinking(self, text):
+    async def append_thinking(self, text, client_event_id=None, delegation_id=None):
         self.appended.append(("thinking", text))
 
-    async def append_commentary(self, text, delegation_id):
-        self.appended.append(("commentary", text, delegation_id))
+    async def append_commentary(self, text, client_event_id=None, delegation_id=None):
+        self.appended.append(("commentary", text, client_event_id, delegation_id))
 
-    def item_create(self, item):
-        if self.item_error:
-            raise self.item_error
-        self.items.append(item)
 
-    async def response_create(self):
-        self.creates += 1
+class NoEvents:
+    """A response stream that ends at once."""
+
+    def __aiter__(self):
+        """The stream is its own iterator."""
+        return self
+
+    async def __anext__(self):
+        """Nothing: the stream has ended."""
+        raise StopAsyncIteration
 
 
 class Collector:
@@ -105,64 +150,6 @@ def responses_config(**kwargs):
     )
 
 
-# ------------------------------------------------------------- Pipecat fakes for engine tests
-import json  # noqa: E402
-import time  # noqa: E402
-
-from pipecat.frames.frames import (  # noqa: E402
-    LLMFullResponseEndFrame,
-    LLMTextFrame,
-    TranscriptionFrame,
-    TTSAudioRawFrame,
-    TTSStartedFrame,
-    TTSStoppedFrame,
-    TTSTextFrame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
-)
-from pipecat.processors.frame_processor import FrameProcessor  # noqa: E402
-
-
-class FakeSTT(FrameProcessor):
-    """Speech-to-text stand-in: the test says a sentence instead of sending speech audio."""
-
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
-        await self.push_frame(frame, direction)
-
-    async def say(self, text):
-        await self.push_frame(UserStartedSpeakingFrame())
-        await self.push_frame(
-            TranscriptionFrame(text=text, user_id="caller", timestamp=str(time.time()), finalized=True)
-        )
-        await self.push_frame(UserStoppedSpeakingFrame())
-
-
-class FakeTTS(FrameProcessor):
-    """Text-to-speech stand-in: 100 ms of tone per word, with the word frames a real TTS emits."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.spoken: list[str] = []
-        self._started = False
-
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, LLMTextFrame):
-            if not self._started:
-                self._started = True
-                await self.push_frame(TTSStartedFrame())
-            for word in frame.text.split():
-                self.spoken.append(word)
-                await self.push_frame(TTSAudioRawFrame(audio=b"\x10\x10" * 2400, sample_rate=24000, num_channels=1))
-                await self.push_frame(TTSTextFrame(text=word, aggregated_by="word"))
-            return
-        if isinstance(frame, LLMFullResponseEndFrame) and self._started:
-            self._started = False
-            await self.push_frame(TTSStoppedFrame())
-        await self.push_frame(frame, direction)
-
-
 class FakeWebSocket:
     """The server side of a primary WebSocket, driven by the test."""
 
@@ -177,6 +164,10 @@ class FakeWebSocket:
 
     async def accept(self):
         return None
+
+    async def receive(self):
+        """The next frame as Starlette's ``WebSocket.receive()`` gives it: a text frame, here always."""
+        return {"type": "websocket.receive", "text": await self.to_server.get()}
 
     async def receive_json(self):
         return json.loads(await self.to_server.get())

@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Prompt catalog for the Frontend/Backend Live example. ``talker`` is the user-facing prompt (selectable in the
-# UI); ``thinker`` is the backend's task prompt. The routing, commentary and voice-channel texts the bridge adds
-# on top live in ``prompts/`` (prompt sets ``v1`` and ``v2``) and are chosen in ``config.yaml``.
+# UI); ``thinker`` is the backend's task prompt. Every text the cascade's own model calls add on top (the routing and
+# commentary texts, ``v2``'s frame around the talker's instructions, the work note, the writer's labels and notes, the
+# schema hints and the normalizer's prompt) lives in a prompt set in ``prompts/``, and the backend's voice-channel note
+# in the delegation core (``src/delegation_core/im/input.py``); ``config.yaml`` chooses the prompt set with
+# ``prompt_version`` and the note with ``voice_note``.
 
 talker:
   default: true
@@ -78,3 +81,17 @@ channel:
   description: "Channel context shared by the talker and the backend."
   content: |
     Channel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.
+
+# The lines the voice says word for word, by name (prompts/catalog.py: catalog_line). The talker says ``holding`` when
+# its decision fails while work is open; the cascade reads the others. An empty line means none is said.
+# Not a prompt: it has no content, so the prompt list leaves it out.
+lines:
+  apology: "Sorry, I ran into a problem with that. Could you say it again?"
+  unclear: "Something went wrong along the way, so I can't tell whether that went through. Let's check before trying it again."
+  lost: "I lost track of that request. Could you say it again?"
+  refusal: "I can't take on another request right now. Please try again in a moment."
+  app_wait_line: "I'm still waiting for that to come through."
+  lead_in: "Let me check."
+  holding: "One moment, I'm still working on your earlier request."
+  still_working: "I'm still working on that, thanks for your patience."
+  intro: "This is an initial greeting, not an order. Greet the user briefly as Remy from Bluebird Cafe and ask what they would like. Respond directly with spoken text."

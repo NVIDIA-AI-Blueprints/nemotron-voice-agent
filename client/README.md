@@ -15,7 +15,7 @@ It is a React and TypeScript single-page app built with [Vite](https://vite.dev/
 - **Metrics dashboard**: time-to-first-byte latency charts, token usage, and connection status.
 - **Conversation transcript**: live ASR and bot-response display.
 - **Webcam vision panel**: live webcam input for the multimodal Omni Subagents example.
-- **Live Console** (`/live.html`): a developer console for the [Frontend/Backend Live](../src/examples/frontend_backend_live/README.md) example. It is a static page in `public/live/` (no build step of its own) that starts live sessions over WebRTC, edits the session config, shows every protocol event and delegation, shows the talker's and the backend's live conversation history and system prompts (each part marked as coming from the client, the config, or the server), runs client-side delegation, and sends steering commands.
+- **Live Console** (`/live.html`): a developer console for the [Frontend/Backend Live](../src/examples/frontend_backend_live/README.md) example that starts live sessions over WebRTC, edits their settings, shows protocol events, delegations, and conversation history, and sends steering commands. It is a static page, `public/live.html` with its scripts and styles in `public/live/`, so it has no build step of its own.
 
 ## Getting started
 
@@ -61,6 +61,8 @@ The client reads its configuration from the backend (`src/server.py`) and starts
 | `/api/ice-servers` | STUN/TURN configuration for WebRTC |
 | `/api/webcam-config` | Webcam capture defaults for multimodal examples |
 | `/api/start` | Start a pipeline session |
+
+The Live Console (`/live.html`) uses the Live routes under `/v1/live` instead, which the server serves in a Frontend/Backend Live deployment or when `LIVE_ENABLED` is `true`. For each route and the `LIVE_API_TOKEN` bearer token, refer to the [Live gateway README](../src/live/README.md).
 
 ## Learn more
 

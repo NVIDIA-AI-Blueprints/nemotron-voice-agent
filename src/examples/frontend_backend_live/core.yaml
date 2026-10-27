@@ -1,0 +1,224 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The delegation core's own settings (CORE_CONFIG_PATH overrides this file). The composition root reads the file once,
+# when it builds the core, so an edit takes effect at the next restart. Unknown keys are errors.
+# delegation_core.config.CoreSettings defines every key below.
+#
+# Profiles are separate files that name the file they build on (`extends: core.yaml`) and set only what differs:
+#   core.ui-bot.yaml           backend.tools: {cafe: {}}; delegation.result_format: speak_display
+#   core.bench.yaml            the benchmark's conductor; client_tool_timeout_seconds: null; progress_note_seconds: 0
+#   core.agent.yaml            backend.adapter: llm-agent; delegation.result_format: speak_display (its conductor
+#                              reads core.yaml's texts.conductor_prompt)
+#   core.harness.yaml          extends core.agent.yaml: backend.adapter: harness, connected to the operator's Hermes
+
+# The interaction manager (IM): admission, Works and their tasks, steering, stops, notes and results.
+delegation:
+  max_pending_delegations: 16          # requests admitted and not yet running; the next one is refused
+  client_tool_timeout_seconds: 60      # how long a task waits for the app's function outputs; null: no deadline
+  stop_timeout_seconds: 10             # how long the stop door waits for a run to confirm its stop
+  close_grace_seconds: 5               # at close, running Works get this long; null: an active response may finish
+  work_timeout_seconds: 600            # the backstop on one Work, through the stop door; null: off
+  result_format: plain                 # plain | speak_display (a show item for the screen, then the answer to speak)
+  backend_calls: items                 # items: official mcp_call items for calls the backend runs; notes: notes only
+  display_label: voiceclaw             # the show item's server label; the root hands it to the reader too
+  progress_note_seconds: 1.0           # at most one progress note per delegation this often; 0: no notes
+  work_tools: []                       # [cancel_work] gives every task a tool to stop its own Work
+  records_max_works: 5                 # the recently ended Works the work records list, after the open ones
+  context_tokens: 24000                # the backend history's budget (fits a 32,768-token local window)
+  tool_output_chars: 8000              # a longer tool output enters the backend history cut to its head and tail
+  voice_note: v2                       # v2 describes the voice channel to the backend; v1 adds nothing
+
+# Every line the core writes, sends, or adds to a model's input.
+texts:
+  voice_notes:
+    v1: ""
+    v2: |
+
+      ## Voice channel
+      Your reply is spoken to the caller by a voice frontend, which may already have said a short
+      acknowledgment such as "Let me check." Start with the substance; do not greet or introduce
+      yourself again.
+      - Write plain spoken sentences: no markdown, lists, tables, links, or emoji.
+      - Put any question or request for confirmation at the end.
+      - Caller messages are speech-recognition transcripts. Spelled letters and spoken numbers arrive
+        as separate words ("J O H N", "four four seven two"); join them before using them in a tool
+        call. Words can be misheard, and the caller's latest correction wins.
+
+      ## Spoken ids
+      - When the caller says an id, look it up before asking them to spell it.
+      - Build the likeliest id from every piece the caller said, with spoken numbers as digits, and
+        trust what the caller says over your own read-back.
+      - If a lookup of a spoken id fails, try it once more in lowercase.
+      - Try the ids you have before you transfer the caller, and offer a transfer after a few failed
+        tries.
+      - Do not ask for any check your instructions do not require.
+
+      ## Requests
+      - Finish every part of the request, and check the rules before each change.
+      - Ask for all missing details in one question, never ask for a detail the records already show,
+        and offer two or three options at a time.
+  result_formats:
+    plain: ""
+    speak_display: "Put screen-only detail in a show call, then answer in speakable sentences."
+  handover_line: "Handled together with your newer request."
+  cancelled_line: "Stopped for your newer request."
+  unconfirmed_line: "I could not confirm that the earlier request stopped; check before trying it again."
+  owed_output: "Outcome unknown: check whether it happened before retrying."
+  not_run_output: "Not run: the caller said something new."
+  stopped_output: "Not run: this work was stopped."
+  clash_output: "Not run: the app and a work tool both have a function by this name, so neither runs."
+  records_block: |-
+    Work so far in this call:
+    {records}
+  closing_line: "Say in one sentence where the work stands, then continue with the next step."
+  task_line: "Task: {task}"
+  conductor_prompt: >-
+    You place the caller's requests for a voice assistant. For each new request, call one tool: start_work
+    for new work (split it into tasks only when the parts are independent), steer_work when it changes or adds
+    to open work, cancel_work when the caller wants open work stopped, or answer_status when the records already
+    answer a question about open work. Never do the work yourself, and never word a result for the caller.
+  outcomes:
+    started: "Started {work} with {tasks}."
+    steered: "Sent to {work} ({tasks}); it applies at the next step."
+    restarted: "{work} had already ended, so this started {new}."
+    cancel_requested: "Stopping {work} ({tasks})."
+    ended: "{work} had already ended; nothing to do."
+    answered: "Answered {delegation}."
+    refused: "Not applied: {reason}"
+  control_tools:
+    start_work:
+      description: Start new work for these requests, as one task or as several independent tasks that run in parallel.
+      parameters:
+        type: object
+        properties:
+          delegations:
+            type: array
+            items: {type: string}
+            description: The ids of the requests this work answers.
+          tasks:
+            type: array
+            items: {type: string}
+            description: One short brief per independent task; leave it out for one task on the requests as asked.
+        required: [delegations]
+        additionalProperties: false
+    steer_work:
+      description: Join these requests to open work, so it takes them in at its next step.
+      parameters:
+        type: object
+        properties:
+          work_id:
+            type: string
+            description: The open work to join.
+          delegations:
+            type: array
+            items: {type: string}
+            description: The ids of the requests that join it.
+          task_id:
+            type: string
+            description: The one task they concern; leave it out when they concern every task of the work.
+        required: [work_id, delegations]
+        additionalProperties: false
+    cancel_work:
+      description: Stop open work, or one task of it, because the caller no longer wants it.
+      parameters:
+        type: object
+        properties:
+          work_id:
+            type: string
+            description: The open work to stop.
+          task_id:
+            type: string
+            description: The one task to stop; leave it out to stop every task of the work.
+        required: [work_id]
+        additionalProperties: false
+    answer_status:
+      description: Answer a question about open work from its records, without changing any work.
+      parameters:
+        type: object
+        properties:
+          delegation_id:
+            type: string
+            description: The id of the request to answer.
+          text:
+            type: string
+            description: The answer, from the records only.
+        required: [delegation_id, text]
+        additionalProperties: false
+  work_tools:
+    show:
+      description: Put this on the caller's screen. It is shown, never spoken.
+      parameters:
+        type: object
+        properties:
+          display:
+            type: string
+            description: What the screen shows.
+        required: [display]
+        additionalProperties: false
+    cancel_work:
+      description: Stop this work after the current step, because the caller no longer wants it.
+      parameters:
+        type: object
+        properties: {}
+        additionalProperties: false
+
+# The backend adapter. adapter and one_shot_adapter name entries of delegation_core/backend/adapters.py. slot and
+# prompt name the default model and instructions by reference; the composition root resolves them from the example's
+# catalog. Each other key is one adapter's own block: its source validates it, and its settings class holds the
+# defaults.
+backend:
+  adapter: llm                         # llm (directly connected, the default) | llm-agent | harness
+  one_shot_adapter: llm                # the adapter that serves stateless requests (the console's client-mode rounds)
+  slot: thinker-llm
+  prompt: thinker
+  tools: {}                            # server tool sources by name: {cafe: {}} in core.ui-bot.yaml
+  llm:
+    provider: chat-completions         # chat-completions | openai-responses
+    conductor: steer                   # steer: each request joins the newest open Work | start_each: a queue
+    max_tool_rounds: 8
+    provider_retries: 2
+    first_event_timeout_seconds: 45
+    idle_timeout_seconds: 30
+    server_tool_timeout_seconds: 60
+    # A requested model the catalog does not list: report answers with the official nonfatal
+    # responses_validation_failed and keeps the setting; fallback runs it on the configured endpoint and logs
+    # it, which only the benchmark's profile does (core.bench.yaml), because its model is not listed.
+    unlisted_models: report            # report | fallback
+    round_cap_note: "You have reached the step limit. Answer the caller with what you have."
+  llm-agent:
+    max_running: 3                     # tasks running at once
+    conductor:
+      provider: chat-completions
+      model: null                      # null: the backend's default model
+      timeout_seconds: 20              # a longer decision round places nothing more; the steer rule places the rest
+    worker: {}                         # the llm block's keys, for the agent's workers
+  # The harness reaches an agent its operator deployed: the operator gives it its model, key, tools and home, and
+  # this block says only which agent class reads it and how to reach it.
+  harness:
+    agent: hermes                      # acp (a plain ACP agent, the default) | hermes: the agent class
+    protocol: acp
+    transport: stdio                   # stdio: start `command` | websocket: connect to `url`, which the operator serves
+    command: [hermes, acp]             # stdio: the agent to start, once per runtime process
+    url: null                          # websocket only: the ws:// or wss:// URL the operator serves the agent on
+    pass_env: [PATH, LANG, LC_ALL, TZ, HERMES_HOME]  # stdio: all a started agent gets of this server's environment
+    env: {}                            # stdio: more variables for a started agent
+    max_running: 3                     # tasks running at once
+    turns_per_process: null            # null: the agent class's own limit (Hermes runs 4 turns at once per process)
+    steer: native_command              # native_command (the agent's own mid-turn steer) | next_prompt | cancel_reprompt
+    permission: reject                 # the answer to the agent's permission requests (no approval is surfaced)
+    runtime_label: hermes              # the server label of the calls the agent runs itself (its own toolsets)
+    stop_timeout_seconds: 10           # how long a worker's stop waits for its turn to end cancelled
+    turn_timeout_seconds: 300
+    conductor_timeout_seconds: 20
+    bridge:
+      bind: "127.0.0.1:8791"
+      advertise: "http://127.0.0.1:8791"
+    work_root: null                    # where the sessions' work folders go; null: ~/.cache/voiceclaw/harness
+                                       # websocket: a folder the served agent sees at the same path; the default
+                                       # does not reach it
+    agents:                            # the values only one agent class reads, by its name
+      hermes:
+        instructions_file: .hermes.md  # one of the files Hermes reads in a session's folder (AGENTS.md, CLAUDE.md, ...)
+        steer_command: "/steer "       # Hermes's mid-turn steer; quoted: it must end with a space
+        command_guard: "Request: "     # put before a prompt that starts with "/", which Hermes would run as a command

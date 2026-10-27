@@ -16,10 +16,11 @@ def server_event_allowed(config: SessionConfig, transport: str, message: dict, s
     if allow == "all":
         return True
     for selector in allow:
-        if isinstance(selector, str) and selector == message["type"]:
-            return True
-        if isinstance(selector, dict) and selector.get("type") == message["type"]:
-            nested = selector.get("response_event")
+        if isinstance(selector, str):
+            if selector == message["type"]:
+                return True
+        elif selector.type == message["type"]:
+            nested = selector.response_event
             if nested is None or nested == message.get("event", {}).get("type"):
                 return True
     return False

@@ -23,7 +23,7 @@ A turn is dropped only when every word is an acknowledgment or filler, it is at 
 import re
 from dataclasses import dataclass
 
-from examples.frontend_backend_live.common.words import continuer_vocabulary, words
+from examples.frontend_backend_live.cascade.talker.words import continuer_vocabulary, words
 
 MAX_WORDS = 4
 

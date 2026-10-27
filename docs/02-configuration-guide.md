@@ -24,6 +24,15 @@ What ASR / LLM / TTS models are available, their VRAM, precision, and known issu
 | [Enable the Audio Recorder](how-to/enable-audio-recorder.md) | Capture raw ASR/TTS audio per turn for debugging |
 | [Use the Realtime Gateway](how-to/use-realtime-gateway.md) | OpenAI Realtime–compatible `WS /v1/realtime` for external clients |
 
+## Frontend/Backend Live
+
+The Frontend/Backend Live example reads two configuration files: `config.yaml` for the frontend and `core.yaml` for
+the delegation core and its backend adapter. To use another file, such as a profile, set `LIVE_CONFIG_PATH` or
+`CORE_CONFIG_PATH`. The server reads each file only once, so restart it after an edit. For the keys, refer to
+[Configuration](../src/examples/frontend_backend_live/README.md#configuration) in the example's README. For the
+profiles and the Live environment variables, refer to
+[Frontend/Backend Live Architecture → Configuration](design/architecture.md#configuration).
+
 ## Welcome Message
 
 When a client connects, the bot greets the user and introduces itself before the user speaks. Disable the welcome message to have the bot wait for the user instead. This behavior applies to the Generic, Multilingual, Omni, Omni Assistant Subagents, and Frontend/Backend Agent examples.

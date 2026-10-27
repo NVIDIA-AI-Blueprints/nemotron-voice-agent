@@ -24,7 +24,10 @@ transports: all
 # UI order. Slots follow the key order; the first entry available in the
 # active recipe is the default. A slot reads the catalog category of the same
 # name unless `categories` maps it to another one. `settings` overrides
-# `settings.yaml` defaults per slot and service key.
+# `settings.yaml` defaults per slot and service key. An example that serves the
+# Live API (`/v1/live`) names its hooks under `live` (`factory`, `describe`,
+# `core`, each `module.path:callable`, imported on first use); the selected
+# example serves it when it has the block, else the first one listed that has.
 examples:
   generic-assistant:
     label: Generic Assistant
@@ -95,8 +98,8 @@ examples:
   frontend-backend-live:
     label: Frontend Backend Live
     services:
-      llm: [nemotron-super, nemotron-lightning]
-      thinker-llm: [nemotron-super, nemotron-lightning]
+      llm: [nemotron-lightning, nemotron-super]
+      thinker-llm: [nemotron-lightning, nemotron-super]
       asr: [nemotron-asr-streaming-english, parakeet-ctc]
       tts: [magpie-multilingual-tts, chatterbox-multilingual-tts, magpie-zeroshot-tts]
     categories:
@@ -124,3 +127,7 @@ examples:
     defaults:
       prompt: [talker]
     bot: examples.frontend_backend_live.pipeline:bot
+    live:
+      factory: examples.frontend_backend_live.factory:create_frontend_adapter
+      describe: examples.frontend_backend_live.factory:describe
+      core: examples.frontend_backend_live.factory:core

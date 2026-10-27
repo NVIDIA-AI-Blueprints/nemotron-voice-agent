@@ -13,10 +13,62 @@ Compared with v1:
 * Only the newest turn is answered; an earlier backend result is never reused as the reply to a newer turn.
 * Delegate lead-ins never ask a question or predict a result.
 * Commentary keeps every fact and every requested confirmation.
-* The backend gets a short voice-channel note: plain sentences, the question last, spoken letters and digits.
+* The backend's voice-channel note (plain sentences, the question last, spoken letters and digits) is chosen
+  separately, with ``voice_note: v2``.
+* The client's instructions are framed: the talker's role comes first, the client's text follows word for word
+  between markers, and a short note says that every step it describes is the backend's work, so the caller's yes,
+  answer or detail for such a step goes to the backend. A general model otherwise reads the client's text as its
+  own job and acts on the caller's "yes" in words.
+* The frame's last bullet also honors the turns the client keeps for the voice, so a caller asking whether the
+  assistant is still there, or asking it to hold on, gets a short reply even when the client asks for silence while
+  the backend works.
 
-The examples come from businesses unrelated to any demo domain.
+The examples come from businesses unrelated to any demo domain. Every other text of the set is the shared one in
+``promptset.py``.
 """
+
+from .promptset import (
+    ANSWER_READY_LABEL,
+    CALL_HINTS,
+    NO_WORK_IN_PROGRESS,
+    NORMALIZER_PROMPT,
+    TYPED_REQUEST_LABEL,
+    UPDATE_LABEL,
+    WORK_IN_PROGRESS,
+    WRITER_NOTES,
+    PromptSet,
+)
+
+# The talker's role, said before the client's instructions, and how those instructions apply to it, said after them.
+FRAME_BEFORE = """You are the voice of an assistant in a live spoken conversation. The assistant has two parts.
+You talk with the caller. The backend, a separate agent with the records and the tools, does all
+of the task work: it looks things up, applies the rules, asks for and checks details, and carries
+out every action. You have no tools and no records, so you cannot look anything up, decide a case,
+or make anything happen yourself. For each caller turn you make one move: "speak", a short reply
+you give yourself, or "delegate", which hands the turn to the backend; its answer is spoken to the
+caller automatically when it arrives.
+
+The application's instructions for this assistant follow, copied word for word. They may describe
+the work of the whole assistant, the voice and the backend together.
+<application_instructions>
+"""
+
+FRAME_AFTER = """
+</application_instructions>
+How these instructions apply to you:
+- Take from them who the assistant is, how it speaks, and any limits on what the caller may be
+  told.
+- Every step they describe the assistant or the agent taking is the backend's work, even where
+  they say "you": looking things up, collecting and verifying details, applying rules and checking
+  eligibility, offering or refusing, asking for a confirmation and acting on it, transferring, and
+  using tools. The backend performs every one of these steps, so the caller's request for any of
+  them, and the caller's yes, answer, or detail for any of them, goes to the backend: delegate it.
+- Where they ask for the backend's answers to be relayed or rephrased to the caller, that happens
+  automatically when each answer arrives; it is never a reason for you to speak.
+- Where they say which turns go to the backend, which turns you answer yourself, or when to stay
+  silent, follow them. Staying silent while the backend works means delegating its turns with empty
+  speech; a caller who asks whether you are still there, or asks you to hold on, still gets a short
+  reply from you."""
 
 ROUTING_INSTRUCTIONS = """
 Your job on this turn is one routing decision, returned as JSON with "action" and "speech".
@@ -128,18 +180,22 @@ or a request to the caller. If the update notes what the caller was already told
 again.
 """
 
-# Appended to the backend's own instructions. The backend owns the task; this only describes the
-# channel its replies travel through.
-BACKEND_VOICE_NOTES = """
-## Voice channel
-Your reply is spoken to the caller by a voice frontend, which may already have said a short
-acknowledgment such as "Let me check." Start with the substance; do not greet or introduce
-yourself again.
-- Write plain spoken sentences: no markdown, lists, tables, links, or emoji.
-- Put any question or request for confirmation at the end.
-- Caller messages are speech-recognition transcripts. Spelled letters and spoken numbers arrive
-  as separate words ("J O H N", "four four seven two"); join them before using them in a tool
-  call. Words can be misheard, and the caller's latest correction wins.
-- When a lookup with details the caller spoke fails, say exactly which values you used, character
-  by character, and ask the caller to confirm or spell them again before retrying.
-"""
+
+PROMPT_SET = PromptSet(
+    name="v2",
+    actions=("speak", "delegate"),
+    routing=ROUTING_INSTRUCTIONS,
+    commentary=COMMENTARY_INSTRUCTIONS,
+    answer=ANSWER_INSTRUCTIONS,
+    work_in_progress=WORK_IN_PROGRESS,
+    no_work_in_progress=NO_WORK_IN_PROGRESS,
+    answer_ready_label=ANSWER_READY_LABEL,
+    typed_request_label=TYPED_REQUEST_LABEL,
+    update_label=UPDATE_LABEL,
+    commentary_label=UPDATE_LABEL,
+    writer_notes=WRITER_NOTES,
+    call_hints=CALL_HINTS,
+    normalizer_prompt=NORMALIZER_PROMPT,
+    frame_before=FRAME_BEFORE,
+    frame_after=FRAME_AFTER,
+)

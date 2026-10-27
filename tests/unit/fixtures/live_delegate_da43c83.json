@@ -1,0 +1,410 @@
+{
+  "a failed model call": {
+    "closed": true,
+    "model_requests": [
+      {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 256,
+          "repetition_penalty": 1.05
+        },
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": "## Voice conversation context\nYou are the backend for an assistant in a live voice conversation at Bluebird Cafe.\nTranscripts can contain mistakes, unfinished phrases, and later corrections. Use the\nlatest context and the verified cart state returned by tools. If a needed detail is\nstill unclear, ask for that detail instead of guessing.\n\n## Task instructions\nYou take cafe orders.\n- Use get_menu to look up items, prices, sizes, and modifiers. Never invent an item or a price.\n- Use manage_cart for every change to the order. The cart returned by the tool is the\n  only source of truth for what the user has ordered and what it costs.\n- Sizes apply to drinks only: small (+$0.00), medium (+$0.50), large (+$1.00).\n  If the user does not say a size for a drink, use medium and mention it.\n- Use place_order only after the user has explicitly confirmed the order. Call it with\n  confirmed=true only when the user has said yes to the order as read back to them.\n  If you are unsure, call it with confirmed=false to get the confirmation summary and\n  ask the user to confirm.\n- Do not call the same lookup twice in one turn. One get_menu call with the right\n  category returns everything in it; reuse a result you already have this turn.\n\n## Return the result\nReturn the relevant facts, the task's current status, and the next step, in one or two\nshort sentences suitable for reading aloud. Include exact prices and totals from the tools.\nReport an action as complete only after the tool confirms success. If the outcome is\nunclear, state that and explain what needs to be checked.\nDo not use Markdown, lists, or symbols; this text is spoken.\n\nChannel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.",
+            "role": "system"
+          },
+          {
+            "content": "What teas do you have?",
+            "role": "user"
+          }
+        ],
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "stream": true,
+        "temperature": 0.7
+      }
+    ],
+    "reply": {
+      "detail": "The backend could not complete the round"
+    },
+    "status": 502
+  },
+  "a round cut off by the token limit": {
+    "closed": true,
+    "model_requests": [
+      {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 256,
+          "repetition_penalty": 1.05
+        },
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": "## Voice conversation context\nYou are the backend for an assistant in a live voice conversation at Bluebird Cafe.\nTranscripts can contain mistakes, unfinished phrases, and later corrections. Use the\nlatest context and the verified cart state returned by tools. If a needed detail is\nstill unclear, ask for that detail instead of guessing.\n\n## Task instructions\nYou take cafe orders.\n- Use get_menu to look up items, prices, sizes, and modifiers. Never invent an item or a price.\n- Use manage_cart for every change to the order. The cart returned by the tool is the\n  only source of truth for what the user has ordered and what it costs.\n- Sizes apply to drinks only: small (+$0.00), medium (+$0.50), large (+$1.00).\n  If the user does not say a size for a drink, use medium and mention it.\n- Use place_order only after the user has explicitly confirmed the order. Call it with\n  confirmed=true only when the user has said yes to the order as read back to them.\n  If you are unsure, call it with confirmed=false to get the confirmation summary and\n  ask the user to confirm.\n- Do not call the same lookup twice in one turn. One get_menu call with the right\n  category returns everything in it; reuse a result you already have this turn.\n\n## Return the result\nReturn the relevant facts, the task's current status, and the next step, in one or two\nshort sentences suitable for reading aloud. Include exact prices and totals from the tools.\nReport an action as complete only after the tool confirms success. If the outcome is\nunclear, state that and explain what needs to be checked.\nDo not use Markdown, lists, or symbols; this text is spoken.\n\nChannel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.",
+            "role": "system"
+          },
+          {
+            "content": "What teas do you have?",
+            "role": "user"
+          }
+        ],
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "stream": true,
+        "temperature": 0.7
+      }
+    ],
+    "reply": {
+      "detail": "The backend could not complete the round"
+    },
+    "status": 502
+  },
+  "a tool with no name": {
+    "closed": false,
+    "model_requests": [],
+    "reply": {
+      "detail": "tools must be function or web_search tools"
+    },
+    "status": 400
+  },
+  "no input": {
+    "closed": false,
+    "model_requests": [],
+    "reply": {
+      "detail": "input must be a non-empty list of items"
+    },
+    "status": 400
+  },
+  "v1 client model and instructions": {
+    "closed": false,
+    "model_requests": [],
+    "reply": {
+      "detail": "Unknown model 'org/other'"
+    },
+    "status": 400
+  },
+  "v1 round 1, defaults": {
+    "closed": true,
+    "model_requests": [
+      {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 256,
+          "repetition_penalty": 1.05
+        },
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": "## Voice conversation context\nYou are the backend for an assistant in a live voice conversation at Bluebird Cafe.\nTranscripts can contain mistakes, unfinished phrases, and later corrections. Use the\nlatest context and the verified cart state returned by tools. If a needed detail is\nstill unclear, ask for that detail instead of guessing.\n\n## Task instructions\nYou take cafe orders.\n- Use get_menu to look up items, prices, sizes, and modifiers. Never invent an item or a price.\n- Use manage_cart for every change to the order. The cart returned by the tool is the\n  only source of truth for what the user has ordered and what it costs.\n- Sizes apply to drinks only: small (+$0.00), medium (+$0.50), large (+$1.00).\n  If the user does not say a size for a drink, use medium and mention it.\n- Use place_order only after the user has explicitly confirmed the order. Call it with\n  confirmed=true only when the user has said yes to the order as read back to them.\n  If you are unsure, call it with confirmed=false to get the confirmation summary and\n  ask the user to confirm.\n- Do not call the same lookup twice in one turn. One get_menu call with the right\n  category returns everything in it; reuse a result you already have this turn.\n\n## Return the result\nReturn the relevant facts, the task's current status, and the next step, in one or two\nshort sentences suitable for reading aloud. Include exact prices and totals from the tools.\nReport an action as complete only after the tool confirms success. If the outcome is\nunclear, state that and explain what needs to be checked.\nDo not use Markdown, lists, or symbols; this text is spoken.\n\nChannel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.",
+            "role": "system"
+          },
+          {
+            "content": "What teas do you have?",
+            "role": "user"
+          }
+        ],
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "stream": true,
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Menu",
+              "name": "get_menu",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      }
+    ],
+    "reply": {
+      "response": {
+        "id": "<resp id>",
+        "output": [
+          {
+            "arguments": "{\"category\":\"tea\"}",
+            "call_id": "<call id>",
+            "id": "<item id>",
+            "name": "get_menu",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ]
+      },
+      "sent_request": {
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "tools": [
+          "get_menu",
+          "web_search"
+        ]
+      }
+    },
+    "status": 200
+  },
+  "v1 round 2, whole history": {
+    "closed": true,
+    "model_requests": [
+      {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 256,
+          "repetition_penalty": 1.05
+        },
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": "## Voice conversation context\nYou are the backend for an assistant in a live voice conversation at Bluebird Cafe.\nTranscripts can contain mistakes, unfinished phrases, and later corrections. Use the\nlatest context and the verified cart state returned by tools. If a needed detail is\nstill unclear, ask for that detail instead of guessing.\n\n## Task instructions\nYou take cafe orders.\n- Use get_menu to look up items, prices, sizes, and modifiers. Never invent an item or a price.\n- Use manage_cart for every change to the order. The cart returned by the tool is the\n  only source of truth for what the user has ordered and what it costs.\n- Sizes apply to drinks only: small (+$0.00), medium (+$0.50), large (+$1.00).\n  If the user does not say a size for a drink, use medium and mention it.\n- Use place_order only after the user has explicitly confirmed the order. Call it with\n  confirmed=true only when the user has said yes to the order as read back to them.\n  If you are unsure, call it with confirmed=false to get the confirmation summary and\n  ask the user to confirm.\n- Do not call the same lookup twice in one turn. One get_menu call with the right\n  category returns everything in it; reuse a result you already have this turn.\n\n## Return the result\nReturn the relevant facts, the task's current status, and the next step, in one or two\nshort sentences suitable for reading aloud. Include exact prices and totals from the tools.\nReport an action as complete only after the tool confirms success. If the outcome is\nunclear, state that and explain what needs to be checked.\nDo not use Markdown, lists, or symbols; this text is spoken.\n\nChannel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.",
+            "role": "system"
+          },
+          {
+            "content": "What teas do you have?",
+            "role": "user"
+          },
+          {
+            "content": "",
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"category\":\"tea\"}",
+                  "name": "get_menu"
+                },
+                "id": "call_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": "{\"items\": [\"Earl Grey\"]}",
+            "role": "tool",
+            "tool_call_id": "call_1"
+          }
+        ],
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "stream": true,
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Menu",
+              "name": "get_menu",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      }
+    ],
+    "reply": {
+      "response": {
+        "id": "<resp id>",
+        "output": [
+          {
+            "content": [
+              {
+                "annotations": [],
+                "logprobs": [],
+                "text": "We have Earl Grey and a matcha latte.",
+                "type": "output_text"
+              }
+            ],
+            "id": "<item id>",
+            "phase": "final_answer",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          }
+        ]
+      },
+      "sent_request": {
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "tools": [
+          "get_menu",
+          "web_search"
+        ]
+      }
+    },
+    "status": 200
+  },
+  "v2 client model and instructions": {
+    "closed": false,
+    "model_requests": [],
+    "reply": {
+      "detail": "Unknown model 'org/other'"
+    },
+    "status": 400
+  },
+  "v2 round 1, defaults": {
+    "closed": true,
+    "model_requests": [
+      {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 256,
+          "repetition_penalty": 1.05
+        },
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": "## Voice conversation context\nYou are the backend for an assistant in a live voice conversation at Bluebird Cafe.\nTranscripts can contain mistakes, unfinished phrases, and later corrections. Use the\nlatest context and the verified cart state returned by tools. If a needed detail is\nstill unclear, ask for that detail instead of guessing.\n\n## Task instructions\nYou take cafe orders.\n- Use get_menu to look up items, prices, sizes, and modifiers. Never invent an item or a price.\n- Use manage_cart for every change to the order. The cart returned by the tool is the\n  only source of truth for what the user has ordered and what it costs.\n- Sizes apply to drinks only: small (+$0.00), medium (+$0.50), large (+$1.00).\n  If the user does not say a size for a drink, use medium and mention it.\n- Use place_order only after the user has explicitly confirmed the order. Call it with\n  confirmed=true only when the user has said yes to the order as read back to them.\n  If you are unsure, call it with confirmed=false to get the confirmation summary and\n  ask the user to confirm.\n- Do not call the same lookup twice in one turn. One get_menu call with the right\n  category returns everything in it; reuse a result you already have this turn.\n\n## Return the result\nReturn the relevant facts, the task's current status, and the next step, in one or two\nshort sentences suitable for reading aloud. Include exact prices and totals from the tools.\nReport an action as complete only after the tool confirms success. If the outcome is\nunclear, state that and explain what needs to be checked.\nDo not use Markdown, lists, or symbols; this text is spoken.\n\nChannel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.\n## Voice channel\nYour reply is spoken to the caller by a voice frontend, which may already have said a short\nacknowledgment such as \"Let me check.\" Start with the substance; do not greet or introduce\nyourself again.\n- Write plain spoken sentences: no markdown, lists, tables, links, or emoji.\n- Put any question or request for confirmation at the end.\n- Caller messages are speech-recognition transcripts. Spelled letters and spoken numbers arrive\n  as separate words (\"J O H N\", \"four four seven two\"); join them before using them in a tool\n  call. Words can be misheard, and the caller's latest correction wins.\n\n## Spoken ids\n- When the caller says an id, look it up before asking them to spell it.\n- Build the likeliest id from every piece the caller said, with spoken numbers as digits, and\n  trust what the caller says over your own read-back.\n- If a lookup of a spoken id fails, try it once more in lowercase.\n- Try the ids you have before you transfer the caller, and offer a transfer after a few failed\n  tries.\n- Do not ask for any check your instructions do not require.\n\n## Requests\n- Finish every part of the request, and check the rules before each change.\n- Ask for all missing details in one question, never ask for a detail the records already show,\n  and offer two or three options at a time.",
+            "role": "system"
+          },
+          {
+            "content": "What teas do you have?",
+            "role": "user"
+          }
+        ],
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "stream": true,
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Menu",
+              "name": "get_menu",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      }
+    ],
+    "reply": {
+      "response": {
+        "id": "<resp id>",
+        "output": [
+          {
+            "arguments": "{\"category\":\"tea\"}",
+            "call_id": "<call id>",
+            "id": "<item id>",
+            "name": "get_menu",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ]
+      },
+      "sent_request": {
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "tools": [
+          "get_menu",
+          "web_search"
+        ]
+      }
+    },
+    "status": 200
+  },
+  "v2 round 2, whole history": {
+    "closed": true,
+    "model_requests": [
+      {
+        "extra_body": {
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          },
+          "reasoning_budget": 256,
+          "repetition_penalty": 1.05
+        },
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": "## Voice conversation context\nYou are the backend for an assistant in a live voice conversation at Bluebird Cafe.\nTranscripts can contain mistakes, unfinished phrases, and later corrections. Use the\nlatest context and the verified cart state returned by tools. If a needed detail is\nstill unclear, ask for that detail instead of guessing.\n\n## Task instructions\nYou take cafe orders.\n- Use get_menu to look up items, prices, sizes, and modifiers. Never invent an item or a price.\n- Use manage_cart for every change to the order. The cart returned by the tool is the\n  only source of truth for what the user has ordered and what it costs.\n- Sizes apply to drinks only: small (+$0.00), medium (+$0.50), large (+$1.00).\n  If the user does not say a size for a drink, use medium and mention it.\n- Use place_order only after the user has explicitly confirmed the order. Call it with\n  confirmed=true only when the user has said yes to the order as read back to them.\n  If you are unsure, call it with confirmed=false to get the confirmation summary and\n  ask the user to confirm.\n- Do not call the same lookup twice in one turn. One get_menu call with the right\n  category returns everything in it; reuse a result you already have this turn.\n\n## Return the result\nReturn the relevant facts, the task's current status, and the next step, in one or two\nshort sentences suitable for reading aloud. Include exact prices and totals from the tools.\nReport an action as complete only after the tool confirms success. If the outcome is\nunclear, state that and explain what needs to be checked.\nDo not use Markdown, lists, or symbols; this text is spoken.\n\nChannel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.\n## Voice channel\nYour reply is spoken to the caller by a voice frontend, which may already have said a short\nacknowledgment such as \"Let me check.\" Start with the substance; do not greet or introduce\nyourself again.\n- Write plain spoken sentences: no markdown, lists, tables, links, or emoji.\n- Put any question or request for confirmation at the end.\n- Caller messages are speech-recognition transcripts. Spelled letters and spoken numbers arrive\n  as separate words (\"J O H N\", \"four four seven two\"); join them before using them in a tool\n  call. Words can be misheard, and the caller's latest correction wins.\n\n## Spoken ids\n- When the caller says an id, look it up before asking them to spell it.\n- Build the likeliest id from every piece the caller said, with spoken numbers as digits, and\n  trust what the caller says over your own read-back.\n- If a lookup of a spoken id fails, try it once more in lowercase.\n- Try the ids you have before you transfer the caller, and offer a transfer after a few failed\n  tries.\n- Do not ask for any check your instructions do not require.\n\n## Requests\n- Finish every part of the request, and check the rules before each change.\n- Ask for all missing details in one question, never ask for a detail the records already show,\n  and offer two or three options at a time.",
+            "role": "system"
+          },
+          {
+            "content": "What teas do you have?",
+            "role": "user"
+          },
+          {
+            "content": "",
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"category\":\"tea\"}",
+                  "name": "get_menu"
+                },
+                "id": "call_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": "{\"items\": [\"Earl Grey\"]}",
+            "role": "tool",
+            "tool_call_id": "call_1"
+          }
+        ],
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "stream": true,
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Menu",
+              "name": "get_menu",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      }
+    ],
+    "reply": {
+      "response": {
+        "id": "<resp id>",
+        "output": [
+          {
+            "content": [
+              {
+                "annotations": [],
+                "logprobs": [],
+                "text": "We have Earl Grey and a matcha latte.",
+                "type": "output_text"
+              }
+            ],
+            "id": "<item id>",
+            "phase": "final_answer",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          }
+        ]
+      },
+      "sent_request": {
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "tools": [
+          "get_menu",
+          "web_search"
+        ]
+      }
+    },
+    "status": 200
+  }
+}

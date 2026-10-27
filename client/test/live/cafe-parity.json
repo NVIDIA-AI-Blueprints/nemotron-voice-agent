@@ -1,0 +1,161 @@
+{
+  "about": "Calls to the cafe tools and the results src/delegation_core/backend/tools/cafe/tools.py gives them, each case on a fresh cart. client/test/live/cafe.test.js checks client/public/live/cafe.js against them; tests/unit/cross_box/test_console_cafe_parity.py checks tools.py and records them again with CAFE_PARITY_RECORD=1. An order's placed_at is compared as <placed_at>.",
+  "cases": [
+    {
+      "name": "the menu, whole and filtered",
+      "calls": [
+        {"call_id": "c1", "name": "get_menu", "arguments": "{}"},
+        {"call_id": "c2", "name": "get_menu", "arguments": "{\"category\": \"tea\"}"},
+        {"call_id": "c3", "name": "get_menu", "arguments": "{\"query\": \" LATTE \"}"},
+        {"call_id": "c4", "name": "get_menu", "arguments": "{\"query\": \"ice\"}"},
+        {"call_id": "c5", "name": "get_menu", "arguments": "{\"category\": \"soup\"}"},
+        {"call_id": "c6", "name": "get_menu", "arguments": "{\"category\": \"\", \"query\": null}"}
+      ],
+      "results": [
+        {"items": [{"id": "esp", "name": "Espresso", "category": "coffee", "price": 3.0, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Double shot, pulled to order."}, {"id": "lat", "name": "Latte", "category": "coffee", "price": 4.5, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Espresso with steamed milk."}, {"id": "cap", "name": "Cappuccino", "category": "coffee", "price": 4.25, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Equal parts espresso, milk, foam."}, {"id": "cbr", "name": "Cold Brew", "category": "coffee", "price": 4.75, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "18-hour steep, served over ice."}, {"id": "mch", "name": "Matcha Latte", "category": "tea", "price": 5.0, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Ceremonial grade matcha."}, {"id": "erl", "name": "Earl Grey", "category": "tea", "price": 3.25, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Bergamot black tea."}, {"id": "crs", "name": "Butter Croissant", "category": "pastry", "price": 3.75, "sizes": null, "notes": "Baked this morning."}, {"id": "bmf", "name": "Blueberry Muffin", "category": "pastry", "price": 3.5, "sizes": null, "notes": "Made with Maine blueberries."}, {"id": "avt", "name": "Avocado Toast", "category": "food", "price": 8.5, "sizes": null, "notes": "Sourdough, chili flake, lemon."}], "modifiers": {"oat_milk": {"label": "Oat milk", "price": 0.75}, "extra_shot": {"label": "Extra shot", "price": 1}, "decaf": {"label": "Decaf", "price": 0}, "iced": {"label": "Iced", "price": 0}}, "tax_rate": 0.085},
+        {"items": [{"id": "mch", "name": "Matcha Latte", "category": "tea", "price": 5.0, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Ceremonial grade matcha."}, {"id": "erl", "name": "Earl Grey", "category": "tea", "price": 3.25, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Bergamot black tea."}], "modifiers": {"oat_milk": {"label": "Oat milk", "price": 0.75}, "extra_shot": {"label": "Extra shot", "price": 1}, "decaf": {"label": "Decaf", "price": 0}, "iced": {"label": "Iced", "price": 0}}, "tax_rate": 0.085},
+        {"items": [{"id": "lat", "name": "Latte", "category": "coffee", "price": 4.5, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Espresso with steamed milk."}, {"id": "mch", "name": "Matcha Latte", "category": "tea", "price": 5.0, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Ceremonial grade matcha."}], "modifiers": {"oat_milk": {"label": "Oat milk", "price": 0.75}, "extra_shot": {"label": "Extra shot", "price": 1}, "decaf": {"label": "Decaf", "price": 0}, "iced": {"label": "Iced", "price": 0}}, "tax_rate": 0.085},
+        {"items": [{"id": "cbr", "name": "Cold Brew", "category": "coffee", "price": 4.75, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "18-hour steep, served over ice."}], "modifiers": {"oat_milk": {"label": "Oat milk", "price": 0.75}, "extra_shot": {"label": "Extra shot", "price": 1}, "decaf": {"label": "Decaf", "price": 0}, "iced": {"label": "Iced", "price": 0}}, "tax_rate": 0.085},
+        {"items": [], "modifiers": {"oat_milk": {"label": "Oat milk", "price": 0.75}, "extra_shot": {"label": "Extra shot", "price": 1}, "decaf": {"label": "Decaf", "price": 0}, "iced": {"label": "Iced", "price": 0}}, "tax_rate": 0.085},
+        {"items": [{"id": "esp", "name": "Espresso", "category": "coffee", "price": 3.0, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Double shot, pulled to order."}, {"id": "lat", "name": "Latte", "category": "coffee", "price": 4.5, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Espresso with steamed milk."}, {"id": "cap", "name": "Cappuccino", "category": "coffee", "price": 4.25, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Equal parts espresso, milk, foam."}, {"id": "cbr", "name": "Cold Brew", "category": "coffee", "price": 4.75, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "18-hour steep, served over ice."}, {"id": "mch", "name": "Matcha Latte", "category": "tea", "price": 5.0, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Ceremonial grade matcha."}, {"id": "erl", "name": "Earl Grey", "category": "tea", "price": 3.25, "sizes": {"small": 0, "medium": 0.5, "large": 1}, "notes": "Bergamot black tea."}, {"id": "crs", "name": "Butter Croissant", "category": "pastry", "price": 3.75, "sizes": null, "notes": "Baked this morning."}, {"id": "bmf", "name": "Blueberry Muffin", "category": "pastry", "price": 3.5, "sizes": null, "notes": "Made with Maine blueberries."}, {"id": "avt", "name": "Avocado Toast", "category": "food", "price": 8.5, "sizes": null, "notes": "Sourdough, chili flake, lemon."}], "modifiers": {"oat_milk": {"label": "Oat milk", "price": 0.75}, "extra_shot": {"label": "Extra shot", "price": 1}, "decaf": {"label": "Decaf", "price": 0}, "iced": {"label": "Iced", "price": 0}}, "tax_rate": 0.085}
+      ]
+    },
+    {
+      "name": "adding lines: the default size, sizes, modifiers and quantities",
+      "calls": [
+        {"call_id": "c1", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"lat\"}"},
+        {"call_id": "c2", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"esp\", \"size\": \"large\", \"quantity\": \"3\", \"modifiers\": [\"oat_milk\", \"bogus\", \"extra_shot\"]}"},
+        {"call_id": "c3", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"crs\", \"size\": \"large\"}"},
+        {"call_id": "c4", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"cap\", \"quantity\": 99}"},
+        {"call_id": "c5", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"mch\", \"quantity\": -5}"},
+        {"call_id": "c6", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"erl\", \"quantity\": \"2.5\"}"},
+        {"call_id": "c7", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"cbr\", \"quantity\": 2.9}"},
+        {"call_id": "c8", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"bmf\", \"quantity\": true}"},
+        {"call_id": "c9", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"esp\", \"size\": \"constructor\", \"modifiers\": [\"toString\", \"decaf\"]}"},
+        {"call_id": "c10", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"lat\", \"quantity\": \" 1_0 \", \"modifiers\": \"iced\"}"}
+      ],
+      "results": [
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}], "item_count": 1, "subtotal": 5.0, "tax": 0.43, "total": 5.43, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}], "item_count": 4, "subtotal": 22.25, "tax": 1.89, "total": 24.14, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}], "item_count": 5, "subtotal": 26.0, "tax": 2.21, "total": 28.21, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}, {"line_id": "line_4", "item_id": "cap", "quantity": 20, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 95.0}], "item_count": 25, "subtotal": 121.0, "tax": 10.29, "total": 131.29, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}, {"line_id": "line_4", "item_id": "cap", "quantity": 20, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 95.0}, {"line_id": "line_5", "item_id": "mch", "quantity": 1, "size": "medium", "modifiers": [], "name": "Matcha Latte", "line_total": 5.5}], "item_count": 26, "subtotal": 126.5, "tax": 10.75, "total": 137.25, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}, {"line_id": "line_4", "item_id": "cap", "quantity": 20, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 95.0}, {"line_id": "line_5", "item_id": "mch", "quantity": 1, "size": "medium", "modifiers": [], "name": "Matcha Latte", "line_total": 5.5}, {"line_id": "line_6", "item_id": "erl", "quantity": 1, "size": "medium", "modifiers": [], "name": "Earl Grey", "line_total": 3.75}], "item_count": 27, "subtotal": 130.25, "tax": 11.07, "total": 141.32, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}, {"line_id": "line_4", "item_id": "cap", "quantity": 20, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 95.0}, {"line_id": "line_5", "item_id": "mch", "quantity": 1, "size": "medium", "modifiers": [], "name": "Matcha Latte", "line_total": 5.5}, {"line_id": "line_6", "item_id": "erl", "quantity": 1, "size": "medium", "modifiers": [], "name": "Earl Grey", "line_total": 3.75}, {"line_id": "line_7", "item_id": "cbr", "quantity": 2, "size": "medium", "modifiers": [], "name": "Cold Brew", "line_total": 10.5}], "item_count": 29, "subtotal": 140.75, "tax": 11.96, "total": 152.71, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}, {"line_id": "line_4", "item_id": "cap", "quantity": 20, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 95.0}, {"line_id": "line_5", "item_id": "mch", "quantity": 1, "size": "medium", "modifiers": [], "name": "Matcha Latte", "line_total": 5.5}, {"line_id": "line_6", "item_id": "erl", "quantity": 1, "size": "medium", "modifiers": [], "name": "Earl Grey", "line_total": 3.75}, {"line_id": "line_7", "item_id": "cbr", "quantity": 2, "size": "medium", "modifiers": [], "name": "Cold Brew", "line_total": 10.5}, {"line_id": "line_8", "item_id": "bmf", "quantity": 1, "size": null, "modifiers": [], "name": "Blueberry Muffin", "line_total": 3.5}], "item_count": 30, "subtotal": 144.25, "tax": 12.26, "total": 156.51, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}, {"line_id": "line_4", "item_id": "cap", "quantity": 20, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 95.0}, {"line_id": "line_5", "item_id": "mch", "quantity": 1, "size": "medium", "modifiers": [], "name": "Matcha Latte", "line_total": 5.5}, {"line_id": "line_6", "item_id": "erl", "quantity": 1, "size": "medium", "modifiers": [], "name": "Earl Grey", "line_total": 3.75}, {"line_id": "line_7", "item_id": "cbr", "quantity": 2, "size": "medium", "modifiers": [], "name": "Cold Brew", "line_total": 10.5}, {"line_id": "line_8", "item_id": "bmf", "quantity": 1, "size": null, "modifiers": [], "name": "Blueberry Muffin", "line_total": 3.5}, {"line_id": "line_9", "item_id": "esp", "quantity": 1, "size": "medium", "modifiers": ["decaf"], "name": "Espresso", "line_total": 3.5}], "item_count": 31, "subtotal": 147.75, "tax": 12.56, "total": 160.31, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 3, "size": "large", "modifiers": ["oat_milk", "extra_shot"], "name": "Espresso", "line_total": 17.25}, {"line_id": "line_3", "item_id": "crs", "quantity": 1, "size": null, "modifiers": [], "name": "Butter Croissant", "line_total": 3.75}, {"line_id": "line_4", "item_id": "cap", "quantity": 20, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 95.0}, {"line_id": "line_5", "item_id": "mch", "quantity": 1, "size": "medium", "modifiers": [], "name": "Matcha Latte", "line_total": 5.5}, {"line_id": "line_6", "item_id": "erl", "quantity": 1, "size": "medium", "modifiers": [], "name": "Earl Grey", "line_total": 3.75}, {"line_id": "line_7", "item_id": "cbr", "quantity": 2, "size": "medium", "modifiers": [], "name": "Cold Brew", "line_total": 10.5}, {"line_id": "line_8", "item_id": "bmf", "quantity": 1, "size": null, "modifiers": [], "name": "Blueberry Muffin", "line_total": 3.5}, {"line_id": "line_9", "item_id": "esp", "quantity": 1, "size": "medium", "modifiers": ["decaf"], "name": "Espresso", "line_total": 3.5}, {"line_id": "line_10", "item_id": "lat", "quantity": 10, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 50.0}], "item_count": 41, "subtotal": 197.75, "tax": 16.81, "total": 214.56, "currency": "USD"}, "status": "added"}
+      ]
+    },
+    {
+      "name": "an item is found by its exact id only",
+      "calls": [
+        {"call_id": "c1", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"Latte\"}"},
+        {"call_id": "c2", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"LAT\"}"},
+        {"call_id": "c3", "name": "manage_cart", "arguments": "{\"action\": \"add\"}"},
+        {"call_id": "c4", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"it's\"}"},
+        {"call_id": "c5", "name": "manage_cart", "arguments": "{\"action\": \"view\"}"}
+      ],
+      "results": [
+        {"status": "error", "error": "Unknown item_id 'Latte'. Call get_menu for valid ids."},
+        {"status": "error", "error": "Unknown item_id 'LAT'. Call get_menu for valid ids."},
+        {"status": "error", "error": "Unknown item_id None. Call get_menu for valid ids."},
+        {"status": "error", "error": "Unknown item_id \"it's\". Call get_menu for valid ids."},
+        {"action": "view", "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}}
+      ]
+    },
+    {
+      "name": "changing lines: update, remove, view and clear",
+      "calls": [
+        {"call_id": "c1", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"lat\"}"},
+        {"call_id": "c2", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"esp\"}"},
+        {"call_id": "c3", "name": "manage_cart", "arguments": "{\"action\": \"update_quantity\", \"line_id\": \"line_1\", \"quantity\": 3}"},
+        {"call_id": "c4", "name": "manage_cart", "arguments": "{\"action\": \"update_quantity\", \"line_id\": \"line_2\", \"quantity\": 0}"},
+        {"call_id": "c5", "name": "manage_cart", "arguments": "{\"action\": \"update_quantity\", \"line_id\": \"line_1\", \"quantity\": \"abc\"}"},
+        {"call_id": "c6", "name": "manage_cart", "arguments": "{\"action\": \"remove\", \"line_id\": \"line_99\"}"},
+        {"call_id": "c7", "name": "manage_cart", "arguments": "{\"action\": \"remove\", \"line_id\": \"line_1\"}"},
+        {"call_id": "c8", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"avt\", \"quantity\": 2}"},
+        {"call_id": "c9", "name": "manage_cart", "arguments": "{\"action\": \"clear\"}"},
+        {"call_id": "c10", "name": "manage_cart", "arguments": "{\"action\": \"view\"}"}
+      ],
+      "results": [
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}], "item_count": 1, "subtotal": 5.0, "tax": 0.43, "total": 5.43, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 1, "size": "medium", "modifiers": [], "name": "Espresso", "line_total": 3.5}], "item_count": 2, "subtotal": 8.5, "tax": 0.72, "total": 9.22, "currency": "USD"}, "status": "added"},
+        {"action": "update_quantity", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 3, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 15.0}, {"line_id": "line_2", "item_id": "esp", "quantity": 1, "size": "medium", "modifiers": [], "name": "Espresso", "line_total": 3.5}], "item_count": 4, "subtotal": 18.5, "tax": 1.57, "total": 20.07, "currency": "USD"}, "status": "updated"},
+        {"action": "update_quantity", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 3, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 15.0}], "item_count": 3, "subtotal": 15.0, "tax": 1.28, "total": 16.28, "currency": "USD"}, "status": "removed"},
+        {"action": "update_quantity", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}], "item_count": 1, "subtotal": 5.0, "tax": 0.43, "total": 5.43, "currency": "USD"}, "status": "updated"},
+        {"status": "error", "error": "Unknown line_id 'line_99'. View the cart for its lines."},
+        {"action": "remove", "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}, "status": "removed"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_3", "item_id": "avt", "quantity": 2, "size": null, "modifiers": [], "name": "Avocado Toast", "line_total": 17.0}], "item_count": 2, "subtotal": 17.0, "tax": 1.45, "total": 18.45, "currency": "USD"}, "status": "added"},
+        {"action": "clear", "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}, "status": "cleared"},
+        {"action": "view", "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}}
+      ]
+    },
+    {
+      "name": "an action that is missing or not supported",
+      "calls": [
+        {"call_id": "c1", "name": "manage_cart", "arguments": "{}"},
+        {"call_id": "c2", "name": "manage_cart", "arguments": "{\"action\": \"explode\"}"}
+      ],
+      "results": [
+        {"status": "error", "error": "'action'"},
+        {"status": "error", "error": "Unsupported cart action"}
+      ]
+    },
+    {
+      "name": "an order is placed only when confirmed is exactly true",
+      "calls": [
+        {"call_id": "c1", "name": "place_order", "arguments": "{\"confirmed\": true}"},
+        {"call_id": "c2", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"lat\", \"size\": \"small\", \"quantity\": 2}"},
+        {"call_id": "c3", "name": "place_order", "arguments": "{\"confirmed\": \"false\"}"},
+        {"call_id": "c4", "name": "place_order", "arguments": "{\"confirmed\": \"true\"}"},
+        {"call_id": "c5", "name": "place_order", "arguments": "{\"confirmed\": 1}"},
+        {"call_id": "c6", "name": "place_order", "arguments": "{}"},
+        {"call_id": "c7", "name": "place_order", "arguments": "{\"confirmed\": true, \"customer_name\": \"Ada\"}"},
+        {"call_id": "c8", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"cap\"}"},
+        {"call_id": "c9", "name": "place_order", "arguments": "{\"confirmed\": true, \"customer_name\": null}"},
+        {"call_id": "c10", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"bmf\"}"},
+        {"call_id": "c11", "name": "place_order", "arguments": "{\"confirmed\": true}"}
+      ],
+      "results": [
+        {"status": "error", "error": "The cart is empty.", "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 2, "size": "small", "modifiers": [], "name": "Latte", "line_total": 9.0}], "item_count": 2, "subtotal": 9.0, "tax": 0.77, "total": 9.77, "currency": "USD"}, "status": "added"},
+        {"status": "needs_confirmation", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 2, "size": "small", "modifiers": [], "name": "Latte", "line_total": 9.0}], "item_count": 2, "subtotal": 9.0, "tax": 0.77, "total": 9.77, "currency": "USD"}, "total": 9.77, "confirmation_summary": "2 Latte", "next_step": "Read back the order and ask the user to confirm."},
+        {"status": "needs_confirmation", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 2, "size": "small", "modifiers": [], "name": "Latte", "line_total": 9.0}], "item_count": 2, "subtotal": 9.0, "tax": 0.77, "total": 9.77, "currency": "USD"}, "total": 9.77, "confirmation_summary": "2 Latte", "next_step": "Read back the order and ask the user to confirm."},
+        {"status": "needs_confirmation", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 2, "size": "small", "modifiers": [], "name": "Latte", "line_total": 9.0}], "item_count": 2, "subtotal": 9.0, "tax": 0.77, "total": 9.77, "currency": "USD"}, "total": 9.77, "confirmation_summary": "2 Latte", "next_step": "Read back the order and ask the user to confirm."},
+        {"status": "needs_confirmation", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 2, "size": "small", "modifiers": [], "name": "Latte", "line_total": 9.0}], "item_count": 2, "subtotal": 9.0, "tax": 0.77, "total": 9.77, "currency": "USD"}, "total": 9.77, "confirmation_summary": "2 Latte", "next_step": "Read back the order and ask the user to confirm."},
+        {"status": "confirmed", "order": {"order_id": "BB-42", "customer_name": "Ada", "ready_in_minutes": 4, "total": 9.77, "lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 2, "size": "small", "modifiers": [], "name": "Latte", "line_total": 9.0}], "placed_at": "<placed_at>"}, "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_2", "item_id": "cap", "quantity": 1, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 4.75}], "item_count": 1, "subtotal": 4.75, "tax": 0.4, "total": 5.15, "currency": "USD"}, "status": "added"},
+        {"status": "confirmed", "order": {"order_id": "BB-43", "customer_name": null, "ready_in_minutes": 4, "total": 5.15, "lines": [{"line_id": "line_2", "item_id": "cap", "quantity": 1, "size": "medium", "modifiers": [], "name": "Cappuccino", "line_total": 4.75}], "placed_at": "<placed_at>"}, "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_3", "item_id": "bmf", "quantity": 1, "size": null, "modifiers": [], "name": "Blueberry Muffin", "line_total": 3.5}], "item_count": 1, "subtotal": 3.5, "tax": 0.3, "total": 3.8, "currency": "USD"}, "status": "added"},
+        {"status": "confirmed", "order": {"order_id": "BB-44", "customer_name": "guest", "ready_in_minutes": 4, "total": 3.8, "lines": [{"line_id": "line_3", "item_id": "bmf", "quantity": 1, "size": null, "modifiers": [], "name": "Blueberry Muffin", "line_total": 3.5}], "placed_at": "<placed_at>"}, "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}}
+      ]
+    },
+    {
+      "name": "a repeated call id returns the first result and changes nothing more",
+      "calls": [
+        {"call_id": "c1", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"lat\"}"},
+        {"call_id": "c1", "name": "manage_cart", "arguments": "{\"action\": \"add\", \"item_id\": \"lat\"}"},
+        {"call_id": "c2", "name": "place_order", "arguments": "{\"confirmed\": true, \"customer_name\": \"Lin\"}"},
+        {"call_id": "c2", "name": "place_order", "arguments": "{\"confirmed\": true, \"customer_name\": \"Lin\"}"},
+        {"call_id": "c3", "name": "manage_cart", "arguments": "{\"action\": \"view\"}"}
+      ],
+      "results": [
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}], "item_count": 1, "subtotal": 5.0, "tax": 0.43, "total": 5.43, "currency": "USD"}, "status": "added"},
+        {"action": "add", "cart": {"lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}], "item_count": 1, "subtotal": 5.0, "tax": 0.43, "total": 5.43, "currency": "USD"}, "status": "added"},
+        {"status": "confirmed", "order": {"order_id": "BB-42", "customer_name": "Lin", "ready_in_minutes": 4, "total": 5.43, "lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}], "placed_at": "<placed_at>"}, "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}},
+        {"status": "confirmed", "order": {"order_id": "BB-42", "customer_name": "Lin", "ready_in_minutes": 4, "total": 5.43, "lines": [{"line_id": "line_1", "item_id": "lat", "quantity": 1, "size": "medium", "modifiers": [], "name": "Latte", "line_total": 5.0}], "placed_at": "<placed_at>"}, "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}},
+        {"action": "view", "cart": {"lines": [], "item_count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0, "currency": "USD"}}
+      ]
+    },
+    {
+      "name": "a tool the cafe does not have",
+      "calls": [
+        {"call_id": "c1", "name": "teleport", "arguments": "{}"}
+      ],
+      "results": [
+        {"status": "error", "error": "Unknown tool: teleport"}
+      ]
+    }
+  ]
+}

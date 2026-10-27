@@ -13,6 +13,11 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.40.0",
     "langchain-nvidia-ai-endpoints>=1.2.1",
     "imageio-ffmpeg>=0.5.1",
+    # The harness backend adapter's protocol packages (Hermes over ACP, tools over MCP, a WebSocket transport). Only
+    # src/delegation_core/backend/harness may import them (tests/unit/test_import_boundaries.py).
+    "agent-client-protocol==0.9.0",
+    "mcp>=2.2.0",
+    "websockets>=15.0.1",
 ]
 
 # Force patched versions for known CVEs
@@ -53,7 +58,8 @@ benchmark = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "." lets tests import shared doubles as tests.unit.<module>, also when run as `uv run pytest` (as CI does)
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 120
@@ -79,6 +85,12 @@ select = [
 ]
 
 ignore = ["SIM108", "E402"]
+
+[tool.ruff.lint.per-file-ignores]
+# The parked Realtime frontend adapter is kept as it is and imports modules this repository does not have, so ruff
+# would re-sort its imports; skip import order there instead of editing the parked files.
+"src/examples/frontend_backend_live/parked/**" = ["I001"]
+"tests/unit/parked/**" = ["I001"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
