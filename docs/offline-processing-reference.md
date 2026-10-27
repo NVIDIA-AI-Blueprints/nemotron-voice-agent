@@ -175,6 +175,22 @@ request merely to simplify comparison. Recording conversion does not add a
 synthetic streaming-resampler delay to provider readiness. First provider PCM,
 first packed chunk, transport delivery, and presentation remain separate events.
 
+Generic Assistant's stitched WebSocket TTS uses
+`explicit_provider_eof_pipecat_1_12_compat` in both modes. The helper requires
+exactly Pipecat 1.12.0 and supplies `stop_frame_timeout_s=None`, so an idle audio
+gap does not complete a context. This constructor behavior is undocumented;
+a supported upstream API is still needed.
+
+Offline response completion waits for provider-worker EOF and native
+audio-context drain, then rechecks errors. Its execution watchdog fails stalled
+work while drain waits race error and interruption signals. The live path retains
+native session/evaluator cancellation bounds and adds no per-generation watchdog.
+Native provider request loops, error generation, and interruption handling remain
+inherited. WebRTC and live per-sentence synthesis are unchanged.
+Offline configuration records `tts_context_completion_policy`; the live startup
+log and optional evaluation trace identify the same policy. Real-service
+validation of this completion policy is pending.
+
 Source detection uses the shared turn settings.
 `USE_SILERO_VAD_TURN_DETECTION=true` selects the required Silero-only detection;
 `SILERO_VAD_STOP_SECS` then defaults to 500 ms. These environment values accept
@@ -314,7 +330,7 @@ that have similar names but different start or end events.
 | LLM first text | Response submission to the native queue through first nonempty LLM text; includes queue delay | Service start frame to first nonempty text frame; Pipecat TTFT can instead end at a choices-bearing role-only delta |
 | LLM completion | Response submission through native LLM response-end observation | Start to end at the service frame boundary, including local request work |
 | TTS first audio | Response submission through first native PCM; first packed output chunk is recorded separately | Filtered text entering `run_tts` to native PCM entering the TTS context queue, before output resampling and paced output |
-| TTS completion | Native serialized response end plus worker drain; retain native processing metrics separately | Stitched-worker completion, including later text waits; cancelled or returned workers do not by themselves establish successful RPC EOF |
+| TTS completion | Native serialized response end, provider-worker EOF, and audio-context drain; retain native processing metrics separately | Stitched-worker completion, including later text waits; cancelled or returned workers do not by themselves establish successful RPC EOF |
 | Output observation | Committed PCM at scheduled sample offsets | Output frame after transport write; client receipt and playback are separate observations |
 | Rendered turn gap | Latest acoustic speech end to first committed bot PCM; VAD stop-confirmation offset is separate | Reported separately from server latency; client playback uses packet receipt and queued PCM |
 

@@ -16,6 +16,7 @@ from pipecat.services.nvidia.llm import NvidiaLLMSettings
 from pipecat.services.nvidia.tts import NvidiaTTSSettings
 
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nvidia_tts_explicit_eof import EXPLICIT_EOF_COMPLETION_POLICY, explicit_eof_tts_options
 from examples.shared.pipeline_utils import (
     PIPELINE_AUDIO_OUT_SAMPLE_RATE,
     build_context_messages,
@@ -216,6 +217,7 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
             ),
             text_filters=[NemotronSpeechTextFilter()],
             custom_dictionary=settings["custom_dictionary"],
+            **explicit_eof_tts_options(synthesis_mode),
             **model_map,
         )
 
@@ -245,6 +247,7 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "provider_execution": "overlapping_continuous_ASR_and_persistent_native_LLM_TTS",
         "llm_service": "pipecat.NvidiaLLMService",
         "tts_service": "pipecat.NvidiaTTSService",
+        "tts_context_completion_policy": EXPLICIT_EOF_COMPLETION_POLICY,
         "pronunciation_dictionary_sha256": hashlib.sha256(
             json.dumps(settings["custom_dictionary"] or {}, sort_keys=True).encode()
         ).hexdigest(),
