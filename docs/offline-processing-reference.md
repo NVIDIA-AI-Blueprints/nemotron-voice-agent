@@ -211,6 +211,21 @@ contains a recognized `ErrorCategory` name. Fields without a recognized value
 are omitted. Public error records exclude provider details, exception strings,
 metadata, and headers.
 
+Owned TTS operations can additionally report these observations.
+
+| Field | Allowed Values |
+| --- | --- |
+| `observed_provider_operation` | `tts_audio_context`, `tts_context_audio_outcome_no_audio`, `tts_context_audio_outcome_with_audio`, or `tts_response_stream` |
+| `observed_generation_state` | `active`, `interrupted`, `closed`, `missing`, or `unknown` |
+| `observed_provider_rpc_state` | `active`, `complete`, or `unavailable` |
+| `observed_provider_rpc_status` | A typed `grpc.StatusCode` name, only when the identified call is confirmed inactive |
+
+RPC observations are separate from the original exception's `grpc_status`.
+An active call does not have its status queried. Missing, cleared, ambiguous,
+or untyped call context yields `unavailable`, which does not establish a backend
+failure. A completed call can omit status when no typed value is available.
+These fields describe observed work and context; they do not establish a cause.
+
 `OFFLINE_AUDIO_DUMP_PATH` selects the server-owned recording directory; its
 default is `audio_dumps/offline`. A UUID session directory contains these files.
 

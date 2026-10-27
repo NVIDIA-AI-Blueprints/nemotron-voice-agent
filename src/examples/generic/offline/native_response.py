@@ -16,10 +16,12 @@ import asyncio
 import copy
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from grpc import Call, StatusCode
 from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
     CancelFrame,
@@ -48,6 +50,37 @@ Capture = Callable[[Frame, FrameDirection], Awaitable[None]]
 _GENERATION_KEY = "nva_offline_response_generation"
 _GENERATION: ContextVar[str | None] = ContextVar("nva_native_response_generation", default=None)
 _ERROR_DIAGNOSTIC_KEY = "_nva_native_provider_error_diagnostic"
+_ProviderOperation = Literal[
+    "tts_audio_context",
+    "tts_context_audio_outcome_no_audio",
+    "tts_context_audio_outcome_with_audio",
+    "tts_response_stream",
+]
+_ObservedGenerationState = Literal["active", "interrupted", "closed", "missing", "unknown"]
+_ObservedRpcState = Literal["active", "complete", "unavailable"]
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeProviderOperationScope:
+    """Observe an owned native operation without changing frame correlation."""
+
+    service: object
+    generation: str | None
+    operation: _ProviderOperation
+    rpc_state: object | None
+
+
+@dataclass
+class _NativeRpcStateRegistration:
+    """Retain one exact state only while its native worker wrappers are running."""
+
+    state: Any
+    users: int = 0
+
+
+_PROVIDER_OPERATION: ContextVar[_NativeProviderOperationScope | None] = ContextVar(
+    "nva_native_provider_operation", default=None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +90,10 @@ class NativeProviderErrorDiagnostic:
     provider_source: Literal["llm", "tts"] | None
     observed_callback_boundary: Literal["llm", "tts"]
     provider_error_category: ErrorCategory | None
+    observed_provider_operation: _ProviderOperation | None = None
+    observed_generation_state: _ObservedGenerationState | None = None
+    observed_provider_rpc_state: _ObservedRpcState | None = None
+    observed_provider_rpc_status: StatusCode | None = None
 
 
 def get_native_provider_error_diagnostic(error: BaseException) -> dict[str, str]:
@@ -75,7 +112,49 @@ def get_native_provider_error_diagnostic(error: BaseException) -> dict[str, str]
     category = diagnostic.provider_error_category
     if isinstance(category, ErrorCategory):
         public["provider_error_category"] = category.name
+    for field_name, allowed in (
+        (
+            "observed_provider_operation",
+            {
+                "tts_audio_context",
+                "tts_context_audio_outcome_no_audio",
+                "tts_context_audio_outcome_with_audio",
+                "tts_response_stream",
+            },
+        ),
+        ("observed_generation_state", {"active", "interrupted", "closed", "missing", "unknown"}),
+        ("observed_provider_rpc_state", {"active", "complete", "unavailable"}),
+    ):
+        value = getattr(diagnostic, field_name)
+        if isinstance(value, str) and value in allowed:
+            public[field_name] = value
+    if public.get("observed_provider_rpc_state") == "complete" and isinstance(
+        diagnostic.observed_provider_rpc_status, StatusCode
+    ):
+        public["observed_provider_rpc_status"] = diagnostic.observed_provider_rpc_status.name
     return public
+
+
+def _observe_rpc_state(state) -> tuple[_ObservedRpcState, StatusCode | None]:
+    """Read only a live native state's actual Call, never provider diagnostics."""
+    try:
+        call = state.rpc_call if state is not None else None
+        if not isinstance(call, Call):
+            return "unavailable", None
+        active = call.is_active()
+        if active is True:
+            return "active", None
+        if active is not False:
+            return "unavailable", None
+    except Exception:
+        return "unavailable", None
+    # grpc.Call reports False only after termination. Reading code before that
+    # point could block the event loop, so it is deliberately never attempted.
+    try:
+        status = call.code()
+    except Exception:
+        status = None
+    return "complete", status if isinstance(status, StatusCode) else None
 
 
 class CapturingNativeNvidiaLLMService(NvidiaLLMService):
@@ -116,6 +195,7 @@ class CapturingNativeNvidiaTTSService(NvidiaTTSService):
         self._native_capture = capture
         self._native_context_generations: dict[str, str] = {}
         self._native_workers: dict[str, asyncio.Event] = {}
+        self._native_rpc_states: dict[str, list[_NativeRpcStateRegistration]] = {}
 
     async def process_frame(self, frame, direction):
         """Retain provenance while native processing creates synthesis contexts."""
@@ -153,9 +233,65 @@ class CapturingNativeNvidiaTTSService(NvidiaTTSService):
         """Expose worker drain independently of serialized response completion."""
         finished = self._native_workers.setdefault(state.context_id, asyncio.Event())
         try:
-            return await super()._synth_task_handler(state)
+            with self._retain_native_rpc_state(state):
+                return await super()._synth_task_handler(state)
         finally:
             finished.set()
+
+    @contextmanager
+    def _retain_native_rpc_state(self, state):
+        entries = self._native_rpc_states.setdefault(state.context_id, [])
+        registration = next((entry for entry in entries if entry.state is state), None)
+        if registration is None:
+            registration = _NativeRpcStateRegistration(state)
+            entries.append(registration)
+        registration.users += 1
+        try:
+            yield
+        finally:
+            registration.users -= 1
+            if not registration.users:
+                entries[:] = [entry for entry in entries if entry is not registration]
+            if not entries:
+                self._native_rpc_states.pop(state.context_id, None)
+
+    @contextmanager
+    def _observe_native_operation(self, context_id, operation, *, rpc_state=None):
+        # This observation deliberately does not set _GENERATION or stamp
+        # frames. Missing ownership must remain visible without changing the
+        # native failure policy while its cause is being investigated.
+        if rpc_state is None:
+            entries = self._native_rpc_states.get(context_id, ())
+            # A reused context can briefly have overlapping worker lifetimes.
+            # Do not attribute an outcome to whichever state registered last.
+            rpc_state = entries[0].state if len(entries) == 1 else None
+        scope = _NativeProviderOperationScope(
+            self, self._native_context_generations.get(context_id), operation, rpc_state
+        )
+        token = _PROVIDER_OPERATION.set(scope)
+        try:
+            yield
+        finally:
+            _PROVIDER_OPERATION.reset(token)
+
+    async def _handle_audio_context(self, context_id):
+        """Observe the native serialization operation without changing its clock."""
+        with self._observe_native_operation(context_id, "tts_audio_context"):
+            return await super()._handle_audio_context(context_id)
+
+    async def _record_context_audio_outcome(self, context_id, received_audio):
+        """Distinguish a native empty-context report from a streaming RPC error."""
+        operation = "tts_context_audio_outcome_with_audio" if received_audio else "tts_context_audio_outcome_no_audio"
+        with self._observe_native_operation(context_id, operation):
+            return await super()._record_context_audio_outcome(context_id, received_audio)
+
+    async def _process_responses(self, state):
+        """Observe the original native response queue without replacing it."""
+        with (
+            self._retain_native_rpc_state(state),
+            self._observe_native_operation(state.context_id, "tts_response_stream", rpc_state=state),
+        ):
+            return await super()._process_responses(state)
 
     async def wait_for_generation_workers(self, generation):
         """Await workers already represented by this generation's serialized EOF."""
@@ -277,7 +413,34 @@ class NativeResponseSession:
         elif self._tts is not None and frame.processor is self._tts:
             source = "tts"
         category = frame.category if isinstance(frame.category, ErrorCategory) else None
-        diagnostic = NativeProviderErrorDiagnostic(source, observed_callback_boundary, category)
+        operation = None
+        generation_state = None
+        rpc_state = None
+        rpc_status = None
+        scope = _PROVIDER_OPERATION.get()
+        if (
+            type(scope) is _NativeProviderOperationScope
+            and self._tts is not None
+            and scope.service is self._tts
+            and frame.processor is self._tts
+        ):
+            operation = scope.operation
+            rpc_state, rpc_status = _observe_rpc_state(scope.rpc_state)
+            if scope.generation is None:
+                generation_state = "missing"
+            else:
+                observed_state = self._generations.get(scope.generation)
+                if observed_state is None:
+                    generation_state = "unknown"
+                elif observed_state.interrupted:
+                    generation_state = "interrupted"
+                elif observed_state.closed:
+                    generation_state = "closed"
+                else:
+                    generation_state = "active"
+        diagnostic = NativeProviderErrorDiagnostic(
+            source, observed_callback_boundary, category, operation, generation_state, rpc_state, rpc_status
+        )
         # Keep the original exception, including typed gRPC information. Some
         # exception implementations forbid extra attributes; diagnostics must
         # never replace their failure or change the actor's completion path.
