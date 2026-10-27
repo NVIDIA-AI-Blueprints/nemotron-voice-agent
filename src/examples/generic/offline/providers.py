@@ -476,7 +476,9 @@ def create_riva_recognizer(settings: dict, *, capture_events: bool = False):
             encoding=riva.client.AudioEncoding.LINEAR_PCM,
             sample_rate_hertz=RATE,
             language_code=settings.get("asr_language_code") or "en-US",
-            model=settings.get("asr_model") or "",
+            # Match NvidiaSTTService: function-id selects the deployed model;
+            # the catalog model name is a service label, not an RPC selector.
+            model="",
             max_alternatives=1,
             profanity_filter=False,
             enable_automatic_punctuation=settings.get("asr_automatic_punctuation", True),

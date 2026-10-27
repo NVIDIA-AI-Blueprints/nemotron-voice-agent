@@ -156,6 +156,10 @@ language, punctuation, voice, temperature, and token settings. A configuration
 fingerprint records the resolved choices.
 Automatic introduction is disabled for finite-session processing.
 
+Offline ASR keeps `RecognitionConfig.model` empty, matching native
+`NvidiaSTTService`. For NVIDIA-hosted ASR, `function-id` metadata selects the
+deployment; the catalog model label is not an RPC selector.
+
 Select `prompt_key=generic_assistant_without_tools`. History summarization is
 explicitly rejected when its native eligibility condition is reached. The paired
 subset disables summarization in both modes with `CHAT_HISTORY_RECENT_TURNS=0`;

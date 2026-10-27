@@ -412,40 +412,66 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests_seen[0].sample_rate_hz, RATE)
         self.assertEqual(requests_seen[0].language_code, "fr-FR")
 
-    async def test_real_asr_request_preserves_model_and_punctuation_without_synthetic_audio(self):
-        requests_seen = []
+    async def test_asr_request_matches_live_streaming_config_and_preserves_source_pcm(self):
+        from pipecat.services.nvidia.stt import NvidiaSTTService, NvidiaSTTSettings
 
-        class Call:
-            def __iter__(self):
-                return iter(())
+        # Include speech-like values, silence, and a partial final source chunk.
+        source = AudioSource(b"\x01\x00" * 256 + bytes(514))
+        for punctuation in (True, False):
+            with self.subTest(punctuation=punctuation):
+                requests_seen = []
+                settings = {
+                    "api_key": "fixture-speech-key",
+                    "asr_server": "grpc.nvcf.nvidia.com:443",
+                    "asr_function_id": "fixture-selected-function",
+                    "asr_model": "selected-model",
+                    "asr_automatic_punctuation": punctuation,
+                }
 
-            def cancel(self):
-                pass
+                class Call:
+                    def __iter__(self):
+                        return iter(())
 
-        def streaming(requests, **kwargs):
-            requests_seen.extend(requests)
-            return Call()
+                    def cancel(self):
+                        pass
 
-        auth = SimpleNamespace(channel=SimpleNamespace(close=lambda: None), get_auth_metadata=lambda: [])
-        service = SimpleNamespace(stub=SimpleNamespace(StreamingRecognize=streaming))
-        with (
-            patch("examples.generic.offline.providers._riva_auth", return_value=auth),
-            patch("riva.client.ASRService", return_value=service),
-        ):
-            recognizer = create_riva_recognizer({"asr_model": "selected-model", "asr_automatic_punctuation": False})
-            await recognizer.recognize(AudioSource(bytes(1026)))
-        config = requests_seen[0].streaming_config.config
-        self.assertEqual(config.model, "selected-model")
-        self.assertFalse(config.enable_automatic_punctuation)
-        from pipecat.services.nvidia.stt import NvidiaSTTService
+                def streaming(requests, captured=requests_seen, **kwargs):
+                    captured.extend(requests)
+                    return Call()
 
-        native = NvidiaSTTService(use_ssl=False)
-        native._sample_rate = RATE
-        native_config = native._create_recognition_config().config
-        self.assertEqual(config.endpointing_config, native_config.endpointing_config)
-        self.assertEqual(config.endpointing_config.stop_history, 320)
-        self.assertEqual(b"".join(request.audio_content for request in requests_seen[1:]), bytes(1026))
-        self.assertTrue(all(not request.runtime_config for request in requests_seen))
+                auth = SimpleNamespace(channel=SimpleNamespace(close=lambda: None), get_auth_metadata=lambda: [])
+                service = SimpleNamespace(stub=SimpleNamespace(StreamingRecognize=streaming))
+                with (
+                    patch("riva.client.Auth", return_value=auth) as auth_factory,
+                    patch("riva.client.ASRService", return_value=service),
+                ):
+                    recognizer = create_riva_recognizer(settings, capture_events=True)
+                    await recognizer.recognize(source)
+                auth_factory.assert_called_once_with(
+                    None,
+                    True,
+                    settings["asr_server"],
+                    [
+                        ("function-id", settings["asr_function_id"]),
+                        ("authorization", "Bearer fixture-speech-key"),
+                    ],
+                )
+
+                # Construct only the native request; never start a live client.
+                native = NvidiaSTTService(
+                    model_function_map={
+                        "function_id": settings["asr_function_id"],
+                        "model_name": settings["asr_model"],
+                    },
+                    settings=NvidiaSTTSettings(automatic_punctuation=punctuation),
+                )
+                native._sample_rate = RATE
+                native_config = native._create_recognition_config()
+                config = requests_seen[0].streaming_config
+                self.assertEqual(config.SerializeToString(), native_config.SerializeToString())
+                self.assertEqual(config.config.endpointing_config.stop_history, 320)
+                self.assertEqual(b"".join(request.audio_content for request in requests_seen[1:]), source.pcm)
+                self.assertTrue(all(not request.runtime_config for request in requests_seen))
 
     async def test_tts_clean_early_eof_rejects_unsynthesized_text(self):
         class Text:
