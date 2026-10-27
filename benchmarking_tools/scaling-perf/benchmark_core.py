@@ -27,6 +27,7 @@ TURN_RESPONSE_TIMEOUT = 10.0
 SERVER_METRIC_KEYS = (
     "llm_ttft",
     "tts_ttfb",
+    "llm_ttfat",
     "asr_ttfb",
     "server_e2e",
     "vad_smart_turn",
