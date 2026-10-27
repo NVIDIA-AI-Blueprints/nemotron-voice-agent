@@ -273,6 +273,15 @@ disabled; no completed VoiceBench run is claimed here.
 
 ## Server Tracing and Metric Definitions
 
+Successful offline sessions can include `metrics.native_provider_observations`,
+collected after engine completion and provider cleanup. It contains integer
+`total`, boolean `truncated`, and an `observations` list. The list retains the
+first 64 captured `ErrorFrame` callbacks with one-based `observation_index`
+values and the allowlisted native provider fields described above. `total`
+counts all captured callbacks, including forwarded duplicates and closed
+generations; `truncated` indicates omitted entries. These are observations,
+not unique failure counts, and do not override completion or scoring.
+
 Set `NVA_EVAL_TRACE_DIR` on the server to retain passive live-pipeline traces.
 Without that setting, the normal provider classes and frame flow are unchanged.
 The observer never creates audio, changes pacing, or makes provider requests.

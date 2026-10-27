@@ -50,6 +50,7 @@ Capture = Callable[[Frame, FrameDirection], Awaitable[None]]
 _GENERATION_KEY = "nva_offline_response_generation"
 _GENERATION: ContextVar[str | None] = ContextVar("nva_native_response_generation", default=None)
 _ERROR_DIAGNOSTIC_KEY = "_nva_native_provider_error_diagnostic"
+_PROVIDER_OBSERVATION_LIMIT = 64
 _ProviderOperation = Literal[
     "tts_audio_context",
     "tts_context_audio_outcome_no_audio",
@@ -102,6 +103,11 @@ def get_native_provider_error_diagnostic(error: BaseException) -> dict[str, str]
         diagnostic = getattr(error, _ERROR_DIAGNOSTIC_KEY, None)
     except Exception:
         return {}
+    return _serialize_provider_diagnostic(diagnostic)
+
+
+def _serialize_provider_diagnostic(diagnostic) -> dict[str, str]:
+    """Share one allowlist between exception sidecars and session observations."""
     if type(diagnostic) is not NativeProviderErrorDiagnostic:
         return {}
     public = {}
@@ -356,6 +362,16 @@ class NativeResponseSession:
         self._ready = None
         self._closed = False
         self._failure: BaseException | None = None
+        self._provider_observations: list[dict[str, str | int]] = []
+        self._provider_observation_total = 0
+
+    def get_provider_observations(self) -> dict[str, Any]:
+        """Copy a bounded trail of sanitized callbacks, including fenced errors."""
+        return {
+            "total": self._provider_observation_total,
+            "truncated": self._provider_observation_total > len(self._provider_observations),
+            "observations": [dict(observation) for observation in self._provider_observations],
+        }
 
     async def start(self):
         """Set up both services before any generation's processing measurement."""
@@ -441,6 +457,15 @@ class NativeResponseSession:
         diagnostic = NativeProviderErrorDiagnostic(
             source, observed_callback_boundary, category, operation, generation_state, rpc_state, rpc_status
         )
+        # A callback is an observation, not necessarily a failed generation:
+        # closed generations still report errors and the same native error may
+        # cross both boundaries. Retain those reports without deduplication or
+        # altering the original failure policy below.
+        self._provider_observation_total += 1
+        if len(self._provider_observations) < _PROVIDER_OBSERVATION_LIMIT:
+            self._provider_observations.append(
+                {**_serialize_provider_diagnostic(diagnostic), "observation_index": self._provider_observation_total}
+            )
         # Keep the original exception, including typed gRPC information. Some
         # exception implementations forbid extra attributes; diagnostics must
         # never replace their failure or change the actor's completion path.

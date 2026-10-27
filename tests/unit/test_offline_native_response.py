@@ -254,13 +254,82 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
             [{"role": "user", "content": "second"}], 1_000_000_000, "second", self.changed
         )
         await self.wait_event(self.llm.entered)
-        stale = ErrorFrame(error="old generation failed")
+        stale = ErrorFrame(error="secret old generation failed", processor=self.tts, category=ErrorCategory.UNKNOWN)
         stale.metadata["nva_offline_response_generation"] = "first"
         await self.session._from_tts(stale, FrameDirection.UPSTREAM)
+        self.assertEqual(
+            self.session.get_provider_observations(),
+            {
+                "total": 1,
+                "truncated": False,
+                "observations": [
+                    {
+                        "provider_source": "tts",
+                        "observed_callback_boundary": "tts",
+                        "provider_error_category": "UNKNOWN",
+                        "observation_index": 1,
+                    }
+                ],
+            },
+        )
+        self.assertIsNone(self.session._failure)
         self.assertFalse(second.drain().done)
         self.llm.release.set()
         result = await asyncio.wait_for(second.result(), 1)
         self.assertFalse(result.interrupted)
+
+    async def test_observation_trail_is_bounded_redacted_and_returns_independent_copies(self):
+        """Count callback reports without exposing content or retaining unbounded state."""
+        actor = await self.session.begin(
+            [{"role": "user", "content": "secret request"}], 0, "private-generation", self.changed
+        )
+        self.llm.release.set()
+        self.tts.release.set()
+        await asyncio.wait_for(actor.result(), 1)
+        failure = RuntimeError("secret-provider-exception")
+        frame = ErrorFrame(
+            error="secret-provider-body", exception=failure, processor=self.tts, category=ErrorCategory.UNKNOWN
+        )
+        frame.metadata.update(nva_offline_response_generation="private-generation", private="secret metadata")
+        for index in range(70):
+            callback = self.session._from_tts if index % 2 == 0 else self.session._from_llm
+            await callback(frame, FrameDirection.UPSTREAM)
+        observations = self.session.get_provider_observations()
+        self.assertEqual(observations["total"], 70)
+        self.assertTrue(observations["truncated"])
+        self.assertEqual(len(observations["observations"]), 64)
+        self.assertEqual([item["observation_index"] for item in observations["observations"]], list(range(1, 65)))
+        self.assertEqual(observations["observations"][1]["observed_callback_boundary"], "llm")
+        self.assertEqual(get_native_provider_error_diagnostic(failure)["observed_callback_boundary"], "tts")
+        for item in observations["observations"]:
+            self.assertEqual(
+                set(item),
+                {"provider_source", "observed_callback_boundary", "provider_error_category", "observation_index"},
+            )
+        self.assertNotIn("secret", json.dumps(observations))
+        self.assertNotIn("private-generation", json.dumps(observations))
+        self.assertIsNone(self.session._failure)
+        observations["observations"][0]["provider_source"] = "secret altered copy"
+        observations["observations"].clear()
+        observations["total"] = -1
+        fresh = self.session.get_provider_observations()
+        self.assertEqual(fresh["total"], 70)
+        self.assertEqual(len(fresh["observations"]), 64)
+        self.assertEqual(fresh["observations"][0]["provider_source"], "tts")
+
+    async def test_unknown_observation_origin_and_category_remain_omitted(self):
+        """The trail shares the exception sidecar's strict public field allowlist."""
+        await self.session._from_tts(
+            ErrorFrame(error="secret-body", processor=object(), category="secret-category"), FrameDirection.UPSTREAM
+        )
+        self.assertEqual(
+            self.session.get_provider_observations(),
+            {
+                "total": 1,
+                "truncated": False,
+                "observations": [{"observed_callback_boundary": "tts", "observation_index": 1}],
+            },
+        )
 
     async def collect_until(self, actor, predicate):
         """Drain notifications until a particular native frame is available."""
@@ -474,6 +543,10 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(actor.result(), 1)
         self.assertIs(caught.exception, failure)
         self.assertEqual(get_native_provider_error_diagnostic(failure), {})
+        self.assertEqual(
+            self.session.get_provider_observations()["observations"],
+            [{"provider_source": "tts", "observed_callback_boundary": "tts", "observation_index": 1}],
+        )
 
     def test_diagnostic_accessor_rejects_untyped_and_nonallowlisted_values(self):
         """The public sidecar reader emits no arbitrary strings or provider objects."""
@@ -517,6 +590,16 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
                         "observed_provider_operation": "tts_context_audio_outcome_no_audio",
                         "observed_generation_state": "missing" if forget_generation else "active",
                         "observed_provider_rpc_state": "unavailable",
+                    },
+                )
+                self.assertEqual(
+                    self.session.get_provider_observations(),
+                    {
+                        "total": 1,
+                        "truncated": False,
+                        "observations": [
+                            {**get_native_provider_error_diagnostic(caught.exception), "observation_index": 1}
+                        ],
                     },
                 )
                 self.assertFalse(self.tts.release.is_set())
