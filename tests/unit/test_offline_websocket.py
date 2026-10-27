@@ -574,8 +574,20 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(source=source):
                 socket = self.prepared_socket()
                 error = RuntimeError("secret-private-provider-body")
+                observations = (
+                    {
+                        "observed_provider_operation": "tts_response_stream",
+                        "observed_generation_state": "active",
+                        "observed_provider_rpc_state": "complete",
+                        "observed_provider_rpc_status": StatusCode.UNAVAILABLE,
+                    }
+                    if source is not None
+                    else {}
+                )
                 setattr(
-                    error, _ERROR_DIAGNOSTIC_KEY, NativeProviderErrorDiagnostic(source, "tts", ErrorCategory.UNKNOWN)
+                    error,
+                    _ERROR_DIAGNOSTIC_KEY,
+                    NativeProviderErrorDiagnostic(source, "tts", ErrorCategory.UNKNOWN, **observations),
                 )
 
                 class FailingRuntime:
@@ -585,6 +597,7 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
                 expected = {"observed_callback_boundary": "tts", "provider_error_category": "UNKNOWN"}
                 if source is not None:
                     expected["provider_source"] = source
+                    expected.update({**observations, "observed_provider_rpc_status": "UNAVAILABLE"})
                 with tempfile.TemporaryDirectory() as root:
                     with self.assertLogs("examples.generic.offline.websocket", level="ERROR") as logs:
                         await serve_offline_session(socket, lambda start: FailingRuntime(), root)
@@ -595,6 +608,7 @@ class OfflineSocketTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(f" {name}={value}", logs.output[0])
                 if source is None:
                     self.assertNotIn("provider_source", socket.sent[-1])
+                self.assertNotIn("grpc_status", socket.sent[-1])
                 self.assertNotIn("secret-private", failure + json.dumps(socket.sent) + "".join(logs.output))
 
     async def test_optional_diagnostic_failure_preserves_original_rpc_status(self):

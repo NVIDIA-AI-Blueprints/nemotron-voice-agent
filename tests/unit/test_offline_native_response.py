@@ -7,9 +7,10 @@ import asyncio
 import copy
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from grpc import RpcError, StatusCode
+from grpc import Call, RpcError, StatusCode
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -101,8 +102,108 @@ class ScriptedTTS(CapturingNativeNvidiaTTSService):
         await super().cleanup()
 
 
+class ScriptedRpcCall(Call):
+    """Expose typed call state without a network, and forbid private metadata reads."""
+
+    def __init__(self, *, active=True, status=StatusCode.UNAVAILABLE, activity_error=False, code_error=False):
+        """Retain counters so observation tests can detect blocking or private access."""
+        self.active = active
+        self.status = status
+        self.activity_error = activity_error
+        self.code_error = code_error
+        self.activity_reads = 0
+        self.code_reads = 0
+
+    def is_active(self):
+        """Return only the scripted state or a contained observation failure."""
+        self.activity_reads += 1
+        if self.activity_error:
+            raise RuntimeError("secret-activity-failure")
+        return self.active
+
+    def code(self):
+        """Reject a potentially blocking read while termination is unverified."""
+        self.code_reads += 1
+        if self.active is not False:
+            raise AssertionError("code() must not be read while a call may be active")
+        if self.code_error:
+            raise RuntimeError("secret-code-failure")
+        return self.status
+
+    def details(self):
+        """Provider error bodies are outside the diagnostic contract."""
+        raise AssertionError("Provider details must not be read")
+
+    def initial_metadata(self):
+        """Authentication metadata is outside the diagnostic contract."""
+        raise AssertionError("Initial metadata must not be read")
+
+    def trailing_metadata(self):
+        """Provider headers are outside the diagnostic contract."""
+        raise AssertionError("Trailing metadata must not be read")
+
+    def time_remaining(self):
+        """The observer does not inspect or change a call's deadline."""
+        raise AssertionError("Deadline must not be read")
+
+    def cancel(self):
+        """The observer may not cancel the call."""
+        raise AssertionError("Call cancellation must not be changed")
+
+    def add_callback(self, callback):
+        """The direct state observation registers no RPC callback."""
+        raise AssertionError("RPC callbacks must not be changed")
+
+
+class DelayedFirstAudioTTS(ScriptedTTS):
+    """Let the real native context timer fire while synthetic inference waits."""
+
+    def __init__(self, capture, *, forget_generation=False, rpc_call=None):
+        """Shorten only this fixture's idle deadline; production keeps its default."""
+        super().__init__(capture)
+        self._stop_frame_timeout_s = 0.02
+        self._forget_generation = forget_generation
+        self._scripted_rpc_call = rpc_call
+
+    async def on_turn_context_created(self, context_id):
+        """Exercise known and missing observation ownership without tagging errors."""
+        await super().on_turn_context_created(context_id)
+        if self._forget_generation:
+            self._native_context_generations.pop(context_id, None)
+
+    async def run_tts(self, text, context_id):
+        """Open the native audio queue, then wait before producing any PCM."""
+        if not self.audio_context_available(context_id):
+            await self.create_audio_context(context_id)
+            self.contexts.append(context_id)
+            yield TTSStartedFrame(context_id=context_id)
+        state = SimpleNamespace(context_id=context_id, rpc_call=self._scripted_rpc_call)
+        with self._retain_native_rpc_state(state):
+            self.generated.set()
+            await self.release.wait()
+
+
 class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
     """Verify incremental output, persistent services and cancellation fences."""
+
+    async def test_rpc_status_requires_a_complete_observation(self):
+        """Keep unfinished or invalid observations from claiming a final status."""
+        for rpc_state in ("active", "unavailable", "unrecognized", "complete"):
+            with self.subTest(rpc_state=rpc_state):
+                failure = RuntimeError("secret-provider-body")
+                failure._nva_native_provider_error_diagnostic = NativeProviderErrorDiagnostic(
+                    "tts",
+                    "tts",
+                    ErrorCategory.UNKNOWN,
+                    observed_provider_rpc_state=rpc_state,
+                    observed_provider_rpc_status=StatusCode.UNAVAILABLE,
+                )
+                diagnostic = get_native_provider_error_diagnostic(failure)
+                if rpc_state == "complete":
+                    self.assertEqual(diagnostic["observed_provider_rpc_status"], "UNAVAILABLE")
+                else:
+                    self.assertNotIn("observed_provider_rpc_status", diagnostic)
+                self.assertNotIn("secret-provider-body", json.dumps(diagnostic))
 
     async def asyncSetUp(self):
         """Create and start two services backed entirely by local scripts."""
@@ -124,6 +225,15 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
     async def wait_event(self, event):
         """Bound a scripted dependency without imposing conversation timers."""
         await asyncio.wait_for(event.wait(), 1)
+
+    async def restart_session(self, tts_factory=None):
+        """Create an independent fixture after releasing the previous providers."""
+        await self.session.aclose()
+        self.session = NativeResponseSession(
+            self.llm_factory, tts_factory or self.tts_factory, sample_rate=22050, failure_timeout=2
+        )
+        self.addAsyncCleanup(self.session.aclose)
+        await self.session.start()
 
     async def test_uncorrelated_idle_service_failure_blocks_the_next_dispatch(self):
         """A background failure after startup is not lost while no turn is active."""
@@ -370,11 +480,247 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
         failure = RuntimeError("secret-provider-body")
         for value in (
             {"provider_source": "secret-source"},
-            NativeProviderErrorDiagnostic("secret-source", "secret-boundary", "secret-category"),
+            NativeProviderErrorDiagnostic(
+                "secret-source",
+                "secret-boundary",
+                "secret-category",
+                "secret-operation",
+                "secret-state",
+                "secret-rpc-state",
+                "secret-rpc-status",
+            ),
         ):
             with self.subTest(kind=type(value).__name__):
                 failure._nva_native_provider_error_diagnostic = value
                 self.assertEqual(get_native_provider_error_diagnostic(failure), {})
+
+    async def test_native_idle_deadline_reports_operation_without_changing_error_correlation(self):
+        """The real native empty-context error is distinct from an RPC failure."""
+        for forget_generation in (False, True):
+            with self.subTest(forget_generation=forget_generation):
+
+                def delayed_factory(capture, forget=forget_generation):
+                    self.tts = DelayedFirstAudioTTS(capture, forget_generation=forget)
+                    return self.tts
+
+                await self.restart_session(delayed_factory)
+                actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+                await self.wait_event(self.tts.generated)
+                with self.assertRaisesRegex(RuntimeError, "completed with no audio") as caught:
+                    await asyncio.wait_for(actor.result(), 1)
+                self.assertEqual(
+                    get_native_provider_error_diagnostic(caught.exception),
+                    {
+                        "provider_source": "tts",
+                        "observed_callback_boundary": "tts",
+                        "provider_error_category": "UNKNOWN",
+                        "observed_provider_operation": "tts_context_audio_outcome_no_audio",
+                        "observed_generation_state": "missing" if forget_generation else "active",
+                        "observed_provider_rpc_state": "unavailable",
+                    },
+                )
+                self.assertFalse(self.tts.release.is_set())
+                self.assertFalse(self.llm.release.is_set())
+                # Operation observations must not tag the previously unscoped
+                # frame: the existing session-failure policy remains intact.
+                self.assertIs(self.session._failure, caught.exception)
+
+    async def test_idle_context_observation_never_reads_status_of_an_active_rpc(self):
+        """An early context outcome can observe a still-active exact native call."""
+        call = ScriptedRpcCall(active=True)
+
+        def delayed_factory(capture):
+            self.tts = DelayedFirstAudioTTS(capture, rpc_call=call)
+            return self.tts
+
+        await self.restart_session(delayed_factory)
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+        await self.wait_event(self.tts.generated)
+        with self.assertRaises(RuntimeError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        diagnostic = get_native_provider_error_diagnostic(caught.exception)
+        self.assertEqual(diagnostic["observed_provider_operation"], "tts_context_audio_outcome_no_audio")
+        self.assertEqual(diagnostic["observed_provider_rpc_state"], "active")
+        self.assertNotIn("observed_provider_rpc_status", diagnostic)
+        self.assertGreater(call.activity_reads, 0)
+        self.assertEqual(call.code_reads, 0)
+        self.assertFalse(self.llm.release.is_set())
+        self.assertFalse(self.tts.release.is_set())
+        await self.session.aclose()
+        self.assertEqual(self.tts._native_rpc_states, {})
+
+    async def test_late_context_diagnostic_does_not_change_unscoped_failure_policy(self):
+        """Observe an old context without silently redirecting its error frame."""
+        for prior_state in ("closed", "interrupted"):
+            with self.subTest(prior_state=prior_state):
+                await self.restart_session()
+                first = await self.session.begin([{"role": "user", "content": "first"}], 0, "first", self.changed)
+                await self.wait_event(self.tts.generated)
+                old_context = self.tts.contexts[0]
+                if prior_state == "interrupted":
+                    await self.session.interrupt("first", 1)
+                else:
+                    self.llm.release.set()
+                    self.tts.release.set()
+                await asyncio.wait_for(first.result(), 1)
+                self.llm.entered.clear()
+                self.llm.release.clear()
+                self.tts.release.clear()
+                second = await self.session.begin([{"role": "user", "content": "second"}], 2, "second", self.changed)
+                await self.wait_event(self.llm.entered)
+                # Inject a late native outcome callback; this does not assert
+                # that ordinary interruption itself emits a zero-audio error.
+                await self.tts._record_context_audio_outcome(old_context, False)
+                with self.assertRaises(RuntimeError) as caught:
+                    await asyncio.wait_for(second.result(), 1)
+                diagnostic = get_native_provider_error_diagnostic(caught.exception)
+                self.assertEqual(diagnostic["observed_provider_operation"], "tts_context_audio_outcome_no_audio")
+                self.assertEqual(diagnostic["observed_generation_state"], prior_state)
+                self.assertIs(self.session._failure, caught.exception)
+                with self.assertRaises(RuntimeError):
+                    await self.session.begin([], 3, "third", self.changed)
+
+    async def test_owned_tts_operation_does_not_relabel_an_llm_error(self):
+        """An owned TTS scope cannot assign its operation to an LLM failure."""
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+        await self.wait_event(self.llm.entered)
+        with self.tts._observe_native_operation("unknown-context", "tts_response_stream"):
+            await self.session._from_llm(
+                ErrorFrame(error="secret-llm-body", processor=self.llm, category=ErrorCategory.SERVER),
+                FrameDirection.UPSTREAM,
+            )
+        with self.assertRaises(RuntimeError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        self.assertEqual(
+            get_native_provider_error_diagnostic(caught.exception),
+            {
+                "provider_source": "llm",
+                "observed_callback_boundary": "llm",
+                "provider_error_category": "SERVER",
+            },
+        )
+        self.assertNotIn("secret-llm", json.dumps(get_native_provider_error_diagnostic(caught.exception)))
+
+    async def test_foreign_tts_scope_cannot_assign_an_operation_to_the_owned_service(self):
+        """An operation from another service instance has no attribution authority."""
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+        await self.wait_event(self.llm.entered)
+        foreign_service = ScriptedTTS(AsyncMock())
+        with foreign_service._observe_native_operation("context", "tts_audio_context"):
+            await self.session._from_tts(
+                ErrorFrame(error="secret-body", processor=self.tts, category=ErrorCategory.UNKNOWN),
+                FrameDirection.UPSTREAM,
+            )
+        with self.assertRaises(RuntimeError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        self.assertEqual(
+            get_native_provider_error_diagnostic(caught.exception),
+            {
+                "provider_source": "tts",
+                "observed_callback_boundary": "tts",
+                "provider_error_category": "UNKNOWN",
+            },
+        )
+
+    async def test_native_response_operation_delegates_original_queue_and_marks_unknown_generation(self):
+        """A mapped but unrecognized generation must not resolve to the active turn."""
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+        await self.wait_event(self.llm.entered)
+        context_id = "observed-context"
+        self.tts._native_context_generations[context_id] = "unrecognized-generation"
+        queue = asyncio.Queue()
+        state = SimpleNamespace(context_id=context_id, response_queue=queue, stop_event=asyncio.Event())
+        await queue.put(RuntimeError("secret-stream-body"))
+        self.tts._stream_state = state
+        try:
+            await self.tts._process_responses(state)
+        finally:
+            # The fixture did not create a real synthesis stream to tear down.
+            self.tts._stream_state = None
+        with self.assertRaises(RuntimeError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        diagnostic = get_native_provider_error_diagnostic(caught.exception)
+        self.assertEqual(diagnostic["observed_provider_operation"], "tts_response_stream")
+        self.assertEqual(diagnostic["observed_generation_state"], "unknown")
+        self.assertEqual(queue.qsize(), 0)
+        later_failure = RuntimeError("secret-later-body")
+        await self.session._from_tts(
+            ErrorFrame(error="secret-later-body", exception=later_failure, processor=self.tts),
+            FrameDirection.UPSTREAM,
+        )
+        self.assertNotIn("observed_provider_operation", get_native_provider_error_diagnostic(later_failure))
+
+    async def test_native_rpc_observation_reads_only_typed_status_after_verified_completion(self):
+        """Unavailable metadata must not mask a failure or cause a blocking status read."""
+        scenarios = (
+            (ScriptedRpcCall(active=True), "active", None, 0),
+            (ScriptedRpcCall(active=False, status=StatusCode.RESOURCE_EXHAUSTED), "complete", "RESOURCE_EXHAUSTED", 1),
+            (ScriptedRpcCall(active=False, status="UNAVAILABLE secret-status"), "complete", None, 1),
+            (ScriptedRpcCall(active=False, code_error=True), "complete", None, 1),
+            (ScriptedRpcCall(active="secret-state"), "unavailable", None, 0),
+            (ScriptedRpcCall(activity_error=True), "unavailable", None, 0),
+            (None, "unavailable", None, None),
+            (object(), "unavailable", None, None),
+        )
+        for index, (call, expected_state, expected_status, code_reads) in enumerate(scenarios):
+            with self.subTest(index=index):
+                await self.restart_session()
+                actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+                await self.wait_event(self.llm.entered)
+                context_id = "scripted-context"
+                self.tts._native_context_generations[context_id] = "first"
+                queue = asyncio.Queue()
+                await queue.put(RuntimeError("secret-stream-body"))
+                state = SimpleNamespace(
+                    context_id=context_id, response_queue=queue, stop_event=asyncio.Event(), rpc_call=call
+                )
+                self.tts._stream_state = state
+                try:
+                    await self.tts._process_responses(state)
+                finally:
+                    self.tts._stream_state = None
+                with self.assertRaises(RuntimeError) as caught:
+                    await asyncio.wait_for(actor.result(), 1)
+                diagnostic = get_native_provider_error_diagnostic(caught.exception)
+                self.assertEqual(diagnostic["observed_provider_rpc_state"], expected_state)
+                self.assertEqual(diagnostic.get("observed_provider_rpc_status"), expected_status)
+                self.assertNotIn("secret", json.dumps(diagnostic))
+                self.assertNotIsInstance(caught.exception, RpcError)
+                self.assertEqual(self.tts._native_rpc_states, {})
+                if code_reads is not None:
+                    self.assertEqual(call.code_reads, code_reads)
+
+    async def test_rpc_observation_does_not_choose_foreign_ambiguous_or_cleared_calls(self):
+        """Context identity and live state ownership must survive observation gaps."""
+        for scenario in ("foreign_context", "ambiguous_context", "cleared_call"):
+            with self.subTest(scenario=scenario):
+                await self.restart_session()
+                actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "first", self.changed)
+                await self.wait_event(self.tts.generated)
+                observed_context = self.tts.contexts[0]
+                call = ScriptedRpcCall(active=False)
+                other_call = ScriptedRpcCall(active=False)
+                state = SimpleNamespace(
+                    context_id="different-context" if scenario == "foreign_context" else observed_context,
+                    rpc_call=call,
+                )
+                other = SimpleNamespace(context_id=observed_context, rpc_call=other_call)
+                with self.tts._retain_native_rpc_state(state):
+                    if scenario == "cleared_call":
+                        state.rpc_call = None
+                    if scenario == "ambiguous_context":
+                        with self.tts._retain_native_rpc_state(other):
+                            await self.tts._record_context_audio_outcome(observed_context, False)
+                    else:
+                        await self.tts._record_context_audio_outcome(observed_context, False)
+                with self.assertRaises(RuntimeError) as caught:
+                    await asyncio.wait_for(actor.result(), 1)
+                diagnostic = get_native_provider_error_diagnostic(caught.exception)
+                self.assertEqual(diagnostic["observed_provider_rpc_state"], "unavailable")
+                self.assertNotIn("observed_provider_rpc_status", diagnostic)
+                self.assertEqual(call.activity_reads, 0)
+                self.assertEqual(other_call.activity_reads, 0)
+                self.assertEqual(self.tts._native_rpc_states, {})
 
     async def test_native_background_error_without_context_still_fails_active_generation(self):
         """An uncorrelated native failure must not leave an actor pending forever."""
