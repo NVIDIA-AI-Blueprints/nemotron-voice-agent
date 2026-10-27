@@ -5,9 +5,11 @@
 
 import asyncio
 import copy
+import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from grpc import RpcError, StatusCode
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -19,12 +21,15 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.nvidia.tts import NvidiaTTSSettings
+from pipecat.utils.errors import ErrorCategory
 
 from examples.generic.offline.native_response import (
     CapturingNativeNvidiaLLMService,
     CapturingNativeNvidiaTTSService,
+    NativeProviderErrorDiagnostic,
     NativeProviderFrame,
     NativeResponseSession,
+    get_native_provider_error_diagnostic,
 )
 
 
@@ -259,10 +264,117 @@ class NativeResponseTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError) as caught:
             await asyncio.wait_for(actor.result(), 1)
         self.assertIs(caught.exception, failure)
+        self.assertEqual(
+            get_native_provider_error_diagnostic(failure),
+            {
+                "provider_source": "llm",
+                "observed_callback_boundary": "llm",
+                "provider_error_category": "UNKNOWN",
+            },
+        )
         with self.assertRaises(RuntimeError):
             actor.drain()
         await self.session.aclose()
         self.assertEqual(self.tts.cleanup_calls, 1)
+
+    async def test_error_origin_is_processor_identity_and_preserves_typed_rpc_exception(self):
+        """An upstream callback edge must not relabel the actual owned source."""
+
+        class PrivateRpcError(RpcError):
+            def code(self):
+                return StatusCode.UNAVAILABLE
+
+            def details(self):
+                raise AssertionError("Provider details must not be read")
+
+        failure = PrivateRpcError("secret-provider-diagnostic")
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "error", self.changed)
+        await self.wait_event(self.llm.entered)
+        frame = ErrorFrame(
+            error="secret-provider-body",
+            exception=failure,
+            processor=self.tts,
+            category=ErrorCategory.CONNECTIVITY,
+        )
+        await self.session._from_llm(frame, FrameDirection.UPSTREAM)
+        # A forwarded report of the same failure must retain its first
+        # diagnostic, just as the generation retains its first exception.
+        await self.session._from_tts(
+            ErrorFrame(
+                error="secret-second-provider-body",
+                exception=failure,
+                processor=self.llm,
+                category=ErrorCategory.AUTHENTICATION,
+            ),
+            FrameDirection.UPSTREAM,
+        )
+        with self.assertRaises(PrivateRpcError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        self.assertIs(caught.exception, failure)
+        self.assertIs(caught.exception.code(), StatusCode.UNAVAILABLE)
+        diagnostic = get_native_provider_error_diagnostic(caught.exception)
+        self.assertEqual(
+            diagnostic,
+            {
+                "provider_source": "tts",
+                "observed_callback_boundary": "llm",
+                "provider_error_category": "CONNECTIVITY",
+            },
+        )
+        self.assertNotIn("secret-provider", json.dumps(diagnostic))
+
+    async def test_unknown_error_processor_retains_only_observed_boundary(self):
+        """An unowned object or category string cannot claim a provider identity."""
+
+        class UnownedProcessor:
+            def __str__(self):
+                raise AssertionError("Processor names must not establish ownership")
+
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "error", self.changed)
+        await self.wait_event(self.llm.entered)
+        frame = ErrorFrame(
+            error="secret-provider-body",
+            processor=UnownedProcessor(),
+            category="CONNECTIVITY secret-provider-category",
+        )
+        await self.session._from_tts(frame, FrameDirection.UPSTREAM)
+        with self.assertRaises(RuntimeError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        self.assertEqual(
+            get_native_provider_error_diagnostic(caught.exception),
+            {"observed_callback_boundary": "tts"},
+        )
+
+    async def test_sidecar_assignment_failure_preserves_the_original_exception(self):
+        """Optional diagnostics cannot turn an immutable provider failure into another error."""
+
+        class ClosedError(RuntimeError):
+            def __setattr__(self, name, value):
+                if name == "_nva_native_provider_error_diagnostic":
+                    raise RuntimeError("secret-assignment-failure")
+                return super().__setattr__(name, value)
+
+        failure = ClosedError("secret-provider-body")
+        actor = await self.session.begin([{"role": "user", "content": "question"}], 0, "error", self.changed)
+        await self.wait_event(self.llm.entered)
+        await self.session._from_tts(
+            ErrorFrame(error="secret-provider-body", exception=failure, processor=self.tts), FrameDirection.UPSTREAM
+        )
+        with self.assertRaises(ClosedError) as caught:
+            await asyncio.wait_for(actor.result(), 1)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(get_native_provider_error_diagnostic(failure), {})
+
+    def test_diagnostic_accessor_rejects_untyped_and_nonallowlisted_values(self):
+        """The public sidecar reader emits no arbitrary strings or provider objects."""
+        failure = RuntimeError("secret-provider-body")
+        for value in (
+            {"provider_source": "secret-source"},
+            NativeProviderErrorDiagnostic("secret-source", "secret-boundary", "secret-category"),
+        ):
+            with self.subTest(kind=type(value).__name__):
+                failure._nva_native_provider_error_diagnostic = value
+                self.assertEqual(get_native_provider_error_diagnostic(failure), {})
 
     async def test_native_background_error_without_context_still_fails_active_generation(self):
         """An uncorrelated native failure must not leave an actor pending forever."""
