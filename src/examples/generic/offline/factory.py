@@ -5,7 +5,11 @@
 
 import hashlib
 import json
+from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 from pipecat.services.nvidia.llm import NvidiaLLMSettings
@@ -46,12 +50,22 @@ from .providers import (
 class GenericOfflineRuntime:
     """Own provider resources and expose a sanitized evaluation configuration."""
 
-    def __init__(self, engine, client, recognizer, synthesis, configuration):
+    def __init__(
+        self,
+        engine,
+        client,
+        recognizer,
+        synthesis,
+        configuration,
+        *,
+        provider_observations: Callable[[], dict[str, Any]] | None = None,
+    ):
         """Keep session-owned provider resources out of the scheduling core."""
         self._engine = engine
         self._client = client
         self._recognizer = recognizer
         self._synthesis = synthesis
+        self._provider_observations = provider_observations
         self.configuration = configuration
         self._closed = False
 
@@ -74,9 +88,19 @@ class GenericOfflineRuntime:
     async def run(self, source):
         """Run once and release every provider connection on success or failure."""
         try:
-            return await self._engine.run(source)
+            result = await self._engine.run(source)
         finally:
             await self.aclose()
+        # Cleanup can emit delayed native errors after the engine has completed.
+        # Collect only after it drains. Optional diagnostics must never replace
+        # the result or mask an execution/cleanup exception.
+        if self._provider_observations is not None:
+            with suppress(Exception):
+                result = replace(
+                    result,
+                    metrics={**result.metrics, "native_provider_observations": self._provider_observations()},
+                )
+        return result
 
 
 def build_runtime(config: dict) -> GenericOfflineRuntime:
@@ -258,4 +282,5 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         recognizer,
         responder,
         configuration,
+        provider_observations=responder.get_provider_observations,
     )

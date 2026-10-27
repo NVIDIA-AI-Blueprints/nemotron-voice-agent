@@ -9,8 +9,12 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from pipecat.frames.frames import ErrorFrame
+from pipecat.processors.frame_processor import FrameDirection
+
 from examples.generic.offline.factory import GenericOfflineRuntime, build_runtime
-from examples.generic.offline.models import AudioSource
+from examples.generic.offline.models import AudioSource, SessionResult
+from examples.generic.offline.native_response import NativeResponseSession
 
 
 class FactoryTests(unittest.TestCase):
@@ -146,6 +150,7 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(
             runtime.configuration["provider_execution"], "overlapping_continuous_ASR_and_persistent_native_LLM_TTS"
         )
+        self.assertEqual(runtime._provider_observations, runtime._synthesis.get_provider_observations)
 
     def test_summary_eligibility_is_explicitly_guarded_instead_of_customized_before_next_request(self):
         runtime, _, _ = self.build({})
@@ -172,6 +177,75 @@ class FactoryTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_observations_are_collected_after_cleanup_into_a_new_result(self):
+        events = []
+        result = SessionResult((), 0, (), (), {"existing": "value"})
+        native_session = NativeResponseSession(None, None, sample_rate=16000)
+        native_session._tts = object()
+
+        async def close_session():
+            events.append("cleanup")
+            frame = ErrorFrame(error="secret-provider-body", processor=native_session._tts)
+            frame.metadata["private"] = "secret-provider-context"
+            await native_session._from_tts(frame, FrameDirection.UPSTREAM)
+
+        def observations():
+            self.assertEqual(events, ["cleanup"])
+            events.append("collect")
+            return native_session.get_provider_observations()
+
+        engine = SimpleNamespace(run=AsyncMock(return_value=result))
+        recognizer = Mock()
+        session = SimpleNamespace(aclose=AsyncMock(side_effect=close_session))
+        runtime = GenericOfflineRuntime(engine, None, recognizer, session, {}, provider_observations=observations)
+        collected = await runtime.run(AudioSource(bytes(2)))
+        self.assertIsNot(collected, result)
+        self.assertEqual(result.metrics, {"existing": "value"})
+        self.assertEqual(collected.metrics["existing"], "value")
+        self.assertEqual(collected.metrics["native_provider_observations"]["total"], 1)
+        self.assertEqual(
+            collected.metrics["native_provider_observations"]["observations"],
+            [{"provider_source": "tts", "observed_callback_boundary": "tts", "observation_index": 1}],
+        )
+        self.assertEqual(events, ["cleanup", "collect"])
+        self.assertNotIn("secret", str(collected.metrics))
+        await runtime.aclose()
+        session.aclose.assert_awaited_once()
+        self.assertEqual(events, ["cleanup", "collect"])
+
+    async def test_optional_observation_collection_failure_preserves_the_result(self):
+        result = SessionResult((), 0, (), (), {"existing": "value"})
+        collector = Mock(side_effect=RuntimeError("secret-provider-body"))
+        runtime = GenericOfflineRuntime(
+            SimpleNamespace(run=AsyncMock(return_value=result)),
+            None,
+            Mock(),
+            SimpleNamespace(aclose=AsyncMock()),
+            {},
+            provider_observations=collector,
+        )
+        self.assertIs(await runtime.run(AudioSource(bytes(2))), result)
+        self.assertEqual(result.metrics, {"existing": "value"})
+        collector.assert_called_once()
+
+    async def test_execution_and_cleanup_errors_do_not_invoke_optional_collector(self):
+        for failure_during in ("engine", "cleanup"):
+            with self.subTest(failure_during=failure_during):
+                failure = RuntimeError("primary failure")
+                result = SessionResult((), 0, (), ())
+                engine = SimpleNamespace(
+                    run=AsyncMock(return_value=result, side_effect=failure if failure_during == "engine" else None)
+                )
+                session = SimpleNamespace(
+                    aclose=AsyncMock(side_effect=failure if failure_during == "cleanup" else None)
+                )
+                collector = Mock(side_effect=RuntimeError("must not replace primary failure"))
+                runtime = GenericOfflineRuntime(engine, None, Mock(), session, {}, provider_observations=collector)
+                with self.assertRaises(RuntimeError) as caught:
+                    await runtime.run(AudioSource(bytes(2)))
+                self.assertIs(caught.exception, failure)
+                collector.assert_not_called()
+
     async def test_native_runtime_closes_its_session_without_creating_or_requiring_a_separate_client(self):
         engine = SimpleNamespace(run=AsyncMock(return_value="result"))
         recognizer = Mock()
