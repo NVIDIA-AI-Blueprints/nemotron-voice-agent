@@ -14,6 +14,7 @@ The `services` lists in [`examples_registry.yaml`](../../../examples_registry.ya
 | Server | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM | Magpie TTS Multilingual NIM |
 | Server Performance | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B NIM with a pinned NVFP4 TP2 profile | Magpie TTS Multilingual NIM with `batch_size=64` |
 | Single GPU | Nemotron Speech Streaming English 0.6B through NeMo-Speech.cpp | Nemotron 3.5 Lightning 30B A3B through vLLM, with chat completions or streaming input | Magpie TTS Multilingual through NeMo-Speech.cpp |
+| Dynamo (experimental) | Nemotron ASR Streaming English NIM | Nemotron 3.5 Lightning 30B A3B through NVIDIA Dynamo, with chat completions or streaming input | Magpie TTS Multilingual NIM |
 
 ## Running the example
 
@@ -44,6 +45,9 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    # One GPU (incl. DGX Spark and Jetson Thor). Download speech weights once, as your user:
    bash scripts/download-nemo-speech-models.sh
    docker compose --profile generic-assistant/single-gpu up -d
+
+   # Experimental: Lightning on NVIDIA Dynamo, with the Server ASR and TTS NIMs
+   docker compose --profile generic-assistant/dynamo up -d
    ```
 
    | Recipe profile | App service | Sidecars |
@@ -52,6 +56,9 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    | `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
    | `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
    | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` |
+   | `generic-assistant/dynamo` | `generic-assistant-dynamo` | `dynamo-lightning`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
+
+   > The `dynamo` recipe needs `NVIDIA_API_KEY` and the `nvcr.io` login for its NIMs and the Dynamo image, and `HF_TOKEN` for the Lightning weights. Refer to [Run Nemotron 3.5 Lightning on NVIDIA Dynamo](../../../docs/how-to/configure-llm.md#run-nemotron-35-lightning-on-nvidia-dynamo-experimental).
 
    > The standard Lightning `server` deployment uses NIM's automatic compatible-profile selection. The `single-gpu` deployment uses its hardware-aware vLLM configuration. The four-GPU `server-perf` benchmark pins NVFP4 TP2 for Blackwell. On older hardware, change it to a compatible TP2 profile as described in [Configure LLM](../../../docs/how-to/configure-llm.md).
 
@@ -64,6 +71,7 @@ This example runs with **Cloud**, **Server** (NIM), benchmark-only **Server Perf
    docker compose --profile generic-assistant/server down      # Server
    docker compose --profile generic-assistant/server-perf down # Four-GPU benchmark only
    docker compose --profile generic-assistant/single-gpu down  # One GPU (incl. DGX Spark and Jetson Thor)
+   docker compose --profile generic-assistant/dynamo down      # NVIDIA Dynamo (experimental)
    ```
 
 To run host-native without Docker, set `selection: generic-assistant` in [`examples_registry.yaml`](../../../examples_registry.yaml), then run `uv run python3 src/server.py`.

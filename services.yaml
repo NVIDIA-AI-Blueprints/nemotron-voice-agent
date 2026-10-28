@@ -55,6 +55,14 @@ server:
       extra_params: '{"extra_body":{"top_k":1,"chat_template_kwargs":{"enable_thinking":false},"repetition_penalty":1.05}}'
       settings: nemotron-omni-nim
       nvcf: {}
+    nemotron-lightning-dynamo:
+      name: "Nemotron 3.5 Lightning 30B A3B (Dynamo)"
+      model_id: "nvidia/nemotron-3.5-lightning-30b-a3b"
+      base_url: "http://dynamo-frontend:8000/v1"
+      health_path: "/v1/models/nvidia/nemotron-3.5-lightning-30b-a3b"
+      streaming_url: "ws://dynamo-frontend:8000/v1/realtime"
+      supported_languages: [en, de, es, fr, it, ja]
+      settings: nemotron-vllm
   tts:
     magpie-multilingual-tts:
       name: "Magpie TTS Multilingual"

@@ -764,12 +764,26 @@ class RepositoryCatalogTests(unittest.TestCase):
         self.assertEqual(urlparse(entry["streaming_url"]).hostname, "nemotron-35-bolt-vllm")
         self.assertEqual(compose["services"]["nemotron-35-bolt-vllm"]["profiles"], ["nemotron-35-bolt-single-gpu"])
         self.assertNotIn("nemotron-bolt-74b", catalog["server"]["llm"])
-        for key in ("generic-assistant", "multilingual-assistant"):
+        llm_keys = ["nemotron-lightning", "nemotron-super", "nemotron-bolt-74b", "nemotron-bolt-4b"]
+        for key, expected in (
+            ("generic-assistant", [*llm_keys, "nemotron-lightning-dynamo"]),
+            ("multilingual-assistant", llm_keys),
+        ):
             with self.subTest(example=key):
-                llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]
-                self.assertEqual(
-                    llm_keys, ["nemotron-lightning", "nemotron-super", "nemotron-bolt-74b", "nemotron-bolt-4b"]
-                )
+                self.assertEqual(examples_registry.EXAMPLES[key]["services"]["llm"], expected)
+
+    def test_dynamo_lightning_is_a_generic_assistant_realtime_llm(self) -> None:
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker" / "docker-compose.dynamo-lightning.yaml")
+        entry = catalog["server"]["llm"]["nemotron-lightning-dynamo"]
+        self.assertTrue(utils.is_streaming_llm_url(entry["streaming_url"]))
+        self.assertEqual(urlparse(entry["streaming_url"]).path, "/v1/realtime")
+        self.assertEqual(entry["base_url"], "http://dynamo-frontend:8000/v1")
+        self.assertEqual(entry["settings"], "nemotron-vllm")
+        service = compose["services"]["dynamo-lightning"]
+        self.assertIn(urlparse(entry["base_url"]).hostname, service["networks"]["default"]["aliases"])
+        self.assertIn("--realtime-chat", "".join(service["command"]))
+        self.assertEqual(service["profiles"], ["generic-assistant/dynamo"])
 
     def test_bolt_e4b_is_an_optional_llm_across_server_and_single_gpu(self) -> None:
         catalog = utils.load_yaml_file(Path("services.yaml"))
@@ -912,7 +926,12 @@ class ComposeRecipeTests(unittest.TestCase):
                     continue
                 with self.subTest(recipe=recipe, key=key):
                     service = services_by_host[urlparse(entry["streaming_url"]).hostname]
-                    self.assertIn("examples.shared.vllm_streaming_input.server", "".join(service["command"]))
+                    server = (
+                        "--realtime"
+                        if urlparse(entry["streaming_url"]).path == "/v1/realtime"
+                        else "examples.shared.vllm_streaming_input.server"
+                    )
+                    self.assertIn(server, "".join(service["command"]))
 
 
 if __name__ == "__main__":

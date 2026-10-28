@@ -153,6 +153,23 @@ The single-GPU vLLM service and the server NIM read the **Reasoning Budget** fro
 
 **Conversational Mode** is a setting of the `nemotron-bolt-4b` settings profile, not of the service. It is on by default for every Bolt E4B endpoint, including NVIDIA Cloud, the server NIM, and the single-GPU service. Turn it off for a session in the Services tab. The model's own chat template defaults it to off, so a client that calls the endpoint directly gets it off unless the request sets `chat_template_kwargs.conversational_mode`.
 
+### Run Nemotron 3.5 Lightning on NVIDIA Dynamo (Experimental)
+
+The `generic-assistant/dynamo` recipe serves Lightning with [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) 1.6.0 and pairs it with the ASR and TTS NIMs from `generic-assistant/server`. The `dynamo-lightning` service runs the Dynamo frontend and one vLLM realtime worker in one container on GPU `0`, with file-based discovery, so it needs no etcd or NATS.
+
+```bash
+docker compose --profile generic-assistant/dynamo up -d
+```
+
+One worker serves both OpenAI Realtime text sessions at `ws://dynamo-frontend:8000/v1/realtime` and, with `--realtime-chat`, chat completions at `http://dynamo-frontend:8000/v1` from the same engine. The `nemotron-lightning-dynamo` entry sets the chat URL as its `base_url` and the realtime URL as its `streaming_url`, so its Services card shows the LLM settings and a **Streaming Input** toggle. With the toggle off, the pipeline sends chat completions. With it on, `NvidiaStreamingLLMService` selects the Dynamo protocol from the `/v1/realtime` path and streams ASR updates into Dynamo's `input_text.*` prefill events. Tool calling and reasoning parsing work the same in both modes.
+
+- **Image.** `docker/dynamo/Dockerfile` builds on `nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.6.0` and applies `docker/dynamo/realtime-text-tools.patch`. The patch adds function tools, `qwen3_coder` tool parsing, `nemotron_v3` reasoning parsing, `conversation.item.delete`, `reasoning.effort`, held-request prefill, and the `--realtime-chat` flag. It fits only the 1.6.0 runtime.
+- **GPU memory.** The ASR and TTS NIMs share GPU `0`, so the worker takes a fixed `0.45` share of GPU memory. The LLM needs about 28 GB, so the default share needs a GPU with at least 64 GB. Set `DYNAMO_GPU_MEMORY_UTILIZATION` in `.env` to change the share.
+- **Prefill.** Prefill runs on one held engine request, and the answer continues it, so the answer does not depend on prefix caching. On Lightning with a 2.9k-token prompt, median time-to-first-token drops from about 160 ms to about 36 ms.
+- **Interrupted replies.** Before the next turn, the service waits up to 5 seconds for Dynamo to finish a cancelled reply. After that it opens a new session.
+- **Settings in streaming mode.** OpenAI Realtime sessions have no sampling fields, and the Dynamo 1.6.0 frontend drops fields it does not know. **Reasoning** maps to `reasoning.effort` (`medium` for on, `minimal` for off). **Max Tokens** maps to `max_output_tokens`. **Temperature**, **Top P**, **Seed**, and **Reasoning Budget** are dropped with a warning, so the worker's defaults apply. Other request options such as `response_format` are also dropped, so multi-speaker prompts that ask for a JSON reply work only with **Streaming Input** off.
+- **Startup.** The Dynamo frontend opens its port within seconds, so the UI lists the Dynamo entry early. Loading the Lightning model takes several minutes on the first start. Until the frontend lists the model, starting a session reports that the LLM is still starting.
+
 ### Deployment Tuning Parameters
 
 Single-GPU Compose services select precision and VRAM utilization automatically. Use `.env` only for the optional headroom or utilization override. Standard NIM Server deployments also use hardware-aware automatic profile selection. Only specialized recipes such as `server-perf` pin a profile. For Server deployments, the stock Compose files expose only the NIM settings shown as environment variables below. Use a Compose override for controls that the stock files fix or omit.

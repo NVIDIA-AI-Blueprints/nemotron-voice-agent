@@ -20,7 +20,7 @@ Each example ships as Docker Compose **profiles**. Pick exactly one per deployme
 
 | Example | Description | Supported profiles |
 |---------|-------------|--------------------|
-| [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
+| [`generic-assistant`](../src/examples/generic/README.md) | Baseline English-only cascaded pipeline (Nemotron ASR + LLM + Magpie TTS) | `generic-assistant`, `generic-assistant/server`, `generic-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor), `generic-assistant/dynamo` (workstation, experimental) |
 | [`multilingual-assistant`](../src/examples/multilingual/README.md) | Multilingual cascaded pipeline with a fixed language per session | `multilingual-assistant`, `multilingual-assistant/server`, `multilingual-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant`](../src/examples/omni_assistant/README.md) | Nemotron Omni model (ASR + LLM) + Magpie TTS cascaded pipeline | `omni-assistant`, `omni-assistant/server`, `omni-assistant/single-gpu` (workstation, DGX Spark, Jetson Thor) |
 | [`omni-assistant-subagents`](../src/examples/omni_assistant_subagents/README.md) | Multi-agent Omni with media + live-webcam understanding | `omni-assistant-subagents`, `omni-assistant-subagents/server`, `omni-assistant-subagents/single-gpu` (workstation, DGX Spark) |

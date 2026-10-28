@@ -1,0 +1,1524 @@
+diff --git a/vllm/backend_args.py b/vllm/backend_args.py
+index 442b4ddbc..34755c5a8 100644
+--- a/vllm/backend_args.py
++++ b/vllm/backend_args.py
+@@ -259,6 +259,16 @@ class DynamoVllmArgGroup(ArgGroup):
+             "Aggregated workers only.",
+         )
+ 
++        add_negatable_bool_argument(
++            g,
++            flag_name="--realtime-chat",
++            env_var="DYN_VLLM_REALTIME_CHAT",
++            default=False,
++            help="With --realtime, also serve the --dyn-endpoint-types OpenAI "
++            "endpoints, such as /v1/chat/completions, from the same engine on a "
++            "sibling endpoint.",
++        )
++
+         add_negatable_bool_argument(
+             g,
+             flag_name="--classify-worker",
+@@ -579,6 +589,7 @@ class DynamoVllmConfig(ConfigBase):
+     embedding_frontend_tokenization: bool = False
+     embedding_worker_processes: int = 1
+     realtime: bool = False
++    realtime_chat: bool = False
+     classify_worker: bool = False
+ 
+     # CustomEncoder (image-only embeddings; worker assembles mixed prompt)
+@@ -973,6 +984,8 @@ class DynamoVllmConfig(ConfigBase):
+     def _validate_realtime_worker_exclusivity(self) -> None:
+         """Realtime serving uses a dedicated aggregated bidirectional worker."""
+         if not self.realtime:
++            if self.realtime_chat:
++                raise ValueError("--realtime-chat requires --realtime.")
+             return
+         if self.disaggregation_mode != DisaggregationMode.AGGREGATED:
+             mode = (
+diff --git a/vllm/realtime/events.py b/vllm/realtime/events.py
+index 170fa4abe..fe60d1e31 100644
+--- a/vllm/realtime/events.py
++++ b/vllm/realtime/events.py
+@@ -274,16 +274,25 @@ def conversation_item_done_event(
+     return _conversation_item_event("conversation.item.done", item, previous_item_id)
+ 
+ 
++def conversation_item_deleted_event(item_id: str) -> dict[str, Any]:
++    return {
++        "type": "conversation.item.deleted",
++        "event_id": event_id(),
++        "item_id": item_id,
++    }
++
++
+ def _response_item_event(
+     event_type: str,
+     response_id: str,
+     item: dict[str, Any],
++    output_index: int,
+ ) -> dict[str, Any]:
+     return {
+         "type": event_type,
+         "event_id": event_id(),
+         "response_id": response_id,
+-        "output_index": 0,
++        "output_index": output_index,
+         "item": item,
+     }
+ 
+@@ -291,15 +300,44 @@ def _response_item_event(
+ def response_output_item_added_event(
+     response_id: str,
+     item: dict[str, Any],
++    output_index: int = 0,
+ ) -> dict[str, Any]:
+-    return _response_item_event("response.output_item.added", response_id, item)
++    return _response_item_event(
++        "response.output_item.added", response_id, item, output_index
++    )
+ 
+ 
+ def response_output_item_done_event(
+     response_id: str,
+     item: dict[str, Any],
++    output_index: int = 0,
+ ) -> dict[str, Any]:
+-    return _response_item_event("response.output_item.done", response_id, item)
++    return _response_item_event(
++        "response.output_item.done", response_id, item, output_index
++    )
++
++
++def response_function_call_arguments_event(
++    event_type: str,
++    response_id: str,
++    item: dict[str, Any],
++    output_index: int,
++    arguments: str,
++) -> dict[str, Any]:
++    event = {
++        "type": event_type,
++        "event_id": event_id(),
++        "response_id": response_id,
++        "item_id": item["id"],
++        "output_index": output_index,
++        "call_id": item["call_id"],
++    }
++    if event_type.endswith(".delta"):
++        event["delta"] = arguments
++    else:
++        event["name"] = item["name"]
++        event["arguments"] = arguments
++    return event
+ 
+ 
+ def response_content_part_event(
+diff --git a/vllm/realtime/factories.py b/vllm/realtime/factories.py
+index caedaf2cc..c1495b258 100644
+--- a/vllm/realtime/factories.py
++++ b/vllm/realtime/factories.py
+@@ -6,6 +6,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import contextvars
+ import logging
+ import uuid
+ from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
+@@ -19,21 +20,228 @@ StreamingInputFactory = Callable[
+     [AsyncGenerator[np.ndarray, None], "asyncio.Queue[list[int]]"],
+     AsyncGenerator[Any, None],
+ ]
+-#: Await with chat messages and an optional output-token limit to obtain a stream
+-#: of OpenAI chat-completion SSE frames. The caller owns closing that stream.
++#: Await with chat messages, an optional output-token limit, chat ``tools`` /
++#: ``tool_choice`` options, and the turn's held prefill request, if any, to obtain
++#: a stream of OpenAI chat-completion SSE frames. The caller owns closing that
++#: stream. The factory owns the held request and closes it if it cannot continue it.
+ ChatCompletionFactory = Callable[
+-    [list[dict[str, str]], int | None],
++    [list[dict[str, Any]], int | None, dict[str, Any], "HeldTextRequest | None"],
+     Awaitable[AsyncGenerator[str, None]],
+ ]
+-#: Consume cumulative user-text updates alongside committed chat history to warm
+-#: the prefix cache. Cancellation must complete engine cleanup before returning.
++#: Prefill cumulative user-text updates alongside committed chat history, and
++#: return the engine request holding that prefix once updates end. Cancellation
++#: must complete engine cleanup before returning. Takes the same tool options as
++#: ``ChatCompletionFactory`` so both render one prefix.
+ TextPrefillFactory = Callable[
+-    [list[dict[str, str]], AsyncGenerator[str, None]],
+-    Coroutine[Any, Any, None],
++    [list[dict[str, Any]], AsyncGenerator[str, None], dict[str, Any]],
++    Coroutine[Any, Any, "HeldTextRequest | None"],
+ ]
+ 
+ logger = logging.getLogger(__name__)
+ 
++_HELD_REQUEST: contextvars.ContextVar[HeldTextRequest | None] = contextvars.ContextVar(
++    "realtime_held_text_request", default=None
++)
++
++
++def vllm_parser_names(
++    tool_parser: str | None, reasoning_parser: str | None
++) -> tuple[str | None, str | None]:
++    """Keep only the parser names that vLLM registers.
++
++    Realtime text parses with vLLM's chat serving, but the names come from the
++    Dynamo parser flags, and some Dynamo parsers have no vLLM counterpart. vLLM
++    rejects unknown names, so an unknown name disables that parsing instead of
++    failing the worker.
++    """
++    from vllm.reasoning import ReasoningParserManager
++    from vllm.tool_parsers import ToolParserManager
++
++    def known(name: str | None, kind: str, lookup: Callable[[str], Any]) -> bool:
++        if not name:
++            return False
++        try:
++            lookup(name)
++        except KeyError:
++            logger.warning(
++                "%s parser %r is not a vLLM parser, so realtime text sessions "
++                "run without it",
++                kind,
++                name,
++            )
++            return False
++        return True
++
++    return (
++        tool_parser
++        if known(tool_parser, "Tool call", ToolParserManager.get_tool_parser)
++        else None,
++        reasoning_parser
++        if known(
++            reasoning_parser, "Reasoning", ReasoningParserManager.get_reasoning_parser
++        )
++        else None,
++    )
++
++
++class HeldTextRequest:
++    """One StreamingInput engine request that prefills a turn and then generates its answer.
++
++    Prefill chunks generate one throwaway token, which vLLM drops when the next
++    chunk arrives, so the engine keeps the prompt's KV cache and recurrent state
++    without relying on prefix caching. The answer must be the last chunk: a
++    resumable request whose input stream stays open can keep decoding past EOS.
++    """
++
++    def __init__(
++        self,
++        engine_client: Any,
++        make_chunk: Callable[[list[int], Any], Any],
++        prefill_params: Any,
++    ) -> None:
++        self.fed: list[int] = []
++        self.prefill_params = prefill_params
++        self.answering = False
++        self._engine = engine_client
++        self._make_chunk = make_chunk
++        self._pending: list[int] = []
++        self._next_answer: tuple[Any, asyncio.Queue[Any]] | None = None
++        self._answer: asyncio.Queue[Any] | None = None
++        self._wake = asyncio.Event()
++        self._chunk_done = asyncio.Event()
++        self._request_id = f"rt-prefill-{uuid.uuid4().hex}"
++        self._task: asyncio.Task[None] | None = None
++        self._closed = False
++
++    def extends(self, token_ids: list[int]) -> bool:
++        """Whether ``token_ids`` continue the fed prompt and can still be appended."""
++        return not self._closed and token_ids[: len(self.fed)] == self.fed
++
++    def feed(self, token_ids: list[int]) -> None:
++        """Queue the tokens of ``token_ids`` beyond the fed prompt, which it must extend."""
++        delta = token_ids[len(self.fed) :]
++        if delta:
++            self._queue(delta)
++
++    def answer(
++        self, token_ids: list[int], sampling_params: Any
++    ) -> AsyncGenerator[Any, None]:
++        """Append the rest of the final prompt as the last chunk and stream its outputs."""
++        queue: asyncio.Queue[Any] = asyncio.Queue()
++        self._next_answer = (sampling_params, queue)
++        self.answering = True
++        self._queue(token_ids[len(self.fed) :])
++        self._closed = True
++        return self._answer_outputs(queue)
++
++    async def close(self) -> None:
++        """Cancel the request and abort it on the engine."""
++        self._closed = True
++        task, self._task = self._task, None
++        if task is None:
++            return
++        task.cancel()
++        await asyncio.gather(task, return_exceptions=True)
++        await self._engine.abort(self._request_id)
++
++    def _queue(self, token_ids: list[int]) -> None:
++        self.fed += token_ids
++        self._pending += token_ids
++        if self._task is None:
++            self._task = asyncio.create_task(self._run())
++        self._wake.set()
++
++    async def _answer_outputs(
++        self, queue: asyncio.Queue[Any]
++    ) -> AsyncGenerator[Any, None]:
++        try:
++            while (output := await queue.get()) is not None:
++                if isinstance(output, Exception):
++                    raise output
++                yield output
++        finally:
++            await asyncio.shield(self.close())
++
++    async def _inputs(self) -> AsyncGenerator[Any, None]:
++        # Merge appends that arrive while a chunk runs, and route each output by
++        # waiting for the previous chunk before yielding the next.
++        while True:
++            await self._wake.wait()
++            self._wake.clear()
++            token_ids, self._pending = self._pending, []
++            answer, self._next_answer = self._next_answer, None
++            if not token_ids and answer is None:
++                continue
++            self._chunk_done.clear()
++            if answer is not None:
++                params, self._answer = answer
++                yield self._make_chunk(token_ids, params)
++                return
++            yield self._make_chunk(token_ids, self.prefill_params)
++            await self._chunk_done.wait()
++
++    async def _run(self) -> None:
++        try:
++            async for output in self._engine.generate(
++                prompt=self._inputs(),
++                sampling_params=self.prefill_params,
++                request_id=self._request_id,
++            ):
++                if self._answer is None:
++                    self._chunk_done.set()
++                    continue
++                self._answer.put_nowait(output)
++                if output.finished:
++                    break
++        except Exception as exc:  # noqa: BLE001 - surfaced as an answer failure
++            if self._answer is None:
++                logger.warning("realtime text prefill stopped: %s", exc)
++            else:
++                self._answer.put_nowait(exc)
++        finally:
++            self._closed = True
++            self._chunk_done.set()
++            if self._answer is not None:
++                self._answer.put_nowait(None)
++
++
++class _HeldRequestEngine:
++    """Engine client whose ``generate`` continues the turn's held prefill request.
++
++    vLLM's chat serving still validates the request, renders the prompt, and
++    builds the sampling parameters. Only the engine call reuses the held
++    request, when the final prompt extends it and the answer needs no
++    per-request engine options or seed.
++    """
++
++    def __init__(self, engine_client: Any) -> None:
++        self._engine = engine_client
++
++    def __getattr__(self, name: str) -> Any:
++        return getattr(self._engine, name)
++
++    def generate(
++        self, prompt: Any, sampling_params: Any, request_id: str, **kwargs: Any
++    ) -> AsyncGenerator[Any, None]:
++        held = _HELD_REQUEST.get()
++        token_ids = prompt.get("prompt_token_ids") if isinstance(prompt, dict) else None
++        if (
++            held is not None
++            and token_ids is not None
++            and len(token_ids) > len(held.fed)
++            and held.extends(list(token_ids))
++            and sampling_params.structured_outputs is None
++            # The engine seeds a request's generator from its first chunk.
++            and sampling_params.seed is None
++            and sampling_params.skip_special_tokens
++            == held.prefill_params.skip_special_tokens
++            and sampling_params.spaces_between_special_tokens
++            == held.prefill_params.spaces_between_special_tokens
++            and kwargs.get("lora_request") is None
++        ):
++            return held.answer(list(token_ids), sampling_params)
++        return self._engine.generate(prompt, sampling_params, request_id, **kwargs)
++
+ 
+ def _build_models(*, engine_client: Any, model_name: str, model_path: str) -> Any:
+     from vllm.entrypoints.openai.models.protocol import BaseModelPath
+@@ -73,24 +281,32 @@ def build_realtime_text_factories(
+     model_name: str,
+     model_path: str,
+     chat_template_path: str | None,
++    tool_parser: str | None = None,
++    reasoning_parser: str | None = None,
++    default_chat_template_kwargs: dict[str, Any] | None = None,
+ ) -> tuple[ChatCompletionFactory, TextPrefillFactory]:
+     """Bind final-generation and prefix-warming callbacks to one vLLM engine.
+ 
+     ``model_name`` is the served API name; ``model_path`` identifies its weights.
+     ``chat_template_path`` optionally overrides the model's default chat template.
+     Both callbacks use vLLM's chat renderer to apply that template and tokenize.
++    ``tool_parser`` enables tool calls in the SSE stream. ``reasoning_parser``
++    moves reasoning out of ``delta.content``. ``default_chat_template_kwargs``
++    applies to every render, since Realtime sessions carry no template options.
+ 
+     Awaiting the first callback with chat messages and an optional output-token
+-    limit returns an SSE stream that the caller must close. The second consumes
+-    cumulative pending-user text with committed chat history and warms stable,
+-    complete prefix-cache blocks through vLLM StreamingInput. Cancel and await
+-    this prefill callback before final generation, which renders the exact
+-    committed conversation independently. Without prefix caching, updates are
+-    consumed without starting speculative generation.
++    limit returns an SSE stream that the caller must close. The second prefills
++    cumulative pending-user text with committed chat history on one vLLM
++    StreamingInput request and returns that request when its updates end. Final
++    generation renders the exact committed conversation and appends it to the
++    held request when it extends what the request holds, so the answer starts
++    from the prefilled state instead of a prefix-cache lookup. Hybrid models
++    cache recurrent state only at large block boundaries, so a separate request
++    would recompute most of the prompt.
+     """
+     from vllm.engine.protocol import StreamingInput
+-    from vllm.entrypoints.chat_utils import load_chat_template
+     from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
++    from vllm.entrypoints.chat_utils import load_chat_template
+     from vllm.entrypoints.openai.chat_completion.serving import OpenAIServingChat
+     from vllm.entrypoints.serve.engine.protocol import ErrorResponse
+     from vllm.inputs import tokens_input
+@@ -121,9 +337,13 @@ def build_realtime_text_factories(
+         request_logger=None,
+         chat_template=chat_template,
+         chat_template_content_format="auto",
++        enable_auto_tools=bool(tool_parser),
++        tool_parser=tool_parser,
++        reasoning_parser=reasoning_parser,
++        default_chat_template_kwargs=default_chat_template_kwargs,
+     )
+     serving = RealtimeServingChat(
+-        engine_client=engine_client,
++        engine_client=_HeldRequestEngine(engine_client),
+         models=_build_models(
+             engine_client=engine_client,
+             model_name=model_name,
+@@ -134,11 +354,17 @@ def build_realtime_text_factories(
+         request_logger=None,
+         chat_template=chat_template,
+         chat_template_content_format="auto",
++        reasoning_parser=reasoning_parser or "",
++        enable_auto_tools=bool(tool_parser),
++        tool_parser=tool_parser,
++        default_chat_template_kwargs=default_chat_template_kwargs,
+     )
+ 
+     async def create_chat_completion(
+-        messages: list[dict[str, str]],
++        messages: list[dict[str, Any]],
+         max_output_tokens: int | None,
++        tool_options: dict[str, Any],
++        prefill: HeldTextRequest | None,
+     ) -> AsyncGenerator[str, None]:
+         request = ChatCompletionRequest(
+             messages=messages,
+@@ -146,18 +372,28 @@ def build_realtime_text_factories(
+             max_completion_tokens=max_output_tokens,
+             stream=True,
+             stream_options={"include_usage": True},
++            **tool_options,
+         )
+-        response = await serving.create_chat_completion(request)
++        token = _HELD_REQUEST.set(prefill)
++        try:
++            response = await serving.create_chat_completion(request)
++        finally:
++            _HELD_REQUEST.reset(token)
++            if prefill is not None and not prefill.answering:
++                await prefill.close()
+         if isinstance(response, ErrorResponse):
+             raise ValueError(response.error.message)
+         return response
+ 
+-    async def render_tokens(messages: list[dict[str, str]]) -> list[int]:
++    async def render_tokens(
++        messages: list[dict[str, Any]], tool_options: dict[str, Any]
++    ) -> tuple[list[int], ChatCompletionRequest]:
+         request = ChatCompletionRequest(
+             messages=messages,
+             model=model_name,
+             add_generation_prompt=False,
+             continue_final_message=True,
++            **tool_options,
+         )
+         rendered = await serving.render_chat_request(request)
+         if isinstance(rendered, ErrorResponse):
+@@ -168,60 +404,58 @@ def build_realtime_text_factories(
+         token_ids = engine_inputs[0].get("prompt_token_ids")
+         if token_ids is None:
+             raise ValueError("Realtime text prefill requires tokenized chat input")
+-        return list(token_ids)
++        return list(token_ids), request
++
++    def make_chunk(token_ids: list[int], params: SamplingParams) -> StreamingInput:
++        return StreamingInput(prompt=tokens_input(token_ids), sampling_params=params)
+ 
+     async def prefill_text(
+-        messages: list[dict[str, str]],
++        messages: list[dict[str, Any]],
+         updates: AsyncGenerator[str, None],
+-    ) -> None:
+-        cache_config = engine_client.vllm_config.cache_config
+-        block_size = cache_config.block_size
+-        if not cache_config.enable_prefix_caching or not block_size:
+-            async for _ in updates:
+-                pass
+-            return
+-
+-        emitted: list[int] = []
+-        sampling_params = SamplingParams.from_optional(
+-            temperature=0.0,
+-            max_tokens=1,
+-            output_kind=RequestOutputKind.DELTA,
+-            skip_clone=True,
+-        )
+-
+-        async def streaming_input() -> AsyncGenerator[Any, None]:
+-            nonlocal emitted
++        tool_options: dict[str, Any],
++    ) -> HeldTextRequest | None:
++        held: HeldTextRequest | None = None
++        try:
+             async for text in updates:
+-                token_ids = await render_tokens(
++                # ASR can still extend the last word, which would change its
++                # tokens, so only whole words are prefilled before the commit.
++                text = text[: text.rfind(" ") + 1].rstrip()
++                if not text:
++                    continue
++                token_ids, request = await render_tokens(
+                     [*messages, {"role": "user", "content": text}],
++                    tool_options,
+                 )
+-                if token_ids[: len(emitted)] != emitted:
+-                    # Appending text can change tokenizer boundaries. Stop this
+-                    # optimization instead of feeding an incorrect token stream;
+-                    # final generation independently renders the exact prompt.
+-                    return
+-                # Retokenizing appended text may alter the last few tokens.
+-                # Keep one cache block pending and submit only full blocks,
+-                # which also avoids engine work that the final request
+-                # cannot reuse through prefix caching.
+-                stable_end = max(0, len(token_ids) - block_size)
+-                end = stable_end // block_size * block_size
+-                if end > len(emitted):
+-                    delta = token_ids[len(emitted) : end]
+-                    emitted = token_ids[:end]
+-                    yield StreamingInput(tokens_input(delta))
+-
+-        try:
+-            result_stream = engine_client.generate(
+-                prompt=streaming_input(),
+-                sampling_params=sampling_params,
+-                request_id=f"rt-prefill-{uuid.uuid4().hex}",
+-            )
+-            async for _ in result_stream:
+-                pass
++                if held is not None and not held.extends(token_ids):
++                    await held.close()
++                    held = None
++                if held is None:
++                    # vLLM detokenizes the whole request as its first chunk
++                    # says, so keep the special tokens the final request keeps.
++                    held = HeldTextRequest(
++                        engine_client,
++                        make_chunk,
++                        SamplingParams.from_optional(
++                            temperature=0.0,
++                            max_tokens=1,
++                            ignore_eos=True,
++                            output_kind=RequestOutputKind.DELTA,
++                            skip_special_tokens=request.skip_special_tokens,
++                            spaces_between_special_tokens=(
++                                request.spaces_between_special_tokens
++                            ),
++                        ),
++                    )
++                held.feed(token_ids)
+         except asyncio.CancelledError:
++            if held is not None:
++                await asyncio.shield(held.close())
+             raise
+         except Exception as exc:  # noqa: BLE001 - prefill is an optional optimization
+             logger.warning("realtime text prefill disabled for this turn: %s", exc)
++            if held is not None:
++                await held.close()
++            return None
++        return held
+ 
+     return create_chat_completion, prefill_text
+diff --git a/vllm/realtime/handlers/text.py b/vllm/realtime/handlers/text.py
+index 18f3a1fad..1011a1457 100644
+--- a/vllm/realtime/handlers/text.py
++++ b/vllm/realtime/handlers/text.py
+@@ -17,11 +17,13 @@ from dynamo._core import Context
+ from ..connection import RealtimeConnection, RealtimeTurn
+ from ..events import (
+     conversation_item_added_event,
++    conversation_item_deleted_event,
+     conversation_item_done_event,
+     invalid_request_error_event,
+     response_content_part_event,
+     response_created_event,
+     response_done_event,
++    response_function_call_arguments_event,
+     response_output_item_added_event,
+     response_output_item_done_event,
+     response_output_text_event,
+@@ -29,10 +31,13 @@ from ..events import (
+ )
+ from ..factories import (
+     ChatCompletionFactory,
++    HeldTextRequest,
+     TextPrefillFactory,
+     build_realtime_text_factories,
++    vllm_parser_names,
+ )
+ from .text_utils import (
++    _chat_options,
+     _max_output_tokens,
+     _normalize_text_item,
+     _realtime_usage,
+@@ -61,8 +66,11 @@ class _TextTurn(RealtimeTurn):
+         add_to_conversation: bool,
+         items: list[dict[str, Any]],
+         metadata: dict[str, str] | None = None,
++        tool_options: dict[str, Any] | None = None,
++        prefill: HeldTextRequest | None = None,
+     ) -> None:
+         super().__init__()
++        self.prefill = prefill
+         self.response_id = f"resp_{uuid.uuid4().hex}"
+         self.item_id = f"item_{uuid.uuid4().hex}"
+         self.messages = messages
+@@ -71,8 +79,13 @@ class _TextTurn(RealtimeTurn):
+         self.add_to_conversation = add_to_conversation
+         self.items = items
+         self.metadata = metadata
++        self.tool_options = tool_options or {}
+         self.previous_item_id = items[-1]["id"] if items else None
+         self.text = ""
++        self.function_calls: list[dict[str, Any]] = []
++        self._function_call_positions: dict[int, int] = {}
++        # (event type, item id) pairs of function-call "added" events already queued.
++        self._announced: set[tuple[str, str]] = set()
+         self.finished = False
+ 
+         # Announce the turn even if generation is cancelled before its task starts.
+@@ -110,6 +123,95 @@ class _TextTurn(RealtimeTurn):
+             ),
+         }
+ 
++    def function_call_events(self, call: dict[str, Any]) -> list[dict[str, Any]]:
++        """Accumulate one streamed chat tool-call delta as a Realtime function call."""
++        index = call.get("index", len(self.function_calls))
++        function = call.get("function") or {}
++        events = []
++        position = self._function_call_positions.get(index)
++        if position is None:
++            position = len(self.function_calls)
++            self._function_call_positions[index] = position
++            previous_item_id = (
++                self.function_calls[-1]["id"] if self.function_calls else self.item_id
++            )
++            item = {
++                "id": f"item_{uuid.uuid4().hex}",
++                "object": "realtime.item",
++                "type": "function_call",
++                "status": "in_progress",
++                "call_id": call.get("id") or f"call_{uuid.uuid4().hex}",
++                "name": function.get("name") or "",
++                "arguments": "",
++            }
++            self.function_calls.append(item)
++            events.append(
++                response_output_item_added_event(
++                    self.response_id, dict(item), position + 1
++                )
++            )
++            if self.add_to_conversation:
++                events.append(
++                    conversation_item_added_event(dict(item), previous_item_id)
++                )
++        item = self.function_calls[position]
++        if function.get("name") and not item["name"]:
++            item["name"] = function["name"]
++        if arguments := function.get("arguments"):
++            item["arguments"] += arguments
++            events.append(
++                response_function_call_arguments_event(
++                    "response.function_call_arguments.delta",
++                    self.response_id,
++                    item,
++                    position + 1,
++                    arguments,
++                )
++            )
++        return events
++
++    async def emit_function_call(self, call: dict[str, Any]) -> None:
++        for event in self.function_call_events(call):
++            await self.events.put(event)
++            if event["type"].endswith(".added"):
++                self._announced.add((event["type"], event["item"]["id"]))
++
++    def _announced_calls(self) -> list[dict[str, Any]]:
++        # A cancel can interrupt the queue put of a call's "added" event.
++        return [
++            item
++            for item in self.function_calls
++            if ("response.output_item.added", item["id"]) in self._announced
++        ]
++
++    def _function_call_final_events(self, status: str) -> list[dict[str, Any]]:
++        events = []
++        previous_item_id = self.item_id
++        for position, item in enumerate(self._announced_calls()):
++            item["status"] = "completed" if status == "completed" else "incomplete"
++            events.append(
++                response_function_call_arguments_event(
++                    "response.function_call_arguments.done",
++                    self.response_id,
++                    item,
++                    position + 1,
++                    item["arguments"],
++                )
++            )
++            events.append(
++                response_output_item_done_event(
++                    self.response_id, dict(item), position + 1
++                )
++            )
++            if (
++                self.add_to_conversation
++                and ("conversation.item.added", item["id"]) in self._announced
++            ):
++                self.items.append(item)
++                events.append(conversation_item_done_event(item, previous_item_id))
++            previous_item_id = item["id"]
++        return events
++
+     def final_events(
+         self,
+         *,
+@@ -134,12 +236,13 @@ class _TextTurn(RealtimeTurn):
+         if self.add_to_conversation:
+             self.items.append(item)
+             events.append(conversation_item_done_event(item, self.previous_item_id))
++        events.extend(self._function_call_final_events(status))
+         events.append(
+             response_done_event(
+                 self.response_id,
+                 output_modalities=["text"],
+                 max_output_tokens=self.wire_max_output_tokens,
+-                output=[item],
++                output=[item, *(dict(call) for call in self._announced_calls())],
+                 status=status,
+                 status_details=status_details,
+                 usage=_realtime_usage(usage),
+@@ -155,21 +258,24 @@ class _TextPrefill:
+     def __init__(
+         self,
+         *,
+-        messages: list[dict[str, str]],
++        messages: list[dict[str, Any]],
+         factory: TextPrefillFactory,
++        tool_options: dict[str, Any] | None = None,
+     ) -> None:
+         self.text = ""
+         self._text_bytes = 0
+-        self._cancel_requested = False
++        self._committed = False
+         self._updated = asyncio.Event()
+-        self.task: asyncio.Task[None] = asyncio.create_task(
+-            factory(messages, self.updates())
++        self.task: asyncio.Task[HeldTextRequest | None] = asyncio.create_task(
++            factory(messages, self.updates(), tool_options or {})
+         )
+ 
+     async def updates(self) -> AsyncGenerator[str, None]:
+         while True:
+             await self._updated.wait()
+             self._updated.clear()
++            if self._committed:
++                return
+             yield self.text
+ 
+     def append(self, text: str) -> None:
+@@ -182,16 +288,27 @@ class _TextPrefill:
+             self._updated.set()
+ 
+     def commit(self) -> None:
+-        # Final generation reuses completed prefix blocks. Finishing another
+-        # warming generation here would put speculative work on its critical path.
+-        if not self._cancel_requested:
+-            self._cancel_requested = True
+-            self.task.cancel()
++        """End the updates, so the prefill returns the request holding its prefix."""
++        self._committed = True
++        self._updated.set()
++
++    async def held(self) -> HeldTextRequest | None:
++        """Return the held request for final generation, which then owns closing it."""
++        self.commit()
++        (result,) = await asyncio.shield(
++            asyncio.gather(self.task, return_exceptions=True)
++        )
++        return result if isinstance(result, HeldTextRequest) else None
+ 
+     async def cancel(self) -> None:
+         self.commit()
++        self.task.cancel()
+         # Session cancellation must not interrupt the engine's abort cleanup.
+-        await asyncio.shield(asyncio.gather(self.task, return_exceptions=True))
++        (result,) = await asyncio.shield(
++            asyncio.gather(self.task, return_exceptions=True)
++        )
++        if isinstance(result, HeldTextRequest):
++            await asyncio.shield(result.close())
+ 
+ 
+ class RealtimeTextHandler:
+@@ -203,10 +320,12 @@ class RealtimeTextHandler:
+         model_name: str,
+         chat_completion_factory: ChatCompletionFactory,
+         text_prefill_factory: TextPrefillFactory | None = None,
++        auto_tool_choice: bool = True,
+     ) -> None:
+         self.model_name = model_name
+         self._chat_completion_factory = chat_completion_factory
+         self._text_prefill_factory = text_prefill_factory
++        self._auto_tool_choice = auto_tool_choice
+ 
+     @classmethod
+     def from_engine(
+@@ -216,19 +335,42 @@ class RealtimeTextHandler:
+         model_name: str,
+         model_path: str,
+         chat_template_path: str | None,
++        tool_parser: str | None = None,
++        reasoning_parser: str | None = None,
++        default_chat_template_kwargs: dict[str, Any] | None = None,
+     ) -> "RealtimeTextHandler":
++        tool_parser, reasoning_parser = vllm_parser_names(tool_parser, reasoning_parser)
+         chat_completion, text_prefill = build_realtime_text_factories(
+             engine_client=engine_client,
+             model_name=model_name,
+             model_path=model_path,
+             chat_template_path=chat_template_path,
++            tool_parser=tool_parser,
++            reasoning_parser=reasoning_parser,
++            default_chat_template_kwargs=default_chat_template_kwargs,
+         )
+         return cls(
+             model_name=model_name,
+             chat_completion_factory=chat_completion,
+             text_prefill_factory=text_prefill,
++            auto_tool_choice=tool_parser is not None,
+         )
+ 
++    def _checked_chat_options(
++        self, session: dict[str, Any], response: dict[str, Any] | None = None
++    ) -> dict[str, Any]:
++        options = _chat_options(session, response)
++        if (
++            not self._auto_tool_choice
++            and options.get("tools")
++            and options.get("tool_choice", "auto") == "auto"
++        ):
++            raise ValueError(
++                "tool_choice 'auto' needs a vLLM tool call parser on this worker; "
++                "use tool_choice 'required', 'none', or a named function"
++            )
++        return options
++
+     def _validate_session(self, session: Any) -> str | None:
+         if not isinstance(session, dict) or session.get("type") != "realtime":
+             return "session.type must be 'realtime'"
+@@ -240,6 +382,7 @@ class RealtimeTextHandler:
+             return "automatic truncation is not supported; use truncation='disabled'"
+         try:
+             _validate_text_options(session, "session")
++            self._checked_chat_options(session)
+             _max_output_tokens(session.get("max_output_tokens"))
+         except ValueError as exc:
+             return str(exc)
+@@ -247,7 +390,9 @@ class RealtimeTextHandler:
+ 
+     def _response_options(
+         self, value: Any, session: dict[str, Any]
+-    ) -> tuple[int | None, int | str, str, bool, bool, dict[str, str] | None]:
++    ) -> tuple[
++        int | None, int | str, str, bool, bool, dict[str, str] | None, dict[str, Any]
++    ]:
+         response = {} if value is None else value
+         if not isinstance(response, dict):
+             raise ValueError("response must be an object")
+@@ -276,6 +421,7 @@ class RealtimeTextHandler:
+             response.get("conversation") != "none",
+             response.get("input") != [],
+             metadata,
++            self._checked_chat_options(session, response),
+         )
+ 
+     async def _run_turn(self, turn: _TextTurn, context: Context) -> None:
+@@ -292,8 +438,9 @@ class RealtimeTextHandler:
+         stopped = context.async_killed_or_stopped()
+         stopped.add_done_callback(cancel_generation)
+         try:
++            prefill, turn.prefill = turn.prefill, None
+             stream = await self._chat_completion_factory(
+-                turn.messages, turn.max_output_tokens
++                turn.messages, turn.max_output_tokens, turn.tool_options, prefill
+             )
+             async for frame in stream:
+                 if context.is_stopped():
+@@ -312,6 +459,8 @@ class RealtimeTextHandler:
+                     usage = payload.get("usage") or usage
+                     for choice in payload.get("choices", []):
+                         finish_reason = choice.get("finish_reason") or finish_reason
++                        for call in choice.get("delta", {}).get("tool_calls") or []:
++                            await turn.emit_function_call(call)
+                         delta = choice.get("delta", {}).get("content")
+                         if delta:
+                             if not isinstance(delta, str):
+@@ -367,6 +516,8 @@ class RealtimeTextHandler:
+             # Cancellation may interrupt an output queue put, not stream.__anext__.
+             if stream is not None:
+                 await stream.aclose()
++            if turn.prefill is not None:
++                await asyncio.shield(turn.prefill.close())
+ 
+     async def generate(
+         self,
+@@ -388,6 +539,7 @@ class RealtimeTextHandler:
+         active_response: _TextTurn | None = None
+         active_prefill: _TextPrefill | None = None
+         committed_prefill: _TextPrefill | None = None
++        prefilled_turns: list[_TextTurn] = []
+ 
+         def append_item(item: dict[str, Any]) -> None:
+             previous_item_id = items[-1]["id"] if items else None
+@@ -425,7 +577,10 @@ class RealtimeTextHandler:
+             event_type = event.get("type")
+             running = current_response()
+ 
+-            if event_type == "session.update":
++            if event_type in (
++                "session.update",
++                "session.chat_completion_options.update",
++            ):
+                 if active_prefill is not None:
+                     emit_error(
+                         event,
+@@ -433,7 +588,14 @@ class RealtimeTextHandler:
+                         "session cannot change while the text buffer is active",
+                     )
+                     return
+-                update = event.get("session")
++                # Dynamo's extension event sets what OpenAI session fields cannot carry.
++                update = (
++                    event.get("session")
++                    if event_type == "session.update"
++                    else {
++                        "chat_completion_options": event.get("chat_completion_options")
++                    }
++                )
+                 if not isinstance(update, dict):
+                     emit_error(event, "invalid_session", "session must be an object")
+                     return
+@@ -475,6 +637,37 @@ class RealtimeTextHandler:
+                     emit_error(event, "invalid_item", str(exc))
+                     return
+                 append_item(item)
++            elif event_type == "conversation.item.delete":
++                if running is not None or active_prefill is not None:
++                    emit_error(
++                        event,
++                        "response_in_progress",
++                        "conversation cannot change while input or response is active",
++                    )
++                    return
++                if committed_prefill is not None:
++                    emit_error(
++                        event,
++                        "response_required",
++                        "create a response before starting another input turn",
++                    )
++                    return
++                item_id = event.get("item_id")
++                if not isinstance(item_id, str):
++                    emit_error(event, "invalid_item", "item_id must be a string")
++                    return
++                index = next(
++                    (i for i, item in enumerate(items) if item["id"] == item_id), None
++                )
++                if index is None:
++                    emit_error(
++                        event,
++                        "item_not_found",
++                        f"conversation item {item_id!r} not found",
++                    )
++                    return
++                del items[index]
++                connection.emit(conversation_item_deleted_event(item_id))
+             elif event_type == "input_text.append":
+                 if running is not None:
+                     emit_error(
+@@ -505,6 +698,7 @@ class RealtimeTextHandler:
+                     active_prefill = _TextPrefill(
+                         messages=_text_prompt(items, session["instructions"]),
+                         factory=self._text_prefill_factory,
++                        tool_options=_chat_options(session),
+                     )
+                 try:
+                     active_prefill.append(text)
+@@ -555,6 +749,7 @@ class RealtimeTextHandler:
+                         add_to_conversation,
+                         use_conversation,
+                         metadata,
++                        tool_options,
+                     ) = self._response_options(event.get("response"), session)
+                     prompt = _text_prompt(
+                         items if use_conversation else [], instructions
+@@ -566,8 +761,11 @@ class RealtimeTextHandler:
+                 except ValueError as exc:
+                     emit_error(event, "invalid_response", str(exc))
+                     return
+-                if committed_prefill is not None:
+-                    await committed_prefill.cancel()
++                prefill = (
++                    await committed_prefill.held()
++                    if committed_prefill is not None
++                    else None
++                )
+                 active_response = await connection.ensure_turn(
+                     lambda: _TextTurn(
+                         messages=prompt,
+@@ -576,8 +774,12 @@ class RealtimeTextHandler:
+                         add_to_conversation=add_to_conversation,
+                         items=items,
+                         metadata=metadata,
++                        tool_options=tool_options,
++                        prefill=prefill,
+                     )
+                 )
++                if prefill is not None:
++                    prefilled_turns.append(active_response)
+                 committed_prefill = None
+                 connection.finish_active_turn()
+             elif event_type == "response.cancel":
+@@ -627,3 +829,7 @@ class RealtimeTextHandler:
+                 await active_prefill.cancel()
+             if committed_prefill is not None:
+                 await committed_prefill.cancel()
++            # A turn cancelled before generation never hands its request on.
++            for turn in prefilled_turns:
++                if turn.prefill is not None:
++                    await asyncio.shield(turn.prefill.close())
+diff --git a/vllm/realtime/handlers/text_utils.py b/vllm/realtime/handlers/text_utils.py
+index 747a5e217..862ede1ab 100644
+--- a/vllm/realtime/handlers/text_utils.py
++++ b/vllm/realtime/handlers/text_utils.py
+@@ -8,6 +8,25 @@ from __future__ import annotations
+ import uuid
+ from typing import Any
+ 
++TOOL_CHOICE_MODES = ("auto", "none", "required")
++REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
++
++#: Chat completion request fields a session may set through the
++#: ``chat_completion_options`` extension, mapped to their JSON types.
++CHAT_COMPLETION_OPTIONS: dict[str, type] = {
++    "temperature": float,
++    "top_p": float,
++    "top_k": int,
++    "min_p": float,
++    "seed": int,
++    "repetition_penalty": float,
++    "presence_penalty": float,
++    "frequency_penalty": float,
++    "thinking_token_budget": int,
++    "chat_template_kwargs": dict,
++}
++_JSON_TYPES = {int: "an integer", float: "a number", dict: "an object"}
++
+ 
+ def _max_output_tokens(value: Any) -> tuple[int | None, int | str]:
+     if value in (None, "inf"):
+@@ -17,22 +36,99 @@ def _max_output_tokens(value: Any) -> tuple[int | None, int | str]:
+     return value, value
+ 
+ 
++def _validate_tools(tools: Any) -> None:
++    if tools is None:
++        return
++    if not isinstance(tools, list):
++        raise ValueError("tools must be an array")
++    for tool in tools:
++        if (
++            not isinstance(tool, dict)
++            or tool.get("type") != "function"
++            or not isinstance(tool.get("name"), str)
++            or not tool["name"]
++        ):
++            raise ValueError("each tool must be a function with a name")
++        if not isinstance(tool.get("parameters", {}), dict):
++            raise ValueError(f"tool {tool['name']!r} parameters must be an object")
++
++
++def _validate_tool_choice(tool_choice: Any) -> None:
++    if tool_choice is None or tool_choice in TOOL_CHOICE_MODES:
++        return
++    if (
++        isinstance(tool_choice, dict)
++        and tool_choice.get("type") == "function"
++        and isinstance(tool_choice.get("name"), str)
++    ):
++        return
++    raise ValueError("tool_choice must be auto, none, required, or a named function")
++
++
+ def _validate_text_options(options: dict[str, Any], name: str) -> None:
+     if options.get("output_modalities") not in (None, ["text"]):
+         raise ValueError("only text output is supported")
+-    if options.get("tools") not in (None, []):
+-        raise ValueError("tools are not supported")
+-    if options.get("tool_choice") not in (None, "none"):
+-        raise ValueError("tool_choice is not supported")
+-    if any(options.get(field) is not None for field in ("prompt", "reasoning")):
+-        raise ValueError("prompt and reasoning configuration are not supported")
++    _validate_tools(options.get("tools"))
++    _validate_tool_choice(options.get("tool_choice"))
++    if not isinstance(options.get("parallel_tool_calls", False), bool):
++        raise ValueError(f"{name}.parallel_tool_calls must be a boolean")
++    _reasoning_options(options.get("reasoning"))
++    if options.get("prompt") is not None:
++        raise ValueError("prompt configuration is not supported")
+     if not isinstance(options.get("instructions", ""), str):
+         raise ValueError(f"{name}.instructions must be a string")
+ 
+ 
++def _item_id(value: dict[str, Any]) -> str:
++    item_id = value.get("id") or f"item_{uuid.uuid4().hex}"
++    if not isinstance(item_id, str):
++        raise ValueError("conversation item id must be a string")
++    return item_id
++
++
++def _normalize_function_call_item(value: dict[str, Any]) -> dict[str, Any]:
++    if not isinstance(value.get("call_id"), str) or not value["call_id"]:
++        raise ValueError("function_call call_id must be a non-empty string")
++    if not isinstance(value.get("name"), str) or not value["name"]:
++        raise ValueError("function_call name must be a non-empty string")
++    arguments = value.get("arguments", "")
++    if not isinstance(arguments, str):
++        raise ValueError("function_call arguments must be a JSON string")
++    return {
++        "id": _item_id(value),
++        "object": "realtime.item",
++        "type": "function_call",
++        "status": "completed",
++        "call_id": value["call_id"],
++        "name": value["name"],
++        "arguments": arguments,
++    }
++
++
++def _normalize_function_call_output_item(value: dict[str, Any]) -> dict[str, Any]:
++    if not isinstance(value.get("call_id"), str) or not value["call_id"]:
++        raise ValueError("function_call_output call_id must be a non-empty string")
++    if not isinstance(value.get("output"), str):
++        raise ValueError("function_call_output output must be a string")
++    return {
++        "id": _item_id(value),
++        "object": "realtime.item",
++        "type": "function_call_output",
++        "status": "completed",
++        "call_id": value["call_id"],
++        "output": value["output"],
++    }
++
++
+ def _normalize_text_item(value: Any) -> dict[str, Any]:
++    if isinstance(value, dict) and value.get("type") == "function_call":
++        return _normalize_function_call_item(value)
++    if isinstance(value, dict) and value.get("type") == "function_call_output":
++        return _normalize_function_call_output_item(value)
+     if not isinstance(value, dict) or value.get("type") != "message":
+-        raise ValueError("only message conversation items are supported")
++        raise ValueError(
++            "only message, function_call, and function_call_output items are supported"
++        )
+     role = value.get("role")
+     if role not in {"system", "user", "assistant"}:
+         raise ValueError("message role must be system, user, or assistant")
+@@ -49,35 +145,177 @@ def _normalize_text_item(value: Any) -> dict[str, Any]:
+     ):
+         raise ValueError(f"{role} message content must contain only {content_type}")
+ 
+-    item = {
+-        "id": value.get("id") or f"item_{uuid.uuid4().hex}",
++    return {
++        "id": _item_id(value),
+         "object": "realtime.item",
+         "type": "message",
+         "status": "completed",
+         "role": role,
+         "content": [{"type": content_type, "text": part["text"]} for part in content],
+     }
+-    if not isinstance(item["id"], str):
+-        raise ValueError("conversation item id must be a string")
+-    return item
++
++
++def _tool_call(item: dict[str, Any]) -> dict[str, Any]:
++    return {
++        "id": item["call_id"],
++        "type": "function",
++        "function": {"name": item["name"], "arguments": item["arguments"]},
++    }
+ 
+ 
+ def _text_prompt(
+     items: list[dict[str, Any]], instructions: str
+-) -> list[dict[str, str]]:
+-    """Convert Realtime items to chat messages; vLLM applies the chat template."""
+-    messages = [
+-        {
+-            "role": item["role"],
+-            "content": "".join(part["text"] for part in item["content"]),
+-        }
+-        for item in items
+-    ]
++) -> list[dict[str, Any]]:
++    """Convert Realtime items to chat messages; vLLM applies the chat template.
++
++    Function calls join the assistant message they follow, as one chat
++    completion turn holds both the spoken text and its tool calls.
++    """
++    messages: list[dict[str, Any]] = []
++    for item in items:
++        if item["type"] == "function_call":
++            previous = messages[-1] if messages else None
++            if previous is None or previous["role"] != "assistant":
++                previous = {"role": "assistant", "content": ""}
++                messages.append(previous)
++            previous.setdefault("tool_calls", []).append(_tool_call(item))
++        elif item["type"] == "function_call_output":
++            messages.append(
++                {
++                    "role": "tool",
++                    "tool_call_id": item["call_id"],
++                    "content": item["output"],
++                }
++            )
++        else:
++            messages.append(
++                {
++                    "role": item["role"],
++                    "content": "".join(part["text"] for part in item["content"]),
++                }
++            )
+     if instructions:
+         messages.insert(0, {"role": "system", "content": instructions})
+     return messages
+ 
+ 
++def _reasoning_options(value: Any) -> dict[str, Any]:
++    """Map Realtime ``reasoning.effort`` to the chat template ``enable_thinking`` switch.
++
++    Chat templates turn thinking on or off, and Realtime has no ``none`` effort,
++    so ``minimal`` turns it off and every other effort turns it on.
++    """
++    if value is None:
++        return {}
++    if not isinstance(value, dict):
++        raise ValueError("reasoning must be an object")
++    effort = value.get("effort")
++    if effort is None:
++        return {}
++    if effort not in REASONING_EFFORTS:
++        raise ValueError(
++            f"reasoning.effort must be one of {', '.join(REASONING_EFFORTS)}"
++        )
++    return {"enable_thinking": effort != "minimal"}
++
++
++def _chat_options(
++    session: dict[str, Any], response: dict[str, Any] | None = None
++) -> dict[str, Any]:
++    """Map session options, overridden by ``response`` ones, to chat completion fields."""
++    response = response or {}
++    options = _chat_completion_options(session.get("chat_completion_options"))
++    if thinking := _reasoning_options(
++        response.get("reasoning", session.get("reasoning"))
++    ):
++        options["chat_template_kwargs"] = {
++            **options.get("chat_template_kwargs", {}),
++            **thinking,
++        }
++    options.update(
++        _chat_tool_options(
++            {
++                "tools": response.get("tools", session.get("tools")),
++                "tool_choice": response.get("tool_choice", session.get("tool_choice")),
++                "parallel_tool_calls": response.get(
++                    "parallel_tool_calls", session.get("parallel_tool_calls")
++                ),
++            }
++        )
++    )
++    return options
++
++
++def _chat_completion_options(value: Any) -> dict[str, Any]:
++    """Validate the ``chat_completion_options`` session extension and drop nulls.
++
++    Realtime sessions have no sampling or chat template fields, so this carries
++    them to every chat completion request the session renders, prefill included.
++    """
++    if value is None:
++        return {}
++    if not isinstance(value, dict):
++        raise ValueError("chat_completion_options must be an object")
++    options = {}
++    for key, option in value.items():
++        kind = CHAT_COMPLETION_OPTIONS.get(key)
++        if kind is None:
++            raise ValueError(f"chat_completion_options.{key} is not supported")
++        if option is None:
++            continue
++        if kind is dict:
++            valid = isinstance(option, dict)
++        else:
++            valid = not isinstance(option, bool) and isinstance(
++                option, int if kind is int else (int, float)
++            )
++        if not valid:
++            raise ValueError(
++                f"chat_completion_options.{key} must be {_JSON_TYPES[kind]}"
++            )
++        options[key] = option
++    return options
++
++
++def _chat_tool_options(options: dict[str, Any]) -> dict[str, Any]:
++    """Map Realtime tool options to chat completion tool fields."""
++    tools = options.get("tools") or []
++    tool_choice = options.get("tool_choice")
++    if not tools:
++        if tool_choice in (None, "auto", "none"):
++            return {}
++        raise ValueError("tool_choice requires tools")
++    if isinstance(tool_choice, dict) and tool_choice["name"] not in {
++        tool["name"] for tool in tools
++    }:
++        raise ValueError(
++            f"tool_choice function {tool_choice['name']!r} is not in tools"
++        )
++    chat: dict[str, Any] = {
++        "tools": [
++            {
++                "type": "function",
++                "function": {
++                    key: tool[key]
++                    for key in ("name", "description", "parameters")
++                    if key in tool
++                },
++            }
++            for tool in tools
++        ]
++    }
++    if isinstance(tool_choice, dict):
++        chat["tool_choice"] = {
++            "type": "function",
++            "function": {"name": tool_choice["name"]},
++        }
++    elif tool_choice is not None:
++        chat["tool_choice"] = tool_choice
++    if options.get("parallel_tool_calls") is not None:
++        chat["parallel_tool_calls"] = options["parallel_tool_calls"]
++    return chat
++
++
+ def _realtime_usage(usage: dict[str, Any] | None) -> dict[str, int] | None:
+     if usage is None:
+         return None
+diff --git a/vllm/worker_factory.py b/vllm/worker_factory.py
+index bb3a02c77..c55c6790c 100644
+--- a/vllm/worker_factory.py
++++ b/vllm/worker_factory.py
+@@ -29,6 +29,7 @@ from dynamo.common.utils.prometheus import (
+     register_embedding_cache_metrics,
+     register_image_loader_metrics,
+ )
++from dynamo.frontend.thinking import apply_default_thinking_mode_to_template_kwargs
+ from dynamo.llm import ModelInput, ModelType, WorkerType, register_model
+ from dynamo.runtime import DistributedRuntime, Endpoint
+ 
+@@ -904,7 +905,6 @@ class WorkerFactory:
+         snapshot_engine: Optional[SnapshotEngineSetupResult] = None,
+     ) -> None:
+         """Initialize an aggregated vLLM realtime worker."""
+-        del shutdown_event  # Connection cancellation is carried by Dynamo Context.
+ 
+         generate_endpoint = runtime.endpoint(
+             f"{config.namespace}.{config.component}.{config.endpoint}"
+@@ -917,7 +917,7 @@ class WorkerFactory:
+             (
+                 engine_client,
+                 vllm_config,
+-                _default_sampling_params,
++                default_sampling_params,
+                 prometheus_temp_dir,
+                 _component_gauges,
+             ) = engine_setup
+@@ -932,7 +932,7 @@ class WorkerFactory:
+             (
+                 engine_client,
+                 vllm_config,
+-                _default_sampling_params,
++                default_sampling_params,
+                 prometheus_temp_dir,
+                 _component_gauges,
+             ) = self.setup_vllm_engine(
+@@ -958,6 +958,11 @@ class WorkerFactory:
+                 model_name=model_name,
+                 model_path=config.model_source_path,
+                 chat_template_path=config.custom_jinja_template,
++                tool_parser=config.dyn_tool_call_parser,
++                reasoning_parser=config.dyn_reasoning_parser,
++                default_chat_template_kwargs=apply_default_thinking_mode_to_template_kwargs(
++                    {}, config.dyn_default_thinking_mode
++                ),
+             )
+         if "realtime" in supported_tasks:
+             handlers["transcription"] = RealtimeTranscriptionHandler.from_engine(
+@@ -988,16 +993,37 @@ class WorkerFactory:
+             (prometheus_names.labels.MODEL, model_name),
+             (prometheus_names.labels.MODEL_NAME, model_name),
+         ]
++        serve_tasks = []
++        if config.realtime_chat:
++            if "realtime" not in handlers:
++                raise ValueError(
++                    f"--realtime-chat requires a text generation model, not {model_name!r}"
++                )
++            serve_tasks.append(
++                await self._realtime_chat_endpoint(
++                    runtime,
++                    config,
++                    engine_client,
++                    vllm_config,
++                    default_sampling_params,
++                    shutdown_event,
++                    shutdown_endpoints,
++                    metrics_labels,
++                )
++            )
+         logger.info(
+             "Starting realtime worker endpoint for model: %s",
+             model_name,
+         )
+-        try:
+-            await generate_endpoint.serve_bidirectional_endpoint(
++        serve_tasks.append(
++            generate_endpoint.serve_bidirectional_endpoint(
+                 handler.generate,
+                 graceful_shutdown=True,
+                 metrics_labels=metrics_labels,
+             )
++        )
++        try:
++            await asyncio.gather(*serve_tasks)
+         except Exception as exc:
+             logger.error("Realtime worker failed: %s", exc)
+             raise
+@@ -1005,6 +1031,62 @@ class WorkerFactory:
+             if prometheus_temp_dir is not None:
+                 prometheus_temp_dir.cleanup()
+ 
++    async def _realtime_chat_endpoint(
++        self,
++        runtime: DistributedRuntime,
++        config: Config,
++        engine_client: Any,
++        vllm_config: Any,
++        default_sampling_params: Any,
++        shutdown_event: asyncio.Event,
++        shutdown_endpoints: list,
++        metrics_labels: list,
++    ) -> Awaitable[None]:
++        """Register the realtime engine's OpenAI endpoints and return their serve task."""
++        chat_endpoint = runtime.endpoint(
++            f"{config.namespace}.{config.component}.{config.endpoint}_chat"
++        )
++        shutdown_endpoints.append(chat_endpoint)
++        model_config = getattr(vllm_config, "model_config", None)
++        chat_handler = DecodeWorkerHandler(
++            runtime,
++            config,
++            engine_client,
++            default_sampling_params,
++            getattr(model_config, "max_model_len", None),
++            model_config=model_config,
++            enable_multimodal=False,
++            generate_endpoint=chat_endpoint,
++            use_vllm_tokenizer=config.use_vllm_tokenizer,
++            shutdown_event=shutdown_event,
++            enable_frontend_decoding=config.frontend_decoding,
++        )
++        chat_handler._first_token_source = await chat_endpoint.first_token_source(
++            WorkerType.Aggregated
++        )
++        await self.register_vllm_model(
++            ModelInput.Text if config.use_vllm_tokenizer else ModelInput.Tokens,
++            parse_endpoint_types(config.endpoint_types),
++            chat_endpoint,
++            config,
++            engine_client,
++            vllm_config,
++            worker_type=WorkerType.Aggregated,
++            needs=[],
++        )
++        logger.info(
++            "Starting realtime chat endpoint with endpoint types: %s",
++            config.endpoint_types,
++        )
++        return chat_endpoint.serve_endpoint(
++            chat_handler.generate,  # type: ignore
++            graceful_shutdown=True,
++            metrics_labels=metrics_labels,
++            health_check_payload=VllmHealthCheckPayload(
++                engine_client, use_text_input=config.use_vllm_tokenizer
++            ).to_dict(),
++        )
++
+     async def _create_multimodal_encode_worker(
+         self,
+         runtime: DistributedRuntime,

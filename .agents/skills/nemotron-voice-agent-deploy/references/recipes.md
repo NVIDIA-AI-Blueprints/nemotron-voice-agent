@@ -4,7 +4,7 @@ Sidecars are the only per-example difference. Apply the same auth and preflight 
 
 `*/server` and `generic-assistant/server-perf` are **workstation only**. They are not supported on DGX Spark or Jetson Thor. On those hosts use `*/single-gpu` or cloud.
 
-Every app service sets `SERVICE_RECIPE`. `server` and `single-gpu` pick that section of the root `services.yaml`, and `cloud` uses the `server` entries that declare `nvcf`. `examples_registry.yaml` lists the services each example offers.
+Every app service except `generic-assistant-dynamo` sets `SERVICE_RECIPE`. `server` and `single-gpu` pick that section of the root `services.yaml`, and `cloud` uses the `server` entries that declare `nvcf`. `examples_registry.yaml` lists the services each example offers.
 
 | Recipe | App | Sidecars |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ Every app service sets `SERVICE_RECIPE`. `server` and `single-gpu` pick that sec
 | `generic-assistant/server` | `generic-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service` |
 | `generic-assistant/server-perf` | `generic-assistant-server-perf` | `nvidia-llm-perf`, `nemotron-asr-streaming-english-perf`, `magpie-multilingual-tts-service-perf` |
 | `generic-assistant/single-gpu` | `generic-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech` (ASR + TTS) |
+| `generic-assistant/dynamo` | `generic-assistant-dynamo` | `dynamo-lightning` (Dynamo frontend + vLLM realtime worker), `nemotron-asr-streaming-english`, `magpie-multilingual-tts-service`. Experimental, workstation only. Needs `NVIDIA_API_KEY` and `HF_TOKEN`. The app leaves `SERVICE_RECIPE` unset and picks the reachable `server` entries. |
 | `multilingual-assistant` | `multilingual-assistant` | None |
 | `multilingual-assistant/server` | `multilingual-assistant-server` | `nvidia-llm`, `nemotron-asr-streaming-multilingual`, `magpie-multilingual-tts-service` |
 | `multilingual-assistant/single-gpu` | `multilingual-assistant-single-gpu` | `nvidia-llm-vllm-lightning`, `nemo-speech-multilingual` (multilingual ASR + TTS) |

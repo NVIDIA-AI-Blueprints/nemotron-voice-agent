@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **LLM time to first answer token (TTFAT).** The client **METRICS** tab shows TTFAT for each LLM, and the scaling benchmark reports it as `llm_ttfat`.
+- **Experimental NVIDIA Dynamo recipe for the Generic Assistant.** The `generic-assistant/dynamo` profile serves Nemotron 3.5 Lightning through NVIDIA Dynamo 1.6.0, next to the Server ASR and TTS NIMs. The same worker serves chat completions and, with **Streaming Input** on, Dynamo's `/v1/realtime` sessions, which `NvidiaStreamingLLMService` now also connects to with streaming-input prefill and tool calling.
 
 ## [2.3.1] - TBD
 

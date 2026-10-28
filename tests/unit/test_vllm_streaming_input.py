@@ -57,7 +57,7 @@ class _FakeWebSocket:
 def _service() -> tuple[NvidiaStreamingLLMService, _FakeWebSocket]:
     service = NvidiaStreamingLLMService(api_key="test", base_url=URL, settings=NvidiaLLMSettings(model="m"))
     websocket = _FakeWebSocket()
-    service._websocket = websocket
+    service._session._websocket = websocket
     return service, websocket
 
 
@@ -77,7 +77,7 @@ def test_service_appends_only_new_text_and_clears_on_asr_revision() -> None:
 
     async def run() -> None:
         for text in ("", "Hi", "Hi there", "Hi there", "Hey there"):
-            await service._sync_session(request, text)
+            await service._session.sync(request, text)
 
     asyncio.run(run())
 
@@ -184,7 +184,7 @@ def test_queued_prefill_keeps_history_stable_when_the_user_turn_is_committed() -
         # queued prefill frame, appending the user turn to the shared history.
         context.add_message({"role": "user", "content": "Hi there"})
         live = queued[0]
-        await service._sync_session(service._session_request_for(live.context), live.text)
+        await service._session.sync(service._session_request_for(live.context), live.text)
         service._reset_response_state()
         stream = await service.get_chat_completions(context)
         async for _ in stream:

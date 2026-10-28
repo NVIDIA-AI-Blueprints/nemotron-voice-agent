@@ -264,6 +264,7 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nemotron-35-bolt-e4b", 8000): 18004,
     ("nemotron-35-bolt-e4b-vllm", 8000): 18004,
     ("nvidia-llm-vllm", 8000): 18000,
+    ("dynamo-frontend", 8000): 18005,
     **{
         (service, ports.grpc): ports.host_grpc
         for services in LOCAL_SPEECH_PORTS.values()

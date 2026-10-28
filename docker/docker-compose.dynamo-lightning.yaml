@@ -1,0 +1,98 @@
+# Nemotron 3.5 Lightning served by NVIDIA Dynamo for the Generic Assistant.
+# One container runs the Dynamo frontend and one vLLM realtime worker that
+# share file-based discovery, so no etcd or NATS is needed. The worker serves
+# OpenAI Realtime text sessions on `ws://dynamo-frontend:8000/v1/realtime` and,
+# with `--realtime-chat`, chat completions on `http://dynamo-frontend:8000/v1`
+# from the same engine. The ASR and TTS NIMs share GPU 0, so the worker takes a
+# fixed share of GPU memory (`DYNAMO_GPU_MEMORY_UTILIZATION`).
+services:
+  dynamo-lightning:
+    build:
+      context: dynamo
+    image: nemotron-voice-agent-dynamo-vllm:1.6.0
+    pull_policy: build
+    profiles:
+      - generic-assistant/dynamo
+    shm_size: 16GB
+    env_file:
+      - ../.env
+    environment:
+      FLASHINFER_DISABLE_VERSION_CHECK: "1"
+      DYN_DISCOVERY_BACKEND: file
+      DYN_FILE_KV: /tmp/dynamo_kv
+      HF_HOME: /home/dynamo/.cache/huggingface
+    ports:
+      - "18005:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/home/dynamo/.cache/huggingface
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        args=(
+          --served-model-name nvidia/nemotron-3.5-lightning-30b-a3b
+          --realtime
+          --realtime-chat
+          --dyn-tool-call-parser qwen3_coder
+          --dyn-reasoning-parser nemotron_v3
+          --reasoning-parser nemotron_v3
+          --dyn-default-thinking-mode disabled
+          --override-generation-config '{"repetition_penalty": 1.05}'
+          --max-model-len 32768
+          --max-num-seqs 256
+          --trust-remote-code
+          --enable-prefix-caching
+          --mamba-backend flashinfer
+          --mamba-cache-mode align
+        )
+
+        compute_cap="$$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1)"
+        compute_major="$${compute_cap%%.*}"
+        compute_minor="$${compute_cap#*.}"
+        model=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+        args+=(--gpu-memory-utilization "$${DYNAMO_GPU_MEMORY_UTILIZATION:-0.45}")
+
+        if [[ "$${compute_major}" =~ ^[0-9]+$ ]] && (( compute_major >= 10 )); then
+          echo "LLM recipe: Blackwell workstation / NVFP4"
+          args+=(--moe-backend marlin --kv-cache-dtype fp8 --async-scheduling)
+        elif [[ "$${compute_major}" == "9" ]] ||
+             [[ "$${compute_major}" == "8" && "$${compute_minor}" =~ ^[0-9]+$ && "$${compute_minor}" -ge 9 ]]; then
+          echo "LLM recipe: Hopper/Ada workstation / NVFP4 W4A16 via Marlin"
+          args+=(--quantization modelopt_fp4 --moe-backend marlin --kv-cache-dtype fp8 --async-scheduling)
+        else
+          echo "Unsupported GPU compute capability for the Dynamo recipe: $${compute_cap:-unknown}" >&2
+          exit 1
+        fi
+
+        python3 -m dynamo.vllm --model "$${model}" "$${args[@]}" &
+        worker=$$!
+        python3 -m dynamo.frontend --http-port 8000 &
+        frontend=$$!
+        wait -n "$${worker}" "$${frontend}"
+        exit 1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/v1/models | grep -q nemotron || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 1200s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      default:
+        aliases:
+          - dynamo-frontend
