@@ -11,9 +11,9 @@ list, is ``examples.shared.nvidia_streaming_llm``.
 Each ``session.update`` or ``input_text_buffer.append`` renders the chat
 request with vLLM's own template and appends only the new prompt tokens to the
 turn's engine request. ``input_text_buffer.commit`` then generates the answer
-through vLLM's chat completions stream, so reasoning and tool parsing are
-unchanged, and ends the request. A render that no longer extends what the
-engine holds starts a new request. Once an answer starts a tool call, a standby
+through vLLM's chat completions stream, so reasoning, tool parsing and
+structured output are unchanged, and ends the request. A render that no longer
+extends what the engine holds starts a new request. Once an answer starts a tool call, a standby
 request prefills the conversation alongside it and then appends that answer, so
 the follow-up turn appends only the tool result.
 
@@ -43,6 +43,10 @@ from vllm.inputs import TokensPrompt
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import RequestOutputKind
+
+from examples.shared.vllm_streaming_input.structured_output import keep_structured_output
+
+keep_structured_output()
 
 logger = init_logger(f"vllm.{__name__}")
 router = APIRouter()
