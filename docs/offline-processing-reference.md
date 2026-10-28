@@ -5,7 +5,12 @@ accompanies the [Offline Processing for Nemotron Voice Agent proposal](12-offlin
 The [dated progress log](offline-processing-progress.md) preserves earlier
 implementations, experiments, and changes in direction.
 
-The proposal baseline is standard continuous speech-to-text (STT) with `stop_history=320` (320 ms) and no force-EOU injection. Verify effective settings in both modes before paired evaluation.
+The default configuration uses standard continuous speech-to-text (STT) with
+320 ms of stop history and no force-EOU injection. Set the server environment
+variable `ASR_STOP_HISTORY_MS` to override stop history in both Generic online
+and offline pipelines. Use an integer from 1 through 10,000 ms. This setting
+does not change the Silero silence threshold or the sample clock. Verify
+effective settings in both modes before paired evaluation.
 
 Use the following sections for detailed implementation and evaluation work.
 
@@ -264,6 +269,8 @@ The `effective_configuration_v1` capability adds the resolved, redacted runtime
 Adapters can verify the fingerprint and required model/settings against this
 public configuration, rather than trusting their requested values. This records
 the application's resolved request settings, not an independent backend attestation.
+The `asr_stop_history_ms` field records the resolved shared STT setting, including
+an explicit `ASR_STOP_HISTORY_MS` override.
 
 ### Incremental Text Completion
 

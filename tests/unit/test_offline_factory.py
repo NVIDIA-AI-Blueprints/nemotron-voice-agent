@@ -127,6 +127,12 @@ class FactoryTests(unittest.TestCase):
         runtime, _, _ = self.build({"temperature": "0", "max_tokens": "128"})
         self.assertEqual(runtime.configuration["llm_extra_params"], {"temperature": 0.0, "max_tokens": 128})
 
+    def test_deployment_history_reaches_the_recognizer_and_effective_configuration(self):
+        with patch.dict(os.environ, {"ASR_STOP_HISTORY_MS": "400"}):
+            runtime, asr, _ = self.build({})
+        self.assertEqual(asr["asr_stop_history"], 400)
+        self.assertEqual(runtime.configuration["asr_stop_history_ms"], 400)
+
     def test_unsupported_turn_policy_names_the_actual_configuration_flag(self):
         with self.assertRaisesRegex(ValueError, "USE_SILERO_VAD_TURN_DETECTION=true"):
             self.build({}, policy="smart_turn")

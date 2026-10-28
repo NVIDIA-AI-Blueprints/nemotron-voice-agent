@@ -3,6 +3,7 @@
 
 """Verify generic TTS construction selects the shared policy by actual transport."""
 
+import os
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -46,8 +47,8 @@ class GenericWebsocketTTSCompletionTests(unittest.IsolatedAsyncioTestCase):
                 stack.enter_context(patch.object(pipeline, name, return_value=value))
             stack.enter_context(patch.object(pipeline, "load_service_entry", side_effect=lambda key, _: catalogs[key]))
             stack.enter_context(patch.object(pipeline.examples_registry, "welcome_message_enabled", return_value=False))
-            stack.enter_context(patch.object(pipeline, "NvidiaSTTService"))
-            stack.enter_context(patch.object(pipeline, "EvaluationNvidiaSTTService"))
+            native_stt = stack.enter_context(patch.object(pipeline, "NvidiaSTTService"))
+            observed_stt = stack.enter_context(patch.object(pipeline, "EvaluationNvidiaSTTService"))
             stack.enter_context(patch.object(pipeline, "NvidiaLLMService"))
             native = stack.enter_context(patch.object(pipeline, "NvidiaTTSService"))
             observed = stack.enter_context(patch.object(pipeline, "EvaluationNvidiaTTSService"))
@@ -55,9 +56,17 @@ class GenericWebsocketTTSCompletionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(_ReachedPipelineAssembly):
                 await pipeline.bot(SimpleNamespace(body=body or {}))
         selected, other = (observed, native) if traced else (native, observed)
+        self.constructed_stt = (observed_stt if traced else native_stt).call_args.kwargs
         selected.assert_called_once()
         other.assert_not_called()
         return selected.call_args.kwargs, trace
+
+    async def test_traced_and_ordinary_asr_receive_the_same_deployment_history(self):
+        """The configured endpointing window reaches both real construction paths."""
+        for traced in (False, True):
+            with self.subTest(traced=traced), patch.dict(os.environ, {"ASR_STOP_HISTORY_MS": "400"}):
+                await self.construct_tts(traced=traced)
+                self.assertEqual(self.constructed_stt["stop_history"], 400)
 
     async def test_ordinary_and_traced_websocket_use_identical_eof_options(self):
         """Tracing never changes the selected native completion policy or settings."""

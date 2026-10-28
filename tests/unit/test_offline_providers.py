@@ -417,8 +417,8 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
 
         # Include speech-like values, silence, and a partial final source chunk.
         source = AudioSource(b"\x01\x00" * 256 + bytes(514))
-        for punctuation in (True, False):
-            with self.subTest(punctuation=punctuation):
+        for punctuation, history in ((True, 320), (True, 400), (False, 320), (False, 400)):
+            with self.subTest(punctuation=punctuation, history=history):
                 requests_seen = []
                 settings = {
                     "api_key": "fixture-speech-key",
@@ -426,6 +426,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                     "asr_function_id": "fixture-selected-function",
                     "asr_model": "selected-model",
                     "asr_automatic_punctuation": punctuation,
+                    "asr_stop_history": history,
                 }
 
                 class Call:
@@ -464,12 +465,13 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                         "model_name": settings["asr_model"],
                     },
                     settings=NvidiaSTTSettings(automatic_punctuation=punctuation),
+                    stop_history=history,
                 )
                 native._sample_rate = RATE
                 native_config = native._create_recognition_config()
                 config = requests_seen[0].streaming_config
                 self.assertEqual(config.SerializeToString(), native_config.SerializeToString())
-                self.assertEqual(config.config.endpointing_config.stop_history, 320)
+                self.assertEqual(config.config.endpointing_config.stop_history, history)
                 self.assertEqual(b"".join(request.audio_content for request in requests_seen[1:]), source.pcm)
                 self.assertTrue(all(not request.runtime_config for request in requests_seen))
 

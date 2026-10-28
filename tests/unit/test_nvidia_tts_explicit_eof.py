@@ -260,12 +260,15 @@ class ExplicitEOFContracts(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(frame, TTSStoppedFrame) for frame in candidate.frames))
 
     async def test_long_pcm_gap_preserves_one_context_and_all_native_audio(self):
-        reference, candidate = await self.make(ReferenceTTS), await self.make()
+        candidate = await self.make()
         candidate_rpc = await self.request(candidate)
-        reference_rpc = await self.request(reference)
         first, second = b"\x01\x02" * 64, b"\x03\x04" * 64
         candidate_rpc.responses.put(first)
         await self.until(candidate, lambda: self.audio(candidate) == first)
+        # Complete the other service's setup before starting the deliberately
+        # short reference idle interval. This scenario tests a gap after audio.
+        reference = await self.make(ReferenceTTS)
+        reference_rpc = await self.request(reference)
         reference_rpc.responses.put(first)
         await self.until(reference, lambda: self.audio(reference) == first)
         await self.until(reference, lambda: bool(reference.outcomes))
