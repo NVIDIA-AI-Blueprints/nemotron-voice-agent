@@ -12,6 +12,7 @@ import contextlib
 import inspect
 import json
 import logging
+import sys
 import time
 import traceback
 import uuid
@@ -40,6 +41,125 @@ from .protocol import (
 
 class _ClientDisconnected(Exception):
     """A disconnect cancels evaluation and never acts as source EOF."""
+
+
+class _LiveEventWriter:
+    """Bound text-stream buffering without backpressuring the media scheduler."""
+
+    def __init__(self, websocket, limits):
+        self.websocket = websocket
+        self.limits = limits
+        self.queue = asyncio.Queue(maxsize=limits.max_pending_stream_events)
+        self.pending_bytes = 0
+        self.last_sample = 0
+
+    def observe(self, event):
+        """Snapshot a committed event or fail explicitly instead of dropping it."""
+        sample = event.get("sample")
+        if type(sample) is not int or sample < self.last_sample:
+            raise OfflineProtocolError("event_order", "Incremental semantic event moved backwards")
+        payload = {"type": "offline.event", "event": redact_private(event)}
+        size = len(json.dumps(payload, allow_nan=False).encode("utf-8"))
+        if self.queue.full() or self.pending_bytes + size > self.limits.max_pending_stream_bytes:
+            raise OfflineProtocolError("event_queue_overflow", "Client cannot keep up with incremental events")
+        self.queue.put_nowait((payload, size))
+        self.pending_bytes += size
+        self.last_sample = sample
+
+    async def run(self):
+        """Use one writer to preserve the exact observed append order."""
+        while True:
+            payload, size = await self.queue.get()
+            try:
+                await self.websocket.send_json(payload)
+            finally:
+                self.pending_bytes -= size
+                self.queue.task_done()
+
+
+async def _execute_text(websocket, receiver, runtime_factory, start, source, limits):
+    """Publish raw event evidence while native providers continue, until disconnect."""
+    runtime = None
+    prepare = runner = writer = drain = None
+    try:
+
+        async def prepare_runtime():
+            nonlocal runtime
+            value = runtime_factory(start)
+            runtime = await value if inspect.isawaitable(value) else value
+            configuration = redact_private(getattr(runtime, "configuration", start.get("config", {})))
+            _check_client(receiver)
+            await websocket.send_json(
+                {
+                    "type": "offline.runtime.configuration",
+                    "protocol": PROTOCOL,
+                    "completion": "text",
+                    "configuration": configuration,
+                    "configuration_fingerprint": configuration_fingerprint(configuration),
+                }
+            )
+
+        prepare = asyncio.create_task(prepare_runtime())
+        await asyncio.wait((prepare, receiver), return_when=asyncio.FIRST_COMPLETED)
+        if prepare.done():
+            prepare.result()
+        _check_client(receiver)
+        await prepare
+        stream = _LiveEventWriter(websocket, limits)
+        writer = asyncio.create_task(stream.run())
+        runner = asyncio.create_task(runtime.run(source, event_sink=stream.observe))
+
+        async def guarded(operation):
+            await asyncio.wait((operation, writer, receiver), return_when=asyncio.FIRST_COMPLETED)
+            if operation.done():
+                operation.result()
+            _check_client(receiver)
+            if writer.done():
+                writer.result()
+                raise RuntimeError("Incremental event writer stopped unexpectedly")
+            return await operation
+
+        # No server-side candidate choice: the same native client policy decides
+        # which raw text epoch to score, then closes its connection immediately.
+        await guarded(runner)
+
+        async def finish_stream():
+            await stream.queue.join()
+            _check_client(receiver)
+            await websocket.send_json({"type": "offline.events.complete", "protocol": PROTOCOL, "completion": "text"})
+
+        drain = asyncio.create_task(finish_stream())
+        await guarded(drain)
+    finally:
+        primary_error = sys.exception()
+        for task in (prepare, runner, writer, drain):
+            if task is not None and not task.done():
+                task.cancel()
+        tasks = [task for task in (prepare, runner, writer, drain) if task is not None]
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        # Native cleanup can raise from a cancelled runner's finally block.
+        # Preserve that real provider failure rather than reclassifying it as
+        # a normal text-scope disconnect. Closed-socket writer failures are
+        # already handled by guarded() and do not attest provider failure.
+        cleanup_errors = [
+            outcome
+            for task, outcome in zip(tasks, outcomes, strict=True)
+            if task in (prepare, runner)
+            and isinstance(outcome, BaseException)
+            and not isinstance(outcome, asyncio.CancelledError)
+            and outcome is not primary_error
+        ]
+        if runtime is not None and hasattr(runtime, "aclose"):
+            try:
+                await runtime.aclose()
+            except Exception as error:
+                cleanup_errors.append(error)
+        if cleanup_errors:
+            if primary_error is None or isinstance(primary_error, (_ClientDisconnected, asyncio.CancelledError)):
+                raise cleanup_errors[0]
+            primary_error.add_note(
+                "Text-stream cleanup also failed: " + ", ".join(type(e).__name__ for e in cleanup_errors)
+            )
 
 
 async def _receive(websocket: Any) -> bytes | str:
@@ -275,6 +395,7 @@ async def serve_offline_session(
 
     limits = limits or SessionLimits()
     directory = None
+    start = None
     await websocket.accept()
     milestones = {"socket_accepted": clock()}
     try:
@@ -288,6 +409,11 @@ async def serve_offline_session(
                 await asyncio.to_thread(write_source, directory, source)
                 milestones["source_recording_wall_ns"] = clock() - recording_started
                 _check_client(receiver)
+                if start.get("completion", "full_session") == "text":
+                    await _execute_text(websocket, receiver, runtime_factory, start, source, limits)
+                    with contextlib.suppress(Exception):
+                        await websocket.close(code=1000)
+                    return
                 runtime, result = await _execute(
                     receiver, runtime_factory, start, source, milestones=milestones, clock=clock
                 )
@@ -358,7 +484,12 @@ async def serve_offline_session(
                     clock=clock,
                 )
     except _ClientDisconnected:
-        _failure_record(directory, "client_disconnected")
+        if start is not None and start.get("completion") == "text" and directory is not None:
+            (directory / "cancellation.json").write_text(
+                json.dumps({"status": "cancelled", "completion": "text", "reason": "client_disconnected"}) + "\n"
+            )
+        else:
+            _failure_record(directory, "client_disconnected")
         return
     except asyncio.CancelledError:
         _failure_record(directory, "server_cancelled")

@@ -73,7 +73,14 @@ class _Deadline:
 async def _yield_ready_tasks() -> None:
     """Run already-ready callbacks without advancing or reading elapsed time."""
     future = asyncio.get_running_loop().create_future()
-    asyncio.get_running_loop().call_soon(future.set_result, None)
+
+    def resume():
+        # A disconnected text client can cancel the waiter before this ready
+        # callback runs. Do not resolve the future that cancellation closed.
+        if not future.done():
+            future.set_result(None)
+
+    asyncio.get_running_loop().call_soon(resume)
     await future
 
 
