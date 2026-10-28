@@ -9,6 +9,7 @@ import heapq
 import math
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 
@@ -74,13 +75,13 @@ class IncrementalSessionEngine:
         self.history_recent_turns = history_recent_turns
         self.preserve_prompt_messages = preserve_prompt_messages
 
-    async def run(self, source):
+    async def run(self, source, *, event_sink: Callable[[dict], None] | None = None):
         """Own one finite session and cancel every producer on failure."""
-        return await _Session(self, source).run()
+        return await _Session(self, source, event_sink=event_sink).run()
 
 
 class _Session:
-    def __init__(self, engine, source):
+    def __init__(self, engine, source, *, event_sink=None):
         self.engine, self.source = engine, source
         self.changed = asyncio.Event()
         self.actors = {}
@@ -89,6 +90,7 @@ class _Session:
         self.queue = []
         self.serial = 0
         self.events = []
+        self._event_sink = event_sink
         self.responses = []
         self.requests = deque()
         self.active = None
@@ -105,10 +107,17 @@ class _Session:
         )
         self.assistant = SharedAssistantAggregation(self.user.context, self.user.clock, on_event=self._assistant_event)
 
-    def emit(self, kind, sample=None, **details):
-        self.events.append(
-            {"type": kind, "sample": self.user.clock.now_sample if sample is None else sample, **details}
+    def emit(self, kind, sample=None, *, stream=True, **details):
+        self._append_event(
+            {"type": kind, "sample": self.user.clock.now_sample if sample is None else sample, **details},
+            stream=stream,
         )
+
+    def _append_event(self, event, *, stream=True):
+        """Observe committed append order without awaiting network or provider work."""
+        self.events.append(event)
+        if stream and self._event_sink is not None:
+            self._event_sink(copy.deepcopy(event))
 
     def schedule(self, sample, kind, payload=None, generation=None):
         if sample < self.user.clock.now_sample:
@@ -120,7 +129,7 @@ class _Session:
         self.requests.append((sample, copy.deepcopy(messages), f"turn-{self.turn_count}"))
 
     async def _assistant_event(self, event):
-        self.events.append(event)
+        self._append_event(event)
         if event["type"] == "assistant_turn_stopped" and self.engine.history_recent_turns is not None:
             from examples.shared.pipeline_utils import find_recent_turn_start
 
@@ -135,7 +144,7 @@ class _Session:
             self.user_turn_active = True
         elif event["type"] == "user_turn_stopped":
             self.user_turn_active = False
-        self.events.append({**event, "turn_id": f"turn-{self.turn_count}"})
+        self._append_event({**event, "turn_id": f"turn-{self.turn_count}"})
         if event["type"] == "interruption" and self.active is not None:
             await self.finish_response(interrupted=True)
 
@@ -404,7 +413,16 @@ class _Session:
                 owned = [span for span in spans if span.response_id == response["response_id"]]
                 response["committed_samples"] = sum(len(span.pcm) // 2 for span in owned)
                 for span in owned:
-                    self.emit("bot_audio", span.start_sample, response_id=span.response_id, end_sample=span.end_sample)
+                    # Recording annotations describe an earlier presentation
+                    # span. Keep them on the complete audit tape, not on the
+                    # live causal text stream whose positions cannot rewind.
+                    self.emit(
+                        "bot_audio",
+                        span.start_sample,
+                        stream=False,
+                        response_id=span.response_id,
+                        end_sample=span.end_sample,
+                    )
             rendered = max(self.source.sample_count, max((s.end_sample for s in spans), default=0))
             recognition = await self.actors["asr"].result()
             self.emit("session_complete", rendered_samples=rendered)

@@ -25,6 +25,7 @@ CAPABILITIES = (
     "service_trace",
     "raw_llm_text_events_v1",
     "effective_configuration_v1",
+    "incremental_text_events_v1",
 )
 _PRIVATE_KEYS = frozenset({"api_key", "authorization", "password", "secret", "token", "credentials"})
 
@@ -48,6 +49,8 @@ class SessionLimits:
     max_packet_samples: int = 65536
     output_packet_samples: int = 1600
     max_control_bytes: int = 32768
+    max_pending_stream_events: int = 1024
+    max_pending_stream_bytes: int = 4 * 1024 * 1024
     upload_timeout_seconds: float = 300
     execution_timeout_seconds: float = 1800
     output_timeout_seconds: float = 300
@@ -60,6 +63,8 @@ class SessionLimits:
             "max_packet_samples",
             "output_packet_samples",
             "max_control_bytes",
+            "max_pending_stream_events",
+            "max_pending_stream_bytes",
         ):
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
@@ -108,6 +113,8 @@ def validate_start(message: dict[str, Any], limits: SessionLimits) -> dict[str, 
         raise OfflineProtocolError("input_too_large", "Declared input exceeds the configured duration limit")
     if "config" in message and not isinstance(message["config"], dict):
         raise OfflineProtocolError("invalid_control", "config must be a JSON object")
+    if message.get("completion", "full_session") not in ("full_session", "text"):
+        raise OfflineProtocolError("unsupported_completion", "completion must be full_session or text")
     return message
 
 

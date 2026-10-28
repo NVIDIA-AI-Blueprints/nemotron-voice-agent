@@ -97,7 +97,8 @@ They do not isolate GPU inference or reproduce an independent online run.
 
 ## Recording and Conversation Invariants
 
-The scheduler and recorder enforce the following rules.
+For completed full-session recordings, the scheduler and recorder enforce the
+following rules.
 
 * Input becomes immutable after sample-count, packet-count, and SHA-256 checks.
   Source silence remains ordinary PCM; a disconnect cancels the session.
@@ -181,7 +182,7 @@ exactly Pipecat 1.12.0 and supplies `stop_frame_timeout_s=None`, so an idle audi
 gap does not complete a context. This constructor behavior is undocumented;
 a supported upstream API is still needed.
 
-Offline response completion waits for provider-worker EOF and native
+Full offline response completion waits for provider-worker EOF and native
 audio-context drain, then rechecks errors. Its execution watchdog fails stalled
 work while drain waits race error and interruption signals. The live path retains
 native session/evaluator cancellation bounds and adds no per-generation watchdog.
@@ -205,6 +206,7 @@ rather than silent changes in behavior.
 The custom protocol is `nva.offline.v1`. The client starts with
 `offline.session.start`, declaring 16 kHz mono PCM16, the input sample count,
 and optional session configuration. The server acknowledges bounds before audio.
+The optional `completion` field selects `full_session` (default) or `text`.
 
 Binary packets contain a network-order `!4sQQI` header: magic, sequence,
 absolute start sample, and sample count. `NVAI` identifies input and `NVAO`
@@ -212,8 +214,9 @@ identifies output. PCM is little-endian signed 16-bit mono. Input is contiguous
 and ordered. Output can omit silence but must be ordered and nonoverlapping.
 
 `offline.input.complete` supplies the sample count, packet count, and SHA-256.
-The server validates and seals the source, processes it, publishes committed
-audio and events, and sends `offline.session.complete`. Disconnect is not EOF.
+In default `full_session` mode, the server validates and seals the source,
+processes it, publishes committed audio and events, and sends
+`offline.session.complete`. Disconnect is not EOF.
 Input after EOF is rejected. Failures send `offline.session.error`.
 For an actual gRPC failure, this record and `failure.json` can include optional
 `grpc_status`, a recognized `grpc.StatusCode` name such as `UNAVAILABLE`.
@@ -262,6 +265,32 @@ Adapters can verify the fingerprint and required model/settings against this
 public configuration, rather than trusting their requested values. This records
 the application's resolved request settings, not an independent backend attestation.
 
+### Incremental Text Completion
+
+Clients selecting `completion=text` must require `incremental_text_events_v1`.
+They upload the same finite source without realtime pacing. After sealing,
+the server sends `offline.runtime.configuration`, including `protocol`,
+`configuration`, and `configuration_fingerprint`, before incremental
+`offline.event` records. Verify configuration before accepting candidate text.
+This mode sends JSON events, not output PCM.
+Its bounded writer fails with `event_queue_overflow` if the client cannot keep
+up; it does not silently discard events. If runtime execution drains first,
+`offline.events.complete` ends the stream without a full-session result.
+
+A benchmark client can apply the native online collector's first-eligible text
+epoch rules as events arrive, then return and disconnect without waiting for
+TTS or full-session completion. On disconnection, the server cancels and awaits
+owned tasks and native cleanup under existing session/evaluator cancellation
+limits. A completed WebSocket close handshake does not attest provider cleanup
+or EOF. Text mode adds no separate per-generation watchdog. A session error
+received before text completion remains a failure.
+A text-mode disconnect can produce `cancellation.json`; this records
+cancellation, not candidate success.
+Text success does not attest a complete output WAV, final recording alignment,
+provider cleanup, or success of later provider work. The default full-session
+path retains those separate completion and recording boundaries.
+Real-service validation of incremental text completion is pending.
+
 ### Raw LLM Text for Benchmark Adapters
 
 The acceptance message advertises `raw_llm_text_events_v1`. Clients that score
@@ -283,13 +312,13 @@ or the final context for the selected completion epoch.
 
 This candidate differs from the October 23 AA-BigBench comparison, which judges
 independent ASR of the complete committed output WAV. Aligned audio remains
-diagnostic evidence when a benchmark scores native LLM text. The planned
-VoiceBench CI run uses offline concurrency 1 and Lightning with thinking
-disabled; no completed VoiceBench run is claimed here.
+diagnostic evidence when a benchmark scores native LLM text. Full-session audio
+evidence and early text completion have different completion scopes; neither
+establishes benchmark-wide equivalence.
 
 ## Server Tracing and Metric Definitions
 
-Successful offline sessions can include `metrics.native_provider_observations`,
+Successful full-session processing can include `metrics.native_provider_observations`,
 collected after engine completion and provider cleanup. It contains integer
 `total`, boolean `truncated`, and an `observations` list. The list retains the
 first 64 captured `ErrorFrame` callbacks with one-based `observation_index`

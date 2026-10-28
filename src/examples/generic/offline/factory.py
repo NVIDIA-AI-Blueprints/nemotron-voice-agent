@@ -86,10 +86,14 @@ class GenericOfflineRuntime:
                 if self._client is not None:
                     await self._client.close()
 
-    async def run(self, source):
+    async def run(self, source, *, event_sink: Callable[[dict], None] | None = None):
         """Run once and release every provider connection on success or failure."""
         try:
-            result = await self._engine.run(source)
+            result = (
+                await self._engine.run(source)
+                if event_sink is None
+                else await self._engine.run(source, event_sink=event_sink)
+            )
         finally:
             await self.aclose()
         # Cleanup can emit delayed native errors after the engine has completed.

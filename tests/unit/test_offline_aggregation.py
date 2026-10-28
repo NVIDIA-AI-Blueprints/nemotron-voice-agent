@@ -40,6 +40,7 @@ from examples.generic.offline.aggregation import (
     SampleClock,
     SharedAssistantAggregation,
     SharedUserAggregation,
+    _yield_ready_tasks,
 )
 from examples.generic.offline.models import RATE
 
@@ -96,6 +97,22 @@ class CaptureStockAggregator(LLMUserAggregator):
 
 
 class OfflineAggregationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelling_ready_yield_does_not_resolve_a_cancelled_future(self):
+        """A text client disconnect can arrive before the queued resume callback."""
+        loop = asyncio.get_running_loop()
+        previous = loop.get_exception_handler()
+        failures = []
+        loop.set_exception_handler(lambda _loop, context: failures.append(context))
+        try:
+            task = asyncio.create_task(_yield_ready_tasks())
+            loop.call_soon(task.cancel)
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await asyncio.sleep(0)
+            self.assertEqual(failures, [])
+        finally:
+            loop.set_exception_handler(previous)
+
     async def make(self, timeout=0, **kwargs):
         adapter = SharedUserAggregation(params=params(timeout, **kwargs))
         self.addAsyncCleanup(adapter.close)
