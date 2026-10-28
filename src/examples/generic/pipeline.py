@@ -51,6 +51,7 @@ from examples.shared.evaluation_trace import (
 )
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
+from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
 from examples.shared.nvidia_tts_explicit_eof import EXPLICIT_EOF_COMPLETION_POLICY, explicit_eof_tts_options
 from examples.shared.pipeline_utils import (
     apply_pinned_prompt_summary,
@@ -167,7 +168,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             f"multi_speaker_support={multi_speaker_support}"
         )
     stt_service = EvaluationNvidiaSTTService if evaluation_trace else NvidiaSTTService
-    stt = stt_service(**asr_kwargs, **evaluation_kwargs)
+    stt = stt_service(**asr_kwargs, stop_history=resolve_stt_stop_history_ms(), **evaluation_kwargs)
     logger.info(
         f"ASR: server={asr_server}, ssl={asr_ssl}, function_id={asr_function_id or '(default)'}, "
         f"language={asr_language_code or '(default)'}, punctuation={asr_automatic_punctuation}"

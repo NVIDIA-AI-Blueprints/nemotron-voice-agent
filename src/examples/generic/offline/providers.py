@@ -11,7 +11,6 @@ the bulk request; it includes transport and provider queueing, not pure GPU time
 import asyncio
 import bisect
 import copy
-import inspect
 import json
 import queue
 import threading
@@ -20,7 +19,7 @@ from collections.abc import AsyncIterator, Callable, Iterable
 from types import SimpleNamespace
 from typing import Any
 
-from pipecat.services.nvidia.stt import NvidiaSTTService
+from examples.shared.nvidia_stt_settings import STANDARD_STT_STOP_HISTORY
 
 from .models import (
     RATE,
@@ -32,10 +31,6 @@ from .models import (
     SpokenWord,
     ns_to_samples,
 )
-
-# Read the pinned live service's constructor default so the request and manifest
-# share its endpointing baseline rather than maintaining a separate override.
-STANDARD_STT_STOP_HISTORY = inspect.signature(NvidiaSTTService).parameters["stop_history"].default
 
 
 class ContinuousASR:

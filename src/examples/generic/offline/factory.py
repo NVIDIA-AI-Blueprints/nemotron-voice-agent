@@ -16,6 +16,7 @@ from pipecat.services.nvidia.llm import NvidiaLLMSettings
 from pipecat.services.nvidia.tts import NvidiaTTSSettings
 
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
 from examples.shared.nvidia_tts_explicit_eof import EXPLICIT_EOF_COMPLETION_POLICY, explicit_eof_tts_options
 from examples.shared.pipeline_utils import (
     PIPELINE_AUDIO_OUT_SAMPLE_RATE,
@@ -42,10 +43,7 @@ from .native_response import (
     CapturingNativeNvidiaTTSService,
     NativeResponseSession,
 )
-from .providers import (
-    STANDARD_STT_STOP_HISTORY,
-    create_riva_recognizer,
-)
+from .providers import create_riva_recognizer
 
 
 class GenericOfflineRuntime:
@@ -126,7 +124,7 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
         "asr_server": config.get("asr_server") or asr.get("server", "grpc.nvcf.nvidia.com:443"),
         "asr_function_id": config.get("asr_function_id") or asr.get("function_id", ""),
         "asr_model": config.get("asr_model") or asr.get("model", ""),
-        "asr_stop_history": STANDARD_STT_STOP_HISTORY,
+        "asr_stop_history": resolve_stt_stop_history_ms(),
         "asr_language_code": config.get("asr_language_code") or asr.get("language_code", "en-US"),
         "asr_automatic_punctuation": str(
             config.get("asr_automatic_punctuation", asr.get("automatic_punctuation", "true"))
