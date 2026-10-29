@@ -32,7 +32,7 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
 
 def _chunk(content=None, *, tool_calls=None):
     delta = SimpleNamespace(content=content, tool_calls=tool_calls)
-    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)], usage=None)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=None)], usage=None)
 
 
 async def _stream(*chunks):
@@ -119,6 +119,13 @@ class OmniTurnPreemptionTests(unittest.IsolatedAsyncioTestCase):
         await self._wait_for(lambda: len(self.turns) == 1)
         self.assertFalse(self.service._audio_user_speaking)
         self.assertTrue(self.turns[0].kwargs["expect_transcript"])
+
+    async def test_new_spoken_turn_clears_the_previous_transcript(self) -> None:
+        self.service._answered_transcript = "previous turn"
+
+        await self.service._handle_user_started()
+
+        self.assertEqual(self.service._answered_transcript, "")
 
     async def test_audio_turn_preempts_in_flight_turn(self) -> None:
         self._fill_audio()
@@ -438,6 +445,7 @@ class OmniTranscriptOwnershipTests(unittest.IsolatedAsyncioTestCase):
         frame, direction = self.pushed[-1]
         self.assertIsInstance(frame, TranscriptionFrame)
         self.assertEqual(frame.text, "where is the tower?")
+        self.assertTrue(frame.finalized)
         self.assertEqual(direction, FrameDirection.UPSTREAM)
 
     async def test_an_audio_pipeline_is_announced_as_a_realtime_service(self) -> None:
@@ -449,6 +457,9 @@ class OmniTranscriptOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.service._settings.input_modalities = ("text",)
 
         self.assertFalse(self.service.service_metadata_frame().is_realtime_service)
+
+    async def test_hybrid_service_reports_ttfat_for_text_answer_tokens(self) -> None:
+        self.assertTrue(self.service.reports_ttfat)
 
 
 class OmniRequestBuildingTests(unittest.IsolatedAsyncioTestCase):
@@ -477,7 +488,7 @@ class OmniRequestBuildingTests(unittest.IsolatedAsyncioTestCase):
         message = {"role": "user", "content": [audio_message_part(b"\x00\x00", 16000, 1)]}
         context = LLMContext([message])
 
-        params = self.service.get_llm_adapter().get_llm_invocation_params(
+        params = await self.service.get_llm_adapter().get_llm_invocation_params(
             context, system_instruction=None, convert_developer_to_user=False
         )
 
@@ -537,6 +548,92 @@ class OmniRequestBuildingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("max_tokens", params)
         self.assertNotIn("max_completion_tokens", params)
+
+    async def test_stream_is_closed_when_a_delta_callback_fails(self) -> None:
+        class _ResponseStream:
+            def __init__(self) -> None:
+                self.close = AsyncMock()
+
+            def __aiter__(self):
+                return _stream(_chunk("hello"))
+
+        response_stream = _ResponseStream()
+
+        async def fake_create(**kwargs):  # noqa: ARG001
+            return response_stream
+
+        async def fail_callback(delta: str) -> None:  # noqa: ARG001
+            raise RuntimeError("callback failed")
+
+        self.service._out_of_band_request_kwargs = AsyncMock(return_value={})
+        self.service._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+
+        with self.assertRaisesRegex(RuntimeError, "callback failed"):
+            await self.service.run_multimodal_inference(
+                LLMContext([{"role": "user", "content": "hi"}]),
+                stream=True,
+                on_text_delta=fail_callback,
+            )
+
+        response_stream.close.assert_awaited_once()
+
+    async def test_stream_is_closed_after_normal_completion(self) -> None:
+        class _ResponseStream:
+            def __init__(self) -> None:
+                self.close = AsyncMock()
+
+            def __aiter__(self):
+                return _stream(_chunk("hello"))
+
+        response_stream = _ResponseStream()
+
+        async def fake_create(**kwargs):  # noqa: ARG001
+            return response_stream
+
+        self.service._out_of_band_request_kwargs = AsyncMock(return_value={})
+        self.service._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+
+        result = await self.service.run_multimodal_inference(
+            LLMContext([{"role": "user", "content": "hi"}]),
+            stream=True,
+        )
+
+        self.assertEqual(result.text, "hello")
+        response_stream.close.assert_awaited_once()
+
+    async def test_stream_is_closed_when_inference_is_cancelled(self) -> None:
+        class _BlockedResponseStream:
+            def __init__(self) -> None:
+                self.close = AsyncMock()
+                self.waiting = asyncio.Event()
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                self.waiting.set()
+                await asyncio.Event().wait()
+
+        response_stream = _BlockedResponseStream()
+
+        async def fake_create(**kwargs):  # noqa: ARG001
+            return response_stream
+
+        self.service._out_of_band_request_kwargs = AsyncMock(return_value={})
+        self.service._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+        inference = asyncio.create_task(
+            self.service.run_multimodal_inference(
+                LLMContext([{"role": "user", "content": "hi"}]),
+                stream=True,
+            )
+        )
+        await response_stream.waiting.wait()
+
+        inference.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await inference
+
+        response_stream.close.assert_awaited_once()
 
     async def test_media_modalities_are_rejected_for_pipeline_input(self) -> None:
         with self.assertRaises(ValueError):

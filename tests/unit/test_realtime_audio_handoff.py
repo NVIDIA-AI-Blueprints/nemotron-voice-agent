@@ -338,6 +338,8 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         from pipecat.frames.frames import TTSUpdateSettingsFrame
 
         self.assertIsInstance(frame, TTSUpdateSettingsFrame)
+        self.assertEqual(frame.delta.voice, "Magpie-Multilingual.EN-US.Aria")
+        self.assertEqual(frame.settings, {})
         audio = ser._session_view["audio"]
         self.assertEqual(audio["input"]["turn_detection"], {"type": "server_vad"})
         self.assertEqual(audio["input"]["format"]["rate"], PIPELINE_PCM_RATE)
@@ -471,6 +473,8 @@ class SerializerAudioTests(unittest.IsolatedAsyncioTestCase):
         from pipecat.frames.frames import TTSUpdateSettingsFrame
 
         self.assertIsInstance(frame, TTSUpdateSettingsFrame)
+        self.assertEqual(frame.delta.voice, "Magpie-Multilingual.EN-US.Aria")
+        self.assertEqual(frame.settings, {})
         self.assertEqual(emitted[-1]["type"], "session.updated")
         self.assertEqual(ser._session_view["audio"]["output"]["voice"], "Magpie-Multilingual.EN-US.Aria")
         self.assertEqual(ser._session_view.get("voice"), "Magpie-Multilingual.EN-US.Aria")

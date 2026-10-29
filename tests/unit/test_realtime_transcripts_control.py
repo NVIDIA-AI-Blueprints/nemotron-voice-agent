@@ -24,12 +24,16 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSStoppedFrame,
     TTSTextFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_output import BaseOutputTransport
-from pipecat.utils.text.base_text_aggregator import AggregationType
+from pipecat.utils.text.base_text_aggregator import TextType
 
 from realtime.conversation import ConversationState
 from realtime.observer import RealtimeLifecycleObserver
@@ -67,8 +71,6 @@ class ConversationStateTests(unittest.TestCase):
 
 class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
     async def test_user_interim_and_final_transcripts(self) -> None:
-        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
-
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -144,8 +146,6 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitted, [])
 
     async def test_vad_events_share_item_id_and_sample_clock(self) -> None:
-        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
-
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -186,9 +186,83 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started["audio_start_ms"], 1000)
         self.assertEqual(stopped["audio_end_ms"], 1500)
 
-    async def test_final_transcript_before_vad_stop_keeps_same_item_id(self) -> None:
-        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+    async def test_raw_vad_emits_speech_boundaries_without_finalizing_turn(self) -> None:
+        emitted: list[dict[str, Any]] = []
 
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        state = ConversationState()
+        state.add_input_audio(32000, 16000)
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=state)
+
+        async def push(frame) -> None:
+            await observer.on_push_frame(
+                FramePushed(
+                    source=MagicMock(),
+                    destination=MagicMock(),
+                    frame=frame,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=0,
+                )
+            )
+
+        await push(VADUserStartedSpeakingFrame())
+        state.add_input_audio(16000, 16000)
+        await push(VADUserStoppedSpeakingFrame())
+
+        self.assertEqual(
+            [event["type"] for event in emitted],
+            ["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"],
+        )
+        self.assertEqual(emitted[0]["audio_start_ms"], 1000)
+        self.assertEqual(emitted[1]["audio_end_ms"], 1500)
+        self.assertEqual(emitted[0]["item_id"], emitted[1]["item_id"])
+        self.assertFalse(state.user_turn_stopped)
+
+        await push(UserStartedSpeakingFrame())
+        await push(TranscriptionFrame(text="hello", user_id="", timestamp=""))
+        await push(UserStoppedSpeakingFrame())
+
+        types = [event["type"] for event in emitted]
+        self.assertEqual(types.count("input_audio_buffer.speech_started"), 1)
+        self.assertEqual(types.count("input_audio_buffer.speech_stopped"), 1)
+        self.assertIn("input_audio_buffer.committed", types)
+        self.assertIn("conversation.item.created", types)
+        self.assertIn("conversation.item.input_audio_transcription.completed", types)
+        committed = next(event for event in emitted if event["type"] == "input_audio_buffer.committed")
+        self.assertEqual(committed["item_id"], emitted[0]["item_id"])
+
+    async def test_raw_vad_pause_does_not_duplicate_or_commit_events(self) -> None:
+        emitted: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            emitted.append(event)
+
+        observer = RealtimeLifecycleObserver(emit=emit, conversation=ConversationState())
+        for frame in (
+            VADUserStartedSpeakingFrame(),
+            VADUserStoppedSpeakingFrame(),
+            VADUserStartedSpeakingFrame(),
+            VADUserStoppedSpeakingFrame(),
+        ):
+            await observer.on_push_frame(
+                FramePushed(
+                    source=MagicMock(),
+                    destination=MagicMock(),
+                    frame=frame,
+                    direction=FrameDirection.DOWNSTREAM,
+                    timestamp=0,
+                )
+            )
+
+        types = [event["type"] for event in emitted]
+        self.assertEqual(types.count("input_audio_buffer.speech_started"), 1)
+        self.assertEqual(types.count("input_audio_buffer.speech_stopped"), 1)
+        self.assertNotIn("input_audio_buffer.committed", types)
+        self.assertNotIn("conversation.item.created", types)
+
+    async def test_final_transcript_before_vad_stop_keeps_same_item_id(self) -> None:
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -229,8 +303,6 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_vad_stop_before_final_transcript_preserves_protocol_order(self) -> None:
-        from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
-
         emitted: list[dict[str, Any]] = []
 
         async def emit(event: dict[str, Any]) -> None:
@@ -290,7 +362,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
             FramePushed(
                 source=source,
                 destination=dest,
-                frame=TTSTextFrame(text="Hello", aggregated_by=AggregationType.SENTENCE),
+                frame=TTSTextFrame(text="Hello", text_type=TextType.SENTENCE),
                 direction=FrameDirection.DOWNSTREAM,
                 timestamp=1,
             )
@@ -489,7 +561,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         source = MagicMock()
         dest = MagicMock()
 
-        tts_text = TTSTextFrame(text="Hi there.", aggregated_by=AggregationType.SENTENCE)
+        tts_text = TTSTextFrame(text="Hi there.", text_type=TextType.SENTENCE)
         await observer.on_push_frame(
             FramePushed(
                 source=source,
@@ -559,10 +631,10 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-        await push(TTSTextFrame(text="One.", aggregated_by=AggregationType.SENTENCE))
+        await push(TTSTextFrame(text="One.", text_type=TextType.SENTENCE))
         await push(BotStoppedSpeakingFrame())
         await push(BotStartedSpeakingFrame())
-        await push(TTSTextFrame(text=" Two.", aggregated_by=AggregationType.SENTENCE))
+        await push(TTSTextFrame(text=" Two.", text_type=TextType.SENTENCE))
         await push(BotStoppedSpeakingFrame())
         await asyncio.sleep(0.25)
         self.assertNotIn("response.done", [e["type"] for e in emitted])
@@ -603,7 +675,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
         await push(LLMTextFrame(text="Hello."))
         await asyncio.sleep(0.05)
         self.assertNotIn("response.done", [e["type"] for e in emitted])
-        await push(TTSTextFrame(text="Hello.", aggregated_by=AggregationType.SENTENCE))
+        await push(TTSTextFrame(text="Hello.", text_type=TextType.SENTENCE))
         await push(TTSStoppedFrame())
         await asyncio.sleep(0)
         self.assertIn("response.done", [e["type"] for e in emitted])
@@ -712,7 +784,7 @@ class ObserverTranscriptTests(unittest.IsolatedAsyncioTestCase):
             )
 
         await push(LLMTextFrame(text="Hello there."))
-        await push(TTSTextFrame(text="Hello there.", aggregated_by=AggregationType.SENTENCE))
+        await push(TTSTextFrame(text="Hello there.", text_type=TextType.SENTENCE))
         await push(TTSStoppedFrame())
         await asyncio.sleep(0)
 
@@ -1209,9 +1281,20 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
 
                 return decorator
 
+        class _Task:
+            def __init__(self) -> None:
+                self.handlers: dict[str, Any] = {}
+                self.queue_frames = AsyncMock()
+
+            def event_handler(self, name: str):
+                def decorator(fn):
+                    self.handlers[name] = fn
+                    return fn
+
+                return decorator
+
         transport = _Transport()
-        task = MagicMock()
-        task.queue_frames = AsyncMock()
+        task = _Task()
         context = LLMContext(
             messages=[{"role": "system", "content": "Use tools for flight requests."}],
             tools=TOOLS_SCHEMA,
@@ -1229,6 +1312,8 @@ class WelcomeGateAlignmentTests(unittest.IsolatedAsyncioTestCase):
             intro_tool_choice="none",
         )
         await transport.handlers["on_client_connected"](None, None)
+        task.queue_frames.assert_not_awaited()
+        await task.handlers["on_pipeline_started"](task, MagicMock())
 
         queued_frames = task.queue_frames.await_args.args[0]
         self.assertEqual(len(queued_frames), 1)

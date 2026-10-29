@@ -22,6 +22,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.serializers.base_serializer import FrameSerializer
+from pipecat.services.nvidia.tts import NvidiaTTSSettings
 
 from realtime.audio import (
     DEFAULT_CLIENT_PCM_RATE,
@@ -383,7 +384,7 @@ class RealtimeFrameSerializer(FrameSerializer):
         await self._emit_event(server_event(SERVER_SESSION_UPDATED, session=dict(self._session_view)))
 
         if voice:
-            return TTSUpdateSettingsFrame(settings={"voice": voice})
+            return TTSUpdateSettingsFrame(delta=NvidiaTTSSettings(voice=voice))
         return None
 
     async def _deserialize_truncate(self, message: dict[str, Any], echo_id: str | None) -> Frame | None:

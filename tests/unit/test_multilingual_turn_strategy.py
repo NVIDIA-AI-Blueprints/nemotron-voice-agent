@@ -9,7 +9,7 @@ import unittest
 from argparse import Namespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
-from pipecat.runner.types import EvalRunnerArguments, RunnerArguments
+from pipecat.runner.types import RunnerArguments
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import TranscriptionUserTurnStartStrategy
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
@@ -71,11 +71,6 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
     def test_eval_transport_detects_runner_cli_transport(self) -> None:
         args = RunnerArguments()
         args.cli_args = Namespace(transport="eval")
-
-        self.assertTrue(_is_eval_transport(args))
-
-    def test_eval_transport_detects_eval_runner_arguments(self) -> None:
-        args = EvalRunnerArguments(host="localhost", port=7900)
 
         self.assertTrue(_is_eval_transport(args))
 
@@ -145,7 +140,9 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
             patch("examples.multilingual.pipeline.asyncio.to_thread", to_thread),
             patch("examples.multilingual.pipeline.get_lang_codes", get_lang_codes),
         ):
-            lang_codes = self._run_prepare_session_language_codes(EvalRunnerArguments(host="localhost", port=7900))
+            args = RunnerArguments()
+            args.cli_args = Namespace(transport="eval")
+            lang_codes = self._run_prepare_session_language_codes(args)
 
         self.assertEqual(lang_codes, "")
         to_thread.assert_not_awaited()
@@ -184,6 +181,8 @@ class MultilingualTurnStrategyTests(unittest.TestCase):
             asr_function_id="fn-123",
             tts_server="tts.example:443",
             tts_voice_id="Magpie-Multilingual.EN-US.Aria",
+            tts_function_id="tts-fn-456",
+            tts_model="magpie-tts-multilingual",
         )
 
     def test_non_eval_transport_passes_llm_language_capabilities(self) -> None:

@@ -35,7 +35,7 @@ from examples.frontend_backend_agent.src.runtime_context import runtime_today
 from examples.frontend_backend_agent.src.tool_handlers import build_handlers
 from examples.frontend_backend_agent.src.tts_filter import apply_frontend_backend_agent_pronunciation_for_tts
 from examples.shared.audio_recorder import create_audio_recorder
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.pipeline_utils import (
     build_pipeline_params,
     build_user_aggregator_params,
@@ -104,7 +104,7 @@ def _apply_chat_history_sliding_window(
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Frontend/Backend Agent cascaded pipeline for one session."""
     logger.info("Starting Frontend/Backend Agent cascaded pipeline")
-    transport = create_transport(runner_args)
+    transport = await create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
@@ -238,8 +238,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
-        "text_filters": [NemotronSpeechTextFilter()],
-        "text_transforms": [("*", apply_frontend_backend_agent_pronunciation_for_tts)],
+        "text_transforms": [
+            ("*", nemotron_speech_text_transform),
+            ("*", apply_frontend_backend_agent_pronunciation_for_tts),
+        ],
         "custom_dictionary": custom_dictionary,
     }
     if tts_function_id or tts_model:

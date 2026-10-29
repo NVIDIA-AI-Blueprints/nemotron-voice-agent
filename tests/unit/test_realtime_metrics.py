@@ -18,6 +18,8 @@ from pipecat.metrics.metrics import (
     LLMTokenUsage,
     LLMUsageMetricsData,
     ProcessingMetricsData,
+    TTFAMetricsData,
+    TTFATMetricsData,
     TTFBMetricsData,
 )
 from pipecat.observers.base_observer import FramePushed
@@ -36,6 +38,18 @@ def metrics_frame() -> MetricsFrame:
             TTFBMetricsData(processor="NvidiaSTTService#1", value=0.8),
             TTFBMetricsData(processor="NvidiaLLMService#1", value=0.2),
             TTFBMetricsData(processor="NvidiaTTSService#1", value=0.1),
+            TTFAMetricsData(
+                processor="NvidiaTTSService#1",
+                ttfa=0.15,
+                ttfb=0.1,
+                leading_silence=0.05,
+            ),
+            TTFATMetricsData(
+                processor="NvidiaLLMService#1",
+                ttfat=0.3,
+                ttfb=0.2,
+                thinking_time=0.1,
+            ),
             ProcessingMetricsData(processor="NvidiaLLMService#1", value=0.5),
             LLMUsageMetricsData(
                 processor="NvidiaLLMService#1",
@@ -59,7 +73,17 @@ class RealtimeMetricsAccumulatorTests(unittest.TestCase):
         accumulator = RealtimeMetricsAccumulator()
         accumulator.consume(metrics_frame())
         accumulator.consume(RTVIServerMessageFrame(data={"type": "user-bot-latency", "latency": 1.25, "first": False}))
-        accumulator.consume(RTVIServerMessageFrame(data={"type": "latency-breakdown", "vad_smart_turn": 0.7}))
+        accumulator.consume(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "metric-group",
+                    "metrics": [
+                        {"key": "text_aggregation_ms", "value": 66.5, "unit": "ms"},
+                        {"key": "turn_taking_latency_ms", "value": 700.0, "unit": "ms"},
+                    ],
+                }
+            )
+        )
 
         telemetry = accumulator.finish()
 
@@ -83,11 +107,16 @@ class RealtimeMetricsAccumulatorTests(unittest.TestCase):
             {
                 "asr_ttfb": [0.8],
                 "llm_processing_time": [0.5],
+                "llm_thinking_time": [0.1],
                 "llm_tokens_per_sec": [20.0],
-                "llm_ttft": [0.2],
+                "llm_ttfat": [0.3],
+                "llm_ttfb": [0.2],
                 "server_e2e": [1.25],
+                "text_aggregation": [0.0665],
+                "turn_taking_latency": [0.7],
+                "tts_leading_silence": [0.05],
+                "tts_ttfa": [0.15],
                 "tts_ttfb": [0.1],
-                "vad_smart_turn": [0.7],
             },
         )
 
@@ -205,8 +234,8 @@ class RealtimeMetricsLifecycleTests(unittest.IsolatedAsyncioTestCase):
         done = next(event for event in emitted if event["type"] == "response.done")
         self.assertEqual(done["response"]["usage"]["total_tokens"], 60)
 
-    async def test_barge_in_keeps_late_and_next_turn_metrics(self) -> None:
-        """Average all samples irrespective of cancellation or turn attribution."""
+    async def test_barge_in_discards_late_cancelled_metrics(self) -> None:
+        """Do not attribute late metrics from a cancelled response to the next turn."""
         emitted: list[dict] = []
 
         async def emit(event: dict) -> None:
@@ -259,11 +288,11 @@ class RealtimeMetricsLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         done_events = [event for event in emitted if event["type"] == "response.done"]
         second = done_events[1]["response"]
-        self.assertEqual(second["usage"]["total_tokens"], 210)
+        self.assertEqual(second["usage"]["total_tokens"], 30)
         metrics = json.loads(second["metadata"]["nvidia_metrics"])
         self.assertEqual(metrics["asr_ttfb"], [0.4])
-        self.assertEqual(metrics["llm_ttft"], [9.0, 0.2])
-        self.assertEqual(metrics["llm_processing_time"], [9.0, 0.5])
+        self.assertEqual(metrics["llm_ttfb"], [0.2])
+        self.assertEqual(metrics["llm_processing_time"], [0.5])
 
     async def test_cancel_without_stale_llm_end_does_not_block_next_text_response(self) -> None:
         """Keep baseline text lifecycle when a cancelled generation emits no LLM end."""

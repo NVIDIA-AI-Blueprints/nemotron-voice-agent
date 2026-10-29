@@ -4,11 +4,13 @@
 # ruff: noqa: D100, D101, D102
 
 import unittest
+from unittest.mock import patch
 
 from examples.multilingual.multilingual_processor import (
     PerTurnReminderProcessor,
     build_reminder,
     describe_language,
+    get_lang_codes,
     with_reasoning,
 )
 
@@ -30,6 +32,23 @@ class BuildReminderTests(unittest.TestCase):
         self.assertIn("Hindi", reminder)
         self.assertIn("ONE single language", reminder)
         self.assertNotIn("JSON", reminder)
+
+
+class LanguageCatalogTests(unittest.TestCase):
+    def test_tts_routing_key_is_forwarded_to_session_catalog(self) -> None:
+        with patch(
+            "examples.multilingual.multilingual_processor.build_session_languages",
+            return_value={"languages": ["en-US"]},
+        ) as build:
+            result = get_lang_codes(
+                tts_server="tts.example:443",
+                tts_voice_id="Voice",
+                tts_function_id="fn-123",
+                tts_model="magpie",
+            )
+
+        self.assertEqual(result, "en-US")
+        self.assertEqual(build.call_args.args[5:7], ("fn-123", "magpie"))
 
 
 class WithReasoningTests(unittest.TestCase):

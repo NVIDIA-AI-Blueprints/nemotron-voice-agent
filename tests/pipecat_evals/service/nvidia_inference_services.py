@@ -51,7 +51,7 @@ class InferenceMagpieTTSService(TTSService):
         """Indicate that this service reports TTFB and usage metrics."""
         return True
 
-    def __init__(self, *args, settings=None, text_filters=None, text_transforms=None, **kwargs) -> None:
+    def __init__(self, *args, settings=None, text_transforms=None, **kwargs) -> None:
         """Accept the NVIDIA gRPC constructor shape used by the examples."""
         voice = getattr(settings, "voice", None) or "Magpie-Multilingual.EN-US.Aria"
         language = getattr(settings, "language", None) or "en-US"
@@ -64,7 +64,6 @@ class InferenceMagpieTTSService(TTSService):
                 voice=str(voice),
                 language=str(language),
             ),
-            text_filters=text_filters,
             text_transforms=text_transforms,
             stop_frame_timeout_s=float(kwargs.get("stop_frame_timeout_s", 3.0)),
         )

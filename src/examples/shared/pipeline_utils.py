@@ -122,11 +122,30 @@ def _ms_metric(key: str, label: str, secs: float) -> dict:
     return {"key": key, "label": label, "value": round(secs * 1000, 3), "unit": "ms"}
 
 
+def turn_taking_latency_secs(breakdown) -> float | None:
+    """Measure VAD stop to LLM request for any configured turn strategy."""
+    endpointing = next(
+        (item for item in breakdown.contributions if item.key == "endpointing_wait"),
+        None,
+    )
+    llm_inference = next(
+        (item for item in breakdown.contributions if item.key == "llm_inference"),
+        None,
+    )
+    if endpointing is None or llm_inference is None:
+        return None
+    vad_stop_time = endpointing.start_time + endpointing.duration_secs
+    latency = llm_inference.start_time - vad_stop_time
+    return latency if latency >= 0 else None
+
+
 def latency_metric_group(turn: int, latency_secs: float, breakdown) -> dict:
     """Build the ``metric-group`` server message the Metrics Board summarizes for one user→bot turn."""
     metrics = [_ms_metric("total_latency_ms", "Total Latency", latency_secs)]
     if breakdown.user_turn_secs is not None:
         metrics.append(_ms_metric("user_turn_ms", "User Turn", breakdown.user_turn_secs))
+    if (turn_taking_latency := turn_taking_latency_secs(breakdown)) is not None:
+        metrics.append(_ms_metric("turn_taking_latency_ms", "Turn Taking Latency", turn_taking_latency))
     for index, ttfb in enumerate(breakdown.ttfb):
         processor = ttfb.processor.replace("#", "_").replace(" ", "_")
         metrics.append(_ms_metric(f"ttfb_{index}_{processor}", f"{ttfb.processor} TTFB", ttfb.duration_secs))
@@ -164,10 +183,12 @@ def register_session_start_handlers(
     from pipecat.frames.frames import LLMContextFrame, LLMRunFrame
 
     started = False
+    client_ready = False
+    pipeline_started = False
 
-    async def _start_session(source: str) -> None:
+    async def _maybe_start_session(source: str) -> None:
         nonlocal started
-        if started:
+        if started or not (client_ready and pipeline_started):
             return
         started = True
         logger.info(f"Client session start via {source}")
@@ -188,6 +209,12 @@ def register_session_start_handlers(
             run_frame = LLMContextFrame(context=intro_context)
         await task.queue_frames([run_frame])
 
+    @task.event_handler("on_pipeline_started")
+    async def _on_pipeline_started(worker, frame):  # noqa: ARG001
+        nonlocal pipeline_started
+        pipeline_started = True
+        await _maybe_start_session("client-ready+pipeline-started")
+
     if runner_protocol(runner_args) == "realtime":
         if not welcome_enabled:
             serializer = getattr(transport, "_realtime_serializer", None)
@@ -197,13 +224,17 @@ def register_session_start_handlers(
 
         @transport.event_handler("on_client_connected")
         async def _on_realtime_connected(transport_obj, client):  # noqa: ARG001
-            await _start_session("realtime-transport-connected")
+            nonlocal client_ready
+            client_ready = True
+            await _maybe_start_session("realtime-transport-connected+pipeline-started")
 
     else:
 
         @task.rtvi.event_handler("on_client_ready")
         async def _on_rtvi_ready(rtvi):  # noqa: ARG001
-            await _start_session("rtvi-client-ready")
+            nonlocal client_ready
+            client_ready = True
+            await _maybe_start_session("rtvi-client-ready+pipeline-started")
 
 
 def build_user_aggregator_params(welcome_enabled: bool) -> LLMUserAggregatorParams:
@@ -343,9 +374,9 @@ async def apply_pinned_prompt_summary(
     )
 
 
-def create_transport(runner_args: RunnerArguments):
+async def create_transport(runner_args: RunnerArguments):
     """Create a transport from runner arguments (WebRTC, WebSocket, Realtime, or eval)."""
-    from pipecat.runner.types import EvalRunnerArguments, SmallWebRTCRunnerArguments
+    from pipecat.runner.types import SmallWebRTCRunnerArguments, WebSocketRunnerArguments
 
     if isinstance(runner_args, SmallWebRTCRunnerArguments):
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -361,22 +392,33 @@ def create_transport(runner_args: RunnerArguments):
             webrtc_connection=runner_args.webrtc_connection,
         )
 
-    if isinstance(runner_args, EvalRunnerArguments):
-        from pipecat.evals.serializer import EvalSerializer
-        from pipecat.evals.transport import EvalTransport, EvalTransportParams
+    if isinstance(runner_args, WebSocketRunnerArguments) and runner_protocol(runner_args) != "realtime":
+        from pipecat.evals.transport import EvalTransportParams
+        from pipecat.runner.utils import create_transport as create_runner_transport
+        from pipecat.serializers.base_serializer import FrameSerializer
+        from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
-        return EvalTransport(
-            params=EvalTransportParams(
-                audio_in_enabled=True,
-                audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
-                audio_out_enabled=True,
-                audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
-                audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
-                add_wav_header=False,
-                serializer=EvalSerializer(),
-            ),
-            host=runner_args.host,
-            port=runner_args.port,
+        return await create_runner_transport(
+            runner_args,
+            {
+                "websocket": lambda: FastAPIWebsocketParams(
+                    audio_in_enabled=True,
+                    audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
+                    audio_out_enabled=True,
+                    audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+                    audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
+                    add_wav_header=False,
+                    serializer=WebClientFrameSerializer(params=FrameSerializer.InputParams(ignore_rtvi_messages=False)),
+                ),
+                "eval": lambda: EvalTransportParams(
+                    audio_in_enabled=True,
+                    audio_in_sample_rate=PIPELINE_AUDIO_IN_SAMPLE_RATE,
+                    audio_out_enabled=True,
+                    audio_out_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
+                    audio_out_10ms_chunks=parse_env_int("AUDIO_OUT_10MS_CHUNKS", 10),
+                    add_wav_header=False,
+                ),
+            },
         )
 
     websocket = getattr(runner_args, "websocket", None)

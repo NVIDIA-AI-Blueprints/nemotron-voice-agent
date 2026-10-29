@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
+from pipecat.adapters.llm.schemas.tools_schema import AdapterType, ToolsSchema
 
 CALL_BACKEND_TOOL: dict = {
     "type": "function",

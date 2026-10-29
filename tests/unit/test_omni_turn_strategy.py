@@ -4,13 +4,14 @@
 # ruff: noqa: D100, D101, D102
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 
-from examples.omni_assistant.pipeline import _build_user_turn_strategies
+from examples.omni_assistant.pipeline import _build_user_turn_strategies, _queue_finalized_user_turn
 from examples.omni_assistant.user_mute_processor import UserMuteProcessor
 
 
@@ -31,6 +32,24 @@ class OmniTurnStrategyTests(unittest.TestCase):
         self.assertIsInstance(stop_strategy, TurnAnalyzerUserTurnStopStrategy)
         self.assertIs(stop_strategy._turn_analyzer, analyzer)
         self.assertFalse(stop_strategy.wait_for_transcript)
+
+
+class OmniFinalizedTurnTests(unittest.IsolatedAsyncioTestCase):
+    async def test_message_added_payload_contains_finalized_content(self) -> None:
+        task = SimpleNamespace(queue_frame=AsyncMock())
+        message = SimpleNamespace(timestamp="now", content="spoken request", user_id="user")
+
+        await _queue_finalized_user_turn(task, message)
+
+        self.assertEqual(
+            task.queue_frame.await_args.args[0].data,
+            {
+                "type": "user-turn-finalized",
+                "timestamp": "now",
+                "transcript": "spoken request",
+                "user_id": "user",
+            },
+        )
 
 
 class UserMuteProcessorSetupTests(unittest.IsolatedAsyncioTestCase):
