@@ -51,6 +51,15 @@ delegation:
     liveness_reply: false          # R1: a silent reply to "are you still there?" / "could you repeat that?" is delegated
     question_never_silent: false   # R2: a silent reply to a question is delegated
     ping_as_status: false          # R3: a ping while WORKING is a status request (never steers the running call)
+    # R4: a backchannel ("okay") while the backend works gets a short line from frontend.yaml acknowledgement_lines
+    # instead of silence, and a repeated delegated filler is replaced from the same pool instead of dropped. Only
+    # when nothing else is pending, the backend question exemption does not apply and the session's ASR language
+    # has a lexicon (localise backchannel_words and acknowledgement_lines together). Off by default; set
+    # FDA_ACKNOWLEDGE_CALLER=true to turn it on. Never set it empty.
+    acknowledge_caller_while_working: "${FDA_ACKNOWLEDGE_CALLER:-false}"
+    acknowledgement_max_per_run: 2         # per backend run (replaced fillers count too)
+    acknowledgement_min_interval_s: 5      # between two acknowledgement lines
+    acknowledgement_min_since_agent_s: 0   # since the agent last spoke (0: no extra gap)
   # The prompt profile (prompts/<profile>/): FDA_PROMPT_PROFILE, default generic. Never set it empty.
   prompts: {path: "prompts/${FDA_PROMPT_PROFILE:-generic}/frontend.yaml"}
   # Every delegation-side fix is on here except M2 (experimental).

@@ -305,6 +305,10 @@ services:
       FDA_EVENT_LOG: logs/fda_voice_events.pipecat.jsonl
       FDA_PROMPT_PROFILE: ${FDA_PROMPT_PROFILE:-generic}
       FDA_SILENT_FRONTEND: "false"
+      # R4 acknowledgement lines: off (docker/docker-compose.fda-acknowledge-caller.yaml turns them on).
+      FDA_ACKNOWLEDGE_CALLER: "false"
+      # Policy follow-up verification of the LLM backend: on (it does nothing without a matching policy rule).
+      FDA_VERIFY_FOLLOW_UP_STEPS: "true"
       FRONTEND_LLM_MODEL: nvidia/nvidia/nemotron-3.5-lightning
       FRONTEND_LLM_BASE_URL: https://inference-api.nvidia.com/v1
       # The Hermes runtime's address (OpenShell: the gateway's routed host name; port 8080 is the

@@ -10,7 +10,7 @@ The example is registered in [`examples_registry.yaml`](../../../examples_regist
 - Browser UI sessions over WebRTC or the UI's WebSocket transport, with the Real-Time Voice Inference (RTVI) protocol.
 - OpenAI Realtime (GA) sessions on the shared `/v1/realtime` route with the model `nvidia/nemotron-realtime-frontend-delegation`.
 
-It has one Docker Compose recipe, `frontend-delegation-agent/single-gpu`, an eval overlay, [`docker/docker-compose.fda-eval.yaml`](../../../docker/docker-compose.fda-eval.yaml), an LLM backend overlay, [`docker/docker-compose.fda-llm.yaml`](../../../docker/docker-compose.fda-llm.yaml), and a silent-frontend overlay for single-turn evaluations, such as VoiceBench, only, [`docker/docker-compose.fda-silent-frontend.yaml`](../../../docker/docker-compose.fda-silent-frontend.yaml), which goes after the eval overlay. `FDA_PROMPT_PROFILE` selects the [prompt profile](#prompt-profiles). For the step-by-step guide, refer to [Deploy the Frontend Delegation Agent](../../../docs/how-to/deploy-frontend-delegation-agent.md). AI agents load the [`nemotron-voice-agent-fda-deploy`](../../../.agents/skills/nemotron-voice-agent-fda-deploy/SKILL.md) skill to build, deploy, or evaluate the example.
+It has one Docker Compose recipe, `frontend-delegation-agent/single-gpu`, an eval overlay, [`docker/docker-compose.fda-eval.yaml`](../../../docker/docker-compose.fda-eval.yaml), an LLM backend overlay, [`docker/docker-compose.fda-llm.yaml`](../../../docker/docker-compose.fda-llm.yaml), and a silent-frontend overlay for single-turn evaluations, such as VoiceBench, only, [`docker/docker-compose.fda-silent-frontend.yaml`](../../../docker/docker-compose.fda-silent-frontend.yaml), which goes after the eval overlay. An acknowledgement overlay, [`docker/docker-compose.fda-acknowledge-caller.yaml`](../../../docker/docker-compose.fda-acknowledge-caller.yaml), turns on [acknowledgement lines](#acknowledgement-switch) and goes after the other overlays. `FDA_PROMPT_PROFILE` selects the [prompt profile](#prompt-profiles). For the step-by-step guide, refer to [Deploy the Frontend Delegation Agent](../../../docs/how-to/deploy-frontend-delegation-agent.md). AI agents load the [`nemotron-voice-agent-fda-deploy`](../../../.agents/skills/nemotron-voice-agent-fda-deploy/SKILL.md) skill to build, deploy, or evaluate the example.
 
 ## Architecture
 
@@ -48,7 +48,7 @@ The gateway configuration has the following backend sections:
 
 - `backend:` holds the settings that every backend shares: `kind`, `model`, `base_url`, `api_key_env`, the run budgets and timeouts, `request_overrides`, `backend_trace`, and `prompts.path`.
 - `hermes:` holds the Hermes-only settings: `provider`, `context_length`, `load_soul_identity`, and `disable_streaming`.
-- `llm:` holds the LLM-only settings: `reasoning_effort`, `request_timeout_s`, and `max_retries`.
+- `llm:` holds the LLM-only settings: `reasoning_effort`, `request_timeout_s`, `max_retries`, and the [policy follow-up verification](#policy-follow-up-verification) settings `verify_policy_follow_up_steps`, `follow_up_rules`, and `follow_up_ignore_tools`.
 
 The former names fail with an error that names the new one. `workers.agent_kind` and `FDH_AGENT_KIND` are now `backend.kind` and `FDA_BACKEND`. The shared keys moved from `hermes:` to `backend:`. The `in_process_fake` value of `workers.mode` and of the voice side's `backend.link` is now `in_process`.
 
@@ -108,7 +108,7 @@ The following limits apply:
 
 A prompt profile is a folder, `config/prompts/<profile>/`, with the frontend catalog (`frontend.yaml`, read by the voice side), one backend catalog per backend (`backend/hermes.yaml` and `backend/llm.yaml`, read by the gateway), and the voice-layer messages (`voice.yaml`). The `FDA_PROMPT_PROFILE` environment variable selects it.
 
-The gateway reads `backend/{kind}.yaml`, where `{kind}` is `backend.kind`. `backend/hermes.yaml` is the former `backend.yaml`, unchanged. `backend/llm.yaml` is an independent full copy of the backend prompts plus the `harness_*` keys, which hold the text that the LLM backend adds to the conversation itself, such as its steer, interrupt, and loop-warning messages. The two files are independent: to change the backend prompts of both backends, edit both. The example ships the profiles in the following table.
+The gateway reads `backend/{kind}.yaml`, where `{kind}` is `backend.kind`. `backend/hermes.yaml` is the former `backend.yaml`, unchanged. `backend/llm.yaml` is an independent full copy of the backend prompts plus the `harness_*` keys, which hold the text that the LLM backend adds to the conversation itself, such as its steer, interrupt, and loop-warning messages, and the `harness_follow_up_check` and `harness_follow_up_draft` texts of the policy follow-up check. The two files are independent: to change the backend prompts of both backends, edit both. The example ships the profiles in the following table.
 
 | Prompt profile | Default for | Purpose |
 | --- | --- | --- |
@@ -228,6 +228,24 @@ Single-turn evaluations, such as VoiceBench, score only the first response of ea
 
 For the deployment steps, refer to [Run a VoiceBench Evaluation](../../../docs/how-to/deploy-frontend-delegation-agent.md#run-a-voicebench-evaluation).
 
+## Acknowledgement Switch
+
+While the backend works, a short acknowledgement from the caller, such as "okay" or "mm-hmm," normally gets no reply. The following switch is off by default in both profiles and in the Python code:
+
+| Switch | Where | Effect |
+| --- | --- | --- |
+| `delegation.guards.acknowledge_caller_while_working` | `delegation_agent.yaml` (`FDA_ACKNOWLEDGE_CALLER`, default `false`) | R4: when the caller says a backchannel while the backend is WORKING and nothing else is pending, the frontend speaks a short line from `acknowledgement_lines` in `prompts/<profile>/frontend.yaml` in place of silence, logged as a `delegation_guard` event with `guard=acknowledge_caller`. A repeated delegated filler while the backend is WORKING is replaced from the same pool in place of being dropped, logged as a `filler_deduped` event with the reason `acknowledgement`. It never answers a backend question, never replaces a hold request or a liveness ping, and never runs with the silent frontend. It acts only when the session's ASR language has a phrase lexicon (`delegation.guards.lexicon`; only `en` ships), so localize `backchannel_words` and `acknowledgement_lines` together. `acknowledgement_max_per_run` (2, replaced fillers included), `acknowledgement_min_interval_s` (5), and `acknowledgement_min_since_agent_s` (0) limit the lines. Only `docker/docker-compose.fda-acknowledge-caller.yaml` turns it on. With the switch off, its keys are dropped from the effective settings, so the `config_hash` does not change |
+
+## Policy Follow-Up Verification
+
+A client policy often states what must follow a change, for example "After rebooking, always move the seat to the new flight." The following switch applies to the LLM backend only and is on by default:
+
+| Switch | Where | Effect |
+| --- | --- | --- |
+| `llm.verify_policy_follow_up_steps` | `gateway.yaml`, `gateway.eval.yaml` (`FDA_VERIFY_FOLLOW_UP_STEPS`, default `true`) | At configure, the backend reads the "After X, always ..." or "After X, ... must ..." sentences of the client's own policy (the `session.update` instructions) and matches each one to the session's write tools. After a successful write that matches a rule, the backend withholds its draft answer once (`harness_follow_up_draft`) and sends `harness_follow_up_check`, which asks the model to complete the rule's follow-up steps before it answers. Without a matching rule, it does nothing. The gateway event log records a `follow_up_obligations` event at configure when the session has rules, and a `follow_up_check` event for each check |
+
+The extraction reads English sentences only. For a policy that it cannot read, such as one in another language, a table, or a rule for a catch-all tool, declare the rule in `llm.follow_up_rules` as `{tools: [<tool name>, ...], text: "<follow-up steps>", domain: <optional>}`. `llm.follow_up_ignore_tools` lists tools that never open an extracted rule. The Hermes backend does not use these settings. To turn the check off, set `verify_policy_follow_up_steps: false` in the gateway configuration.
+
 ## Deployed Fingerprint
 
 The voice server and the gateway log a deployed fingerprint: `fda_session_start.features`, `frontend_prompt`, and `backend_configured`, which includes `backend_domain` and `session_tools_sha256`. `session_tools_sha256` is the first 16 hex characters of the SHA-256 of the session's sorted `session.update` tool schemas. With an `auto` switch on, the voice server also logs a `session_rules` event with the same hash and the derived rules.
@@ -248,6 +266,9 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
 # with the general_qa prompt profile
 FDA_PROMPT_PROFILE=general_qa docker compose -f docker-compose.yml -f docker/docker-compose.fda-eval.yaml \
   -f docker/docker-compose.fda-silent-frontend.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
+# acknowledgement lines: add the acknowledgement overlay after the other overlays you use
+docker compose -f docker-compose.yml -f docker/docker-compose.fda-acknowledge-caller.yaml \
   --profile frontend-delegation-agent/single-gpu up -d --build
 # plain runtime (baseline): add the plain overlay before the eval overlay, if any
 docker compose -f docker-compose.yml -f docker/docker-compose.fda-hermes-plain.yaml \

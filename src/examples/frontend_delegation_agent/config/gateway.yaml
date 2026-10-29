@@ -62,6 +62,15 @@ llm:                                         # read only when backend.kind: llm
   reasoning_effort: medium                   # sent top level on every request
   request_timeout_s: 180                     # OpenAI SDK per-read timeout
   max_retries: 3                             # attempts per model call
+  # Verify the policy's follow-up steps after a change (LLM backend only). After a successful write that matches an
+  # "After X, always/must ..." rule in the client's policy, the backend checks the required follow-up steps before it answers.
+  # Enabled by default. Recommended whenever the client sends a policy in session.update instructions; without a matching
+  # rule it does nothing. Set FDA_VERIFY_FOLLOW_UP_STEPS=false to turn it off.
+  verify_policy_follow_up_steps: ${FDA_VERIFY_FOLLOW_UP_STEPS:-true}
+  # Optional: rules the policy text cannot express ({tools: [name, ...], text: "...", domain: <optional>}), and tools
+  # that never open an extracted rule.
+  follow_up_rules: []
+  follow_up_ignore_tools: []
 
 # Backend prompt variants ({% if features.<name> %} in prompts/<profile>/backend/<kind>.yaml).
 # All on by default. Set one to false to render the backend prompt without that variant.

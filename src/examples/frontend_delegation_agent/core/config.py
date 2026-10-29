@@ -91,6 +91,11 @@ DEFAULTS: dict[str, Any] = {
             "liveness_reply": False,  # R1: a silent reply to a ping or repeat request is delegated (or replayed)
             "question_never_silent": False,  # R2: a silent reply to a question is delegated
             "ping_as_status": False,  # R3: a ping while WORKING is a status request, never a steer
+            # R4: a backchannel while the backend works gets a short acknowledgement line (off by default).
+            "acknowledge_caller_while_working": False,
+            "acknowledgement_max_per_run": 2,  # per backend run (fillers it replaces count too)
+            "acknowledgement_min_interval_s": 5.0,  # between two acknowledgement lines
+            "acknowledgement_min_since_agent_s": 0.0,  # since the agent last spoke (0: no extra gap)
             # Phrase lists per language (BCP-47 tag or base language); the session's ASR language picks one.
             # The backchannel list is always delegation.guards.backchannel_words.
             "lexicon": {"en": {key: value for key, value in ENGLISH.items() if key != "backchannel"}},
@@ -216,6 +221,16 @@ class LivenessSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class AcknowledgeSettings:
+    """``delegation.guards`` R4: a short acknowledgement line for a backchannel while the backend works."""
+
+    enabled: bool = False
+    max_per_run: int = 2
+    min_interval_s: float = 5.0
+    min_since_agent_s: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class FillerDedupeSettings:
     """``delegation.filler_dedupe`` (G1)."""
 
@@ -237,6 +252,7 @@ class DelegationSettings:
     replay: ReplaySettings = field(default_factory=ReplaySettings)
     filler_dedupe: FillerDedupeSettings = field(default_factory=FillerDedupeSettings)
     liveness: LivenessSettings = field(default_factory=LivenessSettings)
+    acknowledge: AcknowledgeSettings = field(default_factory=AcknowledgeSettings)
     silent_frontend: bool = False
 
     @property
@@ -441,6 +457,7 @@ def build_delegation_config(merged: dict[str, Any], files: tuple[Path, ...] = ()
             recent=_int(dl["filler_dedupe"]["recent"], "delegation.filler_dedupe.recent", minimum=1),
         ),
         liveness=_liveness_settings(dl["guards"]),
+        acknowledge=_acknowledge_settings(dl["guards"]),
     )
     gateway_config = str(be.get("gateway_config") or "")
     backend = BackendSettings(
@@ -502,6 +519,9 @@ def build_delegation_config(merged: dict[str, Any], files: tuple[Path, ...] = ()
     if not delegation.silent_frontend:
         # Off: absent, so the config hash of every run without the switch stays unchanged.
         effective["delegation"].pop("silent_frontend", None)
+    if not delegation.acknowledge.enabled:
+        for key in ACKNOWLEDGE_KEYS:  # the same: R4 off leaves the config hash unchanged
+            effective["delegation"]["guards"].pop(key, None)
     return DelegationConfig(
         voice=voice,
         frontend=frontend,
@@ -531,6 +551,27 @@ def _replay_settings(section: dict[str, Any]) -> ReplaySettings:
         ttl_s=_float(section["ttl_s"], f"{key}.ttl_s"),
         triggers=triggers,
         whole_if_heard_below=whole,
+    )
+
+
+#: The R4 keys of ``delegation.guards`` (left out of ``effective`` while R4 is off).
+ACKNOWLEDGE_KEYS = (
+    "acknowledge_caller_while_working",
+    "acknowledgement_max_per_run",
+    "acknowledgement_min_interval_s",
+    "acknowledgement_min_since_agent_s",
+)
+
+
+def _acknowledge_settings(guards: dict[str, Any]) -> AcknowledgeSettings:
+    key = "delegation.guards"
+    return AcknowledgeSettings(
+        enabled=_bool(guards["acknowledge_caller_while_working"], f"{key}.acknowledge_caller_while_working"),
+        max_per_run=_int(guards["acknowledgement_max_per_run"], f"{key}.acknowledgement_max_per_run", minimum=1),
+        min_interval_s=_float(guards["acknowledgement_min_interval_s"], f"{key}.acknowledgement_min_interval_s"),
+        min_since_agent_s=_float(
+            guards["acknowledgement_min_since_agent_s"], f"{key}.acknowledgement_min_since_agent_s"
+        ),
     )
 
 

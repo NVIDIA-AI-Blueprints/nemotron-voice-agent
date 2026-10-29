@@ -61,6 +61,9 @@ class WorkerCore:
             session_id=session_id, emit=emit, timeout_s=tool_timeout_s, is_interrupted=self._host_interrupted
         )
         self.host: AgentHost = host_factory(self.futures, self._activity)
+        set_event_sink = getattr(self.host, "set_event_sink", None)
+        if callable(set_event_sink):  # hosts that write gateway event-log records (the LLM backend)
+            set_event_sink(self._event)
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="fda-run")
         self._run_task: asyncio.Task[None] | None = None
         self._run_epoch: int | None = None
@@ -237,6 +240,11 @@ class WorkerCore:
                     "preview": preview[:200],
                 }
             )
+
+    def _event(self, event: str, fields: dict[str, Any]) -> None:
+        """One record for the gateway event log (``event`` message)."""
+        with contextlib.suppress(Exception):
+            self._emit({"type": "event", "event": event, "session_id": self.session_id, **fields})
 
     def _host_interrupted(self) -> bool:
         host = getattr(self, "host", None)

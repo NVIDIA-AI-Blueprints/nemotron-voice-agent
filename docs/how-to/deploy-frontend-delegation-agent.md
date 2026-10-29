@@ -84,7 +84,7 @@ The overlay also removes the four Hermes and OpenShell services from the recipe 
 
 The following rules apply to the Compose files:
 
-- Pass the overlays in this order: `docker-compose.yml`, then the eval overlay if you use it, then the LLM backend overlay, then the silent-frontend overlay if you use it.
+- Pass the overlays in this order: `docker-compose.yml`, then the eval overlay if you use it, then the LLM backend overlay, then the silent-frontend overlay if you use it, and then the acknowledgement overlay if you use it.
 - Never combine the LLM backend overlay with the plain runtime overlay, `docker/docker-compose.fda-hermes-plain.yaml`. The plain overlay runs Hermes.
 - Pass the same files in every Compose command of the deployment, such as `ps`, `logs`, `exec`, and `down`. An `up` command without the LLM backend overlay recreates the deployment with Hermes.
 
@@ -97,6 +97,8 @@ docker compose -f docker-compose.yml -f docker/docker-compose.fda-llm.yaml \
 ```
 
 The `config hash` covers the backend link and the gateway configuration file, so it differs between the two backends.
+
+The LLM backend also verifies the follow-up steps of the client's policy. When the client's `session.update` instructions contain a rule such as "After rebooking, always move the seat to the new flight," and a write tool call that matches the rule succeeds, the backend withholds its draft answer once. It then asks the model to complete the rule's follow-up steps before it answers. Without a matching rule, the check does nothing. The `llm.verify_policy_follow_up_steps` key in `gateway.yaml` and `gateway.eval.yaml` turns it on, and Compose sets `FDA_VERIFY_FOLLOW_UP_STEPS=true` as a literal value. The rule extraction reads English "After X, always ..." and "After X, ... must ..." sentences only. For other policies, declare the rules in `llm.follow_up_rules`. The gateway event log records a `follow_up_obligations` event at configure when the session has rules, and a `follow_up_check` event for each check. The Hermes backend does not run this check. For the settings, refer to [Policy Follow-Up Verification](../../src/examples/frontend_delegation_agent/README.md#policy-follow-up-verification).
 
 ## Prerequisites
 
@@ -155,9 +157,9 @@ The `eval` profile refuses browser UI sessions, so they cannot take resources fr
 
 A prompt profile is a named set of the agent's prompts. Each profile is a folder, `src/examples/frontend_delegation_agent/config/prompts/<profile>/`, with the following files:
 
-- `frontend.yaml`: the frontend prompt catalog of the voice side, including `frontend_system`, which makes the delegation decisions.
+- `frontend.yaml`: the frontend prompt catalog of the voice side, including `frontend_system`, which makes the delegation decisions, and the line pools that the frontend speaks itself, such as `filler_alternatives`, `status_proactive_lines`, and `acknowledgement_lines`.
 - `backend/hermes.yaml`: the backend prompt catalog of the Hermes backend.
-- `backend/llm.yaml`: the backend prompt catalog of the LLM backend. It is a full copy of the backend prompts, plus the `harness_*` keys. These keys hold the text that the LLM backend adds to the conversation itself, such as its steer and interrupt messages.
+- `backend/llm.yaml`: the backend prompt catalog of the LLM backend. It is a full copy of the backend prompts, plus the `harness_*` keys. These keys hold the text that the LLM backend adds to the conversation itself, such as its steer and interrupt messages and its policy follow-up check, `harness_follow_up_check` and `harness_follow_up_draft`.
 - `voice.yaml`: the voice-side messages about tool calls and formats.
 
 The gateway reads `prompts/<profile>/backend/{kind}.yaml`, where `{kind}` is the backend, so each backend reads its own file. The two backend files are independent. To change the backend prompts of both backends, edit both files.
@@ -273,6 +275,8 @@ The following optional keys change the deployment. Leave them unset to keep the 
 | `HERMES_AGENT_DIR` | `../hermes-agent` | Path of the Hermes checkout for the image build. Both Hermes runtimes use it. The LLM backend does not. |
 | `FDA_PROMPT_PROFILE` | `generic`, or `customer_service` with the eval overlay | The prompt profile: `generic`, `customer_service`, `general_qa`, or a profile that you add. It is the only `FDA_*` key that `.env` can change. Never set it to an empty value. Refer to [Prompt Profiles](#prompt-profiles). |
 | `FDA_SILENT_FRONTEND` | `false` | `true` keeps the frontend silent on delegated turns for single-turn evaluations, such as VoiceBench. Compose sets `false` as a literal value, and only the silent-frontend overlay sets `true`. Setting it in `.env` has no effect. Never set it to an empty value. Refer to [Run a VoiceBench Evaluation](#run-a-voicebench-evaluation). |
+| `FDA_ACKNOWLEDGE_CALLER` | `false` | `true` makes the frontend speak a short acknowledgement line when the caller says "okay" or "mm-hmm" while the backend works. Compose sets `false` as a literal value, and only the acknowledgement overlay sets `true`. Setting it in `.env` has no effect. Never set it to an empty value. Refer to [Turn On Acknowledgement Lines](#turn-on-acknowledgement-lines). |
+| `FDA_VERIFY_FOLLOW_UP_STEPS` | `true` | LLM backend only: verify the follow-up steps that the client's policy requires after a change. Compose sets `true` as a literal value. Setting it in `.env` has no effect. To turn the check off, set `llm.verify_policy_follow_up_steps: false` in the gateway configuration. Refer to [Choose a Backend](#choose-a-backend). |
 
 Do not set `UVICORN_WS_PING_INTERVAL` for this recipe. Compose sets it to `0` on the voice service, and Realtime sessions refuse to start when the server pings WebSocket clients.
 
@@ -686,6 +690,26 @@ To run a VoiceBench evaluation with a silent frontend and the `general_qa` profi
 
 To switch back to a Tau or other evaluation deployment, rerun the `up -d --build` command of your backend from [Deploy in Eval Mode](#deploy-in-eval-mode) without the silent-frontend overlay and without `FDA_PROMPT_PROFILE`. Compose then recreates the containers with `FDA_SILENT_FRONTEND=false` and the `customer_service` prompt profile.
 
+## Turn On Acknowledgement Lines
+
+While the backend works, the frontend stays silent when the caller says a short acknowledgement, such as "okay" or "mm-hmm." The acknowledgement overlay, `docker/docker-compose.fda-acknowledge-caller.yaml`, sets `FDA_ACKNOWLEDGE_CALLER=true`, which turns on the `delegation.guards.acknowledge_caller_while_working` switch. The switch is off by default. With the switch on, the agent behaves as follows:
+
+- When the caller says a backchannel while the backend works and nothing else is pending, the frontend speaks a short line from `acknowledgement_lines` in `frontend.yaml`. The voice event log records a `delegation_guard` event with `guard=acknowledge_caller`.
+- When a delegated filler repeats a recent one while the backend works, the frontend replaces it with a line from the same pool in place of dropping it. The voice event log records a `filler_deduped` event with the reason `acknowledgement`.
+- The frontend never speaks an acknowledgement line in reply to a backend question, a hold request, or a liveness ping, and never with the silent frontend.
+- The frontend speaks at most two acknowledgement lines per backend run, at least 5 seconds apart. The `acknowledgement_max_per_run`, `acknowledgement_min_interval_s`, and `acknowledgement_min_since_agent_s` keys of `delegation_agent.yaml` set these limits.
+
+The switch acts only when the session's ASR language has a phrase lexicon. Only English ships. To use another language, localize `backchannel_words` and `acknowledgement_lines` together.
+
+To turn the lines on, add the acknowledgement overlay after the other Compose files of your deployment, and pass it in every later Compose command. The following command starts the Hermes backend in the `default` profile with acknowledgement lines:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.fda-acknowledge-caller.yaml \
+  --profile frontend-delegation-agent/single-gpu up -d --build
+```
+
+For an eval-mode deployment, use `docker compose $FDA_FILES -f docker/docker-compose.fda-acknowledge-caller.yaml` with `FDA_FILES` from [Deploy in Eval Mode](#deploy-in-eval-mode). To check the switch, run `printenv FDA_ACKNOWLEDGE_CALLER` in the voice container with the same files. The command prints `true`. With the switch on, the `config hash` differs. To turn the lines off, rerun the `up -d --build` command without the overlay.
+
 ## Read the Logs
 
 The containers write the logs in the following table. The `logs/` paths are on the host, in the repository's `logs/` directory.
@@ -739,7 +763,7 @@ docker compose $FDA_FILES --profile frontend-delegation-agent/single-gpu down
 
 In the OpenShell runtime, `fda-hermes` saves the sandbox's `/app/logs` to `logs/openshell/<time>/` and then deletes the sandbox. The stop can take up to 60 seconds. If the controller crashed and left a sandbox behind, the next start saves its logs and deletes it before it creates a new one.
 
-If you started the deployment with the silent-frontend overlay, pass it last as well.
+If you started the deployment with the silent-frontend overlay or the acknowledgement overlay, pass it as well, in the same order.
 
 In the plain runtime, the gateway closes open sessions one after another, so the stop can take up to 75 seconds. Pass the plain overlay to `down` as well.
 

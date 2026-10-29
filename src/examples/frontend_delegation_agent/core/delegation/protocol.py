@@ -69,6 +69,8 @@ SPECS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         "run_outcome": ("epoch", "status"),
         "closed": (),
         "error": ("phase", "message"),
+        # A record for the gateway event log only (never forwarded to the voice server).
+        "event": ("event",),
     },
 }
 

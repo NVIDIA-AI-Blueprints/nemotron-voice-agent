@@ -39,6 +39,7 @@ REQUIRED: dict[str, dict[str, Any]] = {
 OPTIONAL: dict[str, dict[str, Any]] = {
     "status_proactive_lines": {},  # M1: the proactive status while the backend works
     "filler_alternatives": {},  # G1: replacements for a repeated filler
+    "acknowledgement_lines": {},  # R4: a backchannel while the backend works
 }
 
 

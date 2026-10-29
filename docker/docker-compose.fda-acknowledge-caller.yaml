@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Acknowledgement lines for the Frontend Delegation Agent (delegation.guards.acknowledge_caller_while_working).
+# When the caller says a short acknowledgement ("okay", "mm-hmm") while the backend works and nothing else is
+# pending, the frontend speaks a short line from frontend.yaml acknowledgement_lines instead of staying silent,
+# and a repeated delegated filler is replaced from the same pool instead of dropped. Apply after the other
+# overlays you use:
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.fda-acknowledge-caller.yaml \
+#     --profile frontend-delegation-agent/single-gpu up -d
+#
+# It is off by default. Turn it on only for the runs where you want it.
+
+services:
+  frontend-delegation-agent-single-gpu:
+    environment:
+      FDA_ACKNOWLEDGE_CALLER: "true"

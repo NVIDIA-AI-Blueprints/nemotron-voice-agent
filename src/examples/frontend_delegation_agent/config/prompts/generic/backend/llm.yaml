@@ -253,3 +253,16 @@ harness_loop_same_tool_failure: "{{ tool_name }} has failed {{ count }} times th
 harness_iteration_limit: "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing what you've found and accomplished so far, without calling any more tools."
 # After a reply with no tool call that ends on an announced action (at most twice per run).
 harness_continue_now: "[System: Continue now. Execute the required tool calls and only send your final answer after completing the task.]"
+# llm.verify_policy_follow_up_steps: the withheld draft answer, kept in the history as this row.
+harness_follow_up_draft: "[draft answer withheld for a policy check]"
+# llm.verify_policy_follow_up_steps: sent once before the answer when a successful write opened a follow-up
+# rule of the client's policy. changes: the writes ("name(arguments)"); obligations: the policy texts.
+harness_follow_up_check: |-
+  [System check before you answer. Not from the user.] Earlier in this conversation you made these changes: {{ changes }}.
+  Your policy says this about what must follow such changes:
+  {% for o in obligations %}- {{ o }}
+  {% endfor %}For each step that applies to the changes you made:
+  - if a tool call in this conversation already did it, nothing to do;
+  - if it needs the user's choice or consent (such as a preference or an option), ask the user for it now and do not assume;
+  - otherwise, do it now with your tools, carrying over exactly what the original record had.
+  A step that changes anything follows your policy's confirmation rules like any other change; never charge or refund without the user's explicit yes. Do not make any change the policy does not require for these changes. Then give your answer. Say that something was done only if a tool result in this conversation shows it.

@@ -25,6 +25,13 @@ prompt_features:
   situational_facts: true
   identity_from_identifier: true
 
+llm:
+  # Verify the policy's follow-up steps after a change (LLM backend only). After a successful write that matches an
+  # "After X, always/must ..." rule in the client's policy, the backend checks the required follow-up steps before it answers.
+  # Enabled by default. Recommended whenever the client sends a policy in session.update instructions; without a matching
+  # rule it does nothing. Set FDA_VERIFY_FOLLOW_UP_STEPS=false to turn it off.
+  verify_policy_follow_up_steps: ${FDA_VERIFY_FOLLOW_UP_STEPS:-true}
+
 backend:
   # P0.3: the clean controls and the arms record each model request and response for the G2 decision
   # replay (logging only). FDA_BACKEND_TRACE=false turns it off.

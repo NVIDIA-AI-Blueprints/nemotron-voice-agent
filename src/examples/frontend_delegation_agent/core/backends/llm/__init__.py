@@ -29,6 +29,8 @@ HARNESS_KEYS: tuple[str, ...] = (
     "harness_loop_same_tool_failure",
     "harness_iteration_limit",
     "harness_continue_now",
+    "harness_follow_up_draft",
+    "harness_follow_up_check",
 )
 
 SPEC = BackendSpec(

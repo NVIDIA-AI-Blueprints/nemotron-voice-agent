@@ -16,12 +16,16 @@ loop thread, cumulative usage. Its behaviour:
 * **Replies**: reasoning-only replies become the answer; a reply that ends on an announced action is
   re-prompted with "Continue now" (twice at most); one retry for an empty reply; after
   ``max_iterations`` calls a summary request answered without tools.
+* **Policy follow-up check** (``llm.verify_policy_follow_up_steps``, see ``follow_up.py``): when a
+  successful write opened a follow-up rule of the session's policy, the draft answer is withheld once
+  and ``harness_follow_up_check`` asks the model to complete the required steps before it answers.
 
 Stored rows are already what goes on the wire (see ``wire.py``). Stdlib only, apart from the client.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import threading
@@ -32,12 +36,15 @@ from typing import Any
 
 from examples.frontend_delegation_agent.core.backends.llm import tools as tool_rules
 from examples.frontend_delegation_agent.core.backends.llm.client import Aborted, ChatClient, ChatResult
+from examples.frontend_delegation_agent.core.backends.llm.follow_up import Check, FollowUpTracker
 from examples.frontend_delegation_agent.core.backends.llm.wire import build, strip_think
 
 logger = logging.getLogger(__name__)
 
 ToolCaller = Callable[[str, dict[str, Any], str], str]
 Render = Callable[..., str]
+#: Writes one gateway event-log record: ``(event, fields)``.
+EventSink = Callable[[str, dict[str, Any]], None]
 
 #: A redirect that keeps arriving while its correction is retried becomes a steer after this many restarts.
 MAX_REDIRECT_RESTARTS = 3
@@ -88,8 +95,14 @@ class LLMAgent:
         max_iterations: int,
         on_activity: Callable[[str, str, str], None] | None = None,
         trace: Any = None,
+        follow_up: FollowUpTracker | None = None,
+        on_event: EventSink | None = None,
     ) -> None:
-        """``tools`` is the request's ``tools`` field; ``render(key, **vars)`` renders ``llm.yaml`` text."""
+        """``tools`` is the request's ``tools`` field; ``render(key, **vars)`` renders ``llm.yaml`` text.
+
+        ``follow_up`` is the session's policy follow-up tracker (``None``: no check is ever sent);
+        ``on_event`` writes the ``follow_up_check`` record to the gateway event log.
+        """
         self._client = client
         self._system = system
         self._tools = tools
@@ -99,6 +112,8 @@ class LLMAgent:
         self._max_iterations = max_iterations
         self._on_activity = on_activity
         self._trace = trace
+        self._follow_up = follow_up
+        self._on_event = on_event
         self._lock = threading.Lock()
         self._interrupted = threading.Event()
         self._interrupt_message = ""
@@ -174,12 +189,21 @@ class LLMAgent:
         self, user_message: str, conversation_history: list[dict[str, Any]], task_id: str
     ) -> dict[str, Any]:
         """One run: model calls and tool calls until an answer, an interrupt or a failure."""
+        if self._follow_up is None:
+            return self._run(user_message, conversation_history, task_id)
+        self._follow_up.start_run()
+        result = self._run(user_message, conversation_history, task_id)
+        self._follow_up.finish(result.get("final_response"), completed=bool(result.get("completed")))
+        return result
+
+    def _run(self, user_message: str, conversation_history: list[dict[str, Any]], task_id: str) -> dict[str, Any]:
         messages = [dict(row) for row in conversation_history]
         messages.append({"role": "user", "content": user_message})
         warnings = tool_rules.FailureWarnings(self._render)
         invalid_rounds = nudges = restarts = 0
         retried_empty = limit_sent = False
         calls = 0
+        draft: str | None = None  # the answer withheld for the follow-up check (its fallback)
         while True:
             if self._interrupted.is_set():
                 return self._interrupted_result(messages)
@@ -192,12 +216,17 @@ class LLMAgent:
             try:
                 result = self._model_call(messages, task_id, calls + 1, tools=None if final_call else self._tools)
             except Aborted:
+                draft = None  # after a redirect the withheld draft answers an old request
                 restarts = self._after_abort(restarts)
                 continue
             except Exception as exc:  # noqa: BLE001 - the run fails; the controller apologises
                 logger.exception("model call failed")
+                if draft:  # the check's own call failed: answer as the run would have without it
+                    messages.append({"role": "assistant", "content": draft})
+                    return self._result(messages, draft)
                 return self._result(messages, None, failed=True, error=f"{type(exc).__name__}: {exc}")
             if result is None:  # a redirect crossed the finished reply: discard it and retry
+                draft = None
                 restarts = self._after_abort(restarts)
                 continue
             restarts = 0
@@ -222,8 +251,14 @@ class LLMAgent:
                 messages.append({"role": "assistant", "content": text})
                 messages.append({"role": "user", "content": self._render("harness_continue_now")})
                 continue
+            if not text and draft:
+                text = draft  # an empty reply to the check: the withheld draft is the answer
             if not text and not retried_empty and not final_call:
                 retried_empty = True
+                continue
+            if self._follow_up is not None and not final_call and self._follow_up.due():
+                draft = text
+                self._send_follow_up_check(messages, self._follow_up.fire(), task_id)
                 continue
             messages.append({"role": "assistant", "content": text})
             return self._result(messages, text)
@@ -368,7 +403,10 @@ class LLMAgent:
             elif call["args"] is None:
                 output = self._render("harness_invalid_args", error=call["error"])
             else:
-                output = warnings.after(call["name"], call["args"], self._run_tool(call["name"], call["args"], task_id))
+                raw = self._run_tool(call["name"], call["args"], task_id)
+                if self._follow_up is not None:
+                    self._follow_up.record(call["name"], call["args"], raw)
+                output = warnings.after(call["name"], call["args"], raw)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
         return invalid_rounds
 
@@ -384,6 +422,30 @@ class LLMAgent:
             self._last_activity = time.time()
         self._activity("tool_completed", name, output)
         return output
+
+    def _send_follow_up_check(self, messages: list[dict[str, Any]], check: Check, task_id: str) -> None:
+        """Withhold the draft answer and ask the model to complete the policy's follow-up steps."""
+        messages.append({"role": "assistant", "content": self._render("harness_follow_up_draft")})
+        messages.append(
+            {
+                "role": "user",
+                "content": self._render(
+                    "harness_follow_up_check",
+                    changes="; ".join(check.changes),
+                    obligations=[rule.text for rule in check.rules],
+                ),
+            }
+        )
+        fields = {
+            "task_id": task_id,
+            "triggers": [rule.trigger for rule in check.rules],
+            "changes": list(check.changes),
+        }
+        if self._trace is not None:
+            self._trace.write("follow_up_check", **fields)
+        if self._on_event is not None:
+            with contextlib.suppress(Exception):
+                self._on_event("follow_up_check", fields)
 
     def _activity(self, event: str, name: str, preview: str) -> None:
         if self._on_activity is not None:

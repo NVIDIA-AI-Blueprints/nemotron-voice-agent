@@ -89,6 +89,14 @@ filler_alternatives: |
   Give me a second.
   Let me take a look.
 
+# R4 (delegation.guards.acknowledge_caller_while_working): spoken in rotation when the caller backchannels while
+# the backend works, and in place of a repeated delegated filler. Very short, no promise, no result, no progress
+# claim; distinct from the lines above and below. One line per line.
+acknowledgement_lines: |
+  Thanks for your patience.
+  Just a moment longer.
+  Bear with me.
+
 # F2 R1 (delegation.guards.liveness_reply, fix-plan-f1-f2-f4-f8.md section 2.3): spoken in rotation when a
 # silent reply to "are you still there?" or "could you repeat that?" is delegated. No facts, no promise.
 liveness_lines: |

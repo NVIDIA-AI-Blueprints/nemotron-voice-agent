@@ -28,7 +28,7 @@ Gateway configuration sections (`config/gateway.yaml`):
 
 - `backend:` (shared by every backend): `kind`, `model`, `base_url`, `api_key_env`, `agent_construct`, `max_iterations`, `run_budget_seconds`, `run_hard_deadline_s`, `unwind_timeout_s`, `tool_result_timeout_s`, `backend_trace`, `steer_timeout_s`, `status_timeout_s`, `request_overrides`, and `prompts.path` (`prompts/${FDA_PROMPT_PROFILE:-generic}/backend/{kind}.yaml`).
 - `hermes:` (Hermes only): `provider`, `context_length`, `load_soul_identity`, `disable_streaming`.
-- `llm:` (LLM only): `reasoning_effort` (`medium`), `request_timeout_s` (180), `max_retries` (3).
+- `llm:` (LLM only): `reasoning_effort` (`medium`), `request_timeout_s` (180), `max_retries` (3), `verify_policy_follow_up_steps` (`${FDA_VERIFY_FOLLOW_UP_STEPS:-true}`), `follow_up_rules` (`[]`), `follow_up_ignore_tools` (`[]`).
 
 Renamed keys fail at load with an error that names the new one: `workers.agent_kind` and `FDH_AGENT_KIND` are now `backend.kind` and `FDA_BACKEND`; shared keys under `hermes:` moved to `backend:`; `workers.mode: in_process_fake` and the voice `backend.link: in_process_fake` are now `in_process`. The backend worker protocol is version 2, so a Hermes image built from older source needs `up -d --build`.
 
@@ -46,7 +46,7 @@ Realtime sessions always use the `eval` delegation profile and Pipecat settings.
 
 ## Prompt Profiles
 
-A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (voice side, `frontend_system` and the frontend lines), `backend/hermes.yaml` (Hermes backend; the former `backend.yaml`, byte-identical), `backend/llm.yaml` (LLM backend: an independent full copy of the backend prompts plus the `harness_*` keys, the text the LLM backend adds to the conversation itself), and `voice.yaml` (voice-layer messages). The two backend files are independent: edit both when a change applies to both backends. `FDA_PROMPT_PROFILE` selects it. The following table lists the shipped profiles:
+A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (voice side, `frontend_system` and the frontend lines), `backend/hermes.yaml` (Hermes backend; the former `backend.yaml`, byte-identical), `backend/llm.yaml` (LLM backend: an independent full copy of the backend prompts plus the `harness_*` keys, the text the LLM backend adds to the conversation itself, including `harness_follow_up_check` and `harness_follow_up_draft`; a missing key fails to load), and `voice.yaml` (voice-layer messages). The two backend files are independent: edit both when a change applies to both backends. `FDA_PROMPT_PROFILE` selects it. The following table lists the shipped profiles:
 
 | Profile | Default for | Content |
 | --- | --- | --- |
@@ -69,6 +69,9 @@ A prompt profile is a folder `config/prompts/<profile>/` with `frontend.yaml` (v
 | `FDA_BACKEND_DELAY_S` | `5` | The demo delay before each backend run (browser sessions only) |
 | `FDA_PROACTIVE_AFTER_S` | `15` | M1: one proactive status line after this many seconds of silence while the backend works |
 | `FDA_EVENT_LOG` | `logs/fda_voice_events.pipecat.jsonl` | The voice event log |
+| `FDA_SILENT_FRONTEND` | `false` (`true` with `docker/docker-compose.fda-silent-frontend.yaml`) | `delegation.silent_frontend` |
+| `FDA_ACKNOWLEDGE_CALLER` | `false` (`true` with `docker/docker-compose.fda-acknowledge-caller.yaml`) | `delegation.guards.acknowledge_caller_while_working` (R4 acknowledgement lines) |
+| `FDA_VERIFY_FOLLOW_UP_STEPS` | `true` | `llm.verify_policy_follow_up_steps` (LLM backend only). To turn it off, edit the gateway file |
 | `FDA_PROMPT_PROFILE` | `${FDA_PROMPT_PROFILE:-generic}` (`${FDA_PROMPT_PROFILE:-customer_service}` with the eval overlay) | The prompt profile, `config/prompts/<profile>/`. The only value `.env` can change |
 | `FRONTEND_LLM_MODEL`, `FRONTEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3.5-lightning`, `https://inference-api.nvidia.com/v1` | The frontend model of Realtime sessions and the default of browser sessions |
 | `FDA_BACKEND_URL` | `ws://default--fda-hermes.openshell.localhost:8080/v1/backend` (`ws://fda-hermes:8790/v1/backend` with the plain overlay) | The gateway, through the OpenShell gateway's network alias by default. Unused with `llm` |
@@ -151,6 +154,7 @@ The following table lists the shared knobs:
 | Filler spoken when delegating | `delegation.speak_when_delegating` | `true` |
 | Silent frontend for single-turn evaluations such as VoiceBench (filler of delegated turns and M1 status line logged, never spoken; direct answers spoken; a silent turn that holds a request is delegated as a `task` with an empty filler, logged as `delegation_guard` with `guard=silent_delegated`, except empty turns, backchannels, pauses, liveness turns, and turns while WORKING) | `delegation.silent_frontend`, env `FDA_SILENT_FRONTEND` | `false`; only `docker/docker-compose.fda-silent-frontend.yaml` sets `true`. Never set it empty. With it on, the `config hash` differs |
 | Guards | `delegation.guards.backend_question_needs_delegate`, `backchannel_words` | On, 17 words |
+| R4 acknowledgement lines (a backchannel while WORKING, with nothing else pending, gets a short line in place of silence, logged as `delegation_guard` with `guard=acknowledge_caller`; a repeated delegated filler while WORKING is replaced from the same pool, logged as `filler_deduped` with the reason `acknowledgement`; never for a backend question, a hold, a liveness ping, or with the silent frontend; only when the session's ASR language has a lexicon, so localize `backchannel_words` and `acknowledgement_lines` together) | `delegation.guards.{acknowledge_caller_while_working,acknowledgement_max_per_run,acknowledgement_min_interval_s,acknowledgement_min_since_agent_s}`, env `FDA_ACKNOWLEDGE_CALLER`; lines in `prompts/<profile>/frontend.yaml` `acknowledgement_lines` | Off, 2 per run, 5 s, 0 s; only `docker/docker-compose.fda-acknowledge-caller.yaml` sets `true`. Never set it empty. With it on, the `config hash` differs |
 | Steering | `backend.steer_mode` | `auto` (redirect during a model call, else steer) |
 | Status speech | `backend.status_verbalizer.{mode,timeout_ms}` | `llm` (template fallback), 3000 |
 | Output hold and stale policy | `output.hold_max_ms`, `output.on_stale` | 4000; keep answers and apologies, drop stale status lines and fillers |
@@ -159,6 +163,7 @@ The following table lists the shared knobs:
 | Backend model (both backends) | `gateway.yaml` `backend.model`, `base_url`, `request_overrides`; env `BACKEND_LLM_MODEL`, `BACKEND_LLM_BASE_URL` | `nvidia/nvidia/nemotron-3-ultra`, `enable_thinking: true`, budget 1024 |
 | Backend budgets (both backends) | `backend.max_iterations`, `run_budget_seconds`, `run_hard_deadline_s` | 30, 300 (soft), 330 (hard, gateway watchdog; kills a Hermes worker process) |
 | LLM backend client | `llm.reasoning_effort`, `request_timeout_s`, `max_retries` | `medium`, 180, 3 |
+| LLM backend policy follow-up check (after a successful write that matches an English "After X, always/must ..." rule of the client's `session.update` instructions, the draft answer is withheld once and `harness_follow_up_check` asks for the rule's follow-up steps; nothing without a matching rule; gateway events `follow_up_obligations` at configure and `follow_up_check` per check) | `llm.verify_policy_follow_up_steps`, env `FDA_VERIFY_FOLLOW_UP_STEPS`; `llm.follow_up_rules` (`{tools: [...], text: "...", domain?: "..."}`, for policies the extraction cannot read: other languages, tables, catch-all tools); `llm.follow_up_ignore_tools` (tools that never open an extracted rule) | On in `gateway.yaml` and `gateway.eval.yaml`; `[]`, `[]`. Not used by Hermes |
 | Worker processes | `workers.start_timeout_s`, `stop_timeout_s`, `kill_grace_s`, `warm`, `recovery.*` | 15, 12, 3, 0; respawn at most two per session |
 | Speech endpoints | `voice_agent.yaml` `asr.catalog`, `tts.catalog` (the `singlegpu` section of the example's own `services.local.yaml`); env `FBA_ASR_SERVER`, `FBA_TTS_SERVER` | `nemo-speech:50051` |
 

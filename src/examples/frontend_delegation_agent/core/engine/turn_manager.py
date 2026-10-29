@@ -32,7 +32,7 @@ import contextlib
 import re
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from loguru import logger
@@ -68,6 +68,7 @@ from examples.frontend_delegation_agent.core.engine.transcript import (
 )
 from examples.frontend_delegation_agent.core.errors import WireProtocolError
 from examples.frontend_delegation_agent.core.frontend.decider import (
+    ACKNOWLEDGE_CALLER,
     LIVENESS_REPLY,
     PING_AS_STATUS,
     QUESTION_NEVER_SILENT,
@@ -80,6 +81,7 @@ from examples.frontend_delegation_agent.core.frontend.prompts import PromptCatal
 from examples.frontend_delegation_agent.core.frontend.status_verbalizer import StatusVerbalizer
 from examples.frontend_delegation_agent.core.frontend.turn_class import (
     BACKCHANNEL,
+    HOLD,
     LIVENESS,
     TurnClass,
     classify_turn,
@@ -256,6 +258,16 @@ class DelegationTurnManager:
         )
         self._liveness_next = 0
         self._alternative_used: dict[str, int] = {}  # filler alternative -> the turn that last spoke it
+        # R4: an acknowledgement line for a backchannel while the backend works (off by default).
+        self._acknowledgement_lines = (
+            parts.prompts.lines("acknowledgement_lines") if config.delegation.acknowledge.enabled else ()
+        )
+        self._acknowledgement_next = 0
+        self._acknowledgement_epoch = 0
+        self._acknowledgement_count = 0  # in the backend run _acknowledgement_epoch
+        self._acknowledgement_last: float | None = None
+        self._agent_spoke_at: float | None = None  # monotonic time of the last released agent speech
+        self._last_frontend_line = ""
 
     # -- TurnManagerLike: lifecycle ------------------------------------------------------------
 
@@ -661,7 +673,68 @@ class DelegationTurnManager:
         trigger = self._replay_trigger(guarded, context, turn_class)
         if trigger and self._replay(turn, text, guarded, context, trigger=trigger):
             return
+        acknowledged = self._acknowledge(guarded, context, turn_class)
+        if acknowledged is not None:
+            self._log(
+                "delegation_guard",
+                turn_id=turn.turn_id,
+                guard=ACKNOWLEDGE_CALLER,
+                backend_state=context.state,
+                text=acknowledged.filler_text,
+            )
+            guarded = acknowledged
         self._apply(turn, text, guarded, context)
+
+    def _acknowledge(
+        self, decision: Decision, context: DecisionContext, turn_class: TurnClass | None
+    ) -> Decision | None:
+        """R4: a silent decision on a backchannel while the backend works speaks an acknowledgement line.
+
+        Only when nothing else is pending (a queued answer would wait behind the line), the turn is not an
+        answer to a backend question, not a hold request or a liveness ping, and the session's ASR language
+        has a lexicon (the lines are written in it). Capped per backend run and spaced in time.
+        """
+        delegation = self._config.delegation
+        if not self._acknowledgement_lines or delegation.silent_frontend or self._lexicon is None:
+            return None
+        if decision.delegate or decision.filler_text or context.backend_asked_question:
+            return None
+        backend = self._backend
+        if context.state != WORKING or backend.state != WORKING or backend.unavailable or self._agent_busy():
+            return None
+        kind = (turn_class or classify_turn(context.user_text, self._lexicon)).kind
+        words = re.sub(r"[^\w\s'-]", "", context.user_text.lower()).strip()  # the backchannel guard's normalisation
+        if kind in (HOLD, LIVENESS) or (kind != BACKCHANNEL and words not in delegation.backchannel_words):
+            return None
+        line = self._take_acknowledgement()
+        return replace(decision, filler_text=line, repair=ACKNOWLEDGE_CALLER) if line else None
+
+    def _agent_busy(self) -> bool:
+        """Another utterance, speech in progress or a queued item: M1's busy test without the current decision."""
+        return self._awaiting > 0 or self._running is not None or len(self._queue) > 0 or self.progress.active
+
+    def _take_acknowledgement(self) -> str:
+        """The next acknowledgement line, or "" when the run's cap, the interval or the gap after speech forbids one."""
+        settings = self._config.delegation.acknowledge
+        backend = self._backend
+        if backend.epoch != self._acknowledgement_epoch:
+            self._acknowledgement_epoch, self._acknowledgement_count = backend.epoch, 0
+        now = self._ctx.clock.monotonic()
+        if self._acknowledgement_count >= settings.max_per_run:
+            return ""
+        if self._acknowledgement_last is not None and now - self._acknowledgement_last < settings.min_interval_s:
+            return ""
+        if self._agent_spoke_at is not None and now - self._agent_spoke_at < settings.min_since_agent_s:
+            return ""
+        lines = self._acknowledgement_lines
+        for offset in range(len(lines)):
+            index = (self._acknowledgement_next + offset) % len(lines)
+            if _filler_key(lines[index]) != _filler_key(self._last_frontend_line) or len(lines) == 1:
+                self._acknowledgement_next = index + 1
+                self._acknowledgement_count += 1
+                self._acknowledgement_last = now
+                return lines[index]
+        return ""
 
     def _classify(self, text: str) -> TurnClass | None:
         """The F1/F2 class of a turn, or None when no rule needs it (today's path)."""
@@ -863,7 +936,9 @@ class DelegationTurnManager:
             )
             if filler and self._config.delegation.filler_dedupe.enabled and decision.repair != LIVENESS_REPLY:
                 never_empty = decision.repair in (QUESTION_NEVER_SILENT, PING_AS_STATUS)
-                filler = self._dedupe_filler(turn, filler, backend_state=context.state, never_empty=never_empty)
+                filler = self._dedupe_filler(
+                    turn, filler, backend_state=context.state, never_empty=never_empty, request=decision.request
+                )
             if filler and self._speaks_delegated_filler:
                 self._queue_frontend(turn, decision, filler, kind="filler")
             elif filler:
@@ -902,16 +977,34 @@ class DelegationTurnManager:
         self._alternative_used[alternative] = turn.turn_id
         return alternative
 
-    def _dedupe_filler(self, turn: _Turn, filler: str, *, backend_state: str, never_empty: bool = False) -> str:
+    def _dedupe_filler(
+        self,
+        turn: _Turn,
+        filler: str,
+        *,
+        backend_state: str,
+        never_empty: bool = False,
+        request: str = REQUEST_TASK,
+    ) -> str:
         """G1: a delegated filler that repeats a recent one is dropped (WORKING) or replaced.
 
         ``never_empty`` (F2 R2/R3 decisions): replaced in every state, and with every alternative recent the
-        least recently used one is spoken instead of nothing.
+        least recently used one is spoken instead of nothing. With R4 on, a repeat while WORKING is replaced
+        by an acknowledgement line (within R4's cap and spacing; never before a status line) instead of dropped.
         """
         key = _filler_key(filler)
         if key not in self._recent_fillers:
             self._recent_fillers.append(key)
             return filler
+        if backend_state == WORKING and not never_empty and request != REQUEST_STATUS and self._lexicon is not None:
+            line = self._take_acknowledgement() if self._acknowledgement_lines else ""
+            if line:
+                self._recent_fillers.append(_filler_key(line))
+                self._log(
+                    "filler_deduped", turn_id=turn.turn_id, text=filler, action="replaced", new=line,
+                    reason="acknowledgement",
+                )  # fmt: skip
+                return line
         if backend_state != WORKING or never_empty:
             for alternative in self._filler_alternatives:
                 if _filler_key(alternative) not in self._recent_fillers:
@@ -932,6 +1025,7 @@ class DelegationTurnManager:
         return ""
 
     def _queue_frontend(self, turn: _Turn, decision: Decision, text: str, *, kind: str) -> None:
+        self._last_frontend_line = text
         entry = self.transcript.add_spoken("frontend_speech", "frontend", text, turn_id=turn.turn_id)
         self._push(
             SpeechItem(
@@ -1260,6 +1354,7 @@ class DelegationTurnManager:
             if item.entry is not None and item.entry.released_mono is None:
                 item.entry.released_mono = now
             self._mark_activity()
+            self._agent_spoke_at = now
             running.task = asyncio.current_task()
             await self._speak(running, item, settings)
         finally:

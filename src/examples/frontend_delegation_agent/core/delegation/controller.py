@@ -359,6 +359,8 @@ class BackendController:
             self._on_tool_cancel(msg)
         elif kind == "activity":
             self._on_activity(msg)
+        elif kind == "event":
+            self._log(str(msg["event"]), **{k: v for k, v in msg.items() if k not in ("v", "type", "event")})
         elif kind == "run_outcome":
             self._on_outcome(msg)
         elif kind == "closed":
@@ -713,20 +715,25 @@ class BackendController:
 
     async def _configure_worker_locked(self) -> str | None:
         assert self._worker is not None  # noqa: S101
-        tools = [
-            {"name": t.get("name"), "description": t.get("description") or "", "parameters": t.get("parameters") or {}}
-            for t in self._tools
-        ]
+        tools = []
+        for t in self._tools:
+            tool = {
+                "name": t.get("name"),
+                "description": t.get("description") or "",
+                "parameters": t.get("parameters") or {},
+            }
+            if isinstance(t.get("annotations"), dict):  # MCP hints (readOnlyHint); never sent to the model
+                tool["annotations"] = dict(t["annotations"])
+            tools.append(tool)
         system = self._system_prompt()
+        backend = dict(self._settings.worker_backend)
+        if self._settings.backend_kind == "llm":
+            # The client's own policy (not the rendered backend prompt) and the session domain, for the
+            # policy follow-up rules (core/backends/llm/follow_up.py).
+            backend["client_instructions"] = self._instructions
+            backend["session_domain"] = self._domain()
         try:
-            self._worker.send(
-                {
-                    "type": "configure",
-                    "tools": tools,
-                    "instructions": system,
-                    "backend": dict(self._settings.worker_backend),
-                }
-            )
+            self._worker.send({"type": "configure", "tools": tools, "instructions": system, "backend": backend})
             reply = await self._wait_reply(("configured", "error"), None, self._settings.configure_timeout_s)
         except (WorkerGoneError, TimeoutError, Exception) as exc:  # noqa: BLE001
             return f"{type(exc).__name__}: {exc}"

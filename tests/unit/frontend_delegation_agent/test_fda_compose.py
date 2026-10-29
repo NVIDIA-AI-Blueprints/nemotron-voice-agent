@@ -29,6 +29,7 @@ COMPOSE = REPO_ROOT / "docker-compose.yml"
 EVAL_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-eval.yaml"
 PLAIN_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-hermes-plain.yaml"
 LLM_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-llm.yaml"
+ACKNOWLEDGE_OVERLAY = REPO_ROOT / "docker" / "docker-compose.fda-acknowledge-caller.yaml"
 CONTROLLER = REPO_ROOT / "docker" / "fda" / "openshell" / "controller.sh"
 GATEWAY_ENV = REPO_ROOT / "docker" / "fda" / "gateway.env"
 VOICE = "frontend-delegation-agent-single-gpu"
@@ -58,6 +59,9 @@ VOICE_SETTINGS = {
     # Read only when the voice service runs the backend itself (the LLM overlay).
     "FDA_GATEWAY_CONFIG": "gateway.yaml",
     "UVICORN_WS_PING_INTERVAL": "0",
+    "FDA_SILENT_FRONTEND": "false",
+    "FDA_ACKNOWLEDGE_CALLER": "false",  # the acknowledge-caller overlay turns it on
+    "FDA_VERIFY_FOLLOW_UP_STEPS": "true",
 }
 #: The one variable the shell or .env may set: the prompt profile, with the default of each mode.
 PROMPT_PROFILE = "FDA_PROMPT_PROFILE"
@@ -113,6 +117,10 @@ class ComposeTests(unittest.TestCase):
             if key.startswith(("FDA_", "FRONTEND_", "BACKEND_", "FBA_", "UVICORN_")) and key != PROMPT_PROFILE:
                 with self.subTest(key=key):
                     self.assertNotIn("${", str(value), "a ${...} value can be changed by .env")
+
+    def test_acknowledge_overlay_sets_one_literal(self) -> None:
+        overlay = yaml.safe_load(ACKNOWLEDGE_OVERLAY.read_text(encoding="utf-8"))["services"]
+        self.assertEqual(overlay, {VOICE: {"environment": {"FDA_ACKNOWLEDGE_CALLER": "true"}}})
 
     def test_the_voice_service_knows_hermes_only_by_url_and_health(self) -> None:
         voice = self.services[VOICE]

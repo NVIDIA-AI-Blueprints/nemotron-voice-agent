@@ -56,6 +56,7 @@ SAMPLES = {
         "run_outcome": {"epoch": 1, "status": "ok"},
         "closed": {},
         "error": {"phase": "construct", "message": "m"},
+        "event": {"event": "follow_up_check"},
     },
 }
 

@@ -7,6 +7,10 @@
 ``worker_prompts`` hook, the rendered soul and the ``harness_*`` templates of
 ``prompts/<profile>/backend/llm.yaml``. The system message is built once per session: each
 part stripped, joined with a blank line, the instructions last.
+
+With ``verify_policy_follow_up_steps``, the session's policy follow-up rules (``follow_up.py``) are
+built at configure from the client's own instructions (``client_instructions``, never the rendered
+backend prompt) and the tools, and logged as one ``follow_up_obligations`` event when there are any.
 """
 
 from __future__ import annotations
@@ -20,8 +24,14 @@ from typing import Any
 import jinja2
 import openai
 
-from examples.frontend_delegation_agent.core.backends.llm.agent import LLMAgent
+from examples.frontend_delegation_agent.core.backends.llm.agent import EventSink, LLMAgent
 from examples.frontend_delegation_agent.core.backends.llm.client import ChatClient
+from examples.frontend_delegation_agent.core.backends.llm.follow_up import (
+    FollowUpRule,
+    FollowUpTracker,
+    build_rules,
+    write_tools,
+)
 from examples.frontend_delegation_agent.core.backends.llm.tools import model_tools
 from examples.frontend_delegation_agent.core.backends.trace import BackendTrace
 from examples.frontend_delegation_agent.core.worker.tool_futures import ToolFutures
@@ -65,6 +75,12 @@ class LLMAgentHost:
         self._settings: dict[str, Any] = {}
         self._agent: LLMAgent | None = None
         self._lock = threading.Lock()
+        self._follow_up_rules: tuple[FollowUpRule, ...] = ()
+        self._on_event: EventSink | None = None
+
+    def set_event_sink(self, sink: EventSink) -> None:
+        """Where ``follow_up_obligations`` and ``follow_up_check`` records go (the gateway event log)."""
+        self._on_event = sink
 
     def configure(self, *, tools: list[dict[str, Any]], instructions: str, settings: dict[str, Any]) -> list[str]:
         """Keep the session's tools and prompt; build the agent now unless construction is lazy."""
@@ -74,6 +90,7 @@ class LLMAgentHost:
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate tool names: {names}")
         self._tools, self._instructions, self._settings = list(tools), instructions, dict(settings)
+        self._follow_up_rules = self._build_follow_up_rules()
         if str(settings.get("agent_construct", "eager")) == "eager":
             self.agent()
         return sorted(names)
@@ -102,6 +119,22 @@ class LLMAgentHost:
         """Close the agent's client."""
         if self._agent is not None:
             self._agent.close()
+
+    def _build_follow_up_rules(self) -> tuple[FollowUpRule, ...]:
+        """The session's follow-up rules (none when the switch is off); logged once when there are any."""
+        s = self._settings
+        if not s.get("verify_policy_follow_up_steps", True):
+            return ()
+        rules = build_rules(
+            str(s.get("client_instructions") or ""),
+            self._tools,
+            declared=list(s.get("follow_up_rules") or ()),
+            ignore_tools=list(s.get("follow_up_ignore_tools") or ()),
+            domain=str(s.get("session_domain") or ""),
+        )
+        if rules and self._on_event is not None:
+            self._on_event("follow_up_obligations", {"rules": [rule.snapshot() for rule in rules]})
+        return rules
 
     def _build(self) -> LLMAgent:
         s = self._settings
@@ -141,6 +174,7 @@ class LLMAgentHost:
                 instructions=self._instructions,
                 request_overrides=dict(s.get("request_overrides") or {}),
             )
+        tracker = FollowUpTracker(self._follow_up_rules, write_tools(self._tools)) if self._follow_up_rules else None
         return LLMAgent(
             client=client,
             system=system,
@@ -150,4 +184,6 @@ class LLMAgentHost:
             max_iterations=int(s.get("max_iterations", 30)),
             on_activity=self._on_activity,
             trace=trace,
+            follow_up=tracker,
+            on_event=self._on_event,
         )

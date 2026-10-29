@@ -42,6 +42,9 @@ QUESTION_NEVER_SILENT = "question_never_silent"
 PING_AS_STATUS = "ping_as_status"
 #: ``Decision.repair`` of the silent-turn rule (``delegation.silent_frontend`` only).
 SILENT_DELEGATED = "silent_delegated"
+#: ``Decision.repair`` of R4 (``delegation.guards.acknowledge_caller_while_working``): the turn manager sets it
+#: on a silent backchannel decision while the backend works, with an acknowledgement line as the filler.
+ACKNOWLEDGE_CALLER = "acknowledge_caller"
 
 
 @dataclass(frozen=True, slots=True)
