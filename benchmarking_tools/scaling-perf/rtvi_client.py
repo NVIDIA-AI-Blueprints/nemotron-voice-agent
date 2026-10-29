@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import math
 from typing import Any
 
 from benchmark_core import (
@@ -32,6 +33,18 @@ def categorize_processor(processor: str) -> str:
     if "llm" in name:
         return "llm"
     return ""
+
+
+def _finite_number(value: Any) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _positive_number(value: Any) -> float | None:
+    number = _finite_number(value)
+    return number if number is not None and number > 0 else None
 
 
 class RTVIClient(ProtocolClient):
@@ -113,14 +126,23 @@ class RTVIClient(ProtocolClient):
                 message = nested
                 message_type = nested["type"]
         if message_type == "user-bot-latency":
-            value = message.get("latency")
-            if self.collecting_metrics and isinstance(value, (int, float)) and not message.get("first", False):
-                self.server_metric_samples["server_e2e"].append(float(value))
+            value = _positive_number(message.get("latency"))
+            if self.collecting_metrics and value is not None and not message.get("first", False):
+                self.server_metric_samples["server_e2e"].append(value)
             return
-        if message_type == "latency-breakdown":
-            value = message.get("vad_smart_turn")
-            if self.collecting_metrics and isinstance(value, (int, float)):
-                self.server_metric_samples["vad_smart_turn"].append(float(value))
+        if message_type == "metric-group":
+            for item in message.get("metrics", []):
+                if not isinstance(item, dict):
+                    continue
+                metric_key = {
+                    "text_aggregation_ms": "text_aggregation",
+                    "turn_taking_latency_ms": "turn_taking_latency",
+                }.get(item.get("key"))
+                if metric_key is None:
+                    continue
+                value = _positive_number(item.get("value"))
+                if self.collecting_metrics and value is not None:
+                    self.server_metric_samples[metric_key].append(value / 1000)
             return
         metrics = message.get("data", {})
         if message_type != "metrics" or not isinstance(metrics, dict) or not self.collecting_metrics:
@@ -128,42 +150,49 @@ class RTVIClient(ProtocolClient):
         for item in metrics.get("ttfb", []):
             if not isinstance(item, dict):
                 continue
-            value = item.get("value")
+            value = _positive_number(item.get("value"))
             category = categorize_processor(str(item.get("processor", "")))
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and category:
-                key = {"asr": "asr_ttfb", "llm": "llm_ttft", "tts": "tts_ttfb"}[category]
-                self.server_metric_samples[key].append(float(value))
+            if value is not None and category:
+                key = {"asr": "asr_ttfb", "llm": "llm_ttfb", "tts": "tts_ttfb"}[category]
+                self.server_metric_samples[key].append(value)
+        for item in metrics.get("ttfa", []):
+            if not isinstance(item, dict):
+                continue
+            if categorize_processor(str(item.get("processor", ""))) != "tts":
+                continue
+            value = _positive_number(item.get("ttfa"))
+            if value is not None:
+                self.server_metric_samples["tts_ttfa"].append(value)
+            leading_silence = _finite_number(item.get("leading_silence"))
+            if leading_silence is not None:
+                self.server_metric_samples["tts_leading_silence"].append(leading_silence)
         for item in metrics.get("ttfat", []):
             if not isinstance(item, dict):
                 continue
-            value = item.get("ttfat")
-            if (
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and categorize_processor(str(item.get("processor", ""))) == "llm"
-            ):
-                self.server_metric_samples["llm_ttfat"].append(float(value))
+            if categorize_processor(str(item.get("processor", ""))) != "llm":
+                continue
+            value = _positive_number(item.get("ttfat"))
+            if value is not None:
+                self.server_metric_samples["llm_ttfat"].append(value)
+            thinking_time = _finite_number(item.get("thinking_time"))
+            if thinking_time is not None:
+                self.server_metric_samples["llm_thinking_time"].append(thinking_time)
         for item in metrics.get("tokens", []):
             if not isinstance(item, dict):
                 continue
-            completion_tokens = item.get("completion_tokens")
-            if isinstance(completion_tokens, (int, float)) and not isinstance(completion_tokens, bool):
-                self._pending_llm_completion_tokens.append(float(completion_tokens))
+            completion_tokens = _positive_number(item.get("completion_tokens"))
+            if completion_tokens is not None:
+                self._pending_llm_completion_tokens.append(completion_tokens)
         for item in metrics.get("processing", []):
             if not isinstance(item, dict):
                 continue
-            value = item.get("value")
-            if (
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and categorize_processor(str(item.get("processor", ""))) == "llm"
-            ):
-                processing_time = float(value)
+            value = _positive_number(item.get("value"))
+            if value is not None and categorize_processor(str(item.get("processor", ""))) == "llm":
+                processing_time = value
                 self.server_metric_samples["llm_processing_time"].append(processing_time)
-                if self._pending_llm_completion_tokens:
+                if self._pending_llm_completion_tokens and processing_time > 0:
                     completion_tokens = self._pending_llm_completion_tokens.pop(0)
-                    if processing_time > 0:
-                        self.server_metric_samples["llm_tokens_per_sec"].append(completion_tokens / processing_time)
+                    self.server_metric_samples["llm_tokens_per_sec"].append(completion_tokens / processing_time)
 
     async def recover_turn(
         self,

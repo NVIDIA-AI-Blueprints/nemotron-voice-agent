@@ -44,7 +44,7 @@ from examples.omni_assistant.nvidia_omni_multimodal_service import (
     NvidiaOmniSettings,
 )
 from examples.shared.audio_recorder import create_audio_recorder
-from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
+from examples.shared.nemotron_speech_text_filter import nemotron_speech_text_transform
 from examples.shared.pipeline_utils import (
     build_pipeline_params,
     build_smart_turn_stop_strategies,
@@ -52,6 +52,7 @@ from examples.shared.pipeline_utils import (
     create_transport,
     latency_metric_group,
     register_session_start_handlers,
+    turn_taking_latency_secs,
     with_realtime_observers,
 )
 from tracing import IS_TRACING_ENABLED
@@ -84,9 +85,23 @@ def _build_user_turn_processor() -> UserTurnProcessor:
     return UserTurnProcessor(user_turn_strategies=_build_user_turn_strategies())
 
 
+async def _queue_finalized_user_turn(task, message) -> None:
+    """Send the finalized user message after it has been written to context."""
+    await task.queue_frame(
+        RTVIServerMessageFrame(
+            data={
+                "type": "user-turn-finalized",
+                "timestamp": getattr(message, "timestamp", None),
+                "transcript": getattr(message, "content", None),
+                "user_id": getattr(message, "user_id", None),
+            }
+        )
+    )
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Nemotron Omni cascaded pipeline for one session."""
-    transport = create_transport(runner_args)
+    transport = await create_transport(runner_args)
     body = runner_args.body if isinstance(runner_args.body, dict) else {}
     welcome_enabled = examples_registry.welcome_message_enabled(body.get("pipeline_mode", ""))
 
@@ -153,7 +168,7 @@ async def bot(runner_args: RunnerArguments) -> None:
         "server": tts_server,
         "settings": NvidiaTTSSettings(**tts_settings_kwargs),
         "use_ssl": tts_ssl,
-        "text_filters": [NemotronSpeechTextFilter()],
+        "text_transforms": [("*", nemotron_speech_text_transform)],
         "custom_dictionary": custom_dictionary,
         "stop_frame_timeout_s": parse_env_float("TTS_STOP_FRAME_TIMEOUT_S", 30.0, min_value=5.0),
     }
@@ -241,8 +256,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             RTVIServerMessageFrame(
                 data={
                     "type": "latency-breakdown",
-                    "vad_smart_turn": round(breakdown.user_turn_secs, 3)
-                    if breakdown.user_turn_secs is not None
+                    "turn_taking_latency": round(turn_taking_latency, 3)
+                    if (turn_taking_latency := turn_taking_latency_secs(breakdown)) is not None
                     else None,
                     "events": events,
                 }
@@ -264,18 +279,9 @@ async def bot(runner_args: RunnerArguments) -> None:
         setup_timeout_secs=120.0,
     )
 
-    @user_aggregator.event_handler("on_user_turn_stopped")
-    async def on_user_turn_stopped(aggregator, strategy, message):
-        await task.queue_frame(
-            RTVIServerMessageFrame(
-                data={
-                    "type": "user-turn-finalized",
-                    "timestamp": getattr(message, "timestamp", None),
-                    "transcript": getattr(message, "content", None),
-                    "user_id": getattr(message, "user_id", None),
-                }
-            )
-        )
+    @user_aggregator.event_handler("on_user_turn_message_added")
+    async def on_user_turn_message_added(aggregator, message):
+        await _queue_finalized_user_turn(task, message)
 
     async def _on_session_start() -> None:
         if audio_recorder:

@@ -299,22 +299,33 @@ count across all clients in a run):
 
 | Metric | Meaning |
 |--------|---------|
-| `llm_ttft` | Time from the LLM request to the first LLM output, including reasoning output |
-| `llm_ttfat` | Time from the LLM request to the first answer token, or to the start of a tool call (`llm_ttft` plus thinking time) |
+| `llm_ttfb` | Time from the LLM request to the first LLM output, including reasoning output |
+| `llm_thinking_time` | Time between the first LLM output and first answer token |
+| `llm_ttfat` | Time from the LLM request to the first answer token, or to the start of a tool call (`llm_ttfb` plus thinking time) |
 | `tts_ttfb` | Time-to-first-byte from the TTS |
+| `tts_leading_silence` | Silence before the first audible sample in the TTS response |
+| `tts_ttfa` | Time from the TTS request to the first playable audio |
 | `asr_ttfb` | Time-to-first-byte from the ASR |
 | `server_e2e` | Server-side end-to-end (user-stop → first bot speech) |
-| `vad_smart_turn` | VAD + smart-turn analyzer time |
+| `turn_taking_latency` | Time from the acoustic VAD-stop signal to the LLM request, including ASR finalization and whichever turn strategy is configured |
+| `text_aggregation` | Time from the first LLM token to the first complete sentence sent to TTS |
 | `llm_processing_time` | LLM end-to-end (request → final token) |
 | `llm_tokens_per_sec` | Completion tokens / `llm_processing_time` |
 
-The LLM metrics (`llm_ttft`, `llm_ttfat`, `llm_processing_time`, and
+The LLM metrics (`llm_ttfb`, `llm_ttfat`, `llm_processing_time`, and
 `llm_tokens_per_sec`) have one sample per LLM request, not one per user turn.
 A turn that calls a tool makes two LLM requests, so it adds two samples to each
 LLM metric: one for the tool call and one for the follow-up answer. Because
-`llm_ttft` and `llm_ttfat` are both counted per LLM request, `llm_ttfat` minus
-`llm_ttft` approximates the average thinking time. To measure latency per user
-turn, use `server_e2e`. Speech-to-speech LLM services do not report `llm_ttfat`.
+`llm_ttfb` and `llm_ttfat` are both counted per LLM request. The
+`llm_thinking_time` and `tts_leading_silence` columns use Pipecat's direct
+breakdown fields rather than recomputing differences between independently
+aggregated samples. Existing result files that use the former `llm_ttft` key
+remain readable. To measure latency per user turn, use `server_e2e`.
+Speech-to-speech LLM services do not report `llm_ttfat`.
+Pipecat's RTVI token-usage entries do not include a processor identity, so
+`llm_tokens_per_sec` pairs each usage record with the next LLM processing
+record. It is reliable for the benchmark's single-LLM Generic Assistant path;
+do not treat it as per-model throughput in a pipeline with multiple LLMs.
 
 The Nemotron Realtime gateway maps Pipecat token accounting to the standard
 `response.done.response.usage` object. It also places response-scoped server

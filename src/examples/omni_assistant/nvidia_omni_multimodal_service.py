@@ -40,7 +40,7 @@ from loguru import logger
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from openai import NotGiven as OpenAINotGiven
 from openai.types.chat import ChatCompletionMessageParam
-from pipecat.adapters.services.open_ai_adapter import OpenAILLMAdapter, OpenAILLMInvocationParams
+from pipecat.adapters.llm.services.open_ai_adapter import OpenAILLMAdapter, OpenAILLMInvocationParams
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -313,6 +313,11 @@ class NvidiaOmniLLMService(NvidiaLLMService):
             return super().service_metadata_frame()
         return LLMServiceMetadataFrame(service_name=self.name, is_realtime_service=True)
 
+    @property
+    def reports_ttfat(self) -> bool:
+        """Report TTFAT because Omni's pipeline answer is streamed text."""
+        return True
+
     async def start(self, frame: StartFrame) -> None:
         """Start the service and reset per-session audio state."""
         await super().start(frame)
@@ -406,7 +411,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         Returns:
             The generated text, reasoning, and finish reason.
         """
-        request_kwargs = self._out_of_band_request_kwargs(context)
+        request_kwargs = await self._out_of_band_request_kwargs(context)
         if max_tokens is not None:
             # One limit, one field: an endpoint given both is free to honour
             # either, so the one this call asks for replaces both.
@@ -437,22 +442,25 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         reasoning = ""
         finish_reason = ""
         response_stream = await self._client.chat.completions.create(**request_kwargs)
-        async for chunk in response_stream:
-            if not chunk.choices:
-                continue
-            choice = chunk.choices[0]
-            if choice.finish_reason:
-                finish_reason = str(choice.finish_reason)
-            reasoning_delta = _extract_reasoning_content(choice.delta)
-            text_delta = _extract_text_content(getattr(choice.delta, "content", ""))
-            if reasoning_delta:
-                reasoning += reasoning_delta
-                if on_reasoning_delta is not None:
-                    await on_reasoning_delta(reasoning_delta)
-            if text_delta:
-                text += text_delta
-                if on_text_delta is not None:
-                    await on_text_delta(text_delta)
+        try:
+            async for chunk in response_stream:
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                if choice.finish_reason:
+                    finish_reason = str(choice.finish_reason)
+                reasoning_delta = _extract_reasoning_content(choice.delta)
+                text_delta = _extract_text_content(getattr(choice.delta, "content", ""))
+                if reasoning_delta:
+                    reasoning += reasoning_delta
+                    if on_reasoning_delta is not None:
+                        await on_reasoning_delta(reasoning_delta)
+                if text_delta:
+                    text += text_delta
+                    if on_text_delta is not None:
+                        await on_text_delta(text_delta)
+        finally:
+            await response_stream.close()
         return NvidiaOmniInferenceResult(
             text=text.strip(),
             reasoning=reasoning.strip(),
@@ -544,6 +552,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
             logger.debug(f"{self}: barge-in detected, dropping the turn being generated")
             await self._cancel_pending_request()
             self._bot_responding = False
+        self._answered_transcript = ""
         self._audio_user_speaking = True
         self._audio_buffer = list(self._pre_speech_buffer)
         self._pre_speech_buffer = []
@@ -779,6 +788,7 @@ class NvidiaOmniLLMService(NvidiaLLMService):
                 user_id="user",
                 timestamp=time_now_iso8601(),
                 result=transcript,
+                finalized=True,
             ),
             FrameDirection.UPSTREAM,
         )
@@ -822,9 +832,9 @@ class NvidiaOmniLLMService(NvidiaLLMService):
         finally:
             self._active_turn_parts = active
 
-    def _out_of_band_request_kwargs(self, context: LLMContext) -> dict[str, Any]:
+    async def _out_of_band_request_kwargs(self, context: LLMContext) -> dict[str, Any]:
         """Build request kwargs for a one-shot call outside the pipeline turn."""
-        invocation_params = self.get_llm_adapter().get_llm_invocation_params(
+        invocation_params = await self.get_llm_adapter().get_llm_invocation_params(
             context,
             system_instruction=assert_given(self._settings.system_instruction),
             convert_developer_to_user=not self.supports_developer_role,

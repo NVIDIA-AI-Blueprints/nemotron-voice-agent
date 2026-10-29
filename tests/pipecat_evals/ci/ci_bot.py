@@ -99,7 +99,7 @@ def _latest_user_text(messages: list[dict]) -> str:
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Run a service-free bot compatible with Pipecat Eval suites."""
-    transport = create_transport(runner_args)
+    transport = await create_transport(runner_args)
     worker = PipelineWorker(
         Pipeline([transport.input(), CIEvalResponder(), transport.output()]),
         params=PipelineParams(enable_metrics=False, enable_usage_metrics=False),

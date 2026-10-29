@@ -3,6 +3,7 @@
 
 """Service pre-warming to avoid blocking the event loop during first connection."""
 
+import asyncio
 import concurrent.futures
 import json
 import os
@@ -401,7 +402,7 @@ def prewarm_tts(
     def _fetch() -> dict:
         svc = _create_tts_service(server, voice_id, function_id, model)
         svc._initialize_client()
-        raw_config = svc._create_synthesis_config()
+        raw_config = asyncio.run(svc._create_synthesis_config())
 
         model_prefix = voice_id.split(".")[0] if "." in voice_id else ""
         tts_config = _parse_tts_config(raw_config, model_prefix)
@@ -409,10 +410,10 @@ def prewarm_tts(
         tts_config["server"] = server
         return tts_config
 
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(_fetch)
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            tts_config = pool.submit(_fetch).result(timeout=_TTS_PREWARM_RPC_TIMEOUT_SECS)
-
+        tts_config = future.result(timeout=_TTS_PREWARM_RPC_TIMEOUT_SECS)
         config_store.set(cache_key, tts_config)
         config_store.set("tts", tts_config)
 
@@ -421,6 +422,7 @@ def prewarm_tts(
         logger.info(f"TTS pre-warmed ({server}) — {n_langs} languages, {n_voices} voices")
         return tts_config
     except concurrent.futures.TimeoutError:
+        future.cancel()
         logger.warning(f"TTS pre-warm timed out for {server} after {_TTS_PREWARM_RPC_TIMEOUT_SECS}s")
         return {
             "languages": [],
@@ -438,6 +440,8 @@ def prewarm_tts(
             "server": server,
             "error": str(e),
         }
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 _ASR_PREWARM_RPC_TIMEOUT_SECS = float(os.getenv("ASR_PREWARM_RPC_TIMEOUT_SECS", "5"))

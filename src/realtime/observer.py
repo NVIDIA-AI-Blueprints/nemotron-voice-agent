@@ -26,7 +26,10 @@ from pipecat.frames.frames import (
     TTSTextFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
+from pipecat.metrics.metrics import TTFBMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
@@ -53,6 +56,8 @@ from realtime.metrics import RealtimeMetricsAccumulator, RealtimeResponseTelemet
 
 # Frames this observer maps to Realtime events (ignore the rest for dedupe).
 _OBSERVED_FRAME_TYPES = (
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
     InterimTranscriptionFrame,
@@ -99,6 +104,9 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
         self._metrics = RealtimeMetricsAccumulator()
+        self._waiting_for_metrics_scope_after_cancel = False
+        self._speech_started_emitted = False
+        self._speech_stopped_emitted = False
 
     def _clear_frame_dedupe(self) -> None:
         self._processed_frames.clear()
@@ -174,6 +182,38 @@ class RealtimeLifecycleObserver(BaseObserver):
         )
         self._conversation.clear_user_item()
 
+    def _input_audio_ms(self) -> int:
+        """Return the current input-audio clock position."""
+        return int(self._conversation.input_audio_samples * 1000 / max(self._conversation.input_sample_rate, 1))
+
+    async def _emit_speech_started(self, item_id: str, audio_start_ms: int) -> None:
+        if self._speech_started_emitted:
+            return
+        self._speech_started_emitted = True
+        await self._emit_event(
+            server_event(
+                SERVER_SPEECH_STARTED,
+                item_id=item_id,
+                audio_start_ms=audio_start_ms,
+            )
+        )
+
+    async def _emit_speech_stopped(self, item_id: str, audio_end_ms: int) -> None:
+        if not self._speech_started_emitted or self._speech_stopped_emitted:
+            return
+        self._speech_stopped_emitted = True
+        await self._emit_event(
+            server_event(
+                SERVER_SPEECH_STOPPED,
+                item_id=item_id,
+                audio_end_ms=audio_end_ms,
+            )
+        )
+
+    def _reset_speech_events(self) -> None:
+        self._speech_started_emitted = False
+        self._speech_stopped_emitted = False
+
     def take_response_telemetry(self) -> RealtimeResponseTelemetry:
         """Snapshot passively collected metrics for the next ``response.done``."""
         try:
@@ -189,6 +229,7 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
         self._bot_transcript_from_tts = False
+        self._waiting_for_metrics_scope_after_cancel = True
         self._clear_frame_dedupe()
         return text
 
@@ -197,8 +238,10 @@ class RealtimeLifecycleObserver(BaseObserver):
         self._llm_text_buffer = ""
         self._llm_text_generation = 0
         self._metrics.clear()
+        self._waiting_for_metrics_scope_after_cancel = False
         self._processed_metric_frames.clear()
         self._metric_frame_history.clear()
+        self._reset_speech_events()
         self._clear_frame_dedupe()
 
     async def on_push_frame(self, data: FramePushed) -> None:
@@ -243,6 +286,19 @@ class RealtimeLifecycleObserver(BaseObserver):
         if isinstance(frame, (MetricsFrame, RTVIServerMessageFrame)):
             if self._remember_metric_frame(frame.id):
                 try:
+                    if self._waiting_for_metrics_scope_after_cancel:
+                        response_started = (
+                            self._conversation.response_requested or self._conversation.response_status == "in_progress"
+                        )
+                        new_asr_started = isinstance(frame, MetricsFrame) and any(
+                            isinstance(item, TTFBMetricsData)
+                            and ("asr" in item.processor.lower() or "stt" in item.processor.lower())
+                            for item in frame.data
+                        )
+                        if not response_started and not new_asr_started:
+                            return
+                        self._metrics.clear()
+                        self._waiting_for_metrics_scope_after_cancel = False
                     self._metrics.consume(frame)
                 except Exception:
                     logger.exception("Realtime metrics collection failed; ignoring metric frame")
@@ -258,26 +314,28 @@ class RealtimeLifecycleObserver(BaseObserver):
             logger.exception("RealtimeLifecycleObserver failed while handling frame")
 
     async def _handle_frame(self, frame: Frame) -> None:
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            item_id = self._conversation.begin_user_item()
+            await self._emit_speech_started(item_id, self._input_audio_ms())
+            return
+
+        if isinstance(frame, VADUserStoppedSpeakingFrame):
+            if not self._speech_started_emitted:
+                return
+            item_id = self._conversation.begin_user_item()
+            await self._emit_speech_stopped(item_id, self._input_audio_ms())
+            return
+
         if isinstance(frame, UserStartedSpeakingFrame):
             item_id, audio_start_ms = self._conversation.begin_user_turn()
-            await self._emit_event(
-                server_event(
-                    SERVER_SPEECH_STARTED,
-                    item_id=item_id,
-                    audio_start_ms=audio_start_ms,
-                )
-            )
+            # Providers and pipelines without raw VAD frames retain the
+            # finalized-turn fallback.
+            await self._emit_speech_started(item_id, audio_start_ms)
             return
 
         if isinstance(frame, UserStoppedSpeakingFrame):
             item_id, audio_end_ms = self._conversation.stop_user_turn()
-            await self._emit_event(
-                server_event(
-                    SERVER_SPEECH_STOPPED,
-                    item_id=item_id,
-                    audio_end_ms=audio_end_ms,
-                )
-            )
+            await self._emit_speech_stopped(item_id, audio_end_ms)
             await self._emit_event(
                 server_event(
                     SERVER_AUDIO_COMMITTED,
@@ -287,6 +345,7 @@ class RealtimeLifecycleObserver(BaseObserver):
             )
             await self._emit_user_item_if_needed(item_id)
             await self._emit_user_transcript_if_ready()
+            self._reset_speech_events()
             return
 
         if isinstance(frame, InterimTranscriptionFrame):

@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import re
 
-from pipecat.utils.text.base_text_filter import BaseTextFilter
-
 from examples.frontend_backend_agent.airline.airports import AIRPORT_SPOKEN_NAMES, airport_spoken_name
 
 _PNR_ACRONYM_RE = re.compile(r"\bPNR(?:(['’])s)?\b")
@@ -20,23 +18,15 @@ _WHITESPACE_RE = re.compile(r"[ \t]+")
 _BLANK_LINE_RE = re.compile(r"\n{3,}")
 
 
-class FrontendBackendAgentPronunciationTextFilter(BaseTextFilter):
-    """Apply flight-domain pronunciation substitutions after generic cleanup."""
-
-    async def filter(self, text: str) -> str:
-        """Return TTS input with airline codes expanded for clearer speech."""
-        text = _normalize_spacing(text)
-        text = _LIST_PREFIX_RE.sub("", text)
-        text = _PNR_ACRONYM_RE.sub(_sub_pnr_acronym, text)
-        text = _PNR_CODE_RE.sub(_spell_groups, text)
-        text = _FLIGHT_RE.sub(_spell_groups, text)
-        text = _AIRPORT_RE.sub(lambda match: airport_spoken_name(match.group(1)), text)
-        return _normalize_spacing(text)
-
-
-async def apply_frontend_backend_agent_pronunciation_for_tts(text: str, _aggregation_type: object) -> str:
+async def apply_frontend_backend_agent_pronunciation_for_tts(text: str, _text_type: object) -> str:
     """Apply Frontend/Backend Agent pronunciation substitutions only to TTS synthesis text."""
-    return await FrontendBackendAgentPronunciationTextFilter().filter(text)
+    text = _normalize_spacing(text)
+    text = _LIST_PREFIX_RE.sub("", text)
+    text = _PNR_ACRONYM_RE.sub(_sub_pnr_acronym, text)
+    text = _PNR_CODE_RE.sub(_spell_groups, text)
+    text = _FLIGHT_RE.sub(_spell_groups, text)
+    text = _AIRPORT_RE.sub(lambda match: airport_spoken_name(match.group(1)), text)
+    return _normalize_spacing(text)
 
 
 def _sub_pnr_acronym(match: re.Match[str]) -> str:

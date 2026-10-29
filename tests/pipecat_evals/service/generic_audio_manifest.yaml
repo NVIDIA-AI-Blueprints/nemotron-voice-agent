@@ -9,10 +9,11 @@ concurrency: 1
 base_port: 8080
 runs_dir: ../../../eval-runs
 record: true
-spawn: "env {python} {bot} -t eval --port {port}"
+spawn: "env {python} {bot} --port {port}"
 
 suite:
   - bot: eval_bot.py
     runner_body: runner_bodies/generic_audio_default.json
     scenarios:
       - generic_audio_e2e_roundtrip
+      - generic_audio_mid_utterance_pause
