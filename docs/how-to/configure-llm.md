@@ -45,6 +45,8 @@ The multilingual assistant exposes only locales supported by the selected ASR, T
 
 The source of truth for the built-in capability metadata is the NVIDIA [Nemotron 3.5 Lightning model card](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard), the [Nemotron 3.5 Super VL model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4), the [Nemotron 3.5 Bolt 74B model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB), and the [Nemotron 3.5 Bolt E4B model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16).
 
+> **Known limitation (Japanese and Chinese on single-GPU).** Magpie TTS on NeMo-Speech.cpp does not advertise `ja-JP` or `zh-CN`. On `multilingual-assistant/single-gpu`, Voice Settings does not show Japanese or Chinese with any built-in LLM, including Nemotron 3.5 Bolt E4B and Nemotron 3.5 Bolt 74B.
+
 > **Multilingual conversation quality.** Nemotron 3.5 Lightning's conversation quality is weaker in some languages. For multilingual deployments where language fidelity matters, start the **Nemotron 3.5 Super VL** sidecar (see [Run Nemotron 3.5 Super VL](#run-nemotron-35-super-vl)) and select `nemotron-super` in the Services tab. The Generic and Multilingual assistants list it after Lightning. It stays more reliably in the target language and reads more naturally across languages.
 
 ## Hardware Requirements and Deployment Configs
