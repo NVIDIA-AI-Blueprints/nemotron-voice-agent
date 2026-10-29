@@ -55,7 +55,7 @@ Mitigation: Review and scan skill before deployment. <br>
 
 ## Skill Output: <br>
 **Output Type(s):** [Code, Files, Shell commands, Configuration instructions] <br>
-**Output Format:** [Generated project files (Python, Docker Compose, shell scripts, .env templates) with Markdown instructions] <br>
+**Output Format:** [Generated project files (Python, Docker Compose, shell scripts, environment variable templates) with Markdown instructions] <br>
 **Output Parameters:** [1D] <br>
 **Other Properties Related to Output:** [Files are written only after user approval; handover requires a passing smoke test and a successful spoken exchange.] <br>
 
