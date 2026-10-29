@@ -71,6 +71,47 @@
       ]
     },
     {
+      "id": "nemotron-voice-agent-deploy-configure-bolt-e4b-single-gpu",
+      "prompt": "Run Nemotron 3.5 Bolt E4B with the generic assistant on my single-GPU workstation.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Adds the `nemotron-35-bolt-e4b-single-gpu` sidecar profile next to `generic-assistant/single-gpu`, scales Lightning to zero, requires HF_TOKEN, has the user select `nemotron-bolt-4b` in the Services tab, and uses the same profile flags on `down` without `--scale`.",
+      "assertions": [
+        "Loaded nemotron-voice-agent-deploy/SKILL.md and references/configure.md.",
+        "Ran `docker compose --profile generic-assistant/single-gpu --profile nemotron-35-bolt-e4b-single-gpu up -d --scale nvidia-llm-vllm-lightning=0`.",
+        "Treated `nemotron-35-bolt-e4b-single-gpu` as a sidecar profile next to the recipe, not as a second recipe.",
+        "Required HF_TOKEN and did not use NVIDIA_API_KEY or nvcr.io login for the single-GPU recipe.",
+        "Checked at least 24 GiB usable GPU memory for Bolt E4B.",
+        "Told the user to select `nemotron-bolt-4b` in the Services tab before connecting.",
+        "Used the same `--profile` flags on `down`, without `--scale`."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-configure-bolt-e4b-server",
+      "prompt": "Add the Bolt E4B NIM to my generic-assistant/server deployment.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Runs `docker compose --profile generic-assistant/server --profile nemotron-35-bolt-e4b up -d --scale nvidia-llm=0` with the server auth model, because the Bolt E4B NIM runs in place of the Lightning NIM.",
+      "assertions": [
+        "Loaded nemotron-voice-agent-deploy/SKILL.md, references/configure.md, and references/server.md.",
+        "Ran `docker compose --profile generic-assistant/server --profile nemotron-35-bolt-e4b up -d --scale nvidia-llm=0`.",
+        "Kept the server auth model: NVIDIA_API_KEY plus docker login nvcr.io, no HF_TOKEN.",
+        "Told the user to select `nemotron-bolt-4b` in the Services tab before connecting."
+      ]
+    },
+    {
+      "id": "nemotron-voice-agent-deploy-configure-bolt-74b-single-gpu",
+      "prompt": "Use Nemotron 3.5 Bolt 74B for the multilingual assistant on my DGX Spark.",
+      "expected_skill": "nemotron-voice-agent-deploy",
+      "expected_output": "Uses `multilingual-assistant/single-gpu` with the `nemotron-35-bolt-single-gpu` sidecar profile and Lightning scaled to zero, requires HF_TOKEN, has the user select `nemotron-bolt-74b`, and does not offer a server NIM because none exists for Bolt 74B.",
+      "assertions": [
+        "Loaded nemotron-voice-agent-deploy/SKILL.md and references/configure.md.",
+        "Ran `docker compose --profile multilingual-assistant/single-gpu --profile nemotron-35-bolt-single-gpu up -d --scale nvidia-llm-vllm-lightning=0`.",
+        "Did not offer a `*/server` NIM for Bolt 74B.",
+        "Required HF_TOKEN and did not use NVIDIA_API_KEY or nvcr.io login.",
+        "Told the user to select `nemotron-bolt-74b` in the Services tab before connecting.",
+        "Used the same `--profile` flags on `down`, without `--scale`."
+      ]
+    },
+    {
       "id": "nemotron-voice-agent-deploy-configure-add-multilingual-prompt",
       "prompt": "Add a Spanish persona prompt to the multilingual assistant and make it the default.",
       "expected_skill": "nemotron-voice-agent-deploy",

@@ -18,6 +18,12 @@ ENABLE_TTS_AUDIO_DUMP=true
 AUDIO_DUMP_PATH=audio_dumps
 ```
 
+For Docker Compose runs, recreate the app service so that it reads the new `.env` values. `docker compose restart` keeps the old environment. Use the app service of your recipe, for example `generic-assistant-single-gpu` for `--profile generic-assistant/single-gpu`:
+
+```bash
+docker compose --profile <recipe> up -d <app-service>
+```
+
 The shipped examples already create and wire the shared recorder, so the `.env` settings are enough to enable capture for those examples. To add the recorder to a **new custom example**, mirror [`src/examples/generic/pipeline.py`](../../src/examples/generic/pipeline.py) with three changes to your `pipeline.py`:
 
 1. Import the helper:
@@ -64,7 +70,23 @@ audio_dumps/
 
 The `<stream_id>` is a unique 8-character hex ID per session, so files from concurrent sessions do not collide.
 
-> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, mount a host directory to `/app/audio_dumps` if you want the files to appear on the host, or copy them out of the app container after capture. If Docker creates the folder with different permissions, fix ownership:
+> **Note:** For host-native runs, files are written under the project root by default. For Docker Compose runs, files are written to `/app/audio_dumps` inside the app container. The stock `docker-compose.yml` does not mount that directory, so the files are lost when the container is recreated. Copy them to the host after capture:
+>
+> ```bash
+> docker compose --profile <recipe> cp <app-service>:/app/audio_dumps ./
+> ```
+>
+> To write the files to the host directly, mount a host directory with a Compose override, and then recreate the app service:
+>
+> ```yaml
+> # docker-compose.override.yaml (example for --profile generic-assistant)
+> services:
+>   generic-assistant:
+>     volumes:
+>       - ./audio_dumps:/app/audio_dumps
+> ```
+>
+> If Docker creates the folder with different permissions, fix ownership:
 >
 > ```bash
 > # Option 1: Pre-create directory before container start

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-10-29
+
+This patch release adds Nemotron 3.5 Bolt E4B on NVIDIA Cloud, server, and single-GPU hosts, and Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.
+
+### Added
+
+- **Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.** The `nemotron-35-bolt-single-gpu` profile serves it with vLLM on GPU `0` of a Blackwell workstation or DGX Spark, with LiLiCorr speculative decoding, the language model only, and Streaming Input. Scale Lightning to zero with `--scale nvidia-llm-vllm-lightning=0`.
+- **Nemotron 3.5 Bolt E4B across cloud, server, and single-GPU profiles.** The `nemotron-bolt-4b` catalog entry is available from NVIDIA Cloud (`nvidia/nemotron-3.5-bolt-e4b`), on `*/server` recipes with the `nemotron-35-bolt-e4b` NIM sidecar profile, and on `*/single-gpu` recipes with the `nemotron-35-bolt-e4b-single-gpu` vLLM sidecar profile (with DFlash speculative decoding on Blackwell GPUs and Streaming Input). Its Services card adds a **Conversational Mode** toggle, on by default.
+
+### Changed
+
+- **Reasoning Budget stays under Max Tokens.** When **Max Tokens** is set, an LLM's **Reasoning Budget** stays 64 tokens under it. Under 192 **Max Tokens**, the backend turns **Reasoning** off for the session.
+
 ## [2.3.0] - 2026-10-19
 
 This minor release upgrades Pipecat to 1.12.0, adopts its built-in transcript-independent Smart Turn handling for audio-only user turns, adds streaming-input prefill and speaker labels to the Generic Assistant, replaces Nemotron 3 Super with Nemotron 3.5 Super VL on server and single-GPU hosts, and upgrades the single-GPU Lightning vLLM image to 0.31.0.

@@ -6,7 +6,7 @@ Use only for `*/server` and `generic-assistant/server-perf` on a **workstation**
 
 Auth and NGC login are in `../SKILL.md`. Do not use `HF_TOKEN` here.
 
-Needs enough workstation GPU VRAM for the selected NIM services. One GPU is valid when capacity is sufficient. Multi-GPU workstations may split speech sidecars and LLM across devices. For the VRAM, memory-knob, and device-placement matrix, see `docs/how-to/configure-llm.md` (VRAM & hardware support).
+Needs enough workstation GPU VRAM for the selected NIM services. One GPU is valid when capacity is sufficient. The optional Bolt E4B NIM (`nemotron-35-bolt-e4b`) runs in place of the Lightning NIM, so start it with `--scale nvidia-llm=0`. Multi-GPU workstations may split speech sidecars and LLM across devices. For the VRAM, memory-knob, and device-placement matrix, see `docs/how-to/configure-llm.md` (VRAM & hardware support).
 
 ## Precision
 
@@ -47,16 +47,16 @@ docker run --rm --gpus '"device=2,3"' -e NGC_API_KEY="$NVIDIA_API_KEY" \
 
 Confirm GPUs `2` and `3` are the same supported GPU type and that the manifest lists the exact TP2 profile before changing `NIM_MODEL_PROFILE`.
 
-Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
+Device placement is **not** an `.env` knob. Standard `*/server` sidecars default to GPU `0`. The optional Super VL NIM uses GPUs `1` and `2`. `generic-assistant/server-perf` places ASR on `0`, TTS on `1`, tensor-parallel LLM on `2` and `3`. To move a service, edit `device_ids` under `deploy.resources.reservations.devices` in its Compose file:
 
-- Server: `docker/docker-compose.nemotron-asr.yaml`, `docker/docker-compose.magpie-tts.yaml`, `docker/docker-compose.magpie-zeroshot-tts.yaml`, `docker/docker-compose.chatterbox-tts.yaml`, `docker/docker-compose.nemotron35-lightning-nim.yaml`, `docker/docker-compose.nemotron3-omni-nim.yaml`
+- Server: `docker/docker-compose.nemotron-asr.yaml`, `docker/docker-compose.magpie-tts.yaml`, `docker/docker-compose.magpie-zeroshot-tts.yaml`, `docker/docker-compose.chatterbox-tts.yaml`, `docker/docker-compose.nemotron35-lightning-nim.yaml`, `docker/docker-compose.nemotron3-omni-nim.yaml`, `docker/docker-compose.nemotron35-super-vl.yaml`, `docker/docker-compose.nemotron35-bolt-e4b.yaml`
 - A `tp=N` LLM needs N free GPUs. List every index it uses and keep those GPUs free of ASR and TTS. Each target index must appear in the hardware readout. One GPU: keep everything on `0`, or use cloud.
 
 Apply only what the hardware readout indicates. Never silently change values.
 
 NIM model-profile docs: https://docs.nvidia.com/nim/large-language-models/latest/deployment/model-profiles-and-selection.html
 
-Cascaded Lightning NIM health: `curl -f http://localhost:18000/v1/health/ready`. Omni NIM health: `curl -f http://localhost:18002/v1/health/ready`.
+Cascaded Lightning NIM health: `curl -f http://localhost:18000/v1/health/ready`. Omni NIM health: `curl -f http://localhost:18002/v1/health/ready`. Bolt E4B NIM health: `curl -f http://localhost:18004/v1/health/ready`.
 
 ## Failures
 

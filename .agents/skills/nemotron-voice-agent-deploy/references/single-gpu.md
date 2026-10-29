@@ -58,7 +58,7 @@ gpu_memory_utilization =
 
 ### 4. Compare the Budget with the Recipe
 
-Compare that budget with the vLLM recipe: `docker/docker-compose.nemotron35-lightning.yaml` for cascaded examples, `docker/docker-compose.nemotron3-omni.yaml` for Omni. If the automatic plan leaves the wrong reserve for this host, set only the supported `.env` controls: `VLLM_VRAM_HEADROOM_MIB` or, when an explicit fraction is required, `VLLM_GPU_MEMORY_UTILIZATION`. If the model does not fit with safe headroom, use cloud.
+Compare that budget with the vLLM recipe: `docker/docker-compose.nemotron35-lightning.yaml` for cascaded examples, `docker/docker-compose.nemotron3-omni.yaml` for Omni. For Bolt E4B, use `docker/docker-compose.nemotron35-bolt-e4b.yaml`, which needs at least 24 GiB usable after `VLLM_VRAM_HEADROOM_MIB`. If the automatic plan leaves the wrong reserve for this host, set only the supported `.env` controls: `VLLM_VRAM_HEADROOM_MIB` or, when an explicit fraction is required, `VLLM_GPU_MEMORY_UTILIZATION`. If the model does not fit with safe headroom, use cloud.
 
 ### 5. Verify the Warm Stack
 
@@ -74,12 +74,14 @@ The Lightning Compose matrix selects the following model and precision automatic
 
 Lightning vLLM health: `curl -f http://localhost:18000/health`. The same server serves chat completions and the streaming-input WebSocket at `ws://localhost:18000/v1/streaming-session`.
 
+The Bolt E4B command scales Lightning to zero, so port `18000` does not answer. Bolt E4B vLLM health: `curl -f http://localhost:18004/health`.
+
 Omni examples use the hardware selection in `docker/docker-compose.nemotron3-omni.yaml`. Omni vLLM health: `curl -f http://localhost:8002/health`.
 
 ## Failures
 
 - Hang or OOM → GGUFs are missing, or `--gpu-memory-utilization` was not sized with the speech sidecar loaded. Follow the memory-fit procedure and use the documented `.env` controls when an override is required.
-- `Engine core initialization failed` in `nvidia-llm-vllm-lightning` or `nvidia-llm-vllm-omni` → reclaim page cache and retry:
+- `Engine core initialization failed` in a vLLM service, or `Free memory on device ... is less than desired GPU memory utilization` on Jetson Thor after a vLLM stopped or crashed → reclaim page cache and retry:
 
 ```bash
 free -h

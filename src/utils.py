@@ -260,6 +260,9 @@ _HOST_RUNTIME_PORT_OVERRIDES: dict[tuple[str, int], int] = {
     ("nemotron-35-super-vl", 8000): 18001,
     ("nemotron-35-super-vl-vllm", 8000): 18001,
     ("nvidia-llm-omni", 8000): 18002,
+    ("nemotron-35-bolt-vllm", 8000): 18003,
+    ("nemotron-35-bolt-e4b", 8000): 18004,
+    ("nemotron-35-bolt-e4b-vllm", 8000): 18004,
     ("nvidia-llm-vllm", 8000): 18000,
     **{
         (service, ports.grpc): ports.host_grpc
@@ -422,6 +425,7 @@ def _nvcf_catalog(server_catalog: dict) -> dict:
 
 
 _SETTING_TYPES = frozenset({"bool", "int", "float", "enum"})
+_NUMBER_TYPES = frozenset({"int", "float"})
 
 
 def _coerce_setting(name: str, spec: dict, raw: object) -> object:
@@ -456,6 +460,21 @@ def _coerce_setting(name: str, spec: dict, raw: object) -> object:
     return value
 
 
+def _cap_below(name: str, spec: dict, value: int | float, limit: int | float | None) -> int | float | None:
+    """Keep ``value`` at least ``reserve`` under ``limit``, or return ``None`` when that leaves less than ``min``."""
+    if limit is None:
+        return value
+    cap = limit - spec.get("reserve", 0)
+    if value <= cap:
+        return value
+    if cap < spec.get("min", 0):
+        turned_off = f" and turning off {spec['requires']!r}" if spec.get("requires") else ""
+        logger.warning(f"Dropping setting {name!r}{turned_off}: {spec['below']}={limit}")
+        return None
+    logger.warning(f"Capping setting {name!r} from {value} to {cap} to stay under {spec['below']}={limit}")
+    return cap
+
+
 def _set_path(target: dict, path: str, value: object) -> None:
     *parents, leaf = path.split(".")
     for part in parents:
@@ -479,13 +498,24 @@ def apply_service_settings(extra_params: dict, schema: Mapping[str, dict], value
     """Return ``extra_params`` with each schema setting written at its ``path``.
 
     Values come from ``values`` when valid, else the schema default. A setting
-    whose ``requires`` setting resolves falsy is removed instead.
+    whose ``requires`` setting resolves falsy is removed instead. A ``below``
+    setting that cannot stay under its limit turns its ``requires`` setting off.
     """
     resolved = {name: _coerce_setting(name, spec, values.get(name)) for name, spec in schema.items()}
+
+    def active(name: str, spec: dict) -> bool:
+        requirement = spec.get("requires")
+        return resolved[name] is not None and (not requirement or bool(resolved.get(requirement)))
+
+    for name, spec in schema.items():
+        if not spec.get("below") or not active(name, spec):
+            continue
+        resolved[name] = _cap_below(name, spec, resolved[name], resolved.get(spec["below"]))
+        if resolved[name] is None and spec.get("requires"):
+            resolved[spec["requires"]] = False
     out = json.loads(json.dumps(extra_params))
     for name, spec in schema.items():
-        requirement = spec.get("requires")
-        if resolved[name] is None or (requirement and not resolved.get(requirement)):
+        if not active(name, spec):
             _pop_path(out, spec["path"])
         else:
             _set_path(out, spec["path"], resolved[name])
@@ -505,6 +535,18 @@ def _load_settings_profiles() -> dict[str, dict]:
                 raise RuntimeError(
                     f"settings.yaml {profile_name}.{name} needs a type ({', '.join(sorted(_SETTING_TYPES))})"
                 )
+            below = spec.get("below")
+            target = profile.get(below) if below is not None else None
+            target_type = target.get("type") if isinstance(target, dict) else None
+            if below is not None and (spec["type"] not in _NUMBER_TYPES or target_type != spec["type"]):
+                raise RuntimeError(
+                    f"settings.yaml {profile_name}.{name} below must name a number setting of the same type"
+                )
+            if "reserve" in spec and below is None:
+                raise RuntimeError(f"settings.yaml {profile_name}.{name} reserve needs below")
+            reserve = spec.get("reserve", 0)
+            if not isinstance(reserve, int) or isinstance(reserve, bool) or reserve < 0:
+                raise RuntimeError(f"settings.yaml {profile_name}.{name} reserve must be a non-negative integer")
         profiles[profile_name] = {name: {**spec, "path": spec.get("path") or name} for name, spec in profile.items()}
     return profiles
 

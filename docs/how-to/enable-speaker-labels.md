@@ -72,6 +72,9 @@ signals that determine when the semantic user turn is complete.
 - Labels are session-scoped indexes, not names or verified identities.
 - In first-speaker mode, the first person to speak claims the latch.
 - Overlapping speech can reduce attribution accuracy.
+- The streaming ASR assigns speaker labels as the audio arrives, before a
+  sentence ends. Occasionally, the ASR gives part of a sentence a different
+  speaker's label, and the panel shows that sentence as separate bubbles.
 - Labeled text appears on each tagged ASR final. In-progress text stays in
   **Identifying speaker** until a final arrives.
 - The multi-speaker prompt decides on its own whether a line called it. Long

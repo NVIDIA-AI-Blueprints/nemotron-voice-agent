@@ -291,6 +291,60 @@ class ServiceSettingsTests(_CatalogTestCase):
 
         self.assertNotIn("reasoning_budget", extra["extra_body"])
 
+    def test_reasoning_budget_stays_under_max_tokens(self) -> None:
+        schema = {
+            "max_tokens": {"type": "int", "min": 1, "max": 16384, "path": "max_tokens"},
+            "enable_thinking": {"type": "bool", "default": False, "path": "enable_thinking"},
+            "reasoning_budget": {
+                "type": "int",
+                "default": 16384,
+                "min": 128,
+                "max": 32768,
+                "path": "budget",
+                "requires": "enable_thinking",
+                "below": "max_tokens",
+                "reserve": 64,
+            },
+        }
+        cases = [
+            ({"enable_thinking": True}, 16384),
+            ({"enable_thinking": True, "max_tokens": 4096, "reasoning_budget": 1024}, 1024),
+            ({"enable_thinking": True, "max_tokens": 1024}, 960),
+            ({"enable_thinking": True, "max_tokens": 192}, 128),
+        ]
+        for values, budget in cases:
+            with self.subTest(values=values):
+                applied = utils.apply_service_settings({}, schema, values)
+                self.assertEqual(applied["budget"], budget)
+                self.assertIs(applied["enable_thinking"], True)
+        for max_tokens in (64, 191):
+            with self.subTest(max_tokens=max_tokens):
+                applied = utils.apply_service_settings({}, schema, {"enable_thinking": True, "max_tokens": max_tokens})
+                self.assertIs(applied["enable_thinking"], False)
+                self.assertNotIn("budget", applied)
+        unconditional = {
+            **schema,
+            "reasoning_budget": {k: v for k, v in schema["reasoning_budget"].items() if k != "requires"},
+        }
+        self.assertNotIn("budget", utils.apply_service_settings({}, unconditional, {"max_tokens": 64}))
+        self.assertEqual(utils.apply_service_settings({}, unconditional, {"max_tokens": 1024})["budget"], 960)
+
+    def test_below_and_reserve_are_validated(self) -> None:
+        settings_path = Path(os.environ["SERVICES_PATH"]).with_name("settings.yaml")
+        for spec, error in (
+            ("below: missing", "below must name a number setting"),
+            ("below: flag", "below must name a number setting"),
+            ("below: ratio", "below must name a number setting of the same type"),
+            ("reserve: 1", "reserve needs below"),
+            ("below: b\n    reserve: -1", "reserve must be a non-negative integer"),
+            ("below: b\n    reserve: true", "reserve must be a non-negative integer"),
+        ):
+            with self.subTest(spec=spec):
+                others = "  b:\n    type: int\n  ratio:\n    type: float\n  flag:\n    type: bool\n"
+                settings_path.write_text(f"p:\n  a:\n    type: int\n    {spec}\n{others}", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, error):
+                    utils._load_settings_profiles()
+
     def test_invalid_and_unknown_settings_fall_back_to_defaults(self) -> None:
         extra = self._extra(llm_settings={"enable_thinking": "yes", "top_p": 0.1})
 
@@ -702,6 +756,62 @@ class RepositoryCatalogTests(unittest.TestCase):
                 llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]
                 self.assertEqual(llm_keys[:2], ["nemotron-lightning", "nemotron-super"])
 
+    def test_bolt_is_an_optional_single_gpu_only_llm(self) -> None:
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker" / "docker-compose.nemotron35-bolt.yaml")
+        entry = catalog["single-gpu"]["llm"]["nemotron-bolt-74b"]
+        self.assertEqual(urlparse(entry["base_url"]).hostname, "nemotron-35-bolt-vllm")
+        self.assertEqual(urlparse(entry["streaming_url"]).hostname, "nemotron-35-bolt-vllm")
+        self.assertEqual(compose["services"]["nemotron-35-bolt-vllm"]["profiles"], ["nemotron-35-bolt-single-gpu"])
+        self.assertNotIn("nemotron-bolt-74b", catalog["server"]["llm"])
+        for key in ("generic-assistant", "multilingual-assistant"):
+            with self.subTest(example=key):
+                llm_keys = examples_registry.EXAMPLES[key]["services"]["llm"]
+                self.assertEqual(
+                    llm_keys, ["nemotron-lightning", "nemotron-super", "nemotron-bolt-74b", "nemotron-bolt-4b"]
+                )
+
+    def test_bolt_e4b_is_an_optional_llm_across_server_and_single_gpu(self) -> None:
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        compose = utils.load_yaml_file(utils.PROJECT_ROOT / "docker" / "docker-compose.nemotron35-bolt-e4b.yaml")
+        for recipe, service, profile in (
+            ("server", "nemotron-35-bolt-e4b", "nemotron-35-bolt-e4b"),
+            ("single-gpu", "nemotron-35-bolt-e4b-vllm", "nemotron-35-bolt-e4b-single-gpu"),
+        ):
+            with self.subTest(recipe=recipe):
+                entry = catalog[recipe]["llm"]["nemotron-bolt-4b"]
+                self.assertEqual(urlparse(entry["base_url"]).hostname, service)
+                self.assertEqual(compose["services"][service]["profiles"], [profile])
+        self.assertEqual(
+            urlparse(catalog["single-gpu"]["llm"]["nemotron-bolt-4b"]["streaming_url"]).hostname,
+            "nemotron-35-bolt-e4b-vllm",
+        )
+
+    def test_every_llm_with_reasoning_keeps_its_budget_under_max_tokens(self) -> None:
+        profiles = utils._load_settings_profiles()
+        catalog = utils.load_yaml_file(Path("services.yaml"))
+        for recipe, sections in catalog.items():
+            for key, entry in (sections.get("llm") or {}).items():
+                variants = [entry.get("settings"), (utils._nvcf_entry(entry) or {}).get("settings")]
+                for name in {v for v in variants if v and "reasoning_budget" in profiles[v]}:
+                    with self.subTest(recipe=recipe, entry=key, profile=name):
+                        self.assertEqual(profiles[name]["reasoning_budget"]["below"], "max_tokens")
+
+    def test_bolt_e4b_sends_the_budget_key_of_its_endpoint(self) -> None:
+        set_service_context(examples_registry.EXAMPLES["generic-assistant"])
+        for recipe, source, budget_key in (
+            ("single-gpu", utils.SELF_HOSTED_SOURCE, "thinking_token_budget"),
+            ("server", utils.SELF_HOSTED_SOURCE, "thinking_token_budget"),
+            ("server", utils.CLOUD_SOURCE, "reasoning_budget"),
+        ):
+            env = {"SERVICE_RECIPE": recipe, "NVIDIA_API_KEY": "test-key"}
+            with self.subTest(recipe=recipe, source=source), patch.dict(os.environ, env):
+                entry = dict(utils.service_catalog_sources())[source]["llm"]["nemotron-bolt-4b"]
+                values = {"enable_thinking": True, "max_tokens": 1024}
+                extra = utils.apply_service_settings(json.loads(entry["extra_params"]), entry["settings"], values)
+                self.assertEqual(extra["extra_body"][budget_key], 960)
+                self.assertIs(extra["extra_body"]["chat_template_kwargs"]["conversational_mode"], True)
+
     def test_lightning_budget_key_follows_the_serving_engine(self) -> None:
         example = examples_registry.EXAMPLES["frontend-backend-agent"]
         set_service_context(example)
@@ -752,6 +862,7 @@ class HostRuntimeRewriteTests(unittest.TestCase):
             ("base_url", "ws://nvidia-llm-vllm:8000/v1/streaming-session"): "ws://localhost:18000/v1/streaming-session",
             ("base_url", "http://nemotron-35-super-vl:8000/v1"): "http://localhost:18001/v1",
             ("base_url", "http://nemotron-35-super-vl-vllm:8000/v1"): "http://localhost:18001/v1",
+            ("base_url", "http://nemotron-35-bolt-vllm:8000/v1"): "http://localhost:18003/v1",
             ("server", "magpie-multilingual-tts-service:50051"): "localhost:50151",
             ("server", "parakeet-ctc-asr:50052"): "localhost:50352",
             ("server", "nemo-speech:50051"): "localhost:50051",
