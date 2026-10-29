@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.1] - TBD
+## [2.3.1] - 2026-10-29
+
+This patch release adds Nemotron 3.5 Bolt E4B on NVIDIA Cloud, server, and single-GPU hosts, and Nemotron 3.5 Bolt 74B A9B on single-GPU hosts.
 
 ### Added
 
