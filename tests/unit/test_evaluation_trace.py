@@ -515,13 +515,18 @@ class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):
 
         iterator = Iterator()
         service._audio_iterator = iterator
-        reconnect = AsyncMock()
+        reconnect_completed = asyncio.Event()
+
+        async def acknowledge_reconnect():
+            reconnect_completed.set()
+
+        reconnect = AsyncMock(side_effect=acknowledge_reconnect)
         with (
             patch.object(service, "get_event_loop", return_value=asyncio.get_running_loop()),
             patch.object(service, "_request_reconnect", reconnect),
         ):
             await asyncio.to_thread(service._response_handler, iterator)
-            await asyncio.sleep(0)
+            await asyncio.wait_for(reconnect_completed.wait(), timeout=2)
         reconnect.assert_awaited_once_with()
 
     async def test_asr_response_callback_and_worker_delegate_without_reinterpretation(self):
