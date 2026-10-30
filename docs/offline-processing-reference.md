@@ -385,6 +385,16 @@ An emitted frame without a processing event is unobserved at that boundary;
 it is not proof that the native queue discarded it. Check `dropped_events` and
 `observation_errors` before interpreting missing records.
 
+Inline `processor_boundary` observations retain `TranscriptionFrame.finalized` and
+both transcript classes' `includes_inter_frame_spaces` flags. Unsupported
+nonboolean values are `null`. `STTMetadataFrame` observations include
+`stt_ttfs_p99_latency_s`, `stt_ttfs_p99_latency_ms`, and
+`stt_ttfs_p99_latency_finite`. These describe configured time-to-final-segment P99
+policy metadata, not measured request latency or ASR completeness. When present,
+these fields let conditional policy replays use observed inputs for those values.
+Missing fields remain unobserved, not false or default values; the earlier replay
+results retain their reconstructed-metadata qualification.
+
 Offline `logical_sample` is the scheduler delivery position in 16,000 Hz samples.
 Online ingestion and supplied-audio cursors record observed PCM prefixes. These
 positions do not assign words to chunks or establish that no earlier ASR event

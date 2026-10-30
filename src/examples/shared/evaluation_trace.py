@@ -45,6 +45,7 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     MetricsFrame,
     OutputAudioRawFrame,
+    STTMetadataFrame,
     TranscriptionFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
@@ -90,6 +91,16 @@ TIMING_SCOPES = {
     "context_messages": (
         "Immutable snapshot at user-aggregator context publication, after native context mutation and "
         "before forwarding. Distinct from the delayed llm_context_request_edge observation"
+    ),
+    "inline_transcription_flags": (
+        "Actual native finalized and includes_inter_frame_spaces boolean fields copied at this boundary; "
+        "unsupported non-boolean values are null. They do not independently establish full utterance completion "
+        "or source-word ownership. Missing fields in legacy traces are unobserved, not false or defaults"
+    ),
+    "inline_stt_metadata": (
+        "STTMetadataFrame configured ttfs_p99_latency, retained as finite seconds and milliseconds; "
+        "this is a policy input, not a measured latency or completeness watermark. Nonfinite values are null "
+        "and stt_ttfs_p99_latency_finite is false. Missing legacy fields remain unobserved"
     ),
     "logical_sample": (
         "Offline scheduler delivery position in 16000-Hz samples; absent online. Online ASR ingest/supplied "
@@ -230,6 +241,7 @@ class EvaluationTrace(BaseObserver):
                 TranscriptionFrame,
                 InterimTranscriptionFrame,
                 InputAudioRawFrame,
+                STTMetadataFrame,
                 LLMContextFrame,
                 LLMTextFrame,
                 *_LIFECYCLE_FRAMES,
@@ -265,6 +277,18 @@ class EvaluationTrace(BaseObserver):
             if transcript or isinstance(frame, LLMTextFrame):
                 fields["text"] = frame.text
                 fields["text_sha256"] = hashlib.sha256(frame.text.encode()).hexdigest()
+            if transcript:
+                spaces = frame.includes_inter_frame_spaces
+                fields["includes_inter_frame_spaces"] = spaces if isinstance(spaces, bool) else None
+                if isinstance(frame, TranscriptionFrame):
+                    fields["finalized"] = frame.finalized if isinstance(frame.finalized, bool) else None
+            if isinstance(frame, STTMetadataFrame):
+                latency_s = _finite_number(frame.ttfs_p99_latency)
+                fields.update(
+                    stt_ttfs_p99_latency_s=latency_s,
+                    stt_ttfs_p99_latency_ms=_finite_number(latency_s * 1000) if latency_s is not None else None,
+                    stt_ttfs_p99_latency_finite=latency_s is not None,
+                )
             source_tag = frame.metadata.get("nva_eval_source")
             if source_tag is not None:
                 fields["source_tag"] = copy.deepcopy(source_tag)

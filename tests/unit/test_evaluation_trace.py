@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import riva.client
 from pipecat.frames.frames import (
     InputAudioRawFrame,
+    InterimTranscriptionFrame,
     InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
@@ -26,6 +27,8 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     MetricsFrame,
     OutputAudioRawFrame,
+    STTMetadataFrame,
+    TranscriptionFrame,
     TTSAudioRawFrame,
     TTSTextFrame,
     VADUserStoppedSpeakingFrame,
@@ -74,6 +77,89 @@ class EvaluationTraceTests(unittest.IsolatedAsyncioTestCase):
         """Read the finalized document through its public output artifact."""
         self.trace.close()
         return json.loads(self.trace.path.read_text())
+
+    async def test_inline_transcription_flags_are_exact_immutable_and_do_not_retain_private_metadata(self):
+        """Keep actual true/false flags without altering frames or retaining raw ASR results."""
+        owner = SimpleNamespace(name="native-user")
+        private_result = object()
+        frames = [
+            TranscriptionFrame("first", "private-user", "private-timestamp", result=private_result, finalized=False),
+            TranscriptionFrame("second", "private-user", "private-timestamp", result=private_result, finalized=True),
+            InterimTranscriptionFrame("interim", "private-user", "private-timestamp", result=private_result),
+        ]
+        for index, frame in enumerate(frames):
+            frame.includes_inter_frame_spaces = index != 0
+            before = dict(vars(frame))
+            self.trace.processor_boundary("source_delivery", owner, frame, role="asr", logical_sample=512)
+            self.trace.processor_boundary("before_process", owner, frame, role="user", logical_sample=512)
+            self.trace.processor_boundary("after_process", owner, frame, role="user", logical_sample=512)
+            self.assertEqual(vars(frame), before)
+            self.assertIs(frame.result, private_result)
+        # Later mutations cannot rewrite what an earlier inline hook saw.
+        frames[0].finalized = True
+        frames[1].finalized = False
+        for frame in frames:
+            frame.includes_inter_frame_spaces = False
+        document = self.saved()
+        events = [event for event in document["events"] if event["event"] == "processor_boundary"]
+        for index, original in enumerate(frames):
+            snapshots = [event for event in events if event["frame_id"] == original.id]
+            self.assertEqual(len(snapshots), 3)
+            self.assertEqual([event["logical_sample"] for event in snapshots], [512, 512, 512])
+            self.assertTrue(all(event["includes_inter_frame_spaces"] is (index != 0) for event in snapshots))
+            if index < 2:
+                self.assertTrue(all(event["finalized"] is (index == 1) for event in snapshots))
+            else:
+                self.assertTrue(all("finalized" not in event for event in snapshots))
+        self.assertNotIn("private-user", json.dumps(document))
+        self.assertNotIn("private-timestamp", json.dumps(document))
+        self.assertTrue(all("result" not in event and "user_id" not in event for event in events))
+        self.assertEqual(document["observation_errors"], 0)
+
+    async def test_inline_stt_metadata_retains_nondefault_finite_policy_value_without_service_name(self):
+        """Copy configured TTFS metadata at publication and processing, without changing it."""
+        owner = SimpleNamespace(name="native-stt")
+        frame = STTMetadataFrame("private.endpoint.invalid:443", 2.75)
+        before = dict(vars(frame))
+        self.trace.processor_boundary("before_push", owner, frame, role="asr")
+        self.trace.processor_boundary("before_process", owner, frame, role="user", logical_sample=0)
+        self.trace.processor_boundary("after_process", owner, frame, role="user", logical_sample=0)
+        self.assertEqual(vars(frame), before)
+        frame.ttfs_p99_latency = 9.0
+        document = self.saved()
+        events = [event for event in document["events"] if event["event"] == "processor_boundary"]
+        self.assertEqual(len(events), 3)
+        for event in events:
+            self.assertEqual(event["frame_type"], "STTMetadataFrame")
+            self.assertEqual(event["stt_ttfs_p99_latency_s"], 2.75)
+            self.assertEqual(event["stt_ttfs_p99_latency_ms"], 2750.0)
+            self.assertIs(event["stt_ttfs_p99_latency_finite"], True)
+            self.assertNotIn("service_name", event)
+        self.assertNotIn("private.endpoint.invalid", json.dumps(document))
+        self.assertEqual(document["observation_errors"], 0)
+
+    async def test_inline_nonfinite_stt_values_and_nonboolean_flags_remain_unobserved_null(self):
+        """Do not invent policy defaults or truth values for unsupported metadata."""
+        owner = SimpleNamespace(name="native-stt")
+        for value in (float("nan"), float("inf"), float("-inf"), True):
+            with self.subTest(value_type=type(value).__name__):
+                frame = STTMetadataFrame("NvidiaSTTService", value)
+                self.trace.processor_boundary("before_push", owner, frame, role="asr")
+        frame = TranscriptionFrame("text", "user", "", finalized=None)
+        frame.includes_inter_frame_spaces = "unknown"
+        self.trace.processor_boundary("before_process", owner, frame, role="user")
+        document = self.saved()
+        events = [event for event in document["events"] if event["event"] == "processor_boundary"]
+        for event in events[:-1]:
+            self.assertIsNone(event["stt_ttfs_p99_latency_s"])
+            self.assertIsNone(event["stt_ttfs_p99_latency_ms"])
+            self.assertIs(event["stt_ttfs_p99_latency_finite"], False)
+        self.assertIsNone(events[-1]["finalized"])
+        self.assertIsNone(events[-1]["includes_inter_frame_spaces"])
+        # Null diagnostic values keep JSON strict even when an original native
+        # field is NaN. The observer never edits that original frame.
+        json.dumps(document, allow_nan=False)
+        self.assertEqual(document["observation_errors"], 0)
 
     async def test_counts_input_once_and_retains_backdating_parameters(self):
         """Arrival cursors count PCM, while VAD silence remains explicit metadata."""
