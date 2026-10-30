@@ -3,6 +3,7 @@
 
 """Bind the generic assistant's catalogs to independently scheduled providers."""
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from loguru import logger
 from pipecat.services.nvidia.llm import NvidiaLLMSettings
 from pipecat.services.nvidia.tts import NvidiaTTSSettings
 
+from examples.shared.evaluation_trace import _observe, create_evaluation_trace
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
 from examples.shared.nvidia_tts_explicit_eof import EXPLICIT_EOF_COMPLETION_POLICY, explicit_eof_tts_options
@@ -58,6 +60,7 @@ class GenericOfflineRuntime:
         configuration,
         *,
         provider_observations: Callable[[], dict[str, Any]] | None = None,
+        evaluation_trace=None,
     ):
         """Keep session-owned provider resources out of the scheduling core."""
         self._engine = engine
@@ -65,6 +68,7 @@ class GenericOfflineRuntime:
         self._recognizer = recognizer
         self._synthesis = synthesis
         self._provider_observations = provider_observations
+        self._evaluation_trace = evaluation_trace
         self.configuration = configuration
         self._closed = False
 
@@ -81,11 +85,17 @@ class GenericOfflineRuntime:
                 if hasattr(self._synthesis, "aclose"):
                     await self._synthesis.aclose()
             finally:
-                if self._client is not None:
-                    await self._client.close()
+                try:
+                    if self._client is not None:
+                        await self._client.close()
+                finally:
+                    if self._evaluation_trace is not None:
+                        await asyncio.to_thread(_observe, self._evaluation_trace, "close")
 
     async def run(self, source, *, event_sink: Callable[[dict], None] | None = None):
         """Run once and release every provider connection on success or failure."""
+        if self._evaluation_trace:
+            _observe(self._evaluation_trace, "offline_source", source)
         try:
             result = (
                 await self._engine.run(source)
@@ -194,14 +204,19 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
     recognizer = create_riva_recognizer(settings, capture_events=True)
     messages = build_context_messages(prompt, system_prompt)
     recent_turns = parse_env_int("CHAT_HISTORY_RECENT_TURNS", 10)
+    evaluation_trace = create_evaluation_trace({**config, "protocol": "offline"})
 
     def llm_factory(capture):
-        return CapturingNativeNvidiaLLMService(
+        service = CapturingNativeNvidiaLLMService(
             capture=capture,
             api_key=llm_api_key,
             base_url=base_url,
             settings=llm_settings,
+            **({"evaluation_trace": evaluation_trace} if evaluation_trace else {}),
         )
+        if evaluation_trace:
+            _observe(evaluation_trace, "bind_processor", service, role="llm")
+        return service
 
     def tts_factory(capture):
         model_map = {}
@@ -282,10 +297,12 @@ def build_runtime(config: dict) -> GenericOfflineRuntime:
             output_sample_rate=PIPELINE_AUDIO_OUT_SAMPLE_RATE,
             history_recent_turns=recent_turns,
             preserve_prompt_messages=len(messages),
+            evaluation_trace=evaluation_trace,
         ),
         None,
         recognizer,
         responder,
         configuration,
         provider_observations=responder.get_provider_observations,
+        evaluation_trace=evaluation_trace,
     )

@@ -50,6 +50,7 @@ class GenericWebsocketTTSCompletionTests(unittest.IsolatedAsyncioTestCase):
             native_stt = stack.enter_context(patch.object(pipeline, "NvidiaSTTService"))
             observed_stt = stack.enter_context(patch.object(pipeline, "EvaluationNvidiaSTTService"))
             stack.enter_context(patch.object(pipeline, "NvidiaLLMService"))
+            stack.enter_context(patch.object(pipeline, "EvaluationNvidiaLLMService"))
             native = stack.enter_context(patch.object(pipeline, "NvidiaTTSService"))
             observed = stack.enter_context(patch.object(pipeline, "EvaluationNvidiaTTSService"))
             stack.enter_context(patch.object(pipeline, "build_context_messages", side_effect=_ReachedPipelineAssembly))

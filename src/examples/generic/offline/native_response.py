@@ -43,6 +43,9 @@ from pipecat.services.nvidia.tts import NvidiaTTSService
 from pipecat.utils.asyncio.task_manager import TaskManager
 from pipecat.utils.errors import ErrorCategory
 
+from examples.shared.evaluation_trace import _observe
+from examples.shared.llm_request_trace import LLMRequestTraceMixin
+
 from .actors import ActorEvent, EventActor
 from .models import RATE
 
@@ -163,7 +166,7 @@ def _observe_rpc_state(state) -> tuple[_ObservedRpcState, StatusCode | None]:
     return "complete", status if isinstance(status, StatusCode) else None
 
 
-class CapturingNativeNvidiaLLMService(NvidiaLLMService):
+class CapturingNativeNvidiaLLMService(LLMRequestTraceMixin, NvidiaLLMService):
     """Delegate the native service, retaining generation identity across pushes."""
 
     def __init__(self, *, capture: Capture, **kwargs):
@@ -608,6 +611,17 @@ class NativeResponseSession:
         self._publish(state, "response_dispatched", {"messages": copy.deepcopy(snapshot)})
         request = LLMContextFrame(LLMContext(messages=copy.deepcopy(snapshot)))
         request.metadata[_GENERATION_KEY] = generation_id
+        trace = getattr(self._llm, "_evaluation_trace", None)
+        if trace is not None:
+            _observe(
+                trace,
+                "record",
+                "offline_native_context_delivery",
+                generation=generation_id,
+                context_frame_id=request.id,
+                logical_start_ns=logical_start_ns,
+                request_messages=copy.deepcopy(snapshot),
+            )
         await self._llm.queue_frame(request)
         task = asyncio.create_task(self._finish_generation(state))
         actor.bind_worker(task)

@@ -26,6 +26,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import UTC, datetime
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -58,9 +59,12 @@ from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 from pipecat.services.llm_service import LLMService
+from pipecat.services.nvidia.llm import NvidiaLLMService
 from pipecat.services.nvidia.stt import NvidiaSTTService
 from pipecat.services.nvidia.tts import NvidiaTTSService
 from pipecat.transports.base_output import BaseOutputTransport
+
+from examples.shared.llm_request_trace import LLMRequestTraceMixin, current_llm_request_trace
 
 _LIFECYCLE_FRAMES = (
     ClientConnectedFrame,
@@ -78,6 +82,19 @@ _LIFECYCLE_FRAMES = (
 )
 
 TIMING_SCOPES = {
+    "processor_boundary": (
+        "Synchronous native lifecycle hook: before_process runs after dequeue and any pause; after_process "
+        "means normal return. before_push observes publication before forwarding. Direction is unavailable "
+        "in these hooks. An absent processing hook does not prove a frame was discarded"
+    ),
+    "context_messages": (
+        "Immutable snapshot at user-aggregator context publication, after native context mutation and "
+        "before forwarding. Distinct from the delayed llm_context_request_edge observation"
+    ),
+    "logical_sample": (
+        "Offline scheduler delivery position in 16000-Hz samples; absent online. Online ASR ingest/supplied "
+        "cursors are observed audio prefixes, not transcript ownership or completeness acknowledgements"
+    ),
     "clock": (
         "elapsed_ns uses a session-local monotonic callback clock; elapsed_ms = elapsed_ns / 1e6. "
         "Observer callbacks may wait in Pipecat's proxy queue"
@@ -156,6 +173,7 @@ class EvaluationTrace(BaseObserver):
         self._configuration = configuration or {}
         self._clock = clock
         self._started = clock()
+        self._started_at_utc = datetime.now(UTC).isoformat()
         self._lock = threading.RLock()
         self._events: list[dict[str, Any]] = []
         self._seen: set[tuple[str, int]] = set()
@@ -163,6 +181,8 @@ class EvaluationTrace(BaseObserver):
         self._input_end_sample = 0
         self._asr_ingest_samples_16k = Fraction(0)
         self._asr_ingest_sequence = 0
+        self._asr_ingest_audio_bytes = 0
+        self._asr_ingest_audio_hash = hashlib.sha256()
         self._asr_supplied_samples_16k = Fraction(0)
         self._asr_supplied_audio_bytes = 0
         self._asr_supplied_audio_hash = hashlib.sha256()
@@ -172,7 +192,117 @@ class EvaluationTrace(BaseObserver):
         self._dropped = 0
         self._observation_errors = 0
         self._closed = False
+        self._bound_processors: set[tuple[int, str]] = set()
+        self._published_asr: set[int] = set()
+        self._started_asr: set[int] = set()
+        self._returned_asr: set[int] = set()
         self.record("trace_started")
+
+    def bind_processor(self, processor, *, role: str, sample_position=None) -> None:
+        """Attach inline native hooks without replacing queues or processing methods."""
+        key = (id(processor), role)
+        if key in self._bound_processors:
+            return
+        self._bound_processors.add(key)
+        for hook, phase in (
+            ("on_before_process_frame", "before_process"),
+            ("on_after_process_frame", "after_process"),
+            ("on_before_push_frame", "before_push"),
+        ):
+
+            def observed(owner, frame, *, boundary=phase):
+                try:
+                    position = sample_position() if sample_position is not None else None
+                    self.processor_boundary(boundary, owner, frame, role=role, logical_sample=position)
+                except Exception as error:
+                    self._note_failure(error)
+
+            try:
+                processor.add_event_handler(hook, observed)
+            except Exception as error:
+                self._note_failure(error)
+
+    def processor_boundary(self, phase, processor, frame, *, role: str, logical_sample=None) -> None:
+        """Freeze relevant frame evidence at an actual synchronous service boundary."""
+        relevant = isinstance(
+            frame,
+            (
+                TranscriptionFrame,
+                InterimTranscriptionFrame,
+                InputAudioRawFrame,
+                LLMContextFrame,
+                LLMTextFrame,
+                *_LIFECYCLE_FRAMES,
+            ),
+        )
+        if not relevant:
+            return
+        transcript = isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame))
+        with self._lock:
+            if self._closed:
+                return
+            if len(self._events) >= self._max_events:
+                self._dropped += 1
+                return
+            if transcript:
+                if role == "asr" and phase in {"before_push", "source_delivery"}:
+                    self._published_asr.add(frame.id)
+                elif role == "user" and phase == "before_process":
+                    self._started_asr.add(frame.id)
+                elif role == "user" and phase == "after_process":
+                    self._returned_asr.add(frame.id)
+            fields = {
+                "phase": phase,
+                "role": role,
+                "processor": processor.name,
+                "frame_id": frame.id,
+                "frame_type": type(frame).__name__,
+                "direction": None,
+                "logical_sample": logical_sample,
+                "asr_ingested_end_sample_16k": round(self._asr_ingest_samples_16k),
+                "asr_supplied_end_sample_16k": round(self._asr_supplied_samples_16k),
+            }
+            if transcript or isinstance(frame, LLMTextFrame):
+                fields["text"] = frame.text
+                fields["text_sha256"] = hashlib.sha256(frame.text.encode()).hexdigest()
+            source_tag = frame.metadata.get("nva_eval_source")
+            if source_tag is not None:
+                fields["source_tag"] = copy.deepcopy(source_tag)
+            if isinstance(frame, LLMContextFrame):
+                messages = copy.deepcopy(frame.context.get_messages())
+                fields["context_messages"] = messages
+                fields["context_messages_sha256"] = hashlib.sha256(
+                    json.dumps(messages, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+                ).hexdigest()
+            if isinstance(frame, (LLMContextFrame, InterruptionFrame)):
+                fields["published_asr_without_processing_start"] = sorted(self._published_asr - self._started_asr)
+                fields["published_asr_without_processing_return"] = sorted(self._published_asr - self._returned_asr)
+            if role == "llm":
+                fields["request_identity"] = current_llm_request_trace()
+            self.record("processor_boundary", **fields)
+
+    def offline_event(self, event) -> None:
+        """Retain existing scheduler observations without treating them as wall time."""
+        if event["type"] in {
+            "asr_transcript",
+            "vad_decision",
+            "user_turn_started",
+            "user_turn_stopped",
+            "user_turn_message_added",
+            "interruption",
+            "llm_request",
+            "response_requested",
+        }:
+            self.record("offline_scheduler_event", scheduler_event=copy.deepcopy(event))
+
+    def offline_source(self, source) -> None:
+        """Identify the exact uploaded PCM without retaining the audio payload."""
+        self.record(
+            "offline_source",
+            source_samples=source.sample_count,
+            source_pcm_sha256=hashlib.sha256(source.pcm).hexdigest(),
+            source_sample_rate=source.sample_rate,
+        )
 
     def record(self, event: str, **fields) -> None:
         """Append one observation, including calls from provider worker threads."""
@@ -257,6 +387,8 @@ class EvaluationTrace(BaseObserver):
         with self._lock:
             start = round(self._asr_ingest_samples_16k)
             self._asr_ingest_samples_16k += count
+            self._asr_ingest_audio_bytes += len(frame.audio)
+            self._asr_ingest_audio_hash.update(frame.audio)
             tag = {
                 "seq": self._asr_ingest_sequence,
                 "start": start,
@@ -444,7 +576,14 @@ class EvaluationTrace(BaseObserver):
                 document = {
                     "schema": "nva.evaluation.trace.v1",
                     "session_id": self.session_id,
+                    "started_at_utc": self._started_at_utc,
                     "configuration": self._configuration,
+                    "asr_ingested_audio": {
+                        "audio_bytes": self._asr_ingest_audio_bytes,
+                        "samples_16k": round(self._asr_ingest_samples_16k),
+                        "sha256": self._asr_ingest_audio_hash.hexdigest(),
+                        "scope": "Observed source ingestion; not provider consumption or completeness",
+                    },
                     "asr_supplied_audio": {
                         "audio_bytes": self._asr_supplied_audio_bytes,
                         "samples_16k": round(self._asr_supplied_samples_16k),
@@ -453,9 +592,22 @@ class EvaluationTrace(BaseObserver):
                     "timing_scopes": TIMING_SCOPES,
                     "dropped_events": self._dropped,
                     "observation_errors": self._observation_errors,
+                    "asr_frame_accounting": {
+                        "published": len(self._published_asr),
+                        "processing_started": len(self._started_asr),
+                        "processing_returned": len(self._returned_asr),
+                        "published_without_processing_start": sorted(self._published_asr - self._started_asr),
+                        "published_without_processing_return": sorted(self._published_asr - self._returned_asr),
+                        "scope": "Observed lifecycle only; missing processing does not establish a discard cause",
+                    },
                     "events": self._events,
                 }
-            self.path.write_text(json.dumps(document, indent=2, default=str) + "\n")
+            # Request bodies contain conversational data. A fresh UUID path is
+            # private regardless of the process's inherited umask.
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w") as output:
+                json.dump(document, output, indent=2, default=str)
+                output.write("\n")
             logger.info(f"Evaluation timing trace saved: {self.path}")
         except Exception:
             logger.exception("Unable to save optional evaluation timing trace")
@@ -468,7 +620,7 @@ def create_evaluation_trace(body: dict) -> EvaluationTrace | None:
         return None
     try:
         directory = Path(raw)
-        directory.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         view = body.get("realtime_session_view") or {}
         return EvaluationTrace(
             directory,
@@ -511,6 +663,10 @@ class _ObservedASRClient:
                 yield chunk
 
         return self._client.streaming_response_generator(audio_chunks=audio(), streaming_config=streaming_config)
+
+
+class EvaluationNvidiaLLMService(LLMRequestTraceMixin, NvidiaLLMService):
+    """Preserve native LLM processing while retaining immutable request evidence."""
 
 
 class EvaluationNvidiaSTTService(NvidiaSTTService):

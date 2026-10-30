@@ -47,6 +47,8 @@ from pipecat.turns.user_turn_controller import UserTurnController
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.asyncio.task_manager import TaskManager
 
+from examples.shared.evaluation_trace import _observe
+
 from .models import RATE, samples_to_ns
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -313,6 +315,16 @@ class _ObservedUserAggregator(LLMUserAggregator):
         self._user_turn_controller = controller
 
     async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
+        if self._owner.evaluation_trace:
+            _observe(
+                self._owner.evaluation_trace,
+                "processor_boundary",
+                "before_push",
+                self,
+                frame,
+                role="user",
+                logical_sample=self._owner.clock.now_sample,
+            )
         if isinstance(frame, ErrorFrame):
             self._owner.clock._errors.append(frame.exception or RuntimeError(frame.error))
             return
@@ -366,6 +378,7 @@ class SharedUserAggregation:
         clock: SampleClock | None = None,
         on_context: ContextCallback | None = None,
         on_event: EventCallback | None = None,
+        evaluation_trace=None,
     ):
         """Consume fresh shared parameters and adapt their timer waits only."""
         if version("pipecat-ai") != "1.12.0":
@@ -384,6 +397,7 @@ class SharedUserAggregation:
         if not math.isfinite(params.user_turn_stop_timeout) or params.user_turn_stop_timeout <= 0:
             raise ValueError("The shared turn watchdog timeout must be finite and positive")
         self.clock = clock or SampleClock()
+        self.evaluation_trace = evaluation_trace
         self.on_context = on_context
         self.on_event = on_event
         self.events: list[dict[str, Any]] = []
@@ -399,6 +413,14 @@ class SharedUserAggregation:
             ),
         )
         self._aggregator = _ObservedUserAggregator(self, self.context, adapted)
+        if evaluation_trace:
+            _observe(
+                evaluation_trace,
+                "bind_processor",
+                self._aggregator,
+                role="user",
+                sample_position=lambda: self.clock.now_sample,
+            )
         self._tasks: _SampleTaskManager | None = None
         self._started = False
         self._closed = False
@@ -446,6 +468,16 @@ class SharedUserAggregation:
         await self.clock.advance_to(events[0].sample, inclusive=False)
         for event in events:
             _validate_cascaded_frame(event.frame)
+            if self.evaluation_trace:
+                _observe(
+                    self.evaluation_trace,
+                    "processor_boundary",
+                    "delivery",
+                    self._aggregator,
+                    event.frame,
+                    role="user",
+                    logical_sample=event.sample,
+                )
             await self._aggregator.queue_frame(event.frame, event.direction)
         if settle_timers:
             await self.clock.advance_to(events[0].sample)
