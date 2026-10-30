@@ -34,6 +34,8 @@ class LiveSettings:
     api_token: str = ""
     max_sessions: int = 8
     max_session_seconds: int = 1800
+    # The context appends one session accepts in any minute, the three kinds together: a limit of this server's own.
+    max_appends_per_minute: int = 64
     ice_urls: tuple[str, ...] = field(default_factory=tuple)
     # Live sessions live in one server process, so the routes are served only with one uvicorn worker.
     workers: int = 1
@@ -52,15 +54,17 @@ class LiveSettings:
         """Read the live settings from the environment; an unset or empty value is the default.
 
         The variables: ``LIVE_API_TOKEN``, ``LIVE_MAX_SESSIONS``, ``LIVE_MAX_SESSION_SECONDS``, ``LIVE_ICE_URLS``,
-        ``LIVE_MAX_CONSOLE_ROUNDS``, ``LIVE_ALLOWED_HOSTS`` (comma-separated) and ``UVICORN_WORKERS``.
+        ``LIVE_MAX_APPENDS_PER_MINUTE``, ``LIVE_MAX_CONSOLE_ROUNDS``, ``LIVE_ALLOWED_HOSTS`` (comma-separated) and
+        ``UVICORN_WORKERS``.
 
         Raises:
-            ValueError: A session or round limit or the worker count is not a whole number of at least 1.
+            ValueError: A session, append or round limit or the worker count is not a whole number of at least 1.
         """
         return cls(
             api_token=os.getenv("LIVE_API_TOKEN", ""),
             max_sessions=positive_setting("LIVE_MAX_SESSIONS", cls.max_sessions),
             max_session_seconds=positive_setting("LIVE_MAX_SESSION_SECONDS", cls.max_session_seconds),
+            max_appends_per_minute=positive_setting("LIVE_MAX_APPENDS_PER_MINUTE", cls.max_appends_per_minute),
             ice_urls=listed("LIVE_ICE_URLS"),
             workers=positive_setting("UVICORN_WORKERS", cls.workers),
             max_console_rounds=positive_setting("LIVE_MAX_CONSOLE_ROUNDS", cls.max_console_rounds),

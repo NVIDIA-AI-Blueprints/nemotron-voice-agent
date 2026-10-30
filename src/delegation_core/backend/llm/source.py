@@ -49,7 +49,7 @@ class LlmSource:
                 does not list.
             tools: A fresh set of the session's server tool sources, for each IM session.
             make_provider: Makes a model provider on an endpoint; by default the settings' provider class with the
-                settings' limits (a test injects a scripted one).
+                settings' limits.
         """
         self.settings, self.endpoints, self.tools = settings, endpoints, tools
         self.make_provider = make_provider or (lambda endpoint: settings.provider(endpoint, settings.limits))

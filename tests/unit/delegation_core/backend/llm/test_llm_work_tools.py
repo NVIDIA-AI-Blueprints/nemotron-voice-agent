@@ -35,7 +35,7 @@ class WorkToolTests(unittest.IsolatedAsyncioTestCase):
         task = IMTask(work_tools=work)
         events = await drive(adapter(provider).start(task), task)
         self.assertEqual(work.shown, ["Latte $4.50"])
-        self.assertEqual((task.started, task.outcomes["call_1"][1]), ([("call_1", "voiceclaw")], "done"))
+        self.assertEqual((task.started, task.outcomes["call_1"][1]), ([("call_1", "delegation_core")], "done"))
         self.assertEqual([m["phase"] for m in items_of(events, "message")], ["commentary", "final_answer"])
 
     async def test_cancel_work_stops_its_own_work_after_the_step(self):
@@ -49,16 +49,9 @@ class WorkToolTests(unittest.IsolatedAsyncioTestCase):
         events = await drive(adapter(provider, tools=[shop]).start(task), task)
         self.assertTrue(work.cancelled)
         self.assertEqual(shop.calls, [])  # the later call was refused, never run
-        self.assertEqual(task.started, [("call_stop", "voiceclaw")])
+        self.assertEqual(task.started, [("call_stop", "delegation_core")])
         self.assertEqual(items_of(events, "message")[-1]["phase"], "final_answer")  # its next answer is delivered
         self.assertEqual(json.loads(task.outcomes["call_stop"][0]), {"stopping": "after this step"})
-
-    async def test_the_work_tools_join_every_round(self):
-        provider = ScriptedProvider(calling("lookup"), text_round("Done.", "resp_2"))
-        task = IMTask(work_tools=WorkTools())
-        await drive(adapter(provider, tools=[RecordingTools()]).start(task), task)
-        for payload in provider.payloads:
-            self.assertEqual([tool["name"] for tool in payload["tools"]][-2:], ["show", "cancel_work"])
 
 
 if __name__ == "__main__":

@@ -49,7 +49,7 @@ class EndingGoldens(GoldenCase):
     def engine_pending(self):
         """The harness's reasons, except that a held round counts as waiting for the test, like a client-tool wait.
 
-        While a held round waits, the worker does nothing else: the next step is the test's. Results are
+        While a held round waits, the backend does nothing else: the next step is the test's. Results are
         worded and spoken in the presenter's own task, and the harness reports them under a reason of their own,
         which this filter keeps, so a result still being spoken while a round is held is waited for.
         """
@@ -77,7 +77,7 @@ class EndingGoldens(GoldenCase):
         await self.wait_until(lambda: held.waiting.is_set(), "the backend round to wait for its model")
         await self.wait_quiet()
         await self.close()
-        # The worker stopped the round it ran: the model call was cancelled and its stream closed. Both model
+        # The IM session's close stopped the round: the model call was cancelled and its stream closed. Both model
         # clients were released.
         self.assertEqual((held.cancelled, held.closed), (True, True))
         self.assertEqual((self.frontend.closed, self.backend.closed), (True, True))

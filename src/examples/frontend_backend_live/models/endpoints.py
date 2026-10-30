@@ -19,7 +19,7 @@ from typing import Any
 from loguru import logger
 
 from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
-from examples.frontend_backend_live.prompts.catalog import role_instructions
+from examples.frontend_backend_live.prompts.catalog import catalog_prompt
 from utils import NVCF_LLM_BASE_URL, build_services_api_response, nvidia_api_key, parse_json_dict
 
 
@@ -123,11 +123,12 @@ class ExampleCatalog:
         return self.entry(slot)
 
     def prompt(self, key: str) -> str:
-        """A role's static instructions, named by its ``prompts.yaml`` key: the entry, then the shared channel context.
+        """The ``prompts.yaml`` entry named ``key``, as written (``catalog_prompt``).
 
-        It is what a role starts from when a session supplies no instructions (``role_instructions``).
+        It is what the talker starts from when a live session supplies no or blank instructions. A Live client's own
+        instructions and tools carry its domain, so no channel context follows it.
         """
-        return role_instructions(key)
+        return catalog_prompt(key)
 
     def models(self, slot: str) -> list[str]:
         """The model ids the catalog offers for a slot, the default first."""

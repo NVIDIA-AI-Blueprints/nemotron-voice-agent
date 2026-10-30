@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Prompt catalog for the Frontend/Backend Live example. ``talker`` is the user-facing prompt (selectable in the
-# UI); ``thinker`` is the backend's task prompt. Every text the cascade's own model calls add on top (the routing and
-# commentary texts, ``v2``'s frame around the talker's instructions, the work note, the writer's labels and notes, the
-# schema hints and the normalizer's prompt) lives in a prompt set in ``prompts/``, and the backend's voice-channel note
-# in the delegation core (``src/delegation_core/im/input.py``); ``config.yaml`` chooses the prompt set with
-# ``prompt_version`` and the note with ``voice_note``.
+# UI), the cafe's talker that the repository UI bot and the Live Console use; ``voice`` and ``backend`` are the
+# talker's and the backend's defaults for any Live client; ``thinker`` is the cafe's backend prompt (the repository UI
+# bot's and the Live Console's). Every text the cascade's own model calls add on top (the routing and commentary texts,
+# the frames around the client's instructions, the work note, the writer's labels and notes, the schema hints and the
+# normalizer's prompt) lives in a prompt set in ``prompts/``, and the backend's voice-channel note in the delegation
+# core's ``core.yaml`` (``texts.voice_notes``); ``config.yaml`` chooses the prompt set with ``prompt_version``, and
+# ``core.yaml`` the note with ``delegation.voice_note``. The prompt set also words the talker's memory (the marks of
+# reference data and of a cut line) and each delegation's input, the transcript the backend reads.
 
 talker:
   default: true
@@ -77,13 +80,69 @@ thinker:
     unclear, state that and explain what needs to be checked.
     Do not use Markdown, lists, or symbols; this text is spoken.
 
+# The talker's default for a Live session that sets no instructions, or blank ones (config.yaml
+# frontend.cascade.prompt), used as written: GPT-Live's documented Live prompt template, with capability lines that
+# name no domain, since a client's own instructions and tools carry its domain. It is no prompt of the repository UI,
+# so the prompt list leaves it out (internal).
+voice:
+  internal: true
+  description: "Talker prompt for any Live session that sets no or blank instructions; it names no domain."
+  content: |
+    You are a calm, friendly voice assistant.
+    Speak warmly and naturally, at an unhurried pace. Be clear and direct, not overly cheerful.
+    If the user is frustrated, acknowledge it briefly and focus on the next helpful step.
+
+    Backchannel policy: Use moderate backchannels. Acknowledge naturally without competing with the main response.
+
+    Interruption policy: Stop speaking when the user interrupts. Listen to what they say.
+
+    Delegation policy:
+    Backend tools:
+    - Lookups: find the facts, records, and details a request needs.
+    - Actions: carry out, change, or cancel what the user asks for.
+
+    Generate <|SpawnThinking|> when:
+    - The request needs a backend capability or careful reasoning.
+    - A correction changes the work already requested.
+
+    Do not generate <|SpawnThinking|> when:
+    - You can answer from the conversation or a still-current result.
+    - You need a brief clarification to understand the request.
+
+    Generate <|SpawnThinking|> before giving an answer that depends on backend work.
+    Do not guess the result while waiting.
+
+# The backend's default for a Live client that sets no delegation.responses.instructions (core.yaml backend.prompt):
+# GPT-Live's documented backend template, whose task instructions name no domain, since a client's own tools and
+# instructions carry its domain. It is no talker prompt, so the prompt list leaves it out (internal).
+backend:
+  internal: true
+  description: "Backend prompt for any Live client that sets no backend instructions; it names no domain."
+  content: |
+    ## Voice conversation context
+    You are helping an assistant in a live voice conversation. Transcripts can contain mistakes,
+    unfinished phrases, and later corrections. Use the latest context and verified records. If a
+    needed detail is still unclear, ask for that detail instead of guessing.
+
+    ## Task instructions
+    Complete the caller's request with the tools you are given. Look up any fact a tool can give
+    instead of guessing it, and say so when the request needs a tool you do not have.
+
+    ## Return the result
+    Return the relevant facts, the task's current status, and the next step. Report an action as
+    complete after the tool or service confirms success. If the outcome is unclear, state that and
+    explain what needs to be checked.
+
 channel:
   description: "Channel context shared by the talker and the backend."
   content: |
     Channel: in-store kiosk at Bluebird Cafe. The cart starts empty. Prices are in US dollars and include an 8.5% tax line at checkout.
 
 # The lines the voice says word for word, by name (prompts/catalog.py: catalog_line). The talker says ``holding`` when
-# its decision fails while work is open; the cascade reads the others. An empty line means none is said.
+# its decision fails while work is open; the cascade reads the others except ``still_working`` and ``app_started``.
+# The Live Console reads ``apology``, ``unclear``, ``still_working``, ``intro`` and ``app_started`` through
+# GET /v1/live/info, and sends ``app_started``, which is never said, as its silent note that a client delegation's work
+# started. An empty line means none is said or sent.
 # Not a prompt: it has no content, so the prompt list leaves it out.
 lines:
   apology: "Sorry, I ran into a problem with that. Could you say it again?"
@@ -91,7 +150,24 @@ lines:
   lost: "I lost track of that request. Could you say it again?"
   refusal: "I can't take on another request right now. Please try again in a moment."
   app_wait_line: "I'm still waiting for that to come through."
-  lead_in: "Let me check."
   holding: "One moment, I'm still working on your earlier request."
   still_working: "I'm still working on that, thanks for your patience."
   intro: "This is an initial greeting, not an order. Greet the user briefly as Remy from Bluebird Cafe and ask what they would like. Respond directly with spoken text."
+  greeting: "Hi, I'm Remy from Bluebird Cafe. What can I get you?"
+  app_started: "Work on the caller's latest request has started; there is no result yet."
+
+# The Live Console's other append presets, by append type: each a [label, text] that the operator may send
+# (factory.py: console_presets, served by GET /v1/live/info). Not a prompt: it has no content, so the prompt list
+# leaves it out.
+console_presets:
+  session.instructions.append:
+    - ["Recording disclosure", "Immediately say the following disclosure exactly and in full before responding to the caller: This call may be recorded for quality and training purposes."]
+    - ["Guardrail redirect", "Stop speaking about that request. Briefly explain that you cannot help with it, then wait for the user."]
+    - ["Slow down", "Speak more slowly and leave a short pause after each item you read back."]
+  session.thinking.append:
+    - ["UI context", "The user is looking at the pastry section of the kiosk screen. 'this one' most likely refers to the butter croissant."]
+    - ["Loyalty status", "This caller is a loyalty member; the counter applies their discount at pickup. Do not quote a discounted price."]
+    - ["Store state", "The espresso machine is busy; drink orders are running about three minutes behind."]
+  session.commentary.append:
+    - ["Taking longer", "This is taking a little longer than usual — I'm still on it."]
+    - ["Pickup counter", "Your order will be at the far end of the counter when it's ready."]

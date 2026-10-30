@@ -41,7 +41,7 @@ class LiveWebRTCConnection(SmallWebRTCConnection):
                     await self._call_event_handler("data-channel-closed")
 
     def add_event_handler(self, event_name: str, handler) -> None:
-        """Add a handler; a ``connected`` handler means a pipeline transport now runs on this connection."""
+        """Add a handler; a ``connected`` handler means a pipeline transport runs on this connection."""
         super().add_event_handler(event_name, handler)
         self._transport_attached = self._transport_attached or event_name == "connected"
 

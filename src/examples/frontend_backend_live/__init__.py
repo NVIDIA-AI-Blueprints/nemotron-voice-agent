@@ -18,12 +18,12 @@ Two composition roots build each call:
 
 Packages, one per responsibility:
 
-* ``adapter``: the cascade adapter (a ``live.ports.FrontendAdapter``), its class contract and table, and its Pipecat
-  modules: the pipeline host, the bridge between a live session and its pipeline, the playout tracker, the speech
-  services, the reply pre-roll, and the UI bot's task cards.
-* ``cascade``: the cascade's parts for one call: caller turns, the routing talker, the writer, the floor, the work note,
-  the heard log, the talker's memory, the inbox of results, the reader of the official events, and the Pipecat
-  processor that runs them.
+* ``adapter``: the cascade adapter (a ``live.ports.FrontendAdapter``), its class contract and table, and its Live
+  integration: the pipeline host and the bridge between a live session and its pipeline.
+* ``cascade``: the cascade's Pipecat-free parts for one call: caller turns, the routing talker, the writer, the floor,
+  the work note, the heard log, the talker's memory, the presenter's inbox, and the reader of the official events.
+* ``media``: the cascade's Pipecat speech pipeline, which each host builds around it: the Pipecat processor that runs
+  the cascade, the speech services and TTS modes, the playout tracker, the reply pre-roll, and the UI bot's task cards.
 * ``models``: the ``Frontend`` base class and its providers, the decision parser, the example's catalog and endpoint
   resolution, and retries with backoff.
 * ``prompts``: the prompt sets and the reader of the example's ``prompts.yaml``.

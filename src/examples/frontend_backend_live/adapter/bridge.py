@@ -7,10 +7,12 @@ Each works through the adapter's view of the session (:class:`live.ports.Session
 
 * :class:`LiveInputGate` counts caller audio against the session's input clock, honors mute, hands the frontend the
   caller's audio at the rate it hears, and logs each caller turn's level.
-* :class:`LiveEventObserver` turns pipeline frames into input transcript and error events.
+* :class:`LiveEventObserver` turns pipeline frames into input transcript events and failure reports.
+* :class:`LiveOutputTranscript` sends the sentences that played, which the playout tracker hands it, as output
+  transcript events.
 * :class:`LiveWebSocketAudioOutput` sends reply audio on a primary WebSocket in real time, keeping every other frame at
   its place in the audio; the session sends the audio as ``session.output_audio.delta`` events. WebRTC sessions use
-  Pipecat's output transport. What the caller heard is read after either output (``adapter/playout.py``).
+  Pipecat's output transport. What the caller heard is read after either output (``media/playout.py``).
 """
 
 from __future__ import annotations
@@ -170,7 +172,7 @@ class LiveInputGate(FrameProcessor):
 class LiveEventObserver(BaseObserver):
     """Publishes the caller's transcript deltas and pipeline errors as live events.
 
-    The assistant's transcript is sent by the playout tracker, after the output, for the audio the caller was sent.
+    The assistant's transcript is :class:`LiveOutputTranscript`, fed after the output, for the audio sent to the caller.
     An error frame is reported once: each processor it passes pushes it on, and the observer sees every push.
     """
 
@@ -185,8 +187,8 @@ class LiveEventObserver(BaseObserver):
     def _emit(self, kind: str, **fields) -> None:
         self._send(self.session.emit(kind, **fields))
 
-    def _report(self, message: str) -> None:
-        self._send(self.session.report_error(message))
+    def _report(self, message: str, fatal: bool) -> None:
+        self._send(self.session.report_error(message, fatal=fatal))
 
     def _send(self, sending) -> None:
         task = asyncio.create_task(sending)
@@ -214,7 +216,34 @@ class LiveEventObserver(BaseObserver):
             if SILENT_TTS_CONTEXT.match(str(frame.error)):
                 logger.info(f"Ignoring a silent TTS context: {frame.error}")
                 return
-            self._report(str(frame.error)[:500])
+            # A processor this error left unusable ends the pipeline (ProcessorUnusablePolicy.END), and the session.
+            self._report(str(frame.error)[:500], fatal=frame.processor is not None and not frame.processor.is_usable)
+
+
+class LiveOutputTranscript:
+    """The assistant's transcript: each sentence that played, as ``session.output_transcript.delta``.
+
+    The playout tracker (``media/playout.py``) hands it each sentence once its audio has gone out, timed on the
+    session's input clock, so the client's transcript holds played sentences only.
+    """
+
+    def __init__(self, session: SessionPort):
+        """Send on ``session``."""
+        self.session = session
+
+    @property
+    def now_ms(self) -> int:
+        """The session's input clock."""
+        return self.session.input_ms
+
+    async def played(self, text: str, start_ms: int, end_ms: int) -> None:
+        """Send the sentence, ending in a space so the deltas join."""
+        await self.session.emit(
+            "session.output_transcript.delta",
+            delta=text if text.endswith(" ") else text + " ",
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
 
 
 class LiveWebSocketAudioOutput(FrameProcessor):
@@ -317,7 +346,7 @@ class LiveWebSocketAudioOutput(FrameProcessor):
             raise
         except Exception:
             logger.exception("WebSocket audio output failed")
-            await self.session.report_error("Output audio transport failed; start a new session.")
+            await self.session.report_error("Output audio transport failed; start a new session.", fatal=True)
             self.session.request_close("connection_lost")
 
     async def _tick(self) -> None:

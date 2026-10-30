@@ -125,7 +125,7 @@ async def close_parts(session: LiveProtocolSession) -> None:
 
     The server delegation's close deletes the session's conversation, and its readers relay the ends the core writes;
     the client delegation's forgets the ids it announced. A part whose close fails or hangs is logged, and the
-    delegation part still closes, so a hung voice pipeline never leaves the core's work running.
+    delegation part still closes, so a hung frontend adapter never leaves the core's work running.
     """
     try:
         await _close_part(session, session.frontend, "frontend adapter", FRONTEND_CLOSE_SECONDS)

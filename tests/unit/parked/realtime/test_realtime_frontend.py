@@ -12,8 +12,8 @@ import unittest
 
 # Skipped before the imports below, which name the parked adapter and test doubles that are not importable.
 raise unittest.SkipTest(
-    "Parked with the Realtime frontend adapter (src/examples/frontend_backend_live/parked/realtime) at step A1.2 of "
-    "the restructure plan (v2, §2.3); it returns, rebuilt on the adapter ports, at step B16."
+    "Parked with the Realtime frontend adapter (src/examples/frontend_backend_live/parked/realtime), which no "
+    "configuration serves."
 )
 
 from examples.frontend_backend_live.config_manager.schema import (

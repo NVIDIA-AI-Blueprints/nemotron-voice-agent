@@ -112,7 +112,7 @@ class OffTheLockTests(SenderCase):
         chunk = base64.b64encode(b"\x01\x00" * 480).decode()
         await self.session.handle({"type": "session.input_audio.append", "audio": chunk}, self.primary_key)
         self.assertEqual(len(self.core.audio), 1)
-        self.assertLess(time.monotonic() - began, 0.1)  # the audio once waited the core's whole 300 ms
+        self.assertLess(time.monotonic() - began, 0.1)  # the audio does not wait out the core's 300 ms
         await self.until(lambda: self.core.sent)  # the typed run still reaches the core, in turn
 
 
@@ -221,13 +221,6 @@ class OffsetTests(SenderCase):
         await caller
         created = await self.primary.wait_for("session.delegation.created")
         self.assertEqual(created["offset_ms"], 1200)
-
-    async def test_a_typed_run_is_announced_with_its_response_creates_client_event_id(self):
-        await self.start(ScriptedCore())
-        await self.session.handle({"type": "response.item.create", "item": TYPED}, self.primary_key)
-        await self.session.handle({"type": "response.create", "event_id": "typed_1"}, self.primary_key)
-        created = await self.primary.wait_for("session.delegation.created")
-        self.assertEqual(created["client_event_id"], "typed_1")
 
 
 class CloseTests(SenderCase):

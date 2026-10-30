@@ -5,9 +5,16 @@
 // talker and the backend hold. `backend` is null in client mode, where the server runs no backend.
 
 export const HISTORY_POLL_MS = 1000;
-// The prefixes the talker's memory marks reference data with (src/examples/frontend_backend_live/cascade/memory.py).
-export const RESULT_PREFIX = "Backend result (reference data): ";
-export const CONTEXT_PREFIX = "Application context (reference data): ";
+// How the panel shows a talker message of each kind of reference data (EntryKind in
+// src/examples/frontend_backend_live/cascade/memory.py); any other message shows by its role.
+const TALKER_KINDS = {
+  result: { cls: "result", role: "backend result (reference data)" },
+  app_context: { cls: "context", role: "application context" },
+  typed: { cls: "context", role: "application context" },
+};
+// The class of a line the next delegation carries, by its kind (Heard in
+// src/examples/frontend_backend_live/cascade/heard_log.py); the application's lines show as context.
+const PENDING_CLASSES = { caller: "user", agent: "assistant" };
 
 /** Whether the panel's poll fetches: only while the panel is open and the page is visible. */
 export const shouldPoll = (panelOpen, visibility) => Boolean(panelOpen) && visibility === "visible";
@@ -15,13 +22,10 @@ export const shouldPoll = (panelOpen, visibility) => Boolean(panelOpen) && visib
 /** What tells one answer from the last: its text and, in client mode, the page's own delegation and history length. */
 export const snapshotKey = (text, local) => (local ? `${text}\n${local.delegationId}:${local.history.length}` : text);
 
-/** A line the next delegation carries, as the server labels it ("Caller: …", "Agent: …", "App context: …"). */
-export function pendingEntry(line) {
-  const at = line.indexOf(": ");
-  const label = at > 0 ? line.slice(0, at) : "";
-  const text = at > 0 ? line.slice(at + 2) : line;
-  const cls = { Caller: "user", Agent: "assistant" }[label] || "context";
-  return { cls: `${cls} pending`, role: `next delegation · ${label || "line"}`, text };
+/** A line the next delegation carries: its kind, and the labeled line as the backend reads it. */
+export function pendingEntry({ kind, text }) {
+  const cls = PENDING_CLASSES[kind] || "context";
+  return { cls: `${cls} pending`, role: `next delegation · ${kind || "line"}`, text };
 }
 
 /** Where a prompt part comes from: the client over the session, the server's config, or the server's code. */
@@ -49,12 +53,8 @@ export function talkerEntry(message) {
   if (message.role === "system" || message.role === "developer") {
     return { cls: "system", role: `${message.role} message`, text, collapsed: `${text.length} characters` };
   }
-  if (message.role === "user" && text.startsWith(CONTEXT_PREFIX)) {
-    return { cls: "context", role: "application context", text: text.slice(CONTEXT_PREFIX.length) };
-  }
-  if (message.role === "user" && text.startsWith(RESULT_PREFIX)) {
-    return { cls: "result", role: "backend result (reference data)", text: text.slice(RESULT_PREFIX.length) };
-  }
+  const shown = TALKER_KINDS[message.kind];
+  if (shown) return { ...shown, text };
   return { cls: message.role, role: message.role, text };
 }
 

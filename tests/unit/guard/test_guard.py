@@ -3,14 +3,14 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The guard against hardcoding: no kind compare, no foreign isinstance, no removed flag.
+"""The guard against hardcoding: no kind compare, no foreign isinstance, no banned flag.
 
-The rules are in ``tests/unit/ratchet/guard.py``. A failure names the file, the line and the site.
+The rules are in ``guard.py``, beside this file. A failure names the file, the line and the site.
 """
 
 import unittest
 
-from tests.unit.ratchet.guard import (
+from tests.unit.guard.guard import (
     module_name,
     sites_in,
     walked_files,
@@ -141,7 +141,7 @@ class RuleTests(unittest.TestCase):
             ],
         )
 
-    def test_a_removed_flag_is_a_site_wherever_it_appears(self):
+    def test_a_banned_flag_is_a_site_wherever_it_appears(self):
         source = "\n".join(
             [
                 "class Settings:",

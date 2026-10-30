@@ -6,12 +6,12 @@
 """A golden for barge-in on a whole call: what the caller heard corrects the records.
 
 The playout tracker after the output reports each line's played words and the cut an interruption makes
-(``adapter/playout.py``), and the cascade corrects its records by them (``cascade/utterances.py``). A line cut after
-some words keeps what played, ending ``[cut off]``, in the talker's memory and the heard log, which the next delegation
+(``media/playout.py``), and the cascade corrects its records by them (``cascade/utterances.py``). A line cut after
+some words keeps what played, then the cut mark, in the talker's memory and the heard log, which the next delegation
 carries; the result's own entry in the memory stays whole. A line nobody heard leaves both, and a result line goes back
 to the presenter's inbox, to be worded and said again. The caller's barge-in turns open and close with Pipecat's
 proposed frames, as a real speech-to-text's do, so the user aggregator broadcasts the interruption, as
-``tests/unit/frontend_backend_live/cascade/test_cascade_real_turns.py`` sends them. The text-to-speech is paced by the
+``tests/unit/frontend_backend_live/media/test_cascade_real_turns.py`` sends them. The text-to-speech is paced by the
 test, so a line is cut at a chosen word, never at a moment of the clock.
 """
 
@@ -34,7 +34,7 @@ from pipecat.processors.frame_processor import FrameProcessor
 
 from tests.unit.cascade_helpers import FakeSTT
 from tests.unit.goldens import harness
-from tests.unit.goldens.harness import GoldenCase, answer_round, decision
+from tests.unit.goldens.harness import GOLDEN_PROMPTS, GoldenCase, answer_round, decision
 
 TEAS = "We have Earl Grey, Matcha and Sencha."
 COFFEE = "We have espresso and filter coffee."
@@ -134,8 +134,9 @@ class BargeInGoldens(GoldenCase):
         beside the whole result, and the talker answers the barge-in. The caller asks about coffee; the talker
         delegates with a lead-in, and the writer words the answer, but its speech has not started when the caller
         barges in again: nobody heard the line, so it leaves the memory and the heard log, and the answer goes back to
-        the inbox. The talker answers the barge-in, then the writer words the answer again and it plays whole. The
-        coffee delegation's input carries the cut line, as the caller heard it.
+        the inbox, where the writer words it again at once, while the caller speaks. The talker answers the barge-in,
+        which moves that line's stamp, so the writer words the answer once more and it plays whole. The coffee
+        delegation's input carries the cut line, as the caller heard it.
         """
         await self.serve(
             frontend=[
@@ -144,8 +145,9 @@ class BargeInGoldens(GoldenCase):
                 decision("speak", "Sure, take your time."),  # the talker, on the first barge-in
                 decision("delegate", "Let me look."),  # the talker, on the coffee question
                 decision("speak", COFFEE),  # the writer
+                decision("speak", COFFEE),  # the writer, at once, for the answer nobody heard
                 decision("speak", "Yes?"),  # the talker, on the second barge-in
-                decision("speak", COFFEE),  # the writer, for the answer nobody heard
+                decision("speak", COFFEE),  # the writer again: the reply moved the line's stamp
             ],
             backend=[answer_round("Earl Grey, Matcha and Sencha."), answer_round("Espresso and filter coffee.")],
         )
@@ -166,9 +168,10 @@ class BargeInGoldens(GoldenCase):
         )
         self.assertEqual(" ".join(self.played()).split().count("espresso"), 1)  # the coffee answer played once, whole
         cut_turn = json.dumps(self.frontend.requests[2]["messages"])  # the talker, on the first barge-in
-        self.assertIn("We have Earl [cut off]", cut_turn)
+        self.assertIn("We have Earl" + GOLDEN_PROMPTS.cut_mark, cut_turn)
         self.assertIn("Earl Grey, Matcha and Sencha.", cut_turn)  # the result's own entry stays whole
-        second_turn = json.dumps(self.frontend.requests[5]["messages"])  # the talker, on the second barge-in
+        second_turn = json.dumps(self.frontend.requests[6]["messages"])  # the talker, on the second barge-in
         self.assertNotIn(COFFEE, second_turn)  # nobody heard it: it left the memory
-        self.assertIn("Agent: We have Earl [cut off]", json.dumps(self.backend.requests[1]))
+        cut_line = f"{GOLDEN_PROMPTS.transcript.agent}: We have Earl{GOLDEN_PROMPTS.cut_mark}"
+        self.assertIn(cut_line, json.dumps(self.backend.requests[1]))
         self.assert_golden("X10")

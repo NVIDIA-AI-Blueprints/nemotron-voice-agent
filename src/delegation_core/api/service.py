@@ -105,7 +105,7 @@ class ResponsesService:
         """``POST /v1/conversations``: a new IM session, started at once; return the conversation object.
 
         Raises:
-            ValueError: ``metadata`` is not an object of strings.
+            InvalidRequest: ``metadata`` is not an object of strings.
         """
         metadata = {} if metadata is None else metadata
         if not isinstance(metadata, dict) or not all(isinstance(value, str) for value in metadata.values()):
@@ -183,8 +183,9 @@ class ResponsesService:
             InvalidRequest: The request is malformed (see :func:`checked`), or it names no ``conversation`` and
                 the core serves no stateless requests.
             NotFound: The request's conversation does not exist.
-            DelegationError: The IM session refuses the request (``im/session.py``), before any event; a request of the
-                client's own is refused with a ``code``.
+            DelegationError: The IM session refuses the request (``im/session.py``), before any event, with the
+                official ``code`` when one names the refusal.
+            ValueError: The function outputs the request brings are malformed (``IMSession.admit_client_request``).
         """
         input_items, metadata = checked(params)
         if params.get("conversation") is None:
@@ -287,7 +288,7 @@ class StatelessStream:
 
     The session ends once the response's last event was read, or when the reader stops reading (:meth:`aclose`; over
     HTTP, the client's disconnect). Ending it stops the request's work if it still runs (its open response then ends
-    ``response.incomplete`` with status ``cancelled``) and releases the backend model.
+    ``response.incomplete`` with status ``cancelled``) and closes its backend adapter.
     """
 
     def __init__(self, stream: ResponseStream, session: IMSession):

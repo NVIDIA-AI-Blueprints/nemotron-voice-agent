@@ -21,7 +21,7 @@ The following terms have a fixed meaning on this page and in the code:
 | Client mode, Responses mode | The resolved `delegation.type` of a session. In client mode, the gateway only announces each delegation, and the app does the work. An omitted, `null`, or `{}` delegation is client mode. In Responses mode, the delegation core does the work. |
 | Backend LLM | The backend large language model (LLM), directly connected: the default backend adapter, `llm`. |
 | Talker | The frontend model call that decides each caller turn: speak a reply, delegate, or wait. |
-| Writer | The frontend model call that words ready results into one spoken line (`result_wording: writer`). `as_written` says them unchanged. |
+| Writer | The frontend model call that words ready results into one spoken line (`result_wording: writer`). `as_written` says them as the backend wrote them, as plain sentences without list markers, heading marks, asterisks, or backticks. |
 | Delegation, request | One `delegate()` call, sent as one `POST /v1/responses`, with its responses. The request is what it asks for. |
 | Work | One piece of backend work. One request, or several joined requests, is one Work. A Work holds one or more tasks. |
 | Task, worker | A task is one worker: one run of the backend (`BackendRun`). |
@@ -30,7 +30,7 @@ The following terms have a fixed meaning on this page and in the code:
 | Commit gate | While newer input waits to land, or waits for a model conductor's decision, no new call of the work it can concern is dispatched. |
 | Carrier, taker | The carrier is the delegation whose open response carries a Work's output. When a join lands, the newer delegation, the taker, becomes the carrier. |
 | Envelope | The speak and display shape of a result: a `show` item for the screen, then the `final_answer` message to speak. |
-| Voice note | Text the IM adds to the backend's instructions about the voice channel. `v2`, the default, asks for plain spoken sentences and adds rules for spoken IDs and for complete requests. `v1` adds nothing. |
+| Voice note | Text the IM adds to the backend's instructions about the voice channel: the `texts.voice_notes` entry that `delegation.voice_note` names. The `default` note asks for plain spoken sentences that start with the substance, says how speech recognition writes spelled letters, numbers, and IDs, and says how to recover when a lookup by ID fails. An empty note adds nothing. |
 | One-shot session | A request with no conversation, the official stateless use. The Live Console's client-mode rounds use it. |
 
 ## The Four Boxes
@@ -67,14 +67,20 @@ The following table lists the boxes, what each owns, and what each never knows:
 | Box | Path | Owns | Never knows |
 | --- | --- | --- | --- |
 | Live gateway | [`src/live/`](../../src/live/) | Sessions, the order of commands and of the close, the wire schema, the relay of delegation events, and the choice of the delegation part by the resolved `delegation.type` | Pipecat, the cascade, and the IM's records |
-| Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/) and [`cascade/`](../../src/examples/frontend_backend_live/cascade/) of the example, with its `models/`, `prompts/`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
+| Frontend adapter (Live to Pipecat), hosting the cascade | [`adapter/`](../../src/examples/frontend_backend_live/adapter/), [`cascade/`](../../src/examples/frontend_backend_live/cascade/), and [`media/`](../../src/examples/frontend_backend_live/media/) of the example, with its `models/`, `prompts/`, and `config_manager/` | Speech, caller turns, playout, the talker's memory, when a line may start (the floor), the heard log, the inbox and idle delivery, and the display | The IM's records, the backend's kind, and backend model calls |
 | Delegation core: the IM, the work ledger, and the Responses API surface | [`im/`](../../src/delegation_core/im/), [`ledger/`](../../src/delegation_core/ledger/), and [`api/`](../../src/delegation_core/api/) of [`src/delegation_core/`](../../src/delegation_core/) | Admission, placement through the conductor, Works and their tasks, steering, the commit gate, stops, progress notes, results, endings, one-shot sessions, every record, and the official endpoints | Speech, playout, and backend protocols |
 | Backend adapter | [`src/delegation_core/backend/`](../../src/delegation_core/backend/) | Model rounds, model providers, tool sources, conductors, worker sessions, and harness protocols | Speech and the voice wire |
 
 The backend adapter lives in the `backend/` package of the delegation core, but it is a box of its own: the IM reaches
 it only through the backend port, [`backend/port.py`](../../src/delegation_core/backend/port.py).
 
-Four places turn names into objects, and none of them is a box. They are the composition roots:
+Inside the frontend adapter, the cascade (`cascade/`) imports nothing from Pipecat. Its Pipecat speech pipeline
+(`media/`) runs it and corrects its records by what the caller heard. Two hosts build that pipeline around the
+cascade: the cascade adapter (`adapter/`), which translates between the Live protocol and the cascade, and the
+repository UI bot (`pipeline.py`).
+
+Four places turn names into objects, and none of them is a box. They are the three composition roots and the delegation
+core's builder:
 
 - [`factory.py`](../../src/examples/frontend_backend_live/factory.py) builds each live session's frontend adapter and
   the gateway's one delegation core.
@@ -104,8 +110,8 @@ the part of each side that handles it:
 | Point | Direction | Official event or item | Media side | IM side |
 | --- | --- | --- | --- | --- |
 | 1. A delegation creates work | Media to IM | `POST /v1/responses`; its response opens `response.created` (status `queued`), then `response.queued` | The caller's turns and the server delegation's ordered sender | Admission, then the conductor |
-| 1b. A request joins open work | IM to media | The taker's `response.in_progress` names the older response in `previous_response_id`; then the older response gets one `commentary` message and `response.completed` | The reader moves the older delegation's words, lead-in, and clock to the taker | `WorkRun`, when the steering lands |
-| 2. Short status | IM to media | `message` items with `phase: commentary`; `mcp_call` items for the tools the backend runs | The work note keeps the newest line of each delegation | `ProgressNotes`, at most one note per delegation per `progress_note_seconds` |
+| 1b. A request joins open work | IM to media | The taker's `response.in_progress` names the older response in `previous_response_id`; then the older response gets one `commentary` message, which names the taker's delegation ID, and `response.completed` | The reader moves the older delegation's words, lead-in, and clock to the taker | `WorkRun`, when the steering lands |
+| 2. Short status | IM to media | `message` items with `phase: commentary`; `mcp_call` items for the tools the backend runs | The work note keeps the newest line of each delegation and the tool calls of its latest response: a backend call runs from its `response.output_item.added` and ends with the official status of its `response.output_item.done` | `ProgressNotes`, at most one note per delegation per `progress_note_seconds` |
 | 3. A ready result | IM to media | One `message` with `phase: final_answer` per task; `show` items before it; then the terminal event | The inbox, then idle, then memory and speech together; the display at once | `WorkRun` writes it at once, and the IM never waits for speech |
 | 3b. A wait for the app | Both | `function_call` items end the response; the app answers with `function_call_output` items and `response.create` | The app-wait clock and its line | The task waits, matched by `call_id` |
 | 3c. Endings | IM to media | `response.failed` with an official error code; `response.incomplete` at close; an empty `response.completed` for a late continuation | The voice's own fixed lines | The stop door and the failure path |
@@ -114,6 +120,46 @@ the part of each side that handles it:
 Nothing crosses at point 4, because GPT-Live has no receipt event that confirms what the caller heard. Playout facts
 stay in the frontend: they correct the talker's memory and the heard log, and the heard words reach the backend in the
 next request.
+
+Each request's input is one user message, which the heard log
+([`heard_log.py`](../../src/examples/frontend_backend_live/cascade/heard_log.py)) words with the prompt set's
+`transcript` texts: a header, then one labeled line for each caller turn, line of the voice, and app context or
+instruction append since the last request, the newest within 6,000 characters. A line that said results stays out when
+the caller heard it in full, because the backend holds its own answer.
+
+Instruction appends stay outside that limit. The first request that the core accepts after an append carries it in its
+place, and every later request carries it again before the header, under the `earlier` line, so it never reads as new
+input. Every request therefore repeats every instruction append. While an answer that the backend gave waits to be
+heard, which the work note shows as answer ready, the input ends with the `unheard` line, so the backend does not take
+the caller's newer words for a reply to it.
+
+The speech pipeline ends each caller turn as `frontend.cascade.speech.turn_end` sets
+([`media/turns.py`](../../src/examples/frontend_backend_live/media/turns.py)). With `smart_turn`, the default, Smart
+Turn judges each pause of `vad_stop_seconds`, which must be shorter than `turn_silence_seconds`. The speech-to-text is
+asked to finalize only when Smart Turn judges the turn complete, or at a pause of `turn_silence_seconds` while it holds
+words that it has not finalized, because a final forced between the letters of a spelled ID loses letters. With
+`silence`, a pause of `turn_silence_seconds` ends the turn, and the speech-to-text finalizes there. With either one, the
+turn ends at the final, or 0.8 seconds after the request when no final comes, so a turn whose words the speech-to-text
+missed does not wait for Pipecat's 5-second turn stop timeout. `shared` uses the turn detection of the shared pipeline,
+with its environment variables.
+
+The talker decides the caller's turns one decision at a time. When the caller speaks again while the talker decides on
+their turns, that decision says, sends, and records nothing, and the turns wait for the next decision, which covers
+them together with the newer words. If that speech brings no words, the next decision comes when the caller is silent
+again and covers the waiting turns alone. A decision on an instruction append alone is never dropped this way. A reply,
+the `holding` line, and the `refusal` line wait until the caller is silent.
+
+When the caller's words cut a line and the talker waits on them, such as a bare "Okay," the voice says the unheard rest
+of that line once, as it does after a turn with no words, unless another line came since. Set
+`frontend.cascade.speech.resume_after_noise` to `false` to turn both off.
+
+GPT-Live requests a spoken acknowledgement for each delegation and lets its model word it. The talker words it in the
+decision that delegates the turn: its lead-in is the acknowledgement, which the voice says after the session's
+`delegation.acknowledgement_delay_ms`, and not while the caller speaks
+([`turns.py`](../../src/examples/frontend_backend_live/cascade/turns.py), `Acknowledgements`). A result, the
+delegation's end, the caller starting to speak after the turn was delegated, or commentary or thinking that comes first
+drops it, and a delegation without a lead-in says nothing. `Utterances.told` keeps what the caller was told
+about each delegation: its lead-in and its progress lines, less any line that nobody heard.
 
 Naming the taker of point 1b in `previous_response_id` of its `response.in_progress` is this server's convention. The
 IM names it on every join, so the reader never guesses which delegation took the work.
@@ -128,10 +174,30 @@ result from the backend to the caller:
 2. The cascade's reader ([`delegations.py`](../../src/examples/frontend_backend_live/cascade/delegations.py)) reads the
    item. The display sink shows each completed `show` item at once, and the presenter's inbox keeps every ready result
    in arrival order.
-3. When the caller is silent and no turn waits, the presenter words every ready result in one call. When no line is
-   playing, the results and the spoken line enter the talker's memory and the heard log together, and speech starts.
+3. As soon as results are ready, even while the caller speaks or a turn is decided, the presenter words every ready
+   result in one call. When the caller is silent, no turn waits, and no line is playing, it says that line if nothing
+   that the wording read has changed since. A turn that the talker decides changes nothing, so after a turn that the
+   talker waited on, the line plays at once. A line of the voice, an instruction or thinking append, a request opened
+   after the results' delegations, or anything new in the inbox, such as another result, changes it. A change while
+   the writer call runs cancels that call. The presenter then words everything again after no caller turn waits or is
+   being decided, so after a reply or a lead-in, it words again while that line plays. The results and the spoken line
+   enter the talker's memory and the heard log together, and speech starts.
 4. The playout facts settle the line. A cut line keeps what played and ends with `[cut off]`. A line that nobody heard
    leaves the memory and the heard log, and its results go back to the inbox.
+   With `frontend.cascade.speech.heard_words: estimated`, the talker's memory also keeps the words that the line's
+   audio likely carried past what played, estimated at the call's speaking rate. A cut line of stitched speech, which
+   the heard log keeps whole, keeps only the estimated words in the memory. The heard log does not take the estimate.
+   An answered delegation leaves the talker's work note after the caller hears its results, even in part, so results
+   back in the inbox keep it listed as answer ready.
+
+The writer reads the talker's instructions inside the prompt set's writer frame, so it keeps any limits that they set
+on what the caller may be told. `as_written` (`frontend.cascade.delegation.result_wording`) says each result as the
+backend wrote it, cleaned only for speech. So does every writer fallback: a writer call that fails, times out
+(`reliability.talker_attempt_timeout_seconds`), or returns unusable output, no words, the update unchanged, or a line
+that the voice already said. Those limits do not apply to that text, so also put them in the backend's instructions:
+`delegation.responses.instructions`, or, in client mode, the prompt of the app's own backend. A
+`session.commentary.append` is worded with the results, so under `as_written` or a writer fallback, the voice says it
+word for word.
 
 ### Endings
 
@@ -141,8 +207,8 @@ where one applies:
 
 | Ending | What the core writes | What the voice says |
 | --- | --- | --- |
-| Answered | Each task's `final_answer` message, then `response.completed` | The results, worded together at idle |
-| Handed over | The taker's `response.in_progress` names this response; then one `commentary` line (`texts.handover_line`) and `response.completed` | Nothing of its own: the taker carries the work, its words, and its lead-in |
+| Answered | Each task's `final_answer` message, then `response.completed` | The results, worded together as they arrive and said at idle |
+| Handed over | The taker's `response.in_progress` names this response; then one `commentary` line (`texts.handover_line`, whose `{delegation}` is the taker's delegation ID) and `response.completed` | Nothing of its own: the taker carries the work, its words, and its lead-in |
 | Stopped for a newer request | `texts.cancelled_line`, or `texts.unconfirmed_line` when the stop was not confirmed, as a `final_answer`, then `response.completed` | That line, as a result |
 | Failed | `response.failed` with `rate_limit_exceeded` or `server_error`, or `response.incomplete` with an official reason such as `max_output_tokens` | `apology` when no tool ran; `unclear` after a tool ran |
 | Late | A continuation after its Work ended gets an empty response: `response.created`, `response.queued`, `response.in_progress`, then `response.completed` | `unclear` |
@@ -180,6 +246,7 @@ calls `decide()` one call at a time:
 - The conductor places each decision through `place()`: `Start`, `Steer`, `Cancel`, or `Answer`. The IM applies each
   one, re-checks it against the current state, and returns a one-line outcome from `texts.outcomes`, which a model
   conductor reads as its control tool's result.
+  The outcome of a refused decision, `texts.outcomes.refused`, gives its reason from `texts.refusal_reasons`.
 - An arrival that comes while a `decide()` runs restarts that call once with every arrival, if it has placed nothing
   yet. Otherwise, the arrival waits for the next `decide()`, which sees the earlier requests as Works.
 
@@ -189,11 +256,23 @@ The IM re-checks every decision:
 - A `Cancel` of a Work or task that has ended does nothing.
 - A delegation placed twice keeps its first placement.
 - A decision that names a Work or task the IM does not know is refused.
+- An `Answer` while no Work is open is refused (`texts.refusal_reasons.no_open_work`), because `answer_status`
+  answers questions about open work only. The request stays unplaced, so the conductor or the `steer` rule starts a
+  Work for it.
+- With `max_running` above 1, a `Start`, or a `Steer` that starts a new Work, is refused
+  (`texts.refusal_reasons.over_limit`) when its tasks would make the running and queued tasks of open Works more than
+  `max_running`. The request stays unplaced, so another decision or the `steer` rule places it.
 
 What a conductor leaves unplaced is placed by the `steer` rule: it joins the newest open Work, or starts a Work when
-none is open, so no request starts a second Work beside open work. The two model conductors apply this rule themselves
-after a failed, timed-out, or skipped decision. The IM applies it, through the same re-checks, to whatever is still
-unplaced when a `decide()` ends: after a call that raised, was cut short, or skipped a request.
+none is open, so no request starts a second Work beside open work. The two model conductors leave to the IM whatever
+their `decide()` does not place. The IM applies the rule, through the same re-checks and against the Works as they
+stand, to whatever is still unplaced when a `decide()` ends: after a call that raised, was cut short, or skipped a
+request, or after a refused decision. A request that came with one that the conductor started therefore joins that
+Work.
+
+With `max_running: 1`, the conductor of `llm-agent` and of `harness` is the `steer` rule: no model call places a
+request, and `harness` opens no conductor session. Status questions and stop requests then join the open Work, as
+with `llm`.
 
 ### Works and Tasks
 
@@ -212,8 +291,9 @@ newest one carries its response. A Work holds one or more tasks (`TaskRun`), and
 Each task reads the conversation within `delegation.context_tokens`, then its Work's requests, then its brief, if the
 conductor wrote one (`texts.task_line`). The work records go into the last user message of a request, as extra text
 parts: one JSON line per open or recently ended Work, inside `texts.records_block`, followed by `texts.closing_line`,
-which asks the backend to say where the work stands and carry on. The newest request of a starting Work carries the
-records of the other Works, when there are any, and every steered request carries the records of every Work.
+which asks the backend to say in one sentence where the work stands and, in the same reply, carry on with the next
+step, unless the work is done or needs the caller. The newest request of a starting Work carries the records of the
+other Works, when there are any, and every steered request carries the records of every Work.
 
 ### Steering
 
@@ -226,6 +306,11 @@ and the adapter decides how. The following table lists when steering lands:
 | The task runs | At the adapter's next safe point: the IM calls `run.steer()`, the adapter takes the batch with `take_boundary_input()`, and it reports `applied` or `not_applied` through `settle()` |
 | The task waits for the app | After the app's outputs, at the next safe point |
 | No task applied it before the Work ended | It starts a follow-up Work, so nothing the caller said is lost |
+
+A round that answers ends its task, also while steering waits. The answer goes to the caller, and the steering starts a
+follow-up Work. With `delegation.hold_answers_while_deciding: true`, an answer that a task gives while the conductor
+decides on a newer request waits for the decision. If the decision steers that request into the task, the answer becomes
+a progress note, and the task runs one more round with the request (refer to [The Commit Gate](#the-commit-gate)).
 
 When a batch lands, each of its requests takes the Work over in turn, as point 1b describes. Unapplied input never
 enters the backend's history. A joined request keeps the Work's settings, and an explicit request (a continuation or a
@@ -241,10 +326,24 @@ cut.
 
 The gate also covers the time that a model conductor (`llm-agent` or `harness`) takes to decide. While an arrival waits
 for its placement, every call that a task of any open Work routes is refused the same way, because the conductor has
-not yet said which Work the arrival concerns. A task whose calls were refused then waits for the decision before its
-next round, so that round reads the not-run outputs together with what the decision brings. When the decision stops
-the task, no next round starts. With `llm`, the rule conductor decides at once, and the request then waits to land as
-steering.
+not yet said which Work the arrival concerns. An `llm-agent` task whose calls were refused then waits for the decision
+before its next round, so that round reads the not-run outputs together with what the decision brings. When the
+decision stops the task, no next round starts. A rule conductor, as with `llm` or at `max_running: 1`, decides at
+once, and the request then waits to land as steering.
+
+With `harness`, the gate holds only the calls that the agent makes through the tool bridge: the app's functions, the
+session's tool sources, and the IM's work tools. The agent's own tools, such as Hermes toolsets, run inside the agent,
+and the gate cannot hold them (refer to [The Harness](#the-harness)). The bridge answers a refused call of a tool
+source or a work tool at once with `texts.not_run_output`, and the agent carries on with its turn: it does not wait
+for the decision, and only the IM's reading of the task's events waits. The newer request reaches the agent as
+`backend.harness.steer` sets: `native_command` at the turn's next model boundary, `next_prompt` after the turn ends, or
+`cancel_reprompt` in a fresh session after the turn is cancelled. Until it lands, the gate refuses every bridged call
+that the task makes.
+
+With `delegation.hold_answers_while_deciding: true` (the default is `false`), the gate also holds the answer that a
+task gives while an arrival waits for its placement. When the decision steers the arrival into that task, the answer
+becomes a progress note, and the task runs one more round with the arrival, in a new `BackendRun`. Otherwise, the
+answer is written when the decision comes. A stop drops a held answer.
 
 Each refused call's output says why it did not run:
 
@@ -253,6 +352,14 @@ Each refused call's output says why it did not run:
 | Newer input waits to land, or for the conductor's decision | `texts.not_run_output` |
 | The task is stopping, by a stop or by its own `cancel_work` | `texts.stopped_output` |
 | The app and a work tool both have a function by the call's name | `texts.clash_output` |
+| The call repeats the newest call that ran, which the same task made, with the same app function and the same arguments compared as JSON, the app answered that call, no request arrived since, and the Work has taken one request | `texts.repeated_call_output`: the app's output, with a note that the call was not sent again |
+
+A call that ran in between, the backend's own included, ends a repeat. So does a request admitted after the call ran,
+steering and typed messages that come with the app's outputs included, because the caller can ask for the same thing
+again, such as another latte. A call that got no output from the app is sent again. The rule does not tell a lookup
+from a change, so an identical second call that changes state, such as adding the same item to a cart, does not reach
+the app when no request came after the first one ran. A Work that has taken more than one request, such as a second
+latte asked for while the work plans, always sends the call to the app.
 
 ### Stops
 
@@ -269,8 +376,21 @@ the ending ([`stop.py`](../../src/delegation_core/im/stop.py)):
 | The backstop (`delegation.work_timeout_seconds`) | `response.failed` with `server_error` |
 | The session's close | The close writes every open response's terminal itself |
 
+When a Work ends, its requests and each task's own items join the shared conversation. A call that finished while its
+task stopped keeps its output there, and only a call with no output gets `texts.owed_output`, so every call in the
+history has an output.
+
+The shipped `core.yaml` offers `cancel_work` to every task of a conversation (`delegation.work_tools`). A one-shot
+session offers no work tool.
+
 A caller's "stop" is a request like any other. A model conductor decides a `Cancel`. With `llm`, the request joins the
 running Work, and the backend LLM reads it.
+
+A `Cancel` names no request. Another call of the same decision, such as `answer_status`, places the stop request, or
+else the `steer` rule does: while the stopping Work is open, the request joins it. A running task that stops never
+takes it, so the request starts a follow-up Work once the stop is confirmed, and that Work reads the stopped Work's
+record. A queued Work takes it at once, and the stop's line answers it. The `llm-agent` conductor makes one call per
+decision, so when that call is `cancel_work`, the `steer` rule places the stop request.
 
 ### Failures and Time
 
@@ -289,12 +409,26 @@ The backend's `commentary` messages and the harness's activity become progress n
 at most one per delegation every `delegation.progress_note_seconds`. Notes never join a backend history. A status
 question takes one of three paths:
 
-1. The talker answers it from the newest progress note in its work line, and nothing is delegated.
+1. The talker answers it from its work line, with the newest progress note and the tool calls that run now or ended,
+   and nothing is delegated.
 2. If the talker delegates it, a model conductor can answer it from the work records with `Answer` (the
    `answer_status` control tool), which ends the new delegation while the Work keeps running.
 3. With `llm`, whose conductor is a rule, the question joins the running Work. The records block and the closing line
-   ask the backend to say where the work stands and carry on. A message written in a round that also has calls is
-   `commentary`, so the status line is progress and the Work goes on.
+   ask the backend to say where the work stands and carry on in the same reply. A message written in a round that also
+   has calls is `commentary`, so the status line is progress and the Work goes on.
+
+#### Spoken Progress
+
+After `progress_after_seconds` of quiet while work runs, the presenter's quiet task
+([`presenter.py`](../../src/examples/frontend_backend_live/cascade/presenter.py)) asks the writer for one short progress
+line about the oldest quiet delegation. The writer reads the session's `instructions`, the talker's memory, and the work
+note's line for that delegation alone: the request, how long it has run, its steps, and the newest progress note, which
+is a fact and never said as written. It can answer with no words, for example when the instructions ask for silence
+while the backend works. The wording runs beside the inbox, and any change of the floor, any item queued, or a moved
+memory drops the line, so no line is said over a result. A later line needs news in the work note, which is a backend
+step that ended or a new progress note, and every offer counts against `progress_max_per_delegation`. A progress line is
+never resumed or said again, and a wording that fails says nothing. `as_written` words no progress line. GPT-Live keeps
+still-running progress silent by default, and `progress_after_seconds: null` does the same.
 
 ### One-Shot Sessions
 
@@ -336,12 +470,17 @@ The port has three levels:
 - `BackendRun`: one per task, which is one worker. `events()` yields the task's Responses events, `steer()` wakes the
   adapter for waiting steering, `resume()` continues after the app's outputs, and `stop()` returns `stopped` or
   `unconfirmed`.
+  With `delegation.hold_answers_while_deciding: true`, a task whose held answer becomes a progress note gets
+  `start(task)` again, so one task can run in more than one `BackendRun`.
 
 The IM implements `TaskContext` for each task and `DecisionTarget` for the conductor. A task reads its settings
 (`request()`, with the composed instructions) and its history (`history()`), asks who runs each call (`route()`:
 `app`, `backend`, or `refused`), reports the calls the backend runs (`tool_started`, `tool_outcome`) and its other
 activity (`progress`), takes the app's outputs and waiting steering at each safe point (`take_boundary_input()`), and
 reports what became of steering (`settle()`).
+A task also reads the output that the IM gave a call it refused (`refusal()`) and the core's texts (`texts`). An
+adapter words the outputs and notes that it adds itself with those texts, such as `texts.unknown_tool_output`,
+`texts.failed_output`, and `texts.round_cap_note`.
 
 ### The Conductor
 
@@ -349,7 +488,8 @@ A `Conductor` has one method, `decide(given, place)`. The decisions are `Start(d
 `Steer(work_id, delegations, task_id)`, `Cancel(work_id, task_id)`, and `Answer(delegation_id, text)`. A model
 conductor reads its instructions (`texts.conductor_prompt`) and its four control tools (`start_work`, `steer_work`,
 `cancel_work`, and `answer_status`, from `texts.control_tools`) through `ControlTools`
-([`control.py`](../../src/delegation_core/backend/control.py)). A conductor never runs work and never words a result.
+([`control.py`](../../src/delegation_core/backend/control.py)). Its instructions state its adapter's `max_running`,
+which fills the prompt's `{max_running}`. A conductor never runs work and never words a result.
 
 ### The Event Rules
 
@@ -361,9 +501,9 @@ Every `BackendRun.events()` keeps eight rules, and the contract suite checks the
 | E2 Items | Each item is announced by `response.output_item.added` and finished by `response.output_item.done`. The IM reads items only from `output_item.done`. |
 | E3 Phase | Every message carries `phase`: `commentary` is progress, and `final_answer` is the task's answer. |
 | E4 Calls last | A round's calls come after its messages, and a round with calls carries no `final_answer`. |
-| E5 How the iteration ends | After a round with a `final_answer`, after a round with the app's calls (the task waits for `resume()`), or by raising. After `stop()`, nothing more. |
+| E5 How the iteration ends | After a round with a `final_answer`, after a round with the app's calls (the task waits for `resume()`), or by raising. After `stop()`, nothing more. An answer ends it also while steering waits: each batch that the adapter took and did not apply is settled `not_applied`. |
 | E6 Every step the IM must see | Each call the backend runs is reported before it runs and when it ends, a `call_id` never runs twice, and steering reaches the IM only through `settle()`. |
-| E7 Reading and retries | An adapter that owns its model rounds reads `request()` and `history()` at each model call. A harness sends `history()` in the worker's first prompt. No attempt that dispatched a call or delivered an item is retried. |
+| E7 Reading and retries | An adapter that owns its model rounds reads `request()` and `history()` at each model call. A harness sends `history()` in a worker session's first prompt. A session that it keeps from an earlier task reads only the items that follow, and only when `history()` begins with exactly the items that the session was shown or wrote. No attempt that dispatched a call or delivered an item is retried. |
 | E8 Time | A task ends or raises within the adapter's own limits, and `stop()` returns within its stop limit. |
 
 ## The Three Backend Adapters
@@ -374,14 +514,14 @@ core is built with it. The following table compares the three adapters:
 
 | | `llm` (the default) | `llm-agent` | `harness` |
 | --- | --- | --- | --- |
-| What it is | The backend LLM, directly connected | The backend LLM agent: a model conductor and LLM workers | An external agent that its operator deploys, over the Agent Client Protocol (ACP): any ACP agent, with Hermes as the first agent class |
+| What it is | The backend LLM, directly connected | The backend LLM agent: a model conductor and LLM workers | An external agent that its operator deploys, over the Agent Client Protocol (ACP): any ACP agent, and Hermes through an agent class of its own |
 | Package | [`backend/llm/`](../../src/delegation_core/backend/llm/) | [`backend/agent/`](../../src/delegation_core/backend/agent/) | [`backend/harness/`](../../src/delegation_core/backend/harness/) |
-| Conductor | A rule, with no model call: `steer` (the default) or `start_each` (`backend.llm.conductor`) | One model call per `decide()`, with the four control tools, `tool_choice: required`, and parallel calls | Its own agent session, in a process of its own, with exactly the four control tools: one prompt per `decide()` |
-| Workers | One `LlmRun`: one task per Work | `LlmRun`s; a request can split into parallel tasks | One ACP session per task, in the shared workers' process |
+| Conductor | A rule, with no model call: `steer` (the default) or `start_each` (`backend.llm.conductor`) | One model call per `decide()`, with the four control tools, `tool_choice: required`, and one call (`parallel_tool_calls: false`); while no Work is open, no model call: the new requests start a Work (`conductor.when_idle: start`); the `steer` rule at `max_running: 1` | Its own agent session, in a process of its own, with exactly the four control tools: one prompt per `decide()`; the `steer` rule, with no conductor process, at `max_running: 1` |
+| Workers | One `LlmRun`: one task per Work | `LlmRun`s; a request can split into parallel tasks | One ACP session per task, in the shared workers' process; with `backend.harness.session: call`, the session of a task that answered can take the next task |
 | `max_running` | 1 | `max_running` (3) | `max_running` (3), at most the agent's turns per process (4 for Hermes) |
-| Steering | A queued Work joins at once; a running task redoes a round that still streams and has dispatched nothing, once per task, or else takes the steering at its next round; a waiting task takes it after the outputs | The same as `llm` | `backend.harness.steer`: `native_command` (the agent's own mid-turn steer, such as Hermes's `/steer`, which `core.yaml` sets), `next_prompt` (the default), or `cancel_reprompt` |
+| Steering | A queued Work joins at once; a running task redoes a round that still streams and has dispatched nothing, once per run, or else takes the steering at its next round, unless the running round answers first: then the steering starts a follow-up Work; a waiting task takes it after the outputs | The same as `llm` | `backend.harness.steer`: `native_command` (the agent's own mid-turn steer, such as Hermes's `/steer`, which `core.yaml` sets), `next_prompt` (the default), or `cancel_reprompt` |
 | Stop | Cuts a round that still streams, lets started tool calls finish, and confirms within `stop_timeout_seconds` | The same as `llm` | `session/cancel` while a prompt runs, confirmed when the turn ends `cancelled` within `stop_timeout_seconds`; the session's bridge door is closed |
-| Status answers | Never: the question joins the Work | `answer_status` | `answer_status` |
+| Status answers | Never: the question joins the Work | `answer_status`; as `llm` at `max_running: 1` | `answer_status`; as `llm` at `max_running: 1` |
 | Instructions and the envelope | Every round's instructions | Every round's instructions of each worker | Where the agent class puts them: Hermes reads a `.hermes.md` file in the worker's own session folder, and a plain ACP agent gets them at the top of the first prompt |
 | Stateless requests | Serves them | Served by `backend.one_shot_adapter` (`llm`) | Served by `backend.one_shot_adapter` (`llm`) |
 | Model | The request's model, through the catalog (`unlisted_models`) | Workers: the request's model; conductor: `conductor.model`, or the default | The model that the agent's operator configures; requests can name only the default of `backend.slot`, which the agent should run |
@@ -401,8 +541,8 @@ session gets an `LlmAdapter` with one model provider per model. `LlmRun` runs on
 - In a round with calls, every message is `commentary`, and the IM routes each call before the round is passed on.
   Calls that the backend runs start at once after the round, and a call cut at its time limit is `unclear`.
 - An attempt that failed before it dispatched a call or delivered an item is tried once more. A 400 is never retried.
-- After `max_tool_rounds` rounds, one more round runs with `tool_choice: none` and the `round_cap_note`, so the task
-  answers with what it has.
+- After `max_tool_rounds` (30) rounds, one more round runs with no tools offered and with `texts.round_cap_note`, which
+  says that no tool can run, so the task answers with what it has.
 
 A model that the catalog does not list follows `backend.llm.unlisted_models`. With `report`, the default, the core
 refuses the model, and the gateway's settings check reports it to the client as the official nonfatal
@@ -414,14 +554,21 @@ endpoint under its own name, and the server logs it.
 `llm-agent` ([`backend/agent/`](../../src/delegation_core/backend/agent/)) adds a model conductor to LLM workers:
 
 - `AgentSource` parses `backend.llm-agent`: `max_running`, `conductor` (`provider`, `model`, `timeout_seconds` of 20,
-  `memory_tokens` of 8,000, `max_output_tokens_per_request` of 256, `temperature` of 0, and `reasoning_effort` of
-  `none`), and `worker`, which takes the `backend.llm` keys except `conductor`.
+  `memory_tokens` of 8,000, `max_output_tokens_per_request` of 256, `temperature` of 0, `reasoning_effort` of `none`,
+  and `when_idle` of `start`), and `worker`, which takes the `backend.llm` keys except `conductor`.
 - `LlmConductor` makes one model call per `decide()`. Its input is one user message whose text is one JSON object:
-  the new part of the conversation, the work records, and the new requests. Every control call the model makes is
-  placed at once, and the IM's outcome line becomes that call's output in the conductor's own memory, which keeps
-  whole decision rounds within `memory_tokens`.
-- What the model leaves unplaced, after a failure, a timeout, a round with no call, or a skipped request, is placed by
-  the `steer` rule.
+  the new part of the conversation, the work records, and the new requests. The round asks for one control call
+  (`parallel_tool_calls: false`), which can name several requests. On a `chat-completions` endpoint, the provider
+  keeps the reply's first call and stops reading when a second call starts. The call is placed at once, and the IM's
+  outcome line becomes its output in the conductor's own memory, which keeps whole decision rounds within
+  `memory_tokens`. Each round's request and reply go to the server log at debug level.
+- The conductor leaves to the IM every request that its round does not place: after a failure, a timeout, or a refused
+  decision, and every request that the round's call does not name. The IM's `steer` rule places them against the Works
+  as they stand after the round, so a request that came with one that the round started joins that Work.
+- While no Work is open, `conductor.when_idle: start`, the default, places the new requests with no model call: they
+  start one Work together, as with the `steer` rule. `decide` has the model place them, as it places any request.
+- With `max_running: 1`, the adapter's conductor is the `steer` rule instead of `LlmConductor`, and no conductor model
+  call is made.
 - The workers are `LlmRun`s of the session's `LlmAdapter`, so a request's model, settings, and tool sources reach them
   exactly as they reach `llm`.
 
@@ -434,14 +581,15 @@ with `delegation.result_format: speak_display`.
 agent that its operator deploys, such as Hermes. The operator gives the agent its model, key, toolsets, and home, and
 `backend.harness` says only which agent class reads the agent and how to reach it. When the IM asks for the conductor,
 the adapter starts or connects two runtime processes for the IM session: one for the conductor and one for the
-workers. To deploy an agent and connect it, refer to [Connect Your Own Harness](#connect-your-own-harness).
+workers. With `max_running: 1`, the conductor is the `steer` rule, and only the workers' process starts. To deploy an
+agent and connect it, refer to [Connect Your Own Harness](#connect-your-own-harness).
 
 The harness has three layers. Each one is an interface whose classes a key of `backend.harness` names, as the
 following table shows:
 
 | Layer | Package | What it owns | Chosen by |
 | --- | --- | --- | --- |
-| The generic harness | [`harness/`](../../src/delegation_core/backend/harness/) | The conductor session and its control tools, the worker runs and their tasks, the steering policy, stops and the commit gate, the tool bridge, the results, and the envelope. It is the same for any protocol. | `protocol`, `steer`, `permission` |
+| The generic harness | [`harness/`](../../src/delegation_core/backend/harness/) | The conductor session and its control tools, the worker runs and their tasks, the steering policy, the session policy, stops and the commit gate, the tool bridge, the results, and the envelope. It is the same for any protocol. | `protocol`, `steer`, `session`, `permission` |
 | The ACP client | [`harness/acp/`](../../src/delegation_core/backend/harness/acp/) | Initialize, sessions, prompts, cancel, session updates, the MCP servers given at `session/new`, and the transports: `stdio` starts `command`, and `websocket` connects to the `url` that the operator serves. | `transport` |
 | The agent classes | [`acp/agent.py`](../../src/delegation_core/backend/harness/acp/agent.py) and [`acp/hermes/`](../../src/delegation_core/backend/harness/acp/hermes/) | Everything of the connection that is one agent's own. `acp`, the default, is a plain ACP agent, and `hermes` is Hermes. | `agent`, with that agent's own `agents.<name>` block |
 
@@ -468,6 +616,7 @@ client for each runtime process, and the `Agent` that it holds. The following ta
 - `steer_command` must end with a space, because Hermes reads a command's name up to the first space. Quote it in
   YAML, which drops the trailing space of an unquoted value.
 - `command_guard` must not start with `/`, because Hermes would run it as a command.
+- `command_guard` has no default, so with `agent: hermes`, the build refuses an `agents.hermes` block without it.
 
 The tool bridge (`McpBridge`) is one Model Context Protocol (MCP) server over streamable HTTP, one per core. Each ACP
 session gets its own door: a server name unique in its process, a bearer token, and its tools. The conductor's door
@@ -483,13 +632,26 @@ calls in a row. The following table shows how ACP maps onto the port:
 | `plan` | `progress()` |
 | An app function called through the bridge | Held by the bridge, one app call per round; the round's `function_call` and terminal follow after every other call of the turn has reported, and `resume()` answers the held MCP request |
 | `request_permission` | Answered by `backend.harness.permission`; no approval request reaches the app |
-| `end_turn` | The answer, unless steering waits: then the text is `commentary`, and the steering is the next prompt |
+| `end_turn` | The answer, also while steering waits: each batch that the turn did not take is settled `not_applied` and starts a follow-up Work. A turn that gave no answer goes on with the steering as its next prompt |
 | `cancelled` | Confirms a stop |
 | Another stop reason, or a lost connection | Fails the task; the outputs it owes say the outcome is unknown |
 
-A cancel goes only to a prompt that runs, and a cancelled session is never used again, because an agent can carry a
-cancelled turn into its next prompt. Each session works in a folder of its own under `backend.harness.work_root`
-(`~/.cache/voiceclaw/harness` by default), outside any git checkout, and the folder is deleted at the end of the call.
+`backend.harness.session` sets whether a worker's session serves more than one task. With `task`, the default, every
+task opens a fresh session. With `call`, the adapter keeps the session of a task that answered, one session at a time.
+The next task takes it when the session was opened with the task's instructions, its bridge door serves the task's
+tools, its process has a turn free, and the task's `history()` begins with exactly the items that the session was shown
+or wrote, with more after them. The session then reads only those further items as its next prompt, and its door keeps
+its name and token. Otherwise, the kept session is retired, and the task opens a fresh one. A kept session holds none
+of its process's turns while it waits. Only the session of a task that answered, with nothing of the task left open in
+it, is kept, so a session whose task was stopped, failed, or timed out is never kept.
+
+A cancel goes only to a prompt that runs. A worker's cancelled session is never used again, because an agent can carry a
+cancelled turn into its next prompt. The conductor cancels a turn that passes `conductor_timeout_seconds`, or whose
+`decide()` a newer request restarts, and waits up to `stop_timeout_seconds` for the turn to end. If the turn ends
+`cancelled`, the same session takes the next `decide()`, and Hermes puts the cancelled prompt before the new one. If
+it ends any other way, or does not end in that time, the conductor retires the session and opens a fresh
+one. Each session works in a folder of its own under `backend.harness.work_root`
+(`~/.cache/delegation-core/harness` by default), outside any git checkout, and the folder is deleted at the end of the call.
 A server that crashes can leave its folders behind, and the next core built with the same `work_root` deletes them. A
 running server holds a lock on each of its work folders, so a core deletes only the folders that no server holds. The
 servers of one user on one machine, containers included, can therefore share a `work_root`.
@@ -505,6 +667,10 @@ The harness has the following limits:
 - The agent runs one model, the one its operator configures. The model check accepts only the default of
   `backend.slot`, and the settings check (`unsupported()`) refuses a reasoning effort. A request's instructions and
   functions are fixed when its worker starts, so a later change reaches only new workers.
+- With `session: call`, a kept session takes the next task only when nothing came between. An item that the session
+  never read, such as a typed message that came with the app's outputs, or a history that `delegation.context_tokens`
+  trimmed gives the next task a fresh session. Of two tasks that run at once, only the first that answers keeps its
+  session.
 
 ### The Envelope
 
@@ -513,7 +679,7 @@ The envelope is the speak and display shape of a result. `delegation.result_form
 1. The IM adds `texts.result_formats.speak_display` to every task's instructions, after the voice note, and offers the
    `show` work tool.
 2. The backend puts screen-only detail in one `show` call. The IM writes it as an `mcp_call` item with server label
-   `delegation.display_label` (`voiceclaw`) and name `show`, whose `output` is the display.
+   `delegation.display_label` (`delegation_core`) and name `show`, whose `output` is the display.
 3. The backend answers with speakable sentences, the `final_answer` message.
 
 On the voice side, the display sink shows a completed `show` item at once and never speaks it, and the `final_answer`
@@ -587,6 +753,8 @@ The harness's seams are private to the harness, so each new one stays inside `sr
 - A steering strategy is a `SteerStrategy` (`native` and `deliver`) with a `from_settings(block)`, added to `STEERING`
   and named in `backend.harness.steer`. A strategy that needs the agent's own mid-turn steer is refused for an agent
   without one.
+- A session policy is a `SessionPolicy` (`take` and `keep`) with a `from_settings(block)`, added to `SESSIONS` and named
+  in `backend.harness.session`.
 
 ### Add a Model Provider
 
@@ -615,29 +783,38 @@ shared. The cafe tools in [`tools/cafe/`](../../src/delegation_core/backend/tool
 
 ### Add a Prompt Set
 
-A prompt set holds every text that the cascade's own model calls read. Write a module that builds its `PROMPT_SET`
+A prompt set holds the text that the cascade writes for a model to read. That covers the cascade's own model calls,
+the labels and the cut mark in the talker's memory, and each delegation's input, which the backend reads. Write a
+module that builds its `PROMPT_SET`
 ([`prompts/promptset.py`](../../src/examples/frontend_backend_live/prompts/promptset.py)), add it to `PROMPT_SETS` in
 [`prompts/__init__.py`](../../src/examples/frontend_backend_live/prompts/__init__.py), and set
 `frontend.cascade.prompt_version`. Behavior that differs between sets is data in the set, so no code asks which set it
-runs. `v2` is the default set, and `v1` and `v3` are the alternatives.
+runs. The example ships one set, `default`
+([`prompts/default.py`](../../src/examples/frontend_backend_live/prompts/default.py)), which a configuration that names
+none also gets.
 
 ### Extension Points at a Glance
 
-The following table lists every extension point, its interface, what is built, and the key that chooses it:
+The following table lists every extension point, its interface, what is built, and the key that chooses it. In its
+module paths, `core/` is `src/delegation_core/`, `harness/` is `src/delegation_core/backend/harness/`, `live/` is
+`src/live/`, and `FBL/` is the example's folder, `src/examples/frontend_backend_live/`:
 
 | Point | Interface (module) | Built | Chosen by |
 | --- | --- | --- | --- |
 | Backend adapter | `AdapterSource`, `BackendAdapter`, `BackendRun`, `Conductor` (`core/backend/port.py`) | `llm`, `llm-agent`, `harness` | `backend.adapter`, `backend.one_shot_adapter` |
 | Rule conductor | `Conductor` | `steer`, `start_each` | `backend.llm.conductor` |
+| Conductor idle rule | `IdleRule` (`core/backend/agent/settings.py`) | `start`, `decide` | `backend.llm-agent.conductor.when_idle` |
 | Backend model provider | `Backend` (`core/backend/providers/base.py`) | `chat-completions`, `openai-responses` | `backend.llm.provider` |
-| Harness seams | `HarnessProtocol`, `Agent`, `SteerStrategy`, `PermissionAnswer` (`harness/protocol.py`); `AcpAgent`, `Transport` (`harness/acp/`) | `acp`; `acp`, `hermes`; `stdio`, `websocket`; `native_command`, `next_prompt`, `cancel_reprompt`; `reject` | `backend.harness.protocol`, `agent`, `transport`, `steer`, `permission` |
+| Harness seams | `HarnessProtocol`, `Agent`, `SteerStrategy`, `SessionPolicy`, `PermissionAnswer` (`harness/protocol.py`); `AcpAgent`, `Transport` (`harness/acp/`) | `acp`; `acp`, `hermes`; `stdio`, `websocket`; `native_command`, `next_prompt`, `cancel_reprompt`; `task`, `call`; `reject` | `backend.harness.protocol`, `agent`, `transport`, `steer`, `session`, `permission` |
 | Tool source | `ToolSource` (`core/backend/port.py`) | `cafe` | `backend.tools` |
 | Result format; backend call reports | `ResultFormat`, `CallReports` (`core/im/results.py`) | `plain`, `speak_display`; `items`, `notes` | `delegation.result_format`, `delegation.backend_calls` |
 | Session kind | `IMSession`, `OneShotSession` (`core/im/`) | Both | The official rule: a request with no conversation is one-shot |
 | Frontend adapter | `FrontendAdapter` (`live/ports.py`), `FrontendAdapterClass` (`FBL/adapter/contract.py`) | `cascade` | `frontend.adapter` |
 | Delegation part | `DelegationPart` (`live/ports.py`) | `client`, `responses` | The resolved `delegation.type` of each session |
-| TTS mode | `SpeechMode` (`FBL/adapter/services.py`) | `per_sentence`, `stitched` | `frontend.cascade.speech.tts_mode` |
-| Frontend model provider; prompt set | `Frontend` (`FBL/models/base.py`); `PromptSet` (`FBL/prompts/promptset.py`) | `chat-completions`, `openai-responses`; `v1`, `v2`, `v3` | `frontend.cascade.provider`; `frontend.cascade.prompt_version` |
+| TTS mode | `SpeechMode` (`FBL/media/services.py`) | `per_sentence`, `stitched` | `frontend.cascade.speech.tts_mode` |
+| Turn end | `TurnEnd` (`FBL/media/turns.py`) | `smart_turn`, `silence`, `shared` | `frontend.cascade.speech.turn_end` |
+| Cut memory | `CutMemory` (`FBL/cascade/utterances.py`) | `as_recorded`, `estimated` | `frontend.cascade.speech.heard_words` |
+| Frontend model provider; prompt set | `Frontend` (`FBL/models/base.py`); `PromptSet` (`FBL/prompts/promptset.py`) | `chat-completions`, `openai-responses`; `default` | `frontend.cascade.provider`; `frontend.cascade.prompt_version` |
 | Result wording; display sink | `ResultWording`, `DisplaySink` (`FBL/cascade/ports.py`) | `writer`, `as_written`; `NullDisplay`, `RtviTaskCards` | `frontend.cascade.delegation.result_wording`; the root |
 | Live example | The registry's `live:` block | `frontend-backend-live` | `examples_registry.yaml` |
 
@@ -654,16 +831,20 @@ The following table lists the files in the example's folder:
 | --- | --- | --- |
 | [`config.yaml`](../../src/examples/frontend_backend_live/config.yaml) | The frontend only: `frontend.adapter`, each adapter's block (`frontend.cascade`), and `ui_bot.core_config` | The default; `LIVE_CONFIG_PATH` names another file |
 | [`config.bench.yaml`](../../src/examples/frontend_backend_live/config.bench.yaml) | `config.yaml` with no app-wait line and no spoken progress lines, for a benchmark client | `LIVE_CONFIG_PATH` |
-| [`core.yaml`](../../src/examples/frontend_backend_live/core.yaml) | The delegation core: `delegation` (the IM's settings), `texts` (every line the core writes or adds to a model's input), and `backend` (the adapter, the default model's slot and prompt, the tool sources, and each adapter's block) | The default; `CORE_CONFIG_PATH` names another file |
-| [`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) | `core.yaml` with the cafe tools and the envelope, for the repository UI bot | `ui_bot.core_config` in `config.yaml` |
-| [`core.bench.yaml`](../../src/examples/frontend_backend_live/core.bench.yaml) | `core.yaml` with no client-tool deadline, no progress notes, plain results, and `unlisted_models: fallback`, for a benchmark client | `CORE_CONFIG_PATH` |
+| [`core.yaml`](../../src/examples/frontend_backend_live/core.yaml) | The delegation core: `delegation` (the IM's settings), `texts` (the lines that the IM and the backend write or add to a model's input; a harness words its own prompts in `backend.harness.prompts`), and `backend` (the adapter, the default model's slot and prompt, the tool sources, and each adapter's block) | The default; `CORE_CONFIG_PATH` names another file |
+| [`core.ui-bot.yaml`](../../src/examples/frontend_backend_live/core.ui-bot.yaml) | `core.yaml` with the cafe tools, the cafe's backend prompt (`thinker`), and the envelope, for the repository UI bot | `ui_bot.core_config` in `config.yaml` |
+| [`core.bench.yaml`](../../src/examples/frontend_backend_live/core.bench.yaml) | `core.yaml` with no client-tool deadline, no progress notes, plain results, `unlisted_models: fallback`, and one task at a time (`max_running: 1`) for the backend LLM agent and the harness, the harness carrying one session through the call (`session: call`), for a benchmark client | `CORE_CONFIG_PATH` |
 | [`core.agent.yaml`](../../src/examples/frontend_backend_live/core.agent.yaml) | `core.yaml` with `backend.adapter: llm-agent` and the envelope | `CORE_CONFIG_PATH` |
 | [`core.harness.yaml`](../../src/examples/frontend_backend_live/core.harness.yaml) | `core.agent.yaml` with `backend.adapter: harness`. The `backend.harness` block of `core.yaml` names the Hermes agent class, starts `hermes acp` over stdio, and binds the bridge on `127.0.0.1:8791` | `CORE_CONFIG_PATH` |
 
 The model behind each role comes from a services slot of the example's registry entry: the talker's and the writer's
 model from `frontend.cascade.slot` (`llm`), and the backend's default model from `backend.slot` (`thinker-llm`). The
-prompts come from the example's `prompts.yaml`: `frontend.cascade.prompt` (`talker`) when a session sets no
-instructions, and `backend.prompt` (`thinker`) when a request sets none.
+prompts come from the example's `prompts.yaml`, each used as written: `frontend.cascade.prompt` (`voice`) when a
+session sets no instructions or blank ones, and `backend.prompt` (`backend`) when a request sets none. Neither names a
+domain, and `voice` follows GPT-Live's Live prompt template. The UI bot keeps the cafe's prompts: its talker's prompt
+is the UI's choice, the cafe's `talker` by default, its profile names the cafe's `thinker`, and the bot adds the
+`channel` context after each. When the talker's services entry sets a `system_prompt`, the bot puts it before the
+talker's prompt, and the talker's memory keeps both as its instructions through compaction.
 
 ### How Profiles Extend
 
@@ -680,16 +861,17 @@ The following variables configure the Live routes and the example's files:
 | `LIVE_ENABLED` | Whether the Live routes (`/v1/live`) are served. When it is set, it decides (`1`, `true`, `yes`, or `on` serve them). Otherwise, the routes are served when `LIVE_API_TOKEN` is set or when the deployment runs this example alone. The example's Compose profiles default it to `true`. |
 | `LIVE_API_TOKEN` | The bearer token that every Live route requires. Without one, anyone who can reach the server can use the routes, and the server logs a warning at startup. |
 | `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS` | The session limits (8 sessions, 1,800 seconds). |
+| `LIVE_MAX_APPENDS_PER_MINUTE` | The append limit of each session (64 in any 60 seconds), counting `session.instructions.append`, `session.thinking.append`, and `session.commentary.append` together. An append over the limit gets a `rate_limit_exceeded` error, and the gateway neither passes it to the frontend adapter nor acknowledges it. |
 | `LIVE_ICE_URLS` | More ICE servers for the Live gateway's WebRTC peer, comma-separated, beside the TURN server that `TURN_USERNAME`, `TURN_PASSWORD`, and `TURN_URL` configure. |
 | `LIVE_MAX_CONSOLE_ROUNDS`, `LIVE_ALLOWED_HOSTS` | The console route's limits: rounds at once (2), and, with no token, the host names besides IP addresses and `localhost` that it answers to. |
 | `LIVE_CONFIG_PATH`, `CORE_CONFIG_PATH` | Another `config.yaml` or `core.yaml`, such as a profile. |
-| `LIVE_ADAPTER_FACTORY` | Another factory of each session's frontend adapter, as `module:function`: an async function of the session's settings, transport, and WebRTC peer that returns `SessionParts` (`live/ports.py`). `LIVE_ENGINE_FACTORY` is a deprecated alias, read with a warning when `LIVE_ADAPTER_FACTORY` is unset. |
+| `LIVE_ADAPTER_FACTORY` | Another factory of each session's frontend adapter, as `module:function`: an async function of the session's settings, transport, and WebRTC peer that returns `SessionParts` (`live/ports.py`). |
 | `UVICORN_WORKERS` | The number of server workers. With more than one, the Live routes are not served, because a session lives in one process. |
 
-When the Live routes are served, a value of `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS`, or
-`LIVE_MAX_CONSOLE_ROUNDS` that is not a whole number of at least 1 stops the server at startup. `UVICORN_WORKERS` is
-read before that check: for a value that is not a whole number of at least 1, the server logs a warning and runs one
-worker.
+When the Live routes are served, a value of `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS`,
+`LIVE_MAX_APPENDS_PER_MINUTE`, or `LIVE_MAX_CONSOLE_ROUNDS` that is not a whole number of at least 1 stops the server at
+startup. `UVICORN_WORKERS` is read before that check: for a value that is not a whole number of at least 1, the server
+logs a warning and runs one worker.
 
 ## Deployment
 
@@ -723,14 +905,17 @@ The server has three ways in for this example:
 - The Live API (`/v1/live/...`) serves live sessions through the Live gateway, the Live Console, and the console's
   client-mode rounds (`POST /v1/live/delegate`).
 
-The following table lists where each recipe's models run. The talker, the writer, and the backend use the same model
-with different settings:
+The following table lists where each recipe's default models run. The talker and the writer use the same model with
+the same settings:
 
-| Recipe | ASR | Talker and backend LLM | TTS |
-| --- | --- | --- | --- |
-| `frontend-backend-live` | NVIDIA cloud endpoints | NVIDIA cloud endpoint (Nemotron 3.5 Lightning) | NVIDIA cloud endpoints |
-| `frontend-backend-live/server` | Nemotron ASR NIM | Nemotron 3.5 Lightning NIM | Magpie TTS NIM |
-| `frontend-backend-live/single-gpu` | NeMo-Speech.cpp | Nemotron 3.5 Lightning through vLLM | NeMo-Speech.cpp |
+| Recipe | ASR | Talker LLM | Backend LLM | TTS |
+| --- | --- | --- | --- | --- |
+| `frontend-backend-live` | NVIDIA cloud endpoints | Nemotron 3.5 Lightning, NVIDIA cloud endpoint | Nemotron 3 Ultra, public NVIDIA API | NVIDIA cloud endpoints |
+| `frontend-backend-live/server` | Nemotron ASR NIM | Nemotron 3.5 Lightning NIM | Nemotron 3 Ultra, public NVIDIA API | Magpie TTS NIM |
+| `frontend-backend-live/single-gpu` | NeMo-Speech.cpp | Nemotron 3.5 Lightning through vLLM | Nemotron 3.5 Lightning through vLLM | NeMo-Speech.cpp |
+
+For the slot order, the sampling settings, and how to run the backend on a local Nemotron 3 Super NIM, refer to the
+example's [Default Models](../../src/examples/frontend_backend_live/README.md#default-models).
 
 To run another backend adapter, point `CORE_CONFIG_PATH` at its profile. The path is relative to the working
 directory: the repository root on the host, and `/app` in the container, where `./src` is mounted. For example,
@@ -748,7 +933,7 @@ switches the core to the harness.
 
 Hermes runs in its own Python environment, outside the app's image. To deploy it:
 
-1. Install Hermes from `https://github.com/nousresearch/hermes-agent` at the tested commit,
+1. Install [Hermes](https://github.com/nousresearch/hermes-agent) at the tested commit,
    `af26acab737db4382815aadcd73c06755471ab52`, with its `acp` and `mcp` extras, in a virtual environment of its own.
    `hermes acp --check` prints `Hermes ACP check OK`. From commit `eb75627faf` on, `hermes acp` connects to the Hermes
    gateway daemon instead of running the agent itself, so test a later commit before you use it.
@@ -758,15 +943,14 @@ Hermes runs in its own Python environment, outside the app's image. To deploy it
    which Hermes loads itself. The core never passes it a key.
 3. Write the home's `SOUL.md`, the identity that opens the system prompt of every Hermes session. Without one, Hermes
    writes its own persona there on its first run ("You are Hermes Agent, built by Nous Research ..."), and every
-   conductor and worker session reads that persona beside the core's instructions. Use the following identity, which
-   the real-Hermes tests deploy:
+   conductor and worker session reads that persona beside the core's instructions. Use the following identity:
 
    ```text
    You work behind a voice assistant, for its callers. Follow the instructions of your project context exactly, use only the tools you are given, and do not narrate your tool calls.
    ```
 
-4. Configure Hermes in its `config.yaml`. The following example runs the default model of `backend.slot` on NVIDIA's
-   cloud endpoint:
+4. Configure Hermes in its `config.yaml`. The following example runs Nemotron 3.5 Lightning on NVIDIA's cloud
+   endpoint:
 
    ```yaml
    model:
@@ -805,7 +989,7 @@ The following table explains why each setting matters to the core:
 | Setting | Why |
 | --- | --- |
 | `model.default` and `model.base_url` | The model that Hermes runs. Run the default model of `backend.slot`, because the core accepts requests for that model only. Keep `base_url`: it pins the route that `context_length` describes. Without it, Hermes drops `context_length` when it runs on a route other than the provider's default, such as a local NIM that `NVIDIA_BASE_URL` names. |
-| `model.context_length` | The context window that Hermes compresses its own transcript against. Give it at least 65,536 tokens. |
+| `model.context_length` | The context window that Hermes compresses its own transcript against. Give it at least 65,536 tokens. A worker's session holds the history that the core sends, within `delegation.context_tokens` (24,000 tokens), and its tasks' own rounds. With `backend.harness.session: call`, a kept session holds them until that budget trims the history. Keep the budget well below this window, or Hermes compresses the transcript and drops detail. |
 | `platform_toolsets.acp: [no_mcp]` | Only the session's own MCP server, the core's tool bridge, reaches a session. A list without `no_mcp` merges in every MCP server of the configuration. Toolsets that you add after `no_mcp` reach the conductor too, and the commit gate cannot hold them. Hermes warns that the `acp` platform has no valid toolsets (`unknown name(s): no_mcp`) and that tools will be unavailable. This is expected, because the session's own MCP server still reaches the session. Keep `no_mcp`, and do not save the `acp` platform from `hermes tools`, which removes it. |
 | No `mcp_servers` | Hermes starts every MCP server that its home lists when it opens its first session, even with `HERMES_ACP_SKIP_CONFIGURED_MCP=1`, which skips only their start at Hermes's startup. `no_mcp` keeps their tools out of the sessions, but not the servers out of the process, and a server that never connects makes each new session wait up to `mcp_discovery_timeout` (1.5 seconds). |
 | `tools.tool_search.enabled: "off"` | The session's tools stay in front of the model instead of behind a search tool. |
@@ -825,8 +1009,9 @@ your data policy requires.
 
 #### Connect over Stdio
 
-With the `stdio` transport, the core starts `hermes acp` itself: one process for the conductor and one for the workers
-of each conversation, and one more when every one of a process's four turns is taken. To connect:
+With the `stdio` transport, the core starts `hermes acp` itself: one process for the conductor (none at
+`max_running: 1`) and one for the workers of each conversation, and one more when every one of a process's four turns
+is taken. To connect:
 
 1. Put `hermes` on the server's `PATH`, or set `backend.harness.command` to its full path.
 2. If the home of Hermes is not `~/.hermes`, export `HERMES_HOME` in the server's environment. A started process gets
@@ -860,7 +1045,7 @@ backend:
   harness:
     transport: websocket
     url: ws://hermes.internal:8790/acp
-    work_root: /var/lib/voiceclaw/harness
+    work_root: /var/lib/delegation-core/harness
     bridge:
       bind: "0.0.0.0:8791"
       advertise: "http://voice-agent.internal:8791"
@@ -874,7 +1059,7 @@ Two paths must also reach across:
 
 - Hermes reads each session's instructions from `.hermes.md` in the session's folder, which the core makes under
   `work_root`. Mount one folder at the same path on both sides, and set `work_root` to that path, because the default,
-  `~/.cache/voiceclaw/harness`, is a folder on the core's side only. Run Hermes as the same user as the voice-agent
+  `~/.cache/delegation-core/harness`, is a folder on the core's side only. Run Hermes as the same user as the voice-agent
   server, or as root. The core makes each runtime process's work folder with mode 0700 for its own user, so a Hermes
   of another user cannot enter it. Hermes's own image, for example, runs Hermes as the user `hermes`, with UID 10000
   unless its `HERMES_UID` names another.
@@ -935,16 +1120,16 @@ import it.
 
 ### The Guard Test
 
-The guard ([`tests/unit/ratchet/guard.py`](../../tests/unit/ratchet/guard.py), run by `test_guard.py`) walks `src/live`,
+The guard ([`tests/unit/guard/guard.py`](../../tests/unit/guard/guard.py), run by `test_guard.py`) walks `src/live`,
 the example, `src/delegation_core`, and `src/server.py`, and fails on any of four kinds of site:
 
 - `compare`: a kind, such as `.mode`, `.adapter`, `.agent`, or `delegation.type`, compared or matched with a string or
   a constant outside the table modules. `KIND_ATTRIBUTES` and `KIND_NAMES` list the kinds.
 - `isinstance`: an `isinstance` or `issubclass` check against a class of another module of the repository, unless the
-  class is a port type or an exception, or the check sits in a composition root.
-- `flag`: a flag name that `REMOVED_FLAGS` bans, as an attribute, an argument, a keyword, or a field.
-- `pick`: a `pick()` from a table outside a composition root and outside a `from_settings`, `from_config`, or `parse`
-  method.
+  class is a port type or an exception, or the check sits in a composition root or the core's builder.
+- `flag`: a flag name that `BANNED_FLAGS` bans, as an attribute, an argument, a keyword, or a field.
+- `pick`: a `pick()` from a table outside the composition roots, the core's builder, and a `from_settings`,
+  `from_config`, or `parse` method.
 
 Each failure names the file, the line, and the site.
 
@@ -986,7 +1171,7 @@ The tests run offline with scripted models. The following table lists the comman
 
 | What | Command |
 | --- | --- |
-| Every Live box, the contracts, the guard, the goldens, and the import rules | `uv run pytest tests/unit/live tests/unit/frontend_backend_live tests/unit/delegation_core tests/unit/cross_box tests/unit/contracts tests/unit/ratchet tests/unit/goldens tests/unit/test_import_boundaries.py -q` |
+| Every Live box, the contracts, the guard, the goldens, and the import rules | `uv run pytest tests/unit/live tests/unit/frontend_backend_live tests/unit/delegation_core tests/unit/cross_box tests/unit/contracts tests/unit/guard tests/unit/goldens tests/unit/test_import_boundaries.py -q` |
 | One box | `uv run pytest tests/unit/delegation_core -q`, and the same for the box's own folder |
 | Re-record a golden after an intended behavior change | `LIVE_GOLDEN_RECORD=1 uv run pytest tests/unit/goldens/<test file> -q -p no:cacheprovider` |
 | The whole suite, as CI runs it | `uv run pytest tests/unit -v` |

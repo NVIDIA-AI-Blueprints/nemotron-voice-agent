@@ -37,8 +37,37 @@ class ModelEndpoint:
 
 # The outcome texts the IM returns to a conductor for each decision it applied (texts.outcomes).
 OUTCOME_KEYS = ("started", "steered", "restarted", "cancel_requested", "ended", "answered", "refused")
-# The IM's work tools a task may be offered (texts.work_tools): show, with the speak/display format; cancel_work, when
-# delegation.work_tools lists it (it stops the task's own Work).
+# The reason texts.outcomes.refused gives for each refusal (texts.refusal_reasons), with the fields each one is given:
+# a place() after its decide() ended, requests none of which waits to be placed, an unknown Work or task, an answer
+# while no Work is open, a start that would put more tasks to run than the backend runs at once, and a control call
+# that reaches a harness's conductor before a decide() takes its calls.
+REFUSAL_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "ended": (),
+        "unplaced": ("delegations",),
+        "no_work": ("work",),
+        "no_task": ("task", "work"),
+        "no_open_work": (),
+        "over_limit": ("max_running",),
+        "idle": (),
+    }
+)
+# The templates among the lines of texts, with the fields each one is given and must hold.
+TEMPLATE_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "handover_line": ("delegation",),
+        "records_block": ("records",),
+        "task_line": ("task",),
+        "unknown_tool_output": ("name", "offered"),
+        "failed_output": ("name", "error"),
+        "misrouted_output": ("name",),
+        "repeated_call_output": ("output",),
+        "cut_output": ("chars",),
+        "conductor_prompt": ("max_running",),
+    }
+)
+# The IM's work tools a task may be offered (texts.work_tools): show, with the speak_display format; cancel_work, when
+# delegation.work_tools lists it (it stops the task after its current step).
 WORK_TOOL_KEYS = ("show", "cancel_work")
 
 
@@ -72,6 +101,13 @@ def _seconds(where: str, value: Any, *, zero: bool = False, null: bool = False) 
     return float(value)
 
 
+def _flag(where: str, value: Any) -> bool:
+    """``true`` or ``false``: any other value is refused."""
+    if not isinstance(value, bool):
+        raise ValueError(f"{where} must be true or false")
+    return value
+
+
 def _text(where: str, value: Any, *, empty: bool = False) -> str:
     """A string, non-empty unless ``empty``."""
     if not isinstance(value, str) or (not empty and not value.strip()):
@@ -83,6 +119,18 @@ def _texts(where: str, raw: Any, *, empty: bool = False) -> Mapping[str, str]:
     """A mapping of names to strings."""
     mapping = _keys(where, raw, raw.keys() if isinstance(raw, Mapping) else ())
     return MappingProxyType({str(key): _text(f"{where}.{key}", value, empty=empty) for key, value in mapping.items()})
+
+
+def _template(where: str, text: str, names: Iterable[str]) -> str:
+    """``text`` as a template that holds each field of ``names`` and names no other."""
+    for name in names:
+        if f"{{{name}}}" not in text:
+            raise ValueError(f"{where} must hold {{{name}}}")
+    try:
+        text.format(**dict.fromkeys(names, ""))
+    except (KeyError, IndexError, ValueError) as exc:
+        raise ValueError(f"{where} names a field it is not given: {exc}") from None
+    return text
 
 
 def _tools(where: str, raw: Any, names: Iterable[str]) -> Mapping[str, Mapping[str, Any]]:
@@ -105,19 +153,22 @@ class DelegationSettings:
     max_pending_delegations: int = 16  # requests admitted and not yet running; the next one is refused
     client_tool_timeout_seconds: float | None = 60.0  # how long a task waits for the app's outputs; None: no deadline
     stop_timeout_seconds: float = 10.0  # how long the stop door waits for a run to confirm its stop
-    close_grace_seconds: float | None = 5.0  # running Works at close; None: an active response may finish
+    close_grace_seconds: float | None = 5.0  # how long running Works may go on at close; None: until they end
     work_timeout_seconds: float | None = 600.0  # the backstop on one Work, through the stop door; None: off
     result_format: str = "plain"  # a name in texts.result_formats: plain, or speak_display (the envelope)
     # How calls the backend runs itself reach the wire: items (official mcp_call items) or notes (progress notes
     # only); a name the IM's table of call reports holds.
     backend_calls: str = "items"
-    display_label: str = "voiceclaw"  # the server label of the show item; the root hands it to the reader too
+    display_label: str = "delegation_core"  # the server label of the show item; the root hands it to the frontend too
     progress_note_seconds: float = 1.0  # at most one progress note per delegation this often; 0: no notes
-    work_tools: tuple[str, ...] = ()  # optional work tools every task gets: [cancel_work] stops its own Work
+    work_tools: tuple[str, ...] = ()  # optional work tools every task gets: cancel_work stops the task after its step
+    # An answer a task gives while a request waits for the conductor's decision waits for that decision: steered into
+    # the task, it is progress and the task runs one more round with the request; placed elsewhere, it is written.
+    hold_answers_while_deciding: bool = False
     records_max_works: int = 5  # the recently ended Works the work records list, after the open ones
     context_tokens: int = 24_000  # the backend history's budget (fits a 32,768-token local window)
     tool_output_chars: int = 8_000  # a longer tool output enters the backend history cut to its head and tail
-    voice_note: str = "v2"  # a name in texts.voice_notes: v2 describes the voice channel
+    voice_note: str = "default"  # a name in texts.voice_notes: the note that describes the voice channel
 
     @classmethod
     def parse(cls, raw: Any) -> DelegationSettings:
@@ -136,6 +187,8 @@ class DelegationSettings:
                 values[key] = _seconds(where, value)
             elif key == "progress_note_seconds":
                 values[key] = _seconds(where, value, zero=True)
+            elif key == "hold_answers_while_deciding":
+                values[key] = _flag(where, value)
             elif key == "work_tools":
                 if not isinstance(value, list):
                     raise ValueError(f"{where} must be a list of work tool names")
@@ -147,22 +200,41 @@ class DelegationSettings:
 
 @dataclass(frozen=True)
 class Texts:
-    """Every line the core writes, sends or adds to a model's input (``texts``): the core's texts live in YAML."""
+    """The lines the IM and the backend write or add to a model's input (``texts`` in the core's file).
 
-    voice_notes: Mapping[str, str]  # by name: v1 adds nothing; v2 is the voice-channel note
+    Two kinds of text come from elsewhere: a harness's own block words its prompt templates
+    (``backend.harness.prompts``) and its agent class's values (``backend.harness.agents``), and an error's message (an
+    exception's, a timed-out call's) comes from the code that reports it.
+    """
+
+    voice_notes: Mapping[str, str]  # by name: what the IM adds to every task's instructions about the voice channel
     result_formats: Mapping[str, str]  # by name: the note each result format adds (plain: none)
-    handover_line: str  # the older delegation's commentary line when a newer request carries its Work
+    # The older delegation's commentary line when a newer request carries its Work: holds {delegation}, the newer
+    # request's delegation id.
+    handover_line: str
     cancelled_line: str  # the older delegation's answer when its Work stopped for a newer request, stop confirmed
     unconfirmed_line: str  # the same answer when the stop could not be confirmed
     owed_output: str  # the output a call that never reported gets: the outcome is unknown
     not_run_output: str  # the output of a call refused while newer input waits (the commit gate): it was not run
     stopped_output: str  # the output of a call refused once its work is stopping (a stop, or its own cancel_work)
     clash_output: str  # the output of a call refused because the app and a work tool name the same function
+    unknown_tool_output: str  # the error output of a call to a name no tool offers: holds {name} and {offered}
+    failed_output: str  # the error output of a call that raised: holds {name} and {error}
+    misrouted_output: str  # the error output of an app function the IM routes to a harness's agent: holds {name}
+    # The output of an app call that repeats the newest call that ran, which its task made and the app answered, with
+    # no request since: holds {output}, that answer, which the IM gives instead of sending the call again.
+    repeated_call_output: str
+    cut_output: str  # between the head and the tail of a tool output cut to its size cap: holds {chars}, those left out
+    none: str  # how an empty list of names reads in these texts: no tool offered, no request named
     records_block: str  # what the Works have done, on every Work's input and every steer: holds {records}
     closing_line: str  # after each records block: say where the work stands, then go on
     task_line: str  # a task's brief from its conductor: holds {task}
-    conductor_prompt: str  # the instructions of a model conductor (the LLM agent's, the harness's main session)
+    round_cap_note: str  # added to the instructions of the backend LLM's round after max_tool_rounds: answer now
+    # The instructions of a model conductor (the LLM agent's, the harness's conductor session): holds {max_running},
+    # the tasks its backend runs at once.
+    conductor_prompt: str
     outcomes: Mapping[str, str]  # the outcome text the IM returns for each decision it applied (OUTCOME_KEYS)
+    refusal_reasons: Mapping[str, str]  # the {reason} of outcomes.refused for each refusal (REFUSAL_FIELDS)
     control_tools: Mapping[str, Mapping[str, Any]]  # the conductor's four tools (backend/control.py)
     work_tools: Mapping[str, Mapping[str, Any]]  # the IM's work tools (WORK_TOOL_KEYS)
 
@@ -171,18 +243,20 @@ class Texts:
         """Validate the ``texts`` block: every key present, every line text, the templates with their fields."""
         names = [f.name for f in fields(cls)]
         block = _keys("texts", raw, names, names)
-        lines = {
-            key: _text(f"texts.{key}", block[key])
-            for key in names
-            if key not in ("voice_notes", "result_formats", "outcomes", "control_tools", "work_tools")
-        }
-        for key, field_name in (("records_block", "{records}"), ("task_line", "{task}")):
-            if field_name not in lines[key]:
-                raise ValueError(f"texts.{key} must hold {field_name}")
+        mappings = ("voice_notes", "result_formats", "outcomes", "refusal_reasons", "control_tools", "work_tools")
+        lines = {key: _text(f"texts.{key}", block[key]) for key in names if key not in mappings}
+        for key, template_fields in TEMPLATE_FIELDS.items():
+            _template(f"texts.{key}", lines[key], template_fields)
         outcomes = _texts("texts.outcomes", block["outcomes"])
         missing = [key for key in OUTCOME_KEYS if key not in outcomes]
         if missing or set(outcomes) - set(OUTCOME_KEYS):
             raise ValueError(f"texts.outcomes must hold exactly {', '.join(OUTCOME_KEYS)}")
+        _template("texts.outcomes.refused", outcomes["refused"], ("reason",))
+        reasons = _texts("texts.refusal_reasons", block["refusal_reasons"])
+        if set(reasons) != set(REFUSAL_FIELDS):
+            raise ValueError(f"texts.refusal_reasons must hold exactly {', '.join(REFUSAL_FIELDS)}")
+        for key, template_fields in REFUSAL_FIELDS.items():
+            _template(f"texts.refusal_reasons.{key}", reasons[key], template_fields)
         control_tools = block["control_tools"]
         if not isinstance(control_tools, Mapping):
             raise ValueError("texts.control_tools must be a mapping")
@@ -190,10 +264,15 @@ class Texts:
             voice_notes=_texts("texts.voice_notes", block["voice_notes"], empty=True),
             result_formats=_texts("texts.result_formats", block["result_formats"], empty=True),
             outcomes=outcomes,
+            refusal_reasons=reasons,
             control_tools=_tools("texts.control_tools", control_tools, control_tools.keys()),
             work_tools=_tools("texts.work_tools", block["work_tools"], WORK_TOOL_KEYS),
             **lines,
         )
+
+    def refusal(self, reason: str, **values: str) -> str:
+        """The outcome of a refused decision: ``outcomes.refused`` with ``refusal_reasons[reason]`` filled in."""
+        return self.outcomes["refused"].format(reason=self.refusal_reasons[reason].format(**values))
 
 
 @dataclass(frozen=True)

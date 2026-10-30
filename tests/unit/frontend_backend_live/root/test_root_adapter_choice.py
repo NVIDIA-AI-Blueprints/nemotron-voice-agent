@@ -13,12 +13,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from delegation_core.config import CoreSettings
 from examples.frontend_backend_live import factory, pipeline
 from examples.frontend_backend_live.config_manager.loader import CONFIG_PATH, load_live_config
 from examples.frontend_backend_live.config_manager.schema import ConfigError
 from live.protocol import ProtocolError, SessionConfig
-from tests.unit.contracts.base import ContractCase
 from tests.unit.frontend_backend_live.root.root_helpers import (
     CATALOG,
     NoRtviAdapter,
@@ -204,17 +202,6 @@ class HealthUrlTests(unittest.TestCase):
         with patch.object(server, "service_catalog_sources", return_value=sources):
             url = server._llm_health_url("http://thinker-only:8000/v1")
         self.assertEqual(url, "http://thinker-only:8000/v1/health/ready")
-
-
-class ShippedAdapterTests(ContractCase, unittest.TestCase):
-    def test_the_shipped_file_names_a_registered_class_that_parses_its_block(self):
-        from examples.frontend_backend_live.adapter.registry import FRONTEND_ADAPTERS
-
-        config = load_live_config(CONFIG_PATH)
-        core = CoreSettings.load(factory.core_config_path())
-        adapter = FRONTEND_ADAPTERS[config.adapter]
-        adapter.Settings.parse(factory.with_display_label(factory.adapter_block(config), core))
-        self.assertTrue(adapter.hosts_rtvi)
 
 
 if __name__ == "__main__":

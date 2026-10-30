@@ -9,7 +9,10 @@ round completes, so a failed attempt writes nothing. A Work's response belongs t
 landed in it; while that response waits for the app's outputs, the other tasks' items are held in order.
 
 The commit gate refuses every call a task routes while a newer request waits to land in it, or waits for the
-conductor's decision, so the backend re-plans with the newer request; a call that already runs is never cut.
+conductor's decision, so the backend re-plans with the newer request; a call that already runs is never cut. With
+``delegation.hold_answers_while_deciding``, an answer a task gives while a request waits for the conductor's decision
+waits for that decision too: steered into the task, the answer is progress and the task runs one more round with the
+request, in a new run of its adapter; placed elsewhere, it is written then; a stop drops it.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ from delegation_core.ledger.records import Runner, Task, Work
 from delegation_core.ledger.records import Steering as SteeringRecord
 
 if TYPE_CHECKING:
+    from delegation_core.config import Texts
     from delegation_core.im.session import IMSession
 
 # The reasons a cut attempt ends with that the IM passes on as they are.
@@ -163,6 +167,7 @@ class TaskRun:
         self.answered = False  # its last round gave an answer
         self.answers = 0
         self.held = False  # its round's calls were refused while the conductor decides: it waits for the decision
+        self.held_answer: dict | None = None  # its answer, given while the conductor decides: it waits for the decision
         self.completed = False  # its run ended as it should: with an answer, or (one-shot) with the app's calls
         self.stop_reason: StopReason | None = None  # a stop was requested: nothing more of it is written
         self.stopped: StopOutcome | None = None
@@ -174,8 +179,7 @@ class TaskRun:
         shown = self.session.result_format.tools()
         self.displays = frozenset(shown)  # its work tools whose items are the display
         names = tuple(dict.fromkeys((*shown, *self.session.settings.work_tools)))
-        texts, label = self.session.texts.work_tools, self.session.settings.display_label
-        self.work_tools = WorkTools(names, texts, self.cancel_own, label)
+        self.work_tools = WorkTools(names, self.texts, self.cancel_own, self.session.settings.display_label)
         self._readers: dict[str, Callable[[dict], None]] = {
             "response.created": self._attempt_opened,
             "response.output_item.done": self._item_done,
@@ -195,6 +199,9 @@ class TaskRun:
             self.run = self.work.task_started(self)
             while True:
                 await self._read_events()
+                if self.held_answer is not None and await self._decided_on_answer():
+                    self.run = self.session.backend.start(self)  # one more round, with the newer request
+                    continue
                 if self.stop_reason is not None or not self.app_calls:
                     break
                 if self._gated():
@@ -267,6 +274,28 @@ class TaskRun:
         self.app_calls = {}
         return True
 
+    async def _decided_on_answer(self) -> bool:
+        """Wait for the conductor's decision, then release the held answer; ``True`` when the task runs on.
+
+        Newer input the decision steered into this task makes the answer progress, and the task runs one more round
+        with it; otherwise the answer is written now. A stop meanwhile has dropped it (``request_stop``).
+        """
+        await self.session.decided()
+        if self.held_answer is None:
+            return False
+        if self.unapplied():
+            self.session.commentary(self, self._release_answer("commentary"))
+            return True
+        self._answer(self._release_answer("written"))
+        return False
+
+    def _release_answer(self, how: str) -> dict | None:
+        """The held answer leaves the hold ``how``: written, commentary or dropped (``None``: none was held)."""
+        answer, self.held_answer = self.held_answer, None
+        if answer is not None:
+            self.trace("im.answer.released", how=how)
+        return answer
+
     async def _wait_for_app(self) -> None:
         """Wait, holding no slot, for the app's outputs; then for a slot again."""
         self.session.release(self)
@@ -311,6 +340,7 @@ class TaskRun:
         self.stop_reason = reason
         self.record.stop.move("stop_requested")
         self.session.unschedule(self)
+        self._release_answer("dropped")
         return True
 
     async def confirm_stop(self) -> StopOutcome:
@@ -372,12 +402,30 @@ class TaskRun:
                 self.session.action(self, call)
         refused = any(self.routes.get(call.get("call_id", "")) == "refused" for call in calls)
         self.held = refused and self.session.waits_for_decision and self.stop_reason is None
-        if answer is not None:
-            self.answered = True
-            self.answers += 1
-            self.work.answer(self, answer)
+        if answer is not None and self._holds_answers():
+            self.held_answer = answer
+            self.trace("im.answer.held")
+        elif answer is not None:
+            self._answer(answer)
+
+    def _holds_answers(self) -> bool:
+        """Whether its answer waits for the conductor's decision now (``delegation.hold_answers_while_deciding``)."""
+        holds = self.session.settings.hold_answers_while_deciding
+        return holds and self.session.waits_for_decision and self.stop_reason is None
+
+    def _answer(self, message: dict) -> None:
+        """Its answer: the round answered, and the Work writes it."""
+        self.answered = True
+        self.answers += 1
+        self.trace("im.answer.written")
+        self.work.answer(self, message)
 
     # ------------------------------------------------------------------------------------------ TaskContext
+    @property
+    def texts(self) -> Texts:
+        """The core's texts: they word the error outputs, not-run outputs and notes its run adds."""
+        return self.session.texts
+
     def request(self) -> dict:
         """The settings of the task's next model call, its instructions composed."""
         return self.work.request()
@@ -403,22 +451,29 @@ class TaskRun:
         call_id = call.get("call_id", "")
         if call_id not in self.routes:
             name = call.get("name", "")
-            refusal = self._refusal(name)
+            refusal = self._refusal(call)
             self.routes[call_id] = "refused" if refusal is not None else self._route(name)
             self._step(call_id, "started", name)
             if refusal is not None:
                 self.refusals[call_id] = refusal
                 self._refuse(call)
+            else:
+                self.session.call_routed(call)
         return self.routes[call_id]
 
-    def _refusal(self, name: str) -> str | None:
-        """Why the IM will not run a call of ``name`` now, as the not-run output that says so; ``None``: it runs.
+    def refusal(self, call_id: str) -> str:
+        """The not-run output the IM gave a call it refused, which says why."""
+        return self.refusals[call_id]
+
+    def _refusal(self, call: dict) -> str | None:
+        """Why the IM will not run ``call`` now, as the not-run output that says so; ``None``: it runs.
 
         Once its stop was asked or after its own ``cancel_work``, ``texts.stopped_output``; for a function the app and
         a work tool both name, ``texts.clash_output``; while newer input waits, ``texts.not_run_output`` (the commit
-        gate).
+        gate); in a Work that took one request, for an app call that repeats the newest call that ran, which this task
+        made and the app answered, with no request since, that answer (``texts.repeated_call_output``).
         """
-        texts = self.session.texts
+        texts, name = self.session.texts, call.get("name", "")
         declared = any(tool.get("type") == "function" and tool.get("name") == name for tool in self.work.settings.tools)
         if self.stop_reason is not None or self.own_cancel:
             return texts.stopped_output
@@ -426,7 +481,9 @@ class TaskRun:
             return texts.clash_output
         if self.newer_input_waits():
             return texts.not_run_output
-        return None
+        if not declared or len(self.work.requests) > 1:  # a Work that took another request may ask for it again
+            return None
+        return self.session.repeated_output(call, self.task_id)
 
     def _route(self, name: str) -> Route:
         """Who runs a call the IM lets run: the app, for a function the request declared; else the backend."""
@@ -787,14 +844,14 @@ class WorkRun:
     def _hand_over(self, taker: str) -> None:
         """Write the handover: the taker's response goes in progress naming the carrier's newest response.
 
-        An older response still open then ends with ``texts.handover_line`` as ``commentary``; one that ended with the
-        app's calls (at the client-tool deadline) gets nothing more.
+        An older response still open then ends with ``texts.handover_line``, which names the taker, as ``commentary``;
+        one that ended with the app's calls (at the client-tool deadline) gets nothing more.
         """
         book, ledger, older = self.session.book, self.session.ledger, self.carrier
         book.start(taker, previous=older)
         if book.writer(older) is not None:
             book.start(older)
-            book.running(older).message(self.session.texts.handover_line, "commentary")
+            book.running(older).message(self.session.texts.handover_line.format(delegation=taker), "commentary")
             self.session.notes.drop(older)
             book.end(older, "response.completed")
         older_record = ledger.delegations[older]
@@ -905,11 +962,15 @@ class WorkRun:
         self.done.set()
 
     def segment(self) -> list[dict]:
-        """What the Work adds to the shared conversation once it ended: its requests, then each task's own items."""
+        """What the Work adds to the shared conversation once it ended: its requests, then each task's own items.
+
+        A call left without an output in a task's view gets the output the task holds for it, which no safe point took
+        (a call that ended while its task stopped), or ``texts.owed_output`` when the task holds none.
+        """
         items = list(self.requested)
         for task in self.tasks:
             if task.view is not None:
-                task.view.join(task.view.owed(self.session.texts.owed_output))
+                task.view.join(task.view.owed(self.session.texts.owed_output, task.outputs))
                 items += task.view.own()
         return items
 

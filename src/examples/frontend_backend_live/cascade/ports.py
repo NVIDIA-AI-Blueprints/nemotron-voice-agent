@@ -4,8 +4,8 @@
 """Contracts between the cascade's parts: ready results, their wording, and the display.
 
 The reader (``delegations.py``) reads each ``final_answer`` item as a :class:`ReadyResult` and hands display items to
-the :class:`DisplaySink` at once. At idle the presenter words every ready result in one :class:`ResultWording` call,
-records the line in the talker's memory and the heard log in one step, and speaks it.
+the :class:`DisplaySink` at once. The presenter words every ready result in one :class:`ResultWording` call as it
+arrives; at idle it records the line in the talker's memory and the heard log in one step, and speaks it.
 """
 
 from __future__ import annotations
@@ -24,24 +24,33 @@ class ReadyResult:
     item_id: str  # the final_answer message item's id, so a result unheard after a barge-in is requeued exactly
     speak: str  # the text to say, as the backend wrote it
 
+    @property
+    def unworded(self) -> str:
+        """What is said when the result is not worded: its speak part."""
+        return self.speak
+
 
 @dataclass(frozen=True)
 class WordingNotes:
     """What the wording must know besides the results."""
 
-    told: Mapping[str, str]  # by delegation: what the caller was already told about it (a lead-in, a status line)
+    told: Mapping[str, str]  # by delegation: what the caller was already told about it (a lead-in, a progress line)
     newer_requests: tuple[str, ...]  # requests still open that were made after these results' delegations
 
 
 class ResultWording(Protocol):
     """Words every ready result into one line to say: ``writer`` (a model call) or ``as_written``.
 
-    One call covers every result ready at idle. It drops no fact: when the model fails or stays silent, the results are
-    said as written. It never repeats what ``notes.told`` says the caller already heard.
+    One call covers every result ready when it words. It drops no fact: when the model fails or stays silent, the
+    results are said as written. It never repeats what ``notes.told`` says the caller already heard. A progress line
+    holds no fact the caller needs: when it cannot be worded, nothing is said.
     """
 
     async def words(self, results: Sequence[ReadyResult], notes: WordingNotes) -> str:
         """The one line to say for ``results``, in the order given."""
+
+    async def progress(self, update: str, told: str | None, latest: str | None) -> str:
+        """A progress line for ``update``, the work note's line about one delegation, or none (empty)."""
 
 
 class Ending(StrEnum):

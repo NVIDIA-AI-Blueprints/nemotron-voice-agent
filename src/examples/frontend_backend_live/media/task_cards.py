@@ -3,7 +3,7 @@
 
 """Where the display part of each delegation goes in the repository UI bot: a ``DisplaySink`` (``cascade/ports.py``).
 
-:class:`RtviTaskCards` shows each delegation as one ``agent-task-update`` card in the NVA UI
+:class:`RtviTaskCards` shows each delegation as one ``agent-task-update`` card in the repository UI
 (``client/src/components/content/ConversationPanel.tsx``), with the request, its newest progress line, the display
 part, the answer and the words said. The bot's root attaches it to its pipeline worker. A live session needs no sink of
 its own: its client gets every official event through the gateway's relay, display items included, and the cascade's
@@ -23,7 +23,7 @@ from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 
 from examples.frontend_backend_live.cascade.ports import Ending, ReadyResult
 
-CARD_MESSAGE = "agent-task-update"  # the NVA UI's task card message
+CARD_MESSAGE = "agent-task-update"  # the repository UI's task card message
 AGENT = "backend"  # who does the delegated work, as the card names it
 # The card's status for each ending: the UI shows "done" and "failed" in their own colors.
 ENDED_STATUS = {
@@ -49,7 +49,7 @@ class TaskCard:
 
 
 class RtviTaskCards:
-    """Shows each delegation as an ``agent-task-update`` card in the NVA UI, updated as the delegation moves on.
+    """Shows each delegation as an ``agent-task-update`` card in the repository UI, updated as the delegation moves on.
 
     Each call updates the delegation's card and sends all of it, so the UI's merge of a card's fields never loses one.
     The card says ``done`` (or ``failed``, ``cancelled``) when the delegation ends; the UI also shows the spoken words

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from delegation_core.backend.agent import AgentSettings, AgentSource, ConductorSettings, LlmConductor
+from delegation_core.backend.agent.settings import WHEN_IDLE
 from delegation_core.backend.control import ControlVocabulary
 from delegation_core.backend.llm import LlmSettings
 from delegation_core.backend.port import Request, TaskSummary, WorkSummary
@@ -27,7 +28,7 @@ from tests.unit.contracts.backend import a_round, call_events
 FBL = Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live"
 SHIPPED = CoreSettings.load(FBL / "core.yaml")
 TEXTS = SHIPPED.texts
-VOCABULARY = ControlVocabulary(TEXTS.control_tools, TEXTS.conductor_prompt)
+VOCABULARY = ControlVocabulary(TEXTS.control_tools, TEXTS.conductor_prompt, TEXTS.refusal("idle"), TEXTS.failed_output)
 ENDPOINT = ModelEndpoint(model="test/model", base_url="http://localhost:1/v1", api_key="secret-key")
 OTHER = ModelEndpoint(model="other/model", base_url="http://localhost:2/v1")
 LIMITS = ProviderLimits(provider_retries=0, first_event_timeout_seconds=2.0, idle_timeout_seconds=2.0)
@@ -39,7 +40,10 @@ FAST_WORKER = LlmSettings(
     stop_timeout_seconds=0.5,
     provider_retries=0,
 )
-SETTINGS = AgentSettings(worker=FAST_WORKER)
+# The model conductor places every request, also while no Work is open, so the tests read its rounds; the idle rule
+# (conductor.when_idle) has tests of its own.
+CONDUCTOR = ConductorSettings(when_idle=WHEN_IDLE["decide"])
+SETTINGS = AgentSettings(conductor=CONDUCTOR, worker=FAST_WORKER)
 
 
 def lookup(model: str | None) -> ModelEndpoint:
@@ -126,8 +130,9 @@ def start_each(payload: dict) -> list[dict]:
 
 
 def conductor_on(model: Model, **settings: Any) -> LlmConductor:
-    """An ``LlmConductor`` on ``model``, with the shipped vocabulary and ``settings`` over the defaults."""
-    return LlmConductor(lambda: model, VOCABULARY, replace(ConductorSettings(), **settings), ENDPOINT.model)
+    """An ``LlmConductor`` on ``model``, with the shipped vocabulary and ``settings`` over ``CONDUCTOR``."""
+    conductor = replace(CONDUCTOR, **settings)
+    return LlmConductor(lambda: model, VOCABULARY, conductor, ENDPOINT.model, SETTINGS.max_running)
 
 
 # --------------------------------------------------------------------------------------------- the workers' model

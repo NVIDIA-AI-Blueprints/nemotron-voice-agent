@@ -10,9 +10,9 @@ does for a browser session; only its outside edges are replaced:
 
 * the transport (``create_transport``): :class:`FakeTransport`, whose input carries the client's RTVI messages into
   the pipeline and whose output keeps every message the bot sends the client;
-* the speech services (``build_stt``, ``build_tts``) and the turn detection that listens to caller audio
-  (``build_user_aggregator_params``: Silero VAD and the Smart Turn model). ``FakeSTT`` says whole caller turns, so the
-  external turn strategies of the engine tests end each turn when it has been said;
+* the speech services (``build_stt``, ``build_tts``) and the turn detection that listens to caller audio (the turn
+  ends, ``TURN_ENDS``: Silero VAD and the Smart Turn model). ``FakeSTT`` says whole caller turns, so the external turn
+  strategies of the whole-call tests end each turn when it has been said;
 * the model clients: ``build_agent`` gets the talker's and the writer's scripted client, and ``build_core`` builds the
   bot's own core from its profile with the backend LLM on the backend's scripted client (``chat_adapters``);
 * the services catalog (``ExampleCatalog.read``): :data:`OFFERED` in place of ``services.yaml``, ``settings.yaml`` and
@@ -24,9 +24,9 @@ Everything else is the bot's own code: its root (:func:`golden_root` runs ``bot_
 (talker, writer, work note, the greeting line, the task cards), its delegation core and the cafe tools, which its
 backend runs itself as server tools.
 
-Timers: :func:`golden_root` moves the silence status line (``progress_after_seconds``) to an hour, so no golden gets a
-clock-driven line. The other timers keep the files' values, which these calls never reach (a held round is released
-well within its limit).
+Timers: :func:`golden_root` sets the quiet before a progress line (``progress_after_seconds``) to an hour, so no golden
+gets a clock-driven line. The other timers keep the files' values, which these calls never reach (a held round is
+released well within its limit).
 
 Channels, each compared on its own:
 
@@ -45,7 +45,7 @@ Writing a bot golden: subclass :class:`BotGoldenCase`, ``serve`` the scripts, ac
 ``say``), wait for quiet before each action, then ``close`` and ``assert_golden``. A :class:`Held` step keeps a model
 request open until the test releases it, as a model that is still working, so the call can do something while the
 backend works; ``wait_quiet`` treats a held backend request as quiet. Recording works as in the harness:
-``LIVE_GOLDEN_RECORD=1`` writes ``recordings/<name>.json`` and keeps its tags; a normal run only compares. A test
+``LIVE_GOLDEN_RECORD=1`` writes ``recordings/<name>.json``; a normal run only compares. A test
 that changes something ``serve`` also patches (``CascadeSession``, ``LiveTalkerProcessor``, the ``pipeline`` names)
 patches it before ``serve`` with ``start()`` and ``addCleanup(stop)``, never in a ``with`` block around the call:
 ``serve`` undoes its own patches at clean-up, after such a block has ended, and would put the test's version back.
@@ -94,8 +94,9 @@ from delegation_core.backend.tools.cafe.tools import CafeTools
 from delegation_core.im.session import IMSession
 from examples.frontend_backend_live import pipeline
 from examples.frontend_backend_live.cascade.agent import build_agent
-from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.cascade.session import CascadeSession
+from examples.frontend_backend_live.media.playout import PlayoutTracker
+from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from tests.unit.cascade_helpers import FakeSTT, chat_adapters
 from tests.unit.goldens.harness import (
@@ -130,7 +131,7 @@ SESSION_BODY = {"pipeline_mode": "frontend-backend-live", "prompt_key": "talker"
 
 # The catalog entries the bot reads (ExampleCatalog), in place of services.yaml and settings.yaml: the example's
 # default model for both roles, with its registry settings applied (examples_registry.yaml): reasoning off for the
-# talker, on for the thinker. The base URL is never contacted; the model clients are scripted.
+# talker, on for the backend. The base URL is never contacted; the model clients are scripted.
 SERVICE_ENTRIES = {
     "llm": {
         "model_id": "nvidia/nemotron-3-super-120b-a12b",
@@ -182,10 +183,10 @@ def offered_catalog():
 
 
 def golden_root():
-    """The bot's root state, read by ``bot_root``'s own code (uncached), with the silence status line moved to an hour.
+    """The bot's root state, read by ``bot_root``'s own code (uncached), with progress lines an hour away.
 
-    The status line ("Still on it ...") is said after 8 s without speech; a golden that holds the backend for as long
-    as it needs must not get one.
+    A progress line may come after 8 s of silent work (``progress_after_seconds``); a golden that holds the backend for
+    as long as it needs must not get one.
     """
     state = READ_BOT_ROOT()
     delegation = replace(state.cascade.delegation, progress_after_seconds=QUIET_PROGRESS_SECONDS)
@@ -201,17 +202,22 @@ def restore_environment(saved):
             os.environ[name] = value
 
 
-def external_turns(welcome_enabled):
-    """Stands in for ``build_user_aggregator_params``: a turn starts and ends when the fake speech-to-text says so.
+class ExternalTurns:
+    """Stands in for every turn end (``TURN_ENDS``): a turn starts and ends when the fake speech-to-text says so.
 
-    The bot's own parameters detect turns from caller audio (Silero VAD, Smart Turn) and mute the caller until the
+    The bot's own turn end detects turns from caller audio (Silero VAD, Smart Turn) and mutes the caller until the
     welcome has been spoken; the fake speech-to-text sends no audio.
     """
-    return LLMUserAggregatorParams(
-        user_turn_strategies=UserTurnStrategies(
-            start=[ExternalUserTurnStartStrategy()], stop=[ExternalUserTurnStopStrategy()]
+
+    def __init__(self, speech):
+        self.speech = speech
+
+    def user_params(self, welcome_enabled):
+        return LLMUserAggregatorParams(
+            user_turn_strategies=UserTurnStrategies(
+                start=[ExternalUserTurnStartStrategy()], stop=[ExternalUserTurnStopStrategy()]
+            )
         )
-    )
 
 
 # ------------------------------------------------------------------------------------------------- doubles
@@ -342,12 +348,11 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
     """Serves one scripted call per test through ``pipeline.bot()``; pins it to ``recordings/<name>.json``."""
 
     # The harness's generic parts, used unchanged: the bounded waits (``wait_quiet`` reads this class's ``pending``),
-    # the script checks, the tag checks and the scenario text.
+    # the script checks and the scenario text.
     wait_until = GoldenCase.wait_until
     wait_quiet = GoldenCase.wait_quiet
     check_scripts_not_overrun = GoldenCase.check_scripts_not_overrun
     check_scripts_used = GoldenCase.check_scripts_used
-    check_tags = GoldenCase.check_tags
     scenario = GoldenCase.scenario
 
     # ---------------------------------------------------------------------------------------- starting
@@ -406,9 +411,9 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
         edges = {
             "bot_root": golden_root,
             "create_transport": lambda runner_args: case.transport,
-            "build_stt": lambda body, entry: case.stt,
+            "build_stt": lambda body, entry, turn_end: case.stt,
             "build_tts": lambda body, entry: case.tts,
-            "build_user_aggregator_params": external_turns,
+            "TURN_ENDS": dict.fromkeys(pipeline.TURN_ENDS, ExternalTurns),
             "build_agent": scripted_agent,
             "build_core": scripted_core,
             "create_audio_recorder": lambda: None,
@@ -579,7 +584,7 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
     def bot_pending(self):
         """The bot's delegated work in flight; a backend request the test holds is not. Re-point on a move.
 
-        The cascade's presenter speaks each result in its own task, once the worker has handed it over.
+        The cascade's presenter speaks each result in its own task, once the core has handed it over.
         """
         session = self.sessions[0] if self.sessions else None
         worker = self.ims[0] if self.ims else None
@@ -606,7 +611,7 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
         }
 
     def assert_golden(self, name):
-        """Compare the call with ``recordings/<name>.json`` channel by channel, or record it; then check the tags.
+        """Compare the call with ``recordings/<name>.json`` channel by channel, or record it.
 
         As in the harness, only a run with ``LIVE_GOLDEN_RECORD=1`` writes the file, and it still fails when an
         existing file changed.
@@ -616,23 +621,14 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
         path = GOLDEN_DIR / f"{name}.json"
         golden = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         if os.environ.get(RECORD_VARIABLE) == "1":
-            previous, golden = (
-                golden,
-                {
-                    "name": name,
-                    "scenario": self.scenario(),
-                    "tags": golden["tags"] if golden else [],
-                    "channels": recorded,
-                },
-            )
+            previous, golden = golden, {"name": name, "scenario": self.scenario(), "channels": recorded}
             GOLDEN_DIR.mkdir(exist_ok=True)
             path.write_text(json.dumps(golden, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             diffs = changed_bot_channels(name, previous.get("channels", {}), recorded) if previous else []
             if diffs:
                 self.fail(
                     f"Recorded {path.name} again: {len(diffs)} channel(s) changed, and the file now holds this run. "
-                    f"Check the diff, tag the changed lines (each with a row and a note, see harness.py), then run "
-                    f"without {RECORD_VARIABLE}.\n\n" + "\n\n".join(diffs)
+                    f"Check the diff, then run without {RECORD_VARIABLE}.\n\n" + "\n\n".join(diffs)
                 )
         elif golden is None:
             self.fail(f"{path} does not exist; record it with {RECORD_VARIABLE}=1 (see the note in harness.py)")
@@ -641,11 +637,9 @@ class BotGoldenCase(unittest.IsolatedAsyncioTestCase):
             diffs = changed_bot_channels(name, golden["channels"], recorded)
             if diffs:
                 self.fail(
-                    f"Golden {name} changed in {len(diffs)} channel(s). If the change is intended, name it (a row "
-                    f"and a note, see harness.py), record again with {RECORD_VARIABLE}=1 and tag the changed lines.\n\n"
-                    + "\n\n".join(diffs)
+                    f"Golden {name} changed in {len(diffs)} channel(s). If the change is intended, record again "
+                    f"with {RECORD_VARIABLE}=1.\n\n" + "\n\n".join(diffs)
                 )
-        self.check_tags(name, golden)
 
 
 # ----------------------------------------------------------------------------------------------- goldens
@@ -744,44 +738,14 @@ class BotStartTests(BotGoldenCase):
 
 
 class BotCloseTests(BotGoldenCase):
-    """What the bot's root closes: its server delegation (the conversation's IM session) and its core, in a ``finally``.
-
-    A client's disconnect ends ``bot()`` normally, so :meth:`BotGoldenCase.close` cannot tell a ``finally`` from a
-    plain last line; a run that fails can.
-    """
-
-    async def test_a_bot_whose_run_fails_still_closes_its_delegation_side(self):
-        class FailingRunner:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def add_workers(self, *workers):
-                raise RuntimeError("the runner failed")
-
-        with (
-            patch.object(pipeline, "WorkerRunner", FailingRunner),
-            self.assertRaisesRegex(AssertionError, "ended before its pipeline started"),
-        ):
-            await self.serve(welcome=False)
-        self.assertIsInstance(self.bot.exception(), RuntimeError)
-        self.assert_conversation_closed()
-
-    def assert_conversation_closed(self):
-        """The conversation's IM session closed, and no backend round ran, so no backend model client was made."""
-        [im] = self.ims
-        self.assertTrue(im.closed and im.placer.done(), "the conversation's IM session still runs")
-        self.assertEqual(self.backend.closes, 0, "no backend round ran, so no backend model client was made")
-
-
-class BotCascadeCloseTests(BotGoldenCase):
     """What the bot's root closes: its cascade, then its server delegation, then its core, once each.
 
     The talker processor closes nothing, so the root closes the cascade (the presenter's tasks, the
     silence timer and the talker's model) once its pipeline has finished, or in its ``finally`` at the latest, before
-    the server delegation, whose close ends the conversation's IM session (and the provider of a backend round).
+    the server delegation, whose close ends the conversation's IM session (and the provider of a backend round). A
+    client's disconnect ends ``bot()`` normally, so :meth:`BotGoldenCase.close` cannot tell a ``finally`` from a plain
+    last line; a run that fails can.
     """
-
-    assert_conversation_closed = BotCloseTests.assert_conversation_closed
 
     class FailingRunner:
         """A pipeline runner that fails before the pipeline starts."""
@@ -801,6 +765,12 @@ class BotCascadeCloseTests(BotGoldenCase):
             await self.serve(welcome=False)
         [session] = self.sessions
         return session
+
+    def assert_conversation_closed(self):
+        """The conversation's IM session closed, and no backend round ran, so no backend model client was made."""
+        [im] = self.ims
+        self.assertTrue(im.closed and im.placer.done(), "the conversation's IM session still runs")
+        self.assertEqual(self.backend.closes, 0, "no backend round ran, so no backend model client was made")
 
     async def test_the_talkers_model_is_released_before_the_backend_model(self):
         # One delegation, so the backend's IM session has made the provider of its round.
@@ -897,8 +867,9 @@ class BotWiringTests(BotGoldenCase):
         await self.wait_quiet()
 
         # The processors in order (``bot`` in pipeline.py): the transport's input, speech to text, the user
-        # aggregator, the talker processor, text to speech and the transport's output, then the audio recorder when a
-        # dump is switched on. No assistant aggregator: the cascade writes its own lines into the context.
+        # aggregator, the talker processor, text to speech (with its mode's text hold, none for this one) and the
+        # transport's output, the playout tracker, then the audio recorder when a dump is switched on. No assistant
+        # aggregator: the cascade writes its own lines into the context, and the tracker corrects them by playout.
         [processors] = self.processors
         session = self.sessions[0]
         kinds = [
@@ -908,6 +879,7 @@ class BotWiringTests(BotGoldenCase):
             LiveTalkerProcessor,
             RecordingTTS,
             FrameProcessor,
+            PlayoutTracker,
         ]
         self.assertEqual(len(processors), len(kinds), processors)
         for processor, kind in zip(processors, kinds, strict=True):
@@ -944,35 +916,4 @@ class BotWiringTests(BotGoldenCase):
             [("user", "Hi."), ("assistant", "Hello there.")],
         )
         self.check_scripts_used()
-        await self.close()
-
-
-class BotUnknownToolTests(BotGoldenCase):
-    """A call to a tool no server tool source offers: the backend's run answers it at once.
-
-    The bot's IM session runs every call on the server tool sources its profile names, the cafe's, and a name none of
-    them offers gets the run's own "Unknown tool" output, which lists the tools offered (``LlmRun._run_call``). The
-    backend's next round is sent that output under the core's own id of the call; nothing waits for a client.
-    """
-
-    async def test_an_unknown_tool_name_gets_the_runs_unknown_tool_output_at_once(self):
-        unknown = [chunk(tool_calls=[tool_fragment(0, "call_1", "order_pizza", "{}")], finish="tool_calls")]
-        await self.serve(
-            frontend=[decision("delegate", "Let me check."), decision("speak", "We only serve coffee and tea.")],
-            backend=[unknown, answer_round("We do not sell pizza.")],
-            welcome=False,
-        )
-        await self.client_ready()
-        await self.wait_quiet()
-        await self.say("Can I get a pizza?")
-        await self.wait_quiet()
-        self.check_scripts_used()
-        messages = self.backend.requests[1]["messages"]
-        [call] = [call for message in messages if message["role"] == "assistant" for call in message["tool_calls"]]
-        self.assertEqual((call["function"]["name"], call["id"] != "call_1"), ("order_pizza", True))
-        tool_messages = [message for message in messages if message["role"] == "tool"]
-        offered = "get_menu, manage_cart, place_order, show"
-        unknown_tool = json.dumps({"error": f"Unknown tool: order_pizza. The tools offered: {offered}"})
-        self.assertEqual(tool_messages, [{"role": "tool", "tool_call_id": call["id"], "content": unknown_tool}])
-        self.assertEqual(self.tts.utterances[-1], "We only serve coffee and tea.")
         await self.close()

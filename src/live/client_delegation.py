@@ -32,7 +32,7 @@ class ClientDelegation:
     target: Literal["client"] = "client"  # where the work goes, as session.delegation.created names it
     reports_events = False  # no event follows an announcement (live.ports.DelegationPort)
     conversation = None  # no conversation with a delegation core: the client app runs its own backend
-    close_seconds = 10.0  # its close only forgets the ids it announced: the gateway's usual limit
+    close_seconds = 10.0  # its close only forgets the ids it announced: the gateway's default close limit
 
     def __init__(self):
         """Start with nothing announced; nothing is sent until :meth:`delegate`."""

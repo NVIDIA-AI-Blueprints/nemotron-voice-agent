@@ -42,8 +42,8 @@ from tests.unit.cascade_helpers import (
 from tests.unit.contracts.backend import ScriptedBackend
 from tests.unit.core_helpers import FakeChat, _text_round, _timeout
 
-V2 = get_prompt_set("v2")
-TALKER = CallSpec("talker", ("speak", "delegate"), V2.call_hints.talker)
+DEFAULT = get_prompt_set("default")
+TALKER = CallSpec("talker", DEFAULT.actions, DEFAULT.call_hints.talker)
 HISTORY = [{"role": "user", "content": "hi"}]
 
 
@@ -99,12 +99,6 @@ def _decision(action, speech=""):
 
 # ---------------------------------------------------------------------------------------------- the table and recipe
 class ProviderTableTests(unittest.IsolatedAsyncioTestCase):
-    def test_the_shipped_providers_are_a_plain_mapping_by_their_own_names(self):
-        self.assertEqual(sorted(FRONTENDS), ["chat-completions", "openai-responses"])
-        for name, provider in FRONTENDS.items():
-            self.assertEqual(provider.name, name)
-            self.assertTrue(issubclass(provider, Frontend))
-
     async def test_a_new_frontend_is_one_subclass_and_one_entry(self):
         class Echo(Frontend):
             name = "scripted-test"
@@ -116,7 +110,7 @@ class ProviderTableTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(FRONTENDS, {Echo.name: Echo}):
             agent = build_agent(config, ENDPOINT)
         decision = await agent.talker.decide("Be kind.", HISTORY)
-        self.assertEqual((decision.action, decision.speech), ("speak", "heard 1"))
+        self.assertEqual((decision.action, decision.speech), ("speak", "heard 2"))  # the history, then the runtime data
         await agent.close()
 
     def test_an_unknown_provider_names_the_known_ones(self):
@@ -134,12 +128,12 @@ class ProviderTableTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(build_agent, LiveAgent.from_config)
 
     def test_the_agent_builds_the_normalizer_on_its_prompt_set_only_when_enabled(self):
-        config = _config(normalizer=NormalizerConfig(enabled=True), prompt_version="v2")
+        config = _config(normalizer=NormalizerConfig(enabled=True), prompt_version="default")
         config = replace(config, provider="chat-completions")
         agent = build_agent(config, ENDPOINT, frontend_client=FakeChat())
         self.assertIsInstance(agent.normalizer, TurnNormalizer)
         self.assertIs(agent.normalizer.prompts, agent.prompts)
-        self.assertIs(agent.prompts, V2)
+        self.assertIs(agent.prompts, DEFAULT)
         plain = replace(config, normalizer=NormalizerConfig())
         self.assertIsNone(build_agent(plain, ENDPOINT, frontend_client=FakeChat()).normalizer)
 
@@ -148,22 +142,19 @@ class ProviderTableTests(unittest.IsolatedAsyncioTestCase):
 class CallSpecTests(unittest.IsolatedAsyncioTestCase):
     def test_the_schema_is_the_specs_actions_and_hint(self):
         schema = decision_schema(TALKER)
-        self.assertEqual(schema["properties"]["action"]["enum"], ["speak", "delegate"])
-        self.assertEqual(schema["properties"]["speech"]["description"], V2.call_hints.talker)
+        self.assertEqual(schema["properties"]["action"]["enum"], ["speak", "delegate", "wait"])
+        self.assertEqual(schema["properties"]["speech"]["description"], DEFAULT.call_hints.talker)
         self.assertEqual(schema["required"], ["action", "speech"])
         self.assertNotIn("description", decision_schema(CallSpec("x", ("speak",), ""))["properties"]["speech"])
 
     def test_each_caller_states_its_role_actions_and_hint(self):
         frontend = ChatCompletionsFrontend(ENDPOINT, FAST, FakeChat())
-        talker, writer = Talker(frontend, V2), CommentaryWriter(frontend, V2)
-        normalizer = TurnNormalizer(frontend, V2, NormalizerConfig(enabled=True))
-        self.assertEqual((talker.spec.role, talker.spec.actions), ("talker", ("speak", "delegate")))
+        talker, writer = Talker(frontend, DEFAULT), CommentaryWriter(frontend, DEFAULT)
+        normalizer = TurnNormalizer(frontend, DEFAULT, NormalizerConfig(enabled=True))
+        self.assertEqual((talker.spec.role, talker.spec.actions), ("talker", ("speak", "delegate", "wait")))
         self.assertEqual((writer.answer_spec.role, writer.answer_spec.actions), ("writer", ("speak",)))
-        self.assertEqual(writer.commentary_spec.actions, ("speak", "listen"))
-        self.assertEqual(
-            (writer.answer_spec.hint, writer.commentary_spec.hint), (V2.call_hints.answer, V2.call_hints.commentary)
-        )
-        self.assertEqual((normalizer.spec.role, normalizer.spec.hint), ("normalizer", V2.call_hints.normalizer))
+        self.assertEqual(writer.answer_spec.hint, DEFAULT.call_hints.answer)
+        self.assertEqual((normalizer.spec.role, normalizer.spec.hint), ("normalizer", DEFAULT.call_hints.normalizer))
 
     async def test_the_retry_log_names_the_callers_role_and_the_spec_sets_the_attempts(self):
         roles = []
@@ -175,9 +166,9 @@ class CallSpecTests(unittest.IsolatedAsyncioTestCase):
         client = FakeChat(*[_decision_chunks('{"action":"speak","speech":"x"}') for _ in range(3)])
         frontend = ChatCompletionsFrontend(ENDPOINT, FAST, client)
         with patch("examples.frontend_backend_live.models.base.with_retries", recording):
-            await TurnNormalizer(frontend, V2, NormalizerConfig(enabled=True)).normalize([], "two bags")
-            await CommentaryWriter(frontend, V2).render("Be Remy.", HISTORY, "Done.", answer=True, attempts=1)
-            await Talker(frontend, V2).decide("Be Remy.", HISTORY)
+            await TurnNormalizer(frontend, DEFAULT, NormalizerConfig(enabled=True)).normalize([], "two bags")
+            await CommentaryWriter(frontend, DEFAULT).render("Be Remy.", HISTORY, "Done.", attempts=1)
+            await Talker(frontend, DEFAULT).decide("Be Remy.", HISTORY)
         self.assertEqual(roles, [("normalizer", 2), ("writer", 1), ("talker", 2)])
 
 
@@ -191,8 +182,8 @@ class OutputLimitTests(unittest.IsolatedAsyncioTestCase):
                     _decision_chunks('{"action":"speak","speech":"Done."}'),
                 )
                 frontend = ChatCompletionsFrontend(replace(ENDPOINT, extra_params=extra), FAST, client)
-                await Talker(frontend, V2).decide("Be Remy.", HISTORY)
-                await CommentaryWriter(frontend, V2).render("Be Remy.", HISTORY, "Done.", answer=True)
+                await Talker(frontend, DEFAULT).decide("Be Remy.", HISTORY)
+                await CommentaryWriter(frontend, DEFAULT).render("Be Remy.", HISTORY, "Done.")
                 self.assertEqual([request["max_tokens"] for request in client.requests], [expected, expected])
 
     async def test_the_slots_max_tokens_reaches_every_responses_call(self):
@@ -200,8 +191,8 @@ class OutputLimitTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(extra_params=extra):
                 client = FakeResponses(_decision("speak", "Hi."), _decision("speak", "Done."))
                 frontend = OpenAIResponsesFrontend(replace(ENDPOINT, extra_params=extra), FAST, client)
-                await Talker(frontend, V2).decide("Be Remy.", HISTORY)
-                await CommentaryWriter(frontend, V2).render("Be Remy.", HISTORY, "Done.", answer=True)
+                await Talker(frontend, DEFAULT).decide("Be Remy.", HISTORY)
+                await CommentaryWriter(frontend, DEFAULT).render("Be Remy.", HISTORY, "Done.")
                 self.assertEqual([request["max_output_tokens"] for request in client.requests], [expected, expected])
 
 
@@ -214,41 +205,45 @@ class LayoutTests(unittest.IsolatedAsyncioTestCase):
         ]
 
     def test_the_parts_name_their_sources_and_join_into_what_decide_sends(self):
-        talker = Talker(ChatCompletionsFrontend(ENDPOINT, FAST, FakeChat()), V2)
-        parts = talker.routing_parts(self.parts(), "WORK")
+        talker = Talker(ChatCompletionsFrontend(ENDPOINT, FAST, FakeChat()), DEFAULT)
+        parts = talker.routing_parts(self.parts())
         self.assertEqual(
             [part.source for part in parts],
             [
-                "prompt set v2: the voice's role",
+                "prompt set default: the voice's role",
                 "session.instructions",
                 "session.instructions.append",
-                "prompt set v2: how the instructions apply",
-                "prompt set v2: routing rules",
-                "open delegations (runtime)",
+                "prompt set default: how the instructions apply",
+                "prompt set default: routing rules",
             ],
         )
         joined = "".join(part.sep + part.text for part in parts)
-        self.assertEqual(joined, V2.framed("Be Remy.\n\nSpeak slowly.") + "\n" + V2.routing + "\nWORK")
-        v1_parts = Talker(talker.frontend, get_prompt_set("v1")).routing_parts(self.parts())
-        self.assertEqual([part.source for part in v1_parts][-1], "prompt set v1: routing rules")
-        self.assertEqual(len(v1_parts), 3)  # no frame, no work line
+        self.assertEqual(joined, DEFAULT.framed("Be Remy.\n\nSpeak slowly.") + "\n" + DEFAULT.routing)
+        # The work line goes after the conversation, in the runtime data, never in the instructions.
+        runtime = talker.runtime_data("WORK")
+        self.assertEqual(runtime, DEFAULT.runtime_label + "\nWORK\n\n" + DEFAULT.decision_cue)
+        self.assertEqual(talker.runtime_data(), DEFAULT.runtime_label + "\n" + DEFAULT.decision_cue)
 
     async def test_chat_completions_sends_the_layout_then_its_reply_format(self):
         client = FakeChat(_decision_chunks('{"action":"speak","speech":"Hi."}'))
-        talker = Talker(ChatCompletionsFrontend(ENDPOINT, FAST, client), V2)
+        talker = Talker(ChatCompletionsFrontend(ENDPOINT, FAST, client), DEFAULT)
         await talker.decide("Be Remy.\n\nSpeak slowly.", HISTORY, "WORK")
-        joined = "".join(part.sep + part.text for part in talker.routing_parts(self.parts(), "WORK"))
+        joined = "".join(part.sep + part.text for part in talker.routing_parts(self.parts()))
         self.assertEqual(ChatCompletionsFrontend.reply_format, JSON_RULES)
-        self.assertEqual(client.requests[0]["messages"][0]["content"], joined + "\n" + JSON_RULES)
+        messages = client.requests[0]["messages"]
+        self.assertEqual(messages[0]["content"], joined + "\n" + JSON_RULES)
+        # The caller's newest turn, then the runtime data a blank line after it, in one user message.
+        self.assertEqual(messages[-1], {"role": "user", "content": "hi\n\n" + talker.runtime_data("WORK")})
 
     async def test_openai_responses_sends_the_layout_as_its_instructions_with_no_reply_format(self):
         client = FakeResponses(_decision("speak", "Hi."))
-        talker = Talker(OpenAIResponsesFrontend(ENDPOINT, FAST, client), V2)
+        talker = Talker(OpenAIResponsesFrontend(ENDPOINT, FAST, client), DEFAULT)
         await talker.decide("Be Remy.\n\nSpeak slowly.", HISTORY, "WORK")
-        joined = "".join(part.sep + part.text for part in talker.routing_parts(self.parts(), "WORK"))
+        joined = "".join(part.sep + part.text for part in talker.routing_parts(self.parts()))
         self.assertEqual(OpenAIResponsesFrontend.reply_format, "")
         self.assertEqual(client.requests[0]["instructions"], joined)
-        self.assertEqual(client.requests[0]["input"], HISTORY)
+        runtime = {"role": "user", "content": "\n" + talker.runtime_data("WORK")}
+        self.assertEqual(client.requests[0]["input"], [*HISTORY, runtime])
 
 
 # --------------------------------------------------------------------------------------- chat-completions model
@@ -265,7 +260,7 @@ class ChatFrontendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(request["stream"])
         schema = request["response_format"]["json_schema"]
         self.assertTrue(schema["strict"])
-        self.assertEqual(schema["schema"]["properties"]["action"]["enum"], ["speak", "delegate"])
+        self.assertEqual(schema["schema"]["properties"]["action"]["enum"], ["speak", "delegate", "wait"])
 
     async def test_extra_params_override_defaults_without_duplicate_keyword_errors(self):
         client = FakeChat(_decision_chunks('{"action":"delegate","speech":""}'))
@@ -376,7 +371,7 @@ class ResponsesFrontendTests(unittest.IsolatedAsyncioTestCase):
             _decision("delegate", "Let me check."),
             _decision("speak", "A latte is four fifty."),
         )
-        config = _config(provider="openai-responses", prompt_version="v2")
+        config = _config(provider="openai-responses", prompt_version="default")
         agent = build_agent(config, ENDPOINT, frontend_client=client)
         backend = ScriptedBackend([_text_round("Latte: $4.50.")])
         delegation = _delegation(backend)
@@ -398,9 +393,9 @@ class ResponsesFrontendTests(unittest.IsolatedAsyncioTestCase):
         await _settle(session, spoken, 3)
         self.assertEqual(spoken, ["We open at seven.", "Let me check.", "A latte is four fifty."])
         talker_request, _, writer_request = client.requests
-        self.assertTrue(talker_request["instructions"].startswith(V2.frame_before))
+        self.assertTrue(talker_request["instructions"].startswith(DEFAULT.frame_before))
         self.assertEqual(
-            talker_request["text"]["format"]["schema"]["properties"]["action"]["enum"], ["speak", "delegate"]
+            talker_request["text"]["format"]["schema"]["properties"]["action"]["enum"], ["speak", "delegate", "wait"]
         )
         self.assertEqual(writer_request["text"]["format"]["schema"]["properties"]["action"]["enum"], ["speak"])
         self.assertIn("Latte: $4.50.", writer_request["input"][-1]["content"])

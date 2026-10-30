@@ -11,6 +11,7 @@ from delegation_core.backend.harness.render import Renderer
 from delegation_core.backend.harness.settings import HarnessPrompts
 from delegation_core.backend.port import ConductorInput, Steering, TaskSummary, WorkSummary
 from tests.unit.contracts.backend import a_request, an_ended_work, an_open_work
+from tests.unit.delegation_core.backend.harness.doubles import PROMPTS
 
 HISTORY = [
     {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Caller: find teas"}]},
@@ -23,18 +24,22 @@ HISTORY = [
 
 class RenderTests(unittest.TestCase):
     def setUp(self):
-        self.render = Renderer(HarnessPrompts())
+        self.render = Renderer(HarnessPrompts.parse(PROMPTS))
 
     def test_a_transcript_writes_each_item_and_names_each_output_by_its_call(self):
         self.assertEqual(
             self.render.transcript(HISTORY),
             "Caller: find teas\n\n"
-            'Assistant called get_menu with {"kind": "tea"}\n\n'
-            'get_menu returned: {"teas": ["green"]}\n\n'
+            'Earlier step, already done: get_menu with {"kind": "tea"}\n\n'
+            'Result of get_menu: {"teas": ["green"]}\n\n'
             "Assistant: We have green tea.\n\n"
             "Task: also the hours",
         )
         self.assertTrue(self.render.worker_input(HISTORY).startswith("The conversation and your task:\n\nCaller:"))
+
+    def test_an_output_whose_call_is_not_in_the_transcript_names_it_by_the_unnamed_call_prompt(self):
+        output = {"type": "function_call_output", "call_id": "c9", "output": "ok"}
+        self.assertEqual(self.render.transcript([output]), "Result of the call: ok")
 
     def test_a_steering_batch_is_its_requests(self):
         steering = Steering("S1", ({"type": "message", "role": "user", "content": "Make it two."},))

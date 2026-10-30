@@ -26,8 +26,14 @@ from delegation_core.backend.harness.bridge import Door
 from delegation_core.backend.harness.protocol import McpServer, MessageChunk, PromptEnded, Role, ThoughtChunk
 from delegation_core.backend.harness.render import Renderer
 from delegation_core.backend.harness.settings import HarnessSettings
+from delegation_core.config import CoreSettings
 
 FIXTURES = Path(__file__).parent / "fixtures"
+SHIPPED = CoreSettings.load(Path(__file__).resolve().parents[5] / "src/examples/frontend_backend_live/core.yaml")
+# The harness's prompts as core.yaml words them: every harness block carries them.
+PROMPTS = dict(SHIPPED.backend.blocks["harness"]["prompts"])
+# The agent classes' blocks as core.yaml words them: Hermes's holds its command guard, which has no default.
+AGENT_BLOCKS = {name: dict(block) for name, block in SHIPPED.backend.blocks["harness"]["agents"].items()}
 
 # The core's own control tools and conductor prompt, as core.yaml words them.
 CONTROL_TOOLS = {
@@ -61,11 +67,17 @@ CONTROL_TOOLS = {
         },
     },
 }
-CONDUCTOR_PROMPT = "You place the caller's requests. Never do the work yourself."
+CONDUCTOR_PROMPT = "You place the caller's requests, {max_running} tasks at once. Never do the work yourself."
 
 
 def vocabulary() -> ControlVocabulary:
-    return ControlVocabulary(CONTROL_TOOLS, CONDUCTOR_PROMPT)
+    texts = SHIPPED.texts
+    return ControlVocabulary(CONTROL_TOOLS, CONDUCTOR_PROMPT, texts.refusal("idle"), texts.failed_output)
+
+
+def hermes(**block: Any) -> HermesAgent:
+    """The Hermes agent class with core.yaml's block, ``block`` over it."""
+    return HermesAgent.from_settings({**AGENT_BLOCKS["hermes"], **block})
 
 
 def wire(scenario: str) -> list[dict]:
@@ -74,8 +86,10 @@ def wire(scenario: str) -> list[dict]:
 
 
 def settings(**block: Any) -> HarnessSettings:
-    """Test settings: the Hermes agent class and its steer unless ``block`` names others."""
+    """Test settings: core.yaml's prompts and agent blocks; Hermes and its steer unless ``block`` names others."""
     base = {
+        "prompts": PROMPTS,
+        "agents": AGENT_BLOCKS,
         "agent": "hermes",
         "steer": "native_command",
         "command": ["runtime", "acp"],
@@ -167,7 +181,7 @@ class FakeSession:
 
     def replay(self, update: dict, server: str = "client") -> None:
         """Put the event a recorded Hermes update carries, read as the Hermes agent class reads it."""
-        parsed = SessionUpdates(HermesAgent(), server).read(update)
+        parsed = SessionUpdates(hermes(), server).read(update)
         if parsed is not None:
             self.mailbox.put_nowait(parsed)
 
@@ -256,14 +270,23 @@ class FakeHost:
         self.bridge = bridge or FakeBridge()
         self.tools = tuple(tools)
         self.vocabulary = vocabulary()
+        self.max_running = self.settings.max_running
         self.workers = Role("workers", "w")
         self.conductor_role = Role("conductor", "c")
         self.runtime = FakeRuntime()
         self.closed = False
+        self.kept = None  # the session the session policy keeps for a later task
 
     async def shared(self, role: Role) -> FakeRuntime:
         self.runtime.places += 1
         return self.runtime
+
+    def take_place(self, runtime: FakeRuntime) -> bool:
+        limit = self.settings.turns_per_process
+        if (limit is not None and runtime.places >= limit) or not runtime.client.alive:
+            return False
+        runtime.places += 1
+        return True
 
 
 async def until(condition, timeout: float = 2.0) -> None:

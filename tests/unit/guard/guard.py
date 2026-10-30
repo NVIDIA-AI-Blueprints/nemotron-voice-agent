@@ -15,10 +15,10 @@ finds four kinds of site:
   an UPPER_CASE name or an UPPER_CASE member, or a ``match`` on one with such a ``case``, outside the table modules;
 * ``isinstance``: an ``isinstance`` or ``issubclass`` check against a class of another module of the repository
   (imported by name, or reached through its module), unless it is a port type, an exception, or the check sits in a
-  composition root;
-* ``flag``: a banned flag (:data:`REMOVED_FLAGS`) as an attribute, an argument, a keyword or a field;
-* ``pick``: a ``pick()`` from a table outside a composition root and outside a ``from_settings``, ``from_config`` or
-  ``parse`` method: choices are made once, when the object is built.
+  composition root or the core's builder;
+* ``flag``: a banned flag (:data:`BANNED_FLAGS`) as an attribute, an argument, a keyword or a field;
+* ``pick``: a ``pick()`` from a table outside the composition roots, the core's builder and a ``from_settings``,
+  ``from_config`` or ``parse`` method: choices are made once, when the object is built.
 
 The test fails on any site.
 """
@@ -46,7 +46,9 @@ KIND_ATTRIBUTES = frozenset(
         "transport",
         "protocol",
         "conductor",
+        "when_idle",
         "steer",
+        "session",
         "permission",
         "agent",
         "result_format",
@@ -55,6 +57,7 @@ KIND_ATTRIBUTES = frozenset(
         "voice_note",
         "kind",
         "tts_mode",
+        "turn_end",
         "backend_calls",
         "unlisted_models",
         "one_shot_adapter",
@@ -65,7 +68,7 @@ KIND_ATTRIBUTES = frozenset(
 # left out: a local ``kind`` is an official event's or command's type, read by the protocol.
 KIND_NAMES = frozenset({"mode", "target", "provider", "adapter", "agent"})
 # Flags whose behavior is a class or a capability: none may appear.
-REMOVED_FLAGS = frozenset(
+BANNED_FLAGS = frozenset(
     {
         "server_tools",
         "stateless",
@@ -282,11 +285,11 @@ def sites_in(source: str, module: str, is_package: bool = False) -> list[tuple[i
             if module not in ROOTS and _enclosing_function(node, parents) not in BUILD_METHODS:
                 found.append((node.lineno, Site(module, "pick", "pick")))
         flag = None
-        if isinstance(node, ast.Attribute) and node.attr in REMOVED_FLAGS:
+        if isinstance(node, ast.Attribute) and node.attr in BANNED_FLAGS:
             flag = node.attr
-        elif isinstance(node, ast.keyword | ast.arg) and node.arg in REMOVED_FLAGS:
+        elif isinstance(node, ast.keyword | ast.arg) and node.arg in BANNED_FLAGS:
             flag = node.arg
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id in REMOVED_FLAGS:
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id in BANNED_FLAGS:
             flag = node.target.id
         if flag:
             found.append((getattr(node, "lineno", 0), Site(module, "flag", flag)))

@@ -8,42 +8,20 @@
 import asyncio
 import unittest
 
-from examples.frontend_backend_live.cascade.normalizer import TurnNormalizer, has_details, plausible
+from examples.frontend_backend_live.cascade.normalizer import TurnNormalizer
 from examples.frontend_backend_live.config_manager.loader import ConfigError
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, NormalizerConfig
 from examples.frontend_backend_live.models.decision import TalkerDecision
 from examples.frontend_backend_live.prompts import get_prompt_set
-from tests.unit.frontend_backend_live.cascade.doubles import Call, ScriptedFrontend
+from tests.unit.frontend_backend_live.cascade.doubles import Call, ScriptedFrontend, conversation
 
 ON = NormalizerConfig(enabled=True)
-PROMPTS = get_prompt_set("v1")
+PROMPTS = get_prompt_set("default")
 NEWEST_TURN = PROMPTS.normalizer_prompt.newest_turn
 
 
 def speak(text):
     return TalkerDecision("speak", text, {})
-
-
-class DetailTests(unittest.TestCase):
-    def test_turns_with_details_are_normalized(self):
-        for text in (
-            "my user id is m i a underscore l i three six six eight",
-            "reservation H A T zero four five",
-            "I have 2 bags",
-            "no checked bags, zero",
-            "the twentieth of May",
-            "it's spelled L I",
-        ):
-            self.assertTrue(has_details(text), text)
-
-    def test_plain_turns_are_left_alone(self):
-        for text in ("I want to change my flight.", "Yes please.", "Can I talk to a person?", "I need a seat."):
-            self.assertFalse(has_details(text), text)
-
-    def test_a_rewrite_that_adds_content_is_implausible(self):
-        self.assertTrue(plausible("m i a underscore l i", "mia_li"))
-        self.assertFalse(plausible("two bags", ""))
-        self.assertFalse(plausible("two bags", "2 bags, and I also want to upgrade to business and add insurance"))
 
 
 class NormalizerTests(unittest.IsolatedAsyncioTestCase):
@@ -63,12 +41,12 @@ class NormalizerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(frontend.calls[0]["actions"], ("speak",))
         self.assertEqual(frontend.calls[0]["instructions"], PROMPTS.normalizer_prompt.instructions)
 
-    async def test_failures_and_implausible_rewrites_keep_the_turn_as_heard(self):
+    async def test_failures_and_empty_or_echoed_answers_keep_the_turn_as_heard(self):
         heard = "two bags"
         for script, outcome in (
             ([RuntimeError("down"), RuntimeError("down")], "failed"),
-            ([speak("")], "rejected"),
-            ([speak("2 bags " + "and more " * 20)], "rejected"),
+            ([speak("")], "empty"),
+            ([TalkerDecision("delegate", "", {"recovery": "invalid_json"})], "empty"),
             ([speak("two bags")], "unchanged"),
         ):
             text, diagnostics = await TurnNormalizer(ScriptedFrontend(script), PROMPTS, ON).normalize([], heard)
@@ -93,33 +71,29 @@ class SessionTests(Call):
     async def test_the_talker_and_the_delegation_see_the_normalized_turn(self):
         heard = "it's m i a underscore l i three six six eight"
         await self.call(
-            [speak("it's mia_li_3668"), TalkerDecision("delegate", "One moment.", {})],
+            [speak("it's Q91_T"), TalkerDecision("delegate", "One moment.", {})],
             seed=({"role": "assistant", "content": "What is your user ID?"},),
         )
         self.enable()
         await self.turn(heard)
         await self.said(1)
-        self.assertEqual(self.frontend.calls[1]["history"][-1]["content"], "it's mia_li_3668")  # the talker's read
-        self.assertIn(("user", "it's mia_li_3668"), self.memory())
+        self.assertEqual(conversation(self.frontend.calls[1])[-1]["content"], "it's Q91_T")  # the talker's read
+        self.assertIn(("user", "it's Q91_T"), self.memory())
         delegated = str(self.port.requests[0])
-        self.assertIn("mia_li_3668", delegated)
+        self.assertIn("Q91_T", delegated)
         self.assertNotIn("underscore", delegated)
         completed = [fields for kind, fields in self.events if kind == "normalizer.completed"]
         self.assertEqual((completed[0]["heard"], completed[0]["outcome"]), (heard, "changed"))
 
-    async def test_a_turn_without_details_skips_the_normalizer(self):
-        await self.call([speak("Sure, what would you like to change?")])
+    async def test_an_enabled_normalizer_reads_every_turn_and_an_echo_keeps_it_as_heard(self):
+        await self.call([speak("I want to change my flight."), speak("Sure, what would you like to change?")])
         self.enable()
         await self.turn("I want to change my flight.")
-        self.assertEqual(len(self.frontend.calls), 1)
-        self.assertNotIn("normalizer.completed", self.kinds())
-
-    async def test_every_turn_mode_normalizes_plain_turns_too(self):
-        await self.call([speak("I want to change my flight."), speak("Sure.")])
-        self.enable(NormalizerConfig(enabled=True, every_turn=True))
-        await self.turn("I want to change my flight.")
-        self.assertEqual(len(self.frontend.calls), 2)
-        self.assertEqual(self.kinds().count("normalizer.completed"), 1)
+        self.assertEqual([call["role"] for call in self.frontend.calls], ["normalizer", "talker"])
+        completed = [fields for kind, fields in self.events if kind == "normalizer.completed"]
+        self.assertEqual([fields["outcome"] for fields in completed], ["unchanged"])
+        self.assertEqual(conversation(self.frontend.calls[1])[-1]["content"], "I want to change my flight.")
+        self.assertEqual(self.spoken, ["Sure, what would you like to change?"])
 
 
 class ConfigTests(unittest.TestCase):

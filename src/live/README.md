@@ -64,6 +64,10 @@ The block names the following hooks:
 The Frontend/Backend Live example's hooks are in its [`factory.py`](../examples/frontend_backend_live/factory.py). To
 write another frontend adapter, refer to [Add a Frontend Adapter](../../docs/design/architecture.md#add-a-frontend-adapter).
 
+When the frontend adapter reports a failure, the client gets an `error` with code `pipeline_error` if a client command
+failed or the session cannot go on, and an `info` notice with the same code if the session recovers and no command
+caused it. The gateway also logs each one as a warning.
+
 ## Settings
 
 The gateway reads the following environment variables when the server starts:
@@ -73,9 +77,17 @@ The gateway reads the following environment variables when the server starts:
 | `LIVE_ENABLED` | Unset | Whether the routes are served: `1`, `true`, `yes`, or `on` serves them, and any other value turns them off. When it is unset, they are served when `LIVE_API_TOKEN` is set or when the deployment runs the Live example alone. |
 | `LIVE_API_TOKEN` | Unset | The bearer token that every route requires. Without one, the server logs a warning, and anyone who can reach it can use the routes. |
 | `LIVE_MAX_SESSIONS`, `LIVE_MAX_SESSION_SECONDS` | `8`, `1800` | The sessions at once and the length of one session, in seconds. |
+| `LIVE_MAX_APPENDS_PER_MINUTE` | `64` | The appends that one session accepts in any 60 seconds, counting `session.instructions.append`, `session.thinking.append`, and `session.commentary.append` together. An append over the limit gets a `rate_limit_exceeded` error, and the gateway neither passes it to the frontend adapter nor acknowledges it. |
 | `LIVE_ICE_URLS` | Unset | More ICE servers for the WebRTC peer, comma-separated, beside the TURN server. |
 | `LIVE_MAX_CONSOLE_ROUNDS`, `LIVE_ALLOWED_HOSTS` | `2`, unset | The `POST /v1/live/delegate` rounds at once, and, with no token, the host names besides IP addresses and `localhost` that the route answers to. |
 | `UVICORN_WORKERS` | `1` | The server's workers. With more than one, no Live route is served, because a session lives in one process. |
 
 For the example's own variables, refer to [Environment Variables](../../docs/design/architecture.md#environment-variables).
-The gateway's tests run offline with `uv run pytest tests/unit/live -v`.
+
+## Tests
+
+The gateway's tests in `tests/unit/live/` run offline. Run them from the repository root:
+
+```bash
+uv run pytest tests/unit/live -v
+```

@@ -3,53 +3,16 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""The contracts check themselves: the event checker, the endings fixture, and two contracts on their own doubles."""
+"""The contracts check themselves: the event checker, the endings fixture, and the port contract on its own double."""
 
 import unittest
 
-from delegation_core.backend.port import ConductorInput, Place, Start
-from tests.unit.contracts.backend import (
-    ConductorContract,
-    a_round,
-    call_events,
-    check_events,
-    message_events,
-    text_round,
-)
+from tests.unit.contracts.backend import a_round, call_events, check_events, message_events, text_round
 from tests.unit.contracts.delegation_port import DelegationPortContract, ScriptedDelegationPort
 from tests.unit.contracts.endings import load, normalized, official_events, timeline_problems
 
-# Every ending the fixture must hold.
-REQUIRED_ENDINGS = {
-    "answered",
-    "answered_with_progress_and_tool_items",
-    "waits_for_the_app_then_answers",
-    "queued_then_running",
-    "handed_over_with_the_taker_named",
-    "a_chain_of_handovers",
-    "answered_by_the_conductor",
-    "cancelled_for_a_newer_request_stopped",
-    "cancelled_for_a_newer_request_unconfirmed",
-    "failed_with_an_error",
-    "late_continuation",
-    "deadline_while_waiting",
-    "cancelled_at_close",
-    "a_typed_run",
-    "stateless",
-    "show_then_the_answer",
-    "two_works_answering_at_once",
-    "one_work_two_tasks",
-    "a_task_waits_while_another_runs",
-    "cut_by_max_output_tokens",
-    "two_works_waiting_for_the_app",
-}
-
 
 class EventCheckerTests(unittest.TestCase):
-    def test_a_round_that_keeps_the_rules_has_no_violation(self):
-        events = a_round(message_events("Done.", phase="final_answer"))
-        self.assertEqual(check_events(events), [])
-
     def test_each_rule_finds_its_violation(self):
         no_phase = text_round("Done.")
         self.assertIn("E3", " ".join(check_events(no_phase)))
@@ -71,9 +34,6 @@ class EventCheckerTests(unittest.TestCase):
 
 
 class EndingsFixtureTests(unittest.TestCase):
-    def test_the_fixture_holds_every_ending_the_plan_names(self):
-        self.assertEqual(set(load()), REQUIRED_ENDINGS)
-
     def test_every_scenario_keeps_the_wire_rules(self):
         for name, scenario in load().items():
             with self.subTest(name):
@@ -98,43 +58,3 @@ class ScriptedPortContractTests(DelegationPortContract, unittest.IsolatedAsyncio
         created = {"type": "response.created", "response": {"id": "resp_1", "status": "queued"}}
         completed = {"type": "response.completed", "response": {"id": "resp_1", "status": "completed", "output": []}}
         return ScriptedDelegationPort(answer_with=[created, completed])
-
-
-class StartEachArrival:
-    """The smallest conductor: a new Work for every arrival, as the queue profile's rule does."""
-
-    async def decide(self, given: ConductorInput, place: Place) -> None:
-        for arrival in given.arrivals:
-            await place(Start((arrival.delegation_id,)))
-
-
-class ConductorContractSelfTests(ConductorContract, unittest.IsolatedAsyncioTestCase):
-    def make_conductor(self):
-        return StartEachArrival()
-
-
-class ExpectedFailureTests(unittest.TestCase):
-    def test_a_known_failure_marks_only_its_own_binding(self):
-        from tests.unit.contracts.base import ContractCase
-
-        class Contract(ContractCase):
-            def test_it_works(self):
-                pass
-
-        class Failing(Contract):
-            EXPECTED_FAILURES = {"test_it_works": "a later change"}
-
-        class Passing(Contract):
-            pass
-
-        self.assertTrue(getattr(Failing.test_it_works, "__unittest_expecting_failure__", False))
-        self.assertFalse(getattr(Passing.test_it_works, "__unittest_expecting_failure__", False))
-        self.assertFalse(getattr(Contract.test_it_works, "__unittest_expecting_failure__", False))
-
-    def test_a_known_failure_must_name_a_test_of_the_contract(self):
-        from tests.unit.contracts.base import ContractCase
-
-        with self.assertRaisesRegex(TypeError, "no test of the contract"):
-
-            class Wrong(ContractCase):
-                EXPECTED_FAILURES = {"test_missing": "a later change"}

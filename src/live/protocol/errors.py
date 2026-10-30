@@ -30,8 +30,7 @@ class ProtocolError(Exception):
 def validation_error(refused: ValidationError, prefix: str) -> ProtocolError:
     """The first problem of a schema check as the protocol's error, its ``param`` the dotted path under ``prefix``.
 
-    An unknown key is ``unknown_parameter``; any other problem is ``invalid_value`` with the schema's own
-    words.
+    An unknown key is ``unknown_parameter``; any other problem is ``invalid_value`` with the schema's own words.
     """
     problem = refused.errors(include_url=False)[0]
     param = ".".join([prefix, *(str(part) for part in problem["loc"])])

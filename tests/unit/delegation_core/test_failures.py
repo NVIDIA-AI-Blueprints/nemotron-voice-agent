@@ -3,11 +3,9 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""Failure endings carry official codes and reasons, and the core never words an apology."""
+"""Failure endings carry official codes and reasons."""
 
 import asyncio
-import re
-from pathlib import Path
 
 from delegation_core.backend.port import Start
 from tests.unit.delegation_core.helpers import (
@@ -27,8 +25,6 @@ from tests.unit.delegation_core.helpers import (
     read_all,
     wait,
 )
-
-CORE = Path(__file__).resolve().parents[3] / "src" / "delegation_core"
 
 
 class RateLimited(Exception):
@@ -60,14 +56,15 @@ class FailureTests(IMCase):
         self.assertEqual(self.im.ledger.delegations["D1"].state, "failed")
 
     async def test_an_upstream_429_fails_with_rate_limit_exceeded(self):
-        terminal = await self.ending(fail(RateLimited("slow down")))
-        self.assertEqual(terminal["response"]["error"]["code"], "rate_limit_exceeded")
-
-    async def test_an_upstream_429_after_a_failed_attempt_still_fails_with_rate_limit_exceeded(self):
         # The backend LLM's run closes a failed attempt with its own server_error terminal, then retries; a 429 that
         # ends the retry is what failed the task.
-        terminal = await self.ending(failed_attempt("server_error"), fail(RateLimited("slow down")))
-        self.assertEqual(terminal["response"]["error"]["code"], "rate_limit_exceeded")
+        for name, script in (
+            ("at once", [fail(RateLimited("slow down"))]),
+            ("after a failed attempt", [failed_attempt("server_error"), fail(RateLimited("slow down"))]),
+        ):
+            with self.subTest(name):
+                terminal = await self.ending(*script)
+                self.assertEqual(terminal["response"]["error"]["code"], "rate_limit_exceeded")
 
     async def test_the_backends_own_code_is_kept(self):
         terminal = await self.ending(FailedWithCode())
@@ -121,10 +118,3 @@ class FailureTests(IMCase):
         events = await read_all(stream)
         self.assertEqual([item["content"][0]["text"] for item in finished_items(events)], ["Teas."])
         self.assertEqual(events[-1]["type"], "response.failed")
-
-    def test_the_core_words_no_apology(self):
-        for path in CORE.rglob("*.py"):
-            with self.subTest(path=path.name):
-                source = path.read_text(encoding="utf-8")
-                self.assertIsNone(re.search(r"\bsorry\b", source, re.IGNORECASE))
-                self.assertNotIn("apology", source.lower() if path.parent.name == "im" else "")

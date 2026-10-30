@@ -8,11 +8,16 @@ tools. Its instructions are ``texts.conductor_prompt``, placed by the agent clas
 rendered input, bounded by ``conductor_timeout_seconds``: each control call is a decision the IM applies, the IM's
 outcome line is the call's result, and the model's text is ignored.
 
-When the turn fails, times out or skips a request, the ``SteerOpenWork`` rule (``backend/conductors.py``) places what is
-left: each unplaced arrival joins the newest open Work it was shown, or starts one when none is open, so a request never
-starts a second Work beside an open one. When a newer request arrives, the IM cancels a ``decide()`` that placed
-nothing; its session is retired, never reused (an agent may carry a cancelled turn into the next prompt), and a fresh
-one opens in the background. So is a session whose turn ended any way but ``end_turn``.
+Requests the turn leaves unplaced (a failed or timed-out turn, a refused decision, or no call naming them) are left to
+the IM, whose ``steer`` rule places them against the Works as the turn left them: a request that came with one the turn
+started joins that Work. When a newer request arrives, the IM cancels a ``decide()`` that placed nothing.
+
+A turn past its limit, or of a cancelled ``decide()``, is cancelled while it runs, and the ``decide()`` reads on until
+the turn ends, for at most ``stop_timeout_seconds``. A session whose turn ended ``cancelled`` takes the next
+``decide()``; the agent may carry the cancelled prompt into that one (Hermes puts it before the new prompt's text). A
+turn that ended ``end_turn`` after the cancel went out may have ended before the cancel reached the agent, and an idle
+agent takes a cancel for its next prompt (Hermes ends that one unprocessed): that session is retired, as is one whose
+turn did not end by then or ended any other way, and a fresh one opens in the background.
 """
 
 from __future__ import annotations
@@ -23,8 +28,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from delegation_core.backend.conductors import SteerOpenWork
-from delegation_core.backend.port import Answer, Cancel, ConductorInput, Decision, Place, Start, Steer
+from delegation_core.backend.port import ConductorInput, Place
 
 from .bridge import ConductorDoor
 from .protocol import HarnessSession, Mailbox, PromptEnded, Runtime
@@ -33,6 +37,10 @@ from .runtime import give_back
 if TYPE_CHECKING:
     from .adapter import HarnessAdapter
 
+# How a turn ends that keeps its session for the next decide(), by whether a cancel went out for it: it ran to its end,
+# or it ended for that cancel. After a cancel, end_turn is not kept: the cancel may have crossed the turn's end.
+KEPT = {False: "end_turn", True: "cancelled"}
+
 
 class _Turn:
     """Reads the conductor session's events until its prompt ends; everything else it ignores."""
@@ -40,6 +48,7 @@ class _Turn:
     def __init__(self, prompt: int):
         self.prompt = prompt
         self.ended: PromptEnded | None = None
+        self.cancel_sent = False  # a cancel went out while it ran
 
     def prompt_ended(self, event: PromptEnded) -> None:
         if event.prompt == self.prompt:
@@ -52,44 +61,6 @@ class _Turn:
 
 def _ignore(event: object) -> None:
     """Ignore an event."""
-
-
-class _Placed:
-    """One ``decide()``'s ``place``: it records what the decisions placed and the Works they stopped whole.
-
-    It reads each decision as a ``DecisionTarget`` does (double dispatch, no type switch), after the IM applied it. A
-    Steer to a Work or task the conductor was not shown places nothing, as the IM refuses it.
-    """
-
-    def __init__(self, place: Place, given: ConductorInput):
-        self.place = place
-        self.shown = {work.work_id: {task.task_id for task in work.tasks} for work in given.works}
-        self.placed: set[str] = set()
-        self.cancelled: set[str] = set()
-
-    async def __call__(self, decision: Decision) -> str:
-        outcome = await self.place(decision)
-        await decision.apply(self)
-        return outcome
-
-    async def start(self, decision: Start) -> str:
-        self.placed.update(decision.delegations)
-        return ""
-
-    async def steer(self, decision: Steer) -> str:
-        tasks = self.shown.get(decision.work_id)
-        if tasks is not None and (decision.task_id is None or decision.task_id in tasks):
-            self.placed.update(decision.delegations)
-        return ""
-
-    async def cancel(self, decision: Cancel) -> str:
-        if decision.task_id is None:
-            self.cancelled.add(decision.work_id)
-        return ""
-
-    async def answer(self, decision: Answer) -> str:
-        self.placed.add(decision.delegation_id)
-        return ""
 
 
 class HarnessConductor:
@@ -113,43 +84,57 @@ class HarnessConductor:
             self._opening.add_done_callback(_retrieved)
 
     async def decide(self, given: ConductorInput, place: Place) -> None:
-        """One prompt to the session; each control call is placed; whatever is left joins or starts by the rule."""
-        placed = _Placed(place, given)
+        """One prompt to the session; each control call is placed; the IM's steer rule places what the turn leaves."""
         try:
-            await self._turn(given, placed)
-        except asyncio.CancelledError:
-            await self._retire(cancel=True)
-            raise
-        except Exception as exc:  # a failed turn places nothing more; the rule places what is left
+            await self._turn(given, place)
+        except Exception as exc:  # a failed turn places nothing more; the IM's steer rule places what is left
             logger.warning(f"harness.conductor_failed {type(exc).__name__}: {exc}")
             await self._retire(cancel=True)
-        rest = tuple(arrival for arrival in given.arrivals if arrival.delegation_id not in placed.placed)
-        if rest:
-            works = tuple(work for work in given.works if work.work_id not in placed.cancelled)
-            logger.info(
-                f"harness.conductor_left_unplaced {[arrival.delegation_id for arrival in rest]}: the rule places them"
-            )
-            await SteerOpenWork().decide(ConductorInput(rest, works, given.conversation, given.new_from), place)
 
-    async def _turn(self, given: ConductorInput, placed: _Placed) -> None:
+    async def _turn(self, given: ConductorInput, place: Place) -> None:
         session = await self._session()
-        self.door.bind(placed)
+        self.door.bind(place)
         text = self.host.renderer.conductor_input(given, fresh=self.fresh)
         if self.fresh and self.blocks:
             text = "\n\n".join([*self.blocks, text])
         turn = _Turn(session.prompt(text))
         try:
-            async with asyncio.timeout(self.settings.conductor_timeout_seconds):
-                while turn.ended is None:
-                    (await self.mailbox.get()).apply(turn)
-        except TimeoutError:
+            await self._read(turn, self.settings.conductor_timeout_seconds)
+        except asyncio.CancelledError:  # the IM cancelled the decide() for a newer request
+            await self._stop(session, turn)
+            raise
+        if turn.ended is None:
             logger.warning(f"harness.conductor_timed_out after {self.settings.conductor_timeout_seconds:g} s")
-            await self._retire(cancel=True)
+            await self._stop(session, turn)
             return
         self.fresh = False
-        if turn.ended.error is not None or turn.ended.stop_reason != "end_turn":
-            logger.warning(f"harness.conductor_turn_ended stop={turn.ended.stop_reason} error={turn.ended.error}")
-            await self._retire(cancel=False)  # never reused: a refusal lost it, a cancel would join the next prompt
+        await self._keep_or_retire(turn)
+
+    async def _read(self, turn: _Turn, seconds: float) -> None:
+        """Read the session's events until ``turn`` has ended, for at most ``seconds``."""
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(seconds):
+                while turn.ended is None:
+                    (await self.mailbox.get()).apply(turn)
+
+    async def _stop(self, session: HarnessSession, turn: _Turn) -> None:
+        """Cancel the running turn and read on until it ends, for at most ``stop_timeout_seconds``."""
+        try:
+            turn.cancel_sent = await session.cancel()
+            await self._read(turn, self.settings.stop_timeout_seconds)
+        finally:  # a decide() cancelled again while it waits leaves the turn running: the session is retired
+            await self._keep_or_retire(turn)
+
+    async def _keep_or_retire(self, turn: _Turn) -> None:
+        """Keep the session for the next ``decide()`` if its turn ended as ``KEPT`` names; else retire it."""
+        ended = turn.ended
+        if ended is not None and ended.error is None and ended.stop_reason == KEPT[turn.cancel_sent]:
+            return
+        if ended is None:
+            logger.warning("harness.conductor_turn_not_ended after its cancel")
+        else:
+            logger.warning(f"harness.conductor_turn_ended stop={ended.stop_reason} error={ended.error}")
+        await self._retire(cancel=False)
 
     async def _session(self) -> HarnessSession:
         """The session: the open one, the one opening (pre-warmed), or a new one when it was lost.
@@ -174,7 +159,7 @@ class HarnessConductor:
         session = door = None
         try:
             name = runtime.server_name(host.conductor_role.prefix)
-            door = ConductorDoor(name, host.vocabulary, self.settings.prompts.no_placement)
+            door = ConductorDoor(name, host.vocabulary)
             server = host.bridge.open(door)
             folder = runtime.session_folder(name)
             blocks = self.settings.agent.prepare(folder, prompt)
@@ -222,8 +207,8 @@ class HarnessConductor:
 
 
 def host_prompt(host: HarnessAdapter) -> str:
-    """The conductor's instructions: ``texts.conductor_prompt``."""
-    return host.vocabulary.prompt
+    """The conductor's instructions: ``texts.conductor_prompt``, with the tasks the harness runs at once."""
+    return host.vocabulary.instructions(host.max_running)
 
 
 def _retrieved(task: asyncio.Future) -> None:

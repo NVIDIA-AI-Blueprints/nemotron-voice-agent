@@ -6,68 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-This release splits the Frontend/Backend Live example into the Live gateway, a frontend adapter that hosts the cascade, a delegation core, and a backend adapter. It adds two backend adapters beside the backend LLM and makes each choice a configuration setting.
+This release adds the Frontend/Backend Live example, built from the Live gateway, a frontend adapter that hosts the cascade, a delegation core, and three backend adapters.
 
 ### Added
 
-- **Backend adapters** for the Frontend/Backend Live example, selected by `backend.adapter` in `core.yaml`: `llm`, the backend LLM (the default); `llm-agent`, a model conductor with LLM workers (`core.agent.yaml`); and `harness`, an agent that you deploy and connect over the Agent Client Protocol (ACP) (`core.harness.yaml`). The "Connect Your Own Harness" section of `docs/design/architecture.md` shows how to connect an agent.
-- **Delegation core settings** in `src/examples/frontend_backend_live/core.yaml`, with the profiles `core.ui-bot.yaml`, `core.bench.yaml`, `core.agent.yaml`, and `core.harness.yaml`, selected by `CORE_CONFIG_PATH`. `LIVE_CONFIG_PATH` selects the frontend's benchmark profile, `config.bench.yaml`.
-- **Parallel tasks.** A model conductor can split a request into tasks that run in parallel, and steer or cancel one task. Each task's answer is its own `final_answer` message.
-- **Speak and display answers** (`delegation.result_format: speak_display`). Screen-only detail reaches the client as an `mcp_call` item, and the repository UI bot shows each delegation as a task card.
-- **Official Live events.** A response opens at acceptance with `response.created` (status `queued`) and `response.queued`, every message carries `phase`, backend tools appear as `mcp_call` items, and a request that joins open work names the older response in `previous_response_id`.
-- **Background settings checks.** A Live session reports a `delegation.responses` setting that the backend cannot honor as a nonfatal `responses_validation_failed` error.
-- The Frontend/Backend Live architecture page, `docs/design/architecture.md`, and READMEs for the Live gateway (`src/live/README.md`) and the delegation core (`src/delegation_core/README.md`).
-- `LIVE_MAX_CONSOLE_ROUNDS` and `LIVE_ALLOWED_HOSTS` to limit `POST /v1/live/delegate`, and `LIVE_ADAPTER_FACTORY` to name another factory for each session's frontend adapter.
-- `ENABLE_TRACING` traces Live sessions, and each Live session log line names its session.
-- Tests for the Live Console's JavaScript modules in `client/test/live/`, which CI runs with `node --test`.
-- The `agent-client-protocol` 0.9.0 dependency for the harness adapter.
+- **Frontend/Backend Live** example (`frontend-backend-live`): on every caller turn, a talker speaks a reply, delegates the turn to the backend, or waits, and a writer words the backend's results for speech. `config.yaml` configures the frontend and `core.yaml` the delegation core. Cloud, `/server`, and `/single-gpu` recipes are available, with the Bluebird Cafe ordering assistant as the reference.
+- **Live gateway** (`src/live/`), which serves live sessions that follow GPT-Live at `/v1/live`, over WebRTC or WebSocket. In Responses mode, the delegation core does a session's delegated work, and in client mode, the client app does it. The `frontend-backend-live` profiles serve the routes by default, and the `LIVE_` variables in `.env.example` set their bearer token (`LIVE_API_TOKEN`) and limits.
+- **Delegation core** (`src/delegation_core/`), which accepts each delegation through the OpenAI Responses API and streams its events back. Its interaction manager (IM) owns the delegated work: it starts, steers, or cancels work as the backend adapter's conductor decides, so a newer request can join work that already runs.
+- **Backend adapters**, selected by `backend.adapter` in `core.yaml`: `llm`, the backend LLM, directly connected (the default); `llm-agent`, a model conductor that runs LLM workers as parallel tasks (`core.agent.yaml`); and `harness`, an agent that you deploy, such as Hermes, connected over the Agent Client Protocol (ACP) (`core.harness.yaml`). The harness adds the `agent-client-protocol` 0.9.0 dependency.
+- **Live Console** (`/live.html`), a developer console that starts live sessions over WebRTC, shows their events, delegations, and conversation history, and steers them.
+- The `nemotron-ultra` entry in `services.yaml`: Nemotron 3 Ultra 550B A55B on the public NVIDIA API, the default backend model of the Frontend/Backend Live Cloud and Server profiles.
+- The Frontend/Backend Live Architecture page (`docs/design/architecture.md`), which describes each part, its configuration and extension points, and how to connect your own harness.
 
 ### Changed
 
-- In the Frontend/Backend Live example, typed input (`response.item.create` with a user message, then `response.create`) keeps the turns spoken before it, and the next delegation carries them to the backend.
-- The Frontend/Backend Live example's `config.yaml` holds only the frontend's settings (`frontend.adapter`, `frontend.cascade`, and `ui_bot.core_config`), and `core.yaml` holds the delegation core's settings. A key in its old place stops the load with a message that names its new place. A restart applies an edit to either file.
-- In the Frontend/Backend Live example, a request that arrives while backend work runs joins that work at its next step. Ready results wait until the caller is idle and are spoken together, and a display part reaches the screen without being spoken.
-- In the Frontend/Backend Live example, `frontend.cascade.memory` sets the talker's memory as a token budget instead of a count of recent turns.
-- In the Frontend/Backend Live example, a delegation carries a labeled transcript (`Caller:`, `Agent:`, `App context:`) of what the caller said and heard since the last delegation.
-- In the Frontend/Backend Live example, after `progress_after_seconds` of quiet, the voice says the backend's newest progress line or its `still_working` line.
-- In the Frontend/Backend Live example, backend voice note `v2` (`delegation.voice_note` in `core.yaml`) is the default, and prompt set `v2` is the default when `config.yaml` names none.
-- In the Frontend/Backend Live example, a failed backend task ends with `response.failed` and an official error code, or with `response.incomplete`, and the voice says its `apology`, `unclear`, or `lost` line from `lines:` in the example's `prompts.yaml`.
-- In the Frontend/Backend Live example, `delegation.client_tool_timeout_seconds` (60 seconds) in `core.yaml` is the deadline for the app's function outputs. A `response.create` that continues nothing while outputs are owed is refused with `function_call_outputs_required` or `tool_outputs_required`.
-- In the Frontend/Backend Live example, a backend model that the catalog does not list is refused (`unlisted_models: report`), except in `core.bench.yaml` (`fallback`). An `openai-responses` backend sends the whole history each round with `store: false`.
-- The `frontend-backend-live/server` profile runs the talker and the backend on the Nemotron 3.5 Lightning NIM. A `services.yaml` entry with `api_key_env` never falls back to `NVIDIA_API_KEY`, and a slot with no model is an error that names the slot.
-- The Live routes come from the `live:` block of the example's entry in `examples_registry.yaml`. A server with more than one Uvicorn worker serves no Live route, and a `LIVE_` limit that is not a whole number of at least 1 stops the server at startup.
-- In client mode, `session.update` can change `delegation.acknowledgement_delay_ms`.
-- When the repository UI starts a session, the server checks the readiness of every local LLM that the example uses, including the Thinker LLM of the Frontend/Backend Agent and Frontend/Backend Live examples.
-
-### Deprecated
-
-- `LIVE_ENGINE_FACTORY`. Use `LIVE_ADAPTER_FACTORY` instead. The old name still works and logs a deprecation warning.
-
-### Removed
-
-- The Frontend/Backend Live Realtime frontend (`provider: realtime` in the example's `config.yaml`). Its code is parked, unused, in `src/examples/frontend_backend_live/parked/realtime/`.
-- The Frontend/Backend Live settings `merge_pending`, `fold_before_acting`, `status_from_ledger`, `progress_speech`, `progress_interval_seconds`, `recover_failures`, `chat_history_recent_turns`, `backend_context_tokens`, and the `backend` block and `voice_note` of `config.yaml`. `backend.llm.conductor` (`steer` or `start_each`) in `core.yaml` sets how the backend LLM places each request. Each removed key's error message names its replacement.
-- The `examples.frontend_backend_live.engine` import path. Use `examples.frontend_backend_live.factory`.
-
-### Fixed
-
-- WebSocket caller audio of a Live session reaches speech recognition at 16 kHz, and local recipes send Live reply audio.
-- G.711 audio (`audio/pcmu` or `audio/pcma`) on a Live session takes 8000 Hz when the format names no rate, and its samples follow the standard G.711 encoding.
-- An error that a Live client command causes goes only to the connection that sent the command.
-- A Live session that the server refuses because it is full gets a `rate_limit_exceeded` error (HTTP 429 over WebRTC) instead of a bare close.
-- A Live session closes with `remote_hangup` when the client hangs up and `connection_lost` otherwise. A binary WebSocket frame gets an `error` event and leaves the session open, and a WebRTC session ends when only its data channel closes.
-- The gateway paces delegation events to a Live client, so a burst does not close the session. A sideband connection that falls behind is closed with code 1013, and a delegation stream that ends before its terminal event gets one `response.failed` with `server_error`.
-- A slow delegation core does not hold a Live caller's audio, and a frontend that hangs while a Live session closes does not keep backend work running.
-- When a Live session's voice service fails, the client gets one `pipeline_error` error and then `session.closed` with `connection_lost`.
-- The server accepts every documented voice and `service_tier` value and `null` for `parallel_tool_calls` in a Live session, refuses an unknown key with `unknown_parameter` and the key's dotted `param`, and leaves optional fields out of `error` events.
-- The `frontend-backend-live` Compose profiles set `LIVE_ENABLED` to `true` by default, so they serve the Live routes with any `EXAMPLE_SELECTION`, such as `all`. In a deployment locked to another example, Live sessions use the Frontend/Backend Live example's own service slots.
-- The Live gateway's WebRTC peer uses the TURN server that `TURN_URL`, `TURN_USERNAME`, and `TURN_PASSWORD` configure, followed by the servers in `LIVE_ICE_URLS`.
-- The Live Console gets its ICE servers from `GET /api/ice-servers`, so it uses a configured TURN server. A TURN server that the browser cannot reach does not fail the **Start**.
-- The Live Console escapes every value that it writes as HTML, begins a new call at each **Start**, keeps a `+` in a link token (`live.html#token=`), and keeps the newest 2,000 event log rows.
-- The Live Console's delegation cards follow the official events, and the console shows the delegation mode and the backend badge from `session.started`. Its history panel polls only while it is open and the page is visible.
-- In client mode, the Live Console runs one delegation at a time, each with its own history, and **End** stops every round and tool. Bad backend tools JSON stops the **Start** in both modes.
-- The Live Console's browser cafe follows the server's cafe tool rules, and it places an order only when `confirmed` is exactly `true`.
-- In the Frontend/Backend Live example's repository UI bot, the greeting comes from `intro` in `lines:` of the example's `prompts.yaml`, and no late result is worded after the call ends.
+- When a repository UI or Realtime gateway session starts, the server checks the readiness of every local LLM that the example uses, including the Frontend/Backend Agent's Thinker LLM.
 
 ## [2.3.0] - TBD
 

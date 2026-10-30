@@ -34,13 +34,12 @@ class ClientCommandGoldens(GoldenCase):
     async def serve(self, session=None, **script):
         """Start the call as ``GoldenCase.serve`` does; then hold each backend round until the rest is quiet.
 
-        The scripted backend answers at once, and the worker words that answer in the same loop step as it
-        starts the round. A lead-in spoken a moment earlier has then not yet reached the talker's context, so the
-        writer's history and the talker's memory would hold it or not depending on task scheduling alone: ten to
-        twenty more awaits on the result path flip it. A real backend takes far longer than a lead-in takes to reach
-        the context. So, in this file only, each backend request is sent once nothing but the worker is busy: the
-        turn or append that delegated has finished and every utterance is in the talker's context. The request
-        itself is unchanged.
+        The scripted backend answers as soon as its round starts, so a lead-in spoken a moment earlier may not have
+        reached the talker's context yet, and the writer's history and the talker's memory would hold it or not
+        depending on task scheduling alone. A real backend takes far longer than a lead-in takes to reach the context.
+        So, in this file only, each backend request is sent once nothing but the delegated work is busy: the turn or
+        append that delegated has finished and every utterance is in the talker's context. The request itself is
+        unchanged.
         """
         started = await super().serve(session, **script)
         create = self.backend.create

@@ -29,7 +29,7 @@ from delegation_core.backend.port import ControlTools, Outcome, TaskContext, Too
 from delegation_core.ids import uid
 
 from .protocol import AppCall, CallRunning, CallSettled, HeldCall, Mailbox, McpServer
-from .settings import Bridge, HarnessPrompts
+from .settings import Bridge
 
 # The label of a call to a name no source offers: it is reported, and answered with an error text.
 UNKNOWN_LABEL = "harness"
@@ -64,8 +64,15 @@ class Door:
         return []
 
     async def call(self, name: str, arguments: dict) -> str:
-        """Serve one call; the result is plain text. A bare door serves none."""
-        return f"{name} is not served here."
+        """Serve one call; the result is plain text. A bare door serves none, so its answer is empty."""
+        return ""
+
+    def failed(self, name: str, error: str) -> str:
+        """The answer to a call that raised while the door served it (``error``: the exception's type and message).
+
+        A bare door, which never raises, gives the error alone; a door that serves tools words it from the core's texts.
+        """
+        return error
 
     def retire(self, text: str) -> None:
         """Serve nothing more; calls held are answered with ``text``."""
@@ -75,12 +82,11 @@ class Door:
 class ConductorDoor(Door):
     """The conductor's door: the four control tools; each call is a decision the IM applies."""
 
-    def __init__(self, name: str, vocabulary: ControlTools, idle_text: str):
-        """Serve ``vocabulary``'s control tools; before any ``decide()`` binds a ``place``, answer ``idle_text``."""
+    def __init__(self, name: str, vocabulary: ControlTools):
+        """Serve ``vocabulary``'s control tools; before any ``decide()`` binds a ``place``, answer its idle outcome."""
         super().__init__(name)
         self.vocabulary = vocabulary
         self.place: Callable[[Any], Awaitable[str]] | None = None
-        self.idle_text = idle_text
 
     def bind(self, place: Callable[[Any], Awaitable[str]]) -> None:
         """Apply the next calls through ``place`` (the running ``decide()``'s; after it ends the IM refuses)."""
@@ -96,10 +102,14 @@ class ConductorDoor(Door):
             decision = self.vocabulary.decision(name, json.dumps(arguments))
         except ValueError as exc:
             logger.warning(f"harness.conductor_call_malformed name={name} error={exc}")
-            return f"Not applied: {exc}"
+            return json.dumps({"error": str(exc)})
         if self.place is None:
-            return self.idle_text
+            return self.vocabulary.idle
         return await self.place(decision)
+
+    def failed(self, name: str, error: str) -> str:
+        """The answer to a call that raised while the door served it: the vocabulary's ``failed`` answer."""
+        return self.vocabulary.failed.format(name=name, error=error)
 
 
 class WorkerDoor(Door):
@@ -112,32 +122,53 @@ class WorkerDoor(Door):
         sources: Sequence[ToolSource],
         mailbox: Mailbox,
         *,
-        prompts: HarnessPrompts,
         tool_timeout_seconds: float,
     ):
-        """Serve ``task``'s toolset; tell its run through ``mailbox`` what each call does."""
-        super().__init__(name)
-        self.task, self.mailbox, self.prompts, self.limit = task, mailbox, prompts, tool_timeout_seconds
-        self.app_functions: set[str] = set()
-        self.owners: dict[str, ToolSource] = {}
-        self.served: list[dict] = []
-        self.held: list[HeldCall] = []  # app calls the runtime waits on, oldest first
-        self._compose(task, sources)
+        """Serve ``task``'s toolset; tell its run through ``mailbox`` what each call does.
 
-    def _compose(self, task: TaskContext, sources: Sequence[ToolSource]) -> None:
-        """The toolset: the request's functions, then each tool source's, then the work tools'; each name once."""
+        The answers the door words itself come from the task's texts (``TaskContext.texts``).
+        """
+        super().__init__(name)
+        self.task, self.mailbox, self.limit = task, mailbox, tool_timeout_seconds
+        self.app_functions, self.owners, self.served = self._compose(task, sources)
+        self.held: list[HeldCall] = []  # app calls the runtime waits on, oldest first
+
+    def _compose(
+        self, task: TaskContext, sources: Sequence[ToolSource]
+    ) -> tuple[set[str], dict[str, ToolSource], list[dict]]:
+        """The toolset: the request's functions, then each tool source's, then the work tools'; each name once.
+
+        Returns the app's function names, the source of every other tool by name, and the tools as MCP tools.
+        """
+        app_functions: set[str] = set()
+        owners: dict[str, ToolSource] = {}
+        served: list[dict] = []
         for tool in task.request().get("tools") or []:
-            if tool.get("type") == "function" and tool.get("name") and tool["name"] not in self.app_functions:
-                self.app_functions.add(tool["name"])
-                self.served.append(mcp_tool(tool))
+            if tool.get("type") == "function" and tool.get("name") and tool["name"] not in app_functions:
+                app_functions.add(tool["name"])
+                served.append(mcp_tool(tool))
         for source in (*sources, task.tools()):
             for tool in source.tools():
                 name = tool.get("name")
-                if not name or name in self.app_functions or name in self.owners:
+                if not name or name in app_functions or name in owners:
                     logger.warning(f"harness.tool_collision door={self.name} name={name}: offered once only")
                     continue
-                self.owners[name] = source
-                self.served.append(mcp_tool(tool))
+                owners[name] = source
+                served.append(mcp_tool(tool))
+        return app_functions, owners, served
+
+    def rebind(self, task: TaskContext, sources: Sequence[ToolSource]) -> bool:
+        """Serve ``task`` from now on, under the same name and token, when its toolset is the one served.
+
+        A session kept for a later task keeps its door (``backend.harness.session``): the runtime keeps the tools it
+        listed, and the door's calls route, report and word their answers through ``task``. A door that holds a call,
+        is retired, or would serve another toolset is left as it was (``False``).
+        """
+        app_functions, owners, served = self._compose(task, sources)
+        if self.held or self.retired or served != self.served:
+            return False
+        self.task, self.app_functions, self.owners = task, app_functions, owners
+        return True
 
     def tools(self) -> list[dict]:
         """The task's toolset."""
@@ -163,7 +194,7 @@ class WorkerDoor(Door):
                 self.held.remove(held)
         if self.task.route(call) == "refused":
             self.mailbox.put_nowait(CallRunning(call, refused=True))
-            return self.prompts.not_run
+            return self.task.refusal(call["call_id"])
         self.mailbox.put_nowait(CallRunning(call))
         source = self.owners.get(name)
         self.task.tool_started(call, source.label if source is not None else UNKNOWN_LABEL)
@@ -174,19 +205,25 @@ class WorkerDoor(Door):
 
     async def _run(self, source: ToolSource | None, call: dict) -> tuple[str, Outcome, str]:
         """Run a call on its source: the output, its outcome, and the runtime's answer (plain text)."""
-        name, call_id = call["name"], call["call_id"]
+        name, call_id, texts = call["name"], call["call_id"], self.task.texts
         if source is None:
-            output = json.dumps({"error": f"Unknown tool: {name}"})
+            offered = ", ".join(tool["name"] for tool in self.served) or texts.none
+            output = json.dumps({"error": texts.unknown_tool_output.format(name=name, offered=offered)})
             return output, "failed", output
         try:
             async with asyncio.timeout(self.limit):
                 output = await source.execute(call_id, name, call["arguments"])
             return output, "done", output
         except TimeoutError:  # it may have run: the IM answers it as owed, and so does the bridge
-            return f"{name} did not answer within {self.limit:g} s", "unclear", self.prompts.unclear
+            return f"{name} did not answer within {self.limit:g} s", "unclear", texts.owed_output
         except Exception as exc:
-            output = json.dumps({"error": f"{name} failed: {type(exc).__name__}: {exc}"})
+            error = f"{type(exc).__name__}: {exc}"
+            output = json.dumps({"error": texts.failed_output.format(name=name, error=error)})
             return output, "failed", output
+
+    def failed(self, name: str, error: str) -> str:
+        """The answer to a call that raised while the door served it: the task's ``texts.failed_output``."""
+        return self.task.texts.failed_output.format(name=name, error=error)
 
     def retire(self, text: str) -> None:
         """Serve nothing more; the runtime's held app calls end with ``text``."""
@@ -260,7 +297,7 @@ class McpBridge:
                 return
             from mcp.server.lowlevel import Server  # the harness's own package, loaded only with it
 
-            server = Server("voiceclaw-bridge", on_list_tools=self._list_tools, on_call_tool=self._call_tool)
+            server = Server("delegation-core-bridge", on_list_tools=self._list_tools, on_call_tool=self._call_tool)
             app = server.streamable_http_app(
                 streamable_http_path=MCP_PATH, host=self.settings.host, stateless_http=True
             )
@@ -355,7 +392,7 @@ class McpBridge:
         door = self._door(ctx)
         try:
             text = await door.call(params.name, dict(params.arguments or {}))
-        except Exception as exc:  # a bug must not become an MCP error: the runtime gets the text
+        except Exception as exc:  # an unexpected error is answered as text, never as an MCP error
             logger.exception(f"harness.bridge_call_failed door={door.name} name={params.name}")
-            text = f"{params.name} failed: {type(exc).__name__}: {exc}"
+            text = door.failed(params.name, f"{type(exc).__name__}: {exc}")
         return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=False)

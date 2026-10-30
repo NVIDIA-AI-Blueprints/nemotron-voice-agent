@@ -18,9 +18,9 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.tests.utils import SleepFrame, run_test
 
-from examples.frontend_backend_live.adapter.preroll import SpeechPreroll
 from examples.frontend_backend_live.config_manager.loader import ConfigError
 from examples.frontend_backend_live.config_manager.schema import LiveConfig
+from examples.frontend_backend_live.media.preroll import SpeechPreroll
 
 RATE = 24000
 

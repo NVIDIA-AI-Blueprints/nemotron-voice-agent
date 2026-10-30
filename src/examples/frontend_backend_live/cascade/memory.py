@@ -4,10 +4,13 @@
 """The talker's memory: what the talker and the writer read, owned by the cascade (:class:`TalkerMemory`).
 
 Entries render as the messages the models read; a backend result and the application's text become user messages
-marked as reference data (:data:`BACKEND_RESULT_PREFIX`, :data:`CLIENT_CONTEXT_PREFIX`). Above ``compact_at`` of the
+marked as reference data by the prompt set's labels (``result_label``, ``context_label``). Above ``compact_at`` of the
 token budget, the oldest unpinned turn groups leave, never the newest. The host's own buffer (Pipecat's context) is not
 the memory: the cascade only takes the caller's committed turns from it (:class:`TurnBuffer`), so nothing Pipecat adds
 there, such as its note after a turn with no words, reaches the talker.
+
+The talker reads the memory with the set's ``caller_label`` in front of each caller turn right after reference data
+(:meth:`TalkerMemory.labeled`); the writer and the normalizer read it as it is.
 """
 
 from __future__ import annotations
@@ -17,14 +20,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-# A backend result enters the history as a user-role item with this prefix, in time order.
-BACKEND_RESULT_PREFIX = "Backend result (reference data): "
-
-# Client-supplied facts (commentary and context appends) enter the history as user-role items with this prefix.
-CLIENT_CONTEXT_PREFIX = "Application context (reference data): "
-
-# What a cut line keeps after the words that played.
-CUT_MARK = " [cut off]"
+from examples.frontend_backend_live.prompts import PromptSet
 
 
 class TurnBuffer(Protocol):
@@ -90,20 +86,20 @@ class Kind:
     """How the entries of one kind render and live."""
 
     role: str  # the role of its message; "" keeps the entry's own (a prompt entry)
-    mark: str = ""  # what tells reference data from the caller's speech
     pinned: bool = False  # kept through every compaction
     opens_turn: bool = False  # a caller turn: the turn group it opens leaves as one
     said: bool = False  # a line the voice handed to speech, which playout corrects
+    asks: bool = False  # a turn the talker decides (the caller's, or a question the application typed)
 
 
 KINDS = {
     EntryKind.PROMPT: Kind("", pinned=True),
     EntryKind.INSTRUCTION: Kind("developer", pinned=True),
-    EntryKind.CALLER: Kind("user", opens_turn=True),
+    EntryKind.CALLER: Kind("user", opens_turn=True, asks=True),
     EntryKind.SPOKEN: Kind("assistant", said=True),
-    EntryKind.RESULT: Kind("user", BACKEND_RESULT_PREFIX),
-    EntryKind.APP_CONTEXT: Kind("user", CLIENT_CONTEXT_PREFIX),
-    EntryKind.TYPED: Kind("user", CLIENT_CONTEXT_PREFIX),
+    EntryKind.RESULT: Kind("user"),
+    EntryKind.APP_CONTEXT: Kind("user"),
+    EntryKind.TYPED: Kind("user", asks=True),
 }
 
 
@@ -122,12 +118,6 @@ class Entry:
         return KINDS[self.kind]
 
 
-def render(entry: Entry) -> dict:
-    """One entry as the message the models read."""
-    traits = entry.traits
-    return {"role": traits.role or entry.role, "content": traits.mark + entry.text}
-
-
 def approx_tokens(message: dict) -> int:
     """A cheap token estimate for one message: about four characters per token, plus its role."""
     return (len(json.dumps(message, ensure_ascii=False)) + 3) // 4
@@ -136,38 +126,83 @@ def approx_tokens(message: dict) -> int:
 class TalkerMemory:
     """The talker's memory for one call; the cascade's parts are its only writers."""
 
-    def __init__(self, *, context_tokens: int, compact_at: float):
-        """Start empty, with a budget of ``context_tokens``, compacted above ``compact_at`` of it."""
+    def __init__(self, prompts: PromptSet, *, context_tokens: int, compact_at: float):
+        """Start empty, with a budget of ``context_tokens``, compacted above ``compact_at`` of it.
+
+        The entries render in the words of ``prompts``: its labels mark reference data, its cut mark ends a cut line,
+        and its caller label marks a caller turn right after reference data in the talker's view (:meth:`labeled`).
+        """
         self.context_tokens, self.compact_at = context_tokens, compact_at
+        # What the message of each kind of reference data starts with.
+        self.marks = {
+            EntryKind.RESULT: prompts.result_label,
+            EntryKind.APP_CONTEXT: prompts.context_label,
+            EntryKind.TYPED: prompts.context_label,
+        }
+        self.caller_label = prompts.caller_label
+        self.cut_mark = prompts.cut_mark
         self.entries: list[Entry] = []
-        self.version = 0  # moves on every change, so a wording prepared earlier can tell the memory moved
+        # Moves with every entry but a turn the talker decides, and when a line is cut or taken back; never on a
+        # rewrite of a caller's turn or a compaction. So a wording prepared earlier can tell whether anything it read
+        # moved since besides those turns: a line of the voice, an instruction, the application's context.
+        self.version = 0
 
     @classmethod
-    def seeded(cls, messages: list[dict], *, context_tokens: int, compact_at: float) -> TalkerMemory:
-        """A memory that starts with the host's seed: its system and developer messages pinned, the rest as history."""
-        memory = cls(context_tokens=context_tokens, compact_at=compact_at)
+    def seeded(
+        cls, prompts: PromptSet, messages: list[dict], *, context_tokens: int, compact_at: float
+    ) -> TalkerMemory:
+        """A memory that starts with the host's seed: its system and developer messages pinned, the rest as history.
+
+        A user message under one of the set's labels is that kind of reference data again.
+        """
+        memory = cls(prompts, context_tokens=context_tokens, compact_at=compact_at)
         for message in messages:
             role, text = message.get("role"), message_text(message)
             if role in ("system", "developer"):
                 memory.entries.append(Entry(EntryKind.PROMPT, text, role=role))
             elif role == "assistant":
                 memory.entries.append(Entry(EntryKind.SPOKEN, text))
-            elif role == "user" and text.startswith(BACKEND_RESULT_PREFIX):
-                memory.entries.append(Entry(EntryKind.RESULT, text.removeprefix(BACKEND_RESULT_PREFIX)))
-            elif role == "user" and text.startswith(CLIENT_CONTEXT_PREFIX):
-                memory.entries.append(Entry(EntryKind.APP_CONTEXT, text.removeprefix(CLIENT_CONTEXT_PREFIX)))
+            elif role == "user" and text.startswith(prompts.result_label):
+                memory.entries.append(Entry(EntryKind.RESULT, text.removeprefix(prompts.result_label)))
+            elif role == "user" and text.startswith(prompts.context_label):
+                memory.entries.append(Entry(EntryKind.APP_CONTEXT, text.removeprefix(prompts.context_label)))
             elif role == "user":
                 memory.entries.append(Entry(EntryKind.CALLER, text))
         memory._compact()
         return memory
 
+    def render(self, entry: Entry) -> dict:
+        """One entry as the message the models read: reference data starts with its kind's mark."""
+        return {"role": entry.traits.role or entry.role, "content": self.marks.get(entry.kind, "") + entry.text}
+
     def messages(self) -> list[dict]:
         """The memory as the messages the models read, in order."""
-        return [render(entry) for entry in self.entries]
+        return [self.render(entry) for entry in self.entries]
+
+    def labeled(self) -> list[dict]:
+        """The talker's view of the memory: :meth:`messages`, each caller turn right after reference data labeled.
+
+        The set's caller label goes in front of a caller turn whose message before it in the voice history (the user
+        and assistant ones) is reference data, so a caller's "yes" right after a backend result reads as the caller's,
+        not as part of the result. Each entry's kind decides, never its text.
+        """
+        messages, after_reference = [], False
+        for entry in self.entries:
+            message = self.render(entry)
+            if message["role"] in ("user", "assistant"):
+                if after_reference and entry.traits.opens_turn:
+                    message["content"] = self.caller_label + message["content"]
+                after_reference = entry.kind in self.marks
+            messages.append(message)
+        return messages
+
+    def kinds(self) -> list[EntryKind]:
+        """The kind of each message of the voice history, the user and assistant ones (``split_messages``), in order."""
+        return [entry.kind for entry in self.entries if self.render(entry)["role"] in ("user", "assistant")]
 
     def tokens(self) -> int:
         """The estimated tokens the memory holds now."""
-        return sum(approx_tokens(render(entry)) for entry in self.entries)
+        return sum(approx_tokens(self.render(entry)) for entry in self.entries)
 
     def caller(self, text: str) -> None:
         """A caller turn was heard."""
@@ -178,7 +213,6 @@ class TalkerMemory:
         for entry in reversed(self.entries):
             if entry.traits.opens_turn and entry.text == original:
                 entry.text = text
-                self._changed()
                 return
 
     def spoken(self, line: int, text: str) -> None:
@@ -201,27 +235,33 @@ class TalkerMemory:
         """A question the application typed itself."""
         self._add(Entry(EntryKind.TYPED, text))
 
-    def cut(self, line: int, heard: str) -> None:
-        """The line ``line`` was cut after ``heard``: it reads ``<heard> [cut off]``."""
-        for entry in self.entries:
-            if entry.traits.said and entry.line == line:
-                entry.text = heard.rstrip() + CUT_MARK
-                self._changed()
+    def cut(self, line: int, heard: str, *, carried: bool = True) -> None:
+        """The line ``line`` was cut after ``heard``: it reads ``heard`` then the cut mark, or leaves when it is empty.
+
+        What the line carried (results, commentary) stays; with ``carried`` false it leaves too, to be said again.
+        """
+        before = len(self.entries)
+        self.entries = [
+            entry for entry in self.entries if entry.line != line or (bool(heard) if entry.traits.said else carried)
+        ]
+        said = [entry for entry in self.entries if entry.traits.said and entry.line == line]
+        for entry in said:
+            entry.text = heard.rstrip() + self.cut_mark
+        if said or len(self.entries) != before:
+            self.version += 1
 
     def unsay(self, line: int) -> None:
         """Nobody heard the line ``line``: it and what it carried (results, commentary) leave the memory."""
         kept = [entry for entry in self.entries if entry.line != line]
         if len(kept) != len(self.entries):
             self.entries = kept
-            self._changed()
+            self.version += 1
 
     def _add(self, entry: Entry) -> None:
         self.entries.append(entry)
-        self._changed()
+        if not entry.traits.asks:
+            self.version += 1
         self._compact()
-
-    def _changed(self) -> None:
-        self.version += 1
 
     def _compact(self) -> None:
         """Above ``compact_at`` of the budget, drop the oldest turn groups that are not pinned, never the newest."""
@@ -232,7 +272,6 @@ class TalkerMemory:
                 return
             oldest = set(groups[0])
             self.entries = [entry for index, entry in enumerate(self.entries) if index not in oldest]
-            self._changed()
 
     def _groups(self) -> list[list[int]]:
         """The indexes of the unpinned entries, by turn group: each caller turn starts one."""
@@ -254,12 +293,6 @@ def message_text(message: dict) -> str:
     return "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
 
 
-def is_reference_item(message: dict) -> bool:
-    """Return True for a user-role item that carries a backend result or client context, not caller speech."""
-    text = message_text(message)
-    return message.get("role") == "user" and text.startswith((BACKEND_RESULT_PREFIX, CLIENT_CONTEXT_PREFIX))
-
-
 def split_messages(messages: list[dict]) -> tuple[str, list[dict]]:
     """Split a context into the talker's instructions and its plain-text voice history.
 
@@ -278,27 +311,6 @@ def split_messages(messages: list[dict]) -> tuple[str, list[dict]]:
     return "\n\n".join(instructions), history
 
 
-def caller_turn_index(messages: list[dict], text: str) -> int | None:
-    """Return the index of the newest caller turn whose text is ``text``."""
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if message.get("role") == "user" and not is_reference_item(message) and message_text(message) == text:
-            return index
-    return None
-
-
 def caller_turns(messages: list[dict]) -> list[str]:
-    """Return the text of each user message that is caller speech, oldest first, skipping reference items."""
-    return [
-        message_text(message)
-        for message in messages
-        if message.get("role") == "user" and not is_reference_item(message)
-    ]
-
-
-def last_assistant_text(messages: list[dict]) -> str | None:
-    """Return the newest assistant message, or None before the assistant has spoken."""
-    for message in reversed(messages):
-        if message.get("role") == "assistant":
-            return message_text(message)
-    return None
+    """Return the text of each user message, oldest first: in the host's buffer, the seed's and the caller's turns."""
+    return [message_text(message) for message in messages if message.get("role") == "user"]

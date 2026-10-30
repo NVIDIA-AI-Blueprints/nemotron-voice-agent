@@ -6,12 +6,14 @@
 """Playout facts: what each line really played, read after the output that played it."""
 
 import asyncio
+import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -22,25 +24,25 @@ from pipecat.frames.frames import (
     TTSTextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.tts_service import TTSService
 
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
-from examples.frontend_backend_live.adapter.bridge import LiveWebSocketAudioOutput
-from examples.frontend_backend_live.adapter.playout import Playout, PlayoutTracker
-from examples.frontend_backend_live.adapter.services import (
-    SPEECH_MODES,
+from examples.frontend_backend_live.adapter.bridge import LiveOutputTranscript, LiveWebSocketAudioOutput
+from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
+from examples.frontend_backend_live.media.playout import PlayoutTracker
+from examples.frontend_backend_live.media.services import (
     LineTextHold,
     PerSentence,
     Stitched,
     build_tts,
     speech_mode,
 )
-from examples.frontend_backend_live.config_manager.schema import ModelEndpoint
 from examples.shared.pipeline_utils import PIPELINE_AUDIO_OUT_SAMPLE_RATE, build_pipeline_params
 from live.ports import EXCHANGE_RATE
 from live.protocol import SessionConfig
 from tests.unit.cascade_helpers import LIVE_CONFIG as CASCADE_TEST_CONFIG
 from tests.unit.cascade_helpers import FakeTTS
-from tests.unit.frontend_backend_live.adapter.adapter_helpers import Probe, RecordingPort, run_frames, tone
+from tests.unit.frontend_backend_live.adapter.adapter_helpers import FLUSH, Probe, RecordingPort, run_frames, tone
 
 
 def audio(ms: int) -> OutputAudioRawFrame:
@@ -51,17 +53,26 @@ def text(words: str) -> TTSTextFrame:
     return TTSTextFrame(text=words, aggregated_by="sentence")
 
 
+def will_speak(words: str) -> AggregatedTextFrame:
+    """The text a speech service takes, announced ahead of its audio as Pipecat's text-to-speech does."""
+    frame = AggregatedTextFrame(text=words, aggregated_by="sentence")
+    frame.will_be_spoken = True
+    return frame
+
+
 class Facts:
-    """A playout listener that notes each fact, in order."""
+    """A playout listener that notes each fact, in order, and what ``played`` and ``cut`` carry."""
 
     def __init__(self):
         self.seen: list[tuple] = []
+        self.carried: list[tuple] = []
 
     def started(self):
         self.seen.append(("started",))
 
-    def played(self, words):
+    def played(self, words, audio_ms=0):
         self.seen.append(("played", words))
+        self.carried.append(("played", audio_ms))
 
     def finished(self):
         self.seen.append(("finished",))
@@ -69,12 +80,9 @@ class Facts:
     def silent(self):
         self.seen.append(("silent",))
 
-    def cut(self):
+    def cut(self, heard_ms=0, speaking=""):
         self.seen.append(("cut",))
-
-
-def members(protocol) -> set[str]:
-    return {name for name in vars(protocol) if not name.startswith("_")}
+        self.carried.append(("cut", heard_ms, speaking))
 
 
 class TrackerTests(unittest.IsolatedAsyncioTestCase):
@@ -82,7 +90,7 @@ class TrackerTests(unittest.IsolatedAsyncioTestCase):
 
     def tracker(self):
         port, facts = RecordingPort(), Facts()
-        tracker = PlayoutTracker(port)
+        tracker = PlayoutTracker(LiveOutputTranscript(port))
         tracker.listen(facts)
         passed = []
 
@@ -114,13 +122,13 @@ class TrackerTests(unittest.IsolatedAsyncioTestCase):
     async def run_tracker(self, frames):
         """Run the tracker in a pipeline (a cut needs one), with a listener; return the port and the facts."""
         port, facts = RecordingPort(), Facts()
-        tracker = PlayoutTracker(port)
+        tracker = PlayoutTracker(LiveOutputTranscript(port))
         tracker.listen(facts)
         await run_frames([tracker], frames, gap=0.0, settle=0.1)
         return port, facts
 
     async def test_a_cut_line_reports_what_played_and_no_transcript_for_the_rest(self):
-        frames = [TTSStartedFrame(), audio(300), text("Your latte is ready."), audio(100), InterruptionFrame()]
+        frames = [TTSStartedFrame(), audio(300), text("Your latte is ready."), audio(100), FLUSH, InterruptionFrame()]
         port, facts = await self.run_tracker(frames)
         self.assertEqual(facts.seen, [("started",), ("played", "Your latte is ready."), ("cut",)])
         self.assertEqual([delta["delta"] for delta in port.transcript()], ["Your latte is ready. "])
@@ -134,6 +142,16 @@ class TrackerTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_cut_with_no_line_playing_still_tells_the_listener(self):
         _, facts = await self.run_tracker([InterruptionFrame()])
         self.assertEqual(facts.seen, [("cut",)])
+        self.assertEqual(facts.carried, [("cut", 0, "")])
+
+    async def test_a_sentence_and_a_cut_carry_the_audio_since_the_sentence_before_and_a_cut_its_sentence(self):
+        # Per-sentence speech announces each sentence ahead of its audio: the cut carries the audio of the sentence it
+        # cut, each frame measured at its own rate, and that sentence alone.
+        wideband = OutputAudioRawFrame(audio=tone(200, rate=16000), sample_rate=16000, num_channels=1)
+        first, second = "Your latte is ready.", "Anything else?"
+        line = [will_speak(first), TTSStartedFrame(), audio(300), text(first), will_speak(second), audio(100), wideband]
+        _, facts = await self.run_tracker([*line, FLUSH, InterruptionFrame()])
+        self.assertEqual(facts.carried, [("played", 300), ("cut", 300, second)])
 
     async def test_each_sentence_is_timed_on_the_session_clock_from_its_first_audio_to_its_end(self):
         tracker, port, _, _ = self.tracker()
@@ -145,7 +163,7 @@ class TrackerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_facts_wait_for_a_listener_and_the_transcript_does_not(self):
         port = RecordingPort()
-        tracker = PlayoutTracker(port)
+        tracker = PlayoutTracker(LiveOutputTranscript(port))
 
         async def ignore(frame, direction=FrameDirection.DOWNSTREAM):
             pass
@@ -155,16 +173,13 @@ class TrackerTests(unittest.IsolatedAsyncioTestCase):
             await tracker.process_frame(frame, FrameDirection.DOWNSTREAM)
         self.assertEqual([delta["delta"] for delta in port.transcript()], ["Hello. "])
 
-    def test_the_listener_hears_the_plans_four_facts_and_a_silent_line(self):
-        self.assertEqual(members(Playout), {"started", "played", "finished", "silent", "cut"})
-
 
 class WebSocketPlayoutTests(unittest.IsolatedAsyncioTestCase):
     """The primary WebSocket's output followed by the tracker, as a live session runs them."""
 
     async def test_each_sentence_is_sent_to_the_client_only_after_its_audio(self):
         port, facts = RecordingPort(), Facts()
-        tracker = PlayoutTracker(port)
+        tracker = PlayoutTracker(LiveOutputTranscript(port))
         tracker.listen(facts)
         frames = [TTSStartedFrame(), audio(300), text("Your latte is ready."), audio(200), text("Anything else?")]
         await run_frames([LiveWebSocketAudioOutput(port), tracker], [*frames, TTSStoppedFrame()], gap=0.0, settle=0.8)
@@ -177,7 +192,7 @@ class WebSocketPlayoutTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_barge_in_drops_the_text_with_the_audio_it_follows(self):
         port, facts, probe = RecordingPort(), Facts(), Probe()
-        tracker = PlayoutTracker(port)
+        tracker = PlayoutTracker(LiveOutputTranscript(port))
         tracker.listen(facts)
         frames = [TTSStartedFrame(), audio(1000), text("A long answer that never played."), InterruptionFrame()]
         await run_frames([LiveWebSocketAudioOutput(port), tracker, probe], frames, gap=0.03, settle=0.4)
@@ -197,13 +212,6 @@ class WebSocketPlayoutTests(unittest.IsolatedAsyncioTestCase):
 
 class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
     """Each TTS mode, chosen by name, keeps a line's text behind its audio."""
-
-    def test_the_two_modes_are_named_in_one_table(self):
-        self.assertEqual(SPEECH_MODES, {"per_sentence": PerSentence, "stitched": Stitched})
-        self.assertEqual(
-            {name: mode.synthesis_mode for name, mode in SPEECH_MODES.items()},
-            {"per_sentence": "per_sentence", "stitched": "stitched"},
-        )
 
     def test_per_sentence_text_already_follows_its_audio_so_nothing_is_held(self):
         self.assertEqual(PerSentence().text_hold(), [])
@@ -234,10 +242,21 @@ class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_cut_stitched_line_drops_its_text(self):
         probe = Probe()
-        frames = [TTSStartedFrame(), text("Never heard."), audio(100), InterruptionFrame(), TTSStoppedFrame()]
+        frames = [TTSStartedFrame(), text("Never heard."), audio(100), FLUSH, InterruptionFrame(), TTSStoppedFrame()]
         await run_frames([LineTextHold(), probe], frames, gap=0.0, settle=0.1)
         self.assertEqual(probe.of(TTSTextFrame), [])
         self.assertEqual(len(probe.of(TTSStoppedFrame)), 1)
+
+    async def test_a_cut_stitched_line_carries_all_the_audio_that_went_out_and_the_whole_line(self):
+        port, facts = RecordingPort(), Facts()
+        tracker = PlayoutTracker(LiveOutputTranscript(port))
+        tracker.listen(facts)
+        # Stitched speech: each sentence is announced, then its text queued, ahead of its audio.
+        first = [will_speak("Your latte is ready."), TTSStartedFrame(), text("Your latte is ready."), audio(300)]
+        second = [will_speak("Anything else?"), text("Anything else?"), audio(200)]
+        await run_frames([LineTextHold(), tracker], [*first, *second, FLUSH, InterruptionFrame()], gap=0.0, settle=0.1)
+        self.assertEqual(facts.seen, [("started",), ("cut",)])  # no sentence reported: the hold dropped its text
+        self.assertEqual(facts.carried, [("cut", 500, "Your latte is ready. Anything else?")])
 
     def test_a_host_built_text_to_speech_names_the_mode_it_runs_in(self):
         for mode, expected in (("stitched", Stitched), ("per_sentence", PerSentence), ("", PerSentence)):
@@ -248,7 +267,42 @@ class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(stand_in=type(stand_in).__name__):
                 self.assertIsInstance(speech_mode(stand_in), PerSentence)
 
-    async def test_a_stitched_magpie_line_from_todays_root_reaches_the_transcript_after_its_audio(self):
+    def test_a_host_built_text_to_speech_is_never_written_off_for_silent_lines(self):
+        # A rate-limited speech service returns no audio for a while; the cascade retries or writes off each line, and
+        # the service stays in the pipeline, so the call goes on.
+        tts = build_tts({}, {"server": "magpie-tts:50051"})
+        self.assertEqual(tts._max_consecutive_zero_audio_contexts, 0)
+
+    async def test_a_slow_text_to_speech_setup_leaves_the_event_loop_free(self):
+        # Each blocking setup call runs in a worker thread: while a slow server answers, other sessions keep running.
+        tts = build_tts({}, {"server": "magpie-tts:50051"})
+        loop_thread, threads, ticks = threading.current_thread(), [], []
+
+        def blocking(result=None):
+            threads.append(threading.current_thread())
+            time.sleep(0.2)
+            return result
+
+        async def ticker():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        with (
+            patch.object(tts, "_initialize_client", lambda: blocking()),
+            patch.object(tts, "_create_synthesis_config", lambda: blocking("config")),
+            patch.object(tts, "_load_zero_shot_audio_prompt", lambda: blocking()),
+            patch.object(TTSService, "setup", AsyncMock()),
+        ):
+            task = asyncio.create_task(ticker())
+            await tts.setup(None)
+            task.cancel()
+        self.assertEqual(tts._config, "config")
+        self.assertEqual(len(threads), 3)
+        self.assertNotIn(loop_thread, threads)
+        self.assertGreater(len(ticks), 20)  # about 60 ticks of 10 ms in 0.6 s of blocking calls
+
+    async def test_a_stitched_magpie_line_reaches_the_transcript_after_its_audio(self):
         # The root builds a stitched Magpie TTS from the catalog and the adapter with no mode: a stitched line's text
         # comes before its audio, and the hold keeps each sentence for the transcript.
         tts = build_tts({}, {"server": "magpie-tts:50051", "synthesis_mode": "stitched"})
@@ -265,7 +319,7 @@ class SpeechModeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(adapter.speech, Stitched)
         port, facts = RecordingPort(), Facts()
-        tracker = PlayoutTracker(port)
+        tracker = PlayoutTracker(LiveOutputTranscript(port))
         tracker.listen(facts)
         line = "Your latte is ready. It costs five dollars. Anything else?"
         frames = [LLMFullResponseStartFrame(), LLMTextFrame(line), LLMFullResponseEndFrame()]

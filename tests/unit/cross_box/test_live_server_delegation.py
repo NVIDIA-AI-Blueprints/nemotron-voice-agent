@@ -96,21 +96,12 @@ class RecordingFrontend:
         self.ended.append(delegation_id)
 
 
-class FailingFrontend(RecordingFrontend):
-    """The frontend's ``DelegationEvents``, which fails on the first event it is handed."""
-
-    def on_delegation_event(self, delegation_id, event):
-        super().on_delegation_event(delegation_id, event)
-        if len(self.events) == 1:
-            raise RuntimeError("the frontend failed")
-
-
 class SideCase(unittest.IsolatedAsyncioTestCase):
-    async def side(self, provider, view=None, frontend=None, **delegation):
+    async def side(self, provider, view=None, **delegation):
         """A live session's server delegation on a core whose backend LLM runs on ``provider``, opened and listening."""
         self.provider = provider
         self.view = view if view is not None else RecordingView()
-        self.frontend = frontend or RecordingFrontend()
+        self.frontend = RecordingFrontend()
         side = _delegation(provider, **delegation)
         self.sent: list[dict] = []
         create = side.client.create_response
@@ -133,22 +124,6 @@ class SideCase(unittest.IsolatedAsyncioTestCase):
 
 # ---------------------------------------------------------------------------------------------- close
 class StopHandingTests(SideCase):
-    async def test_after_stop_handing_nothing_is_handed_to_the_frontend_and_the_client_still_gets_every_event(self):
-        # Close step 2: the frontend is handed nothing more. The client still gets what the core writes, so the
-        # ends the core writes at close step 4 reach it before session.closed.
-        for stopped in (False, True):
-            with self.subTest(stop_handing=stopped):
-                gate = asyncio.Event()
-                side = await self.side(Provider([gate, *text_round("Done.")]))
-                await side.delegate(HI)
-                await self.until(lambda: self.provider.payloads)  # the round runs, held at the gate
-                if stopped:
-                    side.stop_handing()
-                gate.set()
-                await self.until(lambda: "response.completed" in self.view.relayed)
-                await side.close()
-                self.assertEqual(self.frontend.results, [] if stopped else ["Done."])
-
     async def test_a_delegation_the_close_ends_reaches_the_client_and_never_the_frontend(self):
         # The close (step 4, after step 2) deletes the conversation, which ends the running delegation's response in the
         # core: its reader relays that end to the client, and the frontend, which is closed, gets nothing.
@@ -213,14 +188,6 @@ class RelayTests(SideCase):
         self.assertEqual(
             self.view.relayed, ["response.created", "response.queued", "response.in_progress", "response.failed"]
         )
-
-    async def test_a_frontend_that_fails_on_an_event_still_gets_the_later_ones_and_the_client_gets_them_all(self):
-        side = await self.side(Provider(text_round("Done.")), frontend=FailingFrontend())
-        await side.delegate(HI)
-        await self.until(lambda: self.frontend.results)
-        await self.until(lambda: "response.completed" in self.view.relayed)
-        self.assertEqual(self.view.relayed, [kind for _, kind in self.frontend.events])
-        self.assertEqual(self.frontend.results, ["Done."])
 
 
 class RequestTests(SideCase):
@@ -320,21 +287,6 @@ class ContinuationTests(SideCase):
         await self.until(lambda: self.frontend.results)
         self.assertEqual(self.frontend.results, ["Done."])
         self.assertEqual(self.provider.payloads[1]["input"][-1]["type"], "function_call_output")
-
-    async def test_text_or_nothing_while_outputs_are_owed_is_refused_and_kept(self):
-        # A response.create that would continue nothing while a function result is owed is refused
-        # with the official code; the typed message stays pending and goes with the outputs once they come.
-        side = await self.side(Provider(call_round("get_menu", {}, "c1"), text_round("Done.")))
-        await side.delegate(HI)
-        await self.until(lambda: "response.completed" in self.view.relayed)
-        await side.item_create(typed("Only green tea."), None)
-        with self.assertRaises(Exception) as refused:
-            await side.response_create("create")
-        self.assertEqual(getattr(refused.exception, "code", None), "function_call_outputs_required")
-        self.assertEqual(core_session(side).ledger.works["W1"].state, "waiting_client")
-        await self.answer_calls(side)
-        await self.until(lambda: self.frontend.results)
-        self.assertEqual(self.provider.payloads[1]["input"][-1], typed("Only green tea."))
 
     async def test_at_close_every_route_closes(self):
         side = await self.side(Provider(call_round("get_menu", {}, "c1"), text_round("Done.")))

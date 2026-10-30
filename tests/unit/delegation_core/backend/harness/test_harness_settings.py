@@ -12,18 +12,27 @@ import unittest
 from pathlib import Path
 
 from delegation_core.app import build_core
-from delegation_core.backend.adapters import ADAPTERS
+from delegation_core.backend.conductors import SteerOpenWork
 from delegation_core.backend.harness import HarnessAdapter, HarnessConductor, HarnessSettings, HarnessSource
 from delegation_core.backend.harness.acp import AcpAgent, AcpProtocol
 from delegation_core.backend.harness.acp.agents import AGENTS
 from delegation_core.backend.harness.acp.hermes import HermesAgent
 from delegation_core.backend.harness.acp.transports import StdioTransport, WebSocketTransport
 from delegation_core.backend.harness.permissions import Reject
+from delegation_core.backend.harness.sessions import PerCall, PerTask
 from delegation_core.backend.harness.steering import CancelReprompt, NativeCommand, NextPrompt
 from delegation_core.config import CoreSettings, ModelEndpoint
 from delegation_core.im.input import BackendTask
-from delegation_core.tables import pick
-from tests.unit.delegation_core.backend.harness.doubles import FakeBridge, FakeRuntime, scratch, until, vocabulary
+from tests.unit.contracts.backend import FakeTaskContext
+from tests.unit.delegation_core.backend.harness.doubles import (
+    AGENT_BLOCKS,
+    PROMPTS,
+    FakeBridge,
+    FakeRuntime,
+    scratch,
+    until,
+    vocabulary,
+)
 
 REPO = Path(__file__).resolve().parents[5]
 FBL = REPO / "src" / "examples" / "frontend_backend_live"
@@ -36,12 +45,22 @@ def lookup(model):
 
 def scratch_root(block):
     """``block`` with its work folders under a scratch folder: a source sweeps its work root when it is built."""
-    return {**block, "work_root": str(scratch("work-root-"))}
+    return {**with_prompts(block), "work_root": str(scratch("work-root-"))}
+
+
+def with_prompts(block):
+    """``block`` with core.yaml's prompts and agent blocks unless it words its own: a harness block carries both."""
+    return {"prompts": PROMPTS, "agents": AGENT_BLOCKS, **block}
+
+
+def parse(block):
+    """The settings of ``block``, with core.yaml's prompts and agent blocks."""
+    return HarnessSettings.parse(with_prompts(block))
 
 
 class SettingsTests(unittest.TestCase):
     def test_the_defaults_are_a_plain_acp_agent_started_over_stdio(self):
-        settings = HarnessSettings.parse({"command": ["some-agent", "--acp"]})
+        settings = parse({"command": ["some-agent", "--acp"]})
         self.assertIsInstance(settings.protocol, AcpProtocol)
         self.assertIs(settings.protocol.transport, StdioTransport)
         self.assertIs(type(settings.agent), AcpAgent)
@@ -49,72 +68,54 @@ class SettingsTests(unittest.TestCase):
         self.assertIsInstance(settings.permission, Reject)
         self.assertEqual((settings.max_running, settings.turns_per_process), (3, None))
         self.assertEqual(settings.bridge.url(8791), "http://127.0.0.1:8791")
-        self.assertEqual(settings.work_root, Path("~/.cache/voiceclaw/harness").expanduser())
+        self.assertEqual(settings.work_root, Path("~/.cache/delegation-core/harness").expanduser())
         self.assertEqual((settings.env, settings.pass_env), ({}, ("PATH", "LANG", "LC_ALL", "TZ")))
 
     def test_each_name_picks_its_class(self):
         for name, cls in {"next_prompt": NextPrompt, "cancel_reprompt": CancelReprompt}.items():
             with self.subTest(name):
-                self.assertIsInstance(HarnessSettings.parse({"command": ["x"], "steer": name}).steering, cls)
-        websocket = HarnessSettings.parse({"transport": "websocket", "url": "ws://agent.example:8790/acp"})
+                self.assertIsInstance(parse({"command": ["x"], "steer": name}).steering, cls)
+        websocket = parse({"transport": "websocket", "url": "ws://agent.example:8790/acp"})
         self.assertIs(websocket.protocol.transport, WebSocketTransport)
         self.assertEqual(sorted(AGENTS), ["acp", "hermes"])
 
     def test_the_hermes_agent_class_is_chosen_by_name_with_its_own_block(self):
-        settings = HarnessSettings.parse({"command": ["hermes", "acp"], "agent": "hermes", "steer": "native_command"})
+        settings = parse({"command": ["hermes", "acp"], "agent": "hermes", "steer": "native_command"})
         self.assertIsInstance(settings.agent, HermesAgent)
         self.assertIsInstance(settings.steering, NativeCommand)
         self.assertEqual(settings.turns_per_process, 4)  # Hermes's own limit
         self.assertEqual((settings.agent.instructions_file, settings.agent.steer_command), (".hermes.md", "/steer "))
-        block = {"instructions_file": "AGENTS.md", "steer_command": "/queue "}
-        tuned = HarnessSettings.parse({"command": ["x"], "agent": "hermes", "agents": {"hermes": block}})
+        block = {**AGENT_BLOCKS["hermes"], "instructions_file": "AGENTS.md", "steer_command": "/queue "}
+        tuned = parse({"command": ["x"], "agent": "hermes", "agents": {"hermes": block}})
         self.assertEqual((tuned.agent.instructions_file, tuned.agent.steer_command), ("AGENTS.md", "/queue "))
-        lower = HarnessSettings.parse({"command": ["x"], "agent": "hermes", "max_running": 2, "turns_per_process": 2})
+        lower = parse({"command": ["x"], "agent": "hermes", "max_running": 2, "turns_per_process": 2})
         self.assertEqual(lower.turns_per_process, 2)
 
-    def test_hermes_guards_a_steers_text_too(self):
-        # On an idle session Hermes runs a steer's text as a prompt of its own, so a text that starts with "/" would
-        # run as one of its commands there: the steer's text gets the guard a prompt's gets.
-        agent = HarnessSettings.parse({"command": ["x"], "agent": "hermes", "steer": "native_command"}).agent
-        self.assertEqual(agent.steer_text("/reset the order to tea"), "/steer Request: /reset the order to tea")
-        self.assertEqual(agent.steer_text("Make it two."), "/steer Make it two.")
+    def test_each_task_opens_a_session_of_its_own_unless_call_keeps_an_answered_one_for_the_next(self):
+        default, call = parse({"command": ["x"]}), parse({"command": ["x"], "session": "call"})
+        self.assertIsInstance(default.sessions, PerTask)
+        self.assertIsInstance(call.sessions, PerCall)
+        self.assertEqual((default.describe()["session"], call.describe()["session"]), ("task", "call"))
 
     def test_the_description_shows_the_url_without_what_may_carry_a_credential(self):
-        settings = HarnessSettings.parse({"transport": "websocket", "url": "wss://u:p@h:9/acp?token=t#f"})
+        settings = parse({"transport": "websocket", "url": "wss://u:p@h:9/acp?token=t#f"})
         self.assertEqual(settings.describe()["url"], "wss://h:9/acp")
         self.assertEqual(settings.url, "wss://u:p@h:9/acp?token=t#f")  # the transport connects to the URL as written
-        self.assertIsNone(HarnessSettings.parse({"command": ["x"]}).describe()["url"])
+        self.assertIsNone(parse({"command": ["x"]}).describe()["url"])
 
     def test_core_yamls_harness_block_parses(self):
         block = CoreSettings.load(FBL / "core.yaml").backend.blocks["harness"]
         settings = HarnessSettings.parse(block)
         self.assertIsInstance(settings.agent, HermesAgent)
         self.assertIsInstance(settings.steering, NativeCommand)
+        self.assertIsInstance(settings.sessions, PerTask)
         self.assertEqual(settings.command, ("hermes", "acp"))
         self.assertEqual(settings.bridge.advertise, "http://127.0.0.1:8791")
         self.assertEqual(settings.runtime_label, "hermes")
         self.assertIn("HERMES_HOME", settings.pass_env)  # the operator's Hermes home, when this server names one
 
-    def test_the_agents_own_configuration_is_no_key_of_the_block(self):
-        # The operator gives the agent its model, key, toolsets, context window and home; an agent class's own values
-        # are in its agents.<name> block. The generic block holds neither.
-        keys = (
-            "home_template",
-            "hermes_toolsets",
-            "context_tokens",
-            "reasoning_effort",
-            "runtime_root",
-            "instructions",
-            "context_file",
-            "steer_command",
-            "own_tool_prefix",
-        )
-        for key in keys:
-            with self.subTest(key), self.assertRaisesRegex(ValueError, f"unknown keys: {key}"):
-                HarnessSettings.parse({"command": ["x"], key: None})
-
     def test_a_bad_block_fails_when_the_core_is_built(self):
-        hermes = {"command": ["x"], "agent": "hermes"}
+        hermes = {"command": ["x"], "agent": "hermes", "agents": AGENT_BLOCKS}
         cases = {
             "an unknown key": ({"command": ["x"], "yolo": True}, "unknown keys: yolo"),
             "an unknown protocol": ({"command": ["x"], "protocol": "a2a"}, "Unknown harness protocol 'a2a'"),
@@ -125,12 +126,14 @@ class SettingsTests(unittest.TestCase):
             "an empty steer": ({**hermes, "agents": {"hermes": {"steer_command": " "}}}, "non-empty text"),
             "a steer with no space": ({**hermes, "agents": {"hermes": {"steer_command": "/steer"}}}, "with a space"),
             "a guard Hermes would run": ({**hermes, "agents": {"hermes": {"command_guard": " /x "}}}, "command_guard"),
+            "no guard": ({**hermes, "agents": {"hermes": {}}}, "missing command_guard"),
             "a file Hermes never reads": ({**hermes, "agents": {"hermes": {"instructions_file": "notes.md"}}}, "reads"),
             "a folder for a file": ({**hermes, "agents": {"hermes": {"instructions_file": ".git"}}}, "reads"),
             "the parent folder": ({**hermes, "agents": {"hermes": {"instructions_file": ".."}}}, "reads"),
             "agents not a mapping": ({"command": ["x"], "agents": ["hermes"]}, "map agent names to their blocks"),
             "a steer a plain agent cannot take": ({"command": ["x"], "steer": "native_command"}, "takes none"),
             "an unknown steering": ({"command": ["x"], "steer": "redirect"}, "Unknown harness steering"),
+            "an unknown session": ({"command": ["x"], "session": "forever"}, "Unknown harness session 'forever'"),
             "an unknown permission": ({"command": ["x"], "permission": "yolo"}, "Unknown permission answer"),
             "no command to start": ({}, "must name the agent to start"),
             "a command as one text": ({"command": "hermes acp"}, "command must be a list"),
@@ -144,7 +147,12 @@ class SettingsTests(unittest.TestCase):
             "a negative wait": ({"command": ["x"], "turn_timeout_seconds": -1}, "positive"),
             "a bridge without a port": ({"command": ["x"], "bridge": {"bind": "localhost"}}, "host:port"),
             "a relative work root": ({"command": ["x"], "work_root": "work"}, "absolute path"),
-            "an unknown template field": ({"command": ["x"], "prompts": {"user": "{who}"}}, "names a field"),
+            "an unknown template field": ({"command": ["x"], "prompts": {**PROMPTS, "user": "{who}"}}, "names a field"),
+            "a prompt left out": (
+                {"command": ["x"], "prompts": {key: text for key, text in PROMPTS.items() if key != "unnamed_call"}},
+                "prompts is missing unnamed_call",
+            ),
+            "no prompts": ({"command": ["x"]}, "prompts is missing conductor_input"),
             "an unknown prompt": ({"command": ["x"], "prompts": {"hello": "x"}}, "unknown keys: hello"),
             "an env value that is not text": ({"command": ["x"], "env": {"A": 1}}, "variable names to text"),
             "pass_env as one text": ({"command": ["x"], "pass_env": "PATH"}, "pass_env must be a list"),
@@ -164,9 +172,6 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             tools=tools,
             vocabulary=vocabulary(),
         )
-
-    def test_the_adapter_table_loads_the_source(self):
-        self.assertIs(pick(ADAPTERS, "harness", "backend adapter")(), HarnessSource)
 
     async def test_building_starts_nothing_and_an_adapter_opens_nothing_before_its_conductor(self):
         source = self.build()
@@ -258,6 +263,24 @@ class CoreSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(adapter.conductor(), conductor)
         await asyncio.sleep(0.2)  # the runtime cannot start: the warm-up fails and is retried at the next use
         self.assertEqual(sorted(adapter._shared), ["conductor", "workers"])
+        await adapter.close()
+        await source.aclose()
+
+    async def test_with_one_task_at_a_time_the_conductor_is_the_steer_rule_and_only_the_workers_runtime_starts(self):
+        block = {
+            "command": ["/nonexistent/runtime"],
+            "max_running": 1,
+            "bridge": {"bind": "127.0.0.1:0", "advertise": None},
+        }
+        source = HarnessSource.from_settings(
+            scratch_root(block), endpoints=lookup, tools=lambda: [], vocabulary=vocabulary()
+        )
+        adapter = source.new()
+        self.assertIsInstance(adapter.conductor(), SteerOpenWork)  # no model places a request
+        self.assertIsInstance(adapter.conductor(), SteerOpenWork)
+        await asyncio.sleep(0.2)
+        self.assertEqual(sorted(adapter._shared), ["workers"])  # no conductor process, and the workers' warmed once
+        self.assertEqual(len(adapter._shared["workers"]), 1)
         await adapter.close()
         await source.aclose()
 
@@ -384,6 +407,50 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
         fresh = await self.adapter.shared(workers)
         self.assertIsNot(fresh, lost)
         self.assertTrue(lost.closed)
+
+    async def test_a_kept_session_takes_a_place_again_only_while_its_process_has_a_turn_free_and_lives(self):
+        workers = self.adapter.workers
+        process = await self.adapter.shared(workers)
+        process.leave()  # a session kept for a later task holds no turn while it waits
+        self.assertTrue(self.adapter.take_place(process))
+        self.assertIs(await self.adapter.shared(workers), process)  # another session takes the last turn
+        self.assertFalse(self.adapter.take_place(process))
+        self.assertEqual(process.places, 2)
+        process.leave()
+        process.client.alive = False
+        self.assertFalse(self.adapter.take_place(process))
+        self.assertEqual(process.places, 1)
+
+
+class KeptSessionTests(unittest.IsolatedAsyncioTestCase):
+    """With ``session: call`` the session a task answered in waits in the adapter's slot until a task or the close."""
+
+    async def asyncSetUp(self):
+        block = {"command": ["/nonexistent/runtime"], "agent": "hermes", "session": "call"}
+        self.source = HarnessSource.from_settings(
+            scratch_root(block), endpoints=lookup, tools=lambda: [], vocabulary=vocabulary()
+        )
+        self.adapter = self.source.new()
+        self.adapter.opener, self.adapter.bridge = NewProcessEachOpen(), FakeBridge()
+
+    async def asyncTearDown(self):
+        await self.adapter.close()
+        await self.source.aclose()
+
+    async def test_the_close_retires_the_session_kept_for_a_later_task(self):
+        run = self.adapter.start(FakeTaskContext())
+        events = run.events()
+        await anext(events)
+        [process] = self.adapter.opener.opened
+        session, door = process.client.sessions[-1], run.door
+        session.say("m1", "Do", "ne.")
+        session.end(1, usage={"totalTokens": 100})
+        [event async for event in events]
+        self.assertEqual((self.adapter.kept.session, process.places, session.retired), (session, 0, False))
+        await self.adapter.close()
+        self.assertIsNone(self.adapter.kept)
+        self.assertTrue(session.retired)
+        self.assertIn(door, [closed for closed, _ in self.adapter.bridge.closed])
 
 
 if __name__ == "__main__":

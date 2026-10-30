@@ -11,7 +11,7 @@ import unittest
 from examples.frontend_backend_live.cascade.floor import Floor
 from examples.frontend_backend_live.cascade.ports import ReadyResult
 from examples.frontend_backend_live.models.decision import TalkerDecision
-from tests.unit.frontend_backend_live.cascade.doubles import Call, settle
+from tests.unit.frontend_backend_live.cascade.doubles import Call
 
 
 class Clock:
@@ -48,41 +48,39 @@ class FloorTests(unittest.IsolatedAsyncioTestCase):
         clock.now = 18.0
         self.assertEqual(floor.quiet_for(), 3.0)
 
-    async def test_waiting_for_idle_returns_when_the_line_ends(self):
+    async def test_a_wait_for_a_change_counts_one_made_before_the_wait_first_runs(self):
         floor = Floor(Clock())
+        waiting = asyncio.ensure_future(floor.wait_change())  # it has not run yet
         floor.line_handed()
-        waiting = asyncio.create_task(floor.wait_idle())
+        await asyncio.wait_for(waiting, 1)
+
+    async def test_it_counts_the_callers_starts_and_a_wait_for_their_silence_ends_when_they_stop(self):
+        floor = Floor(Clock())
+        await asyncio.wait_for(floor.wait_caller_silent(), 1)  # silent: at once
+        floor.set_caller_speaking(True)
+        waiting = asyncio.ensure_future(floor.wait_caller_silent())
+        floor.set_turns_busy(True)  # another fact moves; the caller still speaks
         await asyncio.sleep(0.01)
         self.assertFalse(waiting.done())
-        floor.line_settled()
+        floor.set_caller_speaking(False)
         await asyncio.wait_for(waiting, 1)
+        floor.set_caller_speaking(True)
+        self.assertEqual(floor.caller_starts, 2)
+
+    def test_a_call_for_the_callers_silence_runs_at_once_or_once_when_they_stop(self):
+        floor, calls = Floor(Clock()), []
+        floor.when_caller_silent(lambda: calls.append("silent"))  # silent: at once
+        floor.set_caller_speaking(True)
+        floor.when_caller_silent(lambda: calls.append("stopped"))
+        floor.set_turns_busy(True)  # another fact moves; the caller still speaks
+        self.assertEqual(calls, ["silent"])
+        floor.set_caller_speaking(False)
+        floor.set_caller_speaking(True)
+        floor.set_caller_speaking(False)
+        self.assertEqual(calls, ["silent", "stopped"])
 
 
 class HoldTests(Call):
-    async def test_a_result_waits_while_the_caller_speaks_with_no_time_cap(self):
-        await self.call()
-        self.session.caller_started()
-        self.session.presenter.ready(ReadyResult("D1", "m1", "Latte added."))
-        await asyncio.sleep(0.3)
-        self.assertEqual(self.spoken, [])  # held as long as the caller speaks
-        self.session.caller_stopped()
-        await self.said(1)
-
-    async def test_a_result_waits_while_a_turn_is_decided(self):
-        slow = asyncio.get_running_loop().create_future()
-        await self.call([slow])
-        self.buffer.turn("Hello?")
-        self.session.caller_stopped()
-        deciding = asyncio.create_task(self.session.on_turn())
-        await settle(lambda: self.frontend.calls)
-        self.session.presenter.ready(ReadyResult("D1", "m1", "Latte added."))
-        await asyncio.sleep(0.05)
-        self.assertEqual(self.spoken, [])
-        slow.set_result(TalkerDecision("speak", "Hi there."))
-        await deciding
-        await self.said(2)
-        self.assertEqual(self.spoken[0], "Hi there.")
-
     async def test_with_playout_reported_the_result_waits_for_the_line_in_flight_to_end(self):
         await self.call([TalkerDecision("speak", "We open at seven.")], reports_playout=True)
         await self.turn("When do you open?")

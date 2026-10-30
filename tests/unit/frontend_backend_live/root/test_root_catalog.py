@@ -7,6 +7,7 @@
 import os
 import re
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlparse
@@ -15,11 +16,14 @@ import yaml
 
 import examples_registry
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog, resolve_endpoint
-from examples.frontend_backend_live.prompts.catalog import role_instructions
-from utils import NVCF_LLM_BASE_URL
+from examples.frontend_backend_live.prompts.catalog import catalog_prompt
+from utils import NVCF_LLM_BASE_URL, clear_service_context, filter_session_config, set_service_context
 
 REPO = Path(__file__).resolve().parents[4]
 SELF_HOSTED_RECIPES = ("server", "single-gpu")
+EXAMPLE = "frontend-backend-live"
+LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
+ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
 
 
 def compose_services() -> dict[str, dict]:
@@ -56,8 +60,10 @@ def started_hosts(services: dict[str, dict], profile: str) -> set[str]:
 
 
 def entry_host(entry: dict) -> str:
-    """The host a catalog entry points at: its ``base_url``'s, or its gRPC ``server``'s."""
-    return urlparse(entry["base_url"]).hostname if entry.get("base_url") else entry["server"].rsplit(":", 1)[0]
+    """The host a catalog entry points at: its ``base_url``'s, its gRPC ``server``'s, or ``""`` when it has neither."""
+    if entry.get("base_url"):
+        return urlparse(entry["base_url"]).hostname
+    return entry["server"].rsplit(":", 1)[0] if entry.get("server") else ""
 
 
 class ComposeWiringTests(unittest.TestCase):
@@ -77,13 +83,54 @@ class ComposeWiringTests(unittest.TestCase):
                     section = catalog[recipe].get((example.get("categories") or {}).get(slot, slot), {})
                     default = next(key for key in keys if key in section)  # the registry's first listed entry
                     with self.subTest(profile=profile, slot=slot, entry=default):
-                        self.assertIn(entry_host(section[default]), hosts)
+                        host = entry_host(section[default])
+                        if host:
+                            self.assertIn(host, hosts)
+                        else:  # no local server: the entry runs on NVIDIA Cloud, which no profile starts
+                            self.assertIn("nvcf", section[default])
                     checked += 1
         self.assertGreater(checked, 20)  # every example's local profiles were read
 
-    def test_the_live_server_profile_defaults_to_the_model_it_starts(self):
-        services = examples_registry.EXAMPLES["frontend-backend-live"]["services"]
-        self.assertEqual((services["llm"][0], services["thinker-llm"][0]), ("nemotron-lightning", "nemotron-lightning"))
+
+class DefaultModelTests(unittest.TestCase):
+    """The Live example's default models in each recipe, from the shipped catalog and registry."""
+
+    @contextmanager
+    def recipe(self, recipe: str):
+        """The shipped catalog under ``recipe`` and a placeholder NVIDIA key, bound to the example."""
+        with patch.dict(os.environ, {"SERVICE_RECIPE": recipe, "NVIDIA_API_KEY": "nvapi-test"}):
+            os.environ.pop("SERVICES_PATH", None)  # the patch restores the whole environment
+            set_service_context(examples_registry.EXAMPLES[EXAMPLE])
+            try:
+                yield ExampleCatalog.read()
+            finally:
+                clear_service_context()
+
+    def test_cloud_and_server_run_lightning_and_ultra_on_the_public_api(self):
+        defaults = {
+            "cloud": ("cloud-nim:nemotron-lightning", "cloud-nim:nemotron-ultra"),
+            "server": ("self-hosted:nemotron-lightning", "self-hosted:nemotron-ultra"),
+        }
+        for recipe, ids in defaults.items():
+            with self.subTest(recipe=recipe), self.recipe(recipe) as catalog:
+                self.assertEqual((catalog.entry("llm")["id"], catalog.entry("thinker-llm")["id"]), ids)
+                frontend, backend = catalog.model("llm"), catalog.model("thinker-llm")
+                thinking = frontend.extra_params["extra_body"]["chat_template_kwargs"]
+                self.assertEqual((frontend.model, thinking), (LIGHTNING, {"enable_thinking": False}))
+                self.assertEqual((backend.model, backend.base_url), (ULTRA, NVCF_LLM_BASE_URL))
+                # Reasoning on, and no reasoning budget, which the public endpoint rejects for Ultra.
+                reasoning = {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}
+                self.assertEqual(backend.extra_params, {"temperature": 0.0, "max_tokens": 4096, **reasoning})
+
+    def test_single_gpu_runs_both_roles_on_its_lightning_and_lists_ultra_after(self):
+        with self.recipe("single-gpu") as catalog:
+            local = "self-hosted:nemotron-lightning"
+            self.assertEqual((catalog.entry("llm")["id"], catalog.entry("thinker-llm")["id"]), (local, local))
+            self.assertEqual(catalog.models("thinker-llm"), [LIGHTNING, ULTRA])
+            # A session that picks Ultra reaches the public API, not the local server of the slot's default.
+            body = filter_session_config({"pipeline_mode": EXAMPLE, "thinker_llm_id": "cloud-nim:nemotron-ultra"})
+            picked = resolve_endpoint(catalog.entry("thinker-llm"), body, "thinker_", slot="thinker-llm")
+            self.assertEqual((picked.model, picked.base_url), (ULTRA, NVCF_LLM_BASE_URL))
 
 
 class EndpointTests(unittest.TestCase):
@@ -147,8 +194,8 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(LookupError, "'org/z' is not in the catalog"):
             self.CATALOG.named("thinker-llm", "org/z")
 
-    def test_a_prompt_is_the_roles_static_instructions(self):
-        self.assertEqual(self.CATALOG.prompt("talker"), role_instructions("talker"))
+    def test_a_prompt_is_the_entry_as_written(self):
+        self.assertEqual(self.CATALOG.prompt("voice"), catalog_prompt("voice"))  # no channel context follows it
 
 
 if __name__ == "__main__":

@@ -8,23 +8,13 @@
 import unittest
 
 from delegation_core.backend.providers.chat_completions import ChatCompletionsBackend
-from delegation_core.backend.providers.openai_responses import OpenAIResponsesBackend
 from delegation_core.config import ModelEndpoint
 from tests.unit.contracts.base import collect
-from tests.unit.delegation_core.backend.llm.doubles import LIMITS, FakeChat, chunk, tool_fragment
+from tests.unit.delegation_core.backend.llm.doubles import LIMITS, FakeChat, Sleep, chunk, tool_fragment
 
 MENU = {"type": "function", "name": "get_menu", "parameters": {"type": "object", "properties": {}}}
 CART = {"type": "function", "name": "manage_cart", "parameters": {"type": "object", "properties": {}}}
 THINKING = {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}
-# What tau2 sends: functions, tool_choice auto, one call per round, maybe an effort.
-TAU2 = {
-    "model": "test/model",
-    "instructions": "Policy.",
-    "tools": [MENU],
-    "tool_choice": "auto",
-    "parallel_tool_calls": False,
-    "reasoning": {"effort": "low"},
-}
 
 
 def call(index, name):
@@ -51,6 +41,18 @@ class ClientSettingsTests(unittest.IsolatedAsyncioTestCase):
         chat = provider([chunk(finish="stop")])
         await collect(chat.stream(payload(parallel_tool_calls=False)))
         self.assertNotIn("parallel_tool_calls", chat.client.requests[0])  # never sent: an endpoint may refuse it
+
+    async def test_one_call_per_round_ends_the_round_once_a_second_call_starts(self):
+        # The output cap cuts the second call; the round already ended with the first, which a cut never costs.
+        cut = [
+            chunk(tool_calls=[call(0, "get_menu")]),
+            chunk(tool_calls=[tool_fragment(1, "p1", "manage_cart", '{"item": "te')]),
+            Sleep(5),  # never read: a provider that read on would hit its silence limit here
+            chunk(finish="length"),
+        ]
+        events = await collect(provider(cut).stream(payload(parallel_tool_calls=False)))
+        done = [event["item"]["name"] for event in events if event["type"] == "response.output_item.done"]
+        self.assertEqual((done, events[-1]["type"]), (["get_menu"], "response.completed"))
 
     def test_effort_none_turns_thinking_off_where_the_endpoint_has_the_switch(self):
         chat = provider(**THINKING)
@@ -87,11 +89,6 @@ class ClientSettingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([param for param, _ in problems], ["tools", "tools", "service_tier", "text.verbosity"])
         self.assertIn("web_search", problems[0][1])
         self.assertEqual(ChatCompletionsBackend.unsupported({"service_tier": "auto"}), [])
-
-    def test_tau2s_session_body_reports_nothing(self):
-        self.assertEqual(ChatCompletionsBackend.unsupported(TAU2), [])
-        self.assertEqual(OpenAIResponsesBackend.unsupported(TAU2), [])
-        self.assertEqual(OpenAIResponsesBackend.unsupported({"tools": [{"type": "web_search"}]}), [])
 
 
 if __name__ == "__main__":

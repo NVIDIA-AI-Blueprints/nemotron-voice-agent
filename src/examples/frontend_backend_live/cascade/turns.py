@@ -6,8 +6,13 @@
 Turns are taken from the host's turn buffer by count, both when the caller stops speaking and when a turn is to be
 decided, so either frame order notes each turn once. One decision runs at a time, for caller turns and instructions
 alike. A new turn cuts off the caller decision in flight (Pipecat cancels it), so its words wait on and the next
-decision covers them too: every caller turn is noted once and decided once. While turns wait or a decision runs, the
-floor is busy, so nothing the voice says on its own goes before the reply.
+decision covers them too: every caller turn is noted once and decided once. A new turn that began before the decision
+did leaves no interruption to cut it off, so a decision that completes after the caller spoke again past the turns it
+covers is discarded before it says or sends anything, and those turns wait on the same way. Once the caller is silent
+again, they are decided with no new turn, unless a decision runs then: speech with no words may bring no decision of
+its own. While turns wait or a decision runs, the floor is busy, so nothing the voice says on its own goes before the
+reply. A reply or a lead-in never starts while the caller speaks: it waits for the floor, and a lead-in is dropped once
+the caller starts speaking after its delegation was decided.
 """
 
 from __future__ import annotations
@@ -27,16 +32,11 @@ from examples.frontend_backend_live.cascade.memory import (
     TalkerMemory,
     TurnBuffer,
     caller_turns,
-    last_assistant_text,
     split_messages,
 )
 from examples.frontend_backend_live.cascade.ports import DisplaySink
-from examples.frontend_backend_live.cascade.talker.repeat_guard import repeated_speech
-from examples.frontend_backend_live.cascade.talker.router import TurnRouter
-from examples.frontend_backend_live.cascade.utterances import LineKind, Utterances
+from examples.frontend_backend_live.cascade.utterances import Line, LineKind, Utterances
 from examples.frontend_backend_live.cascade.worknote import WorkNote
-from examples.frontend_backend_live.cascade.writer.guards import safe_lead_in
-from examples.frontend_backend_live.config_manager.schema import LiveConfig
 from examples.frontend_backend_live.models.decision import TalkerDecision
 
 if TYPE_CHECKING:
@@ -44,24 +44,33 @@ if TYPE_CHECKING:
 
 
 class Acknowledgements:
-    """The automatic spoken acknowledgement of a delegation whose talker decision brought no lead-in.
+    """The spoken acknowledgement of a delegation: the lead-in the talker wrote in the decision that delegated it.
 
-    The fixed ``lead_in`` line is said after the part's delay (0: at once; an empty line: none). A pending one is
-    dropped when its delegation's result arrives or the delegation ends (its own line, or its taker, speaks for it),
-    when the caller speaks, or when the application appends commentary or thinking, which drops every delegation's.
+    GPT-Live requests an acknowledgement for each delegation and lets its model word it; the talker words it in the
+    same decision. A delegation with no lead-in says nothing. The lead-in is said after the part's delay (0: at once),
+    once the caller is silent; until then it is pending. It is dropped when the caller started speaking after its
+    delegation was decided, since the next decision answers their newer words. A pending one is also dropped when its
+    delegation's result arrives or the delegation ends (its own line, or its taker, speaks for it), when the caller
+    speaks, or when the application appends commentary or thinking, which drops every delegation's.
     """
 
-    def __init__(self, utterances: Utterances, lines: FixedLines, *, observe: Callable[..., None]):
+    def __init__(self, utterances: Utterances, *, observe: Callable[..., None]):
         """Say through ``utterances``; nothing is pending."""
-        self.utterances, self.lines, self.observe = utterances, lines, observe
+        self.utterances, self.observe = utterances, observe
+        self.floor: Floor = utterances.floor
         self.pending: dict[str, asyncio.Task] = {}
 
-    async def acknowledge(self, delegation_id: str, delay_ms: int) -> None:
-        """Acknowledge the delegation with the ``lead_in`` line, now or after ``delay_ms``."""
-        text = self.lines.lead_in
+    async def acknowledge(self, delegation_id: str, text: str, delay_ms: int, *, decided_at: int) -> None:
+        """Acknowledge the delegation with the talker's lead-in ``text``, now or after ``delay_ms``; empty: none.
+
+        ``decided_at`` is the floor's count of the caller's starts when the delegation was decided.
+        """
         if not text.strip():
             return
-        if delay_ms <= 0:
+        if self.floor.caller_starts != decided_at:
+            self.observe("acknowledgement.dropped", delegation_id=delegation_id)
+            return
+        if delay_ms <= 0 and not self.floor.caller_speaking:
             await self.utterances.say_lead_in(delegation_id, text)
             return
         task = asyncio.create_task(self._later(delegation_id, delay_ms / 1000, text), name="acknowledgement")
@@ -69,6 +78,7 @@ class Acknowledgements:
 
     async def _later(self, delegation_id: str, delay: float, text: str) -> None:
         await asyncio.sleep(delay)
+        await self.floor.wait_caller_silent()
         self.pending.pop(delegation_id, None)
         await self.utterances.say_lead_in(delegation_id, text)
 
@@ -91,7 +101,6 @@ class CallerTurns:
     def __init__(
         self,
         agent: LiveAgent,
-        config: LiveConfig,
         memory: TalkerMemory,
         buffer: TurnBuffer,
         *,
@@ -109,7 +118,6 @@ class CallerTurns:
 
         Args:
             agent: The models; turns use the talker and the normalizer.
-            config: The validated example configuration (the guards, the router, the recovery switch).
             memory: The talker's memory.
             buffer: The host's turn buffer, which the caller's turns are taken from.
             heard_log: Notes the caller's words and builds each delegation's input.
@@ -119,28 +127,26 @@ class CallerTurns:
             acknowledgements: The automatic acknowledgements.
             lines: The voice's fixed lines (the refusal).
             display: Hears each delegation start.
-            resume_after_noise: Whether a turn with no words right after a cut says the unheard rest once.
+            resume_after_noise: Whether a turn with no words, or one the talker waits on, right after a cut says the cut
+                line's unheard rest once.
             observe: ``observe(kind, **fields)`` hook for traces.
         """
-        self.agent, self.config, self.memory, self.buffer = agent, config, memory, buffer
+        self.agent, self.memory, self.buffer = agent, memory, buffer
         self.heard_log, self.utterances, self.worknote, self.delegation = heard_log, utterances, worknote, delegation
         self.acknowledgements, self.lines, self.display = acknowledgements, lines, display
         self.resume_after_noise, self.observe = resume_after_noise, observe
         self.floor: Floor = utterances.floor
-        self.router = (
-            TurnRouter(config.guards.continuers)
-            if config.guards.turn_router or config.guards.turn_router_shadow
-            else None
-        )
         # The action table: what each of the talker's actions does with a decided turn.
         self.actions = {"speak": self._speak, "delegate": self._delegate, "wait": self._wait}
         # The caller's turns heard and not decided yet, oldest first; the next decision covers them all.
         self.waiting: list[str] = []
+        self.cuts: list[Line | None] = []  # beside each waiting turn, the line its words cut, if any
         # How many of the buffer's caller turns were taken. Those it holds when the call starts are history.
         self._taken = len(caller_turns(buffer.messages()))
         self._lock = asyncio.Lock()  # one decision at a time: caller turns and instructions
         self._deciding = False
         self.handoffs: set[asyncio.Task] = set()  # hand-offs still running, whoever waited for them
+        self.redecisions: set[asyncio.Task] = set()  # decisions of the turns a dropped decision left waiting
 
     def hear(self) -> None:
         """Take each caller turn the buffer gained: note it, and keep it waiting for a decision. Nothing awaits."""
@@ -149,7 +155,7 @@ class CallerTurns:
                 self.heard_log.caller(text)
                 self.memory.caller(text)
                 self.waiting.append(text)
-                self.utterances.caller_spoke()
+                self.cuts.append(self.utterances.caller_spoke())
         self.buffer.trim(0)  # every turn is taken: the buffer keeps its prompt only, so it stays bounded
         self._taken = len(caller_turns(self.buffer.messages()))
         self._busy()
@@ -185,9 +191,6 @@ class CallerTurns:
                 self._busy()
 
     async def _decide_turns(self) -> None:
-        text = " ".join(self.waiting)
-        if self.router and self._dropped_by_router(text):
-            return
         await self._act(await self._normalize())
 
     async def _resume(self) -> None:
@@ -200,7 +203,7 @@ class CallerTurns:
         newest = len(self.waiting) - 1  # a turn heard while the normalizer runs comes after it
         heard = self.waiting[newest]
         normalizer = self.agent.normalizer
-        if normalizer is not None and normalizer.wanted(heard):
+        if normalizer is not None:
             _, history = split_messages(self.memory.messages())
             normalized, diagnostics = await normalizer.normalize(history, heard)
             self.observe("normalizer.completed", heard=heard, normalized=normalized, **diagnostics)
@@ -213,34 +216,78 @@ class CallerTurns:
     async def _act(self, text: str) -> None:
         """Run the talker's decision and carry it out; it covers the turns waiting when the talker reads the memory.
 
-        A turn heard while the talker decides is not in what it read, so it stays waiting for the next decision: its
-        stop frame can come during a decision no interruption cuts off, such as an instruction's.
+        A decision that covers turns is discarded when the caller spoke again after them (:meth:`_spoke_after`): it
+        says, sends and records nothing, and those turns wait for the next decision, which covers them with the newer
+        words, or comes once the caller is silent (:meth:`_redecide`). A turn heard while the talker decides an
+        instruction alone is not in what it read, so it stays waiting for the next decision: its stop frame can come
+        during a decision no interruption cuts off.
         """
-        instructions, history = split_messages(self.memory.messages())
-        covered = len(self.waiting)
+        instructions, history = split_messages(self.memory.labeled())
+        covered, started = len(self.waiting), self.floor.caller_starts
         open_work = bool(self.worknote.open())
         decision = await self._decide(instructions, history, self.work_line(), work_open=open_work)
-        del self.waiting[:covered]
+        if covered and self._spoke_after(covered, started):
+            self.observe("talker.discarded", action=decision.action, **decision.diagnostics)
+            self.floor.when_caller_silent(self._redecide)
+            return
+        cut = next((line for line in self.cuts[:covered] if line is not None), None)  # joined words: the first cut
+        del self.waiting[:covered], self.cuts[:covered]
         self._busy()
-        if not open_work:
-            decision = self._apply_repeat_guard(decision, text, history)
         self.observe("talker.completed", action=decision.action, **decision.diagnostics)
         # An action the table does not know would be spoken, as a reply is.
         action = self.actions.get(decision.action, self._speak)
-        await action(decision, text)
+        await action(decision, text, cut)
+
+    def _spoke_after(self, covered: int, started: int) -> bool:
+        """Whether the caller spoke again after a decision's ``covered`` turns; ``started``: the starts counted then.
+
+        They speak now, they started since the talker read the turns, or a newer turn was heard. The host can commit a
+        turn after the caller's next one began, so that start comes before the decision and only the caller still
+        speaking shows it; a start that ended with no words before the decision began leaves nothing to join.
+        """
+        floor = self.floor
+        return floor.caller_speaking or floor.caller_starts != started or len(self.waiting) > covered
+
+    def _redecide(self) -> None:
+        """The caller is silent after a dropped decision: decide the turns it left waiting, unless a decision runs then.
+
+        Speech with no words may bring no decision of its own, so they would wait for the caller's next words. The
+        decision runs in a task of its own, once the dropping decision has ended; a newer turn heard meanwhile drops it
+        in turn, and the decision after it covers both.
+        """
+        task = asyncio.create_task(self._decide_dropped(), name="turns-redecided")
+        self.redecisions.add(task)
+        task.add_done_callback(self.redecisions.discard)
+
+    async def _decide_dropped(self) -> None:
+        if not self.waiting or self._deciding:
+            return
+        try:
+            await self.on_turn()  # turns wait, so it decides them
+        except Exception as exc:
+            logger.exception(f"Live turn failed: {exc}")
 
     def work_line(self) -> str:
         """What the talker reads about open work (the work note's line)."""
         return self.worknote.line()
 
-    async def _speak(self, decision: TalkerDecision, text: str) -> None:
-        await self.utterances.say(decision.speech, LineKind.REPLY)
+    async def _answer(self, text: str, kind: LineKind) -> None:
+        """Say a line that answers the decision, once the caller is silent."""
+        await self.floor.wait_caller_silent()
+        await self.utterances.say(text, kind)
 
-    async def _wait(self, decision: TalkerDecision, text: str) -> None:
+    async def _speak(self, decision: TalkerDecision, text: str, cut: Line | None) -> None:
+        await self._answer(decision.speech, LineKind.REPLY)
+
+    async def _wait(self, decision: TalkerDecision, text: str, cut: Line | None) -> None:
+        """Say nothing for the turn; a line its words cut says its unheard rest once, as after a turn with no words."""
         self.observe("talker.waited")
+        if cut is not None and self.resume_after_noise and await self.utterances.resume(cut):
+            self.observe("line.resumed")
 
-    async def _delegate(self, decision: TalkerDecision, text: str) -> None:
+    async def _delegate(self, decision: TalkerDecision, text: str, cut: Line | None) -> None:
         reservation = self.worknote.reserve(text)  # before any await: no decision meanwhile reads "none"
+        decided_at = self.floor.caller_starts
         handoff = asyncio.create_task(self._hand_off(reservation, text), name="delegation-hand-off")
         self.handoffs.add(handoff)
         handoff.add_done_callback(_retrieved)
@@ -252,20 +299,18 @@ class CallerTurns:
         except Exception as exc:
             logger.warning(f"The delegation was refused: {type(exc).__name__}: {exc}")
             self.observe("delegation.refused", error_type=type(exc).__name__)
-            await self.utterances.say(self.lines.refusal, LineKind.NOTICE)
+            await self._answer(self.lines.refusal, LineKind.NOTICE)
             return
-        speech = safe_lead_in(decision.speech) if decision.speech else ""
-        if speech != decision.speech:
-            self.observe("talker.lead_in_replaced", original=decision.speech)
-        if speech:
-            await self.utterances.say_lead_in(delegation_id, speech)
-        else:
-            await self.acknowledgements.acknowledge(delegation_id, self.delegation.acknowledgement_delay_ms)
+        delay_ms = self.delegation.acknowledgement_delay_ms
+        await self.acknowledgements.acknowledge(delegation_id, decision.speech.strip(), delay_ms, decided_at=decided_at)
 
     async def _hand_off(self, reservation: str | None, text: str) -> str:
-        """Send the delegation with the heard log's input; confirm the reserved entry, or release it when refused."""
+        """Send the delegation with the heard log's input; confirm the reserved entry, or release it when refused.
+
+        The input notes an answer that waits to be heard as it is built: the work note's "answer ready".
+        """
         try:
-            delegation_id = await self.heard_log.delegate(self.delegation)
+            delegation_id = await self.heard_log.delegate(self.delegation, unheard=self.worknote.answer_ready())
         except BaseException:
             self.worknote.release(reservation)
             raise
@@ -273,17 +318,6 @@ class CallerTurns:
         self.display.started(delegation_id, text)
         self.observe("delegation.handed", delegation_id=delegation_id)
         return delegation_id
-
-    def _dropped_by_router(self, text: str) -> bool:
-        verdict = self.router.verdict(text, last_assistant_text(self.memory.messages()))
-        if verdict.keep:
-            return False
-        if self.config.guards.turn_router:
-            self.observe("router.dropped", text=text, reason=verdict.reason)
-            self.waiting.clear()
-            return True
-        self.observe("router.would_drop", text=text, reason=verdict.reason)
-        return False
 
     async def _decide(
         self, instructions: str, history: list[dict], work_in_progress: str, *, work_open: bool
@@ -296,15 +330,6 @@ class CallerTurns:
             logger.warning(f"Talker failed ({type(exc).__name__}: {exc}); recovering the turn")
             self.observe("talker.recovered", error_type=type(exc).__name__)
             return self.agent.talker.after_failure({"recovery": "talker_failed"}, work_open=work_open)
-
-    def _apply_repeat_guard(self, decision: TalkerDecision, text: str, history: list[dict]) -> TalkerDecision:
-        if not self.config.guards.repeat_guard or decision.action != "speak":
-            return decision
-        similarity = repeated_speech(decision.speech, text, history)
-        if not similarity:
-            return decision
-        self.observe("talker.repeat_replaced", similarity=similarity)
-        return TalkerDecision("delegate", "", {**decision.diagnostics, "recovery": "repeat_guard"})
 
 
 def _retrieved(task: asyncio.Task) -> None:

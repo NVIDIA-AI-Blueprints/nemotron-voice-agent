@@ -10,5 +10,6 @@ delegation:
   result_format: speak_display         # a show item for the task cards, then the answer to speak
 
 backend:
+  prompt: thinker                      # the cafe's backend prompt; the bot adds the channel context, as for its talker
   tools:
     cafe: {}                           # the cafe's menu, cart and order tools run on the server

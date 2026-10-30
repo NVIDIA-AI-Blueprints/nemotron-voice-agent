@@ -5,8 +5,8 @@
 
 ``llm`` is the backend LLM, directly connected (the default); ``llm-agent`` is a model conductor with LLM workers;
 ``harness`` is an external agent runtime over its protocol, such as Hermes over ACP. Each entry imports its
-``AdapterSource`` only when a core is built with it, so a harness's protocol packages load only for a harness. Tests
-and the emulator pass their own table to ``build_core(adapters=...)``.
+``AdapterSource`` only when a core is built with it, so a harness's protocol packages load only for a harness.
+``build_core(adapters=...)`` can replace this table.
 """
 
 from __future__ import annotations

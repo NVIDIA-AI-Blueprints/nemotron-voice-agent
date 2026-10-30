@@ -14,7 +14,7 @@ from tests.unit.frontend_backend_live.cascade.doubles import CONFIG
 
 
 class SettingsTests(unittest.TestCase):
-    def test_the_defaults_are_the_frozen_ones(self):
+    def test_the_defaults_are_the_documented_ones(self):
         settings = CascadeSettings.parse({})
         self.assertEqual(
             (
@@ -27,19 +27,11 @@ class SettingsTests(unittest.TestCase):
                 settings.start_timeout_seconds,
                 settings.resume_after_noise,
                 settings.retry_silent_lines,
+                settings.heard_words,
+                settings.estimate_chars_per_second,
                 settings.display_label,
             ),
-            (62.0, "writer", 8.0, 1, 16_000, 0.8, 3.0, True, True, "voiceclaw"),
-        )
-
-    def test_a_block_names_only_what_differs_and_null_turns_a_clock_off(self):
-        settings = CascadeSettings.parse(
-            {"delegation": {"app_wait_seconds": None, "progress_after_seconds": None}, "memory": {"compact_at": 0.5}},
-            display_label="ours",
-        )
-        self.assertEqual(
-            (settings.app_wait_seconds, settings.progress_after_seconds, settings.compact_at, settings.display_label),
-            (None, None, 0.5, "ours"),
+            (50.0, "writer", 8.0, 3, 16_000, 0.8, 3.0, True, True, "as_recorded", 15.0, "delegation_core"),
         )
 
     def test_unknown_keys_and_wrong_values_are_refused(self):
@@ -50,8 +42,14 @@ class SettingsTests(unittest.TestCase):
             ({"memory": {"compact_at": 1.5}}, "memory.compact_at must be a number above 0 and at most 1"),
             ({"speech": {"start_timeout_seconds": None}}, "speech.start_timeout_seconds must be a positive number"),
             ({"speech": {"resume_after_noise": "yes"}}, "speech.resume_after_noise must be true or false"),
+            ({"speech": {"heard_words": True}}, "speech.heard_words must be a name"),
+            ({"speech": {"heard_words": "guessed"}}, "Unknown speech.heard_words 'guessed'"),
+            ({"speech": {"estimate_chars_per_second": 0}}, "must be a positive number of characters per second"),
             ({"delegation": {"progress_max_per_delegation": True}}, "must be a positive whole number"),
-            ({"delegation": {"result_wording": "poetic"}}, "Unknown result wording 'poetic'"),
+            (
+                {"delegation": {"result_wording": "poetic"}},
+                "Unknown result wording 'poetic'; known: as_written, writer",
+            ),
         ):
             with self.subTest(block=block), self.assertRaisesRegex(ValueError, message):
                 CascadeSettings.parse(block)
@@ -69,7 +67,13 @@ class SettingsTests(unittest.TestCase):
                 progress_max_per_delegation=2,
             ),
             memory=MemoryConfig(context_tokens=8000, compact_at=0.5),
-            speech=SpeechConfig(start_timeout_seconds=2.0, resume_after_noise=False, retry_silent_lines=False),
+            speech=SpeechConfig(
+                start_timeout_seconds=2.0,
+                resume_after_noise=False,
+                retry_silent_lines=False,
+                heard_words="estimated",
+                estimate_chars_per_second=12.0,
+            ),
             display_label="ours",
         )
         settings = CascadeSettings.from_live_config(config)
@@ -84,9 +88,11 @@ class SettingsTests(unittest.TestCase):
                 settings.start_timeout_seconds,
                 settings.resume_after_noise,
                 settings.retry_silent_lines,
+                settings.heard_words,
+                settings.estimate_chars_per_second,
                 settings.display_label,
             ),
-            (None, "as_written", None, 2, 8000, 0.5, 2.0, False, False, "ours"),
+            (None, "as_written", None, 2, 8000, 0.5, 2.0, False, False, "estimated", 12.0, "ours"),
         )
         with self.assertRaisesRegex(ValueError, "Unknown result wording 'poetic'"):
             CascadeSettings.from_live_config(replace(CONFIG, delegation=DelegationConfig(result_wording="poetic")))

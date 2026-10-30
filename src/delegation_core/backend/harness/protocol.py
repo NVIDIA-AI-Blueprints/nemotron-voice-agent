@@ -5,10 +5,10 @@
 
 Each seam is an interface with implementations named in ``backend.harness`` and resolved by a table of loaders, so a
 class loads only when a core is built with it: :class:`HarnessProtocol` (``protocol``, such as ``acp``), which opens a
-:class:`HarnessClient` per runtime process; :class:`SteerStrategy` (``steer``); and :class:`PermissionAnswer`
-(``permission``). Everything a session reports reaches its run through one mailbox, in wire order: the agent's updates,
-each prompt's :class:`PromptEnded`, the bridge's calls and the run's own :class:`Wake`. Each event applies itself to an
-:class:`EventReader` (double dispatch), so no reader switches on a type.
+:class:`HarnessClient` per runtime process; :class:`SteerStrategy` (``steer``); :class:`SessionPolicy` (``session``);
+and :class:`PermissionAnswer` (``permission``). Everything a session reports reaches its run through one mailbox, in
+wire order: the agent's updates, each prompt's :class:`PromptEnded`, the bridge's calls and the run's own
+:class:`Wake`. Each event applies itself to an :class:`EventReader` (double dispatch), so no reader switches on a type.
 """
 
 from __future__ import annotations
@@ -18,9 +18,12 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from delegation_core.backend.port import Steering
+
+if TYPE_CHECKING:
+    from .sessions import KeptSession
 
 
 # --------------------------------------------------------------------------------------------- events
@@ -272,7 +275,7 @@ class HarnessSession(Protocol):
     async def cancel(self) -> bool:
         """Cancel the running prompt, only while one is outstanding: an idle session has no turn to cancel.
 
-        Returns whether a cancel was sent. A cancelled session is never used again: an agent may carry a cancelled
+        Returns whether a cancel was sent. The turn still ends with a PromptEnded, and an agent may carry the cancelled
         turn into the session's next prompt.
         """
 
@@ -390,7 +393,9 @@ class Runtime(Protocol):
 
 
 class Runtimes(Protocol):
-    """Where a session's runtime comes from (the adapter): a process its role shares."""
+    """Where a session's runtime comes from (the adapter): a process its role shares, or the session it keeps."""
+
+    kept: KeptSession | None  # the session the session policy keeps for a later task
 
     async def shared(self, role: Role) -> Runtime:
         """A process of ``role`` with a turn free, its place taken for the caller's session.
@@ -398,6 +403,9 @@ class Runtimes(Protocol):
         The session gives the place back with ``Runtime.leave``. Another process opens when every one of the role's
         is full or lost.
         """
+
+    def take_place(self, runtime: Runtime) -> bool:
+        """Take a place in ``runtime`` for the session kept there, while it has a turn free and its client is alive."""
 
 
 class Steerable(Protocol):
@@ -422,6 +430,16 @@ class SteerStrategy(Protocol):
         """Hand ``steering`` to ``run`` the way this strategy does."""
 
 
+class SessionPolicy(Protocol):
+    """Whether a worker's session serves more than one task (``backend.harness.session``)."""
+
+    def take(self, host: Runtimes) -> KeptSession | None:
+        """The session ``host`` keeps for the next task, taken from it; ``None``: the task opens a fresh session."""
+
+    def keep(self, host: Runtimes, kept: KeptSession) -> bool:
+        """Whether ``host`` keeps ``kept``, the session of a task that answered; ``False``: the run retires it."""
+
+
 class PermissionAnswer(Protocol):
     """The answer to an agent's permission request (``backend.harness.permission``); no approval is surfaced."""
 
@@ -443,6 +461,10 @@ STEERING: Mapping[str, Loader] = {
     "native_command": lambda: import_module("delegation_core.backend.harness.steering").NativeCommand,
     "next_prompt": lambda: import_module("delegation_core.backend.harness.steering").NextPrompt,
     "cancel_reprompt": lambda: import_module("delegation_core.backend.harness.steering").CancelReprompt,
+}
+SESSIONS: Mapping[str, Loader] = {
+    "task": lambda: import_module("delegation_core.backend.harness.sessions").PerTask,
+    "call": lambda: import_module("delegation_core.backend.harness.sessions").PerCall,
 }
 PERMISSIONS: Mapping[str, Loader] = {
     "reject": lambda: import_module("delegation_core.backend.harness.permissions").Reject,

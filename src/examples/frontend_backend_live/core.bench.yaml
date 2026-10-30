@@ -15,3 +15,8 @@ backend:
   llm:
     conductor: steer                   # each request joins the open Work at its next step
     unlisted_models: fallback          # the benchmark's model is not in services.yaml: run it on the slot's endpoint
+  llm-agent:
+    max_running: 1                     # one task at a time: no conductor call; the steer rule places each request
+  harness:
+    max_running: 1                     # one task at a time: no conductor process; the steer rule places each request
+    session: call                      # one session at a time, carried from each answered task to the next

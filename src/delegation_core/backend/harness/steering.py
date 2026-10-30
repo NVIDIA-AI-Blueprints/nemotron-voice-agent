@@ -6,7 +6,8 @@
 ``native_command`` sends the agent's own mid-turn steer, only for an agent that takes one, and a batch the turn did not
 take goes as the next prompt; ``next_prompt`` (the default) waits for the turn's end; ``cancel_reprompt`` cancels the
 turn once no bridged call runs and sends the task's history with the batch to a fresh session, never re-sending the
-cancelled text. Each strategy hands the batch to the run's matching method (double dispatch).
+cancelled text. Each strategy hands the batch to the run's matching method (double dispatch). A turn that answers
+first ends the task, and every batch it did not take goes back to the IM, which starts it as the next request.
 """
 
 from __future__ import annotations

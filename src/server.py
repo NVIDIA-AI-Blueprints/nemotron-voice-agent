@@ -102,12 +102,8 @@ _TURN_LISTEN_PORT = 3478
 # Each LLM slot an example may use: the session field that holds its base URL (filled from the UI's choice of entry,
 # as utils' catalog hydration writes it) and its name in readiness messages.
 _LLM_SLOTS = {"llm": ("base_url", "LLM"), "thinker-llm": ("thinker_base_url", "Thinker LLM")}
-# The setting that names another factory of a live session's parts (module:function), and its deprecated name.
+# The setting that names another factory of a live session's parts (module:function).
 _LIVE_FACTORY_SETTING = "LIVE_ADAPTER_FACTORY"
-_OLD_LIVE_FACTORY_SETTING = "LIVE_ENGINE_FACTORY"
-# A Frontend/Backend Live factory module the server refuses, and the factory to name instead.
-_REMOVED_ENGINE_MODULE = "examples.frontend_backend_live.engine"
-_ENGINE_SUCCESSOR = "examples.frontend_backend_live.factory:create_frontend_adapter"
 _INDEX_NO_CACHE_HEADERS = {"Cache-Control": "no-store"}
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
@@ -595,29 +591,8 @@ def _live_served(example: dict) -> bool:
 
 
 def _live_factory_spec(example: dict) -> str:
-    """Return the factory of a live session's parts: ``LIVE_ADAPTER_FACTORY``, else the example's ``live.factory``.
-
-    ``LIVE_ENGINE_FACTORY``, the deprecated name, is read when ``LIVE_ADAPTER_FACTORY`` is unset, with a warning.
-
-    Raises:
-        RuntimeError: The setting names the ``examples.frontend_backend_live.engine`` module, which does not exist.
-    """
-    old = os.getenv(_OLD_LIVE_FACTORY_SETTING, "").strip()
-    if old:
-        logger.warning(f"{_OLD_LIVE_FACTORY_SETTING} is deprecated: set {_LIVE_FACTORY_SETTING} instead.")
-    choices = (
-        (_LIVE_FACTORY_SETTING, os.getenv(_LIVE_FACTORY_SETTING, "").strip()),
-        (_OLD_LIVE_FACTORY_SETTING, old),
-        ("live.factory", example["live"]["factory"]),
-    )
-    name, spec = next((name, value) for name, value in choices if value)  # the first one set, in this order
-    module = spec.partition(":")[0]
-    if module == _REMOVED_ENGINE_MODULE or module.startswith(f"{_REMOVED_ENGINE_MODULE}."):
-        raise RuntimeError(
-            f"{name}={spec!r} names {_REMOVED_ENGINE_MODULE}, which was removed: set {_LIVE_FACTORY_SETTING} to "
-            f"{_ENGINE_SUCCESSOR}, or leave it unset for the example's own factory."
-        )
-    return spec
+    """Return the factory of a live session's parts: ``LIVE_ADAPTER_FACTORY``, else the example's ``live.factory``."""
+    return os.getenv(_LIVE_FACTORY_SETTING, "").strip() or example["live"]["factory"]
 
 
 def _live_hook(example: dict, spec: str, what: str):

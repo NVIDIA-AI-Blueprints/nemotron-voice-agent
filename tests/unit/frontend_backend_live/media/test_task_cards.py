@@ -10,22 +10,18 @@ import unittest
 
 from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
 
-from examples.frontend_backend_live.adapter.task_cards import ENDED_STATUS, RtviTaskCards
-from examples.frontend_backend_live.cascade.ports import DisplaySink, Ending, ReadyResult
+from examples.frontend_backend_live.cascade.ports import Ending, ReadyResult
+from examples.frontend_backend_live.media.task_cards import ENDED_STATUS, RtviTaskCards
 
 SHOW_ITEM = {
     "type": "mcp_call",
     "id": "mcp_1",
-    "server_label": "voiceclaw",
+    "server_label": "delegation_core",
     "name": "show",
     "arguments": '{"display": "Latte, oat milk, large: $5.40"}',
     "output": "Latte, oat milk, large: $5.40",
     "status": "completed",
 }
-
-
-def members(protocol) -> set[str]:
-    return {name for name in vars(protocol) if not name.startswith("_")}
 
 
 class TaskCardTests(unittest.IsolatedAsyncioTestCase):
@@ -88,11 +84,6 @@ class TaskCardTests(unittest.IsolatedAsyncioTestCase):
         cards.ended("item_d1", Ending.FAILED)
         await self.settled()
         self.assertEqual((sent[0]["status"], sent[0]["stage"]), ("failed", "failed"))
-
-
-class SinkContractTests(unittest.TestCase):
-    def test_the_cards_take_every_call_of_the_display_port(self):
-        self.assertLessEqual(members(DisplaySink), set(dir(RtviTaskCards)))
 
 
 if __name__ == "__main__":

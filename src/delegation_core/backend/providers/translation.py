@@ -203,7 +203,9 @@ class ChatResponseTranslator:
     `buffer_text` holds answer text until the end. Use it when the model may emit
     `<think>` reasoning inline: the visible answer is only known once it finishes.
     `single_call` keeps only the first tool call of the reply: the request said
-    `parallel_tool_calls: false`, and the endpoint may still return several.
+    `parallel_tool_calls: false`, and the endpoint may still return several. The reply
+    ends once a second call starts (`first_call_whole`), so a later call that the output
+    cap cuts never costs the first one, and the provider stops reading the stream there.
     """
 
     def __init__(
@@ -220,6 +222,7 @@ class ChatResponseTranslator:
         self.message_id = uid("msg")
         self.live_text = ""
         self.calls: dict[int, _Call] = {}
+        self.first_call_whole = False  # single_call: a second call started, so the reply ends with the first
         self.finish_reason: str | None = None
         self.usage: dict | None = None
         self.reasoning_chars = 0
@@ -289,7 +292,9 @@ class ChatResponseTranslator:
 
     # ------------------------------------------------------------------- input
     def feed(self, chunk) -> list[dict]:
-        """Translate one chat-completion chunk into zero or more Responses events."""
+        """Translate one chat-completion chunk into zero or more Responses events; none once the reply has ended."""
+        if self.first_call_whole:
+            return []
         events: list[dict] = []
         usage = getattr(chunk, "usage", None)
         if usage is not None:
@@ -315,7 +320,9 @@ class ChatResponseTranslator:
                 events.append(self._text_delta(delta.content))
         for fragment in delta.tool_calls or []:
             if self.single_call and self.calls and fragment.index not in self.calls:
-                continue  # parallel_tool_calls is false: only the reply's first call is kept
+                # parallel_tool_calls is false: a second call starts, so the first is whole and ends the reply
+                self.finish_reason, self.first_call_whole = "tool_calls", True
+                return events
             call = self.calls.setdefault(fragment.index, _Call(fragment.index))
             function = fragment.function
             if function and function.name:
@@ -364,6 +371,7 @@ class ChatResponseTranslator:
             BrokenStreamError: The stream ended inside a tool call, with no finish reason: the call may be cut, so the
                 round is broken and none of it is emitted to run.
         """
+        # A call without a function name cannot be run, so it has no output index and is left out.
         calls = [call for call in sorted(self.calls.values(), key=lambda c: c.index) if call.output_index is not None]
         if calls and self.finish_reason is None:
             raise BrokenStreamError("The backend's stream ended inside a tool call, with no finish reason")
@@ -407,7 +415,7 @@ class ChatResponseTranslator:
                 self._event("response.output_item.done", output_index=self.message_index, item=message),
             ]
             self.output.append(message)
-        for call in calls:  # a call without a function name cannot be run, so it has no output index
+        for call in calls:
             call.arguments = call.arguments or "{}"
             item = {
                 "id": call.item_id,

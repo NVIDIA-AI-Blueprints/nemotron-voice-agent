@@ -27,6 +27,7 @@ from delegation_core.backend.providers import base as providers
 from delegation_core.config import CoreSettings
 from delegation_core.im.input import compose
 from examples.frontend_backend_live import factory
+from examples.frontend_backend_live.prompts.catalog import catalog_prompt
 from tests.unit.cascade_helpers import MENU_TOOL, tool_call_round
 from tests.unit.core_helpers import FakeChat, chunk
 from tests.unit.frontend_backend_live.root.root_helpers import clear_root_caches
@@ -42,7 +43,7 @@ def answer(text):
     return [chunk(text), chunk(finish="stop")]
 
 
-def voice_note(name="v2"):
+def voice_note(name="default"):
     return CoreSettings.load(CORE).texts.voice_notes[name]
 
 
@@ -178,31 +179,28 @@ class RoundTests(ServedRoute):
             ["system", "user", "assistant", "tool", "assistant", "user"],
         )
 
-    def test_the_voice_note_joins_the_instructions_also_the_clients_own(self):
-        # The core's voice note (core.yaml delegation.voice_note): v2 by default, v1 adds nothing.
-        v1 = self.profile(delegation={"voice_note": "v1"})
-        for name, core, expected in (("v1", v1, "Be terse."), ("v2", CORE, compose("Be terse.", voice_note()))):
-            with self.subTest(voice_note=name):
-                response, chat, _ = self.round({"input": [USER], "instructions": "Be terse."}, answer("Hi."), core=core)
-                self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual(chat.requests[0]["messages"][0], {"role": "system", "content": expected})
-
     def test_the_core_fills_what_the_client_left_out_and_sends_what_it_chose(self):
         chat = FakeChat(answer("Hello."), answer("Hello."))
         with self.served(chat) as (http, _):
             info = http.get("/v1/live/info").json()  # what the console reads (app.js)
             default = http.post("/v1/live/delegate", json={"input": [USER]}).json()
             model = next(name for name in info["backend_models"] if name != info["backend"]["model"])
-            body = {"input": [USER], "model": model, "instructions": "Be terse.", "tools": [MENU_TOOL]}
+            tools = [MENU_TOOL, {"type": "web_search"}]
+            body = {"input": [USER], "model": model, "instructions": "Be terse.", "tools": tools}
             chosen = http.post("/v1/live/delegate", json=body).json()
         first, second = chat.requests
-        # The core's defaults: the backend slot's default model and its prompt, then the voice note.
+        # The core's defaults: the backend slot's default model and its prompt as written, then the voice note. The
+        # console's prefill is the cafe demo's prompt instead, which it sends with the cafe's sample tools.
+        prompt = catalog_prompt(info["backend"]["prompt"])
         self.assertEqual((first["model"], default["sent_request"]["model"]), (info["backend"]["model"],) * 2)
-        self.assertEqual(first["messages"][0]["content"], compose(info["instructions"]["backend"], voice_note()))
+        self.assertEqual(first["messages"][0]["content"], compose(prompt, voice_note()))
+        self.assertNotEqual(info["instructions"]["backend"], prompt)
         self.assertNotIn("tools", first)
-        # The client's own: a model the catalog lists for the slot, its instructions and its tools.
+        # The client's own: a model the catalog lists for the slot, its instructions and its tools. The reply names a
+        # hosted tool by its type; the chat-completions backend gets the function tools only.
         self.assertEqual((second["model"], chosen["sent_request"]["model"]), (model, model))
         self.assertEqual(second["messages"][0]["content"], compose("Be terse.", voice_note()))
+        self.assertEqual(chosen["sent_request"]["tools"], ["get_menu", "web_search"])
         self.assertEqual([tool["function"]["name"] for tool in second["tools"]], ["get_menu"])
 
     def test_a_round_with_no_items_fails(self):

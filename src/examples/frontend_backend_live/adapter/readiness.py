@@ -4,9 +4,9 @@
 """Whether the services a frontend adapter class needs are up, before the root builds a session's adapter.
 
 :class:`EndpointReadiness` is the class side's ``ServiceReadiness`` (``adapter/contract.py``): it checks that each
-service of the deployment accepts connections. Each check runs off the event loop and reuses NVA's reachability probe,
-which keeps each answer for a few seconds, so a burst of sessions probes each service once. NVIDIA's cloud endpoints
-are not probed: they do not start or stop with the deployment.
+service of the deployment accepts connections. Each check runs off the event loop and reuses the repository's
+reachability probe, which keeps each answer for a few seconds, so a burst of sessions probes each service once.
+NVIDIA's cloud endpoints are not probed: they do not start or stop with the deployment.
 """
 
 from __future__ import annotations

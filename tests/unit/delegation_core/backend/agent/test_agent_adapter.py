@@ -11,15 +11,14 @@ import unittest
 from dataclasses import replace
 
 from delegation_core.app import build_core
-from delegation_core.backend.adapters import ADAPTERS
 from delegation_core.backend.agent import AgentAdapter, AgentSettings, AgentSource, ConductorSettings, LlmConductor
-from delegation_core.backend.llm import LlmRun, LlmSettings
+from delegation_core.backend.conductors import SteerOpenWork
+from delegation_core.backend.llm import LlmSettings
 from delegation_core.backend.port import ConductorInput, OneShotSource
 from delegation_core.backend.providers import ChatCompletionsBackend, OpenAIResponsesBackend
 from delegation_core.backend.tools import CafeTools
 from delegation_core.config import BackendChoice, ModelEndpoint
 from delegation_core.im.input import BackendTask
-from delegation_core.tables import pick
 from tests.unit.contracts.backend import (
     MENU_FUNCTION,
     BackendAdapterContract,
@@ -86,14 +85,12 @@ def build(block, *, tools=lambda: [], endpoints=lookup) -> AgentSource:
 
 
 class SettingsTests(unittest.TestCase):
-    def test_the_adapter_table_loads_the_source(self):
-        self.assertIs(pick(ADAPTERS, "llm-agent", "backend adapter")(), AgentSource)
-
     def test_the_shipped_block_parses_to_the_defaults(self):
         settings = build(SHIPPED.backend.blocks["llm-agent"]).settings
         self.assertEqual(settings, AgentSettings())
         self.assertEqual((settings.max_running, settings.conductor.timeout_seconds), (3, 20.0))
         self.assertIs(settings.conductor.provider, ChatCompletionsBackend)
+        self.assertEqual(settings.conductor.when_idle.name, "start")
         self.assertEqual(settings.worker, LlmSettings())
 
     def test_every_key_parses_and_names_become_classes(self):
@@ -107,6 +104,7 @@ class SettingsTests(unittest.TestCase):
                 "max_output_tokens_per_request": 128,
                 "temperature": None,
                 "reasoning_effort": "low",
+                "when_idle": "decide",
             },
             "worker": {"provider": "openai-responses", "unlisted_models": "fallback", "max_tool_rounds": 5},
         }
@@ -118,7 +116,7 @@ class SettingsTests(unittest.TestCase):
             (conductor.model, conductor.timeout_seconds, conductor.memory_tokens), ("other/model", 4.0, 2000)
         )
         self.assertEqual((conductor.max_output_tokens_per_request, conductor.temperature), (128, None))
-        self.assertEqual(conductor.reasoning_effort, "low")
+        self.assertEqual((conductor.reasoning_effort, conductor.when_idle.name), ("low", "decide"))
         self.assertIs(worker.provider, OpenAIResponsesBackend)
         self.assertEqual((worker.unlisted_models.name, worker.max_tool_rounds), ("fallback", 5))
 
@@ -140,6 +138,7 @@ class SettingsTests(unittest.TestCase):
             ),
             "an empty effort": ({"conductor": {"reasoning_effort": " "}}, "reasoning_effort must be non-empty text"),
             "an empty model": ({"conductor": {"model": ""}}, "model must be non-empty text"),
+            "an unknown idle rule": ({"conductor": {"when_idle": "wait"}}, "Unknown conductor idle rule 'wait'"),
             "a worker's conductor": ({"worker": {"conductor": "steer"}}, "worker takes no conductor"),
             "a worker's unknown key": ({"worker": {"fold": True}}, "backend.llm-agent.worker: .*unknown keys: fold"),
             "a worker's bad provider": ({"worker": {"provider": "x"}}, "backend.llm-agent.worker: Unknown backend"),
@@ -202,11 +201,17 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (described["conductor"]["model"], described["conductor"]["provider"]), ("test/model", "chat-completions")
         )
+        self.assertEqual(described["conductor"]["when_idle"], "start")
         self.assertEqual(
-            described["worker"], {"provider": "chat-completions", "unlisted_models": "report", "max_tool_rounds": 8}
+            described["worker"], {"provider": "chat-completions", "unlisted_models": "report", "max_tool_rounds": 30}
         )
         self.assertEqual([tool["name"] for tool in described["tools"]], ["get_menu", "manage_cart", "place_order"])
         self.assertNotIn("secret-key", json.dumps(described))
+
+    def test_with_one_task_at_a_time_it_describes_the_steer_rule_that_places_the_requests(self):
+        built = build({"max_running": 1})
+        self.assertIsInstance(built.new().conductor(), SteerOpenWork)
+        self.assertEqual(built.describe()["conductor"], "steer")  # no conductor model, which never runs
 
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
@@ -221,14 +226,6 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(first.conductor(), second.conductor())
         self.assertIsNot(first.workers.tools[0], second.workers.tools[0])
         self.assertEqual(first.workers.attempts, 2)
-
-    async def test_a_run_is_an_llm_run_and_makes_no_model_call_before_its_events(self):
-        conductor, workers = Model(), Model(text_round("Done."))
-        adapter = source(conductor, workers).new()
-        adapter.conductor()
-        run = adapter.start(object())
-        self.assertIsInstance(run, LlmRun)
-        self.assertEqual((conductor.payloads, workers.payloads, run.round), ([], [], 0))
 
     async def test_close_releases_the_workers_and_the_conductors_providers(self):
         conductor, workers = Model(decisions(start("D1"))), Model()

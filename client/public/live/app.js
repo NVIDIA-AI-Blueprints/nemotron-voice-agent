@@ -30,7 +30,7 @@ import {
   tokenFromHash,
   waitForIceGathering,
 } from "./config.js";
-import { DelegationBook } from "./delegations.js";
+import { DelegationBook, PROGRESS_AFTER_MS, runBatch } from "./delegations.js";
 import { HISTORY_POLL_MS, historyView, shouldPoll, snapshotKey } from "./history.js";
 import { cartHtml, escapeHtml, menuHtml, optionsHtml } from "./html.js";
 import { EventLog, payloadText, searchText } from "./log.js";
@@ -354,20 +354,19 @@ async function runToolCalls(d, calls) {
     label: "client executes the function calls",
     text: calls.map((fc) => `${fc.name}(${fc.arguments})`).join("\n"),
   });
-  // Optional spoken progress while a slow tool runs. This is a client-authored update to the frontend,
-  // independent of the backend response.
-  const slow = calls.find((fc) => fc.name === "place_order" && safeParse(fc.arguments)?.confirmed === true);
-  if (slow && els.optAutoCommentary.checked) {
-    sendOn(call, {
-      type: "session.commentary.append",
-      event_id: nextEventId("commentary"),
-      delegation_id: null, // responses delegation rejects non-null IDs
-      content: "One moment — I'm sending that order to the counter now.",
-    }, { cat: "context", text: "auto progress update while place_order runs", actor: "client" });
-  }
+  // Optional spoken progress while the batch runs: the example's still-working line, once, when the batch is still
+  // running after PROGRESS_AFTER_MS. This is a client-authored update to the frontend, independent of the backend
+  // response.
+  const progress = els.optAutoCommentary.checked ? app.info?.lines?.still_working : "";
+  const slow = progress ? () => sendOn(call, {
+    type: "session.commentary.append",
+    event_id: nextEventId("commentary"),
+    delegation_id: null, // responses delegation rejects non-null IDs
+    content: progress,
+  }, { cat: "context", text: `auto progress update: the tools still run after ${PROGRESS_AFTER_MS} ms`, actor: "client" }) : null;
 
   const t0 = nowMs();
-  const results = await Promise.all(calls.map(async (fc) => {
+  const results = await runBatch(calls, async (fc) => {
     const { args, result, output, latencyMs } = await runCafe(fc);
     countTool(call);
     stage(d, `result_${fc.call_id}`, {
@@ -377,7 +376,7 @@ async function runToolCalls(d, calls) {
       payload: { call_id: fc.call_id, name: fc.name, args, output: result },
     });
     return { fc, output };
-  }));
+  }, { slow, signal: call.scope.signal });
   if (call.scope.signal.aborted) {  // End or a new Start came while the tools ran: their outputs are not sent
     stage(d, "continue", { cls: "warn", label: "not sent: the session ended", text: "The tools ran; their outputs were not sent." });
     return;
@@ -438,6 +437,7 @@ function startClientDelegation(d, delegationId) {
     call.clientView = { model, delegationId: d.id, history };
     const outcome = await runClientDelegation({
       delegationId, transcript, history, model, view,
+      lines: app.info?.lines,
       cart: () => cafe.snapshot(),
       round: roundPoster({
         fetch: (...args) => fetch(...args),
@@ -751,6 +751,7 @@ function applyInfo() {
   els.badgeFrontend.textContent = info.frontend?.model || "—";
   els.noteFrontend.textContent = `${info.frontend?.provider || "frontend"} · prompts ${info.prompt_version || ""}`;
   updateBackendBadge();
+  refreshPresets();
   for (const warning of info.warnings || []) {
     logEvent({ cat: "error", dir: "in", type: "server.warning", text: warning });
   }
@@ -990,29 +991,24 @@ function renderMenu() {
 }
 
 // ---------------------------------------------------------------------------------
-// Append presets
+// Append presets, from GET /v1/live/info: the example's lines that suit each kind of append, then its presets
 // ---------------------------------------------------------------------------------
-const PRESETS = {
-  "session.instructions.append": [
-    ["Greet first", "Greet the caller now in English. Introduce yourself as the Bluebird Cafe assistant and ask what they would like. Then pause and listen."],
-    ["Recording disclosure", "Immediately say the following disclosure exactly and in full before responding to the caller: This call may be recorded for quality and training purposes."],
-    ["Guardrail redirect", "Stop speaking about that request. Briefly explain that you cannot help with it, then wait for the user."],
-    ["Slow down", "Speak more slowly and leave a short pause after each item you read back."],
-  ],
-  "session.thinking.append": [
-    ["UI context", "The user is looking at the pastry section of the kiosk screen. 'this one' most likely refers to the butter croissant."],
-    ["Loyalty status", "This caller is a loyalty member; the counter applies their discount at pickup. Do not quote a discounted price."],
-    ["Store state", "The espresso machine is busy; drink orders are running about three minutes behind."],
-  ],
-  "session.commentary.append": [
-    ["Still working", "I'm still checking that for you."],
-    ["Taking longer", "This is taking a little longer than usual — I'm still on it."],
-    ["Pickup counter", "Your order will be at the far end of the counter when it's ready."],
-  ],
+const PRESET_LINES = {
+  "session.instructions.append": [["Greet first", "intro"]],
+  "session.commentary.append": [["Still working", "still_working"]],
 };
 
+/** The chosen kind's presets as [label, text]: its lines, then the example's presets (`presets`), unless empty. */
+function presets() {
+  const kind = els.ctlKind.value;
+  return [
+    ...(PRESET_LINES[kind] || []).map(([label, name]) => [label, app.info?.lines?.[name] || ""]),
+    ...(app.info?.presets?.[kind] || []),
+  ].filter(([, text]) => text);
+}
+
 function refreshPresets() {
-  const list = PRESETS[els.ctlKind.value] || [];
+  const list = presets();
   els.ctlPreset.innerHTML = optionsHtml(list.map((_, i) => String(i)), "0", list.map((p) => p[0]));
   els.ctlContent.value = list[0]?.[1] || "";
 }
@@ -1196,7 +1192,7 @@ async function boot() {
 
   els.ctlKind.addEventListener("change", refreshPresets);
   els.ctlPreset.addEventListener("change", () => {
-    els.ctlContent.value = PRESETS[els.ctlKind.value][els.ctlPreset.value][1];
+    els.ctlContent.value = presets()[els.ctlPreset.value]?.[1] || "";
   });
 
   els.filters.addEventListener("change", (e) => {

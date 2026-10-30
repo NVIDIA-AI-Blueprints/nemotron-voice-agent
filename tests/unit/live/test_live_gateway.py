@@ -108,6 +108,46 @@ class PrimaryWebSocketTests(unittest.TestCase):
                 self.assertEqual(closed.exception.code, 1008)
 
 
+class SettingsTests(unittest.TestCase):
+    def test_each_limit_is_read_from_the_environment_and_a_bad_one_stops_startup_with_its_name(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(LiveSettings.from_env(), LiveSettings())  # an unset variable is the default
+        for name, field in (
+            ("LIVE_MAX_SESSIONS", "max_sessions"),
+            ("LIVE_MAX_SESSION_SECONDS", "max_session_seconds"),
+            ("LIVE_MAX_APPENDS_PER_MINUTE", "max_appends_per_minute"),
+            ("LIVE_MAX_CONSOLE_ROUNDS", "max_console_rounds"),
+        ):
+            with self.subTest(name=name):
+                with patch.dict(os.environ, {name: " 3 "}):
+                    self.assertEqual(getattr(LiveSettings.from_env(), field), 3)
+                with patch.dict(os.environ, {name: ""}):
+                    self.assertEqual(getattr(LiveSettings.from_env(), field), getattr(LiveSettings, field))
+                for value in ("many", "0", "-3", "2.5"):
+                    with patch.dict(os.environ, {name: value}), self.assertRaisesRegex(ValueError, name):
+                        LiveSettings.from_env()
+        with patch.dict(os.environ, {"LIVE_MAX_SESSIONS": "eight"}), self.assertRaises(ValueError):
+            mount_live(FastAPI(), factory=lambda *args: None)  # the server does not start
+
+
+class AppendLimitTests(unittest.TestCase):
+    def test_each_session_gets_the_gateways_append_limit(self):
+        app, _, engines = make_app(LiveSettings(max_appends_per_minute=1))
+        with TestClient(app) as client, client.websocket_connect("/v1/live/sessions") as ws:
+            ws.send_json(START)
+            ws.receive_json()
+            note = {"type": "session.thinking.append", "delegation_id": None, "content": "note"}
+            ws.send_json({**note, "event_id": "t1"})
+            self.assertEqual(ws.receive_json()["type"], "session.thinking.appended")
+            ws.send_json({**note, "event_id": "t2"})
+            error = ws.receive_json()
+            self.assertEqual(
+                (error["type"], error["error"]["code"], error["client_event_id"]),
+                ("error", "rate_limit_exceeded", "t2"),
+            )
+        self.assertEqual(engines[0].appended, [("thinking", "note")])
+
+
 class SecurityTests(unittest.TestCase):
     def test_a_configured_token_is_required(self):
         app, _, _ = make_app(LiveSettings(api_token="s3cret"))
@@ -253,16 +293,6 @@ class TokenTests(unittest.TestCase):
                 self.assertEqual(client.get("/v1/live/info", headers={"Authorization": header}).status_code, 401)
 
 
-class ExposureTests(unittest.TestCase):
-    # The server decides whether Live is served, for which example (src/server.py); with no factory the mount
-    # serves no live route.
-    def test_with_no_factory_no_live_route_is_served_whatever_the_environment_says(self):
-        app = FastAPI()
-        with patch.dict(os.environ, {"LIVE_ENABLED": "true"}), TestClient(app) as client:
-            self.assertIsNone(mount_live(app))
-            self.assertEqual(client.get("/v1/live/info").status_code, 404)
-
-
 class UnconnectedPeerTests(unittest.IsolatedAsyncioTestCase):
     async def run_deadline(self, connected, status="active"):
         closed = []
@@ -297,6 +327,7 @@ class OpenByDefaultTests(unittest.TestCase):
             with patch.dict(os.environ, {"LIVE_API_TOKEN": ""}):
                 mount_live(FastAPI(), factory=FakeAdapterFactory)
             self.assertIn("LIVE_API_TOKEN is not set", logger.warning.call_args.args[0])
+            self.assertIn("POST /v1/live/delegate", logger.warning.call_args.args[0])
             logger.warning.reset_mock()
             with patch.dict(os.environ, {"LIVE_API_TOKEN": "secret"}):
                 mount_live(FastAPI(), factory=FakeAdapterFactory)

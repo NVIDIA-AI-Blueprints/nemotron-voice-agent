@@ -61,5 +61,5 @@ class LiveAgent:
         await self.frontend.close()
 
 
-# The name the hosts (the live adapter, the UI bot) and the tests build the agent by.
+# The name the hosts (the cascade adapter, the UI bot) build the agent by.
 build_agent = LiveAgent.from_config

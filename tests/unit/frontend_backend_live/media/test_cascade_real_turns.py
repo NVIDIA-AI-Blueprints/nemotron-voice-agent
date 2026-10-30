@@ -20,6 +20,8 @@ from pipecat.frames.frames import (
     ProposedUserStoppedSpeakingFrame,
     SystemFrame,
     TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -32,12 +34,20 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from examples.frontend_backend_live.cascade.memory import ContextConversation
 from examples.frontend_backend_live.cascade.ports import ReadyResult
-from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.cascade.settings import CascadeSettings
+from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.models.decision import TalkerDecision
 from tests.unit.contracts.delegation_port import ScriptedDelegationPort
-from tests.unit.frontend_backend_live.cascade.doubles import CONFIG, FAST, QUIET, ScriptedFrontend, agent
+from tests.unit.frontend_backend_live.cascade.doubles import (
+    CONFIG,
+    FAST,
+    PROMPTS,
+    QUIET,
+    ScriptedFrontend,
+    agent,
+    conversation,
+)
 
 # Only the interruption ends a held decision: no attempt timeout runs out first on a slow machine.
 PATIENT = replace(FAST, talker_attempt_timeout_seconds=30.0)
@@ -109,9 +119,9 @@ class RealTurnTests(Binding):
         add_message = self.context.add_message
         self.context.add_message = lambda message: (added.append(message), add_message(message))[1]
         await self.play(
-            *turn("My user ID is sofia kim"),
+            *turn("My user ID is Q nine one"),
             SleepFrame(0.3),  # the talker is deciding the first turn
-            *turn("seven two eight seven"),
+            *turn("underscore T"),
             SleepFrame(0.3),
             *turn(""),  # a cough after the delegation: Pipecat's empty-turn recovery runs the processor
             SleepFrame(0.8),
@@ -119,18 +129,19 @@ class RealTurnTests(Binding):
         self.assertTrue(slow.cancelled())  # the second turn's interruption cut off the first decision
         self.assertTrue(any(m["role"] == "developer" for m in added))  # the recovery ran
         self.assertEqual(self.context.get_messages(), [{"role": "system", "content": "You are Remy."}])  # bounded
-        talker_calls = [call for call in self.frontend.calls if call["actions"] == ("speak", "delegate")]
+        talker_calls = [call for call in self.frontend.calls if call["role"] == "talker"]
         self.assertEqual(len(talker_calls), 2)  # the recovery brought no new turn, so nothing was decided again
         self.assertEqual(
-            talker_calls[1]["history"],
+            conversation(talker_calls[1]),
             [
-                {"role": "user", "content": "My user ID is sofia kim"},
-                {"role": "user", "content": "seven two eight seven"},
+                {"role": "user", "content": "My user ID is Q nine one"},
+                {"role": "user", "content": "underscore T"},
             ],
         )
         self.assertNotIn("Briefly ask them", talker_calls[1]["instructions"])  # Pipecat's note never reaches it
         transcript = self.port.requests[0][0]["content"][0]["text"]
-        self.assertIn("Caller: My user ID is sofia kim\nCaller: seven two eight seven", transcript)
+        caller = PROMPTS.transcript.caller
+        self.assertIn(f"{caller}: My user ID is Q nine one\n{caller}: underscore T", transcript)
 
     async def test_lines_enter_the_memory_once_when_handed_to_speech_and_a_caller_breaking_in_keeps_them(self):
         slow = asyncio.get_running_loop().create_future()
@@ -142,12 +153,12 @@ class RealTurnTests(Binding):
         await self.play(
             Act(
                 lambda: (
-                    ready(_result("D1", "No user sofia_kim_7287 exists.")),
-                    ready(_result("D2", "HAT176 is on time.")),
+                    ready(_result("D1", "No user Q91_T exists.")),
+                    ready(_result("D2", "Parcel 42 is on time.")),
                 )
             ),
             SleepFrame(0.2),  # both results are said together, as one line
-            *turn("Find sofia kim 7287, and is HAT176 on time?"),
+            *turn("Find user Q91_T, and is parcel 42 on time?"),
             SleepFrame(0.1),
             *turn("Wait, what?"),  # the caller breaks in
             SleepFrame(0.3),
@@ -157,10 +168,10 @@ class RealTurnTests(Binding):
         self.assertEqual(
             [(m["role"], m["content"]) for m in self.session.memory.messages()[1:]],
             [
-                ("user", "Backend result (reference data): No user sofia_kim_7287 exists."),
-                ("user", "Backend result (reference data): HAT176 is on time."),
-                ("assistant", "No user sofia_kim_7287 exists. HAT176 is on time."),
-                ("user", "Find sofia kim 7287, and is HAT176 on time?"),
+                ("user", PROMPTS.result_label + "No user Q91_T exists."),
+                ("user", PROMPTS.result_label + "Parcel 42 is on time."),
+                ("assistant", "No user Q91_T exists. Parcel 42 is on time."),
+                ("user", "Find user Q91_T, and is parcel 42 on time?"),
                 ("user", "Wait, what?"),
                 ("assistant", "Sorry, go ahead."),
             ],
@@ -194,10 +205,40 @@ class RealTurnTests(Binding):
         lines = [line.text for line in self.session.utterances.recent]
         self.assertEqual(lines, ["Your flight leaves at nine from gate twelve.", "at nine from gate twelve."])
 
+    async def test_a_decision_dropped_by_speech_with_no_words_is_made_once_the_caller_is_silent(self):
+        # The turn frames come decided elsewhere, as a speech service with its own turn detection sends them: the
+        # aggregator adopts them, broadcasts no interruption, and runs no turn after one with no words.
+        slow = asyncio.get_running_loop().create_future()
+        await self.bind([slow, TalkerDecision("speak", "Yes, we have oat milk.")])
+        added = []
+        add_message = self.context.add_message
+        self.context.add_message = lambda message: (added.append(message), add_message(message))[1]
+        await self.play(
+            UserStartedSpeakingFrame(),
+            TranscriptionFrame(text="Do you have oat milk?", user_id="caller", timestamp="0", finalized=True),
+            SleepFrame(0.05),  # the stop, a system frame, would overtake the words
+            UserStoppedSpeakingFrame(),
+            SleepFrame(0.2),  # the talker is deciding the turn
+            UserStartedSpeakingFrame(),  # the caller goes on: nothing cuts the decision off
+            SleepFrame(0.1),
+            Act(lambda: slow.set_result(TalkerDecision("speak", "Sure."))),  # it comes while they speak: dropped
+            SleepFrame(0.1),
+            UserStoppedSpeakingFrame(),  # a cough: no words, so no context frame follows
+            SleepFrame(0.3),
+            processors=[Acts(), self.aggregator, self.processor],
+        )
+        self.assertFalse(any(m["role"] == "developer" for m in added))  # Pipecat ran no turn after the cough
+        talker_calls = [call for call in self.frontend.calls if call["role"] == "talker"]
+        self.assertEqual(len(talker_calls), 2)
+        self.assertEqual(conversation(talker_calls[1]), [{"role": "user", "content": "Do you have oat milk?"}])
+        lines = [line.text for line in self.session.utterances.recent]
+        self.assertEqual((lines, self.session.turns.waiting), (["Yes, we have oat milk."], []))
+
 
 class InstructionInterruptTests(Binding):
     async def test_an_instructions_interruption_keeps_the_caller_turn_queued_behind_it(self):
-        # A broadcast interruption reset the processor's own queue and dropped the caller's queued turn.
+        # The interruption goes downstream only: a broadcast would reset the processor's own queue and drop the caller's
+        # queued turn.
         await self.bind([TalkerDecision("speak", "Sure, a table for two."), TalkerDecision("wait")])
         sent: list[tuple[str, str]] = []
         push = self.processor.push_frame

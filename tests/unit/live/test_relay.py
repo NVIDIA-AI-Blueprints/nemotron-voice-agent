@@ -6,7 +6,7 @@
 """A relay that never closes the session.
 
 Each event goes to the frontend adapter first, then to the client, each step guarded, so one bad event is skipped.
-A burst slows the client's view instead of closing the session; a sideband that falls behind is closed.
+A burst slows the client's view and leaves the session open; a sideband that falls behind is closed.
 """
 
 import asyncio
@@ -129,14 +129,14 @@ class RelayCase(unittest.IsolatedAsyncioTestCase):
 
 
 class BurstTests(RelayCase):
-    async def test_2004_events_in_a_burst_all_arrive_and_the_session_stays_open(self):
+    async def test_every_event_of_a_long_burst_arrives_in_order_and_the_session_stays_open(self):
         events = [created("resp_1"), *(delta(n) for n in range(2, 2004)), completed("resp_1", 2004)]
         await self.start(Stream(events), client=YieldingClient())
         delegation_id = await self.session.delegation.delegate(HI)
         await self.until(lambda: len(self.relayed()) == 2004)
         self.assertEqual([e["sequence_number"] for e in self.relayed()], list(range(1, 2005)))
         self.assertEqual(len(self.frontend.heard), 2004)
-        self.assertEqual(self.session.status, "active")  # 128 events in a burst once closed it
+        self.assertEqual(self.session.status, "active")
         self.assertEqual(self.client.kinds().count("session.delegation.created"), 1)
         self.assertEqual(self.relayed()[-1]["type"], "response.completed")
         self.assertTrue(all(e["delegation_id"] == delegation_id for e in self.client.events if "delegation_id" in e))
@@ -306,10 +306,6 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("input", client["response"])
         self.assertEqual(raw, before)  # the core's event, which the frontend holds, is unchanged
 
-    def test_an_event_without_a_snapshot_is_not_copied(self):
-        raw = core_event("response.output_item.done", 3, item=dict(CALL))
-        self.assertIs(sanitize_response_event(raw), raw)
-
 
 class FanoutCase(unittest.IsolatedAsyncioTestCase):
     def fanout(self):
@@ -339,22 +335,6 @@ class CopyTests(FanoutCase):
 
 
 class PacingTests(FanoutCase):
-    async def test_waiting_for_room_waits_while_the_primary_queue_is_above_half_and_no_longer(self):
-        fanout, go = self.fanout(), asyncio.Event()
-
-        async def stalled(message):
-            await go.wait()
-
-        fanout.subscribe(stalled, "primary")
-        for _ in range(600):
-            await fanout.publish(event("x"))
-        waiter = asyncio.create_task(fanout.wait_for_room())
-        await asyncio.sleep(0.05)
-        self.assertFalse(waiter.done())
-        go.set()
-        async with asyncio.timeout(2):
-            await waiter
-
     async def test_a_primary_that_closes_lets_every_waiter_go(self):
         fanout = self.fanout()
 

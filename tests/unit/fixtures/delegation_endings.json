@@ -1,5 +1,5 @@
 {
-  "about": "The endings of a delegation on the wire (alignment plan L0.5, \u00a72.0(f)): each scenario's official events in the order the IM writes them, as tests/unit/contracts/endings.py normalizes them (type, status, phase, item type, terminal; ids as labels; [key] names the texts line a message carries). The IM lane makes the IM write each one; the reader lane replays each one and checks the reader's outcome.",
+  "about": "The endings of a delegation on the wire: each scenario's official events in the order the IM writes them, as tests/unit/contracts/endings.py normalizes them (type, status, phase, item type, terminal; ids as labels; [key] names the texts line a message carries). The IM's test makes the IM write each one; the reader's test replays each one and checks the reader's outcome.",
   "scenarios": {
     "answered": {
       "about": "One request, one task, one answer.",
@@ -239,7 +239,7 @@
         ["R1", "in_progress"],
         ["R1", "mcp_call.in_progress"],
         ["R1", "mcp_call.completed"],
-        ["R1", "mcp_call voiceclaw/show completed"],
+        ["R1", "mcp_call delegation_core/show completed"],
         ["R1", "message final_answer"],
         ["R1", "completed"]
       ],

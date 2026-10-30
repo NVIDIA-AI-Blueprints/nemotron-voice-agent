@@ -12,6 +12,7 @@ since a model call may reason between parts of its text.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -62,8 +63,13 @@ def _card_update(updates: SessionUpdates, update: dict) -> SessionEvent | None:
     if status not in ENDED:
         return None
     raw = update.get("rawOutput")
-    output = raw if isinstance(raw, str) else block_text(update.get("content"))
+    output = raw if isinstance(raw, str) else block_text(update.get("content")) or _written(raw)
     return ToolCardEnd(str(update.get("toolCallId") or ""), ENDED[status], output[:OUTPUT_CHARS])
+
+
+def _written(raw: Any) -> str:
+    """A tool's raw output that is not text, as JSON; none at all is empty."""
+    return "" if raw is None else json.dumps(raw)
 
 
 def _plan(updates: SessionUpdates, update: dict) -> SessionEvent:

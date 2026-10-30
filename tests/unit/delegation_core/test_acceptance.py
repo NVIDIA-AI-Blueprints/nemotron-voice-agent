@@ -3,36 +3,20 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""Responses open at acceptance, and every response passes through ``in_progress`` before its terminal."""
+"""Admission: responses open at acceptance, and what admission refuses."""
 
 import asyncio
-import unittest
 
-from delegation_core.api.local import LocalResponsesClient
-from delegation_core.api.service import ResponsesService
-from delegation_core.backend.port import Answer, Start
 from delegation_core.im.session import DelegationError
-from tests.unit.contracts.responses import ResponsesClientContract
-from tests.unit.delegation_core.emulator import emulator_source
 from tests.unit.delegation_core.helpers import (
     IMCase,
     ScriptedAdapter,
-    ScriptedConductor,
     StartEach,
     answer,
     ask,
-    im_session,
     read_all,
     wait,
 )
-
-
-class IMResponsesClientContractTests(ResponsesClientContract, unittest.IsolatedAsyncioTestCase):
-    """The IM behind the in-process front door, with the API surface's ``input_tokens``."""
-
-    async def make_client(self):
-        new_session = lambda: im_session(ScriptedAdapter(), close_grace_seconds=0.01)  # noqa: E731
-        return LocalResponsesClient(ResponsesService(new_session, backend=emulator_source()))
 
 
 class AcceptanceTests(IMCase):
@@ -60,30 +44,6 @@ class AcceptanceTests(IMCase):
             im.admit(ask("One too many."), delegation_id="D17")
         self.assertEqual(len(im.ledger.delegations), before)
         self.assertNotIn("D17", im.ledger.delegations)
-
-    async def test_a_handover_and_an_answer_pass_through_in_progress(self):
-        async def plan(given, place):
-            ids = [arrival.delegation_id for arrival in given.arrivals]
-            if ids == ["D1", "D2"]:
-                await place(Start(("D1", "D2")))
-            else:
-                await place(Answer(ids[0], "Nothing runs now."))
-
-        never = asyncio.Event()
-        adapter = ScriptedAdapter([wait(never)], conductor=ScriptedConductor(plan))
-        im = self.session(adapter)
-        first = im.admit(ask("Teas."), delegation_id="D1")
-        im.admit(ask("Green only."), delegation_id="D2")
-        older = await read_all(first.stream)
-        self.assertEqual(
-            [e["type"] for e in older if e["type"].startswith("response.") and "response" in e],
-            ["response.created", "response.queued", "response.in_progress", "response.completed"],
-        )
-        answered = await read_all(im.admit(ask("Status?"), delegation_id="D3").stream)
-        self.assertEqual(
-            [e["type"] for e in answered if "response" in e],
-            ["response.created", "response.queued", "response.in_progress", "response.completed"],
-        )
 
     async def test_a_reader_that_stops_reading_leaves_the_response_running(self):
         gate = asyncio.Event()

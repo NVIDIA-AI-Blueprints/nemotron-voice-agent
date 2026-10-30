@@ -13,7 +13,6 @@ model client.
 import asyncio
 import json
 import time
-import unittest
 from dataclasses import replace
 from pathlib import Path
 
@@ -43,14 +42,11 @@ from delegation_core.config import CoreSettings
 from delegation_core.config import ModelEndpoint as CoreEndpoint
 from delegation_core.im.input import BackendTask
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
-from examples.frontend_backend_live.cascade.memory import caller_turn_index, is_reference_item
-from examples.frontend_backend_live.cascade.session import CascadeSession, log_observation
+from examples.frontend_backend_live.cascade.session import log_observation
 from examples.frontend_backend_live.config_manager.schema import LiveConfig, ModelEndpoint, ReliabilityConfig
 from examples.frontend_backend_live.models import Frontend
-from examples.frontend_backend_live.prompts import get_prompt_set
 from live.ports import SessionParts
 from live.server_delegation import ServerDelegation
-from tests.unit.contracts.backend import ScriptedBackend
 from tests.unit.core_helpers import chunk, tool_fragment
 
 CORE_YAML = Path(__file__).resolve().parents[2] / "src/examples/frontend_backend_live/core.yaml"
@@ -148,25 +144,6 @@ class ListConversation:
     def trim(self, limit):
         pass
 
-    def replace_caller_turn(self, original, text):
-        index = caller_turn_index(self._messages, original)
-        if index is not None:
-            self._messages[index] = {**self._messages[index], "content": text}
-
-
-def _agent(frontend, prompt_version="v1"):
-    from examples.frontend_backend_live.cascade.agent import LiveAgent
-    from examples.frontend_backend_live.cascade.talker.talker import Talker
-    from examples.frontend_backend_live.cascade.writer.writer import CommentaryWriter
-
-    prompts = get_prompt_set(prompt_version)
-    return LiveAgent(
-        frontend,
-        prompts,
-        Talker(frontend, prompts),
-        CommentaryWriter(frontend, prompts),
-    )
-
 
 def _delegation(backend, *, tools=(), observe=log_observation, **delegation):
     """The call's server delegation, as the gateway builds it, on a core ``build_core`` makes from the shipped file.
@@ -212,63 +189,11 @@ def _messages(*turns):
     return out
 
 
-def _history_and_turn(messages):
-    """Split a test conversation into the history a call starts with and its newest caller turn, when it ends with one.
-
-    The cascade takes the conversation it starts with as history, and each caller turn arrives later, when Pipecat's
-    user aggregator writes it; a test adds the turn after the session is built, as that aggregator does.
-    """
-    last = messages[-1] if messages else None
-    if last and last["role"] == "user" and not is_reference_item(last):
-        return messages[:-1], last
-    return messages, None
-
-
 async def _settle(session, spoken, count, timeout=2.0):
     """Wait until ``count`` utterances were spoken."""
     async with asyncio.timeout(timeout):
         while len(spoken) < count:
             await asyncio.sleep(0.005)
-
-
-class _SessionCase(unittest.IsolatedAsyncioTestCase):
-    async def make(self, frontend_script, backend_rounds, messages, *, config=None, tools=()):
-        self.frontend = ScriptedFrontend(frontend_script)
-        self.backend = ScriptedBackend(backend_rounds)
-        history, turn = _history_and_turn(messages)
-        self.conversation = ListConversation(history)
-        self.spoken: list[str] = []
-        self.events: list[tuple[str, dict]] = []
-
-        async def say(text):
-            self.spoken.append(text)
-
-        def observe(kind, **fields):
-            self.events.append((kind, fields))
-
-        self.delegation = _delegation(self.backend, tools=tools, observe=observe)
-        self.session = CascadeSession(
-            _agent(self.frontend),
-            config or _config(),
-            self.conversation,
-            delegation=self.delegation,
-            say=say,
-            observe=observe,
-        )
-        if turn:
-            self.conversation.add(turn)
-        await self.delegation.open(None)
-        self.session.start()
-        self.addAsyncCleanup(self.delegation.close)
-        self.addAsyncCleanup(self.session.close)
-
-    @property
-    def im(self):
-        """The IM session that serves the call's conversation in its in-process core."""
-        return core_session(self.delegation)
-
-    def kinds(self):
-        return [kind for kind, _ in self.events]
 
 
 def _decision_chunks(text, finish="stop"):

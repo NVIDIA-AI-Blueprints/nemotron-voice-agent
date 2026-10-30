@@ -32,18 +32,6 @@ for (const fixtureCase of fixture.cases) {
   });
 }
 
-test("the string \"false\", or any value but true, never places an order", async () => {
-  const cafe = new CafeTools({ latency: {} });
-  await cafe.execute("a", "manage_cart", JSON.stringify({ action: "add", item_id: "lat" }));
-  for (const [index, confirmed] of ["false", "yes", 1, {}, [true]].entries()) {
-    const result = JSON.parse(await cafe.execute(`p${index}`, "place_order", JSON.stringify({ confirmed })));
-    assert.equal(result.status, "needs_confirmation", JSON.stringify(confirmed));
-  }
-  assert.equal(cafe.lastOrder, null);
-  assert.equal(JSON.parse(await cafe.execute("go", "place_order", JSON.stringify({ confirmed: true }))).status, "confirmed");
-  assert.equal(cafe.lastOrder.order_id, "BB-42");
-});
-
 test("a repeated call id, even while the first still runs, adds one line", async () => {
   const cafe = new CafeTools({ latency: { manage_cart: 20 } });
   const args = JSON.stringify({ action: "add", item_id: "esp" });

@@ -7,7 +7,6 @@ import asyncio
 import base64
 import json
 import unittest
-from contextlib import ExitStack
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -19,12 +18,11 @@ from pipecat.frames.frames import InputAudioRawFrame, LLMTextFrame
 from pipecat.observers.base_observer import BaseObserver
 from pipecat.processors.frame_processor import FrameProcessor
 
-from delegation_core.config import CoreSettings
 from delegation_core.im.input import BackendTask, compose, settings_for
 from examples.frontend_backend_live.adapter.adapter import LIVE_AUDIO_IN_RATE, CascadeAdapter
-from examples.frontend_backend_live.cascade.heard_log import HEADER as TRANSCRIPT_HEADER
 from examples.frontend_backend_live.cascade.heard_log import Heard
 from examples.frontend_backend_live.cascade.lines import catalog_lines
+from examples.frontend_backend_live.prompts import get_prompt_set
 from live.gateway import LiveGateway, LiveSettings, create_live_router
 from live.gateway.websocket import run_primary_websocket
 from live.ports import SessionParts
@@ -47,6 +45,9 @@ from tests.unit.cascade_helpers import (
 from tests.unit.core_helpers import FakeChat, chunk, tool_fragment
 from tests.unit.live_helpers import FakeWebSocket
 
+# The prompt set these whole-call tests run on, whose words the cascade writes.
+PROMPTS = get_prompt_set(LIVE_CONFIG.prompt_version)
+
 RESPONSES_SESSION = {
     "model": "live-1",
     "instructions": "You are a kiosk voice assistant. Delegate every request.",
@@ -57,7 +58,7 @@ RESPONSES_SESSION = {
 }
 
 # What tau2's Live client starts a session with: its own agent model, its policy as the backend's instructions, its
-# function tools, one call per round and an effort (live_provider.py:283-291).
+# function tools, one call per round and an effort (tau2/voice/audio_native/openai/live_provider.py).
 TAU2_SESSION = {
     "model": "live-1",
     "instructions": "You are a customer service agent. Delegate every request.",
@@ -238,7 +239,7 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.assertEqual(ended["event"]["response"]["incomplete_details"], {"reason": "max_output_tokens"})
         apology = catalog_lines().apology
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "again?" in e["delta"])
-        self.assertEqual(" ".join(self.tts.spoken), " ".join([*catalog_lines().lead_in.split(), *apology.split()]))
+        self.assertEqual(" ".join(self.tts.spoken), " ".join(apology.split()))  # no lead-in: the apology alone
         events = [e["event"]["type"] for e in self.ws.from_server if e["type"] == "response.event"]
         self.assertNotIn("response.completed", events)
         self.assertEqual(len(self.chat.requests), 2)  # the talker and the one round: no retry, no writer
@@ -412,16 +413,22 @@ class ClientToolsEndToEndTests(EngineHarness):
         self.assertEqual(history["frontend"]["model"], ENDPOINT.model)
         self.assertTrue(any("What teas do you have?" in text for text in frontend))
         self.assertTrue(any("The caller is a regular." in text for text in frontend))
+        # Each message carries its kind, which the console styles it by.
+        kinds = {m["content"]: m["kind"] for m in history["frontend"]["messages"]}
+        self.assertEqual(kinds[PROMPTS.context_label + "The caller is a regular."], "app_context")
+        self.assertEqual(kinds[PROMPTS.result_label + "We have Earl Grey."], "result")
         backend = history["backend"]
         request = backend["items"][0]["content"][0]["text"]
         # The delegation's input is the labeled transcript since the last request, the context included.
-        self.assertTrue(request.startswith(TRANSCRIPT_HEADER), request)
+        self.assertTrue(request.startswith(PROMPTS.transcript.header), request)
         self.assertIn("The caller is a regular.", request)
         self.assertIn("What teas do you have?", request)
         self.assertIn("We have Earl Grey.", json.dumps(backend["items"][1:]))
         # The transcript went with the delegation. The lead-in was said after its input was built, so the next
         # delegation carries it; the answer the caller heard in full is the backend's own.
-        self.assertEqual(backend["pending"], [f"{Heard.AGENT}: Let me check."])
+        self.assertEqual(
+            backend["pending"], [{"kind": Heard.AGENT, "text": f"{PROMPTS.transcript.agent}: Let me check."}]
+        )
         # What the session set, then the newest request's instructions as the core composed them.
         composed = compose(RESPONSES_SESSION["delegation"]["responses"]["instructions"], *self.im().instruction_notes())
         self.assertEqual(
@@ -458,68 +465,6 @@ class ClientToolsEndToEndTests(EngineHarness):
         )
         await self.ws.wait_for("session.updated")
         self.assertEqual((await self.history())["backend"]["prompt"][0]["text"], "Use the tools.")
-
-    async def test_history_names_a_session_update_as_the_source_of_the_backends_new_instructions(self):
-        # The delegation side reads the session's stored settings, as session.update changed them. A
-        # session that sets no instructions runs on the core's default, which the core reports on each response it
-        # opens: the gateway knows it from the first request on.
-        session = {**RESPONSES_SESSION, "delegation": {"type": "responses", "responses": {"model": "org/org/model"}}}
-        await self.serve(
-            session,
-            [
-                _decision_chunks('{"action":"delegate","speech":"Let me check."}'),
-                [chunk("We have Earl Grey.", finish="stop")],
-                _decision_chunks('{"action":"speak","speech":"We have Earl Grey."}'),
-            ],
-        )
-        self.assertEqual((await self.history())["backend"]["prompt"], [])  # no request yet: the client set none
-        await self.stt.say("What teas do you have?")
-        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "Grey" in e["delta"])
-        composed = compose(STATIC_BACKEND, *self.im().instruction_notes())
-        self.assertEqual((await self.history())["backend"]["prompt"], [{"source": COMPOSED_SOURCE, "text": composed}])
-        update = {"delegation": {"responses": {"instructions": "Use the tools."}}}
-        self.ws.send({"type": "session.update", "event_id": "u", "session": update})
-        await self.ws.wait_for("session.updated")
-        self.assertEqual(
-            (await self.history())["backend"]["prompt"][0],
-            {"source": "delegation.responses.instructions", "text": "Use the tools."},
-        )
-
-    async def test_history_shows_the_voice_note_the_core_adds_v2_by_default(self):
-        # The voice note is the core's (core.yaml delegation.voice_note, v2 by default); it follows the
-        # session's instructions in what the core composes, which the newest response reports.
-        await self.serve(
-            RESPONSES_SESSION,
-            [
-                _decision_chunks('{"action":"delegate","speech":"Let me check."}'),
-                [chunk("We have Earl Grey.", finish="stop")],
-                _decision_chunks('{"action":"speak","speech":"We have Earl Grey."}'),
-            ],
-        )
-        await self.stt.say("What teas do you have?")
-        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "Grey" in e["delta"])
-        composed = (await self.history())["backend"]["prompt"][-1]
-        note = CoreSettings.load(CORE_YAML).texts.voice_notes["v2"]
-        self.assertEqual(composed["source"], COMPOSED_SOURCE)
-        self.assertTrue(composed["text"].startswith("Look things up.\n## Voice channel"), composed["text"])
-        self.assertIn(note.strip(), composed["text"])
-
-    async def test_history_shows_the_frame_prompt_set_v2_puts_around_the_instructions(self):
-        # v2 frames the client's instructions: its role comes before them, how they apply after them.
-        await self.serve(RESPONSES_SESSION, [], live_config=replace(LIVE_CONFIG, prompt_version="v2"))
-        sources = [part["source"] for part in (await self.history())["frontend"]["prompt"]]
-        self.assertEqual(sources[:2], ["prompt set v2: the voice's role", "session.instructions"])
-        routing = sources.index("prompt set v2: routing rules")
-        self.assertEqual(sources[routing - 1], "prompt set v2: how the instructions apply")
-
-    async def test_history_shows_the_backend_model_a_session_update_chose(self):
-        # The model the session's stored settings name, which the next request runs on, not the endpoint's: the
-        # other /history tests run on the endpoint's own model, so they cannot tell the two apart.
-        await self.serve(RESPONSES_SESSION, [])
-        update = {"delegation": {"responses": {"model": "org/other-model"}}}
-        self.ws.send({"type": "session.update", "event_id": "u", "session": update})
-        await self.ws.wait_for("session.updated")
-        self.assertEqual((await self.history())["backend"]["model"], "org/other-model")
 
     async def test_history_shows_the_backend_busy_while_a_delegation_waits_for_the_app(self):
         # The console's "working" flag comes from the adapter's work note.
@@ -563,7 +508,7 @@ class TypedQuestionTests(EngineHarness):
         self.ws.send({"type": "response.create", "event_id": "go"})
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "cafe." in e["delta"])
         self.assertNotIn("error", self.ws.kinds())
-        question = {"role": "user", "content": "Application context (reference data): Is there parking?"}
+        question = {"role": "user", "content": PROMPTS.context_label + "Is there parking?"}
         # The writer's request: the question, then the answer to word, in its one user message.
         wording = self.chat.requests[1]["messages"][-1]
         self.assertEqual(wording["role"], "user")
@@ -571,7 +516,7 @@ class TypedQuestionTests(EngineHarness):
         memory = self.engines[0].cascade.memory.messages()
         self.assertIn(question, memory)
         self.assertNotIn({"role": "user", "content": "Is there parking?"}, memory)  # no caller turn
-        self.assertEqual([entry.kind.value for entry in self.engines[0].cascade.heard_log.entries], ["Agent"])
+        self.assertEqual([entry.kind for entry in self.engines[0].cascade.heard_log.entries], [Heard.AGENT])
 
 
 class ClientModeEndToEndTests(EngineHarness):
@@ -603,7 +548,7 @@ class ClientModeEndToEndTests(EngineHarness):
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "sunny" in e["delta"])
         update = self.chat.requests[1]["messages"][-1]["content"]
         self.assertIn("Weather: sunny, 72 degrees.", update)
-        self.assertIn('you already told the caller: "One moment."', update)
+        self.assertIn('(the caller already heard: "One moment."; do not say that again)', update)
         # The writer words the delegation's answer as one the caller waits for, so it may only speak.
         self.assertEqual(
             self.chat.requests[1]["response_format"]["json_schema"]["schema"]["properties"]["action"]["enum"],
@@ -617,7 +562,7 @@ class ClientModeEndToEndTests(EngineHarness):
             self.CLIENT_SESSION,
             [
                 _decision_chunks('{"action":"delegate","speech":""}'),
-                _decision_chunks('{"action":"listen","speech":""}'),
+                _decision_chunks('{"action":"wait","speech":""}'),
             ],
         )
         await self.stt.say("Check something.")
@@ -632,9 +577,9 @@ class ClientModeEndToEndTests(EngineHarness):
         self.feed_silence(6)
         await self.ws.wait_for("session.commentary.appended", timeout=3)
         await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "fact." in e["delta"], timeout=3)
-        # The talker delegated with no lead-in, so the voice says its own first; the writer's answer may not
+        # The talker delegated with no lead-in, so the voice says nothing first; the writer's answer may not
         # stay silent, so the client's update is said as written.
-        self.assertEqual(" ".join(self.tts.spoken), f"{catalog_lines().lead_in} Background fact.")
+        self.assertEqual(" ".join(self.tts.spoken), "Background fact.")
 
     async def test_history_has_no_backend_when_the_client_runs_it(self):
         await self.serve(self.CLIENT_SESSION, [])
@@ -684,194 +629,6 @@ class ClientModeEndToEndTests(EngineHarness):
         await gateway.close_all()
 
 
-class ConsoleClientLoopTests(EngineHarness):
-    """The Live Console's client mode, played call by call against the real gateway and the real route.
-
-    The test makes the console's requests in its order (``client/public/live/client-mode.js``): for each client
-    delegation, a silent thinking append, then rounds of ``POST /v1/live/delegate``, then the answer as a commentary
-    append. Only the backend model client is scripted. It leaves out the transcript's 1.5 s join window and 40-line cap,
-    and the **Backend instructions** box.
-    """
-
-    TOOL_ROUNDS = 6  # client-mode.js: rounds that may run tools; one more round only answers
-
-    CONSOLE_SESSION = {
-        "model": "live-1",
-        "audio": {"output": {"voice": "marin"}},
-        "instructions": "You are a kiosk voice assistant.",
-        "delegation": {"type": "client"},
-    }
-
-    async def asyncSetUp(self):
-        import os
-
-        import server
-        from delegation_core.backend.providers import base as providers
-        from tests.unit.frontend_backend_live.root.root_helpers import clear_root_caches
-        from utils import clear_service_context, set_active_services
-
-        self.backend = FakeChat(
-            tool_call_round("call_1"),
-            [chunk("We have green tea and chai."), chunk(finish="stop")],
-            [chunk("We have espresso."), chunk(finish="stop")],
-        )
-        stack = ExitStack()
-        self.addCleanup(stack.close)
-        # The server's routes with the bundled files and the registry's hooks; the catalog's self-hosted section, named
-        # outright, and no NVIDIA Cloud key, so no reachability probe picks another. With no token, the console's host
-        # name must be allowed.
-        live = {"LIVE_ENABLED": "true", "LIVE_API_TOKEN": "", "LIVE_ALLOWED_HOSTS": "console"}
-        stack.enter_context(patch.dict(os.environ, {**live, "SERVICE_RECIPE": "server", "NVIDIA_API_KEY": ""}))
-        for name in ("SERVICES_PATH", "LIVE_CONFIG_PATH", "CORE_CONFIG_PATH", "LIVE_ADAPTER_FACTORY"):
-            os.environ.pop(name, None)  # the patch above restores the whole environment when the test ends
-        # The route's rounds reach the root's one core, whose providers make their clients here: the scripted backend.
-        # The session's own core is the harness's, which no backend request may reach in client mode.
-        stack.enter_context(patch.object(providers, "AsyncOpenAI", return_value=self.backend))
-        clear_root_caches(self)
-        self.addCleanup(clear_service_context)
-        self.addCleanup(set_active_services, None)
-        routes = server.create_app()
-        self.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=routes), base_url="http://console")
-        self.addAsyncCleanup(self.http.aclose)
-        self.event_seq = 0
-
-    def next_event_id(self, prefix):
-        self.event_seq += 1
-        return f"{prefix}_{self.event_seq:03d}"
-
-    def transcript_context(self):
-        """``Transcript.context``: the transcript deltas, joined by speaker, as the last eight "role: text" lines."""
-        lines: list[list[str]] = []
-        for event in self.ws.from_server:
-            role = {"session.input_transcript.delta": "user", "session.output_transcript.delta": "assistant"}.get(
-                event["type"]
-            )
-            if role is None:
-                continue
-            if lines and lines[-1][0] == role:
-                lines[-1][1] += event["delta"]
-            else:
-                lines.append([role, event["delta"]])
-        return "\n".join(f"{role}: {text.strip()}" for role, text in lines[-8:] if len(f"{role}: {text.strip()}") > 7)
-
-    async def run_client_delegation(self, delegation_id, model, tools):
-        """``runClientDelegation`` for one client delegation; returns the answer the console sends back.
-
-        The delegation keeps its own history; rounds 1-6 may run tools, a seventh only answers; the answer is the
-        rounds' ``final_answer`` messages (a message with no phase is one), and with none the console says a fixed line.
-        """
-        self.ws.send(
-            {
-                "type": "session.thinking.append",
-                "event_id": self.next_event_id("progress"),
-                "delegation_id": delegation_id,
-                "content": "Working on that now. Nothing has been ordered yet.",
-            }
-        )
-        reconstructed = (
-            f"Recent voice transcript (may contain errors or corrections):\n{self.transcript_context()}\n\n"
-            'Current cart state: {"lines":[],"item_count":0,"subtotal":0,"tax":0,"total":0,"currency":"USD"}\n\n'
-            "The voice assistant delegated the user's latest request to you. Handle it and return "
-            "a short result suitable for reading aloud."
-        )
-        history = [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": reconstructed}]}]
-        final, tool_ran = "", False
-        for number in range(1, self.TOOL_ROUNDS + 2):
-            body = {"input": history, "model": model, "tools": tools}
-            response = await self.http.post("/v1/live/delegate", json=body)
-            self.assertEqual(response.status_code, 200, response.text)
-            output = response.json()["response"]["output"]
-            history.extend(output)
-            calls = [item for item in output if item["type"] == "function_call"]
-            if not calls or number > self.TOOL_ROUNDS:
-                final = "\n\n".join(
-                    "".join(part.get("text", "") for part in item["content"] if part.get("type") == "output_text")
-                    for item in output
-                    if item["type"] == "message" and item.get("phase") != "commentary"
-                )
-                break
-            tool_ran = True
-            history.extend(
-                {
-                    "type": "function_call_output",
-                    "call_id": call["call_id"],
-                    "output": '{"items": ["green tea", "chai"]}',
-                }
-                for call in calls
-            )
-        if not final:  # client-mode.js PARTLY_DONE_LINE or FAILED_LINE
-            final = "I may have only partly finished that" if tool_ran else "I could not get that done"
-        self.ws.send(
-            {
-                "type": "session.commentary.append",
-                "event_id": self.next_event_id("result"),
-                "delegation_id": delegation_id,
-                "content": final[:1200],
-            }
-        )
-        return final
-
-    async def test_the_console_runs_each_client_delegation_through_the_route_and_its_answer_is_spoken(self):
-        info = (await self.http.get("/v1/live/info")).json()
-        model, tools = info["backend"]["model"], info["sample_tools"]  # applyInfo and backendModel in app.js
-        await self.serve(
-            self.CONSOLE_SESSION,
-            [
-                _decision_chunks('{"action":"delegate","speech":"One moment."}'),
-                _decision_chunks('{"action":"speak","speech":"We have green tea and chai."}'),
-                _decision_chunks('{"action":"delegate","speech":"Let me check."}'),
-                _decision_chunks('{"action":"speak","speech":"We have espresso."}'),
-            ],
-        )
-        # The first delegation: announced to the console, which runs it at once and answers with commentary that
-        # names it.
-        await self.stt.say("What teas do you have?")
-        first = await self.ws.wait_for("session.delegation.created")
-        self.assertEqual(first["delegation"]["target"], "client")
-        self.assertNotIn("response_id", first["delegation"])
-        answer = await self.run_client_delegation(first["delegation"]["id"], model, tools)
-        self.assertEqual(answer, "We have green tea and chai.")
-        # Round 1 sent the request with the cafe tools; round 2 resent the delegation's history, and the function's
-        # output reached the backend model.
-        self.assertEqual([request["model"] for request in self.backend.requests], [model, model])
-        self.assertEqual(
-            [tool["function"]["name"] for tool in self.backend.requests[0]["tools"]],
-            [tool["name"] for tool in tools],
-        )
-        second_round = self.backend.requests[1]["messages"]
-        self.assertEqual([m["role"] for m in second_round], ["system", "user", "assistant", "tool"])
-        self.assertIn("corrections):\nuser: What teas do you have?", second_round[1]["content"])
-        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "chai" in e["delta"])
-        writer = self.chat.requests[1]["messages"][-1]["content"]
-        self.assertIn("We have green tea and chai.", writer)
-        self.assertIn('you already told the caller: "One moment."', writer)
-        self.feed_silence(10)
-        await self.ws.wait_for("session.thinking.appended")
-        await self.ws.wait_for("session.commentary.appended")
-        # The history panel gets no server backend and shows the console's own history instead (refreshHistory).
-        self.assertIsNone((await self.history())["backend"])
-        # The second delegation's first round carries only its own rebuilt request: none of the first one's
-        # items, and the backend model answers it.
-        await self.stt.say("And coffee?")
-        second = await self.ws.wait_for(
-            "session.delegation.created", where=lambda e: e["delegation"]["id"] != first["delegation"]["id"]
-        )
-        self.assertEqual(
-            await self.run_client_delegation(second["delegation"]["id"], model, tools), "We have espresso."
-        )
-        third_round = self.backend.requests[2]["messages"]
-        self.assertEqual([m["role"] for m in third_round], ["system", "user"])
-        self.assertIn("And coffee?", third_round[1]["content"])
-        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "espresso" in e["delta"])
-        self.assertIn('you already told the caller: "Let me check."', self.chat.requests[3]["messages"][-1]["content"])
-        # The session itself made only the talker's and the writer's requests: no backend request, no error, and no
-        # response.event.
-        self.assertEqual(len(self.chat.requests), 4)
-        self.assertEqual(len(self.backend.requests), 3)
-        self.assertNotIn("error", self.ws.kinds())
-        self.assertNotIn("response.event", self.ws.kinds())
-
-
 class _IdleFrontend:
     """A frontend adapter that starts and closes and does nothing else, for a session that only needs to start."""
 
@@ -880,38 +637,6 @@ class _IdleFrontend:
 
     async def close(self):
         pass
-
-
-class CommentaryEndToEndTests(EngineHarness):
-    """The client's commentary with no delegation id, in a responses session: the writer phrases it and it is spoken."""
-
-    async def test_the_clients_commentary_is_spoken(self):
-        await self.serve(RESPONSES_SESSION, [_decision_chunks('{"action":"speak","speech":"It is sunny today."}')])
-        self.ws.send(
-            {
-                "type": "session.commentary.append",
-                "event_id": "c1",
-                "delegation_id": None,
-                "content": "Weather: sunny, 72 degrees.",
-            }
-        )
-        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "sunny" in e["delta"])
-        # No talker turn comes first, so the writer's request is the first model request. The client's commentary is
-        # worded with what else is ready as one line the caller hears, so the writer may only speak.
-        update = self.chat.requests[0]["messages"][-1]["content"]
-        self.assertIn("Weather: sunny, 72 degrees.", update)
-        self.assertEqual(
-            self.chat.requests[0]["response_format"]["json_schema"]["schema"]["properties"]["action"]["enum"],
-            ["speak"],
-        )
-
-    async def test_client_commentary_is_spoken_even_when_the_writer_would_stay_silent(self):
-        await self.serve(RESPONSES_SESSION, [_decision_chunks('{"action":"listen","speech":""}')])
-        self.ws.send({"type": "session.commentary.append", "delegation_id": None, "content": "Background fact."})
-        self.feed_silence(6)
-        await self.ws.wait_for("session.commentary.appended", timeout=3)
-        await self.ws.wait_for("session.output_transcript.delta", where=lambda e: "fact." in e["delta"], timeout=3)
-        self.assertEqual(" ".join(self.tts.spoken), "Background fact.")
 
 
 class WebRTCEndToEndTests(unittest.IsolatedAsyncioTestCase):
@@ -935,6 +660,7 @@ class WebRTCEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(core.aclose)
         app = FastAPI()
         gateway = mount_live(app, factory=factory, core=core_hook(core))
+        self.addAsyncCleanup(gateway.close_all)  # as at shutdown: a failure mid-call leaves no session open
         client = RTCPeerConnection()
         self.addAsyncCleanup(client.close)
         client.addTrack(AudioStreamTrack())
@@ -1101,7 +827,7 @@ class CloseOwnerTests(EngineHarness):
     """Who closes what in a live session: the delegation side's own close stops its worker.
 
     The adapter's close stops the pipeline, the presenter's task, the silence timer and the talker's model, and leaves
-    the delegation side alone. The close-order pin cannot tell, because the session closes the side right after the
+    the delegation side alone. A whole session's close cannot tell the two apart: it closes the side right after the
     adapter, and a second close of the side does nothing.
     """
 

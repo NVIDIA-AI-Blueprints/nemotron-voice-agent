@@ -258,7 +258,7 @@ class StockClientAgainstTheCascadeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([(d.target, d.response_id) for d in created], [("client", None)])
             update = self.chat.requests[1]["messages"][-1]["content"]
             self.assertIn("No backend is available to handle delegated work in this session.", update)
-            self.assertIn('you already told the caller: "Let me check."', update)
+            self.assertIn('(the caller already heard: "Let me check."; do not say that again)', update)
             self.assertEqual(len(self.chat.requests), 2)  # the talker and the writer: the server runs no backend
             await worker.queue_frame(EndFrame())
             async with asyncio.timeout(15):

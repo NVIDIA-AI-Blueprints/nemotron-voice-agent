@@ -15,8 +15,8 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 
-# The options a request may carry beside the model, the instructions, the tools and the output limit. The Responses
-# backend applies them; a chat-completions backend has no equivalent and ignores them.
+# The options a request may carry beside the model, the instructions, the tools, the tool choice and the output limit.
+# The Responses backend passes them on; the chat-completions backend maps those it has an equivalent for.
 OPTIONS = ("parallel_tool_calls", "reasoning", "text", "service_tier")
 # The fields of a Responses request that set how its Work runs on the backend model.
 SETTINGS = ("model", "instructions", "tools", "tool_choice", "max_output_tokens", *OPTIONS)

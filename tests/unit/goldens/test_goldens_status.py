@@ -6,23 +6,20 @@
 """Goldens for status while work runs and for the floor: who may speak, and when.
 
 The voice has no canned status lines: the talker answers a status question from its work line (each open
-delegation's state and newest progress), or delegates it; a quiet spell says the backend's newest unsaid progress line
-or the voice's still-working line, at most once per delegation. A result waits for the floor: the caller
+delegation's state and newest progress), or delegates it. A result waits for the floor: the caller
 speaking, a turn being decided or a line in flight holds it. Every result ready when the floor frees is
 worded together and said in one line.
 """
 
 import asyncio
 import json
-from dataclasses import replace
 from unittest.mock import patch
 
 from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 
 from examples.frontend_backend_live.cascade.floor import Floor
-from examples.frontend_backend_live.cascade.lines import catalog_lines
+from examples.frontend_backend_live.cascade.presenter import Presenter
 from tests.unit.goldens.harness import (
-    GOLDEN_LIVE_CONFIG,
     WORK_RUNNING,
     GoldenCase,
     HeldRound,
@@ -39,9 +36,6 @@ TEA_MENU = '{"teas": ["Earl Grey", "Matcha"]}'
 # X9's two backend answers, and the one line the writer words for both.
 TEA_ANSWER, PASTRY_ANSWER = "Earl Grey and Matcha.", "We have fresh croissants."
 BOTH = "We have Earl Grey and Matcha, and fresh croissants."
-# G9's quiet spell is half a second, and its timer looks every eighth of a second while the floor is idle: eight looks
-# after the first line span two quiet spells, in which a second line would come but for the cap.
-TWO_QUIET_SPELLS_OF_LOOKS = 8
 
 
 class StatusGoldens(GoldenCase):
@@ -50,14 +44,14 @@ class StatusGoldens(GoldenCase):
     def instrument(self, patches):
         """The harness's counters, plus the floor's: whether the caller speaks, and the lines held for the caller.
 
-        ``Floor.set_caller_speaking`` records whether the cascade knows the caller is speaking, and a wait for the
-        floor that begins while the caller speaks counts as a line held for the caller. Each wrapper calls the
-        original unchanged; they reach past the wire like the harness's own ``instrument``: re-point them when a step
-        moves those reads (edit (b)).
+        ``Floor.set_caller_speaking`` records whether the cascade knows the caller is speaking, and a worded line's
+        wait for the floor (``Presenter._held``) that begins while the caller speaks counts as a line held for the
+        caller. Each wrapper calls the original unchanged; they reach past the wire like the harness's own
+        ``instrument``: re-point them when a change moves those reads.
         """
         super().instrument(patches)
         case = self
-        set_caller_speaking, wait_may_prepare = Floor.set_caller_speaking, Floor.wait_may_prepare
+        set_caller_speaking, held = Floor.set_caller_speaking, Presenter._held
         self.caller_speaking = False
         self.holds = self.holds_open = 0
 
@@ -66,27 +60,27 @@ class StatusGoldens(GoldenCase):
             case.caller_speaking = speaking
             case._changed()
 
-        async def wait_may_prepare_counted(floor):
-            held = floor.caller_speaking
-            if held:
+        async def held_counted(presenter, batch, stamp, until=None):
+            hold = until is None and presenter.floor.caller_speaking  # a wait for idle, not for a wording
+            if hold:
                 case.holds += 1
                 case.holds_open += 1
                 case._changed()
             try:
-                await wait_may_prepare(floor)
+                return await held(presenter, batch, stamp, until)
             finally:
-                if held:
+                if hold:
                     case.holds_open -= 1
                     case._changed()
 
         patches.enter_context(patch.object(Floor, "set_caller_speaking", set_caller_speaking_seen))
-        patches.enter_context(patch.object(Floor, "wait_may_prepare", wait_may_prepare_counted))
+        patches.enter_context(patch.object(Presenter, "_held", held_counted))
 
     def hold_reply(self, client, number):
         """Hold the scripted reply to request ``number`` of ``client`` until the returned event is set.
 
         The request is recorded and its step is taken when it is made, as usual; only the reply waits, as a slow
-        model's would. Release it well within the role's 10 s attempt timeout.
+        model's would. Release it well within the role's timeouts (a talker or writer attempt has 10 s).
         """
         release = asyncio.Event()
         create = client.create
@@ -97,7 +91,7 @@ class StatusGoldens(GoldenCase):
                 await release.wait()
             return stream
 
-        client.create = create_held  # the engine calls client.chat.completions.create, which is client.create
+        client.create = create_held  # a provider calls client.chat.completions.create, which is client.create
         return release
 
     def in_context(self, text):
@@ -120,12 +114,11 @@ class StatusGoldens(GoldenCase):
 
         The talker delegates the tea question with a lead-in; the backend calls the client's get_menu tool, and the
         work waits for the client. "Any update?" goes to the talker, whose prompt carries the work line, and the
-        talker answers it itself (a canned status line once answered without a model call). "Can I also
-        get a muffin?" is delegated and joins the waiting Work (the steer conductor). The client returns the
-        menu: the Work's next round answers both, in the newer request's response, and the writer speaks it,
-        told of both lead-ins. A later request is a Work of its own, delegated with a lead-in; its backend input carries
-        the conversation since the joined request. Its backend reply is held until the lead-in is in the talker's
-        context, so the writer's request is the same on every run.
+        talker answers it itself. "Can I also get a muffin?" is delegated and joins the waiting Work (the steer
+        conductor). The client returns the menu: the Work's next round answers both, in the newer request's response,
+        and the writer speaks it, told of both lead-ins. A later request is a Work of its own, delegated with a
+        lead-in; its backend input carries the conversation since the joined request. Its backend reply is held until
+        the lead-in is in the talker's context, so the writer's request is the same on every run.
         """
         await self.serve(
             frontend=[
@@ -164,53 +157,24 @@ class StatusGoldens(GoldenCase):
         await self.close()
         self.assert_golden("G8")
 
-    async def test_g9_a_quiet_spells_line_while_a_round_runs(self):
-        """G9: a quiet spell's line while a backend round runs.
-
-        The quiet-spell timer is set to half a second, one line per delegation (the default cap). The talker delegates
-        with a lead-in, and the backend round is held. After half a second of quiet the voice says its still-working
-        line: the backend wrote no progress note to say instead. The round stays held for a second more, and
-        the cap keeps every later quiet spell silent. Then the backend answers, and the writer words the answer, told
-        of the lead-in and the line already said. While the work waits for the app, the quiet spell says nothing: the
-        app wait does (G16).
-        """
-        live_config = replace(
-            GOLDEN_LIVE_CONFIG, delegation=replace(GOLDEN_LIVE_CONFIG.delegation, progress_after_seconds=0.5)
-        )
-        held = HeldRound(answer_round(TEAS))
-        with patch("tests.unit.goldens.harness.ScriptedChat", HoldingChat):
-            await self.serve(
-                frontend=[decision("delegate", "Let me check."), decision("speak", TEAS)],
-                backend=[held],
-                live_config=live_config,
-            )
-        still_working = catalog_lines().still_working
-        await self.say("What teas do you have?")
-        await self.wait_until(lambda: held.waiting.is_set(), "the backend round to wait for its model")
-        await self.wait_until(lambda: self.in_context(still_working), "the still-working line after quiet")
-        # Two more quiet spells pass, counted in the timer's looks: the cap leaves it no delegation to speak of.
-        self.assertFalse(await self.wait_quiet_spells(TWO_QUIET_SPELLS_OF_LOOKS))
-        held.release()
-        await self.wait_quiet()
-        await self.close()
-        self.assertEqual(self.tts.utterances.count(still_working), 1)
-        self.assert_golden("G9")
-
     async def test_x9_two_results_ready_together_are_said_in_one_line(self):
         """X9: two results ready together are worded together and said in one line (the presenter's inbox).
 
         The talker delegates the tea question with a lead-in, and the backend round is held. The caller starts to
         speak and keeps talking, so the floor is held, and the round answers: the tea answer waits in the inbox. The
         client types a question about pastries and runs it; no Work is open, so it starts one, and its answer waits
-        beside the first. When the caller stops (with no words the speech-to-text kept), the presenter takes both: the
-        writer words them in one request, one line says both, and each answer enters the talker's memory with it. The
-        caller then thanks the talker, whose request shows both answers and the one line.
+        beside the first. The writer words the tea answer at once, while the caller speaks, and the pastry answer that
+        comes next makes the presenter take both at once: the writer words them in one request, and the line waits
+        again. When the caller stops (with no words the speech-to-text kept), one line says both, and each answer
+        enters the talker's memory with it. The caller then thanks the talker, whose request shows both answers and the
+        one line.
         """
         held = HeldRound(answer_round(TEA_ANSWER))
         with patch("tests.unit.goldens.harness.ScriptedChat", HoldingChat):
             await self.serve(
                 frontend=[
                     decision("delegate", "Let me check."),  # the talker, on the tea question
+                    decision("speak", TEAS),  # the writer, at once: the tea result alone
                     decision("speak", BOTH),  # the writer: both results in one request
                     decision("speak", "You're welcome."),  # the talker, on the thanks
                 ],
@@ -227,17 +191,19 @@ class StatusGoldens(GoldenCase):
         self.send(typed_item("And do you have pastries?", "typed_question"))
         self.send(response_create("typed_run"))
         await self.wait_until(lambda: self.completed_responses() == 2, "the typed run's answer beside the tea answer")
-        self.assertEqual((self.holds_open, len(self.frontend.requests)), (1, 1))  # both wait; nothing worded yet
+        await self.wait_until(
+            lambda: (self.holds_open, len(self.frontend.requests)) == (1, 3), "both answers worded together, held"
+        )
         await self.caller_stops_speaking()
         await self.wait_quiet()
         await self.say("Thanks.")
         await self.wait_quiet()
         await self.close()
-        self.assertEqual(self.holds, 1)
+        self.assertEqual(self.holds, 2)  # the tea answer, then both answers worded again
         self.assertEqual(self.tts.utterances, ["Let me check.", BOTH, "You're welcome."])
-        writer = json.dumps(self.frontend.requests[1])
+        writer = json.dumps(self.frontend.requests[2])
         self.assertTrue(TEA_ANSWER in writer and PASTRY_ANSWER in writer, "one writer request words both results")
-        talker = json.dumps(self.frontend.requests[2])
+        talker = json.dumps(self.frontend.requests[3])
         self.assertTrue(all(text in talker for text in (TEA_ANSWER, PASTRY_ANSWER, BOTH)), "both enter the memory")
         self.assert_golden("X9")
 
@@ -249,19 +215,23 @@ class StatusGoldens(GoldenCase):
         )
 
     async def test_x4_a_reply_spoken_while_a_result_is_held(self):
-        """X4: a reply spoken while a result is held.
+        """X4: a reply decided while the caller speaks again waits for their silence; the result is held meanwhile.
 
         The talker delegates the tea question with a lead-in; the backend calls the client's get_menu tool, and the
         work waits for the client. The caller asks about oat milk, and while the talker decides, starts to speak
-        again. The client returns the menu: the tea answer waits for the floor, because the caller is speaking.
-        The talker's reply about oat milk answers a turn, so it is spoken while the answer is held. When the caller
-        stops (with no words the speech-to-text kept), the held answer is worded and spoken.
+        again. The client returns the menu: the writer words the tea answer at once, and it waits for the floor,
+        because the caller is speaking. The talker's reply about oat milk comes while the caller speaks, so it is
+        dropped and the oat-milk turn waits. The caller stops with no words the speech-to-text kept: the talker decides
+        the waiting turn again and replies, and the reply moves the held line's stamp, so the writer words the answer
+        again; then it is spoken.
         """
         await self.serve(
             frontend=[
                 decision("delegate", "Let me check."),
-                decision("speak", "Yes, we have oat milk."),
-                decision("speak", TEAS),
+                decision("speak", "Yes, we have oat milk."),  # the talker: completes while the caller speaks
+                decision("speak", TEAS),  # the writer, at once, while the caller speaks
+                decision("speak", "Yes, we have oat milk."),  # the talker again, once the caller is silent
+                decision("speak", TEAS),  # the writer again: the reply moved the line's stamp
             ],
             backend=[tool_call_round(), answer_round(TEAS)],
         )
@@ -277,10 +247,12 @@ class StatusGoldens(GoldenCase):
         self.send({"type": "response.create", "event_id": "continue"})
         await self.wait_until(lambda: self.holds_open == 1, "the tea answer held for the caller")
         release.set()
-        await self.wait_until(lambda: self.in_context("Yes, we have oat milk."), "the reply about oat milk")
-        self.assertEqual((self.holds_open, self.tts.utterances[-1]), (1, "Yes, we have oat milk."))
+        turns = self.engine.cascade.turns
+        await self.wait_until(lambda: not turns._deciding and turns.waiting, "the reply dropped, its turn waiting")
+        self.assertNotIn("Yes, we have oat milk.", self.tts.utterances)
         await self.caller_stops_speaking()
         await self.wait_quiet()
-        self.assertEqual(self.holds, 1)
+        self.assertEqual(self.tts.utterances, ["Let me check.", "Yes, we have oat milk.", TEAS])
+        self.assertEqual(len(self.frontend.requests), 5)
         await self.close()
         self.assert_golden("X4")

@@ -5,7 +5,7 @@
 
 Each connection has its own bounded queue and writer. An event is copied once when it is published, and that one copy
 goes to every connection that may see it. The relay of a delegation's events waits for room in the primary
-connection's queue (:meth:`Fanout.wait_for_room`), so a burst slows the view instead of overflowing the queue. A
+connection's queue (:meth:`Fanout.wait_for_room`), so a burst slows the relay instead of overflowing the queue. A
 primary connection that falls a whole queue behind, or whose send fails or stalls, closes its session; a sideband that
 does is dropped and closed with the reason.
 """

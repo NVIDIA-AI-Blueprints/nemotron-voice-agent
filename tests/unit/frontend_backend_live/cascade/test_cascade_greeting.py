@@ -5,10 +5,15 @@
 
 """The greeting through the inbox: a pinned developer message plus a commentary append, worded and said."""
 
+import asyncio
+
+from examples.frontend_backend_live.cascade.heard_log import Heard
+from examples.frontend_backend_live.cascade.settings import CascadeSettings
 from examples.frontend_backend_live.models.decision import TalkerDecision
 from tests.unit.frontend_backend_live.cascade.doubles import Call
 
 INTRO = "Greet the caller now in English as Remy from Bluebird Cafe and ask what they would like. Then pause."
+AS_WRITTEN = CascadeSettings.parse({"delegation": {"result_wording": "as_written", "progress_after_seconds": None}})
 
 
 class GreetingTests(Call):
@@ -19,7 +24,7 @@ class GreetingTests(Call):
         self.assertEqual(self.spoken, ["Hi, I'm Remy at Bluebird Cafe. What can I get you?"])
         self.assertIn(INTRO, self.frontend.calls[0]["history"][-1]["content"])  # worded as the update
         self.assertEqual(self.session.turns.waiting, [])
-        self.assertEqual([entry.kind.value for entry in self.session.heard_log.entries], ["Agent"])
+        self.assertEqual([entry.kind for entry in self.session.heard_log.entries], [Heard.AGENT])
         self.assertEqual(self.memory()[1], ("developer", INTRO))
         self.assertNotIn(("user", INTRO), self.memory())
 
@@ -40,3 +45,23 @@ class GreetingTests(Call):
         self.assertEqual(self.spoken, [])
         self.session.caller_stopped()
         await self.said(1)
+
+    async def test_a_writer_that_fails_says_the_greeting_line_never_the_instructions(self):
+        # A writer that raises, one past its deadline, and output the parser cannot use.
+        for step in (
+            RuntimeError("model down"),
+            asyncio.get_running_loop().create_future(),  # never answers
+            TalkerDecision("delegate", "", {"recovery": "invalid_json"}),  # how the parser reads it
+        ):
+            with self.subTest(step=repr(step)):
+                await self.call([step])
+                self.session.greet(INTRO)
+                await self.said(1, timeout=3.0)
+                self.assertEqual(self.spoken, [self.lines.greeting])
+
+    async def test_on_as_written_the_greeting_line_is_said_with_no_writer_call(self):
+        await self.call(settings=AS_WRITTEN)
+        self.session.greet(INTRO)
+        await self.said(1)
+        self.assertEqual(self.spoken, [self.lines.greeting])
+        self.assertEqual(self.frontend.calls, [])

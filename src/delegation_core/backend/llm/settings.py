@@ -66,7 +66,7 @@ UNLISTED_MODELS: Mapping[str, UnlistedModels] = {
     policy.name: policy for policy in (ReportUnlisted(), FallBackToDefault())
 }
 
-# The keys of whole numbers, with their least value; the keys of durations in seconds; the keys of text.
+# The keys of whole numbers, with their least value; the keys of durations in seconds.
 COUNTS = {"max_tool_rounds": 1, "provider_retries": 0}
 SECONDS = (
     "first_event_timeout_seconds",
@@ -74,7 +74,6 @@ SECONDS = (
     "server_tool_timeout_seconds",
     "stop_timeout_seconds",
 )
-TEXTS = ("round_cap_note",)
 
 
 @dataclass(frozen=True)
@@ -84,13 +83,12 @@ class LlmSettings:
     provider: type[Backend] = ChatCompletionsBackend  # chat-completions | openai-responses (providers.BACKENDS)
     conductor: type[SteerOpenWork] | type[StartEach] = SteerOpenWork  # steer | start_each (RULE_CONDUCTORS)
     unlisted_models: UnlistedModels = UNLISTED_MODELS["report"]  # report | fallback
-    max_tool_rounds: int = 8  # rounds before the capped round
+    max_tool_rounds: int = 30  # rounds before the capped round, which adds texts.round_cap_note to its instructions
     provider_retries: int = 2  # tries after the first, when opening a round fails with a transient error
     first_event_timeout_seconds: float = 45.0  # from a round's request to its first event
     idle_timeout_seconds: float = 30.0  # the longest silence between two events of a round
     server_tool_timeout_seconds: float = 60.0  # one call a tool source runs
     stop_timeout_seconds: float = 10.0  # how long a stop waits for the round and the started calls to end
-    round_cap_note: str = "You have reached the step limit. Answer the caller with what you have."
 
     @property
     def limits(self) -> ProviderLimits:
@@ -128,11 +126,6 @@ class LlmSettings:
                 if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
                     raise ValueError(f"backend.llm.{key} must be a positive number of seconds")
                 values[key] = float(value)
-        for key in TEXTS:
-            if key in block:
-                if not isinstance(block[key], str) or not block[key].strip():
-                    raise ValueError(f"backend.llm.{key} must be non-empty text")
-                values[key] = block[key]
         return cls(**values)
 
     def describe(self) -> dict:

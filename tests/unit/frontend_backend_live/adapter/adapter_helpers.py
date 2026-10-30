@@ -78,15 +78,28 @@ class Probe(FrameProcessor):
         return [f for f, d in zip(self.frames, self.directions, strict=True) if isinstance(f, kinds) and d is direction]
 
 
+FLUSH = object()  # a step of run_frames: wait until every frame queued before it has passed the whole pipeline
+
+
 async def run_frames(processors, frames, *, settle=0.15, gap=0.02, observers=None, params=None):
-    """Run ``processors`` in a pipeline, queue ``frames`` ``gap`` apart, wait ``settle``, then cancel it."""
+    """Run ``processors`` in a pipeline: once started, queue ``frames`` ``gap`` apart, wait ``settle``, then cancel it.
+
+    A processor takes the frames waiting for it system frames first, so a cut queued right behind a line can overtake
+    the line. A :data:`FLUSH` step before the cut keeps it behind the line, as a text-to-speech passes a cut on only
+    after the frames it pushed before it.
+    """
     worker = PipelineWorker(Pipeline(processors), observers=observers or [], idle_timeout_secs=None, **(params or {}))
+    started = asyncio.Event()
+    worker.add_event_handler("on_pipeline_started", lambda worker, frame: started.set())
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
     running = asyncio.create_task(runner.run())
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(started.wait(), timeout=5)
     for frame in frames:
-        await worker.queue_frame(frame)
+        if frame is FLUSH:
+            await worker.flush_pipeline()
+        else:
+            await worker.queue_frame(frame)
         await asyncio.sleep(gap)
     await asyncio.sleep(settle)
     await worker.cancel()

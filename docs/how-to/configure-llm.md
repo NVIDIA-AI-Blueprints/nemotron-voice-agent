@@ -10,12 +10,13 @@ Models are declared in the root [`services.yaml`](../../services.yaml), and each
 
 ## Models
 
-Three unique Nemotron models back the examples. Each is served by the self-hosted Compose service(s) below. Nemotron 3.5 Lightning and Nemotron 3 Nano Omni are also available from the cloud catalog with no sidecar. Nemotron 3 Super is self-hosted only.
+Four unique Nemotron models back the examples. Nemotron 3.5 Lightning and Nemotron 3 Nano Omni are served by the self-hosted Compose services below and are also available from the cloud catalog with no sidecar. Nemotron 3 Super is self-hosted only. Nemotron 3 Ultra runs only on the public NVIDIA API, with `NVIDIA_API_KEY`.
 
 | Model | Self-hosted compose service | Modelcard |
 |-------|-----------------------------|-----------|
 | **Nemotron 3.5 Lightning 30B A3B**: fast, efficient text LLM | [`docker-compose.nemotron35-lightning-nim.yaml`](../../docker/docker-compose.nemotron35-lightning-nim.yaml) (NIM), [`docker-compose.nemotron35-lightning.yaml`](../../docker/docker-compose.nemotron35-lightning.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
 | **Nemotron 3 Super 120B A12B**: higher-capability alternative for complex tasks, available self-hosted | [`docker-compose.nemotron3-super.yaml`](../../docker/docker-compose.nemotron3-super.yaml) | [model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
+| **Nemotron 3 Ultra 550B A55B**: the largest of these models, the Frontend/Backend Live example's default backend on Cloud and Server | None: the public NVIDIA API (`integrate.api.nvidia.com`) only | [model card](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b/modelcard) |
 | **Nemotron 3 Nano Omni 30B A3B**: audio-input model that does ASR and the LLM in one, used by the Omni examples | [`docker-compose.nemotron3-omni-nim.yaml`](../../docker/docker-compose.nemotron3-omni-nim.yaml) (NIM), [`docker-compose.nemotron3-omni.yaml`](../../docker/docker-compose.nemotron3-omni.yaml) (vLLM) | [modelcard](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 
 Each model is exposed as one or more **catalog keys** in `services.yaml`:
@@ -24,6 +25,7 @@ Each model is exposed as one or more **catalog keys** in `services.yaml`:
 |-------|--------------|
 | Nemotron 3.5 Lightning | `nemotron-lightning` |
 | Nemotron 3 Super | `nemotron-super` (self-hosted only) |
+| Nemotron 3 Ultra | `nemotron-ultra` (public NVIDIA API only, in every recipe) |
 | Nemotron 3 Nano Omni | `nemotron-omni-nvfp4` |
 
 Reasoning is a per-session toggle on the same entry, not a separate key (see [Reasoning, parser & tool calling](#reasoning-parser--tool-calling)). The active default per slot is the first available key under the example's `services` in [`examples_registry.yaml`](../../examples_registry.yaml).
@@ -164,7 +166,7 @@ nemotron-nim:
     requires: enable_thinking
 ```
 
-For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. NIM reads the budget from `reasoning_budget` and vLLM from `thinking_token_budget`, so `nemotron-nim` and `nemotron-vllm` differ only in that `path`. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
+For spoken pipelines, prefer reasoning **OFF**, since thinking adds latency before the first spoken token. Turn it **ON** for complex tool/agent tasks where the quality gain outweighs the delay. NIM reads the budget from `reasoning_budget` and vLLM from `thinking_token_budget`, so `nemotron-nim` and `nemotron-vllm` differ only in that `path`. The Frontend/Backend thinker reads the same `nemotron-lightning` entry as the talker, and its `settings` in `examples_registry.yaml` turn reasoning **ON** with a 1024-token budget. Its 4096 max tokens default lives in the example's `pipeline.py`, like the talker's 2048. On Cloud and Server, the Frontend/Backend Live backend defaults to `nemotron-ultra` with reasoning on, temperature 0, 4096 max tokens, and no reasoning budget: Ultra's endpoint refuses one, and the `nemotron-super` profile it uses has no budget setting. Change a profile's `default`, the entry's `extra_params`, or the example's registry `settings` to change the default for every session. See [Configure Services](configure-services.md#editable-settings) for the schema.
 
 ### Reasoning Parser & Tool Calling (Self-Hosted)
 

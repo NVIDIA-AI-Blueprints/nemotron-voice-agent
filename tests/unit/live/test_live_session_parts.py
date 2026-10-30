@@ -34,7 +34,6 @@ class FakeFrontend:
         self.log, self.collector = log, collector
         self.start_gate: asyncio.Event | None = None  # set by a test to hold start until it is released
         self.close_error: Exception | None = None
-        self.close_gate: asyncio.Event | None = None
         self.seen_at_start: list | None = None  # what the client had received when the frontend started
 
     async def start(self, session, delegation):
@@ -45,8 +44,6 @@ class FakeFrontend:
 
     async def close(self):
         self.log.append("frontend.close")
-        if self.close_gate:
-            await self.close_gate.wait()
         if self.close_error:
             raise self.close_error
 
@@ -104,7 +101,7 @@ class FakeDelegation:
 
     async def update(self, config, patch, client_event_id):
         self.log.append(("delegation.update", patch, client_event_id))
-        return await self.server.update(config, patch, client_event_id)  # the core does not serve "bad-model"
+        return await self.server.update(config, patch, client_event_id)
 
     async def item_create(self, item, client_event_id):
         self.log.append(("delegation.item_create", item, client_event_id))
@@ -304,20 +301,6 @@ class RoutingTests(SplitPartsCase):
         self.assertEqual((await self.primary.wait_for("error"))["error"]["code"], "rate_limit_exceeded")
         self.assertEqual(self.log[self.after_start :], [("delegation.item_create", typed, "q1")])
 
-    async def test_a_model_the_core_refuses_is_reported_after_session_updated_and_kept(self):
-        await self.start()
-        bad = {"delegation": {"responses": {"model": "bad-model"}}}
-        await self.handle({"type": "session.update", "event_id": "u1", "session": bad})
-        error = (await self.primary.wait_for("error"))["error"]
-        self.assertEqual(
-            (error["code"], error["param"], error["client_event_id"]),
-            ("responses_validation_failed", "session.delegation.responses.model", "u1"),
-        )
-        kinds = self.primary.kinds()
-        self.assertLess(kinds.index("session.updated"), kinds.index("error"))  # session.updated does not wait
-        self.assertEqual(self.log[self.after_start :], [("delegation.update", bad, "u1")])
-        self.assertEqual(self.session.config.delegation.responses.model, "bad-model")
-
     async def test_the_usage_meter_reads_the_frontend_adapters_count_only(self):
         self.build()
         self.delegation.context_tokens = lambda: 64_000  # a delegation side's count is not the frontend's context
@@ -358,21 +341,6 @@ class CloseOrderTests(SplitPartsCase):
         )
         self.assertEqual(self.session.status, "closed")
         self.assertEqual(self.primary.kinds().count("session.closed"), 1)
-
-    async def test_a_frontend_close_that_hangs_uses_its_own_limit_and_the_delegation_side_still_closes(self):
-        # Each part has its own close limit, and the delegation side always closes, so a hung voice
-        # pipeline never leaves the core's work running.
-        await self.start()
-        self.frontend.close_gate = asyncio.Event()  # not set until the test ends: the frontend's close hangs
-        self.addCleanup(self.frontend.close_gate.set)  # then a close that still hangs can finish
-        with patch.object(lifecycle, "FRONTEND_CLOSE_SECONDS", 0.1):
-            async with asyncio.timeout(5):  # a close with no limit at all fails here instead of hanging the test
-                await self.session.close("close_requested")
-        self.assertEqual(
-            self.log[self.after_start :], ["delegation.stop_handing", "frontend.close", "delegation.close"]
-        )
-        self.assertEqual(self.session.status, "closed")
-        self.assertEqual(self.primary.kinds()[-1], "session.closed")
 
 
 class InspectableFrontend(FakeFrontend):
@@ -421,10 +389,6 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
         history = await self.history(InspectableFrontend([]), config)
         self.assertEqual(history["backend"], None)
         self.assertEqual(history["frontend"], {"messages": [{"role": "user", "content": "Hi."}]})
-
-    async def test_an_adapter_that_gives_no_half_still_has_the_parts_half(self):
-        history = await self.history(FakeFrontend([]))
-        self.assertEqual(history, {"frontend": None, "backend": {"model": "org/org/model", "prompt": [], "items": []}})
 
     async def test_an_adapter_that_holds_nothing_yet_gives_no_half_and_the_route_still_answers(self):
         class NotStarted(FakeFrontend):

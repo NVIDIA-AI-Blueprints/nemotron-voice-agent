@@ -39,9 +39,9 @@ Usage
 
 **Script a call.** Subclass :class:`GoldenCase` and write one test per golden::
 
-    class QueueGoldens(GoldenCase):
-        async def test_g5_a_second_request_after_the_first_acted(self):
-            '''G5: one or two sentences on what the call does; they are copied into the golden file.'''
+    class MenuGoldens(GoldenCase):
+        async def test_g17_a_delegation_with_one_client_tool_round(self):
+            '''G17: one or two sentences on what the call does; they are copied into the golden file.'''
             await self.serve(
                 frontend=[decision("delegate", "Let me check."), decision("speak", "We have tea.")],
                 backend=[tool_call_round(), answer_round("We have tea.")],
@@ -53,15 +53,15 @@ Usage
             self.send({"type": "response.create", "event_id": "continue"})
             await self.wait_quiet()
             await self.close()
-            self.assert_golden("G5")
+            self.assert_golden("G17")
 
 * ``serve(session=None, *, frontend=(), backend=(), live_config=None, delegation=None)`` starts the session and returns
   ``session.started``; ``delegation`` sets keys of the core's ``delegation`` block (``core.yaml``). ``frontend`` lists
   the talker's and the writer's replies in the order they are asked for; ``backend`` lists the backend rounds in order.
   A step is a chunk list or an exception, as ``FakeChat`` takes it: ``decision(action, speech)``, ``tool_call_round()``,
   ``answer_round(text)``, ``[chunk(...)]``. Every step must be used and no client may run out of steps; ``wait_quiet``
-  and ``assert_golden`` fail otherwise. ``session`` defaults to the engine tests' ``RESPONSES_SESSION`` and
-  ``live_config`` to ``GOLDEN_LIVE_CONFIG``.
+  and ``assert_golden`` fail otherwise. ``session`` defaults to ``RESPONSES_SESSION`` and ``live_config`` to
+  ``GOLDEN_LIVE_CONFIG``.
 * ``say(text)`` speaks a caller line and returns its input transcript event (pass ``turn=False`` for a line that will
   not reach the talker); ``feed_silence(tenths)`` sends caller audio; ``send(event)`` sends any client event.
 * ``wait_for(kind, where=...)``, ``wait_for_response_event(kind, where=...)`` and ``wait_for_call(name)`` wait for one
@@ -72,9 +72,9 @@ Usage
   text-to-speech, so a barge-in golden waits for events rather than for quiet.
 * ``close()`` closes the session as the client does and checks that ``session.closed`` came once and last;
   ``assert_golden(name)`` then compares every channel.
-* Timers. ``GOLDEN_LIVE_CONFIG`` sets the silence status line to an hour (``progress_after_seconds``), and the
-  gateway's usage report is patched to an hour (``usage_interval_seconds``), so neither puts a clock-driven line
-  into a golden. A golden that tests a timer sets it small through its own ``live_config`` or the core's
+* Timers. ``GOLDEN_LIVE_CONFIG`` sets the quiet before a progress line to an hour (``progress_after_seconds``),
+  and the gateway's usage report is patched to an hour (``usage_interval_seconds``), so neither puts a clock-driven
+  line into a golden. A golden that tests a timer sets it small through its own ``live_config`` or the core's
   ``delegation`` keys, or a test-local patch, with a comment, for example ``replace(GOLDEN_LIVE_CONFIG,
   delegation=replace(GOLDEN_LIVE_CONFIG.delegation, progress_after_seconds=0.2))`` or
   ``delegation={"client_tool_timeout_seconds": 0.2}``.
@@ -84,29 +84,17 @@ Usage
   while ``self.backend.holding``: a held round waits for the test, as a client-tool round waits for the client.
 
 **Record.** ``LIVE_GOLDEN_RECORD=1 uv run pytest <test file> -q -p no:cacheprovider`` writes
-``recordings/<name>.json``: the scenario (the test's docstring) and the channels; the tags already in the file are
-kept. A recording that changes an existing file still writes it, then fails with the diff, so a record run never
-passes over a change unseen; a new file or an unchanged one passes. A normal run only compares, never writes, and
-fails with a unified diff per changed channel. After recording, read the file, tag it, then run the test several
-times in a row. The folder is not called ``data`` because the repository's ``.gitignore`` ignores every folder of that
-name. The goldens import this module as ``tests.unit.goldens.harness``, which needs pytest's ``pythonpath = ["src",
-"."]`` (``pyproject.toml``).
+``recordings/<name>.json``: the scenario (the test's docstring) and the channels. A recording that changes an existing
+file still writes it, then fails with the diff, so a record run never passes over a change unseen; a new file or an
+unchanged one passes. A normal run only compares, never writes, and fails with a unified diff per changed channel.
+After recording, read the file, then run the test several times in a row. The folder is not called ``data`` because
+the repository's ``.gitignore`` ignores every folder of that name. The goldens import this module as
+``tests.unit.goldens.harness``, which needs pytest's ``pythonpath = ["src", "."]`` (``pyproject.toml``).
 
-**Tag.** Each golden line that a known defect or a named change alters carries a tag in the file's ``tags`` list::
-
-    {"channel": "frontend_requests", "contains": {"max_tokens": 512}, "row": "<row>", "note": "..."}
-
-A line is one event, one transcript delta, one utterance or one model request. ``channel`` is a channel name, or
-``delegations/<item_1>`` for one delegation. ``contains`` is either a non-empty substring of the line's JSON text (a
-string) or a non-empty object whose every key must match the line (nested objects match the same way and may not be
-empty; other values must be equal). ``row`` is an id of :data:`KNOWN_ROWS` (a defect id: two capitals, a dash and two
-digits; or a change id: a capital and a digit) that groups the tags of one change; ``note`` says in words what
-changes. Every tag must still match at least one line, so a tag whose line went away fails the test.
-
-**Engine internals.** Two methods are the only places that reach past the wire: :meth:`GoldenCase.instrument` wraps five
+**Internals.** Two methods are the only places that reach past the wire: :meth:`GoldenCase.instrument` wraps five
 production methods (``LiveProtocolSession.handle``, ``CascadeSession.on_turn``, ``LiveTalkerProcessor.speak``,
 ``TaskRun._wait_for_app`` and ``WorkNote.quiet_candidate``) with counting wrappers that call the original unchanged, and
-:meth:`GoldenCase.engine_pending` reads the engine's, the core's and the gateway's state. When a change moves
+:meth:`GoldenCase.engine_pending` reads the cascade adapter's, the core's and the gateway's state. When a change moves
 those objects, re-point these two methods; the goldens themselves stay. A spoken line enters the talker's
 context when it is handed to speech, so nothing waits for it to be written there.
 """
@@ -129,9 +117,10 @@ from pipecat.frames.frames import LLMTextFrame
 
 from delegation_core.im.run import TaskRun
 from examples.frontend_backend_live.adapter.adapter import CascadeAdapter
-from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
 from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.cascade.worknote import WorkNote
+from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
+from examples.frontend_backend_live.prompts import get_prompt_set
 from live.gateway import LiveGateway, LiveSettings
 from live.gateway.websocket import run_primary_websocket
 from live.ports import SessionParts
@@ -181,17 +170,17 @@ GOLDEN_DIR = Path(__file__).parent / "recordings"
 RECORD_VARIABLE = "LIVE_GOLDEN_RECORD"
 
 # Timers that would put clock-driven lines into a golden. A golden that tests one of them sets it small itself.
-# The silence status line ("Still on it ...") is said after 8 s without speech by default; an hour keeps it out.
+# A quiet spell's progress line may come after 8 s of silent work by default; an hour keeps it out.
 QUIET_PROGRESS_SECONDS = 3600.0
 # The gateway reports session.usage.updated every 5 s (live.session.lifecycle.USAGE_INTERVAL_SECONDS); the harness
 # patches the interval to an hour for the length of each test.
 USAGE_INTERVAL_SECONDS = 3600
-# The talker's prompt set the goldens were recorded on: v1. The default is v2, and the engine's tests run on it; naming
-# v1 here keeps a prompt-set change out of every golden's frontend requests.
-GOLDEN_PROMPT_SET = "v1"
-# The same for the core: its voice note is v2 by default, which the core's own tests pin; the goldens keep the v1 note
-# they were recorded with (none), as the core's file names it.
-GOLDEN_CORE = {"voice_note": "v1"}
+# The talker's prompt set the goldens run on: the shipped one, so a change to its texts shows in every golden's frontend
+# requests.
+GOLDEN_PROMPT_SET = "default"
+GOLDEN_PROMPTS = get_prompt_set(GOLDEN_PROMPT_SET)
+# The core's voice note the goldens run on: the shipped one, which every golden's backend requests carry.
+GOLDEN_CORE = {"voice_note": "default"}
 # The models the core's catalog lists besides the session's: a session.update may choose them (core.yaml reports an
 # unlisted one).
 GOLDEN_MODELS = ("org/other-model",)
@@ -202,9 +191,9 @@ GOLDEN_LIVE_CONFIG = replace(
 )
 
 WAIT_SECONDS = 10.0
-# How often a wait looks again at state that announces no change of its own (the worker going idle).
+# How often a wait looks again at state that announces no change of its own (an IM session going idle).
 POLL_SECONDS = 0.01
-# The reason GoldenCase.engine_pending gives while the delegation worker is busy and not waiting for the client's
+# The reason GoldenCase.engine_pending gives while the IM session is busy and not waiting for the client's
 # tool outputs. A golden that holds backend work drops it while the work is held; import it, never copy the text.
 WORK_RUNNING = "delegated work running"
 # The reason it gives while the cascade's presenter has a result it has not spoken yet. A golden
@@ -222,30 +211,6 @@ CHANNELS = (
     "frontend_requests",
     "backend_requests",
 )
-
-# The rows a tag may name: defect ids (two letters, a dash and two digits) and change ids (a letter and a digit).
-BUG_ROWS = {
-    "GW": 21,
-    "AU": 10,
-    "TK": 17,
-    "BT": 3,
-    "SM": 2,
-    "LK": 7,
-    "CO": 13,
-    "PV": 5,
-    "CF": 5,
-    "CN": 12,
-    "RL": 9,
-    "EX": 2,
-    "DC": 7,
-    "CU": 9,
-}
-CHANGE_ROWS = {"F": 5, "S": 3, "C": 4}
-KNOWN_ROWS = frozenset(
-    [f"{family}-{number:02d}" for family, count in BUG_ROWS.items() for number in range(1, count + 1)]
-    + [f"{family}{number}" for family, count in CHANGE_ROWS.items() for number in range(1, count + 1)]
-)
-TAG_KEYS = {"channel", "contains", "row", "note"}
 
 
 # --------------------------------------------------------------------------------------------- script steps
@@ -269,7 +234,14 @@ FRESH_EVENT_ID = re.compile(r"event_[0-9a-f]{32}")
 # time field that appears or goes away still shows in the diff.
 CLOCK_KEYS = frozenset({"created_at", "expires_at", "offset_ms", "start_ms", "end_ms", "timestamp"})
 CLOCK = "<clock>"
-CLOCK_TEXT = ((re.compile(r"\brunning for \d+ s\b"), "running for <seconds> s"),)
+# The work note's running state counts the seconds the work has run, in the golden set's words: a clock reading too.
+RUNNING = GOLDEN_PROMPTS.work_texts.running
+CLOCK_TEXT = (
+    (
+        re.compile(r"\b" + r"\d+".join(map(re.escape, RUNNING.split("{seconds}"))) + r"\b"),
+        RUNNING.format(seconds="<seconds>"),
+    ),
+)
 AUDIO_EVENT = "session.output_audio.delta"
 # A transcript event with exactly these keys is written as its delta text; any other is written whole.
 TRANSCRIPT_KEYS = frozenset({"type", "event_id", "delta", "start_ms", "end_ms"})
@@ -356,7 +328,7 @@ def normalize_channels(raw):
     return normalized
 
 
-# ------------------------------------------------------------------------------------------ diffs and tags
+# ---------------------------------------------------------------------------------------------------- diffs
 def render(value):
     return json.dumps(value, indent=2, ensure_ascii=False).splitlines()
 
@@ -380,43 +352,6 @@ def changed_channels(name, expected, recorded):
         for channel in CHANNELS
         if canonical(expected.get(channel)) != canonical(recorded[channel])
     ]
-
-
-def specific(contains):
-    """Whether a tag's ``contains`` can fail to match: a non-empty string, or a non-empty object, nested ones too."""
-    if isinstance(contains, str):
-        return bool(contains.strip())
-    if isinstance(contains, dict):
-        return bool(contains) and all(specific(part) for part in contains.values() if isinstance(part, dict))
-    return False
-
-
-def channel_lines(channels, channel):
-    """The lines a tag can match in ``channel`` (``delegations/<id>`` is one delegation), or None if it is unknown."""
-    if channel == "delegations":
-        return [event for events in channels["delegations"].values() for event in events]
-    if channel.startswith("delegations/"):
-        return channels["delegations"].get(channel.split("/", 1)[1])
-    lines = channels.get(channel)
-    return lines if isinstance(lines, list) else None
-
-
-def line_text(line):
-    return line if isinstance(line, str) else json.dumps(line, ensure_ascii=False)
-
-
-def line_matches(line, contains):
-    if isinstance(contains, str):
-        return contains in line_text(line)
-    return contains_object(line, contains)
-
-
-def contains_object(value, wanted):
-    if isinstance(wanted, dict):
-        return isinstance(value, dict) and all(
-            key in value and contains_object(value[key], part) for key, part in wanted.items()
-        )
-    return value == wanted
 
 
 # ------------------------------------------------------------------------------------------------- doubles
@@ -551,7 +486,7 @@ class RecordingWebSocket(FakeWebSocket):
 
 # ---------------------------------------------------------------------------------------------- the harness
 class GoldenCase(EngineHarness):
-    """Serves one scripted call per test through the real gateway and engine; pins it to ``recordings/<name>.json``."""
+    """One scripted call per test on the real gateway, adapter and core, pinned to ``recordings/<name>.json``."""
 
     session = RESPONSES_SESSION
     live_config = GOLDEN_LIVE_CONFIG
@@ -559,7 +494,7 @@ class GoldenCase(EngineHarness):
 
     # ---------------------------------------------------------------------------------------- starting
     async def serve(self, session=None, *, frontend=(), backend=(), live_config=None, delegation=None):
-        """Start a session on the real gateway with the real engine and return ``session.started``.
+        """Start a session on the real gateway, adapter and core, and return ``session.started``.
 
         Unlike ``EngineHarness.serve``, the frontend (talker and writer) and the backend each get their own scripted
         client, so each script is consumed in a fixed order whatever the two roles do at the same time. ``delegation``
@@ -793,11 +728,11 @@ class GoldenCase(EngineHarness):
         return reasons + self.engine_pending()
 
     def engine_pending(self):
-        """The engine's and the gateway's own work in flight. The only reads of their internals: re-point on a move.
+        """The adapter's, the core's and the gateway's own work in flight: the only reads of their internals.
 
-        The worker is free once it has handed an answer over: the presenter words, holds and speaks
-        each result in its own task, so this method also reports the results the presenter has not spoken yet, under a
-        reason of their own (:data:`RESULTS_PENDING`). The IM's task waits for the client's outputs itself
+        Re-point them when a change moves those objects. The presenter words, holds and speaks each result in its own
+        task after the core has handed it over, so this method also reports the results the presenter has not spoken
+        yet, under a reason of their own (:data:`RESULTS_PENDING`). The IM's task waits for the client's outputs itself
         (``TaskRun._wait_for_app``), and :meth:`instrument` notes each task in that wait.
         """
         engine, reasons = self.engine, []
@@ -843,7 +778,7 @@ class GoldenCase(EngineHarness):
         }
 
     def assert_golden(self, name):
-        """Compare the call with ``recordings/<name>.json`` channel by channel, or record it; then check the tags.
+        """Compare the call with ``recordings/<name>.json`` channel by channel, or record it.
 
         Only a run with ``LIVE_GOLDEN_RECORD=1`` writes the file, and it still fails when an existing file changed.
         """
@@ -853,23 +788,14 @@ class GoldenCase(EngineHarness):
         path = GOLDEN_DIR / f"{name}.json"
         golden = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         if os.environ.get(RECORD_VARIABLE) == "1":
-            previous, golden = (
-                golden,
-                {
-                    "name": name,
-                    "scenario": self.scenario(),
-                    "tags": golden["tags"] if golden else [],
-                    "channels": recorded,
-                },
-            )
+            previous, golden = golden, {"name": name, "scenario": self.scenario(), "channels": recorded}
             GOLDEN_DIR.mkdir(exist_ok=True)
             path.write_text(json.dumps(golden, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             diffs = changed_channels(name, previous.get("channels", {}), recorded) if previous else []
             if diffs:
                 self.fail(
                     f"Recorded {path.name} again: {len(diffs)} channel(s) changed, and the file now holds this run. "
-                    f"Check the diff, tag the changed lines (each with a row and a note, see harness.py), then run "
-                    f"without {RECORD_VARIABLE}.\n\n" + "\n\n".join(diffs)
+                    f"Check the diff, then run without {RECORD_VARIABLE}.\n\n" + "\n\n".join(diffs)
                 )
         elif golden is None:
             self.fail(f"{path} does not exist; record it with {RECORD_VARIABLE}=1 (see the note in harness.py)")
@@ -878,11 +804,9 @@ class GoldenCase(EngineHarness):
             diffs = changed_channels(name, golden["channels"], recorded)
             if diffs:
                 self.fail(
-                    f"Golden {name} changed in {len(diffs)} channel(s). If the change is intended, name it (a row "
-                    f"and a note, see harness.py), record again with {RECORD_VARIABLE}=1 and tag the changed lines.\n\n"
-                    + "\n\n".join(diffs)
+                    f"Golden {name} changed in {len(diffs)} channel(s). If the change is intended, record again "
+                    f"with {RECORD_VARIABLE}=1.\n\n" + "\n\n".join(diffs)
                 )
-        self.check_tags(name, golden)
 
     def scenario(self):
         doc = inspect.getdoc(getattr(self, self._testMethodName)) or ""
@@ -908,29 +832,6 @@ class GoldenCase(EngineHarness):
                 seen.add(event_id)
         if problems:
             self.fail("The server's event ids changed:\n" + "\n".join(problems))
-
-    def check_tags(self, name, golden):
-        """Each tag names a known row and still matches at least one line of its channel."""
-        problems = []
-        for number, tag in enumerate(golden["tags"], 1):
-            if not isinstance(tag, dict) or set(tag) != TAG_KEYS:
-                problems.append(f"tag {number} must have exactly the keys {sorted(TAG_KEYS)}: {tag}")
-                continue
-            if not all(isinstance(tag[key], str) for key in ("channel", "row", "note")) or not tag["note"].strip():
-                problems.append(f"tag {number} needs channel, row and note as strings, and a note: {tag}")
-                continue
-            if not specific(tag["contains"]):
-                problems.append(f"tag {number} needs contains as a non-empty string or a non-empty object: {tag}")
-                continue
-            if tag["row"] not in KNOWN_ROWS:
-                problems.append(f"tag {number} names an unknown row {tag['row']!r}")
-            lines = channel_lines(golden["channels"], tag["channel"])
-            if lines is None:
-                problems.append(f"tag {number} names an unknown channel {tag['channel']!r}")
-            elif not any(line_matches(line, tag["contains"]) for line in lines):
-                problems.append(f"tag {number} ({tag['row']}) matches no line of {tag['channel']}: {tag['contains']!r}")
-        if problems:
-            self.fail(f"Golden {name} has stale or malformed tags:\n" + "\n".join(problems))
 
     def check_scripts_not_overrun(self):
         for client in (self.frontend, self.backend):

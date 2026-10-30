@@ -62,7 +62,7 @@ The client reads its configuration from the backend (`src/server.py`) and starts
 | `/api/webcam-config` | Webcam capture defaults for multimodal examples |
 | `/api/start` | Start a pipeline session |
 
-The Live Console (`/live.html`) uses the Live routes under `/v1/live` instead, which the server serves in a Frontend/Backend Live deployment or when `LIVE_ENABLED` is `true`. For each route and the `LIVE_API_TOKEN` bearer token, refer to the [Live gateway README](../src/live/README.md).
+The Live Console (`/live.html`) reads its STUN/TURN configuration from `/api/ice-servers` and uses the Live routes under `/v1/live` for everything else. The server serves those routes in a Frontend/Backend Live deployment or when `LIVE_ENABLED` is `true`. For each route and the `LIVE_API_TOKEN` bearer token, refer to the [Live gateway README](../src/live/README.md).
 
 ## Learn more
 

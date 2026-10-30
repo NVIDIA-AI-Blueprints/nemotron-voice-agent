@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frontend/Backend Live pipeline: STT -> talker/thinker/commentary processor -> TTS."""
+"""Frontend/Backend Live pipeline: STT -> talker/writer processor -> TTS, with a delegation core of its own."""
 
 from __future__ import annotations
 
@@ -24,12 +24,8 @@ from pipecat.workers.runner import WorkerRunner
 import examples_registry
 from delegation_core.app import build_core
 from delegation_core.config import CoreSettings
-from examples.frontend_backend_live.adapter.services import build_stt, build_tts
-from examples.frontend_backend_live.adapter.task_cards import RtviTaskCards
 from examples.frontend_backend_live.cascade.agent import build_agent
 from examples.frontend_backend_live.cascade.memory import ContextConversation
-from examples.frontend_backend_live.cascade.processor import LiveTalkerProcessor
-from examples.frontend_backend_live.cascade.session import CascadeSession
 from examples.frontend_backend_live.config_manager.loader import load_live_config
 from examples.frontend_backend_live.config_manager.schema import ConfigError, LiveConfig
 from examples.frontend_backend_live.factory import (
@@ -42,14 +38,17 @@ from examples.frontend_backend_live.factory import (
     ui_bot_core,
     with_display_label,
 )
+from examples.frontend_backend_live.media.playout import PlayoutTracker, SpeechPlayout
+from examples.frontend_backend_live.media.processor import LiveTalkerProcessor
+from examples.frontend_backend_live.media.services import build_stt, build_tts, speech_mode
+from examples.frontend_backend_live.media.task_cards import RtviTaskCards
+from examples.frontend_backend_live.media.turns import TURN_ENDS
 from examples.frontend_backend_live.models.endpoints import ExampleCatalog
 from examples.frontend_backend_live.prompts.catalog import CHANNEL_PROMPT_KEY, catalog_line, catalog_prompt
 from examples.frontend_backend_live.tables import pick
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.pipeline_utils import (
-    build_context_messages,
     build_pipeline_params,
-    build_user_aggregator_params,
     create_transport,
     register_session_start_handlers,
     with_realtime_observers,
@@ -108,11 +107,22 @@ def backend_overrides(body: dict) -> dict:
     }
 
 
+def hold_client_text(transport) -> None:
+    """Shut a Realtime client's text gate, which the shared start handler opens when its own welcome is off.
+
+    The gate opens when the first response, the greeting, is done (``realtime.conversation``), as the caller's audio
+    waits for the greeting's end. A transport that speaks no Realtime has no gate.
+    """
+    conversation = getattr(getattr(transport, "_realtime_serializer", None), "conversation", None)
+    if conversation is not None:
+        conversation.assistant_has_responded = False
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Build and run the Frontend/Backend Live pipeline for one session.
 
     The cascade greets the caller with its own line when the registry's welcome switch is on, shows each delegation as
-    a task card, and closes when the pipeline has finished.
+    a task card, corrects its records by what the caller heard, and closes when the pipeline has finished.
     """
     logger.info("Starting Frontend/Backend Live cascaded pipeline")
     transport = create_transport(runner_args)
@@ -132,20 +142,28 @@ async def bot(runner_args: RunnerArguments) -> None:
         f"extra_params={frontend_endpoint.extra_params or '(none)'}"
     )
     logger.info(f"Backend: adapter={state.core.backend.adapter}, model={endpoints(None).model}")
-    stt = build_stt(body, catalog.service("asr"))
+    # The turn end (speech.turn_end) builds the speech-to-text and the turn detection, as in a live session.
+    turn_end = pick(TURN_ENDS, cascade.speech.turn_end, "speech.turn_end")(cascade.speech)
+    stt = build_stt(body, catalog.service("asr"), turn_end)
     tts = build_tts(body, catalog.service("tts"))
+    # What the caller heard corrects the cascade's records, as in a live session. The text-to-speech runs in the
+    # catalog's synthesis mode, and the tracker sends no transcript: the RTVI client gets Pipecat's own.
+    speech_playout, tracker = SpeechPlayout(speech_mode(tts)), PlayoutTracker()
 
     default_llm = catalog.entry(cascade.slot)
     system_prompt = body.get("system_prompt", "") or default_llm.get("system_prompt", "")
-    messages = build_context_messages(f"{talker_prompt}\n\n{channel}", system_prompt)
+    # The seed is the talker's instructions as system messages, which its memory pins: the services entry's
+    # system_prompt when it sets one, then the talker's prompt and the channel. A user message would be a caller turn
+    # there, which compaction drops.
+    seed = (system_prompt, f"{talker_prompt}\n\n{channel}")
+    messages = [{"role": "system", "content": text} for text in seed if text]
     context = LLMContext(messages)  # the talker's memory: only the cascade trims it, at each caller turn
     # Only the caller's turns come from Pipecat's aggregator; the cascade writes its own lines (cascade.utterances).
-    user_aggregator = LLMContextAggregatorPair(
-        context, user_params=build_user_aggregator_params(welcome_enabled)
-    ).user()
+    user_aggregator = LLMContextAggregatorPair(context, user_params=turn_end.user_params(welcome_enabled)).user()
 
-    # The bot's own delegation core runs the cafe's tools on the server. Its server delegation has no Live sink, so each
-    # delegation's events go to the cascade only, and the core runs every request on its defaults.
+    # The bot's own delegation core runs the tools its profile names (ui_bot.core_config) on the server. Its server
+    # delegation has no Live sink, so each delegation's events go to the cascade only, and the core runs every request
+    # on its defaults.
     core = build_core(state.core, endpoints=endpoints, defaults=backend_defaults(state.core, endpoints))
     delegation = ServerDelegation(core_client(core))
     live = LiveTalkerProcessor()
@@ -157,8 +175,9 @@ async def bot(runner_args: RunnerArguments) -> None:
             stt,
             user_aggregator,
             live,
-            tts,
+            *speech_playout.speech_out(tts),
             transport.output(),
+            tracker,
             *([audio_recorder] if audio_recorder else []),
         ]
     )
@@ -190,7 +209,8 @@ async def bot(runner_args: RunnerArguments) -> None:
     )
 
     # The cascade shows each delegation as a task card in the UI, the display part of its result included.
-    session = CascadeSession(
+    session = speech_playout.cascade(
+        tracker,
         build_agent(cascade, frontend_endpoint),
         cascade,
         ContextConversation(context),
@@ -237,7 +257,8 @@ async def bot(runner_args: RunnerArguments) -> None:
             session.greet(catalog_line("intro"))  # said before the caller speaks, as the assistant's own line
 
     # The shared start handler runs with its welcome off: the greeting is the cascade's line, never a caller turn.
-    # The caller's audio still waits for it when the welcome is on (the aggregator follows the same switch).
+    # The caller's audio still waits for it when the welcome is on (the aggregator follows the same switch), and so
+    # does a Realtime client's text, whose gate that handler opens.
     register_session_start_handlers(
         transport=transport,
         task=task,
@@ -246,6 +267,8 @@ async def bot(runner_args: RunnerArguments) -> None:
         on_start=_on_session_start,
         welcome_enabled=False,
     )
+    if welcome_enabled:
+        hold_client_text(transport)
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

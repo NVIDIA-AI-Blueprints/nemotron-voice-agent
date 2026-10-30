@@ -7,8 +7,7 @@
 (``frontend.adapter``), holds each adapter's own block (``frontend.<name>``), and names the UI bot's core profile
 (``ui_bot.core_config``): :class:`ExampleConfig`. The cascade's block is :class:`LiveConfig`, which the cascade
 adapter's class parses (``LiveConfig.parse``). The delegation core reads its own file (``core.yaml``,
-``delegation_core.config``); a key that belongs elsewhere stops loading with a message that names where the setting
-lives (:data:`MOVED`).
+``delegation_core.config``).
 """
 
 from __future__ import annotations
@@ -21,64 +20,10 @@ from typing import Any
 from examples.frontend_backend_live.prompts import PROMPT_SETS
 from examples.frontend_backend_live.tables import pick
 
-DEFAULT_CONTINUERS = ("uh-huh", "uh huh", "mm-hmm", "mm hmm", "mhm", "hmm", "mm", "mmm", "ah", "oh", "i see", "got it")
 # Every other number is a timeout, a limit or a count, where 0 would disable or break the feature.
 ZERO_ALLOWED = frozenset({"provider_retries"})
 # Settings a profile may turn off with null.
 NULL_ALLOWED = frozenset({"app_wait_seconds", "progress_after_seconds"})
-# The cascade's keys that sat at the top of config.yaml before the file named its frontend adapter.
-CASCADE_KEYS = (
-    "prompt_version",
-    "reliability",
-    "guards",
-    "delegation",
-    "normalizer",
-    "memory",
-    "speech",
-    "tts_preroll_ms",
-)
-
-# Keys config.yaml does not accept, by their path in the file, each with where its setting lives.
-MOVED = MappingProxyType(
-    {
-        "backend": "the delegation core's file: core.yaml backend (slot and prompt; provider is backend.llm.provider)",
-        "voice_note": "core.yaml delegation.voice_note",
-        "backend_context_tokens": "core.yaml delegation.context_tokens",
-        "chat_history_recent_turns": "frontend.cascade.memory.context_tokens (the talker's memory is a token budget)",
-        **{key: f"frontend.cascade.{key}" for key in CASCADE_KEYS},
-        "frontend.provider": "frontend.cascade.provider (frontend.adapter names the frontend adapter)",
-        "frontend.slot": "frontend.cascade.slot",
-        "frontend.prompt": "frontend.cascade.prompt",
-        "frontend.cascade.display_label": "core.yaml delegation.display_label (the root hands it to the frontend)",
-        "frontend.cascade.chat_history_recent_turns": "frontend.cascade.memory.context_tokens",
-        "frontend.cascade.reliability.api_timeout_seconds": (
-            "frontend.cascade.reliability.client_timeout_seconds for the talker's model, and the backend LLM's "
-            "first_event_timeout_seconds and idle_timeout_seconds in core.yaml backend.llm"
-        ),
-        "frontend.cascade.reliability.tool_timeout_seconds": (
-            "core.yaml delegation.client_tool_timeout_seconds (the IM's deadline for the app's outputs), core.yaml "
-            "backend.llm.server_tool_timeout_seconds, and frontend.cascade.delegation.app_wait_seconds (the voice's "
-            "app-wait line)"
-        ),
-        "frontend.cascade.reliability.max_tool_rounds": "core.yaml backend.llm.max_tool_rounds",
-        "frontend.cascade.reliability.max_pending_delegations": "core.yaml delegation.max_pending_delegations",
-        "frontend.cascade.reliability.recover_failures": (
-            "core.yaml backend.llm.provider_retries; the voice says its own lines (prompts.yaml lines)"
-        ),
-        "frontend.cascade.delegation.merge_pending": (
-            "core.yaml backend.llm.conductor (steer joins open work; start_each gives each request its own)"
-        ),
-        "frontend.cascade.delegation.fold_before_acting": "core.yaml backend.llm.conductor",
-        "frontend.cascade.delegation.status_from_ledger": (
-            "nothing: the talker answers a status question from its work line, or delegates it"
-        ),
-        "frontend.cascade.delegation.progress_speech": "frontend.cascade.delegation.progress_after_seconds (null: off)",
-        "frontend.cascade.delegation.progress_interval_seconds": (
-            "nothing: a progress line comes after progress_after_seconds of quiet, at most "
-            "progress_max_per_delegation times"
-        ),
-    }
-)
 
 
 class ConfigError(ValueError):
@@ -86,22 +31,18 @@ class ConfigError(ValueError):
 
 
 def section(where: str, raw: Any, cls: type) -> dict[str, Any]:
-    """``raw`` (the block at ``where``) checked against the fields of ``cls``; a misplaced key names its place.
+    """``raw`` (the block at ``where``) checked against the fields of ``cls``.
 
     Each value is checked against the type of the default it replaces: a whole number refuses a fraction, a duration
     refuses a negative, and only :data:`NULL_ALLOWED` settings take ``null``.
 
     Raises:
-        ConfigError: The block is not a mapping, a key belongs elsewhere or is unknown, or a value has the wrong kind.
+        ConfigError: The block is not a mapping, a key is unknown, or a value has the wrong kind.
     """
     if raw is None:
         return {}
     if not isinstance(raw, Mapping):
         raise ConfigError(f"{where} must be a mapping")
-    for key in raw:
-        moved = MOVED.get(f"{where}.{key}")
-        if moved:
-            raise ConfigError(f"{where}.{key} moved: set {moved}")
     allowed = {f.name: f for f in fields(cls)}
     unknown = set(raw) - set(allowed)
     if unknown:
@@ -115,10 +56,6 @@ def _typed(where: str, value: Any, default: Any) -> Any:
     name = where.rsplit(".", 1)[-1]
     if value is None and name in NULL_ALLOWED:
         return None
-    if isinstance(default, tuple):
-        if not (isinstance(value, list) and all(isinstance(item, str) for item in value)):
-            raise ConfigError(f"{where} must be a list of strings")
-        return tuple(value)
     if isinstance(default, bool):
         if not isinstance(value, bool):
             raise ConfigError(f"{where} must be true or false")
@@ -161,26 +98,17 @@ class ReliabilityConfig:
 
 
 @dataclass(frozen=True)
-class GuardConfig:
-    """Deterministic floors beneath the prompts."""
-
-    repeat_guard: bool = False  # a spoken reply that nearly repeats an earlier one becomes a delegation
-    # Drop acknowledgment-only turns before the talker ("okay", "mm-hmm"); shadow mode only traces them.
-    turn_router: bool = False
-    turn_router_shadow: bool = False
-    continuers: tuple[str, ...] = DEFAULT_CONTINUERS
-
-
-@dataclass(frozen=True)
 class DelegationConfig:
     """What the voice does around its delegations: the app wait, how results are worded, spoken progress."""
 
     # How long the voice waits for the app's outputs to a delegation before it says the app-wait line; null: no line.
-    app_wait_seconds: float | None = 62.0
+    # It is below the core's deadline for those outputs (core.yaml delegation.client_tool_timeout_seconds).
+    app_wait_seconds: float | None = 50.0
     result_wording: str = "writer"  # how ready results are worded: writer (a model call) or as_written
-    # A short progress line is spoken when work has run this long without the assistant saying anything; null: none.
+    # The writer may word a short progress line when work has run this long without the assistant saying anything;
+    # null: none. A later line for the same delegation needs a backend step that ended or a new progress note.
     progress_after_seconds: float | None = 8.0
-    progress_max_per_delegation: int = 1
+    progress_max_per_delegation: int = 3
 
 
 @dataclass(frozen=True)
@@ -188,8 +116,6 @@ class NormalizerConfig:
     """Rewriting the caller's turn into written form before the talker sees it."""
 
     enabled: bool = False
-    # Normalize every turn, not only turns that carry details (digits, number words, spelled letters).
-    every_turn: bool = False
     # A slower normalization keeps the turn as heard.
     timeout_seconds: float = 4.0
 
@@ -207,9 +133,19 @@ class SpeechConfig:
     """How replies are spoken."""
 
     tts_mode: str = "per_sentence"  # per_sentence | stitched
+    # How the caller's turn ends, and when the speech-to-text finalizes what it heard (media/turns.py): smart_turn,
+    # silence or shared.
+    turn_end: str = "smart_turn"
+    vad_start_seconds: float = 0.12  # smart_turn, silence: speech this long marks the caller as speaking
+    vad_stop_seconds: float = 0.2  # smart_turn: the pause Smart Turn judges, below turn_silence_seconds
+    turn_silence_seconds: float = 1.2  # a pause this long ends the turn whatever Smart Turn judged
     start_timeout_seconds: float = 3.0  # a line whose audio has not started by then is retried or written off
-    resume_after_noise: bool = True  # a line cut by a noise that was not speech resumes
+    resume_after_noise: bool = True  # a line cut by a noise, or by words the talker waits on, resumes
     retry_silent_lines: bool = True  # a line that produced no audio is said once more
+    # What the talker's memory alone keeps of a cut line: as_recorded, the words that played, as every record keeps
+    # them; estimated, also the whole words its audio likely carried past what played.
+    heard_words: str = "as_recorded"
+    estimate_chars_per_second: float = 15.0  # that estimate's speaking rate until a sentence of the call has played
 
 
 @dataclass(frozen=True)
@@ -217,45 +153,39 @@ class LiveConfig:
     """The cascade's settings: the ``frontend.cascade`` block of ``config.yaml``.
 
     ``provider`` names the frontend model's implementation (``models/``), ``slot`` the ``examples_registry.yaml``
-    services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the ``prompts.yaml`` entry used
-    as the talker's instructions when a session supplies none. ``display_label`` is not a key of the file: the root
-    hands the cascade the delegation core's ``delegation.display_label`` (the server label of the core's display
-    items), so the label is written once.
+    services slot whose selected ``services.yaml`` entry is that model, and ``prompt`` the ``prompts.yaml`` entry used,
+    as written, as the talker's instructions when a session supplies none or blank ones. ``display_label`` is not a key
+    of the file: the root hands the cascade the delegation core's ``delegation.display_label`` (the server label of the
+    core's display items), so the label is written once.
     """
 
     provider: str
     slot: str
-    prompt: str = "talker"
+    prompt: str = "voice"
     prompt_version: str = ""  # a name in the prompt-set table; empty: the table's default set
     reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
-    guards: GuardConfig = field(default_factory=GuardConfig)
     delegation: DelegationConfig = field(default_factory=DelegationConfig)
     normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     speech: SpeechConfig = field(default_factory=SpeechConfig)
     # Reply audio held before playback starts, so uneven TTS chunks do not stall it (0 sends audio at once).
     tts_preroll_ms: int = 300
-    display_label: str = "voiceclaw"
+    display_label: str = "delegation_core"
 
     @classmethod
     def parse(cls, block: Any) -> LiveConfig:
         """Validate the cascade's block (with the ``display_label`` the root put in).
 
         Raises:
-            ConfigError: A key moved or is unknown, a value has the wrong kind, the model is not named, or
-                ``prompt_version`` names no prompt set.
+            ConfigError: A key is unknown, a value has the wrong kind, the model is not named, or ``prompt_version``
+                names no prompt set.
         """
         where = "frontend.cascade"
         if not isinstance(block, Mapping):
             raise ConfigError(f"{where} must be a mapping")
         own = {name: value for name, value in block.items() if name != "display_label"}
-        for key in own:
-            moved = MOVED.get(f"{where}.{key}")
-            if moved:
-                raise ConfigError(f"{where}.{key} moved: set {moved}")
         parts = {
             "reliability": ReliabilityConfig,
-            "guards": GuardConfig,
             "delegation": DelegationConfig,
             "normalizer": NormalizerConfig,
             "memory": MemoryConfig,
@@ -297,8 +227,8 @@ class LiveConfig:
 class UiBotConfig:
     """The repository UI bot's own settings (``ui_bot``)."""
 
-    # The delegation core profile the bot builds its core from, beside config.yaml (core.ui-bot.yaml: the cafe tools,
-    # and results with a display part for the task cards).
+    # The delegation core profile the bot builds its core from, beside config.yaml (core.ui-bot.yaml: the UI bot's
+    # backend tools, and results with a display part for the task cards).
     core_config: str = "core.ui-bot.yaml"
 
 
@@ -315,25 +245,17 @@ class ExampleConfig:
         """Validate the file's top level; each adapter's block is kept as written, for its class to parse.
 
         Raises:
-            ConfigError: The file is not a mapping, a key moved or is unknown, ``frontend.adapter`` is missing or names
-                no block, a block is not a mapping, or a block sets what the root hands it.
+            ConfigError: The file is not a mapping, a key is unknown, ``frontend.adapter`` is missing or names no
+                block, a block is not a mapping, or a block sets what the root hands it.
         """
         if not isinstance(data, Mapping):
             raise ConfigError("config.yaml must be a mapping")
-        for key in data:
-            moved = MOVED.get(str(key))
-            if moved:
-                raise ConfigError(f"{key} moved: set {moved}")
         unknown = set(data) - {"frontend", "ui_bot"}
         if unknown:
             raise ConfigError(f"config.yaml has unknown keys: {', '.join(sorted(map(str, unknown)))}")
         frontend = data.get("frontend")
         if not isinstance(frontend, Mapping):
             raise ConfigError("config.yaml needs frontend: the frontend adapter (adapter) and its block")
-        for key in frontend:
-            moved = MOVED.get(f"frontend.{key}")
-            if moved:
-                raise ConfigError(f"frontend.{key} moved: set {moved}")
         adapter = frontend.get("adapter")
         if not isinstance(adapter, str) or not adapter:
             raise ConfigError("frontend.adapter must name the frontend adapter that serves live sessions")
@@ -344,7 +266,7 @@ class ExampleConfig:
             if not isinstance(block, Mapping):
                 raise ConfigError(f"frontend.{name} must be a mapping: a frontend adapter's block")
             if "display_label" in block:
-                raise ConfigError(f"frontend.{name}.display_label moved: set {MOVED['frontend.cascade.display_label']}")
+                raise ConfigError(f"frontend.{name}.display_label comes from core.yaml delegation.display_label")
             blocks[str(name)] = MappingProxyType(dict(block))
         if adapter not in blocks:
             raise ConfigError(f"frontend.adapter names {adapter!r}, but config.yaml has no frontend.{adapter} block")

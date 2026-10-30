@@ -28,12 +28,12 @@ from delegation_core.backend.port import (
     StopOutcome,
     TaskContext,
 )
-from delegation_core.config import CoreSettings
+from delegation_core.config import CoreSettings, Texts
 from delegation_core.im.input import BackendTask
 from delegation_core.im.oneshot import OneShotSession
 from delegation_core.im.results import CallReports, ResultFormat
 from delegation_core.im.session import IMSession
-from delegation_core.im.stream import ResponseWriter
+from delegation_core.im.stream import ResponseWriter, message_text
 from tests.unit.contracts.endings import normalized
 
 # The core's own settings file: the IM's settings and its texts.
@@ -48,6 +48,12 @@ FIXTURE_LINES = {
     "cancelled_line": TEXTS.cancelled_line,
     "unconfirmed_line": TEXTS.unconfirmed_line,
 }
+
+
+def is_handover_line(text: str) -> bool:
+    """Whether ``text`` is ``texts.handover_line`` with a taker's delegation id in its ``{delegation}`` field."""
+    head, _, tail = TEXTS.handover_line.partition("{delegation}")
+    return len(text) > len(head) + len(tail) and text.startswith(head) and text.endswith(tail)
 
 
 def ask(text: str) -> list[dict]:
@@ -493,18 +499,19 @@ class ScriptedConductor:
 def im_session(
     adapter: ScriptedAdapter,
     *,
+    texts: Texts = TEXTS,
     result_format: ResultFormat | None = None,
     call_reports: CallReports | None = None,
     observe: Callable[..., None] | None = None,
     **changes: Any,
 ) -> IMSession:
-    """An IM session on ``adapter`` with the core's settings (``changes`` override them) and texts."""
+    """An IM session on ``adapter`` with the core's settings (``changes`` override them) and ``texts``."""
     settings = replace(CORE_SETTINGS.delegation, **changes)
     return IMSession(
         adapter,
         DEFAULTS,
         settings,
-        TEXTS,
+        texts,
         result_format=result_format,
         call_reports=call_reports,
         observe=observe or (lambda kind, **fields: None),
@@ -537,5 +544,11 @@ class IMCase(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
 
     def timeline(self) -> list[list[str]]:
-        """The wire, as the endings fixture writes it."""
-        return normalized(self.wire.events, FIXTURE_LINES)
+        """The wire, as the endings fixture writes it: a handover line is marked whichever taker it names."""
+        events = []
+        for response_id, event in self.wire.events:
+            item = event.get("item") or {}
+            if item.get("type") == "message" and is_handover_line(message_text(item)):
+                event = {**event, "item": message_item(TEXTS.handover_line, item["phase"])}
+            events.append((response_id, event))
+        return normalized(events, FIXTURE_LINES)

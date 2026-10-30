@@ -9,7 +9,7 @@ import json
 import unittest
 
 from delegation_core.backend.llm import LlmSettings
-from tests.unit.contracts.backend import a_round, call_events, check_events, message_events, text_round
+from tests.unit.contracts.backend import a_round, call_events, call_round, check_events, message_events, text_round
 from tests.unit.delegation_core.backend.llm.doubles import (
     IMTask,
     RecordingTools,
@@ -19,6 +19,7 @@ from tests.unit.delegation_core.backend.llm.doubles import (
     drive,
     items_of,
 )
+from tests.unit.delegation_core.helpers import TEXTS, IMCase, ask, read_all
 
 
 def calls_round(*names, said=None, prefix="call"):
@@ -103,28 +104,15 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(("call_invented", "llm"), task.started)
 
-    async def test_a_name_in_another_form_of_one_offered_tool_is_that_tools_call(self):
-        # Case, separators, CamelCase and a trailing "tool" are forms of one name; nothing is guessed beyond them.
-        provider = ScriptedProvider(calls_round("LookupTool", "GetMenu"), text_round("Done.", "resp_2"))
+    async def test_a_name_the_round_did_not_offer_runs_as_written_even_close_to_an_offered_one(self):
+        # No name is guessed: the unknown-tool output lists the offered names, and the model reads them next round.
+        provider = ScriptedProvider(calls_round("LookupTool"), text_round("Done.", "resp_2"))
         shop, task = RecordingTools(["lookup"]), IMTask()
         events = await drive(adapter(provider, tools=[shop]).start(task), task)
-        names = [item["name"] for item in items_of(events, "function_call")]
-        self.assertEqual(names, ["lookup", "get_menu"])  # the IM routes, and the app gets, the names it offered
-        self.assertEqual(([call[1] for call in shop.calls], task.started), (["lookup"], [("call_LookupTool", "shop")]))
-
-    async def test_a_name_two_offered_tools_have_in_some_form_is_not_guessed(self):
-        provider = ScriptedProvider(calls_round("LookUp"), text_round("Done.", "resp_2"))
-        shop, task = RecordingTools(["look_up", "lookup"]), IMTask()
-        await drive(adapter(provider, tools=[shop]).start(task), task)
-        self.assertEqual(shop.calls, [])
-        self.assertIn("Unknown tool: LookUp", json.loads(task.outcomes["call_LookUp"][0])["error"])
-
-    async def test_a_refused_call_is_not_run(self):
-        provider = ScriptedProvider(calls_round("lookup"), text_round("Done.", "resp_2"))
-        shop, task = RecordingTools(), IMTask()
-        task.refused.add("call_lookup")
-        events = await drive(adapter(provider, tools=[shop]).start(task), task)
-        self.assertEqual((shop.calls, task.started, events[-1]["type"]), ([], [], "response.completed"))
+        self.assertEqual([item["name"] for item in items_of(events, "function_call")], ["LookupTool"])
+        self.assertEqual((shop.calls, task.started), ([], [("call_LookupTool", "llm")]))
+        unknown = task.texts.unknown_tool_output.format(name="LookupTool", offered="get_menu, lookup")
+        self.assertEqual(task.outcomes["call_LookupTool"], (json.dumps({"error": unknown}), "failed"))
 
     async def test_every_round_offers_the_apps_the_sources_and_the_work_tools_each_name_once(self):
         provider = ScriptedProvider(calls_round("lookup"), text_round("Done.", "resp_2"))
@@ -134,6 +122,37 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         for payload in provider.payloads:
             self.assertEqual([tool["name"] for tool in payload["tools"]], ["get_menu", "lookup", "show", "cancel_work"])
         self.assertEqual(task.started, [("call_lookup", "shop")])
+
+
+USER_FUNCTION = {
+    "type": "function",
+    "name": "get_user_details",
+    "description": "A user's profile.",
+    "parameters": {"type": "object", "properties": {"user_id": {"type": "string"}}},
+}
+
+
+class RepeatedCallTests(IMCase):
+    """Under the real IM, an app call that repeats the newest call that ran is answered from the record."""
+
+    async def test_the_repeat_never_reaches_the_app_and_the_next_round_reads_the_recorded_answer(self):
+        lookup = {"user_id": "noh_mlr_9847"}
+        provider = ScriptedProvider(
+            call_round("get_user_details", lookup, "call_1"),
+            call_round("get_user_details", lookup, "call_2"),
+            text_round("Please spell your user id.", "resp_3"),
+        )
+        im = self.session(adapter(provider))
+        settings = {"tools": [USER_FUNCTION]}
+        first = await read_all(im.admit(ask("Find my account."), delegation_id="D1", settings=settings).stream)
+        self.assertEqual([call["call_id"] for call in items_of(first, "function_call")], ["call_1"])
+        output = [{"type": "function_call_output", "call_id": "call_1", "output": "Error: user not found"}]
+        rest = await read_all(im.admit_client_request(output, delegation_id="D1", settings=settings).stream)
+        self.assertEqual(items_of(rest, "function_call"), [])  # the repeat never went to the app
+        self.assertEqual(items_of(rest, "message")[-1]["content"][0]["text"], "Please spell your user id.")
+        outputs = {item["call_id"]: item["output"] for item in provider.payloads[2]["input"] if "output" in item}
+        repeated = TEXTS.repeated_call_output.format(output="Error: user not found")
+        self.assertEqual(outputs, {"call_1": "Error: user not found", "call_2": repeated})
 
 
 if __name__ == "__main__":

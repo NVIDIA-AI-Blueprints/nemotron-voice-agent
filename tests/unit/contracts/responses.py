@@ -3,7 +3,7 @@
 
 # ruff: noqa: D102, D103, D107
 
-"""The contract of a ``ResponsesClient`` (``live/server_delegation/responses_client.py``), the core's front door.
+"""The contract of a ``ResponsesClient`` (``live/server_delegation/responses_client.py``), the port to the core.
 
 The gateway reaches the delegation core only through it. The in-process ``LocalResponsesClient`` binds it; an HTTP
 client gets the same contract.

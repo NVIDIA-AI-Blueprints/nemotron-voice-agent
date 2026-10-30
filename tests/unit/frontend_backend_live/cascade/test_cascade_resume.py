@@ -3,13 +3,17 @@
 
 # ruff: noqa: D101, D102, D103
 
-"""Resume after noise; repeat a silent line."""
+"""Resume after noise or after a turn the talker waits on; repeat a silent line."""
+
+import asyncio
 
 from examples.frontend_backend_live.cascade.settings import CascadeSettings
+from examples.frontend_backend_live.cascade.utterances import LineKind
 from examples.frontend_backend_live.models.decision import TalkerDecision
-from tests.unit.frontend_backend_live.cascade.doubles import Call
+from tests.unit.frontend_backend_live.cascade.doubles import PROMPTS, Call, settle
 
 ANSWER = "Your flight leaves at nine from gate twelve, and boarding starts at eight thirty."
+REST = "from gate twelve, and boarding starts at eight thirty."  # what a cut after "nine" left unheard
 
 
 class ResumeTests(Call):
@@ -24,6 +28,19 @@ class ResumeTests(Call):
         self.session.playout.cut()
         self.session.caller_stopped()  # no words came
 
+    async def cut_by(self, words, *script, settings=None):
+        """The caller's ``words`` cut the reply: heard, they wait for their decision, the next of ``script``."""
+        kwargs = {"settings": settings} if settings else {}
+        await self.call([TalkerDecision("speak", ANSWER), *script], reports_playout=True, **kwargs)
+        await self.turn("When is my flight?")
+        self.session.caller_started()
+        self.session.interrupted()
+        self.session.playout.started()
+        self.session.playout.played("Your flight leaves at nine")
+        self.session.playout.cut()
+        self.buffer.turn(words)
+        self.session.caller_stopped()
+
     async def test_a_turn_with_no_words_right_after_a_cut_says_the_unheard_rest_once(self):
         await self.cut_reply()
         await self.session.on_turn()
@@ -34,7 +51,7 @@ class ResumeTests(Call):
         self.assertEqual(
             self.memory()[-2:],
             [
-                ("assistant", "Your flight leaves at nine [cut off]"),
+                ("assistant", "Your flight leaves at nine" + PROMPTS.cut_mark),
                 ("assistant", "from gate twelve, and boarding starts at eight thirty."),
             ],
         )
@@ -48,41 +65,75 @@ class ResumeTests(Call):
         await self.session.on_turn()
         self.assertEqual(len(self.spoken), 2)
 
-    async def test_words_after_a_cut_that_the_talker_waits_on_leave_nothing_to_resume(self):
-        # The caller broke in with words and the talker chose to say nothing: a cough afterwards is no turn with no
-        # words right after the cut, so the line the caller stopped is not said again.
-        class Waits:
-            async def decide(self, instructions, history, work_in_progress="", *, work_open=False):
-                return TalkerDecision("wait")
-
-        await self.call([TalkerDecision("speak", ANSWER)], reports_playout=True)
-        await self.turn("When is my flight?")
-        self.session.agent.talker = Waits()
-        self.session.caller_started()
-        self.session.interrupted()
-        self.session.playout.started()
-        self.session.playout.played("Your flight leaves at nine")
-        self.session.playout.cut()
-        self.buffer.turn("Hold on.")
-        self.session.caller_stopped()
+    async def test_words_after_a_cut_that_the_talker_waits_on_say_the_unheard_rest_once(self):
+        # The caller broke in with "Okay." and the talker chose to say nothing: the line it stopped goes on, once, and a
+        # cough afterwards says nothing more.
+        await self.cut_by("Okay.", TalkerDecision("wait"))
         await self.session.on_turn()  # decided: wait
+        self.assertEqual(self.spoken, [ANSWER, REST])
+        self.assertIn("line.resumed", self.kinds())
         self.session.caller_started()  # then a cough
         self.session.caller_stopped()
         await self.session.on_turn()
-        self.assertEqual(self.spoken, [ANSWER])
+        self.assertEqual(len(self.spoken), 2)
+
+    async def test_a_turn_the_talker_delegates_after_a_cut_resumes_nothing(self):
+        # The delegation answers the turn, even with no lead-in; a cough afterwards does not bring the line back either.
+        await self.cut_by("Can I change my seat?", TalkerDecision("delegate", ""))
+        await self.session.on_turn()
+        self.session.caller_started()
+        self.session.caller_stopped()
+        await self.session.on_turn()
+        self.assertEqual((self.spoken, len(self.port.requests)), ([ANSWER], 1))
         self.assertNotIn("line.resumed", self.kinds())
 
-    async def test_an_empty_turn_with_no_cut_says_nothing(self):
-        await self.call([TalkerDecision("speak", ANSWER)])
-        await self.turn("When is my flight?")
+    async def test_a_line_said_after_the_cut_leaves_the_waited_turn_nothing_to_resume(self):
+        await self.cut_by("Okay.", TalkerDecision("wait"))
+        await self.session.utterances.say("Your gate changed to fourteen.", LineKind.NOTICE)  # said before the decision
         await self.session.on_turn()
+        self.assertEqual(self.spoken, [ANSWER, "Your gate changed to fourteen."])
+        self.assertNotIn("line.resumed", self.kinds())
+
+    async def test_words_joined_to_a_cut_off_decision_resume_the_line_the_first_words_cut(self):
+        # "Okay." cut the reply and "Go on." cut off its decision: one decision covers both, and the reply goes on once.
+        slow = asyncio.get_running_loop().create_future()
+        await self.cut_by("Okay.", slow, TalkerDecision("wait"))
+        deciding = asyncio.create_task(self.session.on_turn())
+        await settle(lambda: len(self.frontend.calls) == 2)
+        deciding.cancel()  # the caller says more: Pipecat cancels the decision
+        await asyncio.gather(deciding, return_exceptions=True)
+        await self.turn("Go on.")
+        self.assertEqual(self.spoken, [ANSWER, REST])
+
+    async def test_words_joined_to_a_discarded_decision_resume_the_line_the_first_words_cut(self):
+        # "Okay." cut the reply, and the caller went on before its decision began, so no interruption cut that decision
+        # off: it is discarded when it completes, one decision covers both turns, and the reply goes on once.
+        slow = asyncio.get_running_loop().create_future()
+        await self.cut_by("Okay.", slow, TalkerDecision("wait"))
+        self.session.caller_started()
+        deciding = asyncio.create_task(self.session.on_turn())
+        await settle(lambda: len(self.frontend.calls) == 2)
+        slow.set_result(TalkerDecision("speak", "Sure."))
+        await deciding
         self.assertEqual(self.spoken, [ANSWER])
+        self.buffer.turn("Go on.")
+        self.session.caller_stopped()
+        await self.session.on_turn()
+        self.assertEqual(self.spoken, [ANSWER, REST])
 
     async def test_resuming_can_be_turned_off(self):
         settings = CascadeSettings.parse(
             {"delegation": {"progress_after_seconds": None}, "speech": {"resume_after_noise": False}}
         )
         await self.cut_reply(settings)
+        await self.session.on_turn()
+        self.assertEqual(self.spoken, [ANSWER])
+
+    async def test_resuming_after_a_waited_turn_can_be_turned_off(self):
+        settings = CascadeSettings.parse(
+            {"delegation": {"progress_after_seconds": None}, "speech": {"resume_after_noise": False}}
+        )
+        await self.cut_by("Okay.", TalkerDecision("wait"), settings=settings)
         await self.session.on_turn()
         self.assertEqual(self.spoken, [ANSWER])
 

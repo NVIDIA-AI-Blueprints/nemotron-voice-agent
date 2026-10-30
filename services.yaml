@@ -12,7 +12,9 @@
 # recipe uses it with `nvcf` fields applied over the entry (`server` defaults to
 # grpc.nvcf.nvidia.com:443 and `base_url` to integrate.api.nvidia.com). Entries
 # without `nvcf` are self-hosted only. When `NVIDIA_API_KEY` is set, local
-# recipes also list the cloud entries.
+# recipes also list the cloud entries. An LLM entry without `base_url` has no
+# local server: every recipe that lists it uses integrate.api.nvidia.com. Its
+# `nvcf` sets that URL as `base_url`, which the cloud entry otherwise lacks.
 #
 # Each example picks the keys it offers under `services` in
 # `examples_registry.yaml`. Compose hostnames are rewritten to localhost for
@@ -36,6 +38,12 @@ server:
       health_path: "/v1/health/ready"
       extra_params: '{"extra_body":{"repetition_penalty":1.05}}'
       settings: nemotron-super
+    nemotron-ultra:
+      name: "Nemotron 3 Ultra 550B A55B"
+      model_id: "nvidia/nemotron-3-ultra-550b-a55b"
+      settings: nemotron-super
+      nvcf:
+        base_url: "https://integrate.api.nvidia.com/v1"
     nemotron-omni-nvfp4:
       name: "Nemotron 3 Nano Omni 30B A3B Reasoning"
       model_id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"

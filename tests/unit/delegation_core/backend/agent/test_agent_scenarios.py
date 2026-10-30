@@ -18,6 +18,7 @@ from delegation_core.api.service import ResponsesService
 from delegation_core.app import build_core
 from delegation_core.backend.adapters import ADAPTERS
 from delegation_core.backend.agent import AgentSettings, AgentSource
+from delegation_core.backend.conductors import SteerOpenWork
 from delegation_core.config import CoreSettings
 from delegation_core.im.input import BackendTask
 from delegation_core.im.results import SpeakDisplay
@@ -25,6 +26,7 @@ from tests.unit.contracts.backend import call_round, text_round
 from tests.unit.contracts.endings import load
 from tests.unit.delegation_core.backend.agent.doubles import (
     FBL,
+    SETTINGS,
     SHIPPED,
     TEXTS,
     Model,
@@ -193,6 +195,18 @@ class AgentScenarioTests(IMCase):
         self.assertEqual(answers(await read(first.stream)), ["Green and black."])
         self.assertScenario("answered_by_the_conductor")
 
+    async def test_an_answer_while_no_work_is_open_is_refused_and_the_request_starts_work(self):
+        # No records stand behind it, so the IM refuses the answer; the request is left, and the steer rule starts it.
+        conductor = Model(decisions(answer_status("D1", "Your table is booked.")))
+        workers = Model(text_round("Friday at seven is free; shall I book it?"))
+        im = self.session(agent(conductor, workers))
+        events = await read(im.admit(ask("Book a table for Friday."), delegation_id="D1").stream)
+        self.assertEqual(answers(events), ["Friday at seven is free; shall I book it?"])
+        self.assertEqual(im.ledger.delegations["D1"].work, "W1")
+        placed = [(kind, fields["outcome"]) for kind, fields in self.traces if kind.startswith("im.placed")]
+        started = TEXTS.outcomes["started"].format(work="W1", tasks="W1.1")
+        self.assertEqual(placed, [("im.placed", TEXTS.refusal("no_open_work")), ("im.placed_by_rule", started)])
+
     async def test_a_conductor_failure_while_a_work_is_open_joins_it(self):
         gate = asyncio.Event()
         conductor = Model(decisions(start("D1")), [RuntimeError("the conductor's model is down")])
@@ -215,22 +229,9 @@ class AgentScenarioTests(IMCase):
         self.assertEqual(im.ledger.delegations["D1"].work, "W1")
         self.assertScenario("answered")
 
-    async def test_a_conductor_timeout_while_a_work_is_open_joins_it(self):
-        gate, never = asyncio.Event(), asyncio.Event()
-        conductor = Model(decisions(start("D1")), [never])
-        workers = Model(gated(gate, text_round("Black tea.")), text_round("Green tea, as you asked."))
-        settings = replace(source(conductor, workers).settings)
-        settings = replace(settings, conductor=replace(settings.conductor, timeout_seconds=0.05))
-        im = self.session(agent(conductor, workers, settings=settings))
-        im.admit(ask("Find teas."), delegation_id="D1")
-        await self.turns()
-        second = im.admit(ask("Green tea only."), delegation_id="D2")
-        self.assertEqual(answers(await read(second.stream)), ["Green tea, as you asked."])
-        self.assertEqual(im.ledger.delegations["D2"].work, "W1")
-
     async def test_a_conductor_failure_after_the_open_work_ended_starts_the_request(self):
-        # W1 ends while the model decides, then the model fails: the rule steers into W1 as it was shown, and the IM,
-        # which re-checks every decision, starts a Work instead, since nothing joins an ended Work.
+        # W1 ends while the model decides, then the model fails: the IM's steer rule places the request against the
+        # Works as they stand, and none is open, so it starts a Work.
         round_gate, deciding = asyncio.Event(), asyncio.Event()
         conductor = Model(decisions(start("D1")), [deciding, RuntimeError("the conductor's model is down")])
         workers = Model(gated(round_gate, text_round("Black tea.")), text_round("Green tea."))
@@ -245,8 +246,25 @@ class AgentScenarioTests(IMCase):
         deciding.set()
         self.assertEqual(answers(await read(second.stream)), ["Green tea."])
         self.assertEqual((im.ledger.works["W1"].state, im.ledger.delegations["D2"].work), ("answered", "W2"))
-        outcomes = [fields["outcome"] for kind, fields in self.traces if kind == "im.placed"]
-        self.assertEqual(outcomes[-1], TEXTS.outcomes["restarted"].format(work="W1", new="W2"))
+        outcomes = [fields["outcome"] for kind, fields in self.traces if kind == "im.placed_by_rule"]
+        self.assertEqual(outcomes, [TEXTS.outcomes["started"].format(work="W2", tasks="W2.1")])
+
+    async def test_a_request_the_rounds_one_call_leaves_joins_the_work_that_round_started(self):
+        # Both requests reach one round, whose one call starts work for the first: the second joins that Work.
+        gate = asyncio.Event()
+        conductor = Model(decisions(start("D1")))
+        workers = Model(respond=lambda payload: gated(gate, text_round("Friday at seven is free for two.")))
+        im = self.session(agent(conductor, workers))
+        first = im.admit(ask("Book a table for Friday."), delegation_id="D1")
+        second = im.admit(ask("For two people."), delegation_id="D2")
+        await self.turns()
+        self.assertEqual([r["delegation_id"] for r in round_data(conductor.payloads[0])["new_requests"]], ["D1", "D2"])
+        self.assertEqual([im.ledger.delegations[d].work for d in ("D1", "D2")], ["W1", "W1"])
+        self.assertNotIn("W2", im.ledger.works)
+        gate.set()
+        await read(first.stream)
+        self.assertEqual(answers(await read(second.stream)), ["Friday at seven is free for two."])
+        self.assertEqual(len(conductor.payloads), 1)
 
     async def test_an_arrival_restarts_a_decide_that_placed_nothing_once(self):
         cancelled, restarted = asyncio.Event(), asyncio.Event()
@@ -331,27 +349,43 @@ class AgentScenarioTests(IMCase):
             self.assertIn(envelope, payload["instructions"])
             self.assertIn("show", [tool["name"] for tool in payload["tools"]])
         [asked] = conductor.payloads
-        self.assertEqual(asked["instructions"], TEXTS.conductor_prompt)
+        self.assertEqual(asked["instructions"], TEXTS.conductor_prompt.format(max_running=3))
         self.assertNotIn(envelope, asked["instructions"])
         self.assertNotIn("show", [tool["name"] for tool in asked["tools"]])
 
-    async def test_max_running_counts_the_tasks_of_every_work(self):
-        gates = {brief: asyncio.Event() for brief in ("a", "b", "c", "d")}
-        conductor = Model(decisions(start("D1", tasks=["a", "b"])), decisions(start("D2", tasks=["c", "d"])))
-        workers = Model(respond=by_brief({brief: [gated(gate, text_round(brief))] for brief, gate in gates.items()}))
-        im = self.session(agent(conductor, workers))
-        first = im.admit(ask("A and B."), delegation_id="D1")
+    async def test_with_one_task_at_a_time_the_steer_rule_places_with_no_model_call_and_a_newer_request_joins(self):
+        gate = asyncio.Event()
+        conductor = Model()  # never asked
+        workers = Model(gated(gate, text_round("Old.")), text_round("Teas for two."))
+        adapter = agent(conductor, workers, settings=replace(SETTINGS, max_running=1))
+        self.assertIsInstance(adapter.conductor(), SteerOpenWork)
+        im = self.session(adapter)
+        first = im.admit(ask("Find teas."), delegation_id="D1")
         await self.turns()
-        second = im.admit(ask("C and D."), delegation_id="D2")
+        second = im.admit(ask("For two."), delegation_id="D2")
+        self.assertEqual(answers(await read(second.stream)), ["Teas for two."])
+        gate.set()
+        self.assertEqual(answers(await read(first.stream)), [])  # handed over to the newer request
+        self.assertEqual(conductor.payloads, [])
+        self.assertEqual([im.ledger.delegations[d].work for d in ("D1", "D2")], ["W1", "W1"])
+
+    async def test_a_start_over_max_running_is_refused_and_its_request_joins_the_open_work(self):
+        gate = asyncio.Event()
+        conductor = Model(decisions(start("D1")), decisions(start("D2", tasks=["teas", "hours"])))
+        workers = Model(gated(gate, text_round("Old.")), text_round("Teas and hours."))
+        im = self.session(agent(conductor, workers, settings=replace(SETTINGS, max_running=2)))
+        first = im.admit(ask("Find teas."), delegation_id="D1")
         await self.turns()
-        self.assertEqual(len(workers.payloads), 3)  # max_running 3: the fourth task waits for a slot
-        gates["a"].set()
-        await self.turns()
-        self.assertEqual(len(workers.payloads), 4)
-        for gate in gates.values():
-            gate.set()
-        self.assertEqual(answers(await read(first.stream)), ["a", "b"])
-        self.assertEqual(answers(await read(second.stream)), ["c", "d"])
+        second = im.admit(ask("And the hours, at the same time."), delegation_id="D2")
+        self.assertEqual(answers(await read(second.stream)), ["Teas and hours."])
+        gate.set()
+        self.assertEqual(answers(await read(first.stream)), [])  # handed over to the newer request
+        # One task runs and the start asks for two more, with two at once: refused, and the steer rule joins the
+        # request to the open Work.
+        outcomes = [fields["outcome"] for kind, fields in self.traces if kind == "im.placed"]
+        self.assertEqual(outcomes[-1], TEXTS.refusal("over_limit", max_running="2"))
+        self.assertEqual((im.ledger.delegations["D2"].work, sorted(im.ledger.works)), ("W1", ["W1"]))
+        self.assertIn("at most 2 tasks run at once", conductor.payloads[1]["instructions"].lower())
 
 
 class ProfileTests(unittest.IsolatedAsyncioTestCase):
@@ -412,7 +446,7 @@ class ProfileTests(unittest.IsolatedAsyncioTestCase):
             events = [event async for event in stream]
         self.assertEqual(events[-1]["type"], "response.completed")
         self.assertEqual(answers(events), ["A latte is $4.50."])
-        self.assertEqual(conductor.payloads[0]["instructions"], TEXTS.conductor_prompt)
+        self.assertEqual(conductor.payloads, [])  # no Work was open: the request started one with no model call
         self.assertIn(TEXTS.result_formats["speak_display"], workers.payloads[0]["instructions"])
 
 

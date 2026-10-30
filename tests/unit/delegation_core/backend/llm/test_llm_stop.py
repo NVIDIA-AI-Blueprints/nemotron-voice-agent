@@ -132,7 +132,7 @@ class StopTests(unittest.IsolatedAsyncioTestCase):
         gate.set()
         self.assertEqual([event async for event in events], [])
 
-    async def test_steering_held_when_the_run_stops_is_not_applied(self):
+    async def test_steering_that_waits_when_the_run_answers_and_stops_is_never_taken(self):
         gate, slow = gated("One coffee.")
         provider, task = ScriptedProvider(slow, text_round("Two.", "resp_2")), IMTask()
         run = adapter(provider, settings=FAST).start(task)
@@ -144,7 +144,7 @@ class StopTests(unittest.IsolatedAsyncioTestCase):
         async for event in events:
             if event["type"] == "response.completed":
                 await run.stop()
-        self.assertEqual(task.settled, [("steer_1", "not_applied")])
+        self.assertEqual((task.settled, len(task._steering)), ([], 1))  # the IM keeps it for the next request
         self.assertEqual(provider.opened, 1)
 
 

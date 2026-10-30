@@ -6,8 +6,9 @@
 # delegation_core.config.CoreSettings defines every key below.
 #
 # Profiles are separate files that name the file they build on (`extends: core.yaml`) and set only what differs:
-#   core.ui-bot.yaml           backend.tools: {cafe: {}}; delegation.result_format: speak_display
-#   core.bench.yaml            the benchmark's conductor; client_tool_timeout_seconds: null; progress_note_seconds: 0
+#   core.ui-bot.yaml           backend.prompt: thinker; backend.tools: {cafe: {}};
+#                              delegation.result_format: speak_display
+#   core.bench.yaml            one task at a time; client_tool_timeout_seconds: null; progress_note_seconds: 0
 #   core.agent.yaml            backend.adapter: llm-agent; delegation.result_format: speak_display (its conductor
 #                              reads core.yaml's texts.conductor_prompt)
 #   core.harness.yaml          extends core.agent.yaml: backend.adapter: harness, connected to the operator's Hermes
@@ -21,19 +22,23 @@ delegation:
   work_timeout_seconds: 600            # the backstop on one Work, through the stop door; null: off
   result_format: plain                 # plain | speak_display (a show item for the screen, then the answer to speak)
   backend_calls: items                 # items: official mcp_call items for calls the backend runs; notes: notes only
-  display_label: voiceclaw             # the show item's server label; the root hands it to the reader too
+  display_label: delegation_core             # the show item's server label; the root hands it to the frontend too
   progress_note_seconds: 1.0           # at most one progress note per delegation this often; 0: no notes
-  work_tools: []                       # [cancel_work] gives every task a tool to stop its own Work
+  work_tools: [cancel_work]            # a task stops after its current step when the caller asks to stop; []: none
+  hold_answers_while_deciding: false   # true: an answer given while a model conductor decides on a newer request
+                                       # waits for the decision; steered into the task, it is progress and the task
+                                       # runs one more round with the request; placed elsewhere, it is written
   records_max_works: 5                 # the recently ended Works the work records list, after the open ones
   context_tokens: 24000                # the backend history's budget (fits a 32,768-token local window)
   tool_output_chars: 8000              # a longer tool output enters the backend history cut to its head and tail
-  voice_note: v2                       # v2 describes the voice channel to the backend; v1 adds nothing
+  voice_note: default                  # the texts.voice_notes entry that describes the voice channel to the backend
 
-# Every line the core writes, sends, or adds to a model's input.
+# The lines the IM and the backend write or add to a model's input. Two kinds of text come from elsewhere: a harness's
+# own block words its prompt templates (backend.harness.prompts) and its agent class's values (backend.harness.agents),
+# and an error's message (an exception's, a timed-out call's) comes from the code that reports it.
 texts:
   voice_notes:
-    v1: ""
-    v2: |
+    default: |
 
       ## Voice channel
       Your reply is spoken to the caller by a voice frontend, which may already have said a short
@@ -44,40 +49,57 @@ texts:
       - Caller messages are speech-recognition transcripts. Spelled letters and spoken numbers arrive
         as separate words ("J O H N", "four four seven two"); join them before using them in a tool
         call. Words can be misheard, and the caller's latest correction wins.
-
-      ## Spoken ids
-      - When the caller says an id, look it up before asking them to spell it.
-      - Build the likeliest id from every piece the caller said, with spoken numbers as digits, and
-        trust what the caller says over your own read-back.
-      - If a lookup of a spoken id fails, try it once more in lowercase.
-      - Try the ids you have before you transfer the caller, and offer a transfer after a few failed
-        tries.
-      - Do not ask for any check your instructions do not require.
-
-      ## Requests
-      - Finish every part of the request, and check the rules before each change.
-      - Ask for all missing details in one question, never ask for a detail the records already show,
-        and offer two or three options at a time.
+      - Speech recognition guesses capital letters, spacing and symbols and often drops single spelled
+        letters, so build an id from every piece the caller said, with spoken numbers as digits, and
+        trust the caller's words over the assistant's read-backs.
+      - Write an id in the form its tool describes. If a lookup fails, you may retry once with only its
+        letter case or separators changed; never try other letters or digits. Then read back what you
+        heard, letter by letter, and ask the caller to spell the part you are unsure of. Once a lookup
+        in this call has found what an id names, do not ask the caller for that id again.
+      - Offer two or three options at a time.
   result_formats:
     plain: ""
     speak_display: "Put screen-only detail in a show call, then answer in speakable sentences."
-  handover_line: "Handled together with your newer request."
+  # The older delegation's commentary when a newer request carries its Work ({delegation}: the newer request's id).
+  handover_line: "Handled together with your newer request ({delegation})."
   cancelled_line: "Stopped for your newer request."
   unconfirmed_line: "I could not confirm that the earlier request stopped; check before trying it again."
   owed_output: "Outcome unknown: check whether it happened before retrying."
   not_run_output: "Not run: the caller said something new."
   stopped_output: "Not run: this work was stopped."
   clash_output: "Not run: the app and a work tool both have a function by this name, so neither runs."
+  # The error outputs of a call to a name no tool offers, and of a call that raised ({error}: its type and message).
+  unknown_tool_output: "Unknown tool: {name}. The tools offered: {offered}"
+  failed_output: "{name} failed: {error}"
+  # The error output of an app function the IM routes to a harness's agent instead of the app (it never should).
+  misrouted_output: "{name} is the app's function; the harness cannot run it"
+  # The output of an app call with the same function and arguments (compared as JSON) as the newest call that ran, which
+  # its task made and the app answered, with no request since ({output}: that answer): the IM gives it instead of
+  # sending the call again.
+  repeated_call_output: "{output}\n(not sent again: the same call just returned this)"
+  # What stands between the head and the tail of a tool output cut to delegation.tool_output_chars ({chars}: how many
+  # characters it leaves out).
+  cut_output: "\n[... {chars} characters cut ...]\n"
+  none: "none"                         # how an empty list of names reads: no tool offered, no request named
   records_block: |-
     Work so far in this call:
     {records}
-  closing_line: "Say in one sentence where the work stands, then continue with the next step."
+  closing_line: >-
+    Say in one sentence where the work stands, and in the same reply carry on with the next step, unless the work is
+    done or needs the caller.
   task_line: "Task: {task}"
+  # Added to the instructions of the backend LLM's round after max_tool_rounds, which offers no tool.
+  round_cap_note: >-
+    You have reached the step limit and can call no more tools. Answer the caller in plain sentences with what the
+    results so far show, and say what is still unchecked.
+  # A model conductor's instructions ({max_running}: the tasks its backend runs at once).
   conductor_prompt: >-
     You place the caller's requests for a voice assistant. For each new request, call one tool: start_work
     for new work (split it into tasks only when the parts are independent), steer_work when it changes or adds
     to open work, cancel_work when the caller wants open work stopped, or answer_status when the records already
-    answer a question about open work. Never do the work yourself, and never word a result for the caller.
+    answer a question about open work. At most {max_running} tasks run at once, counting the running and queued
+    tasks of open work; when new work would make more, steer the request into open work instead. Never do the
+    work yourself, and never word a result for the caller.
   outcomes:
     started: "Started {work} with {tasks}."
     steered: "Sent to {work} ({tasks}); it applies at the next step."
@@ -86,6 +108,20 @@ texts:
     ended: "{work} had already ended; nothing to do."
     answered: "Answered {delegation}."
     refused: "Not applied: {reason}"
+  # The {reason} of outcomes.refused for each refusal: a place() after its decide() ended, requests none of which
+  # waits to be placed, an unknown Work or task, an answer_status while no work is open (the request then starts
+  # work), a start_work (or a steer_work into ended work, which starts work) whose tasks, with the running and queued
+  # tasks of open work, would be more than the backend runs at once ({max_running}; the steer rule then places the
+  # request), and (idle) a control call that reaches the harness's conductor before a decide() takes its calls.
+  refusal_reasons:
+    ended: "its decide() has ended"
+    unplaced: "no unplaced request among {delegations}"
+    no_work: "no work {work}"
+    no_task: "no task {task} in {work}"
+    no_open_work: >-
+      no work is open, and answer_status answers questions about open work only; every new request is start_work
+    over_limit: "at most {max_running} tasks run at once, and this work would make more"
+    idle: "no request waits to be placed now."
   control_tools:
     start_work:
       description: Start new work for these requests, as one task or as several independent tasks that run in parallel.
@@ -157,7 +193,9 @@ texts:
         required: [display]
         additionalProperties: false
     cancel_work:
-      description: Stop this work after the current step, because the caller no longer wants it.
+      description: >-
+        Stop this work after the current step, only when the caller asks to stop it or says they no longer want it.
+        A caller who finishes giving details or agrees to go on has not asked to stop. It undoes nothing already done.
       parameters:
         type: object
         properties: {}
@@ -171,12 +209,12 @@ backend:
   adapter: llm                         # llm (directly connected, the default) | llm-agent | harness
   one_shot_adapter: llm                # the adapter that serves stateless requests (the console's client-mode rounds)
   slot: thinker-llm
-  prompt: thinker
+  prompt: backend                      # the generic entry, with no domain; the cafe's thinker in core.ui-bot.yaml
   tools: {}                            # server tool sources by name: {cafe: {}} in core.ui-bot.yaml
   llm:
     provider: chat-completions         # chat-completions | openai-responses
     conductor: steer                   # steer: each request joins the newest open Work | start_each: a queue
-    max_tool_rounds: 8
+    max_tool_rounds: 30
     provider_retries: 2
     first_event_timeout_seconds: 45
     idle_timeout_seconds: 30
@@ -185,13 +223,17 @@ backend:
     # responses_validation_failed and keeps the setting; fallback runs it on the configured endpoint and logs
     # it, which only the benchmark's profile does (core.bench.yaml), because its model is not listed.
     unlisted_models: report            # report | fallback
-    round_cap_note: "You have reached the step limit. Answer the caller with what you have."
   llm-agent:
-    max_running: 3                     # tasks running at once
+    # Tasks running at once. Above 1, the conductor places each request that comes while a Work is open (and the others
+    # as conductor.when_idle says), its instructions state this limit, and the IM refuses a start_work over it. 1: the
+    # steer rule places each request, with no conductor call; it joins the newest open Work, or starts one.
+    max_running: 3
     conductor:
       provider: chat-completions
       model: null                      # null: the backend's default model
       timeout_seconds: 20              # a longer decision round places nothing more; the steer rule places the rest
+      when_idle: start                 # start: while no Work is open, a request starts one with no conductor call |
+                                       # decide: the conductor places it too
     worker: {}                         # the llm block's keys, for the agent's workers
   # The harness reaches an agent its operator deployed: the operator gives it its model, key, tools and home, and
   # this block says only which agent class reads it and how to reach it.
@@ -203,18 +245,20 @@ backend:
     url: null                          # websocket only: the ws:// or wss:// URL the operator serves the agent on
     pass_env: [PATH, LANG, LC_ALL, TZ, HERMES_HOME]  # stdio: all a started agent gets of this server's environment
     env: {}                            # stdio: more variables for a started agent
-    max_running: 3                     # tasks running at once
+    max_running: 3                     # tasks running at once; 1: no conductor process, as llm-agent's max_running says
     turns_per_process: null            # null: the agent class's own limit (Hermes runs 4 turns at once per process)
     steer: native_command              # native_command (the agent's own mid-turn steer) | next_prompt | cancel_reprompt
+    session: task                      # task: a fresh session for each task | call: an answered task's session takes
+                                       # the next task whose history begins with what the session has read
     permission: reject                 # the answer to the agent's permission requests (no approval is surfaced)
     runtime_label: hermes              # the server label of the calls the agent runs itself (its own toolsets)
-    stop_timeout_seconds: 10           # how long a worker's stop waits for its turn to end cancelled
+    stop_timeout_seconds: 10           # how long a worker's stop, or the conductor's cancel, waits for its turn to end
     turn_timeout_seconds: 300
     conductor_timeout_seconds: 20
     bridge:
       bind: "127.0.0.1:8791"
       advertise: "http://127.0.0.1:8791"
-    work_root: null                    # where the sessions' work folders go; null: ~/.cache/voiceclaw/harness
+    work_root: null                    # where the sessions' work folders go; null: ~/.cache/delegation-core/harness
                                        # websocket: a folder the served agent sees at the same path; the default
                                        # does not reach it
     agents:                            # the values only one agent class reads, by its name
@@ -222,3 +266,27 @@ backend:
         instructions_file: .hermes.md  # one of the files Hermes reads in a session's folder (AGENTS.md, CLAUDE.md, ...)
         steer_command: "/steer "       # Hermes's mid-turn steer; quoted: it must end with a space
         command_guard: "Request: "     # put before a prompt that starts with "/", which Hermes would run as a command
+    # What the agent reads, as text (harness/render.py fills each template's fields). The conductor's input for one
+    # decide() is the new requests, the work records and the conversation it has not read; a worker's first prompt is
+    # its task's view of the conversation as a transcript. unnamed_call names an output whose call is not shown.
+    prompts:
+      conductor_input: |-
+        New requests to place:
+        {arrivals}
+
+        Work records:
+        {works}
+
+        Conversation since your last turn:
+        {conversation}
+      arrival: "[{delegation}] {text}"
+      work: "[{work}] {state}, carried by {carrier}; requests: {requests}\n{tasks}"
+      task: "  task {task}: {state} for {seconds} s{brief}; steps: {steps}; newest note: {note}"
+      brief: ', brief "{brief}"'
+      none: "none"
+      worker_input: "The conversation and your task:\n\n{transcript}"
+      user: "{text}"
+      assistant: "Assistant: {text}"
+      call: "Earlier step, already done: {name} with {arguments}"
+      output: "Result of {name}: {output}"
+      unnamed_call: "the call"

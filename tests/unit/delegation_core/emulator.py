@@ -17,7 +17,7 @@ The conductor reads each arrival's text and places the arrival:
 * ``[cancel:W1]`` stops Work W1, ``[cancel:W1.1]`` its task W1.1; neither places the arrival itself;
 * ``[answer:text]``: answer the arrival from the records;
 * ``[skip]``: place nothing for it (the IM starts it once ``decide()`` returns);
-* ``[think:N]``: wait N seconds first (the busy-conductor rule: one ``decide()`` at a time);
+* ``[think:N]``: wait N seconds first (the IM runs one ``decide()`` at a time);
 * ``[raise]``: ``decide()`` raises.
 
 A task's run reads its script when it starts: the block's ``script``, then the directives of the first text of the
