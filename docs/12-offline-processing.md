@@ -340,3 +340,29 @@ adaptation runs VoiceBench through its GitLab CI evaluation flow in offline mode
 at concurrency 1, using Lightning with thinking disabled. That execution and its
 scores are not validated by this AA-BigBench result. Latency-sensitive benchmarks
 continue to require realtime execution.
+
+## October 30, 2026: Validation and Architecture Checkpoint
+
+The WebSocket implementation supports continuous ASR, independently scheduled native
+LLM/TTS work, and sample-aligned recording. Full-audio sessions wait for provider EOF
+and native audio-context drain. Text-scored evaluation returns at the first eligible raw
+LLM completion without waiting for the whole TTS response.
+
+Three offline concurrency-1 VoiceBench Lite runs each complete all 778 cases with zero
+errors or retries. Their internal nine-dataset means range from 72.27 to 73.41, compared
+with 65.78 for the historical online concurrency-6 run. Different source revisions and
+concurrency prevent a mode-only accuracy or throughput conclusion.
+
+A matched-source, concurrency-1 probe completes five online/offline pairs. Four pairs
+send identical complete HTTP request bodies; all five have the same recognized user-word
+sequence. All five raw answers differ without establishing different correctness. The
+remaining pair has different message grouping because its final ASR callback arrives
+after the online turn commit and before the offline logical turn commit. This probe
+shows no queue loss.
+
+The next design target is shared late-final continuation semantics and stable turn
+identity in both modes. Audio offsets preserve media coordinates but cannot force fresh
+provider callback order. Behavioral and scoring consistency remains under validation.
+Refer to the [dated progress
+checkpoint](offline-processing-progress.md#october-30-2026-voicebench-repeatability-and-context-timing)
+for results, timing boundaries, and planned tests.

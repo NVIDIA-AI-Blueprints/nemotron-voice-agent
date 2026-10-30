@@ -782,3 +782,112 @@ verify the fingerprint, Lightning model identifier, and disabled thinking agains
 those settings. Wire tests cover redaction and fingerprint agreement. Backend
 identity still needs deployment provenance; requested configuration alone does
 not establish it. This capability does not change scheduling or score selection.
+
+## October 30, 2026: VoiceBench Repeatability and Context Timing
+
+### Completed VoiceBench Comparison
+
+Three offline concurrency-1 runs completed the same frozen 778-case Lite selection
+across nine datasets. Each completed with zero errors or retries and full native scoring
+coverage. The scores below are internal nine-dataset means using the native hosted
+GPT-4.1 judging configuration, not official overall scores.
+
+| Run | Concurrency | Internal Mean | Inference Elapsed in ms |
+| --- | ---: | ---: | ---: |
+| Historical online | 6 | 65.7774 | 3,001,750 |
+| Original offline | 1 | 73.4136 | 3,888,542 |
+| Offline repeat 1 | 1 | 72.4409 | 3,456,310 |
+| Offline repeat 2 | 1 | 72.2746 | 3,509,851 |
+
+The aggregate offline gap repeats, while dataset deltas vary; BBH changes direction and
+IFEval varies substantially. The historical online run used a different source revision
+and concurrency. These elapsed times do not isolate a mode-only speedup. Incremental
+judging overlaps inference; its independent total duration is not measured.
+
+The comparison retains Lightning, `max_tokens=5000`, `enable_thinking=false`, repetition
+penalty 1.05, cloud ASR/TTS, 320 ms STT stop history, 1,250 ms Silero silence, 400 ms
+output chunks, and a 1,500 ms input tail. Welcome and history summarization are
+disabled. Native text candidate selection and scorer behavior remain unchanged.
+
+The implementation also corrects native stitched-TTS completion to require provider EOF
+and native audio-context drain. Text evaluation now returns at its first eligible raw
+LLM completion and does not wait for the complete TTS response.
+
+### Matched Source Request Probe
+
+Five online and five offline sessions run at concurrency 1 with the same NVA source
+`4b33f39`, evaluator `1e81b8d`, native Pipecat 1.12, model services, and generation
+settings. All ten selected cases complete. Thirteen HTTP dispatches across 12 retained
+traces include two readiness gates and one additional online continuation request. Trace
+observation errors and dropped events are zero; the probe makes no judge requests.
+
+Four of five selected pairs send identical complete HTTP request bodies. All five use
+the same actual model/options and recognized user-word sequence. All five raw answer
+strings differ, including the four identical-request pairs. This demonstrates
+output-text variation without establishing a change in correctness.
+
+CommonEval sample 32 explains the remaining request difference. Online commits the first
+four words before the last one-word ASR final arrives. That final reaches the user
+aggregator 109.484783 ms after VAD-stop handling begins. Native
+continuation/interruption produces a second selected request with two user messages
+containing four words and one word; the first request emits no visible LLM token frames.
+Offline processes the final at logical sample 46,306, before VAD-stop/commit sample
+46,603: 18.5625 ms earlier on its audio timeline. Its selected request contains one
+five-word user message. These intervals belong to different clock domains and must not
+be subtracted.
+
+At each selected commit, every then-published final transcript has finished aggregator
+processing. This probe shows no queue loss. The controlled native queue/backlog fixture
+remains a possible mechanism, not the established cause of the historical score gap. No
+ASR word timestamps determine event placement.
+
+The five online sessions take 65,096 ms; the five offline sessions take 23,749 ms.
+Different generated response lengths, provider variation, and online-first warm-up order
+prevent an isolated speed claim.
+
+### Architecture Decision and Next Validation
+
+Chunk offsets align source and playback positions, but cannot force streamed and bulk
+ASR callbacks to become available in the same order relative to VAD stop. The next
+design target is a shared policy for late-final continuation and stable turn identity in
+both modes. Offline-only merging would change the benchmark conversation contract and is
+not the chosen direction.
+
+Validation will exercise finals arriving before, at, and after a turn commit;
+continuation during generation; interruption; and EOF. Immutable actual requests,
+candidate epochs, committed history, and chunk/event ordering remain separate checks.
+The current evidence does not finalize that policy or establish behavioral or scoring
+equivalence.
+
+Detailed run artifacts and raw conversational traces remain outside Git.
+
+### Conditional Turn Policy Replay
+
+Five provider-free replays of CommonEval sample 32 test whether delivery order alone can
+reproduce its user-message grouping. Native queued processing and the shared
+sample-clock policy receive the observed policy-input schedules. The unchanged schedules
+reproduce the actual recorded context hashes.
+
+| Policy Input Schedule | Runtime | User Word Counts at Successive Commits |
+| --- | --- | --- |
+| Observed online | Native queued | `[4]`, then `[4, 1]` |
+| Observed online | Shared sample-clock policy | `[4]`, then `[4, 1]` |
+| Observed offline | Shared sample-clock policy | `[5]` |
+| Only final/VAD-stop delivery order swapped | Native queued | `[5]` |
+| Offline with only the last final deferred until after VAD stop | Shared sample-clock policy | `[4]`, then `[4, 1]` |
+
+All five scenarios pass without forced backlog, provider requests, generated audio,
+judge requests, or watchdog expiry. Under the frozen policy, changing only the
+last-final/VAD-stop delivery relation is sufficient to reverse this grouping difference.
+
+This is a conditional policy-boundary replay using reconstructed Pipecat 1.12 metadata
+and defaults. It does not reproduce the full asynchronous pipeline, backend, VAD model,
+or physical queue-arrival history. It neither assigns the historical score gap to this
+mechanism nor establishes a complete pipeline counterfactual. The next design target
+remains shared late-final continuation semantics in both modes.
+
+The next trial preserves native turn policy while testing availability ordering
+separately, with no automatic merging, backdating, or offline-only rules. Turn IDs alone
+cannot resolve ASR ownership across missed VAD speech or restarts; a shared late-final
+revision policy remains a proposal until an explicit ownership and closure contract
+exists.
