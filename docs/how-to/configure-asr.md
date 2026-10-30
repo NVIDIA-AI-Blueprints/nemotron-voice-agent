@@ -82,7 +82,17 @@ For ASR latency and throughput across GPUs and WER for different models, see the
   )
   ```
 
-- **Endpointing (end-of-utterance)**: Riva/NIM ASR decides when the user has stopped speaking from trailing silence, via the endpoint parameters `start_history` / `start_threshold`, `stop_history` / `stop_threshold`. Silence windows are in ms, a multiple of 80, and `-1` keeps the model defaults. Shorter `stop_history` finalizes faster but can reduce recognition accuracy. The cascaded examples construct the stock `NvidiaSTTService` with `stop_history=320`. To customize this value, pass your chosen value in the example pipeline:
+- **Endpointing (end-of-utterance)**: Riva/NIM ASR decides when the user has stopped speaking from trailing silence, via the endpoint parameters `start_history` / `start_threshold`, `stop_history` / `stop_threshold`. Silence windows are in ms, a multiple of 80, and `-1` keeps the model defaults. Shorter `stop_history` finalizes faster but can reduce recognition accuracy. The cascaded examples use the stock `NvidiaSTTService` default of `stop_history=320`.
+
+  For Generic Assistant, set the server environment variable
+  `ASR_STOP_HISTORY_MS` to override stop history in both online and offline
+  sessions. It accepts decimal integers from 1 through 10,000 ms; when unset,
+  the native default remains 320 ms. This setting does not change Silero's
+  silence threshold. Apply the same value in both modes for paired evaluation.
+  Restart the selected application after changing its environment.
+
+  For examples without this shared override, customize the service constructor
+  in the example pipeline:
 
   ```python
   stt = NvidiaSTTService(
