@@ -7,6 +7,8 @@ import asyncio
 import hashlib
 import itertools
 import json
+import os
+import stat
 import tempfile
 import threading
 import unittest
@@ -343,8 +345,17 @@ class EvaluationTraceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_unwritable_optional_trace_does_not_raise(self):
         """A tracing failure must not turn a successful conversation into a failure."""
-        with patch.object(Path, "write_text", side_effect=OSError("disk full")):
+        with patch("examples.shared.evaluation_trace.os.open", side_effect=OSError("disk full")):
             self.trace.close()
+
+    def test_request_trace_file_is_private_even_with_permissive_umask(self):
+        """Opt-in conversational request snapshots are not world readable."""
+        previous = os.umask(0)
+        try:
+            self.trace.close()
+        finally:
+            os.umask(previous)
+        self.assertEqual(stat.S_IMODE(self.trace.path.stat().st_mode), 0o600)
 
 
 class EvaluationServiceTests(unittest.IsolatedAsyncioTestCase):

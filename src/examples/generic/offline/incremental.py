@@ -30,6 +30,8 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.stt_latency import DEFAULT_TTFS_P99
 
+from examples.shared.evaluation_trace import _observe
+
 from .actors import ActorEvent, EventActor
 from .aggregation import ChunkPositionedFrame, SharedAssistantAggregation, SharedUserAggregation
 from .models import RATE, SessionResult, ns_to_samples, samples_to_ns
@@ -65,6 +67,7 @@ class IncrementalSessionEngine:
         output_sample_rate=RATE,
         history_recent_turns=None,
         preserve_prompt_messages=0,
+        evaluation_trace=None,
     ):
         """Inject independently progressing sources and the native response port."""
         self.detector, self.recognizer, self.responder = detector, recognizer, responder
@@ -74,6 +77,7 @@ class IncrementalSessionEngine:
         self.output_sample_rate = output_sample_rate
         self.history_recent_turns = history_recent_turns
         self.preserve_prompt_messages = preserve_prompt_messages
+        self.evaluation_trace = evaluation_trace
 
     async def run(self, source, *, event_sink: Callable[[dict], None] | None = None):
         """Own one finite session and cancel every producer on failure."""
@@ -103,7 +107,11 @@ class _Session:
         self.asr_physical_start_ns = None
         self.output = IncrementalOutput(sample_rate=engine.output_sample_rate, chunks_10ms=engine.output_chunks_10ms)
         self.user = SharedUserAggregation(
-            engine.initial_messages, params=engine.params, on_context=self._context, on_event=self._policy_event
+            engine.initial_messages,
+            params=engine.params,
+            on_context=self._context,
+            on_event=self._policy_event,
+            evaluation_trace=engine.evaluation_trace,
         )
         self.assistant = SharedAssistantAggregation(self.user.context, self.user.clock, on_event=self._assistant_event)
 
@@ -116,6 +124,8 @@ class _Session:
     def _append_event(self, event, *, stream=True):
         """Observe committed append order without awaiting network or provider work."""
         self.events.append(event)
+        if self.engine.evaluation_trace:
+            _observe(self.engine.evaluation_trace, "offline_event", event)
         if stream and self._event_sink is not None:
             self._event_sink(copy.deepcopy(event))
 
@@ -291,6 +301,16 @@ class _Session:
                 if value.final
                 else InterimTranscriptionFrame(value.text, "", "")
             )
+            if self.engine.evaluation_trace:
+                _observe(
+                    self.engine.evaluation_trace,
+                    "processor_boundary",
+                    "source_delivery",
+                    self.user._aggregator,
+                    frame,
+                    role="asr",
+                    logical_sample=sample,
+                )
             await self.user.feed_batch([ChunkPositionedFrame(sample, frame)], settle_timers=False)
         elif event.kind == "provider_frame":
             value = event.payload

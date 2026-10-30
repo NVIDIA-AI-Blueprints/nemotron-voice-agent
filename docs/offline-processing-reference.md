@@ -334,11 +334,12 @@ counts all captured callbacks, including forwarded duplicates and closed
 generations; `truncated` indicates omitted entries. These are observations,
 not unique failure counts, and do not override completion or scoring.
 
-Set `NVA_EVAL_TRACE_DIR` on the server to retain passive live-pipeline traces.
-Without that setting, the normal provider classes and frame flow are unchanged.
-The observer never creates audio, changes pacing, or makes provider requests.
-It counts PCM, buffers bounded events, and writes a session JSON file after the
-worker stops. Trace-file failures do not fail the voice session.
+Set `NVA_EVAL_TRACE_DIR` on the server to retain passive session traces for
+normal Generic Assistant streaming and offline processing. Without that setting,
+the normal provider classes and frame flow are unchanged. The trace never creates
+audio, changes pacing, or makes provider requests. It counts PCM, buffers bounded
+events, and writes a session JSON file after cleanup. Trace-file failures do not
+fail the voice session.
 
 The live trace records ASR request yields and existing response callbacks,
 LLM frames, TTS text submission and generated PCM, stitched-worker completion,
@@ -349,10 +350,70 @@ events remain null. Every trace includes `timing_scopes` for its boundaries.
 Observer callbacks can run after frame pushes. The report therefore calculates
 LLM frame intervals from their original pipeline timestamps. Provider hooks use
 a separate clock origin, so the report does not subtract a TTS-hook timestamp
-from an LLM-frame timestamp without clock calibration. Compare actual native
-request logs when exact dispatch contexts matter: an observer's later context
+from an LLM-frame timestamp without clock calibration. Use the immutable request
+snapshots below when exact dispatch contexts matter: an observer's later context
 snapshot can already include another frame. Delivered TTS text also does not
 prove that a client heard it.
+
+### Trace Context Commitment and LLM Requests
+
+The trace also captures synchronous processor boundaries and immutable request
+snapshots. Use these observations to separate ASR output arrival, user-context
+commitment, and the request that reaches the LLM client.
+
+| Boundary | Captured Evidence | Limit |
+| --- | --- | --- |
+| ASR frame publication or delivery | Frame identity and text before the live ASR push or at offline scheduler delivery | Publication does not prove queue acceptance or aggregator consumption. |
+| User-aggregator processing start | The frame identity at the native processing callback | Processing has started after dequeue and pause handling; it has not necessarily returned. |
+| User-aggregator processing return | The frame identity after its normal handler returns | A missing return can indicate cancellation or an error. |
+| Context push | A copied context at the synchronous handoff boundary | This is separate from a later observer snapshot and provider dispatch. |
+| LLM request preparation | Copied messages and options after native parameter conversion | Preparation is not an HTTP attempt or provider-consumption acknowledgement. |
+| LLM HTTP attempt | The serialized chat-completion request body and its request/attempt association | The capture observes client dispatch, not server receipt or hidden model state. |
+
+Join `processor_boundary` events by `frame_id`. Join `llm_request_prepared` and
+`llm_http_request` by `request_id`; `http_attempt` separates SDK retry attempts.
+`context_frame_id` connects a request to the context frame entering the service.
+Offline dispatch creates a new native context frame. Bridge the original user
+commit through `offline_native_context_delivery` using its `generation` and
+immutable `request_messages`. The scheduler's `response_requested` event uses
+`response_id` for that generation. Do not equate the original commit frame ID
+with the new native context frame ID; mark nonunique joins as ambiguous.
+Legacy observer `llm_request_index` values remain separate from these dispatch
+identities. Preserve the distinction between an emitted transcript and one the
+aggregator processes.
+An emitted frame without a processing event is unobserved at that boundary;
+it is not proof that the native queue discarded it. Check `dropped_events` and
+`observation_errors` before interpreting missing records.
+
+Offline `logical_sample` is the scheduler delivery position in 16,000 Hz samples.
+Online ingestion and supplied-audio cursors record observed PCM prefixes. These
+positions do not assign words to chunks or establish that no earlier ASR event
+remains pending. The trace does not use ASR word timestamps to place conversation
+events.
+
+Prepared parameters retain native omitted-value markers. The HTTP capture
+separately retains the serialized JSON body, its canonical digest, and the raw
+serialized-body digest. Check `llm_request_capture_capability` before requiring
+HTTP evidence. An unsupported client or unobserved request identity is a
+diagnostic gap, not a provider failure. Capture covers requests in the owned
+completion scope. Out-of-band `run_inference` calls, including history
+summarization, are outside that scope; this trace is not a complete HTTP inventory
+when those calls occur. The paired diagnostic procedure below disables history
+summarization.
+
+Use `started_at_utc` with source PCM digests to correlate cases. Online
+`asr_ingested_audio` describes observed ingestion; `offline_source` describes the
+offline upload. Compare format and trailing padding before asserting byte identity
+across those boundaries.
+
+Request snapshots can contain conversation text. They are server-owned,
+opt-in diagnostic artifacts written with file permissions `0600`. They exclude
+authentication headers and provider response bodies. `sdk_retry_count` retains
+only a numeric SDK retry counter; raw headers are not retained. Unscoped requests
+on shared HTTP clients are skipped before their bodies are read. The hooks
+preserve native queues, timers, and request construction. Snapshot copying and hashing still add CPU and memory overhead,
+so a traced run is diagnostic evidence rather than an uninstrumented latency
+baseline.
 
 All human-readable durations are milliseconds. Raw manifests retain sample
 positions and nanosecond timers. Stages overlap and their durations must not be

@@ -45,10 +45,12 @@ from examples.generic.tools import TOOL_HANDLERS, build_tools_schema
 from examples.shared.activity_check import create_activity_check_processor
 from examples.shared.audio_recorder import create_audio_recorder
 from examples.shared.evaluation_trace import (
+    EvaluationNvidiaLLMService,
     EvaluationNvidiaSTTService,
     EvaluationNvidiaTTSService,
     create_evaluation_trace,
 )
+from examples.shared.llm_request_trace import LLMRequestTraceMixin
 from examples.shared.nemotron_speech_text_filter import NemotronSpeechTextFilter
 from examples.shared.nvidia_streaming_llm import NvidiaStreamingLLMService, StreamingLLMUserAggregator
 from examples.shared.nvidia_stt_settings import resolve_stt_stop_history_ms
@@ -97,6 +99,10 @@ class AddressedNvidiaLLMService(AddressedReplyMixin, NvidiaLLMService):
 
 class AddressedNvidiaStreamingLLMService(AddressedReplyMixin, NvidiaStreamingLLMService):
     """NvidiaStreamingLLMService that asks spoken turns for the multi-speaker JSON reply."""
+
+
+class AddressedEvaluationNvidiaLLMService(LLMRequestTraceMixin, AddressedNvidiaLLMService):
+    """Retain addressed reply behavior with optional native request capture."""
 
 
 GENERIC_INTRO_PROMPT = "Greet the user warmly, introduce yourself, and ask how you can help."
@@ -216,10 +222,13 @@ async def bot(runner_args: RunnerArguments) -> None:
         llm_service = AddressedNvidiaStreamingLLMService if streaming else AddressedNvidiaLLMService
     else:
         llm_service = NvidiaStreamingLLMService if streaming else NvidiaLLMService
+    if evaluation_trace and not streaming:
+        llm_service = AddressedEvaluationNvidiaLLMService if multi_speaker_support else EvaluationNvidiaLLMService
     llm = llm_service(
         api_key=llm_api_key,
         base_url=base_url,
         settings=llm_settings,
+        **(evaluation_kwargs if not streaming else {}),
     )
 
     tools_schema = None
@@ -308,6 +317,10 @@ async def bot(runner_args: RunnerArguments) -> None:
         assistant_aggregator = LLMAssistantAggregator(context)
     else:
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
+    if evaluation_trace:
+        evaluation_trace.bind_processor(stt, role="asr")
+        evaluation_trace.bind_processor(user_aggregator, role="user")
+        evaluation_trace.bind_processor(llm, role="llm")
     if speaker_processor and not multi_speaker_support:
         logger.info("Barge-in: final transcript from latched speaker only")
     logger.info(

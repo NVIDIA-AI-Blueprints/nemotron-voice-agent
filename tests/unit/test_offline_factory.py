@@ -3,9 +3,12 @@
 
 # ruff: noqa: D100, D101, D102, D103, D107
 
+import json
 import os
+import tempfile
 import unittest
 from contextlib import ExitStack
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -15,6 +18,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from examples.generic.offline.factory import GenericOfflineRuntime, build_runtime
 from examples.generic.offline.models import AudioSource, SessionResult
 from examples.generic.offline.native_response import NativeResponseSession
+from examples.shared.evaluation_trace import EvaluationTrace
 from examples.shared.nvidia_tts_explicit_eof import EXPLICIT_EOF_COMPLETION_POLICY
 
 
@@ -187,6 +191,54 @@ class FactoryTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_trace_closes_after_provider_cleanup_with_exact_source_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            trace = EvaluationTrace(Path(folder))
+            source = AudioSource(bytes(1024))
+            result = SessionResult((), 0, (), (), {})
+
+            async def cleanup():
+                self.assertFalse(trace.path.exists())
+                trace.record("provider_cleanup_returning")
+
+            runtime = GenericOfflineRuntime(
+                SimpleNamespace(run=AsyncMock(return_value=result)),
+                None,
+                Mock(),
+                SimpleNamespace(aclose=AsyncMock(side_effect=cleanup)),
+                {},
+                evaluation_trace=trace,
+            )
+            self.assertIs(await runtime.run(source), result)
+            events = json.loads(trace.path.read_text())["events"]
+            source_event = next(e for e in events if e["event"] == "offline_source")
+            self.assertEqual(source_event["source_samples"], 512)
+            self.assertEqual(source_event["source_sample_rate"], 16000)
+            self.assertEqual(events[-2]["event"], "provider_cleanup_returning")
+            self.assertEqual(events[-1]["event"], "trace_closed")
+
+    async def test_failed_trace_writer_preserves_original_execution_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            trace = EvaluationTrace(Path(folder))
+            original = RuntimeError("native execution failure")
+            synthesis = SimpleNamespace(aclose=AsyncMock())
+            runtime = GenericOfflineRuntime(
+                SimpleNamespace(run=AsyncMock(side_effect=original)),
+                None,
+                Mock(),
+                synthesis,
+                {},
+                evaluation_trace=trace,
+            )
+            with (
+                patch.object(trace, "close", side_effect=OSError("writer unavailable")),
+                self.assertRaises(RuntimeError) as caught,
+            ):
+                await runtime.run(AudioSource(bytes(2)))
+            self.assertIs(caught.exception, original)
+            synthesis.aclose.assert_awaited_once()
+            self.assertEqual(trace._observation_errors, 1)
+
     async def test_observations_are_collected_after_cleanup_into_a_new_result(self):
         events = []
         result = SessionResult((), 0, (), (), {"existing": "value"})
