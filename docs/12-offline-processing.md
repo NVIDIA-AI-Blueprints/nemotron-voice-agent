@@ -366,3 +366,25 @@ provider callback order. Behavioral and scoring consistency remains under valida
 Refer to the [dated progress
 checkpoint](offline-processing-progress.md#october-30-2026-voicebench-repeatability-and-context-timing)
 for results, timing boundaries, and planned tests.
+
+## October 30, 2026: Native Policy Acceptance Contract
+
+Fresh rebased-source validation at NVA `273522f` completes five online/offline pairs at
+concurrency 1. Four pairs send identical complete serialized requests; all five use the
+same recognized user-word sequence, model, and options. Raw answers differ in every
+pair; the diagnostic makes no judge calls or new accuracy claims. Four conditional
+policy replays using captured transcript flags and STT metadata reproduce the recorded
+context grouping in native queued and shared execution.
+
+The acceptance contract preserves native online policy: the same delivered
+source/provider/control event tape, recorded metadata, and policy deadlines must produce
+equivalent context commits, cancellation decisions, and output-control order. Fresh
+streamed and bulk provider readiness can change that tape, so exact fresh-run grouping
+or answer equality is not guaranteed.
+
+Automatic merging, backdating, and offline-only normalization are not chosen fixes. Turn
+IDs help correlation but cannot prove ASR ownership across missed VAD speech or
+restarts. Any shared late-final revision policy remains contingent on an explicit
+ownership and closure contract. The [progress
+record](offline-processing-progress.md#rebased-source-validation-and-native-policy-contract)
+retains current results, historical failures, and timing limits.

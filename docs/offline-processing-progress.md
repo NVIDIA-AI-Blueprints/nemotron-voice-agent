@@ -891,3 +891,48 @@ separately, with no automatic merging, backdating, or offline-only rules. Turn I
 cannot resolve ASR ownership across missed VAD speech or restarts; a shared late-final
 revision policy remains a proposal until an explicit ownership and closure contract
 exists.
+
+### Rebased Source Validation and Native Policy Contract
+
+A fresh diagnostic on rebased NVA `273522f` and evaluator `4eeb0d7` completes five
+online and five offline sessions at concurrency 1, each in one attempt. Both real-audio
+and text readiness gates pass. Twelve traces have zero observation errors or dropped
+events, and all ten selected commits follow processing return for every then-published
+final transcript. This is a new source-pinned trial, separate from the earlier `4b33f39`
+probe.
+
+Four of five pairs match both the complete JSON request body and serialized HTTP-body
+digest. All five match recognized user-word sequence, model, and generation options; all
+five raw answers differ. No judge requests or new accuracy scores are produced. The
+previously recorded 778-case means remain unchanged.
+
+Observed case wallspans are 67,961 ms online and 23,579 ms offline. The total CI job
+takes 472,309 ms, including startup and gates. Response-length, provider-readiness, and
+warm-up differences prevent an isolated mode-only speed claim.
+
+Four provider-free policy replays now use the actual captured
+transcript-finalization/spacing flags and configured 1,000 ms STT latency metadata.
+Native queued and shared policy execution both reproduce the online tape's `[4]`, then
+`[4, 1]` commits, and the offline tape's `[5]` commit, with exact recorded context
+hashes. These are conditional policy-boundary checks, not full asynchronous-pipeline or
+backend counterfactuals. The earlier reconstructed-metadata replay remains historical
+evidence.
+
+An earlier offline concurrency-6 trial attempted all 778 cases: 777 completed, one ended
+in a terminal transport error, and 34 cases retried, with 33 recovered and one
+exhausted. Its inference elapsed was 4,191,534 ms versus the historical online
+concurrency-6 result of 3,001,750 ms. MMSU and the internal mean were withheld using the
+original denominator. The timeout path drops partial collector evidence, so no
+provider/stage cause is established. Subsequent validation follows the requested
+concurrency-1 scope; this is not a new concurrency-6 result on `273522f`.
+
+The acceptance contract preserves native online policy. Given the same delivered
+source/provider/control event tape, recorded metadata, and policy deadlines, both modes
+must produce equivalent context commits, cancellation decisions, and output-control
+order. Fresh streaming and bulk provider readiness can change that tape, so exact
+fresh-run grouping or answer equality is not guaranteed.
+
+The next trial adds no automatic merging, backdating, or offline-only rules. Turn IDs
+aid correlation but cannot establish ASR ownership across missed VAD speech or restarts.
+A shared late-final revision policy remains a proposal contingent on an explicit
+ownership and closure contract.
